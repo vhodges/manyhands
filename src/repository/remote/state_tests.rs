@@ -5,6 +5,216 @@ const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ADVERTISED: &str = "1111111111111111111111111111111111111111";
 const TRACKING: &str = "2222222222222222222222222222222222222222";
 
+fn review_completed_state() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    RepositoryService,
+    crate::repository::OperationId,
+) {
+    let (data, root, service) = fixture();
+    let op = crate::repository::OperationId::new();
+    with_transaction(&service,root.path(),|tx,id|{
+        configure(tx,id,Some(&plan()),false)?;
+        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
+        tx.execute("UPDATE remote_operation_records SET phase='completed',completed_step='before_discovery',outcome='completed',updated_at=124,poll_completed_at=124,poll_next_eligible_at=424",[]).unwrap();
+        replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().primary().clone()),kind:None,item_id:None,disposition:super::super::poll::PollDisposition::Current,before_oid:Some(ADVERTISED.parse().unwrap()),after_oid:Some(ADVERTISED.parse().unwrap())}],124)
+    }).unwrap();
+    (data, root, service, op)
+}
+
+#[test]
+fn review_disposition_envelope_rejects_lost_column_pair_without_recreation() {
+    let (data, _, service, _) = review_completed_state();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;").unwrap();
+    let before = db
+        .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==crate::repository::RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| r
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn review_disposition_envelope_rejects_lost_object_pair_without_recreation() {
+    let (data, _, service, op) = review_completed_state();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch(
+        "DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;",
+    )
+    .unwrap();
+    let before = db
+        .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert!(
+        matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==crate::repository::RepositoryErrorKind::RecoveryRequired)
+    );
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        before
+    );
+    assert!(
+        !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_poll_dispositions')",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap()
+    );
+    assert_eq!(db.query_row("SELECT poll_completed_at,poll_next_eligible_at FROM remote_operation_records WHERE operation_ulid=?1",[op.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?))).unwrap(),(124,424));
+}
+
+#[test]
+fn review_disposition_metadata_loss_is_not_hidden_by_updated_at_fallback() {
+    for latest in [false, true] {
+        let (data, _, service, op) = review_completed_state();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if !latest {
+            db.execute("DELETE FROM remote_poll_dispositions", [])
+                .unwrap();
+        }
+        db.execute(
+            "UPDATE remote_operation_records SET poll_completed_at=NULL",
+            [],
+        )
+        .unwrap();
+        assert!(
+            poll_completion_metadata(&db, 1, op).is_err(),
+            "missing new-row completion must not become updated_at"
+        );
+        assert!(
+            matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==crate::repository::RepositoryErrorKind::RecoveryRequired)
+        );
+    }
+}
+
+#[test]
+fn review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows() {
+    let (data, _, service, op) = review_completed_state();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;").unwrap();
+    let before = db
+        .query_row(
+            "SELECT phase,outcome,created_at,updated_at FROM remote_operation_records",
+            [],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT phase,outcome,created_at,updated_at FROM remote_operation_records",
+            [],
+            |r| Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?
+            ))
+        )
+        .unwrap(),
+        before
+    );
+    assert_eq!(
+        poll_completion_metadata(&db, 1, op).unwrap(),
+        (
+            OffsetDateTime::from_unix_timestamp(124).unwrap(),
+            None,
+            false
+        )
+    );
+    let version = db
+        .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    drop(service);
+    assert!(RepositoryService::open_at(data.path()).is_ok());
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        version
+    );
+}
+
+#[test]
+fn review_disposition_every_recognizable_partial_envelope_is_retained() {
+    for retained in 1..15 {
+        let (data, _, service, _) = review_completed_state();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        // Alter columns while schema references are still valid, then remove
+        // objects. The retained bitmask is table/trigger/completion/deadline.
+        if retained & 4 == 0 {
+            db.execute_batch("ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at")
+                .unwrap();
+        }
+        if retained & 8 == 0 {
+            db.execute_batch(
+                "ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at",
+            )
+            .unwrap();
+        }
+        if retained & 2 == 0 {
+            db.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable")
+                .unwrap();
+        }
+        if retained & 1 == 0 {
+            db.execute_batch("DROP TABLE remote_poll_dispositions")
+                .unwrap();
+        }
+        let before = db
+            .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        assert!(
+            matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==crate::repository::RepositoryErrorKind::RecoveryRequired),
+            "retained mask {retained}"
+        );
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            before,
+            "partial schema rewritten for {retained}"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT phase,outcome,updated_at FROM remote_operation_records",
+                [],
+                |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?
+                ))
+            )
+            .unwrap(),
+            ("completed".into(), "completed".into(), 124)
+        );
+    }
+}
+
 #[test]
 fn task6_local_history_unknown_context_also_exposes_its_latest_disposition() {
     let (_data, root, service) = fixture();

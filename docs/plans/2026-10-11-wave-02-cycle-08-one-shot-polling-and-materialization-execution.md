@@ -10,6 +10,237 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 6 Spec Corrections: Final GREEN And Re-Review Handoff — 2026-10-14T06:48:06Z
+
+All four findings from `ses_ec74e7b1cffe52NiF8TdyiLNkR` are **technically corrected,
+awaiting SPEC re-review**. Quality has **not started**. Incremental fix base
+`72a6260853fe5f9f49b0342a602f999f990a01bc`; complete Task 6 base
+`ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`, including a70a2ab and initial feature.
+Return exact local correction HEAD after commit; review the complete range, not
+only the new commit. No amendment to the approved Cycle/design/implementation plan.
+
+### Corrected Findings
+
+1. **P1 eligibility:** stored terminal replay alone bypasses policy. Active or
+   interrupted automatic restart checks disabled/paused/recovery suspension/not-due
+   before any current configuration work or owner re-acquisition. Public regressions
+   prove all eight phase/policy cases with zero operation/policy writes and unchanged
+   epoch/outcome. Manual-ID explicit restart still bypasses automatic policy.
+2. **P2 replay identity:** registered root/op-ID lookup and immutable stored action/
+   kind/invocation validation precede live plan lookup. Removing selection/config
+   or changing remote/primary leaves terminal original report untouched, for both
+   restart values, with zero attempt/outcome writes. Invocation/observe-kind mismatch
+   still refuses before consulting missing live configuration.
+3. **P2 owned result:** safe-point, batch and finish callbacks capture the original
+   report inside the existing ownership-checked transaction before release. Capture
+   clones only metadata/target shadow; existing observe/sync entry points use identity
+   callbacks with unchanged checks/acknowledgment/policy writes. Shadow rows and the
+   committed-local-change flag advance only after durable row writes. Success/index
+   failure return that same captured outcome; cancel/yield preserve first FF and
+   NotReached remainder even when a later explicit poll replaces the set and scans.
+   A foreign generation fence also retains the original handoff's IndexPending
+   status after later repair, without a new persistent field or original scan.
+   Only later older-ID replay receives empty targets. Fenced readback verifies
+   scope/repository/operation/generation/epoch; it cannot adopt a restarted owner.
+4. **P2 envelope/data loss:** table, owner trigger and both replay columns are one
+   all-present/all-absent envelope. Every one of 14 recognizable partial shapes
+   refuses, retaining schema/rows with no recreation. Genuine legacy migration
+   preserves original operation fields and freezes only its pre-envelope updated_at
+   time fallback once, with unknown original deadline left NULL. Modern NULL
+   completion is RecoveryRequired at read/startup, not inferred from updated_at.
+   Update-kind generation fencing records actual completion/deadline in its own
+   existing transaction. Observe/sync metadata semantics are unchanged.
+
+### Test-First Evidence And Trial Accounting
+
+Meaningful RED before each behavior correction, with exact commands below:
+
+| Exact command | RED |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_restart_auto_gate_` | **0 passed/4 failed/604 filtered**, transport error instead of each gate result |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_terminal_replay_` | **0 passed/1 failed/607 filtered**, removed configuration breaks replay |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_original_report_` | **0 passed/1 failed/607 filtered**, actual second poll makes original targets empty after existing public boundary dispatch wiring |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::review_disposition_` | **1 passed/3 failed/604 filtered**, silent pair recreation twice and modern-time fallback; genuine-old control passes |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_original_fenced_stop_` | Additional R3 **0 passed/1 failed/612 filtered**, original stop incorrectly Complete after foreign fence/later index repair |
+
+Initial R3 missing-callback-dispatch trial is recorded separately below, not claimed
+as report-loss RED. One R4 post-fix assertion trial needed direct reads of preserved
+time columns instead of a helper querying the correctly missing table; fixed test
+only. First broad correction gate passed 1,689 tests, then the additional actual
+fenced-stop RED justified the final corrected-tree gate. No timeout, Clippy failure,
+production-fix trial failure or redundant unchanged-tree broad rerun in this fix.
+
+**15 new library tests** (10 poll, 5 state) in this correction. Actual local Git,
+two services, test-installed tracking and real cache transitions; no fake transport,
+sleeps/global config/developer keys. Existing public, non-cfg(test) FailurePoint
+boundary callback dispatch is outside lease/registry/transport scopes. No new
+dependency, DTO/schema field, phase, safe point, transport adapter or frontend code.
+
+### Final Sequential Devenv Evidence
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_` | **10 passed**, 603 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::review_disposition_` | **5 passed**, 607 filtered (state unchanged after this focused run; all 5 pass in final library/full gate) |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **76 passed**, 537 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state` | **59 passed**, 553 filtered (state unchanged after focused run) |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | **40 passed**, 572 filtered (reservation unchanged after focused run) |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,690 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo test --locked --lib` | Final standalone **613 passed**, 0 failed |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+
+Final check/fmt/Clippy/full gate ran in the mandated order; log
+`tool_139039d7b001Ok7TtKnL72SBZD`: **613 library**, **779 ordinary integration**,
+**289 unchanged real-SSH** (41 comment, 25 merge, 15 observation, 63 synchronization,
+31 fixture, 114 transport), **9 doctests**. Final standalone/CLI/preservation log
+`tool_1392a241c001mYnB47hZGCxz5J`. Existing thousand-item characterization ignored.
+No Rust edit after the final gate; only canonical bookkeeping follows.
+
+### Local Delivery And Review Status
+
+Changed implementation: poll.rs, reservation.rs, state.rs and two associated poll/
+state test files. Existing reservation tests, observe_publication_remote body,
+shared sync/refs/discovery/read/frontend helpers, dependencies/lockfiles, integration/
+SSH tests, API audit and approved contracts have empty diffs against fix base.
+Only those five Rust files, ledger, open ticket and two new Node-ULID comments are
+staged for the authorized local correction commit. Status/source diff/recent log
+inspected; git diff --check, preservation diff and scripts/show-ticket schema/render
+checks precede commit. No subagents, Task 7, native dispatch, push, PR, merge,
+closure or worktree removal. Canonical re-review comment
+`01M4WJP4VF6W2FPCZ7ZHM9229A` records this checkpoint.
+
+Return to spec reviewer `ses_ec74e7b1cffe52NiF8TdyiLNkR`; do not start quality until
+spec approval. Ticket remains **open**. Task 2 direct-SQL poll-kind immutability
+minor remains **deferred to final Cycle review**; whole-poll SSH/native exit
+evidence remains pending, not claimed by these local-stage tests. Prior Task 5
+approvals, D1–D4 and owner exceptions remain unchanged.
+
+## Task 6 Spec Corrections: Investigation And RED — 2026-10-14T04:48:30Z
+
+Spec reviewer `ses_ec74e7b1cffe52NiF8TdyiLNkR` **BLOCKED four findings** before
+quality review. Verified clean fix base `72a6260853fe5f9f49b0342a602f999f990a01bc`
+in the assigned worktree/branch; complete Task 6 review base remains
+`ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`, including a70a2ab. Fix only, inline,
+no subagents; prior preflight/Task 0 trusted. Controller confirms necessary minimal
+reservation transaction helper edits remain authorized implementation detail.
+No approved contract change, Task 7 or outward/lifecycle action.
+
+Source verifies all four: automatic gate is conditional on no replay row; current
+plan lookup precedes operation lookup; original report is read only after released
+reservation/refresh; disposition objects and time-column pair migrate separately.
+Tests added before behavior corrections. Sequential exact RED evidence:
+
+| Finding / exact command | RED result |
+| --- | --- |
+| R1 `devenv shell -- cargo test --locked --lib remote::poll::tests::review_restart_auto_gate_` | **0 passed/4 failed/604 filtered**, transport error instead of each NotEligible; active cases fail first, interrupted cases execute at GREEN |
+| R2 `devenv shell -- cargo test --locked --lib remote::poll::tests::review_terminal_replay_` | **0 passed/1 failed/607 filtered**, removed publication selection produces transport error instead of original report; remaining configuration variants execute at GREEN |
+| R4 `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::review_disposition_` | **1 passed/3 failed/604 filtered**, lost pair silently recreated twice; missing new-row completion hidden by updated_at fallback; genuine all-absent/no-op control already passes |
+| R3 `devenv shell -- cargo test --locked --lib remote::poll::tests::review_original_report_` | **0 passed/1 failed/607 filtered**, initial fixture boundary not reached; not yet a reproduced report-loss RED |
+
+R1 asserts zero operation/policy writes, unchanged epoch/phase/outcome/snapshot for
+all four policies on active and interrupted automatic restart. R2 covers removed
+selection/config file and changed remote/primary, restart false/true, exact original
+report, no attempt/outcome writes and invocation mismatch. R4 checks no schema
+version change/recreation, retained data, new-row NULL metadata refusal and genuine
+old rows unchanged with only allowed legacy-time reconstruction, unknown deadline.
+No fake transport: real local repositories, installed tracking refs, panic provider.
+
+R3 uses the existing public FailurePoint::PollAfterCompletion and public local
+boundary callback to run a second real local post-fetch poll after release but
+before first refresh/result, covering success and injected refresh failure. That
+point currently calls check_failure directly, so only test plumbing must first
+route it through the already-existing boundary dispatcher. This leaves the racy
+report logic unchanged; record actual lost-report RED before its correction.
+Canonical RED/review checkpoint `01M4WBV4WAGBZ4GEWTE583GF8X` precedes fixes.
+Quality not started. Ticket remains open; Task 2 SQL-kind minor deferred final.
+
+R3 actual race RED after only existing boundary dispatch wiring:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::review_original_report_`
+exits **101, 0 passed/1 failed/607 filtered**. Second local poll really reserves,
+commits a new batch/disposition set and refreshes after first completion. First
+original response incorrectly has **0 targets**, expected its FastForwarded row.
+This is the meaningful report-loss RED before transaction/report capture changes.
+
+### Focused Corrections And GREEN
+
+R1 gates every nonterminal automatic restart before re-acquisition; terminal replay
+alone bypasses policy. Public cases prove active/interrupted × disabled, paused,
+recovery-suspended and not-due, zero policy/operation writes and unchanged owner.
+Explicit restart of a manual-priority ID still bypasses automatic policy and retains
+backoff/deadline on its actual preflight transport failure.
+
+R2 resolves the registered root/operation record first, validates stored action/
+kind/invocation identity with its immutable target, and returns terminal reports
+before any live config lookup. New attempts keep their prior missing-config path;
+eligible restart resolves/rechecks its live target before configuration writes.
+Removed publication/config file and changed remote/primary all replay identically
+for restart false/true; different invocation or observe kind remains OperationMismatch.
+
+R3 adds generic capture callbacks to the same shared safe-point, batch and finish
+transaction implementations. Existing public observe/sync callers use identity
+callbacks; no ownership/phase/policy algorithm duplicated or rewritten. The original
+executor clones its report (metadata, times, disposition shadow, pending state)
+before the transaction releases ownership. The shadow is updated only after each
+durable row write, keeping failed targets NotReached. Success/failure refresh
+wrappers reuse that exact captured outcome; only an older replay reads empty targets.
+Stop reports capture before acknowledgment commits too, and stay IndexPending even
+when a later poll repairs the index before the first response. Configuration-fenced
+readback verifies original scope/repository/generation/epoch rather than adopting
+a restarted executor. AfterCompletion callback runs only outside all guards.
+
+R4 treats table+owner trigger+two replay columns as one all-present/all-absent
+envelope; every one of **14 recognizable partial bitmasks** refuses without schema
+or row rewriting. A genuine pre-envelope migration freezes only the existing
+legacy updated_at completion fallback once, preserving original row fields; the
+historical per-ID deadline is unknown and remains NULL. Modern completion reads
+have no coalesce fallback; startup rejects lost completed/cancelled/failed metadata
+and interrupted latest-report metadata. Update-kind configuration fencing writes
+its actual completion/deadline in the same fence transaction, so this stricter
+audit does not require inferred modern times. Observe/sync metadata stays unchanged.
+
+One R4 fixture trial after the correction was **3 passed/1 failed** because its
+post-refusal data-preservation assertion called a helper that queries the correctly
+still-missing table. Corrected assertion to read the retained time columns directly;
+no production relaxation. All other correction trials compiled and executed without
+fixture failures. Original race's second poll is manual priority, respecting due
+policy after the first completes; its post-fetch data comes from actual local Git.
+
+Sequential focused evidence on the corrected tree, before final broad gates:
+
+| Exact command | GREEN |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::review_` | **9 passed**, 603 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::review_disposition_` | **5 passed**, 607 filtered |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **75 passed**, 537 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state` | **59 passed**, 553 filtered |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | **40 passed**, 572 filtered |
+
+Four findings technically corrected, **not independently approved**. Spec re-review
+required before quality starts. No scope amendment, subagents or Task 7 work.
+
+### Additional R3 Fenced-Stop RED Before Final Handoff
+
+The first corrective broad gate passed all four required checks and **1,689 tests**
+(log `tool_138d3489c001No35S3ChQQAHpQ`), with **612** in the standalone library run.
+No failure/timeout in that gate. Before committing, self-review tests a foreign
+configuration-generation fence followed by a later explicit poll/index repair
+before the first caller observes its stop. The original targets are preserved,
+but reading the now-cleared root flag incorrectly returns Complete for that
+original interrupted handoff. This is part of R3's stop-release race, not new scope.
+
+Meaningful RED before the change:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::review_original_fenced_stop_`
+exits **101, 0 passed/1 failed/612 filtered**, at "original fenced stop must retain
+its own index handoff state". Real two-service post-fetch polls, actual cache
+configuration fence, primary FF retained and context NotReached, only later poll
+scans. Retain the original executor's committed-local-change boolean beside its
+in-memory target shadow, so stopped results remain IndexPending despite later
+repair. No new durable field/schema or scan; successful refresh/replay semantics
+unchanged. A new final gate is justified by this actual regression correction.
+
 ## Task 6 Delivered Locally For Review — 2026-10-14T04:31:06Z
 
 **Complete Task 6 review base:** `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`.

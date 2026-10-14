@@ -1153,6 +1153,51 @@ impl RepositoryService {
             &request.root,
             RepositoryOperation::RepositorySnapshot,
         )?;
+        let priority = if request.invocation == RemotePollInvocation::Automatic {
+            RemoteOperationPriority::Poll
+        } else {
+            RemoteOperationPriority::Manual
+        };
+        // Terminal replay is checked before policy/endpoint/authentication work.
+        let existing = state::with_transaction(self, &root, |tx, id| {
+            state::read_operation(tx, id, request.operation_id)
+        })?;
+        let replay_reservation = if let Some(record) = existing {
+            // The immutable stored target validates kind/invocation/ID. Live
+            // configuration cannot redefine a terminal attempt's identity.
+            match self.reserve_remote_poll(&root, request.operation_id, &record.target, priority)? {
+                PR::Reservation(r) => Some(r),
+                PR::ConflictPending => return Err(RemotePollError::ConflictPending),
+            }
+        } else {
+            None
+        };
+        if let Some(R::Replay(record)) = &replay_reservation {
+            if matches!(
+                record.phase(),
+                super::RemoteOperationPhase::Completed
+                    | super::RemoteOperationPhase::Cancelled
+                    | super::RemoteOperationPhase::Failed
+            ) {
+                return self.poll_stored_result(&root, request.operation_id);
+            }
+            if !request.restart {
+                return Err(RemotePollError::Interrupted);
+            }
+        }
+        if request.invocation == RemotePollInvocation::Automatic
+            && replay_reservation.is_some()
+            && let AutomaticPollEligibility::NotEligible {
+                reason,
+                next_eligible_at,
+            } = self.automatic_poll_eligibility(&root)?
+        {
+            return Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible {
+                reason,
+                next_eligible_at,
+            }));
+        }
+        // Only a new execution or an eligible deliberate restart needs a live plan.
         let plan = match super::observation::observation_plan(&root) {
             Ok(plan) => plan,
             Err(error) => {
@@ -1186,38 +1231,10 @@ impl RepositoryService {
             }
         };
         let target = RemoteOperationTarget::for_poll(&plan);
-        let priority = if request.invocation == RemotePollInvocation::Automatic {
-            RemoteOperationPriority::Poll
-        } else {
-            RemoteOperationPriority::Manual
-        };
-        // Terminal replay is checked before policy/endpoint/authentication work.
-        let existing = state::with_transaction(self, &root, |tx, id| {
-            state::read_operation(tx, id, request.operation_id)
-        })?;
-        let replay_reservation = if existing.is_some() {
-            match self.reserve_remote_poll(&root, request.operation_id, &target, priority)? {
-                PR::Reservation(r) => Some(r),
-                PR::ConflictPending => return Err(RemotePollError::ConflictPending),
-            }
-        } else {
-            None
-        };
-        if let Some(R::Replay(record)) = &replay_reservation {
-            if matches!(
-                record.phase(),
-                super::RemoteOperationPhase::Completed
-                    | super::RemoteOperationPhase::Cancelled
-                    | super::RemoteOperationPhase::Failed
-            ) {
-                return self.poll_stored_result(&root, request.operation_id);
-            }
-            if !request.restart {
-                return Err(RemotePollError::Interrupted);
-            }
-        }
-        if request.invocation == RemotePollInvocation::Automatic
-            && replay_reservation.is_none()
+        if replay_reservation.is_some() {
+            // Restart still requires the original target, before configuration writes.
+            self.reserve_remote_poll(&root, request.operation_id, &target, priority)?;
+        } else if request.invocation == RemotePollInvocation::Automatic
             && let AutomaticPollEligibility::NotEligible {
                 reason,
                 next_eligible_at,
@@ -1306,9 +1323,9 @@ impl RepositoryService {
             )? {
                 return Ok(result);
             }
-            self.poll_interrupt(&root, &owner)?;
+            let interrupted = self.poll_interrupt(&root, &owner, None)?;
             return if decision == super::RemoteSafePointOutcome::Cancelled {
-                self.poll_stored_result(&root, owner.operation_id())
+                interrupted.ok_or(RemotePollError::Interrupted)
             } else {
                 Err(RemotePollError::Interrupted)
             };
@@ -1325,13 +1342,16 @@ impl RepositoryService {
                 )? {
                     return Ok(result);
                 }
-                let decision = self.finish_remote_operation(
+                let (decision, captured) = self.finish_remote_operation_with(
                     &root,
                     &owner,
                     super::observation::transport_category(&error.kind),
+                    |tx, id, decision| {
+                        self.poll_capture_stop(tx, id, owner.operation_id(), decision, None)
+                    },
                 )?;
                 if decision != super::RemoteSafePointOutcome::Continue {
-                    return self.poll_stored_result(&root, owner.operation_id());
+                    return captured.ok_or(RemotePollError::Interrupted);
                 }
                 Err(RemotePollError::Transport(error))
             }
@@ -1461,11 +1481,11 @@ impl RepositoryService {
             return Ok(result);
         }
         if !self.poll_configuration_matches(root, plan, configuration)? {
-            self.poll_interrupt(root, owner)?;
+            let _ = self.poll_interrupt(root, owner, None)?;
             return Err(RemotePollError::Interrupted);
         }
         let at = OffsetDateTime::now_utc().unix_timestamp();
-        let decision = super::reservation::commit_observation_batch_with(
+        let (decision, captured) = super::reservation::commit_observation_batch_with_capture(
             self,
             root,
             owner,
@@ -1473,17 +1493,32 @@ impl RepositoryService {
             &observations,
             at,
             |tx, id| state::replace_poll_dispositions(tx, id, owner.operation_id(), &targets, at),
+            |tx, id, decision| self.poll_capture_stop(tx, id, owner.operation_id(), decision, None),
         )?;
         if decision != D::Continue {
-            return self.poll_stored_result(root, owner.operation_id());
+            return captured.ok_or(RemotePollError::Interrupted);
         }
-        if let Some(result) = self.poll_safe_point(root, owner, S::AfterBatchCommit)? {
+        if let Some(result) = self.poll_safe_point_with_targets(
+            root,
+            owner,
+            S::AfterBatchCommit,
+            Some((&targets, false)),
+        )? {
             return Ok(result);
         }
-        for (ordinal, row) in targets.iter_mut().enumerate() {
-            if let Some(result) = self.poll_safe_point(root, owner, S::BeforeLocalMutation)? {
+        let mut local_changes = false;
+        for ordinal in 0..targets.len() {
+            if let Some(result) = self.poll_safe_point_with_targets(
+                root,
+                owner,
+                S::BeforeLocalMutation,
+                Some((&targets, local_changes)),
+            )? {
                 return Ok(result);
             }
+            // Publish to the caller's shadow only after the row write commits.
+            // A failed/incomplete target retains its durable NotReached image.
+            let mut row = targets[ordinal].clone();
             self.poll_boundary(
                 crate::repository::FailurePoint::PollBeforeTarget,
                 Some(ordinal),
@@ -1632,13 +1667,14 @@ impl RepositoryService {
                             )
                             .map_err(|_| state::recovery_required())?;
                         }
-                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, row)
+                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, &row)
                     })?;
+                    local_changes |= changed;
                 } else {
                     row.disposition = PollDisposition::Malformed;
                     state::with_transaction(self, root, |tx, id| {
                         super::reservation::owned(self, tx, id, owner)?;
-                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, row)
+                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, &row)
                     })?;
                 }
                 Ok(())
@@ -1647,16 +1683,21 @@ impl RepositoryService {
                 if matches!(error, RemotePollError::Interrupted) {
                     // A pending request gets its normal durable acknowledgement;
                     // otherwise fence a changed frozen input without retrying.
-                    if let Some(result) =
-                        self.poll_safe_point(root, owner, S::BeforeLocalMutation)?
-                    {
+                    if let Some(result) = self.poll_safe_point_with_targets(
+                        root,
+                        owner,
+                        S::BeforeLocalMutation,
+                        Some((&targets, local_changes)),
+                    )? {
                         return Ok(result);
                     }
-                    self.poll_interrupt(root, owner)?;
-                    return self.poll_stored_result(root, owner.operation_id());
+                    return self
+                        .poll_interrupt(root, owner, Some((&targets, local_changes)))?
+                        .ok_or(RemotePollError::Interrupted);
                 }
                 return Err(error);
             }
+            targets[ordinal] = row;
         }
         self.poll_boundary(
             crate::repository::FailurePoint::PollBeforeDiscovery,
@@ -1664,10 +1705,16 @@ impl RepositoryService {
             root,
         )?;
         if !self.poll_configuration_matches(root, plan, configuration)? {
-            self.poll_interrupt(root, owner)?;
-            return self.poll_stored_result(root, owner.operation_id());
+            return self
+                .poll_interrupt(root, owner, Some((&targets, local_changes)))?
+                .ok_or(RemotePollError::Interrupted);
         }
-        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeDiscovery)? {
+        if let Some(result) = self.poll_safe_point_with_targets(
+            root,
+            owner,
+            S::BeforeDiscovery,
+            Some((&targets, local_changes)),
+        )? {
             return Ok(result);
         }
         state::with_transaction(self, root, |tx, id| {
@@ -1679,21 +1726,40 @@ impl RepositoryService {
             .map_err(|_| state::recovery_required())?;
             Ok(())
         })?;
-        let decision =
-            self.finish_remote_operation(root, owner, RemoteOutcomeCategory::Completed)?;
+        let (decision, captured) = self.finish_remote_operation_with(
+            root,
+            owner,
+            RemoteOutcomeCategory::Completed,
+            |tx, id, decision| {
+                Ok((
+                    decision,
+                    self.poll_result_in_transaction(
+                        tx,
+                        id,
+                        owner.operation_id(),
+                        Some((&targets, local_changes)),
+                    )?,
+                ))
+            },
+        )?;
+        let result = captured.ok_or(RemotePollError::Interrupted)?;
         if decision != D::Continue {
-            return self.poll_stored_result(root, owner.operation_id());
+            self.poll_boundary(
+                crate::repository::FailurePoint::PollAfterCompletion,
+                None,
+                root,
+            )?;
+            return Ok(result);
         }
-        self.check_failure(
+        self.poll_boundary(
             crate::repository::FailurePoint::PollAfterCompletion,
-            RepositoryOperation::RepositorySnapshot,
+            None,
             root,
         )?;
         let refreshed = self.refresh_repository(crate::repository::RefreshRepositoryRequest {
             root: root.to_owned(),
             operation_id: crate::repository::OperationId::new(),
         });
-        let result = self.poll_stored_result(root, owner.operation_id())?;
         if matches!(
             refreshed,
             Ok(crate::repository::RefreshOutcome::Refreshed { .. })
@@ -1726,7 +1792,8 @@ impl RepositoryService {
         &self,
         root: &Path,
         owner: &super::RemoteReservation,
-    ) -> Result<(), RepositoryError> {
+        targets: Option<(&[PollTargetReport], bool)>,
+    ) -> Result<Option<RemotePollResult>, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             if let Ok(record) = super::reservation::owned(self, tx, id, owner) {
                 tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,OffsetDateTime::now_utc().unix_timestamp()]).map_err(|_|state::recovery_required())?;
@@ -1736,8 +1803,10 @@ impl RepositoryService {
                     owner.operation_id(),
                     OffsetDateTime::now_utc().unix_timestamp(),
                 )?;
+            } else {
+                super::reservation::fenced_poll_record(self, tx, id, owner)?;
             }
-            Ok(())
+            self.poll_result_in_transaction(tx, id, owner.operation_id(), targets)
         })
     }
     fn poll_safe_point(
@@ -1746,25 +1815,68 @@ impl RepositoryService {
         owner: &super::RemoteReservation,
         point: super::RemoteOperationSafePoint,
     ) -> Result<Option<RemotePollResult>, RemotePollError> {
-        let decision = match self.remote_safe_point(root, owner, point) {
-            Ok(d) => d,
-            Err(e) => {
-                let record = state::with_transaction(self, root, |tx, id| {
-                    state::read_operation(tx, id, owner.operation_id())
-                })?;
-                if record.is_some_and(|r| r.phase == super::RemoteOperationPhase::Interrupted) {
-                    super::RemoteSafePointOutcome::Interrupted
-                } else {
-                    return Err(e.into());
+        self.poll_safe_point_with_targets(root, owner, point, None)
+    }
+    fn poll_safe_point_with_targets(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        point: super::RemoteOperationSafePoint,
+        targets: Option<(&[PollTargetReport], bool)>,
+    ) -> Result<Option<RemotePollResult>, RemotePollError> {
+        let (decision, captured) =
+            match self.remote_safe_point_with(root, owner, point, |tx, id, decision| {
+                self.poll_capture_stop(tx, id, owner.operation_id(), decision, targets)
+            }) {
+                Ok(result) => result,
+                Err(e) => {
+                    let stopped = state::with_transaction(self, root, |tx, id| {
+                        if super::reservation::fenced_poll_record(self, tx, id, owner).is_err() {
+                            return Ok(None);
+                        }
+                        Ok(Some(self.poll_result_in_transaction(
+                            tx,
+                            id,
+                            owner.operation_id(),
+                            targets,
+                        )?))
+                    })?;
+                    match stopped {
+                        Some(result) => (super::RemoteSafePointOutcome::Interrupted, result),
+                        None => return Err(e.into()),
+                    }
                 }
-            }
-        };
+            };
         match decision {
             super::RemoteSafePointOutcome::Continue => Ok(None),
-            _ => self
-                .poll_stored_result(root, owner.operation_id())
-                .map(Some),
+            _ => {
+                // The callback may let a later poll replace the latest set;
+                // captured is already the original executor's owned response.
+                self.poll_boundary(
+                    crate::repository::FailurePoint::PollAfterCompletion,
+                    None,
+                    root,
+                )?;
+                captured.map(Some).ok_or(RemotePollError::Interrupted)
+            }
         }
+    }
+    fn poll_capture_stop(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        id: i64,
+        op: crate::repository::OperationId,
+        decision: super::RemoteSafePointOutcome,
+        targets: Option<(&[PollTargetReport], bool)>,
+    ) -> Result<(super::RemoteSafePointOutcome, Option<RemotePollResult>), RepositoryError> {
+        Ok((
+            decision,
+            if decision == super::RemoteSafePointOutcome::Continue {
+                None
+            } else {
+                self.poll_result_in_transaction(tx, id, op, targets)?
+            },
+        ))
     }
     fn poll_stored_result(
         &self,
@@ -1772,44 +1884,62 @@ impl RepositoryService {
         op: crate::repository::OperationId,
     ) -> Result<RemotePollResult, RemotePollError> {
         state::with_transaction(self, root, |tx, id| {
-            let record = state::read_operation(tx, id, op)?.ok_or_else(state::recovery_required)?;
-            let (completed_at, next_eligible_at, latest) =
-                state::poll_completion_metadata(tx, id, op)?;
-            let completion = match record.phase {
-                super::RemoteOperationPhase::Interrupted => PollCompletion::Interrupted,
-                super::RemoteOperationPhase::Cancelled => PollCompletion::Cancelled,
-                _ => PollCompletion::Completed,
-            };
-            if completion == PollCompletion::Interrupted && !latest {
-                return Ok(None);
-            }
-            let targets = if latest {
-                state::read_poll_dispositions(tx, id)?
-            } else {
-                Vec::new()
-            };
-            let outcome = RemotePollOutcome::Polled(RemotePollReport {
-                operation_id: op,
-                completion,
-                completed_at,
-                next_eligible_at,
-                targets,
-                outcome: record.outcome,
-            });
-            let pending: bool = tx
-                .query_row(
-                    "SELECT refresh_required FROM repositories WHERE id=?1",
-                    [id],
-                    |r| r.get(0),
-                )
-                .map_err(|_| state::recovery_required())?;
-            Ok(Some(if pending {
-                RemotePollResult::IndexPending(crate::repository::IndexPending::new(outcome))
-            } else {
-                RemotePollResult::Complete(outcome)
-            }))
+            self.poll_result_in_transaction(tx, id, op, None)
         })?
         .ok_or(RemotePollError::Interrupted)
+    }
+    fn poll_result_in_transaction(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        id: i64,
+        op: crate::repository::OperationId,
+        original_targets: Option<(&[PollTargetReport], bool)>,
+    ) -> Result<Option<RemotePollResult>, RepositoryError> {
+        let record = state::read_operation(tx, id, op)?.ok_or_else(state::recovery_required)?;
+        if record.phase == super::RemoteOperationPhase::Interrupted && original_targets.is_none() {
+            let latest:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=?1 AND operation_ulid=?2)",params![id,op.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+            if !latest {
+                return Ok(None);
+            }
+        }
+        let (completed_at, next_eligible_at, latest) = state::poll_completion_metadata(tx, id, op)?;
+        let completion = match record.phase {
+            super::RemoteOperationPhase::Interrupted => PollCompletion::Interrupted,
+            super::RemoteOperationPhase::Cancelled => PollCompletion::Cancelled,
+            _ => PollCompletion::Completed,
+        };
+        let targets = if let Some((original, _)) = original_targets {
+            original.to_vec()
+        } else if latest {
+            state::read_poll_dispositions(tx, id)?
+        } else {
+            Vec::new()
+        };
+        let outcome = RemotePollOutcome::Polled(RemotePollReport {
+            operation_id: op,
+            completion,
+            completed_at,
+            next_eligible_at,
+            targets,
+            outcome: record.outcome,
+        });
+        let pending: bool = tx
+            .query_row(
+                "SELECT refresh_required FROM repositories WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(|_| state::recovery_required())?;
+        // A foreign generation fence may release this owner before it observes
+        // the stop. Later index repair cannot rewrite its original handoff.
+        let pending = pending
+            || original_targets
+                .is_some_and(|(_, changed)| changed && completion != PollCompletion::Completed);
+        Ok(Some(if pending {
+            RemotePollResult::IndexPending(crate::repository::IndexPending::new(outcome))
+        } else {
+            RemotePollResult::Complete(outcome)
+        }))
     }
 }
 

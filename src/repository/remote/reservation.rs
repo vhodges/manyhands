@@ -238,6 +238,29 @@ pub(super) fn owned(
     Ok(record)
 }
 
+/// A configuration fence can end this executor before its next safe point.
+/// Read its terminal evidence only if scope, repository, ID and epoch still
+/// identify this executor; a restarted owner is never adopted as its result.
+pub(super) fn fenced_poll_record(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    id: i64,
+    owner: &RemoteReservation,
+) -> Result<state::StoredRemoteOperation, RepositoryError> {
+    let record =
+        state::read_operation(tx, id, owner.operation_id)?.ok_or_else(state::recovery_required)?;
+    if !Arc::ptr_eq(&service.remote_reservation_scope, &owner.scope)
+        || id != owner.repository_id
+        || record.generation != owner.generation
+        || record.owner_epoch != owner.epoch
+        || record.poll_kind != Some(state::PollKind::Update)
+        || record.phase != RemoteOperationPhase::Interrupted
+    {
+        return Err(state::recovery_required());
+    }
+    Ok(record)
+}
+
 fn publication_intent(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
@@ -547,6 +570,31 @@ pub(super) fn commit_observation_batch_with(
     observed_at: i64,
     write: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    commit_observation_batch_with_capture(
+        service,
+        root,
+        owner,
+        plan,
+        observations,
+        observed_at,
+        write,
+        |_, _, decision| Ok(decision),
+    )
+}
+
+/// Capture an original executor's result before a terminal transition releases
+/// the reservation. Existing callers keep the identity capture above.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn commit_observation_batch_with_capture<T>(
+    service: &RepositoryService,
+    root: &Path,
+    owner: &RemoteReservation,
+    plan: &super::RemoteRefPlan,
+    observations: &[super::RemoteRefObservation],
+    observed_at: i64,
+    write: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>,
+    capture: impl FnOnce(&Transaction<'_>, i64, RemoteSafePointOutcome) -> Result<T, RepositoryError>,
+) -> Result<T, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
         let record = owned(service, tx, id, owner)?;
         let synchronization = is_sync(&record.target);
@@ -573,7 +621,7 @@ pub(super) fn commit_observation_batch_with(
             },
         )?;
         if decision != RemoteSafePointOutcome::Continue {
-            return Ok(decision);
+            return capture(tx, id, decision);
         }
         if synchronization || record.poll_kind == Some(state::PollKind::Update) {
             state::persist_complete_advertisement(
@@ -588,7 +636,7 @@ pub(super) fn commit_observation_batch_with(
             state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
         }
         write(tx, id)?;
-        if synchronization {
+        let decision = if synchronization {
             // Fresh Fetch evidence cannot erase an unresolved local/push checkpoint.
             tx.execute("UPDATE remote_operation_records SET phase=CASE WHEN reconciliation_required=1 THEN 'reconciling' ELSE 'fetch_observed' END,sync_checkpoint=CASE WHEN reconciliation_required=1 THEN sync_checkpoint ELSE 'fetch_observed' END WHERE id=?1",[record.id]).map_err(|_| state::recovery_required())?;
             let current = state::read_operation(tx, id, owner.operation_id)?
@@ -596,7 +644,8 @@ pub(super) fn commit_observation_batch_with(
             acknowledge(tx, &current, RemoteOperationSafePoint::AfterFetch)
         } else {
             acknowledge(tx, &record, RemoteOperationSafePoint::AfterBatchCommit)
-        }
+        }?;
+        capture(tx, id, decision)
     })
 }
 
@@ -890,6 +939,20 @@ impl RepositoryService {
         owner: &RemoteReservation,
         point: RemoteOperationSafePoint,
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.remote_safe_point_with(root, owner, point, |_, _, decision| Ok(decision))
+    }
+
+    pub(super) fn remote_safe_point_with<T>(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        point: RemoteOperationSafePoint,
+        capture: impl FnOnce(
+            &Transaction<'_>,
+            i64,
+            RemoteSafePointOutcome,
+        ) -> Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             if is_sync(&record.target) {
@@ -963,7 +1026,8 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
-            acknowledge(tx, &record, point)
+            let decision = acknowledge(tx, &record, point)?;
+            capture(tx, id, decision)
         })
     }
 
@@ -1056,6 +1120,20 @@ impl RepositoryService {
         owner: &RemoteReservation,
         category: RemoteOutcomeCategory,
     ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        self.finish_remote_operation_with(root, owner, category, |_, _, decision| Ok(decision))
+    }
+
+    pub(super) fn finish_remote_operation_with<T>(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        category: RemoteOutcomeCategory,
+        capture: impl FnOnce(
+            &Transaction<'_>,
+            i64,
+            RemoteSafePointOutcome,
+        ) -> Result<T, RepositoryError>,
+    ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
@@ -1072,14 +1150,15 @@ impl RepositoryService {
             }
             let decision = acknowledge(tx, &record, point)?;
             if decision != RemoteSafePointOutcome::Continue {
-                return Ok(decision);
+                return capture(tx, id, decision);
             }
             finish(tx, id, &record, category)?;
-            Ok(if category == RemoteOutcomeCategory::Cancelled {
+            let decision = if category == RemoteOutcomeCategory::Cancelled {
                 RemoteSafePointOutcome::Cancelled
             } else {
                 RemoteSafePointOutcome::Continue
-            })
+            };
+            capture(tx, id, decision)
         })
     }
 }

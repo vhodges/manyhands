@@ -228,14 +228,7 @@ fn validate_poll_disposition_schema(db: &Connection) -> Result<(), RepositoryErr
     Ok(())
 }
 fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
-    let n:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
-    if n == 0 {
-        tx.execute_batch(POLL_DISPOSITION_SCHEMA)
-            .map_err(|_| recovery_required())?;
-    } else if n != 2 {
-        return Err(recovery_required());
-    }
-    validate_poll_disposition_schema(tx)?;
+    let objects:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     let cols = tx
         .prepare("PRAGMA table_info(remote_operation_records)")
         .and_then(|mut q| {
@@ -244,18 +237,27 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         })
         .map_err(|_| recovery_required())?;
     let names = ["poll_completed_at", "poll_next_eligible_at"];
-    let n = names
+    let columns = names
         .iter()
         .filter(|name| cols.iter().any(|c| c == **name))
         .count();
-    if n == 1 {
+    // Objects and replay columns are one recognizable envelope. Either missing
+    // pair is evidence loss, not an older registry eligible for empty recreation.
+    if !((objects == 0 && columns == 0) || (objects == 2 && columns == 2)) {
         return Err(recovery_required());
     }
-    if n == 0 {
+    if objects == 0 {
+        tx.execute_batch(POLL_DISPOSITION_SCHEMA)
+            .map_err(|_| recovery_required())?;
         for name in names {
             tx.execute_batch(&format!("ALTER TABLE remote_operation_records ADD COLUMN {name} INTEGER CHECK({name} IS NULL OR (typeof({name})='integer' AND {name} BETWEEN 0 AND 253402300799))")).map_err(|_|recovery_required())?;
         }
+        // Only a genuine pre-envelope row may use the historical updated_at
+        // completion fallback. Freeze it once during migration; its original
+        // retry deadline is unknown and remains NULL. New rows never infer it.
+        tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
     }
+    validate_poll_disposition_schema(tx)?;
     Ok(())
 }
 
@@ -417,7 +419,7 @@ pub(super) fn poll_completion_metadata(
     id: i64,
     op: crate::repository::OperationId,
 ) -> Result<(OffsetDateTime, Option<OffsetDateTime>, bool), RepositoryError> {
-    let (at,next,latest):(Option<i64>,Option<i64>,bool)=db.query_row("SELECT coalesce(poll_completed_at,updated_at),poll_next_eligible_at,EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=?1 AND operation_ulid=?2) FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2",params![id,op.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|recovery_required())?;
+    let (at,next,latest):(Option<i64>,Option<i64>,bool)=db.query_row("SELECT poll_completed_at,poll_next_eligible_at,EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=?1 AND operation_ulid=?2) FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2",params![id,op.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|recovery_required())?;
     Ok((
         poll_time(at)?.ok_or_else(recovery_required)?,
         poll_time(next)?,
@@ -2075,6 +2077,9 @@ pub(in super::super) fn configure(
         .generation
         .checked_add(1)
         .ok_or_else(recovery_required)?;
+    // Configuration fencing terminates an update executor just like an explicit
+    // interruption. Preserve its actual completion/deadline in the same fence TX.
+    transaction.execute("UPDATE remote_operation_records SET poll_completed_at=?2,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND poll_kind='update' AND phase IN ('reserved','advertising','persisting','local_prepared')",params![repository_id,OffsetDateTime::now_utc().unix_timestamp().max(0)]).map_err(|_|recovery_required())?;
     transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     // The mutable current snapshot is invalidated, but a pass referenced by an
     // immutable window is retained as historical intent. It is never made
@@ -4916,12 +4921,19 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
     validate_merge_evidence_schema(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
-    let times=transaction.prepare("SELECT poll_completed_at,poll_next_eligible_at,action,poll_kind FROM remote_operation_records").and_then(|mut q|q.query_map([],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
-    for (at, next, action, kind) in times {
+    let times=transaction.prepare("SELECT poll_completed_at,poll_next_eligible_at,action,poll_kind,phase,EXISTS(SELECT 1 FROM remote_poll_dispositions d WHERE d.repository_id=o.repository_id AND d.operation_ulid=o.operation_ulid) FROM remote_operation_records o").and_then(|mut q|q.query_map([],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,bool>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    for (at, next, action, kind, phase, latest) in times {
         poll_time(at)?;
         poll_time(next)?;
         if (at.is_some() || next.is_some())
             && (action != "poll" || kind.as_deref() != Some("update"))
+        {
+            return Err(recovery_required());
+        }
+        if kind.as_deref() == Some("update")
+            && at.is_none()
+            && (matches!(phase.as_str(), "completed" | "cancelled" | "failed")
+                || phase == "interrupted" && latest)
         {
             return Err(recovery_required());
         }

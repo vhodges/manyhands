@@ -174,6 +174,23 @@ and the baseline.
   original ff43d2c and includes a70a2ab docs checkpoint. Approved contracts unchanged.
 - [ ] Independent Task 6 spec review of full range from
   `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7` through returned feature HEAD.
+  `ses_ec74e7b1cffe52NiF8TdyiLNkR` BLOCKED four issues: automatic restart bypasses
+  all eligibility gates; terminal replay consults current config before stored ID;
+  original result loses targets when another poll replaces the set after release;
+  separately probed schema sub-envelopes recreate identifiable partial loss.
+  Corrections authorized at 72a6260; meaningful RED for R1/R2/R4 recorded before
+  fixes, R3 fixture plumbing precedes actual race RED. Details in ledger/comment
+  `01M4WBV4WAGBZ4GEWTE583GF8X`; quality not started.
+  All four technically corrected, awaiting SPEC re-review: all automatic restart
+  gates; stored-ID-first config-independent terminal replay; transaction-captured
+  original reports and stop handoff state; one all-or-nothing schema envelope with
+  no modern-time fallback. Added 15 meaningful regression/expanded library tests.
+  Each finding has recorded behavioral RED before correction; additional R3 foreign
+  fence/index-repair RED also corrected. Final GREEN 76 poll/59 state/40 reservation,
+  613 library; four required Rust gates PASS, full total **1,690 passed, 0 failed,
+  1 existing ignored**. Re-review comment `01M4WJP4VF6W2FPCZ7ZHM9229A` and dated
+  ledger retain commands/counts/trials. Fix base 72a6260; complete base ff43d2c.
+  Return to `ses_ec74e7b1cffe52NiF8TdyiLNkR` before any quality review.
 - [ ] Independent Task 6 quality review after spec approval.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
@@ -202,6 +219,8 @@ controller resolved it as an implementation detail within existing authorization
 Task 6 delivered locally after recorded RED, self-review regressions and final
 verification, ready for independent spec then quality review. Prior Task 0/preflight
 trusted; no repeated characterization. Complete range includes a70a2ab.
+Task 6 initial spec blocked four findings; corrective implementation and final
+verification now complete, **SPEC re-review pending, quality not started**.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 7–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.

@@ -11,6 +11,616 @@ use std::{collections::BTreeMap, fs, path::PathBuf};
 use time::OffsetDateTime;
 
 struct PanicCredentials;
+
+fn review_restart_gate(reason: PollIneligibility) {
+    for interrupted in [false, true] {
+        let f = PollFixture::new();
+        if interrupted {
+            f.db()
+                .execute("UPDATE remote_operation_records SET yield_requested=1", [])
+                .unwrap();
+            assert_eq!(
+                f.local
+                    .service
+                    .remote_safe_point(
+                        &f.local.root,
+                        &f.owner,
+                        super::super::RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .unwrap(),
+                super::super::RemoteSafePointOutcome::Interrupted
+            );
+        }
+        let (enabled, paused, suspended, next) = match reason {
+            PollIneligibility::Disabled => (false, false, false, None),
+            PollIneligibility::Paused => (true, true, false, None),
+            PollIneligibility::RecoverySuspended => (true, false, true, None),
+            PollIneligibility::NotDue => (
+                true,
+                false,
+                false,
+                Some(OffsetDateTime::now_utc().unix_timestamp() + 60),
+            ),
+        };
+        f.db().execute("UPDATE remote_polling_state SET enabled=?1,paused=?2,recovery_suspended=?3,next_eligible_at=?4,automatic_backoff_seconds=120,latest_outcome='completed',latest_attempt_at=123",params![enabled,paused,suspended,next]).unwrap();
+        let before = f.local.service.remote_snapshot(&f.local.root).unwrap();
+        let owned_before: (String, i64, String) = f
+            .db()
+            .query_row(
+                "SELECT phase,owner_epoch,coalesce(outcome,'') FROM remote_operation_records",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        f.db().execute_batch("CREATE TABLE review_writes(n INTEGER);INSERT INTO review_writes VALUES(0);CREATE TRIGGER review_operation_write AFTER UPDATE ON remote_operation_records BEGIN UPDATE review_writes SET n=n+1;END;CREATE TRIGGER review_policy_write AFTER UPDATE ON remote_polling_state BEGIN UPDATE review_writes SET n=n+1;END;").unwrap();
+        let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+        let result = f.local.service.poll_publication_remote(
+            PollPublicationRemoteRequest {
+                root: f.local.root.clone(),
+                operation_id: f.owner.operation_id(),
+                invocation: RemotePollInvocation::Automatic,
+                approval: None,
+                restart: true,
+            },
+            &mut session,
+        );
+        assert!(
+            matches!(result,Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible{reason:r,next_eligible_at})) if r==reason && next_eligible_at==next.map(at)),
+            "{interrupted}: {result:?}"
+        );
+        assert_eq!(
+            f.local.service.remote_snapshot(&f.local.root).unwrap(),
+            before
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT phase,owner_epoch,coalesce(outcome,'') FROM remote_operation_records",
+                    [],
+                    |r| Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, String>(2)?
+                    ))
+                )
+                .unwrap(),
+            owned_before
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT n FROM review_writes", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+#[test]
+fn review_restart_auto_gate_disabled() {
+    review_restart_gate(PollIneligibility::Disabled);
+}
+#[test]
+fn review_restart_auto_gate_paused() {
+    review_restart_gate(PollIneligibility::Paused);
+}
+#[test]
+fn review_restart_auto_gate_recovery_suspended() {
+    review_restart_gate(PollIneligibility::RecoverySuspended);
+}
+#[test]
+fn review_restart_auto_gate_not_due() {
+    review_restart_gate(PollIneligibility::NotDue);
+}
+
+#[test]
+fn review_terminal_replay_precedes_removed_or_changed_live_configuration() {
+    for change in [
+        "publication_removed",
+        "configuration_removed",
+        "remote_changed",
+        "primary_changed",
+    ] {
+        let f = PollFixture::new();
+        f.local
+            .tracking(&SynchronizationTarget::Primary, f.local.old);
+        let (original, _) = report(
+            f.run(vec![("refs/heads/main".into(), f.local.old)])
+                .unwrap(),
+        );
+        let config = f.local.root.join(".manyhands/config.toml");
+        match change {
+            "publication_removed" => {
+                fs::write(&config, "format_version = 1\nprimary_branch = \"main\"\n").unwrap()
+            }
+            "configuration_removed" => fs::remove_file(&config).unwrap(),
+            "remote_changed" => fs::write(
+                &config,
+                "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"other\"\n",
+            )
+            .unwrap(),
+            "primary_changed" => fs::write(
+                &config,
+                "format_version = 1\nprimary_branch = \"other\"\npublication_remote = \"origin\"\n",
+            )
+            .unwrap(),
+            _ => unreachable!(),
+        }
+        f.db().execute_batch("CREATE TABLE review_writes(n INTEGER);INSERT INTO review_writes VALUES(0);CREATE TRIGGER review_operation_write AFTER UPDATE ON remote_operation_records BEGIN UPDATE review_writes SET n=n+1;END;CREATE TRIGGER review_policy_write AFTER UPDATE ON remote_polling_state BEGIN UPDATE review_writes SET n=n+1;END;").unwrap();
+        let before = state::with_transaction(&f.local.service, &f.local.root, |tx, id| {
+            state::read_snapshot(tx, id)
+        })
+        .unwrap();
+        let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+        for restart in [false, true] {
+            let (replay, pending) = report(
+                f.local
+                    .service
+                    .poll_publication_remote(
+                        PollPublicationRemoteRequest {
+                            root: f.local.root.clone(),
+                            operation_id: f.owner.operation_id(),
+                            invocation: RemotePollInvocation::Automatic,
+                            approval: None,
+                            restart,
+                        },
+                        &mut session,
+                    )
+                    .unwrap(),
+            );
+            assert_eq!(replay, original, "{change}");
+            assert!(!pending);
+        }
+        assert_eq!(
+            state::with_transaction(&f.local.service, &f.local.root, |tx, id| {
+                state::read_snapshot(tx, id)
+            })
+            .unwrap(),
+            before
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT n FROM review_writes", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert!(
+            matches!(f.local.service.poll_publication_remote(PollPublicationRemoteRequest{root:f.local.root.clone(),operation_id:f.owner.operation_id(),invocation:RemotePollInvocation::Explicit,approval:None,restart:false},&mut session),Err(RemotePollError::Repository(e)) if e.kind==crate::repository::RepositoryErrorKind::OperationMismatch)
+        );
+    }
+}
+
+#[test]
+fn review_original_report_survives_second_poll_before_refresh_return() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    for failure in [
+        None,
+        Some(crate::repository::FailurePoint::BeforeIndexTransactionCommit),
+    ] {
+        let f = PollFixture::with_failure(failure);
+        let incoming = f.local.incoming(f.local.old, None);
+        f.local.tracking(&SynchronizationTarget::Primary, incoming);
+        let root = f.local.root.clone();
+        let data = f.local._data.path().to_owned();
+        let plan = f.local.plan.clone();
+        let called = Arc::new(AtomicBool::new(false));
+        let fired = called.clone();
+        f.local
+            .service
+            .set_poll_boundary_hook_for_testing(move |point, _| {
+                if point == crate::repository::FailurePoint::PollAfterCompletion
+                    && !fired.swap(true, Ordering::SeqCst)
+                {
+                    let service = RepositoryService::open_at(&data).unwrap();
+                    let configuration = service.observation_configuration(&root, &plan).unwrap();
+                    let owner = match service
+                        .reserve_remote_poll(
+                            &root,
+                            crate::repository::OperationId::new(),
+                            &super::super::RemoteOperationTarget::for_poll(&plan),
+                            super::super::RemoteOperationPriority::Manual,
+                        )
+                        .unwrap()
+                    {
+                        super::super::reservation::RemotePollReservationOutcome::Reservation(
+                            super::super::RemoteReservationOutcome::Reserved(o),
+                        ) => o,
+                        other => panic!("{other:?}"),
+                    };
+                    service
+                        .remote_safe_point(
+                            &root,
+                            &owner,
+                            super::super::RemoteOperationSafePoint::BeforeTransport,
+                        )
+                        .unwrap();
+                    let (second, pending) = report(
+                        service
+                            .poll_after_fetch(
+                                &root,
+                                &owner,
+                                &plan,
+                                &configuration,
+                                vec![("refs/heads/main".into(), incoming)],
+                            )
+                            .unwrap(),
+                    );
+                    assert!(!pending);
+                    assert_eq!(second.targets()[0].disposition(), PollDisposition::Current);
+                }
+            });
+        let (original, pending) =
+            report(f.run(vec![("refs/heads/main".into(), incoming)]).unwrap());
+        assert!(
+            called.load(Ordering::SeqCst),
+            "post-completion fixture boundary not reached"
+        );
+        assert_eq!(pending, failure.is_some());
+        assert_eq!(
+            original.targets().len(),
+            1,
+            "original response lost its targets"
+        );
+        assert_eq!(
+            original.targets()[0].disposition(),
+            PollDisposition::FastForwarded
+        );
+        assert_eq!(original.targets()[0].before_oid(), Some(f.local.old));
+        assert_eq!(original.targets()[0].after_oid(), Some(incoming));
+        let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+        let (older, _) = report(
+            f.local
+                .service
+                .poll_publication_remote(
+                    PollPublicationRemoteRequest {
+                        root: f.local.root.clone(),
+                        operation_id: f.owner.operation_id(),
+                        invocation: RemotePollInvocation::Automatic,
+                        approval: None,
+                        restart: false,
+                    },
+                    &mut session,
+                )
+                .unwrap(),
+        );
+        assert!(older.targets().is_empty());
+        assert_eq!(older.completed_at(), original.completed_at());
+        assert_eq!(older.next_eligible_at(), original.next_eligible_at());
+    }
+}
+
+#[test]
+fn review_original_stop_report_survives_later_poll_and_index_repair() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    for cancelled in [false, true] {
+        let f = PollFixture::new();
+        let (target, _) = f.local.context();
+        let incoming = f.local.incoming(f.local.old, None);
+        f.local.tracking(&SynchronizationTarget::Primary, incoming);
+        f.local.tracking(&target, incoming);
+        let context = f
+            .local
+            .plan
+            .context(AuthoringKind::Document, &POLL_ID.parse().unwrap());
+        let advertised = vec![
+            ("refs/heads/main".into(), incoming),
+            (context.remote_ref().into(), incoming),
+        ];
+        f.db().execute_batch(&format!("CREATE TRIGGER review_stop AFTER UPDATE ON remote_poll_dispositions WHEN NEW.ordinal=0 AND NEW.disposition='fast_forwarded' BEGIN UPDATE remote_operation_records SET {}=1 WHERE operation_ulid=NEW.operation_ulid;END;",if cancelled{"cancel_requested"}else{"yield_requested"})).unwrap();
+        let root = f.local.root.clone();
+        let data = f.local._data.path().to_owned();
+        let plan = f.local.plan.clone();
+        let second_advertised = advertised.clone();
+        let called = Arc::new(AtomicBool::new(false));
+        let fired = called.clone();
+        f.local
+            .service
+            .set_poll_boundary_hook_for_testing(move |point, _| {
+                if point == crate::repository::FailurePoint::PollAfterCompletion
+                    && !fired.swap(true, Ordering::SeqCst)
+                {
+                    let service = RepositoryService::open_at(&data).unwrap();
+                    let configuration = service.observation_configuration(&root, &plan).unwrap();
+                    let owner = match service
+                        .reserve_remote_poll(
+                            &root,
+                            crate::repository::OperationId::new(),
+                            &super::super::RemoteOperationTarget::for_poll(&plan),
+                            super::super::RemoteOperationPriority::Manual,
+                        )
+                        .unwrap()
+                    {
+                        super::super::reservation::RemotePollReservationOutcome::Reservation(
+                            super::super::RemoteReservationOutcome::Reserved(o),
+                        ) => o,
+                        other => panic!("{other:?}"),
+                    };
+                    service
+                        .remote_safe_point(
+                            &root,
+                            &owner,
+                            super::super::RemoteOperationSafePoint::BeforeTransport,
+                        )
+                        .unwrap();
+                    let (second, pending) = report(
+                        service
+                            .poll_after_fetch(
+                                &root,
+                                &owner,
+                                &plan,
+                                &configuration,
+                                second_advertised.clone(),
+                            )
+                            .unwrap(),
+                    );
+                    assert!(!pending);
+                    assert_eq!(second.targets()[0].disposition(), PollDisposition::Current);
+                    assert_eq!(
+                        second.targets()[1].disposition(),
+                        PollDisposition::FastForwarded
+                    );
+                }
+            });
+        let (original, pending) = report(f.run(advertised).unwrap());
+        assert!(called.load(Ordering::SeqCst));
+        assert!(pending);
+        assert_eq!(
+            original.completion(),
+            if cancelled {
+                PollCompletion::Cancelled
+            } else {
+                PollCompletion::Interrupted
+            }
+        );
+        assert_eq!(
+            original
+                .targets()
+                .iter()
+                .map(|t| t.disposition())
+                .collect::<Vec<_>>(),
+            [PollDisposition::FastForwarded, PollDisposition::NotReached]
+        );
+        assert_eq!(original.targets()[0].before_oid(), Some(f.local.old));
+        assert_eq!(original.targets()[0].after_oid(), Some(incoming));
+        assert_eq!(
+            f.db()
+                .query_row("SELECT count(*) FROM operation_records", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1,
+            "only the later poll scans"
+        );
+        assert!(
+            !f.db()
+                .query_row("SELECT refresh_required FROM repositories", [], |r| r
+                    .get::<_, bool>(0))
+                .unwrap(),
+            "later poll repaired the index but original stop remains IndexPending"
+        );
+    }
+}
+
+#[test]
+fn review_original_fenced_stop_keeps_pending_after_later_poll_repairs_index() {
+    let f = PollFixture::new();
+    let (target, _) = f.local.context();
+    let incoming = f.local.incoming(f.local.old, None);
+    f.local.tracking(&SynchronizationTarget::Primary, incoming);
+    f.local.tracking(&target, incoming);
+    let context = f
+        .local
+        .plan
+        .context(AuthoringKind::Document, &POLL_ID.parse().unwrap());
+    let advertised = vec![
+        ("refs/heads/main".into(), incoming),
+        (context.remote_ref().into(), incoming),
+    ];
+    let root = f.local.root.clone();
+    let data = f.local._data.path().to_owned();
+    let plan = f.local.plan.clone();
+    let second_advertised = advertised.clone();
+    f.local
+        .service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if point == crate::repository::FailurePoint::PollBeforeTarget && ordinal == Some(1) {
+                let service = RepositoryService::open_at(&data).unwrap();
+                // A real configuration-generation fence ends the first owner before
+                // its next safe point. A later explicit local poll may now proceed.
+                state::with_transaction(&service, &root, |tx, id| {
+                    state::configure(tx, id, Some(&plan), true)
+                })
+                .unwrap();
+                let configuration = service.observation_configuration(&root, &plan).unwrap();
+                let owner = match service
+                    .reserve_remote_poll(
+                        &root,
+                        crate::repository::OperationId::new(),
+                        &super::super::RemoteOperationTarget::for_poll(&plan),
+                        super::super::RemoteOperationPriority::Manual,
+                    )
+                    .unwrap()
+                {
+                    super::super::reservation::RemotePollReservationOutcome::Reservation(
+                        super::super::RemoteReservationOutcome::Reserved(o),
+                    ) => o,
+                    other => panic!("{other:?}"),
+                };
+                service
+                    .remote_safe_point(
+                        &root,
+                        &owner,
+                        super::super::RemoteOperationSafePoint::BeforeTransport,
+                    )
+                    .unwrap();
+                let (second, pending) = report(
+                    service
+                        .poll_after_fetch(
+                            &root,
+                            &owner,
+                            &plan,
+                            &configuration,
+                            second_advertised.clone(),
+                        )
+                        .unwrap(),
+                );
+                assert!(!pending);
+                assert_eq!(
+                    second.targets()[1].disposition(),
+                    PollDisposition::FastForwarded
+                );
+            }
+        });
+    let (original, pending) = report(f.run(advertised).unwrap());
+    assert_eq!(original.completion(), PollCompletion::Interrupted);
+    assert_eq!(
+        original
+            .targets()
+            .iter()
+            .map(|t| t.disposition())
+            .collect::<Vec<_>>(),
+        [PollDisposition::FastForwarded, PollDisposition::NotReached]
+    );
+    assert!(
+        pending,
+        "original fenced stop must retain its own index handoff state"
+    );
+    assert!(
+        !f.db()
+            .query_row("SELECT refresh_required FROM repositories", [], |r| r
+                .get::<_, bool>(0))
+            .unwrap()
+    );
+    assert_eq!(
+        f.db()
+            .query_row("SELECT count(*) FROM operation_records", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "only the later poll scanned"
+    );
+}
+
+#[test]
+fn review_explicit_restart_preserves_manual_identity_and_bypasses_policy_gates() {
+    let f = PollFixture::new();
+    end_fixture_reservation(&f);
+    let op = crate::repository::OperationId::new();
+    let owner = match f
+        .local
+        .service
+        .reserve_remote_poll(
+            &f.local.root,
+            op,
+            &super::super::RemoteOperationTarget::for_poll(&f.local.plan),
+            super::super::RemoteOperationPriority::Manual,
+        )
+        .unwrap()
+    {
+        super::super::reservation::RemotePollReservationOutcome::Reservation(
+            super::super::RemoteReservationOutcome::Reserved(o),
+        ) => o,
+        other => panic!("{other:?}"),
+    };
+    f.local
+        .service
+        .remote_safe_point(
+            &f.local.root,
+            &owner,
+            super::super::RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    f.db().execute_batch("UPDATE remote_polling_state SET enabled=0,paused=1,recovery_suspended=1,next_eligible_at=12345,automatic_backoff_seconds=120").unwrap();
+    let before = f
+        .local
+        .service
+        .remote_snapshot(&f.local.root)
+        .unwrap()
+        .polling()
+        .clone();
+    let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+    assert!(matches!(
+        f.local.service.poll_publication_remote(
+            PollPublicationRemoteRequest {
+                root: f.local.root.clone(),
+                operation_id: op,
+                invocation: RemotePollInvocation::Explicit,
+                approval: None,
+                restart: true
+            },
+            &mut session
+        ),
+        Err(RemotePollError::Transport(_))
+    ));
+    let after = f.local.service.remote_snapshot(&f.local.root).unwrap();
+    assert_eq!(after.polling(), &before);
+    assert_eq!(after.next_eligible_at(), Some(at(12345)));
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid=?1",
+                [op.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn review_terminal_other_kind_rejects_before_missing_live_configuration() {
+    let f = PollFixture::new();
+    end_fixture_reservation(&f);
+    let op = crate::repository::OperationId::new();
+    let owner = match f
+        .local
+        .service
+        .reserve_remote_operation(
+            &f.local.root,
+            op,
+            &super::super::RemoteOperationTarget::for_poll(&f.local.plan),
+        )
+        .unwrap()
+    {
+        super::super::RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    f.local
+        .service
+        .remote_safe_point(
+            &f.local.root,
+            &owner,
+            super::super::RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    f.local
+        .service
+        .finish_remote_operation(
+            &f.local.root,
+            &owner,
+            RemoteOutcomeCategory::TransportUnavailable,
+        )
+        .unwrap();
+    fs::remove_file(f.local.root.join(".manyhands/config.toml")).unwrap();
+    let before = state::with_transaction(&f.local.service, &f.local.root, |tx, id| {
+        state::read_snapshot(tx, id)
+    })
+    .unwrap();
+    let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+    assert!(
+        matches!(f.local.service.poll_publication_remote(PollPublicationRemoteRequest{root:f.local.root.clone(),operation_id:op,invocation:RemotePollInvocation::Automatic,approval:None,restart:true},&mut session),Err(RemotePollError::Repository(e)) if e.kind==crate::repository::RepositoryErrorKind::OperationMismatch)
+    );
+    assert_eq!(
+        state::with_transaction(&f.local.service, &f.local.root, |tx, id| {
+            state::read_snapshot(tx, id)
+        })
+        .unwrap(),
+        before
+    );
+}
 impl crate::repository::keys::SessionCredentialProvider for PanicCredentials {
     fn request_passphrase(
         &mut self,
