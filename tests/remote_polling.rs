@@ -2181,7 +2181,9 @@ fn prepare_transfer(p: &Pair) -> Result<git2::Oid, FixtureError> {
     p.publish(MAIN, p.base()?, &[("payload", Some((&payload, MODE)))])
 }
 fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureError> {
+    let t0 = std::time::Instant::now();
     let p = Pair::new()?;
+    ssh_harness::observation(&[1, t0.elapsed().as_millis()]);
     if transfer {
         prepare_transfer(&p)?;
         p.server.pace_transfer(std::time::Duration::from_millis(50));
@@ -2194,7 +2196,9 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
     };
     let before = snapshot(&p.b)?;
     let refs_before = all_refs(&p.b.repo()?)?;
+    ssh_harness::observation(&[2, t0.elapsed().as_millis()]);
     let n = p.no_push_baseline()?;
+    ssh_harness::observation(&[3, t0.elapsed().as_millis()]);
     let local_ops = count(&p.b, "operation_records")?;
     let invocation = if explicit {
         RemotePollInvocation::Explicit
@@ -2226,7 +2230,9 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
     };
     std::thread::scope(|scope| -> Result<(), FixtureError> {
         let worker = scope.spawn(|| p.b.service.poll_publication_remote(request, &mut session()));
+        ssh_harness::observation(&[4, t0.elapsed().as_millis()]);
         gate.wait_until_held()?;
+        ssh_harness::observation(&[5, t0.elapsed().as_millis()]);
         if local {
             assert!(
                 matches!(second.save_ticket(save.clone()),Err(e) if e.kind==RepositoryErrorKind::RepositoryBusy)
@@ -2244,7 +2250,9 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
         assert_eq!(snapshot(&p.b)?, before);
         assert_eq!(all_refs(&p.b.repo()?)?, refs_before);
         gate.release()?;
+        ssh_harness::observation(&[6, t0.elapsed().as_millis()]);
         let result = fixed(worker.join())?;
+        ssh_harness::observation(&[7, t0.elapsed().as_millis()]);
         p.redacted(&format!("{result:?}"))?;
         if explicit {
             assert_eq!(
@@ -2261,7 +2269,9 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
         }
         Ok(())
     })?;
+    ssh_harness::observation(&[8, t0.elapsed().as_millis()]);
     p.no_push_since(n)?;
+    ssh_harness::observation(&[9, t0.elapsed().as_millis()]);
     p.privacy()?;
     p.server.clear_fault();
     let inspection = fixed(p.b.service.active_remote_operation(&p.b.root))?;
@@ -2284,6 +2294,7 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
             SynchronizationResult::Complete(_)
         ));
     }
+    ssh_harness::observation(&[10, t0.elapsed().as_millis()]);
     p.finish()
 }
 fn advertisement_yield() -> Result<(), FixtureError> {
