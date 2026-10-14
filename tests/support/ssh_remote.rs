@@ -27,6 +27,12 @@ pub(super) struct AdvertisementGate {
     pub reached: std::sync::mpsc::Sender<()>,
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
+/// A real upload-pack relay pauses only after forwarding this many transfer
+/// bytes. The same controller contract as advertisements; no synthetic transport.
+pub(super) struct TransferGate {
+    pub after_bytes: usize,
+    pub gate: AdvertisementGate,
+}
 /// Fixed labels shared by the gated receiver-receipt regression and its worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReceiveAuditEvent {
@@ -124,6 +130,7 @@ pub(super) struct Shared {
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
     pub authentication_attempts: AtomicUsize,
+    pub connections: AtomicUsize,
     pub rejected_authentications: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
@@ -135,6 +142,7 @@ pub(super) struct Shared {
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
+    pub transfer_hold: Mutex<Option<TransferGate>>,
     pub receive_audit_hold: Mutex<Option<ReceiveAuditGate>>,
     pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
@@ -207,6 +215,26 @@ impl SshRemoteFixture {
         *gate = Some(AdvertisementGate {
             reached: ready,
             release: released,
+        });
+        Ok(AdvertisementHold { reached, release })
+    }
+
+    pub fn hold_transfer_after(
+        &self,
+        after_bytes: usize,
+    ) -> Result<AdvertisementHold, FixtureError> {
+        let mut hold = fixed(self.shared.transfer_hold.lock())?;
+        if hold.is_some() || after_bytes == 0 {
+            return Err(FixtureError);
+        }
+        let (ready, reached) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *hold = Some(TransferGate {
+            after_bytes,
+            gate: AdvertisementGate {
+                reached: ready,
+                release: released,
+            },
         });
         Ok(AdvertisementHold { reached, release })
     }
@@ -286,6 +314,7 @@ impl SshRemoteFixture {
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
             authentication_attempts: AtomicUsize::new(0),
+            connections: AtomicUsize::new(0),
             rejected_authentications: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
@@ -297,6 +326,7 @@ impl SshRemoteFixture {
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
+            transfer_hold: Mutex::new(None),
             receive_audit_hold: Mutex::new(None),
             receive_receipt_events: Mutex::new(None),
             hostile: Mutex::new(None),
@@ -488,6 +518,9 @@ impl SshRemoteFixture {
             self.shared.authentication_attempts.load(Ordering::SeqCst),
             self.shared.rejected_authentications.load(Ordering::SeqCst),
         )
+    }
+    pub fn connections(&self) -> usize {
+        self.shared.connections.load(Ordering::SeqCst)
     }
     /// Choose one exact virtual target; helpers always receive the owned repo path.
     pub fn expect_command_path(&self, path: &str) {

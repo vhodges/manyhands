@@ -172,7 +172,7 @@ and the baseline.
   Incremental meaningful RED/corrections/trials and exact commands in ledger;
   review-ready comment `01M4WAV9ECDNZ8NFSP7CGSXK85`. Complete review range starts
   original ff43d2c and includes a70a2ab docs checkpoint. Approved contracts unchanged.
-- [ ] Independent Task 6 spec review of full range from
+- [x] Independent Task 6 spec review of full range from
   `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7` through returned feature HEAD.
   `ses_ec74e7b1cffe52NiF8TdyiLNkR` BLOCKED four issues: automatic restart bypasses
   all eligibility gates; terminal replay consults current config before stored ID;
@@ -191,7 +191,24 @@ and the baseline.
   1 existing ignored**. Re-review comment `01M4WJP4VF6W2FPCZ7ZHM9229A` and dated
   ledger retain commands/counts/trials. Fix base 72a6260; complete base ff43d2c.
   Return to `ses_ec74e7b1cffe52NiF8TdyiLNkR` before any quality review.
-- [ ] Independent Task 6 quality review after spec approval.
+- [x] Controller/user reports Task 6 SPEC re-review APPROVE:
+  `ses_ec74e7b1cffe52NiF8TdyiLNkR`, through `4d89295070715d6a15ced2c08d72aff0dd0ee46f`.
+- [x] Independent Task 6 quality review after spec approval:
+  `ses_ec6bed51effeNWgnoaPfQ9pdlV`, APPROVE, one nonblocking minor:
+  duplicate disposition attachment in state.rs (5208–5219/5256–5267); the first
+  audit return needs attachment, normal return currently performs two passes.
+  Carry explicitly to final review alongside Task 2 SQL-kind regression minor.
+- [x] Task 7: real-SSH acceptance target, authorized inline at exact base
+  `4d89295070715d6a15ced2c08d72aff0dd0ee46f`; no subagents. **68 new SSH cases**
+  pass, including byte-barrier in-transfer yield, real divergence D3, D4 save,
+  conservative D2 partial checkout, stops/restarts and whole-store/output privacy.
+  Fixture-only optional short paths/transfer hold/connection counter; public API,
+  no production changes. Five dedicated targets pass **68/15/63/25/41**.
+  Required sequential Rust gates PASS: **1,758 passed, 0 failed, 1 existing ignored**.
+  No invented behavioral RED; fixture failures and outer-chain timeout recorded
+  honestly in dated ledger. Manual-only native workflow wired, not dispatched.
+  Review-ready comment `01M4WTNE2QC4091RCJ9KM6YYNM`; complete range starts above.
+- [ ] Independent Task 7 spec review, then quality review.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -220,9 +237,11 @@ Task 6 delivered locally after recorded RED, self-review regressions and final
 verification, ready for independent spec then quality review. Prior Task 0/preflight
 trusted; no repeated characterization. Complete range includes a70a2ab.
 Task 6 initial spec blocked four findings; corrective implementation and final
-verification now complete, **SPEC re-review pending, quality not started**.
-Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
-Tasks 7–8 have not started. Ticket remains
+verification now complete; controller/user reports **SPEC and quality APPROVE**.
+Deferred Task 2 direct-SQL kind-immutability and Task 6 duplicate disposition
+attachment minors remain for final review. Task 7 delivered locally for independent
+spec then quality review; Task 8 unstarted.
+Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence

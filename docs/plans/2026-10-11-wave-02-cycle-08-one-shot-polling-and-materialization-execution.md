@@ -10,6 +10,206 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 7 Delivered Locally For Independent Review — 2026-10-14T09:07:32Z
+
+**Task 7 review base:** `4d89295070715d6a15ced2c08d72aff0dd0ee46f`.
+Exact local delivery HEAD returned after the authorized commit. All 68 new
+real-SSH cases pass on Linux. Task 7 implemented; independent spec then quality
+review pending. Task 8 has **not** started. Ticket remains **open**.
+
+### Implementation And Boundaries
+
+New `tests/remote_polling.rs` links the public library normally (no source
+inclusion or cfg(test) access), uses the existing russh/real Git helper fixture,
+and registers as `harness=false`. Two independent authenticated clones have
+separate roots/services/registries. Peer Git setup/publishing/deletion/rename is
+outside each poll's counter scope. Every poll checks a settled baseline for zero
+new receive-pack advertisements, commands and ref updates; every case finishes
+with privacy scanning. Held-worker tests check the same baseline before manual
+retry, since deliberate synchronization may publish legitimately.
+
+Necessary **test-fixture-only** additions in support files: real accepted-TCP
+connection counter; opt-in transfer hold after 131,072 bytes forwarded by real
+upload-pack; and opt-in single-character isolation-directory names (including
+nested privacy controls). Existing targets keep their original path mode and
+all holds default absent. Pacing plus the byte barrier proves a negotiated,
+partly transmitted download, not just an advertisement stop. Controllers use
+bounded channels/holds and helper-audit barriers; no acceptance-test sleep,
+developer keys, global Git config mutation or synthetic transport. These are
+fixture plumbing, not changes to shared production helpers.
+
+Registry triggers request stops/fail atomic transitions; existing public
+FailurePoint injects materialization/index failures. The existing public
+PollBeforeTarget boundary callback installs an actual external tracking-ref
+change outside all guards; its report, batch, branch, fetched commit and
+tracking OID are checked. Cancellation also exercises public cancel while the
+advertisement is held. No production file, dependency/lockfile, versioned DTO
+schema, CLI/desktop, API audit or approved Cycle/design/plan changed.
+
+Preservation snapshots hash worktree bytes, HEAD/index/merge metadata, statuses,
+local refs, shared Git config, registration/admin artifacts and deterministic
+obstructions. Missing/foreign fixtures include their parked original checkout.
+Tracking refs may advance only as fetched; explicit all-ref assertions cover
+stops before tracking writes. Materialization checks exact branch/HEAD/index,
+single deterministic registration, comments/discovery, no upstream config and
+immutable original intent owner/target across second/reopen/second-service calls.
+Concurrent Busy proves only one reservation record before retry.
+
+D2 actual failed checkout is Linux-specific: a regular `a` is written, overlong
+symlink `z` fails, branch/gitfile/admin/registration survive and index is absent.
+Reopen/restart and the next poll retain byte-identical partial artifacts and
+MaterializationIncomplete. This case is not native Windows/macOS proof. D3 uses
+an actual divergent canonical ticket synchronization with retained conflict;
+both invocation modes add zero connections/operations or Git effects.
+D4 local save requests yield without a new journal row and succeeds on retry.
+
+Privacy scans cover every remote/operation recovery table (including dispositions
+and intents), generated stores, a live nonempty WAL, VACUUM INTO backup, formatted
+results/snapshots and isolated raw child output. BODY/passphrase/endpoint/private
+key/malformed-name canaries are never cached. Ordinary canonical titles are
+intentionally discovery content: the title sentinel is used in an executable
+**rejected** context tree, so a whole-database title scan tests metadata privacy
+without confusing legitimate indexed titles with recovery state. No recovery
+scan omits title probes. Nested controls prove stdout leak, beyond-prefix stderr
+leak on failure, clean failure and missing inventory all fail with exact categories.
+
+### Exact Passing Task 7 Case Inventory (68)
+
+All names below passed in `devenv shell -- cargo test --locked --test remote_polling`
+and again in the required all-features submission gate:
+
+| Group | Exact test names | Passed |
+| --- | --- | ---: |
+| Clean + current | `poll_primary_fast_forward`, `poll_document_fast_forward`, `poll_ticket_fast_forward`, `poll_all_three_fast_forward`, `poll_already_current` | 5 |
+| Once-only materialization | `poll_materialize_document_once`, `poll_materialize_ticket_once`, `poll_concurrent_materialization_once` | 3 |
+| Local exceptional state | `poll_tracked_dirty`, `poll_staged_dirty`, `poll_untracked_dirty`, `poll_git_conflicted_without_pending_record`, `poll_local_ahead`, `poll_diverged`, `poll_context_wrong_branch`, `poll_missing_worktree_directory`, `poll_primary_wrong_branch` | 9 |
+| Remote exceptional state | `poll_remote_deleted_preserves_local_work`, `poll_remote_renamed_old_deleted_new_nonconforming`, `poll_nonconforming_tree`, `poll_malformed_family`, `poll_outside_family`, `poll_preexisting_branch_blocks_materialization`, `poll_preexisting_path_blocks_materialization`, `poll_history_unknown_after_registry_loss` | 8 |
+| Prior hardening acceptance | `poll_ignored_directory_collision_preserved`, `poll_foreign_worktree_ownership_refused`, `poll_dot_document_nonconforming` | 3 |
+| Policy/attention | `poll_policy_disabled`, `poll_policy_paused`, `poll_policy_recovery_suspended`, `poll_policy_not_due`, `poll_unreachable_backoff_cap_and_explicit_failure`, `poll_rejected_key_attention_without_backoff`, `poll_unapproved_host_without_backoff`, `poll_locked_blocked_session_no_automatic_prompt` | 8 |
+| Arbitration/D3/D4 | `poll_automatic_advertisement_yields_to_manual`, `poll_automatic_in_transfer_yields_to_manual`, `poll_explicit_advertisement_makes_manual_busy`, `poll_local_save_requests_automatic_yield`, `poll_retained_real_divergence_conflict_blocks_both_invocations` | 5 |
+| Cancellation | `poll_cancel_before_transport`, `poll_cancel_after_advertisement`, `poll_cancel_between_observations`, `poll_cancel_before_batch`, `poll_cancel_after_batch`, `poll_cancel_before_local_mutation`, `poll_cancel_before_discovery`, `poll_public_cancel_held_advertisement` | 8 |
+| Partial cursor/restart | `poll_partial_batch_yield_report_and_restart` | 1 |
+| Interruption/reopen | `poll_disconnect_download_next_poll_finishes`, `poll_failure_after_tracking_writes_restart`, `poll_batch_commit_failure_atomic_restart`, `poll_fast_forward_before_disposition_failure_restart`, `poll_materialization_intent_failure_restart`, `poll_materialization_branch_failure_restart`, `poll_materialization_worktree_failure_restart`, `poll_materialization_branch_record_failure_retains_ambiguity`, `poll_failed_checkout_retains_partial_d2`, `poll_completion_transaction_failure_restart`, `poll_after_completion_failure_index_only_recovery`, `poll_refresh_failure_index_only_recovery` | 12 |
+| Frozen inputs | `poll_held_publication_remote_rename_fences`, `poll_held_endpoint_change_fences`, `poll_held_selected_key_change_fences`, `poll_tracking_changed_before_target_fences` | 4 |
+| Privacy | `poll_recovery_database_wal_backup_privacy`, `poll_output_capture_negative_controls` | 2 |
+
+### Final Sequential Verification
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_polling` | **68 passed**, 0 failed |
+| `devenv shell -- cargo test --locked --test remote_observation` | **15 passed**, 0 failed |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | **63 passed**, 0 failed, standalone rerun after outer chain timeout |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery` | **25 passed**, 0 failed |
+| `devenv shell -- cargo test --locked --test comment_publication` | **41 passed**, 0 failed |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,758 passed**, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+| `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` | PASS, open ticket and both new canonical Node-ULID comments rendered; no malformed diagnostics |
+| `git diff --check` | PASS |
+| `git diff --exit-code -- src Cargo.lock devenv.lock docs/Cycles/wave-02-cycle-08-one-shot-polling-and-materialization.md docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-design.md docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-implementation.md` | PASS, production/lockfiles/approved contracts unchanged |
+
+Final required check/fmt/Clippy/full-test order is sequential, log
+`tool_1398d3266001W2O7VUoM1Aliyb`: **613 library + 779 ordinary integration +
+357 real-SSH (68 poll, 15 observation, 63 synchronization, 25 merge, 41 comment,
+31 fixture, 114 transport) + 9 doctests**. Initial check/fmt/Clippy also passed
+before the last three acceptance-assertion tightenings. Those edits and fixture
+trial fixes justified the final gate. No Rust change after the final gate.
+
+### Honest Trial/RED Accounting
+
+**No production bug found or production behavior changed; no behavioral RED
+claimed.** Acceptance tests exercise already-delivered behavior. Fixture/test
+failures below are retained as trial evidence, not mislabeled bug regressions:
+
+- Initial `devenv shell -- cargo test --locked --test remote_polling` did not
+  compile: one Rust string escape and one temporary-ODB lifetime. Fixed tests.
+- Successive same-command trials stopped at **3 passed/1 failed** (all-three
+  clean assertion included IGNORED worktree directory), **5/1** (intent query
+  used `oid` instead of `target_oid`), **12/1** (ahead fixture created a sibling
+  commit rather than publishing the base), **16/1** (primary-wrong fixture also
+  advanced a clean context), **18/1** (renamed tree happened to contain the seed
+  document's valid ID). Corrected setup/assertions; next trial **36 passed**.
+  The all-three focused diagnostic trial was **0 passed/1 failed**, confirming
+  status bit 16384 (IGNORED), not a dirty checkout or production failure.
+- Expanded target compile trial: one mismatched match-arm return type in the
+  selected-key fixture. Corrected; `devenv shell -- cargo test --locked --test remote_polling poll_automatic`
+  **2 passed**. Expanded full trial **40/1**: retained-conflict check consulted
+  a cached libgit2 Index; reopening the actual checkout proves installed stages.
+  `devenv shell -- cargo test --locked --test remote_polling poll_retained` then **1 passed**.
+- `devenv shell -- cargo test --locked --test remote_polling poll_cancel` initial **0/1**: setup's initial
+  refresh-required flag caused IndexPending. Explicit initial public refresh
+  fixes baseline; next **7 passed**. Later final-tightening full trial **41/1**:
+  seeded backoff was legitimately reset by the first endpoint-generation setup.
+  Establish endpoint generation with a real successful poll first, then seed
+  metadata. Final 7 boundary cases preserve backoff=120/deadline=12345.
+- `devenv shell -- cargo test --locked --test remote_polling failure` initial **9/1**: post-completion repair
+  selected an old completed refresh ID. Select only unfinished ordinary refresh
+  records (otherwise new ID); next **11 passed**. No production recovery change.
+- `devenv shell -- cargo test --locked --test remote_polling poll_held` two **0/1** trials: Git fixture remote
+  rename itself moves tracking refs. Numeric diagnosis confirmed Transport
+  stop; compare all refs after the fixture's rename, before releasing the hold.
+  Next **3 passed**, with no poll ref write or batch.
+- `devenv shell -- cargo test --locked --test remote_polling poll_recovery_database` initial **0/1**: no live
+  nonempty WAL when the last connection closed. Hold a WAL connection across
+  actual polls; next **1 passed**, with backup/nonempty WAL inventory assertions.
+- Short-path/full trial **35/1**: blocked-session test additionally demanded no
+  TCP handshake, although host verification precedes blocked authentication.
+  Required no prompt/no Git helper still holds; removed only that extra TCP
+  assertion. Eligibility and D3 zero-connection tests use the new real counter.
+  Next full target **68 passed**; final strengthened-tree full target **68 passed**.
+- Additional focused commands, each **1 passed**:
+  `devenv shell -- cargo test --locked --test remote_polling poll_partial`;
+  `devenv shell -- cargo test --locked --test remote_polling poll_failed_checkout`;
+  `devenv shell -- cargo test --locked --test remote_polling poll_output_capture`;
+  `devenv shell -- cargo test --locked --test remote_polling poll_tracking_changed`;
+  `devenv shell -- cargo test --locked --test remote_polling poll_disconnect`.
+- Final dedicated five-target command chain (each exact command above joined
+  sequentially) exceeded its **600,000 ms outer tool timeout** during synchronization,
+  after poll **68**, observation **15**, and 45 synchronization success lines.
+  This is **not** a completed synchronization pass. No test failure printed.
+  The standalone synchronization rerun used 1,200,000 ms and passed all **63**;
+  merge/comment subsequently passed **25/41**. Final required four-command gate
+  used 2,400,000 ms and completed with the full results above. No concurrent
+  Devenv commands or repeated unchanged-tree success run beyond mandated checks.
+
+### Review And Native Handoff
+
+Manual-only `.github/workflows/build.yml` appends `--test remote_polling` to the
+shared native command for all five matrix targets. **No workflow dispatched;
+all five native executions pending.** Linux-only D2 checkout fault is reported
+as such. Task 6 approvals recorded at entry remain trusted. Carry **Task 2
+direct-SQL kind-immutability regression minor** and **Task 6 duplicate disposition
+attachment minor** explicitly into final Cycle review (first audit return still
+needs attachment; normal path currently does two passes). No cleanup for those
+minors in Task 7. No Task 8, subagents, design change, push/PR/merge/closure or
+worktree removal. Canonical review-ready comment `01M4WTNE2QC4091RCJ9KM6YYNM`.
+
+## Task 7 Entry And Task 6 Approvals — 2026-10-14T07:26:16Z
+
+Fresh Task 7-only implementer, inline, no subagents. Clean exact base/HEAD
+`4d89295070715d6a15ced2c08d72aff0dd0ee46f`, specified ticket branch/worktree
+verified. Prior controller preflight and Task 0 trusted; no repeated fetch/rebase
+or characterizations. Inspected approved plan, current APIs and real SSH fixtures.
+
+Controller/user reports Task 6 SPEC `ses_ec74e7b1cffe52NiF8TdyiLNkR` **APPROVE**,
+then quality `ses_ec6bed51effeNWgnoaPfQ9pdlV` **APPROVE** through this base.
+Historical pending-review statements below are superseded. Carry quality's one
+nonblocking minor explicitly to final Cycle review: state.rs 5208–5219/5256–5267
+duplicates disposition attachment on the normal return; the first audit return
+still needs its pass. Also retain Task 2 direct-SQL kind-immutability regression
+minor. Neither is required cleanup for Task 7.
+
+Task 7 acceptance tests exercise already-delivered public behavior. No artificial
+acceptance-target RED is required or claimed; any meaningful discovered bug must
+have recorded behavioral RED before a narrow production correction. Public API,
+real in-process russh/helper transport, counter baselines, barriers/registry
+triggers and public FailurePoint only. D1–D4 and sole Task 5 final-validator
+lease exception unchanged. Native workflow wiring only; native execution pending.
+Task 8 unstarted, ticket open. Entry comment `01M4WMW0XX9QSW6XWAXBKBQDDK`.
+
 ## Task 6 Spec Corrections: Final GREEN And Re-Review Handoff — 2026-10-14T06:48:06Z
 
 All four findings from `ses_ec74e7b1cffe52NiF8TdyiLNkR` are **technically corrected,

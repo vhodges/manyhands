@@ -121,6 +121,7 @@ pub(super) async fn serve(
             _ = shutdown.changed() => break,
             result = listener.accept() => {
                 let Ok((socket, _)) = result else { break };
+                shared.connections.fetch_add(1, Ordering::SeqCst);
                 let shared = shared.clone();
                 sessions.spawn(async move {
                     if boundary(&shared, FixtureBoundary::Handshake).await.is_err() { return; }
@@ -320,6 +321,7 @@ async fn relay(
     let mut status = None;
     let mut transfer_started = false;
     let mut transfer_checked = false;
+    let mut transferred = 0;
     let mut advertisement_checked = false;
     let mut hostile_pending = Vec::new();
     let mut hostile_sideband_sent = false;
@@ -360,6 +362,23 @@ async fn relay(
                 match result {
                     Ok(0) | Err(_) => output_open = false,
                     Ok(count) => {
+                        if transfer_started && !receiving {
+                            let gate = {
+                                let mut hold = shared.transfer_hold.lock().unwrap();
+                                if hold.as_ref().is_some_and(|h| transferred >= h.after_bytes) {
+                                    hold.take()
+                                } else { None }
+                            };
+                            if let Some(hold) = gate {
+                                if hold.gate.reached.send(()).is_err() { break; }
+                                let released = tokio::select! {
+                                    result = hold.gate.release => result.is_ok(),
+                                    _ = shutdown.changed() => false,
+                                    _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                                };
+                                if !released { break; }
+                            }
+                        }
                         if !advertisement_checked {
                             advertisement_checked = true;
                             if boundary(&shared, FixtureBoundary::Advertisement).await.is_err() { break; }
@@ -395,6 +414,7 @@ async fn relay(
                             _ = shutdown.changed() => break,
                         };
                         if sent.is_err() { break; }
+                        if transfer_started && !receiving { transferred += count; }
                     }
                 }
             },
