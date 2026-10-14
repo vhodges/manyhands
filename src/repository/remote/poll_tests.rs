@@ -4957,7 +4957,7 @@ fn substituted_context_is_inaccessible(case: &str) {
                 .join("worktrees")
                 .join(POLL_ID)
                 .join("gitdir"),
-            format!("{}\n", path.join("ignored").display()),
+            super::super::git_metadata_link_text(&path.join("ignored")),
         )
         .unwrap();
         git2::Repository::open(&path).unwrap()
@@ -5028,7 +5028,7 @@ fn substituted_context_is_inaccessible(case: &str) {
                 .unwrap();
                 fs::write(
                     other.path().join("gitdir"),
-                    format!("{}\n", path.join(".git").display()),
+                    super::super::git_metadata_link_text(&path.join(".git")),
                 )
                 .unwrap();
                 let repo = git2::Repository::open(&path).unwrap();
