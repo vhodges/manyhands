@@ -119,6 +119,7 @@ pub enum FixtureBoundary {
 #[derive(Clone, Copy)]
 pub(super) enum Fault {
     Disconnect(FixtureBoundary),
+    DisconnectAfterTransferBytes(usize),
     Stall(FixtureBoundary, Duration),
     Pace(Duration),
 }
@@ -131,6 +132,8 @@ pub(super) struct Shared {
     pub accepted: Mutex<Vec<Vec<u8>>>,
     pub authentication_attempts: AtomicUsize,
     pub connections: AtomicUsize,
+    pub upload_pack_bytes: AtomicUsize,
+    pub byte_disconnects: AtomicUsize,
     pub rejected_authentications: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
@@ -315,6 +318,8 @@ impl SshRemoteFixture {
             accepted: Mutex::new(Vec::new()),
             authentication_attempts: AtomicUsize::new(0),
             connections: AtomicUsize::new(0),
+            upload_pack_bytes: AtomicUsize::new(0),
+            byte_disconnects: AtomicUsize::new(0),
             rejected_authentications: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
@@ -576,6 +581,19 @@ impl SshRemoteFixture {
     pub fn disconnect_at(&self, boundary: FixtureBoundary) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Disconnect(boundary));
     }
+    /// Disconnect a negotiated upload only after this many response bytes have
+    /// actually been forwarded. Install while its byte barrier is held.
+    pub fn disconnect_after_transfer_bytes(&self, after_bytes: usize) {
+        assert!(after_bytes > 0);
+        *self.shared.fault.lock().unwrap() = Some(Fault::DisconnectAfterTransferBytes(after_bytes));
+    }
+    /// Sideband-1 PACK payload bytes, excluding framing, ACKs and progress text.
+    pub fn upload_pack_bytes(&self) -> usize {
+        self.shared.upload_pack_bytes.load(Ordering::SeqCst)
+    }
+    pub fn byte_disconnects(&self) -> usize {
+        self.shared.byte_disconnects.load(Ordering::SeqCst)
+    }
     pub fn stall_at(&self, boundary: FixtureBoundary, delay: Duration) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Stall(boundary, delay));
     }
@@ -625,4 +643,7 @@ pub fn generate_key() -> Result<PrivateKey, FixtureError> {
 
 pub fn receiver_command_fragmentation() -> Result<(), FixtureError> {
     server::receiver_command_fragmentation()
+}
+pub fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
+    server::upload_pack_counter_fragmentation()
 }

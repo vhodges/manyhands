@@ -10,6 +10,183 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 7 SPEC Evidence Corrections: Verified Re-Review Handoff — 2026-10-14T10:22:41Z
+
+All three P2 evidence findings from `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` are
+**technically corrected, awaiting SPEC re-review; quality has not started**.
+Incremental correction base `6132090ba3d8930ad42ca86e2a99e139603dfd4b`; complete
+Task 7 review base `4d89295070715d6a15ced2c08d72aff0dd0ee46f`. Exact new local
+HEAD returned after authorized commit. No production behavior change or design
+amendment. Historical Task 7 evidence/limitations below remain recorded and are
+superseded only where this correction strengthens the named acceptance checks.
+
+### 1. Complete Ref Inventory On Current/Second Polls
+
+`all_refs` now records **every ref name, direct OID and symbolic target**. The
+four clean-update cases compare that complete inventory before/after the second
+poll, along with object inventory/local snapshots and renewed branch/index/files/
+tracking assertions. Current acceptance now includes primary, document and ticket
+together; only the initial real poll may introduce context tracking refs, then
+two more polls must preserve the complete inventory. Once-only materialization
+second/reopen/second-service current polls also compare complete inventories.
+Each clean/current fixture plants an unadvertised `refs/remotes/origin/stale` and
+unrelated symbolic `refs/remotes/unused/HEAD`, with fetch.prune=true, so deletion
+or symbolic-target changes cannot hide behind the local-only snapshot. The
+snapshot still intentionally permits legitimate tracking writes during initial
+fetch/exceptional-state processing; no preservation assertion was weakened.
+
+Named checks: `poll_primary_fast_forward`, `poll_document_fast_forward`,
+`poll_ticket_fast_forward`, `poll_all_three_fast_forward`, `poll_already_current`,
+`poll_materialize_document_once`, `poll_materialize_ticket_once`.
+Initial strengthened clean/current runs were already GREEN, not fabricated RED.
+
+### 2. Proven Partial PACK Download Before Disconnect
+
+The real upload relay gains an **opt-in byte-qualified disconnect fault**,
+installed only while the existing 131,072-response-byte barrier is held. The
+controller first asserts at least 65,536 actual **sideband-1 PACK payload bytes**
+were forwarded; ACK/control packets, framing and progress text do not count.
+Only after this proof does it install the fault and release the barrier. A
+separate counter proves exactly one byte-qualified disconnect executed. Transport
+still uses real russh/Git helpers, with no sleeps, fabricated transfer, production
+hook or change to existing fixture fault behavior when the new option is absent.
+
+`poll_upload_pack_counter_fragmentation` verifies byte observation across widths
+1/2/3/7/16,384, progress/ACK exclusion, incomplete packets counted only on complete
+forwarding, and malformed input fail-closed/sticky bounded observation. It tests
+the fixture parser only, not a synthetic transport. Unrelated relay output is
+never modified and unsupported packet output simply stops counting.
+
+Both `poll_disconnect_download_next_poll_finishes` (explicit) and new
+`poll_disconnect_partial_download_automatic_backoff` retain a real prior completed
+batch. After partial download they assert all refs, local Git/files/config and
+the complete prior batch/ref-observation/disposition rows unchanged. Every old
+ODB object survives, every retained object reads valid, and additional valid
+partial-download objects are permitted and counted, not mistaken for ref-update
+authority. Actual Linux observations in focused and final runs were **131,029
+PACK payload bytes, 0 new indexed objects, incoming commit not indexed** for each
+invocation. Those object observations are reported, not imposed as a universal
+backend requirement.
+
+Each failed record is `failed`/`transport_unavailable`. Automatic backoff doubles
+120→240 with completion-based deadline; explicit failure retains backoff=120 and
+deadline=12345. Reopened service replays the failed ID with zero new connections
+and unchanged prior batch, then a fresh explicit poll completes the unfinished
+download/FF and verifies branch/index/worktree/tracking. Poll-phase receive-pack
+advertisement/command/update counters remain at their baseline throughout.
+All three initial byte-fault/parser checks were already GREEN.
+
+### 3. Accepted-Title Privacy With Explicit Canonical-Index Scope
+
+Valid collaborator document and ticket contexts now use distinct accepted-title
+sentinels and real body-sentinel comments. **Metadata probes** include these titles
+for every recovery/operation row, formatted results/reports/RemoteSnapshot and
+isolated raw output. **Whole-store probes** still include the rejected TITLE,
+BODY, endpoint, passphrase/key and malformed-name probes, but permit accepted
+titles because discovered_items legitimately indexes canonical titles. No body,
+credential, endpoint or rejected-title probe was removed from any raw scan.
+
+The privacy journey materializes both accepted contexts successfully, verifies
+their comments/discovery and diagnostic RemoteSnapshots, and proves the accepted
+titles are really indexed in the live database and VACUUM INTO backup. Recovery
+rows in both live registries and the backup are scanned with the stronger metadata
+set. Negative controls inject each accepted title into a fixture-only backup
+recovery table: the same row scanner must reject it, then the fixture table is
+removed and the backup recovery scan passes again. Raw generated DB/WAL/backup
+scans continue to reject every non-index-content sentinel. **No claim of raw DB/
+WAL/backup absence of legitimate accepted indexed titles is made.**
+
+Existing materialization/replay results are scanned with accepted-title probes.
+`poll_output_capture_negative_controls` now also proves exact OutputPrivacy for
+accepted document title on stdout and accepted ticket title beyond the prefix on
+stderr of a failing child, alongside all four original controls (six total).
+Those private child controls are not counted as ordinary passing target cases.
+
+### First Trials And Fixture Failure Accounting
+
+No production defect found/fixed; **no production behavioral RED claimed**.
+All Rust commands below used Devenv, sequentially:
+
+| Exact command | First result / correction evidence |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_polling fast_forward` | **5 passed**, including four strengthened clean cases and existing disposition-failure case |
+| `devenv shell -- cargo test --locked --test remote_polling poll_already_current` | **1 passed** |
+| `devenv shell -- cargo test --locked --test remote_polling poll_upload_pack_counter_fragmentation` | **1 passed** |
+| `devenv shell -- cargo test --locked --test remote_polling poll_disconnect` | **2 passed**, measured 131,029 payload bytes/0 new indexed objects each |
+| `devenv shell -- cargo test --locked --test remote_polling poll_materialize` | **2 passed** with accepted-title result/row/output probes |
+| `devenv shell -- cargo test --locked --test remote_polling poll_recovery_database` | First **0 passed/1 failed**, then five diagnostic **0/1** runs; after fixture correction **1 passed** |
+| `devenv shell -- cargo test --locked --test remote_polling poll_output_capture` | **1 passed**, all six negative controls |
+
+The sole failure was **fixture invalidity**, not title leakage or a production
+bug: the new combined successful document/ticket journey reused comment ID C for
+two different items. Global item/comment ID uniqueness correctly made the cache
+unreadable and refresh IndexPending. The first numerical diagnostic pinned failure
+to the first combined materialization; a query for an unfinished refresh row found
+none, then retry returned fixed IndexUnavailable before journaling. Source
+`repository.rs:6010–6014` explicitly rejects globally reused item/comment IDs.
+Use a distinct canonical document-comment ID, matching its filename and discovery
+assertion; the combined valid fixture then succeeds. Five temporary numerical-only
+diagnostic trials are retained honestly; all diagnostic/retry plumbing was removed.
+No compile failure, timeout, Clippy failure or production patch in this correction.
+
+### Final Submission Verification And Handoff
+
+After all Rust/test edits, final sequential commands:
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_polling` | **70 passed**, 0 failed: original 68 cases plus automatic partial-download and fixture-counter cases |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,760 passed**, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+| `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` | PASS, open ticket and both correction comments rendered, no malformed diagnostics |
+| `git diff --check` | PASS |
+
+CLI/canonical-validation log `tool_139f21b19001QDfY3UKlfyuSCt`. Production,
+manifest/lockfile, workflow and all three approved-contract preservation diff
+checks also exit 0. These post-gate operations do not change the Rust tree.
+
+Full gate log `tool_139d2679f0017Gt3lDgqTITLXk`: **613 library + 779 ordinary
+integration + 359 SSH-target cases + 9 doctests**. It includes **70 polling,
+15 observation, 63 synchronization, 25 merge recovery, 41 comment publication,
+31 fixture and 114 transport**. Existing case bodies in other targets are
+unchanged, all passing with the additive fixture observer/fault. Their prior
+standalone Task 7 checks remain recorded below; not falsely claimed rerun as
+standalone commands here. Full gate completed within its 3,600,000 ms bound;
+no outer timeout in this correction. No Rust edit after this gate.
+
+Only remote_polling.rs, ssh_remote.rs, ssh_server.rs, ledger/open ticket and two
+new canonical Node-ULID comments change from the correction base. Production,
+dependencies/lockfiles, workflow, approved Cycle/design/plan and existing SSH test
+bodies remain unchanged. Return complete Task 7 range for SPEC re-review by
+`ses_ec64fd841ffe4JHjZ3XJ7I1MOp` before quality. Native execution remains pending
+for all five targets; workflow still manual-only and undispatched. Task 8 unstarted,
+ticket open, no subagents/push/PR/merge/closure/cleanup. Task 2 SQL-kind immutability
+and Task 6 duplicate disposition attachment minors remain explicitly deferred to
+final Cycle review. Re-review comment `01M4WYZ203H6WF06FST9VFHZH0`.
+
+## Task 7 SPEC Evidence Corrections: Entry — 2026-10-14T09:21:28Z
+
+Reviewer `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` reports **three P2 evidence gaps**;
+quality has not started. Verified clean fix base
+`6132090ba3d8930ad42ca86e2a99e139603dfd4b`, same assigned branch/worktree.
+Complete Task 7 review base remains `4d89295070715d6a15ced2c08d72aff0dd0ee46f`.
+Task 0/preflight and Task 6 approvals trusted; no rebase or repeated characterization.
+
+Source confirms all three: local preservation snapshots intentionally exclude
+remote refs, but current/second-poll cases have no full inventory comparison;
+disconnect_at(Transfer) runs before the first transfer response is forwarded;
+accepted materialization titles are ordinary unprobed content and only a rejected
+title is a privacy sentinel. These are test-evidence gaps, not established
+production defects. Harden complete ref inventories, disconnect only beyond a
+real byte barrier, and separate accepted-title recovery/diagnostic/output probes
+from whole-store probes that must permit canonical indexed titles. Record actual
+first-run results; no artificial behavioral RED. Existing cases/production
+semantics remain unchanged. Fix inline, no subagents; spec re-review before quality.
+Ticket open, Task 8 unstarted. Entry comment `01M4WVEZ4CAG09BJ2NT1G3XYE1`.
+
 ## Task 7 Delivered Locally For Independent Review — 2026-10-14T09:07:32Z
 
 **Task 7 review base:** `4d89295070715d6a15ced2c08d72aff0dd0ee46f`.

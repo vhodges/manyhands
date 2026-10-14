@@ -209,6 +209,21 @@ and the baseline.
   honestly in dated ledger. Manual-only native workflow wired, not dispatched.
   Review-ready comment `01M4WTNE2QC4091RCJ9KM6YYNM`; complete range starts above.
 - [ ] Independent Task 7 spec review, then quality review.
+  SPEC `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` requests three P2 evidence corrections:
+  complete refs on second/current polls; byte-proven partial download disconnect;
+  accepted-title recovery/diagnostic/output privacy with canonical index exception.
+  Fix-only base `6132090ba3d8930ad42ca86e2a99e139603dfd4b`; tests/fixture hardening
+  technically corrected, awaiting SPEC re-review, no production defect established.
+  Complete direct/symbolic/tracking inventories now preserved on second/current
+  polls; partial download proven by 131,029 real PACK payload bytes before fault,
+  previous batch/refs retained and both failure policies/reopen/next poll verified.
+  Accepted document/ticket title probes cover recovery/diagnostics/raw output while
+  legitimate canonical index titles are permitted in DB/WAL/backup raw scans.
+  Added automatic partial-download and fixture-counter cases; **70 polling cases**
+  and required sequential Rust gates PASS (**1,760 passed, 0 failed, 1 ignored**).
+  Combined privacy fixture's reused comment ID failure/diagnostic trials and exact
+  commands/counts recorded in dated ledger; distinct IDs fix fixture only.
+  Re-review comment `01M4WYZ203H6WF06FST9VFHZH0`. Quality not started.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main

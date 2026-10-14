@@ -31,12 +31,15 @@ fn main() {
 const T: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 const D: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const C: &str = "01CRZ3NDEKTSV4RRFFQ69G5FAV";
+const DOCUMENT_COMMENT: &str = "01DRZ3NDEKTSV4RRFFQ69G5FAV";
 const MAIN: &str = "refs/heads/main";
 const TP: &str = ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAW/ticket.md";
 const DP: &str = "docs/d.md";
 const PASSWORD: &str = "poll-private-passphrase-canary";
 const BODY: &str = "poll-private-comment-body-canary";
 const TITLE: &str = "poll-private-rejected-title-canary";
+const DOCUMENT_TITLE: &str = "poll-private-accepted-document-title-canary";
+const TICKET_TITLE: &str = "poll-private-accepted-ticket-title-canary";
 const BAD_REF: &str = "refs/heads/manyhands/ticket/poll-private-malformed-canary";
 const MODE: u32 = 0o100644;
 
@@ -128,6 +131,11 @@ const CASES: &[ssh_harness::Case] = &[
         "poll_disconnect_download_next_poll_finishes",
         disconnect_download,
     ),
+    (
+        "poll_disconnect_partial_download_automatic_backoff",
+        disconnect_download_automatic,
+    ),
+    ("poll_upload_pack_counter_fragmentation", upload_counter),
     (
         "poll_failure_after_tracking_writes_restart",
         failure_after_tracking,
@@ -243,7 +251,7 @@ fn source(item: &str, title: &str, body: &str) -> String {
 }
 fn comment(item: &str) -> String {
     canonical::serialize_item(&canonical::CanonicalItem::Comment(canonical::Comment {
-        id: C.parse().unwrap(),
+        id: comment_id(item).parse().unwrap(),
         item_id: item.parse().unwrap(),
         parent_id: None,
         created_at: time::OffsetDateTime::from_unix_timestamp(1_767_225_600).unwrap(),
@@ -371,6 +379,7 @@ struct Pair {
     b: Side,
     _dir: tempfile::TempDir,
     probes: Vec<Vec<u8>>,
+    metadata_probes: Vec<Vec<u8>>,
 }
 impl Pair {
     fn new() -> Result<Self, FixtureError> {
@@ -410,7 +419,13 @@ impl Pair {
                 .filter(|s| s.len() > 40)
                 .map(<[u8]>::to_vec),
         );
-        ssh_privacy::save(&probes)?;
+        let mut metadata_probes = probes.clone();
+        metadata_probes.extend([
+            DOCUMENT_TITLE.as_bytes().to_vec(),
+            TICKET_TITLE.as_bytes().to_vec(),
+        ]);
+        // Captured output never has an index-content exception.
+        ssh_privacy::save(&metadata_probes)?;
         let ar = dir.path().join("a");
         let ad = dir.path().join("x");
         let repo = clone_owned(&server, &ar)?;
@@ -481,6 +496,7 @@ impl Pair {
             },
             _dir: dir,
             probes,
+            metadata_probes,
         })
     }
     fn approval(&self) -> HostApproval {
@@ -546,41 +562,15 @@ impl Pair {
         Ok(())
     }
     fn redacted(&self, text: &str) -> Result<(), FixtureError> {
-        ssh_privacy::clean(text.as_bytes(), &self.probes)
+        ssh_privacy::clean(text.as_bytes(), &self.metadata_probes)
     }
     fn privacy(&self) -> Result<(), FixtureError> {
-        ssh_privacy::save(&self.probes)?;
+        ssh_privacy::save(&self.metadata_probes)?;
         for side in [&self.a, &self.b] {
             let db = side.db()?;
-            let mut stmt=fixed(db.prepare(r"SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'remote\_%' ESCAPE '\' OR name='operation_records') ORDER BY name"))?;
-            let tables = fixed(
-                fixed(stmt.query_map([], |r| r.get::<_, String>(0)))?
-                    .collect::<Result<Vec<_>, _>>(),
-            )?;
-            for required in [
-                "remote_poll_dispositions",
-                "remote_poll_materializations",
-                "remote_operation_records",
-                "remote_ref_observations",
-            ] {
-                assert!(tables.iter().any(|t| t == required));
-            }
-            for table in tables {
-                let mut stmt = fixed(db.prepare(&format!("SELECT * FROM {table}")))?;
-                let cols = stmt.column_count();
-                let mut rows = fixed(stmt.query([]))?;
-                while let Some(row) = fixed(rows.next())? {
-                    for c in 0..cols {
-                        if let rusqlite::types::ValueRef::Text(b)
-                        | rusqlite::types::ValueRef::Blob(b) = fixed(row.get_ref(c))?
-                        {
-                            ssh_privacy::clean(b, &self.probes)?;
-                        }
-                    }
-                }
-            }
-            // Canonical discovery intentionally caches ordinary titles. TITLE is
-            // only used in a rejected tree and is never eligible for that cache.
+            scan_recovery_rows(&db, &self.metadata_probes)?;
+            // Accepted titles are legitimate discovered_items content. All other
+            // canaries, including the rejected title, remain whole-store probes.
             let inventory = ssh_privacy::scan(&side.data, &self.probes)?;
             assert!(
                 inventory
@@ -622,6 +612,35 @@ impl Pair {
     fn finish(&self) -> Result<(), FixtureError> {
         self.privacy()
     }
+}
+fn scan_recovery_rows(db: &rusqlite::Connection, probes: &[Vec<u8>]) -> Result<(), FixtureError> {
+    let mut stmt = fixed(db.prepare(r"SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'remote\_%' ESCAPE '\' OR name='operation_records') ORDER BY name"))?;
+    let tables = fixed(
+        fixed(stmt.query_map([], |r| r.get::<_, String>(0)))?.collect::<Result<Vec<_>, _>>(),
+    )?;
+    for required in [
+        "remote_poll_dispositions",
+        "remote_poll_materializations",
+        "remote_operation_records",
+        "remote_ref_observations",
+    ] {
+        assert!(tables.iter().any(|t| t == required));
+    }
+    for table in tables {
+        let mut statement = fixed(db.prepare(&format!("SELECT * FROM {table}")))?;
+        let columns = statement.column_count();
+        let mut rows = fixed(statement.query([]))?;
+        while let Some(row) = fixed(rows.next())? {
+            for column in 0..columns {
+                if let rusqlite::types::ValueRef::Text(bytes)
+                | rusqlite::types::ValueRef::Blob(bytes) = fixed(row.get_ref(column))?
+                {
+                    ssh_privacy::clean(bytes, probes)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 fn report(result: RemotePollResult) -> Result<(RemotePollReport, bool), FixtureError> {
     let (outcome, pending) = match result {
@@ -798,6 +817,7 @@ fn clean_checkout(p: &Pair, item: Option<&str>, oid: git2::Oid) -> Result<(), Fi
 fn clean_case(items: &[Option<&str>]) -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let base = p.base()?;
+    stale_tracking(&p, base)?;
     let mut tips = Vec::new();
     for item in items {
         if let Some(item) = item {
@@ -826,6 +846,7 @@ fn clean_case(items: &[Option<&str>]) -> Result<(), FixtureError> {
     }
     let before = snapshot(&p.b)?;
     let odb = objects(&p.b.repo()?)?;
+    let refs = all_refs(&p.b.repo()?)?;
     let again = p.poll()?;
     assert!(
         again
@@ -835,6 +856,10 @@ fn clean_case(items: &[Option<&str>]) -> Result<(), FixtureError> {
     );
     assert_eq!(snapshot(&p.b)?, before);
     assert_eq!(objects(&p.b.repo()?)?, odb);
+    assert_eq!(all_refs(&p.b.repo()?)?, refs);
+    for (item, _, tip) in tips {
+        clean_checkout(&p, item, tip)?;
+    }
     p.finish()
 }
 fn primary_fast_forward() -> Result<(), FixtureError> {
@@ -851,31 +876,67 @@ fn all_three_fast_forward() -> Result<(), FixtureError> {
 }
 fn already_current() -> Result<(), FixtureError> {
     let p = Pair::new()?;
+    let base = p.base()?;
+    stale_tracking(&p, base)?;
+    for item in [D, T] {
+        p.context(item)?;
+        let peer = p.a.repo()?;
+        fixed(peer.reference(&reference(item), base, false, "owned current peer branch"))?;
+        push_peer(&peer, &p.server, &reference(item))?;
+    }
+    // Only this initial fetch may introduce the two context tracking refs.
+    let initial = p.poll()?;
+    assert_eq!(initial.targets().len(), 3);
+    assert!(
+        initial
+            .targets()
+            .iter()
+            .all(|t| t.disposition() == PollDisposition::Current)
+    );
     let before = snapshot(&p.b)?;
     let odb = objects(&p.b.repo()?)?;
+    let refs = all_refs(&p.b.repo()?)?;
     for _ in 0..2 {
         let r = p.poll()?;
-        assert_eq!(r.targets().len(), 1);
-        assert_eq!(row(&r, MAIN).disposition(), PollDisposition::Current);
+        assert_eq!(r.targets().len(), 3);
+        assert!(
+            r.targets()
+                .iter()
+                .all(|t| t.disposition() == PollDisposition::Current)
+        );
         assert_eq!(snapshot(&p.b)?, before);
         assert_eq!(objects(&p.b.repo()?)?, odb);
+        assert_eq!(all_refs(&p.b.repo()?)?, refs);
+        for item in [None, Some(D), Some(T)] {
+            clean_checkout(&p, item, base)?;
+        }
     }
     p.finish()
 }
 
 fn publish_new(p: &Pair, item: &str) -> Result<git2::Oid, FixtureError> {
-    let cp = format!(".manyhands/comments/{item}/{C}.md");
+    let cp = format!(".manyhands/comments/{item}/{}.md", comment_id(item));
     p.publish(
         &reference(item),
         p.base()?,
         &[
             (
                 if item == T { TP } else { DP },
-                Some((source(item, "Collaborator", BODY).as_bytes(), MODE)),
+                Some((source(item, accepted_title(item), BODY).as_bytes(), MODE)),
             ),
             (&cp, Some((comment(item).as_bytes(), MODE))),
         ],
     )
+}
+fn accepted_title(item: &str) -> &'static str {
+    if item == T {
+        TICKET_TITLE
+    } else {
+        DOCUMENT_TITLE
+    }
+}
+fn comment_id(item: &str) -> &'static str {
+    if item == T { C } else { DOCUMENT_COMMENT }
 }
 fn discovered_once(p: &Pair, item: &str, tip: git2::Oid) -> Result<(), FixtureError> {
     let repo = p.b.repo()?;
@@ -904,10 +965,16 @@ fn discovered_once(p: &Pair, item: &str, tip: git2::Oid) -> Result<(), FixtureEr
         .filter(|i| i.id.to_string() == item && i.context == p.b.worktree(item))
         .collect::<Vec<_>>();
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].title, "Collaborator");
+    assert_eq!(found[0].title, accepted_title(item));
     assert_eq!(found[0].comments.len(), 1);
-    assert_eq!(found[0].comments[0].id.to_string(), C);
+    assert_eq!(found[0].comments[0].id.to_string(), comment_id(item));
     assert_eq!(fixed(p.b.db()?.query_row("SELECT count(*) FROM remote_poll_materializations WHERE item_id=?1 AND step='complete'",[item],|r|r.get::<_,i64>(0)))?,1);
+    // RemoteSnapshot is diagnostic/recovery metadata, unlike the canonical
+    // RepositorySnapshot.items content inspected above.
+    p.redacted(&format!(
+        "{:?}",
+        fixed(p.b.service.remote_snapshot(&p.b.root))?
+    ))?;
     Ok(())
 }
 fn materialize_once(item: &str) -> Result<(), FixtureError> {
@@ -920,6 +987,7 @@ fn materialize_once(item: &str) -> Result<(), FixtureError> {
     );
     discovered_once(&p, item, tip)?;
     let before = snapshot(&p.b)?;
+    let refs = all_refs(&p.b.repo()?)?;
     let intents = fixed(p.b.db()?.query_row(
         "SELECT operation_ulid,target_oid,step FROM remote_poll_materializations",
         [],
@@ -944,6 +1012,7 @@ fn materialize_once(item: &str) -> Result<(), FixtureError> {
         );
         assert_eq!(snapshot(&p.b)?, before);
         discovered_once(&p, item, tip)?;
+        assert_eq!(all_refs(&p.b.repo()?)?, refs);
         assert_eq!(
             fixed(p.b.db()?.query_row(
                 "SELECT operation_ulid,target_oid,step FROM remote_poll_materializations",
@@ -1690,15 +1759,38 @@ fn explicit_busy() -> Result<(), FixtureError> {
 fn local_save_yield() -> Result<(), FixtureError> {
     priority(false, false, true)
 }
-fn all_refs(repo: &git2::Repository) -> Result<Vec<(String, Option<git2::Oid>)>, FixtureError> {
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RefState {
+    name: String,
+    direct: Option<git2::Oid>,
+    symbolic: Option<String>,
+}
+fn all_refs(repo: &git2::Repository) -> Result<Vec<RefState>, FixtureError> {
     let mut refs = fixed(repo.references())?
         .map(|r| {
             let r = fixed(r)?;
-            Ok((fixed(r.name().ok_or(FixtureError))?.to_owned(), r.target()))
+            Ok(RefState {
+                name: fixed(r.name().ok_or(FixtureError))?.to_owned(),
+                direct: r.target(),
+                symbolic: r.symbolic_target().map(str::to_owned),
+            })
         })
         .collect::<Result<Vec<_>, FixtureError>>()?;
     refs.sort();
     Ok(refs)
+}
+fn stale_tracking(p: &Pair, oid: git2::Oid) -> Result<(), FixtureError> {
+    let repo = p.b.repo()?;
+    fixed(repo.reference("refs/remotes/origin/stale", oid, false, "owned D1 sentinel"))?;
+    fixed(repo.reference_symbolic(
+        "refs/remotes/unused/HEAD",
+        "refs/remotes/origin/stale",
+        false,
+        "owned unrelated sentinel",
+    ))?;
+    // The complete inventory must preserve these even with backend prune enabled.
+    fixed(fixed(repo.config())?.set_bool("fetch.prune", true))?;
+    Ok(())
 }
 fn retained_conflict() -> Result<(), FixtureError> {
     let p = Pair::new()?;
@@ -1973,25 +2065,94 @@ fn completion_failure() -> Result<(), FixtureError> {
         "completion",
     )
 }
-fn disconnect_download() -> Result<(), FixtureError> {
+fn disconnect_download_case(invocation: RemotePollInvocation) -> Result<(), FixtureError> {
     let p = Pair::new()?;
+    p.poll()?; // retain an actual complete earlier batch and endpoint generation
     let incoming = prepare_transfer(&p)?;
+    fixed(p.b.db()?.execute(
+        "UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=?1",
+        [if invocation == RemotePollInvocation::Automatic {
+            None
+        } else {
+            Some(12345i64)
+        }],
+    ))?;
+    let policy = fixed(p.b.service.remote_snapshot(&p.b.root))?;
     let before = snapshot(&p.b)?;
     let refs = all_refs(&p.b.repo()?)?;
-    p.server.disconnect_at(FixtureBoundary::Transfer);
-    assert!(matches!(
-        p.poll_with(
-            &p.b.service,
-            p.request(RemotePollInvocation::Explicit),
-            &mut session()
-        ),
-        Err(RemotePollError::Transport(_))
-    ));
+    let batch = observation_digest(&p.b)?;
+    let odb = objects(&p.b.repo()?)?;
+    let pack_bytes = p.server.upload_pack_bytes();
+    let disconnects = p.server.byte_disconnects();
+    let gate = p.server.hold_transfer_after(131_072)?;
+    let n = p.no_push_baseline()?;
+    let req = p.request(invocation);
+    std::thread::scope(|scope| -> Result<(), FixtureError> {
+        let request = req.clone();
+        let worker = scope.spawn(|| p.b.service.poll_publication_remote(request, &mut session()));
+        gate.wait_until_held()?;
+        // Parsed sideband-1 PACK payload was really forwarded, not ACKs or
+        // progress text. The fixture is now held before its next response.
+        assert!(p.server.upload_pack_bytes() - pack_bytes >= 65_536);
+        assert_eq!(all_refs(&p.b.repo()?)?, refs);
+        p.server.disconnect_after_transfer_bytes(131_072);
+        gate.release()?;
+        let result = fixed(worker.join())?;
+        assert!(matches!(result, Err(RemotePollError::Transport(_))));
+        p.redacted(&format!("{result:?}"))?;
+        Ok(())
+    })?;
+    p.no_push_since(n)?;
+    assert_eq!(p.server.byte_disconnects(), disconnects + 1);
     assert_eq!(snapshot(&p.b)?, before);
     assert_eq!(all_refs(&p.b.repo()?)?, refs);
-    assert_eq!(count(&p.b, "remote_observation_batches")?, 0);
+    assert_eq!(observation_digest(&p.b)?, batch);
+    assert_eq!(count(&p.b, "remote_observation_batches")?, 1);
+    let after_odb = objects(&p.b.repo()?)?;
+    // Complete pre-existing objects are retained. A backend may keep additional
+    // valid objects from a partial download; they cannot authorize ref writes.
+    assert!(odb.iter().all(|oid| after_odb.contains(oid)));
+    for oid in &after_odb {
+        fixed(fixed(p.b.repo()?.odb())?.read(*oid))?;
+    }
+    ssh_harness::observation(&[
+        p.server.upload_pack_bytes().saturating_sub(pack_bytes) as u128,
+        (after_odb.len() - odb.len()) as u128,
+        u128::from(p.b.repo()?.find_commit(incoming).is_ok()),
+    ]);
+    let (phase, outcome) = fixed(p.b.db()?.query_row(
+        "SELECT phase,outcome FROM remote_operation_records WHERE operation_ulid=?1",
+        [req.operation_id.to_string()],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+    ))?;
+    assert_eq!(phase, "failed");
+    assert_eq!(outcome, "transport_unavailable");
+    let failed = fixed(p.b.service.remote_snapshot(&p.b.root))?;
+    assert_eq!(
+        failed.latest_outcome(),
+        Some(RemoteOutcomeCategory::TransportUnavailable)
+    );
+    if invocation == RemotePollInvocation::Automatic {
+        assert_eq!(failed.polling().automatic_backoff().unwrap().as_secs(), 240);
+        assert_eq!(
+            failed.next_eligible_at().unwrap() - failed.latest_attempt_at().unwrap(),
+            time::Duration::seconds(240)
+        );
+    } else {
+        assert_eq!(failed.polling(), policy.polling());
+        assert_eq!(failed.next_eligible_at(), policy.next_eligible_at());
+    }
+    p.privacy()?;
     p.server.clear_fault();
     let second = p.b.reopen()?;
+    let connections = p.server.connections();
+    let (replay, _) = report(fixed(p.poll_with(&second, req, &mut session()))?)?;
+    assert_eq!(
+        replay.outcome(),
+        Some(RemoteOutcomeCategory::TransportUnavailable)
+    );
+    assert_eq!(p.server.connections(), connections);
+    assert_eq!(observation_digest(&p.b)?, batch);
     let (r, _) = report(fixed(p.poll_with(
         &second,
         p.request(RemotePollInvocation::Explicit),
@@ -2000,6 +2161,43 @@ fn disconnect_download() -> Result<(), FixtureError> {
     assert_eq!(row(&r, MAIN).disposition(), PollDisposition::FastForwarded);
     clean_checkout(&p, None, incoming)?;
     p.finish()
+}
+fn disconnect_download() -> Result<(), FixtureError> {
+    disconnect_download_case(RemotePollInvocation::Explicit)
+}
+fn disconnect_download_automatic() -> Result<(), FixtureError> {
+    disconnect_download_case(RemotePollInvocation::Automatic)
+}
+fn upload_counter() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    upload_pack_counter_fragmentation()?;
+    let n = p.no_push_baseline()?;
+    p.no_push_since(n)?;
+    p.finish()
+}
+fn observation_digest(side: &Side) -> Result<[u8; 32], FixtureError> {
+    let db = side.db()?;
+    let mut hash = blake3::Hasher::new();
+    for table in [
+        "remote_observation_batches",
+        "remote_ref_observations",
+        "remote_poll_dispositions",
+    ] {
+        hash.update(table.as_bytes());
+        let mut statement = fixed(db.prepare(&format!("SELECT * FROM {table} ORDER BY rowid")))?;
+        let columns = statement.column_count();
+        let mut rows = fixed(statement.query([]))?;
+        while let Some(row) = fixed(rows.next())? {
+            for column in 0..columns {
+                hash.update(
+                    format!("{:?}", fixed(row.get::<_, rusqlite::types::Value>(column))?)
+                        .as_bytes(),
+                );
+                hash.update(&[0]);
+            }
+        }
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 fn material_failure(point: FailurePoint) -> Result<(), FixtureError> {
     let p = Pair::new()?;
@@ -2295,8 +2493,32 @@ fn database_privacy() -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let db = p.b.db()?;
     fixed(db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;"))?;
-    publish_new(&p, T)?;
-    p.poll()?;
+    let ticket = publish_new(&p, T)?;
+    let document = publish_new(&p, D)?;
+    let success = p.poll()?;
+    assert_eq!(
+        row(&success, &reference(T)).disposition(),
+        PollDisposition::Materialized
+    );
+    assert_eq!(
+        row(&success, &reference(D)).disposition(),
+        PollDisposition::Materialized
+    );
+    discovered_once(&p, T, ticket)?;
+    discovered_once(&p, D, document)?;
+    for title in [TICKET_TITLE, DOCUMENT_TITLE] {
+        assert!(
+            fixed(db.query_row(
+                "SELECT count(*) FROM discovered_items WHERE title=?1",
+                [title],
+                |r| r.get::<_, i64>(0)
+            ))? > 0
+        );
+        // Probe controls: only canonical/raw-store scans may allow these titles.
+        ssh_privacy::clean(title.as_bytes(), &p.probes)?;
+        assert!(ssh_privacy::clean(title.as_bytes(), &p.metadata_probes).is_err());
+        assert!(p.redacted(title).is_err());
+    }
     let new = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
     p.publish(
         &reference(new),
@@ -2309,6 +2531,27 @@ fn database_privacy() -> Result<(), FixtureError> {
     p.poll()?;
     let backup = p.b.data.join("v");
     fixed(db.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()]))?;
+    let backup_db = fixed(rusqlite::Connection::open(&backup))?;
+    scan_recovery_rows(&backup_db, &p.metadata_probes)?;
+    for title in [TICKET_TITLE, DOCUMENT_TITLE] {
+        assert!(
+            fixed(backup_db.query_row(
+                "SELECT count(*) FROM discovered_items WHERE title=?1",
+                [title],
+                |r| r.get::<_, i64>(0)
+            ))? > 0
+        );
+    }
+    // The same scanner must refuse accepted titles in recovery metadata even
+    // though their legitimate canonical index content is allowed in raw stores.
+    fixed(backup_db.execute_batch("CREATE TABLE remote_title_probe(value TEXT);"))?;
+    for title in [TICKET_TITLE, DOCUMENT_TITLE] {
+        fixed(backup_db.execute("INSERT INTO remote_title_probe VALUES(?1)", [title]))?;
+        assert!(scan_recovery_rows(&backup_db, &p.metadata_probes).is_err());
+        fixed(backup_db.execute("DELETE FROM remote_title_probe", []))?;
+    }
+    fixed(backup_db.execute_batch("DROP TABLE remote_title_probe;"))?;
+    scan_recovery_rows(&backup_db, &p.metadata_probes)?;
     fixed(db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE privacy_fixed(category TEXT); INSERT INTO privacy_fixed VALUES('fixed');"))?;
     let inventory = ssh_privacy::scan(&p.b.data, &p.probes)?;
     assert!(inventory.iter().any(|(path, n)| path == &backup && *n > 0));
@@ -2332,7 +2575,28 @@ const OUTPUT_CONTROLS: &[ssh_harness::Case] = &[
     ("poll_control_stderr_failure", control_stderr),
     ("poll_control_clean_failure", control_failure),
     ("poll_control_missing_inventory", control_missing),
+    (
+        "poll_control_accepted_document_title_stdout",
+        control_document_title,
+    ),
+    (
+        "poll_control_accepted_ticket_title_stderr_failure",
+        control_ticket_title,
+    ),
 ];
+fn control_document_title() -> Result<(), FixtureError> {
+    use std::io::Write;
+    ssh_privacy::save(&[DOCUMENT_TITLE.as_bytes().to_vec()])?;
+    fixed(std::io::stdout().write_all(DOCUMENT_TITLE.as_bytes()))
+}
+fn control_ticket_title() -> Result<(), FixtureError> {
+    use std::io::Write;
+    ssh_privacy::save(&[TICKET_TITLE.as_bytes().to_vec()])?;
+    let mut bytes = vec![b'x'; 20_478];
+    bytes.extend_from_slice(TICKET_TITLE.as_bytes());
+    fixed(std::io::stderr().write_all(&bytes))?;
+    Err(FixtureError)
+}
 fn control_stdout() -> Result<(), FixtureError> {
     use std::io::Write;
     ssh_privacy::save(&[CONTROL.to_vec()])?;
@@ -2361,6 +2625,14 @@ fn capture_controls() -> Result<(), FixtureError> {
         ("poll_control_stderr_failure", F::OutputPrivacy),
         ("poll_control_clean_failure", F::Child),
         ("poll_control_missing_inventory", F::ProbeInventory),
+        (
+            "poll_control_accepted_document_title_stdout",
+            F::OutputPrivacy,
+        ),
+        (
+            "poll_control_accepted_ticket_title_stderr_failure",
+            F::OutputPrivacy,
+        ),
     ] {
         assert_eq!(
             ssh_harness::run_isolated_with_output_privacy(case),
