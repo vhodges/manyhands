@@ -5,6 +5,122 @@ const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ADVERTISED: &str = "1111111111111111111111111111111111111111";
 const TRACKING: &str = "2222222222222222222222222222222222222222";
 
+fn poll_kind_row(db: &Connection) -> Vec<rusqlite::types::Value> {
+    db.query_row("SELECT * FROM remote_operation_records", [], |row| {
+        (0..row.as_ref().column_count())
+            .map(|i| row.get(i))
+            .collect()
+    })
+    .unwrap()
+}
+
+#[test]
+fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reopen() {
+    for kind in [Some(PollKind::Observe), Some(PollKind::Update), None] {
+        let (data, root, service) = fixture();
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)?;
+            insert_operation_with_kind(
+                tx,
+                id,
+                crate::repository::OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan()),
+                RemoteOperationPriority::Poll,
+                kind,
+                123,
+            )?;
+            tx.execute(
+                "UPDATE remote_operation_records SET phase='interrupted'",
+                [],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        drop(service);
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let before = poll_kind_row(&db);
+        for _ in 0..2 {
+            let reopened = RepositoryService::open_at(data.path()).unwrap();
+            for replacement in [Some("observe"), Some("update"), None] {
+                assert!(
+                    db.execute(
+                        "UPDATE remote_operation_records SET poll_kind=?1",
+                        [replacement]
+                    )
+                    .is_err()
+                );
+                assert_eq!(poll_kind_row(&db), before);
+            }
+            // Legacy NULL retains observe semantics; no explicit-kind backfill
+            // by later writers is allowed to change its durable identity.
+            reopened.remote_snapshot(root.path()).unwrap();
+            assert_eq!(
+                read_operations(&db, 1).unwrap()[0].poll_kind,
+                Some(kind.unwrap_or(PollKind::Observe))
+            );
+        }
+    }
+}
+
+#[test]
+fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen() {
+    let (data, root, service) = fixture();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            crate::repository::OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan()),
+            RemoteOperationPriority::Poll,
+            123,
+        )?;
+        tx.execute(
+            "UPDATE remote_operation_records SET phase='interrupted'",
+            [],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let before = poll_kind_row(&db);
+    // Reconstruct the genuinely pre-kind, pre-materialization/disposition
+    // envelope, rather than asking startup to repair a recognizable partial one.
+    db.execute_batch(
+        "DROP TABLE remote_poll_dispositions;
+        DROP TRIGGER remote_poll_disposition_owner_immutable;
+        ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;
+        ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at;
+        DROP TABLE remote_poll_materializations;
+        DROP TRIGGER remote_poll_materialization_owner_immutable;
+        DROP TRIGGER remote_poll_kind_immutable;
+        ALTER TABLE remote_operation_records DROP COLUMN poll_kind;",
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let reopened = RepositoryService::open_at(data.path()).unwrap();
+        assert_eq!(poll_kind_row(&db), before);
+        for replacement in [Some("update"), None] {
+            assert!(
+                db.execute(
+                    "UPDATE remote_operation_records SET poll_kind=?1",
+                    [replacement]
+                )
+                .is_err()
+            );
+            assert_eq!(poll_kind_row(&db), before);
+        }
+        reopened.remote_snapshot(root.path()).unwrap();
+        assert_eq!(
+            read_operations(&db, 1).unwrap()[0].poll_kind,
+            Some(PollKind::Observe)
+        );
+    }
+}
+
 fn review_completed_state() -> (
     tempfile::TempDir,
     tempfile::TempDir,

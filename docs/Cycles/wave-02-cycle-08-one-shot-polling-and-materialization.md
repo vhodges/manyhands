@@ -263,6 +263,40 @@ original question and the cost accepted are kept below.
 | Recovery rows, database sidecars, diagnostics and fixture output hold no body, title, endpoint or secret | Tasks 1 and 7 privacy scans |
 | Required Devenv checks pass; native evidence is honestly recorded | Task 8; native execution pending authorization |
 
+### Local Verification Checkpoint — 2026-10-14
+
+Implementation Tasks 0–7 have controller-reported SPEC/quality approvals through
+`b0f005531879c5ee2806ed13052bdd157df627d7`. Task 8 is **IN PROGRESS** and its
+controller-dispatched reviews remain pending. The
+[dated execution ledger acceptance map](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14)
+maps every acceptance row and dimension to exact names observed passing in the
+final-tree local gate: **1,765 passed, 0 failed, 1 existing ignored**, including
+**73 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
+pass; Cargo/devenv lockfile hashes are unchanged.
+
+Concrete passing journeys include `poll_all_three_fast_forward`,
+`poll_materialize_document_once`, `poll_materialize_ticket_once`,
+`poll_concurrent_materialization_once`, `poll_partial_batch_yield_report_and_restart`,
+`poll_disconnect_partial_download_automatic_backoff`,
+`poll_failed_checkout_retains_partial_d2`, `poll_refresh_failure_index_only_recovery`
+and `poll_recovery_database_wal_backup_privacy`. The ledger adds the named policy,
+reservation, classification, conformity, timestamp, clamp, fault and privacy
+dimension checks rather than inferring coverage from these example names.
+
+Recovery/diagnostic/output scans reject accepted document/ticket titles. Raw
+DB/WAL/backup scans permit those titles only as legitimate canonical discovery
+index content; all body, endpoint, secret, malformed-name and rejected-title
+sentinels remain forbidden. Literal permission-denied unreadability has no named
+poll preservation test in this checkpoint; the ledger records row 6 as partially
+proved, not fully met. Missing, unregistered, redirected, foreign and wrong-branch
+inaccessibility is proved separately.
+
+Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 native executions
+are each **PENDING AUTHORIZATION**. Manual workflow wiring and local Linux tests
+are not native proof. Linux-only failed-checkout and Unix permission/symlink
+controls do not prove Windows/macOS behavior. Ticket remains open; no native
+dispatch, push, PR, merge, closure or worktree removal is authorized here.
+
 ## Self-Review And Lifecycle
 
 The decision audit in the [execution ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md)
@@ -277,5 +311,6 @@ code-review or pull-request approval, normally in the authorized final
 pre-merge push. Commit, push, pull request, native dispatch, merge, closure and
 worktree cleanup each need their own authorization. The rebase rewrote the
 published ticket checkpoint, so a later push must first reconcile the remote
-ticket branch; no force push is implied. Nothing here claims implementation or
-passing tests.
+ticket branch; no force push is implied. Planning inspection is historical; the
+local checkpoint above records concrete passing tests and remaining review and
+platform gates without claiming final Cycle completion.

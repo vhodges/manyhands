@@ -10,6 +10,215 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 8 Local Verification Checkpoint — 2026-10-14
+
+**Status: IN PROGRESS / CONTROLLER REVIEW PENDING.** Fresh inline implementer
+at clean exact base `b0f005531879c5ee2806ed13052bdd157df627d7`, assigned ticket
+worktree/branch, no subagents. Controller reports Task 7 SPEC
+`ses_ec64fd841ffe4JHjZ3XJ7I1MOp` and QUALITY
+`ses_ec608e461ffeB8pQQSieLJnzhE` **APPROVE** through this base after all canonical
+path, first-poll sentinel and snapshot fixes. Prior Tasks 0–7 approvals and
+current-main no-op resume preflight trusted; no fetch/rebase or review replay.
+Historical pending Task 7 statements below are superseded by these approvals.
+Entry checkpoint `01M4X3ER7B21PNX7DZNQ0RMZ55`.
+
+### Deferred Minors Resolved Locally
+
+1. Task 2 QUALITY `ses_ec9e9909cffeS4kt0Z0ENmyjss`: added two direct-SQL durable
+   invariant tests in state_tests.rs. Explicit observe↔update, update→NULL, and
+   legacy NULL→either explicit kind are denied, including same-kind SQL updates
+   under the approved strict immutability semantic. Compare **every stored row
+   value**, not merely poll_kind, after each denial and two reopens; decode NULL
+   as Observe. A genuine pre-kind/pre-intent/pre-disposition registry migrates to
+   explicit Observe once, retaining all original row values, then denies kind
+   changes on both reopens. Production trigger unchanged; already-correct
+   hardening, **no behavioral RED claimed**.
+2. Task 6 QUALITY `ses_ec6bed51effeNWgnoaPfQ9pdlV`: extracted
+   `attach_context_dispositions` in state.rs. Audit calls it before its early
+   return; normal reads call it only after local-only contexts are projected.
+   Exactly one pass on either path, identical target/malformed predicates. No
+   audit/envelope/history/local-cache validation removed or relaxed. Existing
+   meaningful state and ordered snapshot tests cover local-only HistoryUnknown,
+   persisted and malformed contexts, reopen, historical validation, partial
+   envelopes and privacy; no helper-call-count mirror test added.
+
+### Actual Trial And Failure History
+
+- First `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::poll_kind_`
+  compiled but **0 passed/2 failed/613 filtered**: new fixture attempted invalid
+  outcome `interrupted`, which is a phase only. Existing SQL CHECK correctly
+  refused fixture setup before any tested kind mutation. Remove the invented
+  outcome, retain interrupted phase and NULL outcome. Next run **2 passed**;
+  no production bug or RED-to-fix claim. One patch attempt after formatting did
+  not match its pre-format context; reread and applied correct test-only edit.
+- State suite **61 passed/554 filtered** before cleanup and again after cleanup.
+  Ordered persisted/new/malformed-context snapshot test **1 passed/614 filtered**
+  after cleanup. Full gate below passed first time; no compile/lint/test timeout
+  or subsequent Rust edit. Two SQL cases increase library count 613→615.
+- Post-gate count aggregation first used unavailable `python3` (shell exit 127,
+  not a Rust/test failure); Node aggregation of actual summary lines confirms
+  **1,403 ordinary (library + integration + doctests) + 362 SSH = 1,765**.
+- Initial wrapper around successful `scripts/show-ticket` output falsely matched
+  ordinary body text containing "malformed"; restricting the diagnostic check to
+  line-anchored `show-ticket:` confirms **42 comments, both new comments rendered,
+  open ticket, no malformed diagnostics**. This was a wrapper false positive,
+  not schema corruption or a script failure.
+- Historical Tasks 0–7 meaningful REDs, fixture invalidity, compilation trials
+  and outer-chain timeout remain in their dated entries below; not erased or
+  rerun. No new transport, config, secret logging or dependency.
+
+### Sequential Final-Tree Verification
+
+Final Rust edits preceded this single required gate. Commands joined with `&&`,
+3,600,000 ms outer bound; entire chain completed successfully. Actual full log:
+`/home/vhodges/.local/share/opencode/tool-output/tool_13a3db7a5001ZVwqt6D5YeQIkQ`.
+All Rust commands, including focused tests and optional startup, used Devenv.
+
+| Exact command | Observed result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,765 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+| `git diff --check` | PASS; repeat after bookkeeping before commit |
+| `sha256sum Cargo.lock devenv.lock` | Entry/final hashes identical (below) |
+| `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` | PASS, open ticket, 42 comments, both new Node-ULID comments rendered, no malformed diagnostics |
+
+Post-bookkeeping evidence verifier extracted the 12 acceptance-table rows and
+matched **121 distinct exact test names** against actual passing full-gate lines:
+**0 missing passing names**. It checks runtime output, not declarations or globs.
+Preservation diff against Task 8 base for dependencies/lockfiles/toolchain,
+workflow, CLI/desktop, schemas, tests and approved design/plan is empty.
+
+Runtime summary breakdown: **615 library + 779 ordinary integration + 362 SSH
+target cases + 9 doctests**. Binary test targets each 0. Existing ignored case:
+`reads_of_a_thousand_item_repository_are_characterized`; not run or counted.
+Harness=false runtime totals, not globs or private negative-control child cases:
+
+| SSH target | Actual passing cases |
+| --- | ---: |
+| comment_publication | 41 |
+| remote_merge_recovery | 25 |
+| remote_observation | 15 |
+| remote_polling | 73 |
+| remote_synchronization | 63 |
+| ssh_fixture | 31 |
+| ssh_transport | 114 |
+
+Both disconnect cases report **131,029 PACK payload bytes, 0 new indexed objects,
+incoming commit not indexed** in this final run. The byte-qualified real fault
+and object inventory checks pass; zero additional indexed objects is an actual
+observation, not a portable assumption. Task 7 normal/alias **73+73** evidence
+remains trusted; alias target was not redundantly rerun for this state-only cleanup.
+
+Lockfiles (SHA-256), unchanged at entry and after full gate:
+
+```text
+8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8  Cargo.lock
+d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e  devenv.lock
+```
+
+Display inspection found `DISPLAY=:1`, `WAYLAND_DISPLAY=wayland-1`,
+`XDG_RUNTIME_DIR=/run/user/1000` and the Wayland socket. Optional bounded command:
+`timeout --signal=TERM --kill-after=10s 90s devenv shell -- cargo run --locked --features desktop --bin manyhands`.
+Build finished in 16.05 s, then the actual `target/debug/manyhands` ran and emitted
+`Hello from Manyhands!` twice, without startup error, until the intentional bound.
+This is **process startup evidence only**; no visual inspection/interaction claimed.
+No Rust edits followed the full gate or the startup check.
+
+### All 12 Acceptance Rows: Exact Named Passing Tests And Dimensions
+
+Names below are exact test identifiers observed as `... ok` in the final full
+gate, not inferred from source declarations. Namespace key: **P** =
+`repository::remote::poll::tests` (poll_tests.rs), **S** =
+`repository::remote::state::persistence_tests` (state_tests.rs), **R** =
+`repository::remote::reservation::tests` (reservation_tests.rs), **T** =
+`tests/ssh_transport.rs` harness case, **SSH** = `tests/remote_polling.rs` harness
+case. Prefixes identify the source/target; backticked suffixes are exact names.
+Rows 1–5 and 7–11 have local proving tests for each listed property. Row 6 has
+one literal unproven dimension, explicitly **not fully met**. Row 12's local
+gate passes but its native runtime dimension is pending, **not native-proved**.
+
+| Cycle row | Property dimensions → exact passing tests | Local assessment |
+| --- | --- | --- |
+| 1. Eligibility / explicit bypass | Disabled, paused, recovery-suspended, not-due, zero connections/prompts/new reservation and unchanged outcome/policy → SSH `poll_policy_disabled`, `poll_policy_paused`, `poll_policy_recovery_suspended`, `poll_policy_not_due`; blocked-session no automatic prompt → SSH `poll_locked_blocked_session_no_automatic_prompt`; precedence and no writes → P `eligibility_policy_precedence_wins_over_due_and_future_deadlines`, `ineligible_policy_writes_nothing_even_when_deadline_needs_clamping`, `task6_automatic_gates_do_not_reserve_or_change_outcome`; active/interrupted automatic restart gates → P `review_restart_auto_gate_disabled`, `review_restart_auto_gate_paused`, `review_restart_auto_gate_recovery_suspended`, `review_restart_auto_gate_not_due`; explicit restart bypass/manual identity → P `review_explicit_restart_preserves_manual_identity_and_bypasses_policy_gates` | Proved locally |
+| 2. Durable time / retry policy | Attempt/deadline migration, rollback and reopen → S `attempt_migration_preserves_existing_rows_and_is_a_no_op_on_second_start`, `finishing_attempt_timestamps_commit_and_roll_back_with_the_outcome`; all nine outcome categories × automatic/explicit atomic finish → R `finish_updates_attempt_deadline_and_phase_atomically_from_pre_finish_policy`; category/invocation pure table → P `next_eligibility_result_table_covers_every_category_and_invocation`; 60→120→240→480→900→900 for transport/protocol → P `network_retry_deadlines_start_at_sixty_double_and_cap_at_nine_hundred`, SSH `poll_unreachable_backoff_cap_and_explicit_failure`; rejected key/host attention → SSH `poll_rejected_key_attention_without_backoff`, `poll_unapproved_host_without_backoff`; larger interval/max-backoff clamp, one durable write and countdown with no reservation → P `rollback_clamp_uses_larger_of_interval_and_maximum_backoff`, `stored_clamp_is_written_once_and_counts_down_without_reserving`; malformed UTC values fail closed → S `attempt_columns_reject_non_integer_negative_and_unrenderable_timestamps`, integration `corrupt_poll_times_fail_closed_at_snapshot_reopen_gate_and_status` (remote_reservation target) | Proved locally |
+| 3. Scoped fetch / guard / no push / complete batch | Exact primary/document/ticket objects and tracking, excluded malformed/outside objects, no tags/FETCH_HEAD/prune/unrelated refs, rewind tracking only → T `poll_fetch_set`; absent primary/empty set → T `poll_absent_primary_and_empty_set`; old-value race/noncommit/partial guarded write → T `poll_tracking_race`, `poll_noncommit_tip`, `poll_partial_guarded_write`; fetch advertisement consistency → T `poll_download_advertisement`; complete batch replacement/deletion authority → S `only_complete_batches_replace_current_and_deletion_retains_last_successful_oid`; batch + initial NotReached atomic/foreign-owner rollback → P `task6_atomic_batch_extension_rolls_back_and_rejects_foreign_owner`, `task6_disposition_insert_fault_rolls_back_advertisement_and_old_report`; no poll receive-pack advertisement/command/update → every one of 73 SSH cases, concretely `poll_all_three_fast_forward`, `poll_materialize_document_once`, `poll_materialize_ticket_once` | Proved locally |
+| 4. Manual/local priority / safe stop / repeat safety | Advertisement/in-transfer automatic yield and successful manual retry → SSH `poll_automatic_advertisement_yields_to_manual`, `poll_automatic_in_transfer_yields_to_manual`; explicit operation Busy → SSH `poll_explicit_advertisement_makes_manual_busy`; D4 local-save retry/no new journal row → SSH `poll_local_save_requests_automatic_yield`, R `update_local_prepared_journal_guard_yields_without_creating_local_rows`; cancel/yield every update boundary, release/fence/unchanged policy → R `update_requests_at_every_boundary_release_slot_preserve_policy_and_fence_owner`; safe-point ordering/active one-slot/repeated local mutation → R `update_local_stage_is_ordered_repeatable_active_and_completion_requires_discovery`; partial cursor/report/unchanged completed local target on restart → SSH `poll_partial_batch_yield_report_and_restart`, P `task6_yield_between_targets_keeps_changed_primary_and_restart_is_current`; D3 real retained divergence blocks both modes with zero connections → SSH `poll_retained_real_divergence_conflict_blocks_both_invocations` | Proved locally |
+| 5. Strict clean FF once | Primary/document/ticket/all-three branch/index/files/tracking plus second/current full refs and no new objects → SSH `poll_primary_fast_forward`, `poll_document_fast_forward`, `poll_ticket_fast_forward`, `poll_all_three_fast_forward`, `poll_already_current`; first-poll direct/symbolic sentinels retained in those five cases; pure equal/behind/ahead/diverged and ancestry errors → P `poll_relation_equal_behind_ahead_and_diverged_are_pure`, `poll_relation_surfaces_both_ancestry_errors_without_guessing`; local FF then exact current snapshot → P `poll_fast_forward_primary_and_context_advance_files_index_branch_then_are_current`; immediate local/tracking/config/endpoint reobservation → P `poll_fast_forward_reobserves_ref_tracking_configuration_and_endpoint_before_mutation`, SSH `poll_tracking_changed_before_target_fences` | Proved locally |
+| 6. Exceptional local preservation / disposition | Tracked dirty/staged/untracked/conflicted/ahead/diverged → SSH `poll_tracked_dirty`, `poll_staged_dirty`, `poll_untracked_dirty`, `poll_git_conflicted_without_pending_record`, `poll_local_ahead`, `poll_diverged`; seven dirty/merge/index variants with full snapshots → P `poll_classification_dirty_and_conflicted_states_preserve_full_snapshot`; wrong context/primary branch and missing directory → SSH `poll_context_wrong_branch`, `poll_primary_wrong_branch`, `poll_missing_worktree_directory`; detached/unregistered/primary elsewhere/symlink → P `poll_wrong_or_detached_head_and_primary_not_at_root_are_inaccessible`, `poll_missing_and_unregistered_contexts_are_inaccessible_and_unchanged`, `poll_symlink_deterministic_path_is_inaccessible_without_following_it`; ignored destructive collisions → SSH `poll_ignored_directory_collision_preserved`, P `poll_retiring_directory_ignored_descendants_are_dirty_before_any_checkout`; foreign/admin/backlink ownership → SSH `poll_foreign_worktree_ownership_refused`, P `poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink`; fixed guidance → P `poll_dispositions_have_only_fixed_guidance`; literal permission-denied unreadability → **no named poll preservation test, NOT PROVED** (missing/unregistered/redirected are not relabeled as this property) | **Partially proved; row not fully met** |
+| 7. Once-only conforming materialization / comments / index | New document/ticket discovered once with canonical titles/comments, single branch/worktree/intent, no upstream; second/reopen/second service current → SSH `poll_materialize_document_once`, `poll_materialize_ticket_once`; concurrent Busy/reservation uniqueness then current retry → SSH `poll_concurrent_materialization_once`; lease race → P `poll_materialization_two_services_race_under_root_lease`; accepted tree ⇒ active discovery, invalid comments allowed, duplicate/wrong kind/id/mode/UTF-8/worktree subtree rejected → P `poll_tree_conformity_matrix_rejects_without_creation_and_all_accepted_are_discoverable`, `poll_conformity_cannot_hide_executable_duplicate_or_discovery_excluded_item`; ordered persisted/new/malformed snapshot after refresh → P `task6_ordered_existing_new_malformed_targets_materialize_and_snapshot_after_refresh` | Proved locally; accepted⇒active amendment only |
+| 8. Exceptional remote state / no creation/deletion / scoped visibility | Nonconforming/malformed/outside → SSH `poll_nonconforming_tree`, `poll_malformed_family`, `poll_outside_family`; old deleted/new renamed nonconforming with unchanged local work → SSH `poll_remote_deleted_preserves_local_work`, `poll_remote_renamed_old_deleted_new_nonconforming`; pre-existing branch/path obstruction and lost-history preservation → SSH `poll_preexisting_branch_blocks_materialization`, `poll_preexisting_path_blocks_materialization`, `poll_history_unknown_after_registry_loss`; exhaustive local obstruction matrix → P `poll_materialization_local_obstruction_matrix_is_byte_exact_unchanged`; visibility of local-only HistoryUnknown disposition and persisted context → S `task6_local_history_unknown_context_also_exposes_its_latest_disposition`, `local_context_with_lost_history_is_projected_as_unknown_without_a_deletion`; dot-document selection → SSH `poll_dot_document_nonconforming`, P `poll_document_selection_matches_discovery_extensions_including_dotfiles` | Proved locally; out-of-family excluded from reports as contracted |
+| 9. Interruption/reopen / Git-first unfinished-only reconciliation | Real partly downloaded PACK disconnect, prior complete batch/ref/ODB preservation, explicit unchanged retry deadline and automatic doubling, terminal replay zero connections then next poll completes → SSH `poll_disconnect_download_next_poll_finishes`, `poll_disconnect_partial_download_automatic_backoff`; tracking-before-batch/batch rollback/FF-before-row → SSH `poll_failure_after_tracking_writes_restart`, `poll_batch_commit_failure_atomic_restart`, `poll_fast_forward_before_disposition_failure_restart`; intent/branch/worktree/branch-record ambiguity/D2 partial checkout → SSH `poll_materialization_intent_failure_restart`, `poll_materialization_branch_failure_restart`, `poll_materialization_worktree_failure_restart`, `poll_materialization_branch_record_failure_retains_ambiguity`, `poll_failed_checkout_retains_partial_d2`; completion/index boundaries → SSH `poll_completion_transaction_failure_restart`, `poll_after_completion_failure_index_only_recovery`, `poll_refresh_failure_index_only_recovery`; abandoned/interrupted epoch fencing → R `update_restart_from_every_abandoned_or_interrupted_stage_reobserves_with_new_epoch`; completed ID config-independent replay → P `review_terminal_replay_precedes_removed_or_changed_live_configuration`, `task6_batch_completion_once_and_older_replay_keeps_its_times_but_no_targets`; original handoff targets/index-pending survive later poll → P `review_original_report_survives_second_poll_before_refresh_return`, `review_original_stop_report_survives_later_poll_and_index_repair`, `review_original_fenced_stop_keeps_pending_after_later_poll_repairs_index`; kind durable identity → S `poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reopen`, `poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen` | Proved locally; actual failed-checkout fault Linux-only |
+| 10. Index separation / no second fetch | Failure/crash retains authoritative poll result and durable stale flag, repair by ordinary fresh refresh ID, completed replay without transport → SSH `poll_after_completion_failure_index_only_recovery`, `poll_refresh_failure_index_only_recovery`; P `task6_index_failure_and_crash_leave_repairable_flag_without_poll_id_reuse`; original reports remain independently owned when next poll replaces stored targets → P `review_original_report_survives_second_poll_before_refresh_return` | Proved locally |
+| 11. Privacy / rows / sidecars / diagnostics / output | Accepted document/ticket title absent from recovery rows, formatted result/snapshot and isolated raw output; legitimate canonical index title present in live DB and backup (not falsely forbidden in raw scans); body/endpoint/key/passphrase/rejected-title/malformed-name absent from rows/DB/nonempty WAL/VACUUM backup → SSH `poll_recovery_database_wal_backup_privacy`; output stdout, beyond-prefix stderr on failing child, clean failure, missing inventory, both accepted-title negative controls → SSH `poll_output_capture_negative_controls`; metadata schema/rollback/corruption/privacy and malformed name redaction → S `task6_disposition_schema_upgrade_rollback_corruption_and_privacy`, `malformed_response_names_never_enter_database_wal_backups_or_public_formatting`; all-case final privacy scans and exact fixed guidance → P `poll_dispositions_have_only_fixed_guidance`; type-only/mode-only/name-content-boundary snapshot negative controls → SSH `poll_snapshot_detects_type_only_changes`, `poll_snapshot_detects_permission_only_changes`, `poll_snapshot_detects_name_content_boundary_changes` | Proved locally with canonical index-content title exception |
+| 12. Required gate / honest native evidence | Exact commands and runtime totals above passed on final changed Rust tree; two new SQL tests plus all named evidence tests pass in that gate; CLI exits 0; hashes unchanged; bounded desktop process startup above. Each native target below explicitly pending authorization; manual wiring proves no native execution | **Local gate PASS; native execution not proved** |
+
+Cancellation supplements row 4/9 at each orchestration boundary: SSH
+`poll_cancel_before_transport`, `poll_cancel_after_advertisement`,
+`poll_cancel_between_observations`, `poll_cancel_before_batch`,
+`poll_cancel_after_batch`, `poll_cancel_before_local_mutation`,
+`poll_cancel_before_discovery`, `poll_public_cancel_held_advertisement`.
+Frozen publication/endpoint/key changes: SSH
+`poll_held_publication_remote_rename_fences`, `poll_held_endpoint_change_fences`,
+`poll_held_selected_key_change_fences`. These also pass in the final gate and
+prove no further local changes after a generation mismatch.
+
+### Review Ranges, Scope And Pending Work
+
+Complete whole-branch review base (origin/main at trusted preflight):
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`. Review **base..returned checkpoint HEAD**,
+not HEAD~1. Exact checkpoint SHA is returned after local commit; this heading is
+its durable evidence anchor. Task 8 increment starts exact b0f0055 above.
+
+| Scope | Exact complete range through prior approvals |
+| --- | --- |
+| Ticket/planning | `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17..094e5734d1d4480ee29e6f675aaba4a8883b9060` |
+| Task 0 + reviews | `094e5734d1d4480ee29e6f675aaba4a8883b9060..4c1590d73b9dbab17030670989bd8825328f1f55` |
+| Task 1 | `4c1590d73b9dbab17030670989bd8825328f1f55..5ff9f4eee31cd88067a406ba8acbc317c0ee2045` |
+| Task 2 | `5ff9f4eee31cd88067a406ba8acbc317c0ee2045..6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a` |
+| Task 3 + correction | `6cb69f4b6dd4f9798e509f9cdddc1acc7cd4f39a..34b97c178a48b39b6ae32e30de52ff5722d1dd06` |
+| Task 4 + blockers/amendment/corrections | `34b97c178a48b39b6ae32e30de52ff5722d1dd06..8cb5d777758287b200e09255dc1fa7f254fc4da3` |
+| Task 5 + blockers/exception/correction | `8cb5d777758287b200e09255dc1fa7f254fc4da3..ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7` (implementation review base `ab07d0d3096a0e6129add1ba32a2f977a131b80a`) |
+| Task 6 + interface checkpoint/corrections | `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7..4d89295070715d6a15ced2c08d72aff0dd0ee46f` |
+| Task 7 + evidence/quality corrections | `4d89295070715d6a15ced2c08d72aff0dd0ee46f..b0f005531879c5ee2806ed13052bdd157df627d7` |
+| Task 8 verification checkpoint | `b0f005531879c5ee2806ed13052bdd157df627d7..returned local checkpoint HEAD` |
+
+Task 8 changes only state.rs, state_tests.rs, this ledger, Cycle evidence, open
+ticket and canonical comments. Complete pre-checkpoint branch inventory is **78
+files**; Task 8's two new comments make **80** at handoff. Includes 42 canonical
+comments, one ticket, four planning/Cycle documents, API audit, one manifest,
+one manual workflow, 20 src Rust files and 10 integration/support Rust files.
+The final `git diff --name-only base..HEAD` output is the authoritative full-range
+file list returned with the checkpoint; counts are verified before handoff.
+No Task 8 dependencies/lockfiles, CLI/desktop, schemas, GPUI/runtime libraries,
+transport/support or approved design/plan edits. Cycle change is evidence only.
+D1–D4, accepted⇒active-only amendment and **sole Task 5 final-validator canonical
+collection under the same lease** exception remain unchanged; network, prompts
+and discovery/index-refresh scans stay outside.
+
+Controller will dispatch Task 8 SPEC, whole-branch quality and independent
+whole-branch review after this return. **Unrun here; no review approval or Task 8
+completion claimed.** Literal permission-denied unreadability preservation in
+row 6 remains a named evidence gap for that review, not silently marked met.
+Only subsequently authorized review fixes with actual new Rust code require a
+fresh final-tree full gate. Final approved-review recording, final review-ready
+comment and Task 8 tick await controller review resolution/resume.
+
+| Native target | Status |
+| --- | --- |
+| Linux x86_64 | PENDING AUTHORIZATION |
+| Linux aarch64 | PENDING AUTHORIZATION |
+| Windows x86_64 | PENDING AUTHORIZATION |
+| Windows aarch64 | PENDING AUTHORIZATION |
+| macOS aarch64 | PENDING AUTHORIZATION |
+
+Build workflow is manual-only and wired for remote_polling, **undispatched**.
+No native proof claimed from YAML/local Linux. No push, PR, merge, ticket closure,
+worktree removal or review spawning. Ticket open, Task 8 unchecked. Local
+review-pending checkpoint comment `01M4X5PT42E2TRWCPFM9Q8KAKM`.
+
 ## Task 7 Quality Corrections: Verified Re-Review Handoff — 2026-10-14T11:28:19Z
 
 QUALITY `ses_ec608e461ffeB8pQQSieLJnzhE`'s **Important and both minors are

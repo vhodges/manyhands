@@ -5205,21 +5205,10 @@ fn read_snapshot_rows(
     if !current_contexts.is_empty() {
         return Err(recovery_required());
     }
-    for context in &mut snapshot.contexts {
-        context.latest_disposition = snapshot
-            .polling
-            .dispositions
-            .iter()
-            .find(|r| {
-                r.target == context.target
-                    && (r.target.is_some()
-                        || r.disposition == super::poll::PollDisposition::Malformed)
-            })
-            .map(|r| r.disposition);
-    }
     // Local discovery has its own validation and recovery contract. Startup's
     // remote audit must not reinterpret unrelated local-cache corruption.
     if audit_history {
+        attach_context_dispositions(&mut snapshot);
         return Ok(snapshot);
     }
     let local_contexts = connection.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
@@ -5253,6 +5242,11 @@ fn read_snapshot_rows(
             RemoteContextState::HistoryUnknown,
         ));
     }
+    attach_context_dispositions(&mut snapshot);
+    Ok(snapshot)
+}
+
+fn attach_context_dispositions(snapshot: &mut RemoteSnapshot) {
     for context in &mut snapshot.contexts {
         context.latest_disposition = snapshot
             .polling
@@ -5265,7 +5259,6 @@ fn read_snapshot_rows(
             })
             .map(|row| row.disposition);
     }
-    Ok(snapshot)
 }
 
 impl crate::repository::RepositoryService {

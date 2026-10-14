@@ -208,7 +208,8 @@ and the baseline.
   No invented behavioral RED; fixture failures and outer-chain timeout recorded
   honestly in dated ledger. Manual-only native workflow wired, not dispatched.
   Review-ready comment `01M4WTNE2QC4091RCJ9KM6YYNM`; complete range starts above.
-- [ ] Independent Task 7 spec review, then quality review.
+- [x] Independent Task 7 spec review, then quality review (controller-reported
+  final approvals below supersede the historical correction checkpoints).
   SPEC `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` requests three P2 evidence corrections:
   complete refs on second/current polls; byte-proven partial download disconnect;
   accepted-title recovery/diagnostic/output privacy with canonical index exception.
@@ -226,7 +227,7 @@ and the baseline.
   Re-review comment `01M4WYZ203H6WF06FST9VFHZH0`. Quality not started.
 - [x] Controller/user reports Task 7 SPEC approved through
   `650c827bef529c306bca9b377bb8cfed03efb490`; historical approval.
-- [ ] Task 7 QUALITY `ses_ec608e461ffeB8pQQSieLJnzhE` BLOCKED Important path
+- [x] Task 7 QUALITY `ses_ec608e461ffeB8pQQSieLJnzhE` historically BLOCKED Important path
   portability and minors for first-poll sentinel preservation and snapshot
   type/permission encoding. All-three correction authorized at clean 650c827.
   Important alias-path RED reproduced before edits (0 passed/1 failed); entry
@@ -242,6 +243,28 @@ and the baseline.
   after gate; dated ledger retains all four REDs/commands/names/counts. Correction
   base 650c827; re-review comment `01M4X2Q740QMGYS5E2FCG3BQMF`. Await SPEC increment
   re-review, then `ses_ec608e461ffeB8pQQSieLJnzhE` quality re-review; no Task 8.
+
+- [x] Controller/user reports final Task 7 SPEC
+  `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` and QUALITY
+  `ses_ec608e461ffeB8pQQSieLJnzhE` APPROVE through
+  `b0f005531879c5ee2806ed13052bdd157df627d7`, after canonical paths, first-poll
+  sentinel preservation and typed/permission-aware snapshot corrections.
+- [ ] Task 8 **IN PROGRESS** at that exact base, inline, no subagents.
+  - [x] Resolve Task 2 suggested direct-SQL kind immutability hardening: two
+    passing durable-invariant tests, no production trigger change or invented RED.
+  - [x] Resolve Task 6 duplicate attachment: one helper/pass per audit or normal
+    path; existing local-only/persisted/malformed/startup validation tests pass.
+  - [x] Final-tree sequential Devenv check/fmt/Clippy/full test/CLI PASS:
+    **1,765 passed, 0 failed, 1 existing ignored**. Lockfile hashes unchanged.
+  - [x] Record all 12 acceptance rows, exact passing names and property coverage
+    in the dated ledger; explicitly retain unproven dimensions rather than
+    marking them met. Cycle evidence links this checkpoint.
+  - [ ] Controller-dispatched Task 8 SPEC, whole-branch quality and independent
+    whole-branch review/resolution; no approval claimed by this implementer.
+  - [ ] Final approved-review recording, final review-ready comment and Task 8
+    tick await controller review resolution and subsequent resume.
+  - [ ] All five native executions **PENDING AUTHORIZATION**; workflow wiring
+    is not platform proof. Ticket stays open; local checkpoint only.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -271,9 +294,10 @@ verification, ready for independent spec then quality review. Prior Task 0/prefl
 trusted; no repeated characterization. Complete range includes a70a2ab.
 Task 6 initial spec blocked four findings; corrective implementation and final
 verification now complete; controller/user reports **SPEC and quality APPROVE**.
-Deferred Task 2 direct-SQL kind-immutability and Task 6 duplicate disposition
-attachment minors remain for final review. Task 7 delivered locally for independent
-spec then quality review; Task 8 unstarted.
+Task 7 final SPEC and quality approvals are now controller-reported through b0f0055.
+Task 8 resolved both deferred minors and prepared local verification evidence;
+independent controller reviews and their resolution remain pending. The acceptance
+map records the literal unreadable-permissions coverage gap and pending native proof.
 Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
@@ -283,3 +307,9 @@ Real remote tests prove clean updates and new-context materialization occur
 once, while dirty, divergent, conflicted, malformed, inaccessible,
 unrecognized, renamed, and remotely deleted contexts remain unchanged and
 actionable.
+
+Task 8 local checkpoint: required final-tree checks pass with 1,765 tests and
+unchanged lockfiles. Exact command results, all 12 acceptance rows, commit ranges,
+failure history and remaining gates are in the
+[execution ledger](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14).
+This is review-pending evidence, not a Task 8 completion or closure claim.
