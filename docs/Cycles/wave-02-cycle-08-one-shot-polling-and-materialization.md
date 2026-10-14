@@ -263,11 +263,12 @@ original question and the cost accepted are kept below.
 | Recovery rows, database sidecars, diagnostics and fixture output hold no body, title, endpoint or secret | Tasks 1 and 7 privacy scans |
 | Required Devenv checks pass; native evidence is honestly recorded | Task 8; native execution pending authorization |
 
-### Local Verification Checkpoint — 2026-10-14
+### Final Local Review-Ready Evidence — 2026-10-14
 
 Implementation Tasks 0–7 have controller-reported SPEC/quality approvals through
-`b0f005531879c5ee2806ed13052bdd157df627d7`. Task 8 is **IN PROGRESS** and its
-controller-dispatched reviews remain pending. The
+`b0f005531879c5ee2806ed13052bdd157df627d7`. Task 8 local verification and all
+controller-dispatched reviews are **COMPLETE / APPROVED** at source HEAD
+`0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`. The
 [dated execution ledger acceptance map](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14)
 maps every acceptance row and dimension to exact names observed passing in the
 final-tree local gate: **1,779 passed, 0 failed, 1 existing ignored**, including
@@ -301,9 +302,23 @@ automatic gating before invalid live config; pre-fence retry policy retained on
 configuration/endpoint attention. Three library and ten new real-SSH regressions
 pass in the final gate above. The ledger's row supplements explicitly map all
 four findings, including cancelled restart after a failed disposition/intent write
-and all 12 eligibility × invalid-config combinations. **Technically corrected,
-awaiting SPEC and whole-branch re-reviews**; earlier Task 8 SPEC/quality approvals
-apply only to their historical checkpoint, not final Cycle approval.
+and all 12 eligibility × invalid-config combinations. Controller reports final
+Task 8 SPEC `ses_ec5708ca9ffe05wyiELtDB2hks` APPROVE of full
+`b0f005531879c5ee2806ed13052bdd157df627d7..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`,
+quality `ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE of latest increment and full Task 8
+with zero Critical/Important/Minor findings, and independent whole-branch
+`ses_ec567b276ffe5pzt4rGBeBRgPy` APPROVED full
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`
+for **LOCAL review-ready handoff**, no findings. The whole reviewer independently
+passed all three library/ten SSH regressions; all four Important findings and
+earlier deferred minors are resolved. The map's 135 named tests plus 11 boundary
+checks have no missing PASS names. Final approval details are in the
+[dated ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-final-local-review-approval--2026-10-14t150920z).
+
+This final update is bookkeeping only; source/build/test tree and lockfiles are
+unchanged from reviewed/gated 0cca1f8. Existing passing Rust evidence is retained
+without rerunning unchanged code. These are controller-conveyed independent
+review approvals, not owner authorization for outward delivery or closure.
 
 Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 native executions
 are each **PENDING AUTHORIZATION**. Manual workflow wiring and local Linux tests
@@ -326,5 +341,6 @@ pre-merge push. Commit, push, pull request, native dispatch, merge, closure and
 worktree cleanup each need their own authorization. The rebase rewrote the
 published ticket checkpoint, so a later push must first reconcile the remote
 ticket branch; no force push is implied. Planning inspection is historical; the
-local checkpoint above records concrete passing tests and remaining review and
-platform gates without claiming final Cycle completion.
+local evidence above records approved local review-ready status and concrete
+passing tests. Native/platform gates remain pending; the ticket stays open until
+separate outward/lifecycle authorization.

@@ -249,7 +249,8 @@ and the baseline.
   `ses_ec608e461ffeB8pQQSieLJnzhE` APPROVE through
   `b0f005531879c5ee2806ed13052bdd157df627d7`, after canonical paths, first-poll
   sentinel preservation and typed/permission-aware snapshot corrections.
-- [ ] Task 8 **IN PROGRESS** at that exact base, inline, no subagents.
+- [x] Task 8 **LOCAL REVIEW-READY / COMPLETE** from that exact base through
+  reviewed source `0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`, inline, no subagents.
   - [x] Resolve Task 2 suggested direct-SQL kind immutability hardening: two
     passing durable-invariant tests, no production trigger change or invented RED.
   - [x] Resolve Task 6 duplicate attachment: one helper/pass per audit or normal
@@ -266,15 +267,15 @@ and the baseline.
     Row 6 fully LOCAL-proved on Linux as UID 1000; ineffective permissions fail
     rather than skip. Windows ACL/native evidence remains pending. New final-tree
     gate above supersedes first checkpoint counts; trials retained in ledger.
-  - [ ] Controller-dispatched Task 8 SPEC, whole-branch quality and independent
-    whole-branch review/resolution; no approval claimed by this implementer.
+  - [x] Controller-dispatched Task 8 SPEC, quality and independent whole-branch
+    reviews/resolution completed; final approvals conveyed by controller below.
   - [x] Controller reports historical Task 8 checkpoint SPEC
     `ses_ec5708ca9ffe05wyiELtDB2hks` and quality
     `ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE through 7d62da7; these are not
     final whole-branch approval.
-  - [ ] Whole-branch review `ses_ec567b276ffe5pzt4rGBeBRgPy` BLOCKED four
-    Important/P1 findings. All now technically corrected locally, awaiting SPEC
-    and whole-branch re-review: external Git ref-creation overwrite; stale flag
+  - [x] Whole-branch review `ses_ec567b276ffe5pzt4rGBeBRgPy` historically BLOCKED
+    four Important/P1 findings, now corrected and finally APPROVED: external Git
+    ref-creation overwrite; stale flag
     rollback after surviving Git effects; late new automatic invalid-config gate;
     retry backoff cleared by invalid-plan/endpoint fencing. Meaningful REDs before
     every production correction recorded in dated ledger and comment
@@ -283,10 +284,20 @@ and the baseline.
     local update or shared observer/sync behavior change. Final gate above includes
     all 13 regressions, existing observer/privacy/permission cases. Current map:
     12 rows plus property supplements, 135 exact passing names, zero missing.
-  - [ ] Final approved-review recording, final review-ready comment and Task 8
-    tick await controller review resolution and subsequent resume.
-  - [ ] All five native executions **PENDING AUTHORIZATION**; workflow wiring
-    is not platform proof. Ticket stays open; local checkpoint only.
+  - [x] Final Task 8 SPEC `ses_ec5708ca9ffe05wyiELtDB2hks` APPROVE at 0cca1f8,
+    full `b0f005531879c5ee2806ed13052bdd157df627d7..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`,
+    all four fixes and acceptance map verified.
+  - [x] Final Task 8 QUALITY `ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE latest
+    increment and full Task 8, zero Critical/Important/Minor findings.
+  - [x] Independent WHOLE BRANCH `ses_ec567b276ffe5pzt4rGBeBRgPy` APPROVED
+    `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`
+    for LOCAL review-ready handoff, no findings; fresh 3 library + 10 SSH
+    regressions PASS, all four Important findings resolved.
+  - [x] Record approved reviews, final review-ready comment
+    `01M4XFBXA11PWNEYZT453YNN5D`, and Task 8 tick per explicit owner instruction.
+  - [x] Record all five native executions **PENDING AUTHORIZATION**; workflow
+    wiring/Linux-only syscall/Unix permission results are not native or Windows
+    ACL proof. Ticket stays **open**; authorized handoff is local bookkeeping only.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -317,8 +328,9 @@ trusted; no repeated characterization. Complete range includes a70a2ab.
 Task 6 initial spec blocked four findings; corrective implementation and final
 verification now complete; controller/user reports **SPEC and quality APPROVE**.
 Task 7 final SPEC and quality approvals are now controller-reported through b0f0055.
-Task 8 resolved both deferred minors and prepared local verification evidence;
-independent controller reviews and their resolution remain pending. The acceptance
+Task 8 resolved both deferred minors, all four whole-branch findings and local
+verification; all three final independent reviews are controller-reported APPROVED
+at 0cca1f8. The acceptance
 map now closes the literal unreadable-permissions gap locally with a named Unix
 case and retains pending native/Windows ACL proof.
 Ticket remains
@@ -335,4 +347,8 @@ Task 8 local checkpoint: required final-tree checks pass with 1,779 tests and
 unchanged lockfiles. Exact command results, all 12 acceptance rows, commit ranges,
 failure history and remaining gates are in the
 [execution ledger](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14).
-This is review-pending evidence, not a Task 8 completion or closure claim.
+Task 8 local review-ready handoff is approved and recorded in the
+[final ledger section](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-final-local-review-approval--2026-10-14t150920z).
+Source remains unchanged from reviewed 0cca1f8; final update is documentation only.
+Independent review approval does not authorize closure: ticket status remains open
+and all native executions remain pending authorization.

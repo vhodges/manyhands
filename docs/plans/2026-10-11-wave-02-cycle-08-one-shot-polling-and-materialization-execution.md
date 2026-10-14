@@ -10,6 +10,91 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 8 Final Local Review Approval — 2026-10-14T15:09:20Z
+
+**Task 8 COMPLETE for local verification and review-ready handoff. Ticket OPEN.**
+Controller reports every required review **APPROVED** at verified source HEAD
+`0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`. These are independent reviewer
+reports conveyed by the controller, not owner authorization for outward delivery
+or ticket closure. Historical pending/blocked review statements below are
+superseded by this final approval record; their REDs, findings and trials remain.
+
+| Independent review | Reviewer/session | Approved exact range / result |
+| --- | --- | --- |
+| Task 8 SPEC | `ses_ec5708ca9ffe05wyiELtDB2hks` | `b0f005531879c5ee2806ed13052bdd157df627d7..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`; full Task 8, all four fixes and acceptance map verified, APPROVE |
+| Task 8 QUALITY | `ses_ec56c4e36ffe44uv6nZQOvA20P` | Latest increment `7d62da772174e753feb02421bbc469b5cf13fcb2..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed` and full Task 8 range above; APPROVE, zero Critical/Important/Minor findings |
+| Independent WHOLE BRANCH | `ses_ec567b276ffe5pzt4rGBeBRgPy` | `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`; APPROVED for LOCAL review-ready handoff, no findings |
+
+Whole reviewer independently reran the **three library + ten real-SSH review
+regressions**, all PASS, and signed off all four Important findings: atomic
+lock-held absence before local branch creation; durable stale state before Git
+effects and cancelled recovery; automatic policy before invalid live config;
+pre-fence retry policy retained on attention. No unresolved deferred minors:
+Task 2 direct-SQL identity hardening, Task 6 attachment cleanup and all three
+Task 7 corrections are resolved and reviewed. Owner decisions D1–D4,
+accepted⇒active-only amendment and sole Task 5 final-validator canonical collection
+under the same single lease exception remain unchanged.
+
+### Verified Source And Final Local Evidence
+
+The source/build/test tree remains **identical to reviewed and gated 0cca1f8**.
+This final handoff updates only this ledger, Cycle evidence, ticket checklist and
+one canonical Node-ULID comment. No Rust/C, dependencies/lockfiles, schemas,
+workflow, frontend or toolchain edits. No repeated Rust tests/gates on unchanged
+code; existing final-tree evidence remains authoritative:
+
+- Sequential Devenv check/fmt/strict Clippy/full locked all-features tests/CLI:
+  **PASS**, **1,779 passed, 0 failed, 1 existing ignored**.
+- Actual totals: **618 library + 779 ordinary integration + 373 SSH + 9 doctests**.
+  SSH: **84 polling, 15 observation, 63 synchronization, 25 merge recovery,
+  41 comment publication, 31 fixture, 114 transport**.
+- CLI exit 0/no window. Prior bounded actual desktop process startup recorded
+  below; no visual proof claimed.
+- Living acceptance map: **12 rows, four review-property supplements, 135 exact
+  named tests + 11 additional cancellation/frozen-input boundary checks**, all
+  matched to actual PASS output with no missing names. Native dimension stays
+  explicitly pending; ignored/private child controls are not counted as successes.
+- Raw final gate log:
+  `/home/vhodges/.local/share/opencode/tool-output/tool_13abfb03d001iszyUfPlRyalaF`.
+- Source comparison against 0cca1f8, unchanged lockfile hashes, canonical
+  scripts/show-ticket validation and working/whole-range diff checks are the
+  checks for this documentation-only handoff: **all PASS**. Renderer confirms
+  **47 comments**, final comment rendered, Task 8 ticked and status open, with
+  no malformed diagnostics. Raw-output verification confirms 135 mapped names
+  plus all 11 extra boundary names passing, none missing. No Rust gate rerun.
+
+```text
+8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8  Cargo.lock
+d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e  devenv.lock
+```
+
+### Native Gates And Authorized Stop
+
+| Native target | Status |
+| --- | --- |
+| Linux x86_64 | PENDING AUTHORIZATION |
+| Linux aarch64 | PENDING AUTHORIZATION |
+| Windows x86_64 | PENDING AUTHORIZATION |
+| Windows aarch64 | PENDING AUTHORIZATION |
+| macOS aarch64 | PENDING AUTHORIZATION |
+
+Manual workflow wiring is not native proof. Linux-only syscall/failed-checkout
+and local Unix permission/symlink results do not prove other native targets or
+Windows ACL permission-denied behavior. Windows ACL evidence remains pending
+native verification. Task 8's definition permits these gates to be recorded as
+pending; local review approval does not mark any native execution passed.
+
+Final canonical review-ready comment `01M4XFBXA11PWNEYZT453YNN5D`. Ticket Task 8
+and all review/approval-recording checkpoints ticked; **status remains open** by
+explicit owner direction. This authorization ends with a new LOCAL bookkeeping
+commit and review-ready handoff. No push, PR, native dispatch, merge, closure,
+worktree deletion or changes to main/other worktrees. Branch/worktree preserved.
+
+Final bookkeeping increment: **4 documentation/canonical files**. Reviewed Task
+8 range had 15 files; handoff range through returned docs-only HEAD has **16**.
+Reviewed whole branch had 85 files; final range has **86**, including **47 comments**.
+The approved code SHA stays 0cca1f8; exact local handoff SHA returned after commit.
+
 ## Task 8 Whole-Branch Corrections: Verified Re-Review Handoff — 2026-10-14T14:46:46Z
 
 All four Important/P1 findings from whole reviewer
