@@ -351,4 +351,27 @@ Task 8 local review-ready handoff is approved and recorded in the
 [final ledger section](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-final-local-review-approval--2026-10-14t150920z).
 Source remains unchanged from reviewed 0cca1f8; final update is documentation only.
 Independent review approval does not authorize closure: ticket status remains open
-and all native executions remain pending authorization.
+and native results below supersede the historical pending-authorization status.
+
+## Native Build Run — 2026-10-14
+
+- [x] Owner authorized publishing the reviewed branch and one five-target run.
+  Normal fast-forward push to `3d8f8a5a054fd74dc83eb2a4a93c260769177ce8` succeeded.
+- [x] Dispatch and watch [Build 38612548902](https://github.com/vhodges/manyhands/actions/runs/38612548902)
+  through completion on that exact commit; inspect successful and failed logs.
+- [x] Linux x86_64 and aarch64: configured tests PASS (1,700 per target, including
+  84 polling SSH cases); release artifacts uploaded.
+- [ ] Windows x86_64 and aarch64: both FAIL
+  `poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink`
+  at `poll_tests.rs:5065` (578 passed, 1 failed each); fixture workdir resolves to
+  runner checkout instead of temporary context. Integration execution not reached.
+- [ ] macOS aarch64: FAIL `poll_automatic_in_transfer_yields_to_manual`, reported
+  as isolated child or watchdog failure after 48 passing polling cases. Exact
+  underlying failure not yet diagnosed; later tests not proved.
+- [ ] Correct failed-platform issues and obtain freshly authorized native evidence.
+
+All five release builds and binary verification passed. Overall run **FAILURE**;
+native acceptance remains blocked, despite the retained local review approval.
+No retry, second dispatch, PR, merge, closure or worktree removal was performed.
+Results and evidence are recorded in canonical comment `01M4XWFCGW9N53Y99FMXFHPGER`
+and the latest execution-ledger section. Ticket remains open.

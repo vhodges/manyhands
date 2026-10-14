@@ -10,6 +10,72 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## First Authorized Native Build Run — 2026-10-14T18:58:25Z
+
+The owner authorized publishing the reviewed ticket branch, dispatching one full
+five-target Build workflow, and watching it to completion. A fresh ticket-ref
+fetch found remote `094e5734d1d4480ee29e6f675aaba4a8883b9060`, an ancestor of
+local `3d8f8a5a054fd74dc83eb2a4a93c260769177ce8` (26 commits ahead, none behind).
+A normal fast-forward push succeeded; no force push or history reconciliation
+was needed. The remote tip was verified as the reviewed local commit.
+
+Command: `gh workflow run build.yml --ref manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DG`.
+Run [38612548902](https://github.com/vhodges/manyhands/actions/runs/38612548902)
+tested exactly `3d8f8a5a054fd74dc83eb2a4a93c260769177ce8`, started at
+2026-10-14T18:08:00Z and finished at 18:56:51Z. The controller watched with
+`gh run watch 38612548902 --interval 60 --compact --exit-status`, then inspected
+final job metadata, all failed-step logs, and both successful Linux job logs.
+The run is **completed / failure**, not native acceptance approval.
+
+| Native target | Release build and binary verification | Test/job conclusion | Job evidence |
+| --- | --- | --- | --- |
+| Linux x86_64 | PASS | PASS; configured tests and artifact upload completed | [116019320355](https://github.com/vhodges/manyhands/actions/runs/38612548902/job/116019320355) |
+| Linux aarch64 | PASS | PASS; configured tests and artifact upload completed | [116019320818](https://github.com/vhodges/manyhands/actions/runs/38612548902/job/116019320818) |
+| Windows x86_64 | PASS | FAIL in library tests; integration targets not executed | [116019320168](https://github.com/vhodges/manyhands/actions/runs/38612548902/job/116019320168) |
+| Windows aarch64 | PASS | FAIL in library tests; integration targets not executed | [116019320057](https://github.com/vhodges/manyhands/actions/runs/38612548902/job/116019320057) |
+| macOS aarch64 | PASS | FAIL in polling SSH target; later cases/targets not executed | [116019320252](https://github.com/vhodges/manyhands/actions/runs/38612548902/job/116019320252) |
+
+Both Linux jobs passed 618 library, 709 selected ordinary integration, and 373
+SSH cases: **1,700 configured tests per target, zero failures**, including all
+84 polling SSH cases. This is the workflow's selected native test set, not the
+1,779-test local all-features gate (which also includes other targets/doctests).
+Release artifacts were uploaded for both Linux targets. All five release builds
+and binary checks succeeded; the three failed jobs skipped artifact upload.
+
+Both Windows targets failed the same library test:
+`repository::remote::poll::tests::poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink`.
+Each reported **578 passed, 1 failed**. At `poll_tests.rs:5065`, the fixture's
+opened workdir canonicalized to the runner checkout instead of the intended
+temporary deterministic context path. The unexpected checkout was on `D:` for
+x86_64 and `C:` for aarch64. This is observed fixture setup evidence; production
+ownership behavior has not been diagnosed or changed, and Windows integration
+or polling SSH success is not established by compilation.
+
+macOS passed the earlier targets it reached, including the library, 41 comment
+publication SSH cases, 25 merge recovery cases, and 15 observation cases. In
+`remote_polling`, 48 cases passed before
+`poll_automatic_in_transfer_yields_to_manual` failed with the privacy-filtered
+message `isolated child or watchdog failure`. The log does not distinguish an
+assertion failure from watchdog/child failure; no root cause is claimed. Later
+polling cases and subsequent integration targets were not proved by this run.
+Both Linux jobs passed the same in-transfer case.
+
+Raw fetched logs are available locally in tool outputs
+`tool_13bc6b3e3001aVNS43FMFctZeA` (failed steps),
+`tool_13bc71a3b001uqlhsUE3aDFqvk` (Linux x86_64), and
+`tool_13bc719ec001kbUlJiRDgpk6YX` (Linux aarch64). GitHub job links above are the
+durable external evidence. Action-runtime deprecation warnings are not the
+recorded test failure causes.
+
+This checkpoint records results only: no source/test/workflow changes, local
+Rust reruns, retries, additional dispatches, PR, merge, closure, or worktree
+removal. The existing local review approval remains historical evidence at its
+reviewed source; native acceptance is **blocked by Windows and macOS failures**.
+The ticket stays open. Any subsequent dispatch needs fresh owner authorization;
+failed-platform isolation/fixes and restoration of the full matrix must follow
+the applicable native-CI workflow instructions. Canonical result comment:
+`01M4XWFCGW9N53Y99FMXFHPGER`.
+
 ## Task 8 Final Local Review Approval — 2026-10-14T15:09:20Z
 
 **Task 8 COMPLETE for local verification and review-ready handoff. Ticket OPEN.**

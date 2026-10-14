@@ -320,11 +320,20 @@ unchanged from reviewed/gated 0cca1f8. Existing passing Rust evidence is retaine
 without rerunning unchanged code. These are controller-conveyed independent
 review approvals, not owner authorization for outward delivery or closure.
 
-Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 native executions
-are each **PENDING AUTHORIZATION**. Manual workflow wiring and local Linux tests
-are not native proof. Linux-only failed-checkout and Unix permission/symlink
-controls do not prove Windows/macOS behavior. Ticket remains open; no native
-dispatch, push, PR, merge, closure or worktree removal is authorized here.
+The owner subsequently authorized a normal branch push and one five-target native
+run. [Build 38612548902](https://github.com/vhodges/manyhands/actions/runs/38612548902)
+tested published commit `3d8f8a5a054fd74dc83eb2a4a93c260769177ce8` and completed
+with **failure** on 2026-10-14. All five release builds/binary checks passed.
+Both Linux targets passed all configured tests (1,700 each, including 84 polling
+SSH cases) and uploaded artifacts. Both Windows targets stopped on the same
+library worktree-identity fixture assertion (578 passed, 1 failed each), before
+integration execution. macOS stopped at the polling in-transfer yield case with
+an isolated-child/watchdog failure; later cases and targets remain unproved.
+Exact job links and observed failures are in the
+[native-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#first-authorized-native-build-run--2026-10-14t185825z).
+Native acceptance is blocked pending correction and verified native reruns.
+Further dispatches require fresh authorization. Ticket remains open; PR, merge,
+closure and worktree removal remain separately authorized lifecycle actions.
 
 ## Self-Review And Lifecycle
 
