@@ -112,6 +112,11 @@ pub struct OperationRemains {
     /// Whether the operation recorded that it passed the point where its
     /// work is committed. An abandon leaves that commit where it is: it
     /// is not undone, and nothing says it was abandoned but this.
+    ///
+    /// A comment that stopped at `comment_checkpoint_intent` reads
+    /// `true` and may have made no commit: the step is recorded before
+    /// the commit is attempted. `paths` says which: with no commit made
+    /// the comment's file is among them.
     pub committed: bool,
     /// The request whose record holds the operation and is not finished:
     /// the one an abandon releases.

@@ -377,6 +377,9 @@ pub struct OperationAbandonPreviewDto {
     pub paths_complete: bool,
     /// Whether the operation recorded that it passed the point where its
     /// work is committed. The command leaves that commit where it is.
+    /// For a comment whose step is `comment_checkpoint_intent` the
+    /// commit may not exist; `paths` holds the comment's file when it
+    /// does not.
     pub committed: bool,
     /// The unfinished request that began the operation, whose record
     /// the command deletes. Null when no such request is recorded.
@@ -728,8 +731,10 @@ pub struct OperationMutationDto {
     pub paths_complete: bool,
     /// Whether the operation had recorded that it passed the point where
     /// its work is committed. That commit is kept: an abandon undoes
-    /// nothing. The released request, sent again, is a new request, and
-    /// is answered by what the repository then shows.
+    /// nothing. For a comment whose step was `comment_checkpoint_intent`
+    /// the commit may not exist; `paths` holds the comment's file when
+    /// it does not. The released request, sent again, is a new request,
+    /// and is answered by what the repository then shows.
     pub committed: bool,
     /// The request whose record was deleted with the operation: its ID
     /// is free, and its next use is a new request. Null when no

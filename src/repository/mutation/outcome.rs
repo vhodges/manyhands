@@ -1036,9 +1036,12 @@ fn with_host_action(
 ///    of each operation in `pending`. The offer is made whatever the
 ///    result's own cause was: an active reservation or a pending merge
 ///    can be why a request was `recovery_required` while a local
-///    operation is pending as well. That is harmless, since the pending
-///    operation does refuse the repository's other operations, and the
-///    preview of the abandon says what it is.
+///    operation is pending as well. That is harmless: the preview of
+///    the abandon says what it is. A pending operation does refuse the
+///    repository's other operations, with one exception, which is
+///    offered all the same: a comment that waits for its registration
+///    refuses only the reservation of a synchronization, so its abandon
+///    can be offered to a request it was not in the way of.
 ///
 ///    An operation among them that is in `resumable` is offered its
 ///    resume as well, before `repo.inspect`: the way on comes before
