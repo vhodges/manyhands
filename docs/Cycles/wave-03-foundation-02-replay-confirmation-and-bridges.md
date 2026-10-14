@@ -299,7 +299,9 @@ same target passed all 88 cases in the run without the `desktop` feature a
 few minutes later, and in three further runs with every feature. It is
 recorded as a timing failure under load, not a defect.
 
-INTEGRATION-CI-PLACEHOLDER
+Native CI run 38513751605 at `9ac77fc`, the integrated branch, passed on all
+five targets; it runs main's `comment_publication` target beside this
+Cycle's.
 
 ## Decisions For The Product Owner
 
@@ -686,6 +688,7 @@ ticket.
 | `01M4R1K5VRSRXFM58VQCTQ9F3W` | Shorten the native CI feedback loop |
 | `01M4SDB38H9JTG77VMC9102W2F` | Enabling a repository can erase another process's Git configuration change |
 | `01M4TFGHPG98GCM6TX3B56HJAB` | A backslash in a file name under docs makes every refresh fail on Linux and macOS (low priority) |
+| `01M4W5SCBV6WFJP11Y7PJF5VS8` | The operation reads name no item for a local authoring operation (found during the Cycle 07 integration; on main) |
 
 The `remote remove` binding refuses the removals the first ticket
 describes; the domain function is unchanged. Ticket
