@@ -165,6 +165,58 @@ pub fn insert_remote_synchronization(
         .unwrap();
 }
 
+/// Makes the synchronization `child`, of `item`'s branch, the one a
+/// comment's binding keeps: the submission `parent`, completed, and its
+/// binding with a receipt, as the index holds them once the comment is
+/// committed and handed to the index. The synchronization's own row is
+/// inserted with `insert_remote_synchronization`.
+pub fn insert_comment_binding(
+    data_directory: &Path,
+    parent: &str,
+    child: &str,
+    (kind, item): (&str, &str),
+    comment: &str,
+) {
+    let connection = items::index(data_directory);
+    let root: String = connection
+        .query_row("SELECT root_path FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO operation_records (
+                repository_id, root_path, operation_ulid, action, target, state,
+                completed_step, observed_at
+             ) SELECT id, root_path, ?1, 'submit_comment', ?2, 'completed',
+                      'authoritative_observed', ?3
+                 FROM repositories",
+            params![
+                parent,
+                format!("authoring-context-v1/{kind}/{item}/Edit\0.manyhands/comments\0{comment}"),
+                STORED_AT
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO comment_publication_bindings (
+                operation_ulid, local_record_id, root_digest, kind, item_ulid, comment_ulid,
+                synchronization_ulid, pre_checkpoint_oid, checkpoint_oid, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '0')",
+            params![
+                parent,
+                connection.last_insert_rowid(),
+                blake3::hash(root.as_bytes()).as_bytes().as_slice(),
+                kind,
+                item,
+                comment,
+                child,
+                "0".repeat(40),
+                PUBLISHED_OID
+            ],
+        )
+        .unwrap();
+}
+
 /// The commit a completed synchronization published in these fixtures.
 pub const PUBLISHED_OID: &str = "0123456789abcdef0123456789abcdef01234567";
 

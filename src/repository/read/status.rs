@@ -301,7 +301,15 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
 ///
 /// A poll that ended is not listed, whatever became of it. A new poll
 /// takes its place, and listing each would grow without bound.
-fn remote_standing(record: &StoredRemoteOperation) -> (bool, Option<OperationNextAction>) {
+///
+/// `of_a_comment` says the synchronization is the one a comment's binding
+/// keeps. It is listed as any other is and no resume is offered for it:
+/// it is the comment submission's to take up, and `operation resume`
+/// refuses it.
+fn remote_standing(
+    record: &StoredRemoteOperation,
+    of_a_comment: bool,
+) -> (bool, Option<OperationNextAction>) {
     let (_, holds_reservation) = remote_phase(record.phase);
     let is_synchronization = matches!(
         record.target.action(),
@@ -314,15 +322,20 @@ fn remote_standing(record: &StoredRemoteOperation) -> (bool, Option<OperationNex
     if holds_reservation {
         (true, None)
     } else if is_synchronization && (stopped || record.index_pending) {
-        (true, Some(OperationNextAction::Resume))
+        (true, (!of_a_comment).then_some(OperationNextAction::Resume))
     } else {
         (record.index_pending || record.reconciliation_required, None)
     }
 }
 
-fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, ReadError> {
+fn remote_operation(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+) -> Result<StoredOperation, ReadError> {
     let (state, _) = remote_phase(record.phase);
-    let (listed, next_action) = remote_standing(record);
+    let of_a_comment =
+        recovery::is_comment_synchronization(connection, &record.operation_id.to_string())?;
+    let (listed, next_action) = remote_standing(record, of_a_comment);
     Ok(StoredOperation {
         listed,
         dto: OperationDto {
@@ -365,7 +378,7 @@ fn remote_operations(
 ) -> Result<Vec<StoredOperation>, ReadError> {
     remote_records(connection, repo, id)?
         .iter()
-        .map(remote_operation)
+        .map(|record| remote_operation(connection, record))
         // The store narrows the rows; this decides which are listed.
         .filter(|operation| {
             id.is_some()

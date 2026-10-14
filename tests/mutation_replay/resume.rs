@@ -935,6 +935,74 @@ fn a_resume_of_a_fenced_synchronization_is_not_taken_up_and_names_its_request() 
     );
 }
 
+/// The synchronization a comment's binding keeps is taken up by the
+/// comment's own retry, which first proves that the branch still holds
+/// the comment and may merge. No command of the boundary is that retry
+/// yet. A resume would take it up as a plain synchronization, and one
+/// that published a branch the comment was missing from would end the
+/// only synchronization the comment has. So it is left: nothing of the
+/// row changes, and neither the list nor `operation show` says a resume
+/// would go on with it, as they say of the same row with no binding.
+#[test]
+fn a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered() {
+    use manyhands::repository::OperationNextAction;
+    let world = remote_world();
+    for operation_id in [OPERATION_A, OPERATION_C] {
+        operations::insert_remote_synchronization(
+            world.data.path(),
+            operation_id,
+            Some(("ticket", TICKET_A)),
+            "interrupted",
+            Some("before_fetch"),
+            None,
+        );
+    }
+    operations::insert_comment_binding(
+        world.data.path(),
+        OPERATION_B,
+        OPERATION_A,
+        ("ticket", TICKET_A),
+        items::COMMENT_A,
+    );
+    let before = stored_remote(&world, OPERATION_A);
+    let repo = world.service.resolve_repository(&world.root).unwrap();
+    let next_action = |operation_id: &str| {
+        let shown = world
+            .service
+            .show_operation(&repo, OperationId::parse(operation_id).unwrap())
+            .unwrap();
+        let listed = world
+            .service
+            .list_operations(&repo)
+            .unwrap()
+            .items
+            .into_iter()
+            .find(|operation| operation.operation_id.as_deref() == Some(operation_id))
+            .expect("a synchronization that stopped is listed");
+        assert_eq!(listed, shown);
+        shown.next_action
+    };
+
+    assert_eq!(next_action(OPERATION_A), None);
+    // The same row with no binding is one a resume goes on with.
+    assert_eq!(next_action(OPERATION_C), Some(OperationNextAction::Resume));
+
+    let left = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &left,
+        Outcome::Blocked,
+        ResultCode::RecoveryRequired,
+    );
+    assert!(
+        !recovery_actions(&left).contains(&"operation.resume"),
+        "{:?}",
+        recovery_actions(&left)
+    );
+    assert_eq!(stored_remote(&world, OPERATION_A), before);
+}
+
 #[test]
 fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     let world = remote_world();

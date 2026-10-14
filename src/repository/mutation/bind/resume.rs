@@ -144,6 +144,10 @@ enum Named {
     /// work recorded as outstanding: a cancelled synchronization that
     /// Git may still hold something of. It is looked at, not resumed.
     /// `synchronization` is what it synchronized, when it is one.
+    ///
+    /// Also the synchronization a comment's binding keeps, ended or
+    /// not, with no `synchronization`: the domain is asked nothing of
+    /// it under a resume, which would take it up.
     LeftToInspect {
         synchronization: Option<SynchronizationTarget>,
     },
@@ -210,6 +214,22 @@ fn found_remote(
 ) -> Result<Option<Named>, ReadError> {
     let row = remote::state::lookup_operation(connection, root, operation_id)?;
     let target = remote::state::lookup_synchronization_target(connection, root, operation_id)?;
+    // The synchronization a comment's binding keeps is the comment
+    // submission's to take up: its retry proves that the branch still
+    // holds the comment before it publishes, and may merge. No command
+    // of the boundary is that retry, so the boundary takes it up for
+    // nobody, also for its index hand-off. It is left non-terminal, as
+    // the submission's own retry needs it.
+    let of_a_comment = recovery::is_comment_synchronization(connection, &operation_id.to_string())?;
+    let taken_up = |target: SynchronizationTarget| {
+        if of_a_comment {
+            Named::LeftToInspect {
+                synchronization: None,
+            }
+        } else {
+            Named::Synchronization(target)
+        }
+    };
     Ok(Some(match (row, target) {
         (JournalRow::Absent, None) => return Ok(None),
         // The two are read of one row, in one transaction.
@@ -241,7 +261,7 @@ fn found_remote(
                 checkpointed: _,
             },
             Some(Some(target)),
-        ) => Named::Synchronization(target),
+        ) => taken_up(target),
         // Cancelled, which nothing continues, or an operation that is
         // no synchronization, with work recorded as outstanding.
         (
@@ -263,7 +283,7 @@ fn found_remote(
                     Named::Fenced,
                 )?
             } else {
-                Named::Synchronization(target)
+                taken_up(target)
             }
         }
         // A poll, a promotion or a closure: no request of the boundary

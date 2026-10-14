@@ -1250,6 +1250,29 @@ fn comment_child_may_begin(
     Ok(action == "refresh" && target.is_empty() && allowed)
 }
 
+/// The table of the bindings of comment submissions.
+const COMMENT_BINDINGS_TABLE: &str = "comment_publication_bindings";
+
+/// Whether `operation_id` is the ID a comment's binding keeps for its
+/// synchronization. That synchronization is the comment submission's: it
+/// is taken up by the submission's own retry, which proves first that
+/// the branch still holds the comment. Whoever would take a
+/// synchronization up by its ID alone, or say that it can be, asks this.
+/// An index that has never held a submission may lack the table.
+pub(super) fn is_comment_synchronization(
+    connection: &Connection,
+    operation_id: &str,
+) -> rusqlite::Result<bool> {
+    if !has_table(connection, COMMENT_BINDINGS_TABLE)? {
+        return Ok(false);
+    }
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM comment_publication_bindings WHERE synchronization_ulid = ?1)",
+        [operation_id],
+        |row| row.get(0),
+    )
+}
+
 /// What the local journal holds pending for a root, as a call that would
 /// begin or take up an operation there reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
