@@ -569,10 +569,11 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
-            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path FROM comment_publication_bindings b
+            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path,o.state,o.completed_step FROM comment_publication_bindings b
                 JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
-                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?))).optional().map_err(|_| state::recovery_required())?;
-            if let Some((kind, item, checkpoint, parent_root)) = binding {
+                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?,r.get::<_, String>(4)?,r.get::<_, Option<String>>(5)?))).optional().map_err(|_| state::recovery_required())?;
+            if let Some((kind, item, checkpoint, parent_root, parent_state, parent_step)) = binding
+            {
                 let registered_root: String = tx
                     .query_row(
                         "SELECT root_path FROM repositories WHERE id=?1",
@@ -589,6 +590,21 @@ impl RepositoryService {
                     || !identity_matches
                 {
                     return Err(mismatch());
+                }
+                // The submission this synchronization is of was abandoned.
+                // Its row is under another ID than the one reserved here,
+                // so the refusal below, which reads the row of this ID,
+                // does not see it. A replay or a retry that read its
+                // binding before the abandon comes here next, and is
+                // stopped in the transaction that would reserve: nothing
+                // is begun on the remote for it.
+                if parent_state == "completed"
+                    && crate::repository::recovery::is_abandoned_step(parent_step.as_deref())
+                {
+                    return Err(crate::repository::recovery::abandoned(
+                        RepositoryOperation::SubmitComment,
+                        root,
+                    ));
                 }
                 if checkpoint.is_none() {
                     return Err(state::recovery_required());

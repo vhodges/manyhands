@@ -5165,6 +5165,83 @@ fn an_abandoned_comment_is_refused_by_its_replay_its_retry_and_its_cancellation(
     );
 }
 
+/// A replay or a retry that had read its binding and proved its
+/// checkpoint before the abandon landed asks nothing more of the parent's
+/// row: what it does next is reserve the synchronization its binding
+/// names. That reservation is where it is stopped, in the transaction that
+/// would make it, so that no remote work is begun for a submission that
+/// was abandoned. The reservation is asked for here as that call asks.
+#[test]
+fn an_abandoned_comment_s_synchronization_is_refused_its_reservation() {
+    use manyhands::repository::{RemoteOperationAction, RemoteOperationTarget, RemoteRefPlan};
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let operation_id = support::new_operation_id();
+    let failing = support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
+        .open_service(enabled.data_directory.path());
+    let CommentSubmissionOutcome::Saved { receipt, .. } = failing
+        .submit_comment_with_test_session(comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        ))
+        .unwrap()
+    else {
+        panic!("the comment is committed and its hand-off is owed");
+    };
+    assert!(matches!(
+        enabled
+            .service
+            .abandon_operation(AbandonOperationRequest {
+                root: fixture.root.clone(),
+                operation_id,
+                expected: None,
+            })
+            .unwrap(),
+        AbandonOperationOutcome::Abandoned(_)
+    ));
+    let index = support::items::index(enabled.data_directory.path());
+    index
+        .execute_batch("UPDATE remote_polling_state SET remote_name='origin',primary_branch='main'")
+        .unwrap();
+    let remote_rows = || -> i64 {
+        index
+            .query_row("SELECT COUNT(*) FROM remote_operation_records", [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    let target = RemoteOperationTarget::for_context(
+        &RemoteRefPlan::from_configuration("origin", "main").unwrap(),
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Document,
+        support::document_id(),
+    )
+    .unwrap();
+
+    let refused = enabled
+        .service
+        .reserve_remote_operation(
+            &fixture.root.canonicalize().unwrap(),
+            receipt.synchronization_id,
+            &target,
+        )
+        .map(|_| ())
+        .map_err(|error| error.kind);
+
+    assert_eq!(refused, Err(RepositoryErrorKind::OperationAbandoned));
+    assert_eq!(remote_rows(), 0);
+}
+
 #[test]
 fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     let fixture = support::born_repository();
