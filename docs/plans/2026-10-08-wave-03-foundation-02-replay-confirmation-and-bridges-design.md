@@ -69,6 +69,13 @@ of every command is what the code does. Where the built contract departs
 from an RFC by a decision already made, the departure is listed once, under
 [Departures from the RFCs](#departures-from-the-rfcs).
 
+It was brought up to date a fourth time on 2026-10-13, after main's Wave 02
+Cycle 07, comment publication, was merged into the branch and reconciled
+with the journal's readers. The boundary still binds no comment command.
+What an abandon, a resume and the operation reads answer for a comment
+submission's rows is under
+[Abandoning An Operation](#abandoning-an-operation).
+
 Terms used below:
 
 - **Mutation boundary**: the new library entry points, `prepare` and
@@ -457,11 +464,44 @@ All thirty are built.
 
 Not bound in F2, with the owner:
 
-- `comment add`: the first of C4 or D4. The CLI RFC defines it as one
-  checkpoint followed by immediate publication, and that compound operation
-  is Wave 02 Cycle 07. Binding the local half now would publish a result
-  shape that changes when the other half arrives. No Cycle before C4 and D4
-  submits comments. F2 still makes `submit_comment` write the author.
+- `comment add`: the first of C4 or D4, by the product owner's decision of
+  2026-10-13. The CLI RFC defines it as one checkpoint followed by
+  immediate publication. That compound operation, Wave 02 Cycle 07, is on
+  the branch, so the binding no longer waits for its other half; it waits
+  for the work below. No Cycle before C4 and D4 submits comments, and
+  nothing reaches `submit_comment` but a direct call of the service. F2
+  still makes `submit_comment` write the author. What the boundary needs
+  from the compound operation before it can bind it:
+  - **An observed sibling.** `submit_comment` and
+    `retry_comment_publication` call `synchronize_remote`. The boundary's
+    synchronizations call `synchronize_remote_observed`, with a
+    cancellation token and a progress sink; without a sibling that does
+    the same, a binding can neither honor the token nor report progress.
+    The operation's own cancellation is by lookup, from another call.
+  - **A decision on divergence.** The boundary's synchronizations refuse
+    divergence (decision 12). A comment's synchronization merges, and can
+    leave a retained conflict that no bound command resolves. Either the
+    comment binding refuses divergence too, or it waits for the conflict
+    commands.
+  - **Which call a retry is.** Once a checkpoint exists a retry is
+    `retry_comment_publication`, which takes no body; before it, it is
+    `submit_comment`, which needs the body from the caller. A request
+    record holds a digest and no body, so a caller that lost its input
+    before the checkpoint needs an answer that
+    `original_request_required` does not give.
+  - **Two IDs for one request.** The record holds the comment's operation
+    ID. The synchronization's ID is the compound operation's own, kept in
+    `comment_publication_bindings`; the record must not allot or store a
+    second. Whether the envelope shows it is a contract question.
+  - **`publication_pending`**, in the Incomplete class, with its schema
+    tie and golden.
+  - **A hand-off-only entry,** if `operation resume` is to finish a
+    comment that waits for its registration or its index hand-off without
+    publishing; and a rule for when a resume may take a comment's
+    synchronization up, which it refuses today in every state.
+  - **`repository_not_enabled`** for the retry and the cancellation, which
+    on a repository that was never enabled answer `RecoveryRequired`
+    today because no binding is found.
 - `poll configure`, `poll pause`, `poll resume`, `poll once`: the first of C5
   or D6.
 - `document promote`, `ticket close`: the first of C5 or D5; track rule 6.
@@ -748,15 +788,21 @@ Three terms are used throughout.
   operation has not ended; a remote row whose phase is interrupted or
   failed reads this way. `Final`: the operation has ended. A `Final` row
   carries `kind` (`Completed`, `Cancelled` or `RetainedForInspection`),
-  `owes_work` (a remote row whose index hand-off or reconciliation is
+  `owes_work` (a local row of a comment that waits for its registration,
+  or a remote row whose index hand-off or reconciliation is
   still owed) and `checkpointed`.
 - `checkpointed` says the row records that the operation passed the point
   where its work is committed. The steps a local row records are one
   closed enum, `LocalStep`; a stored name that is none of them reads as an
   unlisted step, which is recorded and is no checkpoint. For a local row
   it is true when the last step recorded is `authoring_checkpoint_observed`,
-  `authoritative_observed`, `initialization_committed` or
-  `publication_committed`. A save records its checkpoint step whether it
+  `authoritative_observed`, `initialization_committed`,
+  `publication_committed`, `comment_checkpoint_intent` or
+  `comment_registration_pending`. The enum has twenty-one stored names:
+  seventeen steps of work and the four that close a row, `error`,
+  `completed`, `rejected` and `abandoned`. Three of the seventeen are a
+  comment submission's, and how each is classified is under
+  [Abandoning An Operation](#abandoning-an-operation). A save records its checkpoint step whether it
   committed or found nothing to commit, so the step does not show that a
   commit was made. Its absence shows that none was. Remote and key rows
   record phases, and their final rows always read `true`.
@@ -2050,6 +2096,43 @@ predates this Cycle; each names its ticket.
   `publication` and `discovery` only, so one that moved the local branch
   and then stopped is `blocked` with nothing durable reported.
 
+*Comment submissions.* These hold for rows that only a direct call of the
+service makes, until `comment add` is bound.
+
+- **Abandoning a submission spends its comment ID.** The binding is kept,
+  so a new operation for the same comment ID is refused, also when the
+  abandoned one never committed. A file it wrote and did not commit stays
+  in the worktree and keeps the context from synchronizing until it is
+  removed by hand, as for an abandoned save.
+- **`committed: true` at `comment_checkpoint_intent` may name a commit
+  that does not exist.** From the intent on a commit may exist, and only
+  Git says whether it does. The abandon's preview and result say
+  `committed: true` either way; when there is no commit the same result
+  lists the comment's file in `paths` as uncommitted. The alternative
+  would report `committed: false` over a commit that may exist.
+- **The abandon of a registration-pending comment is offered on any
+  `recovery_required` that offers abandons,** also when that row is not
+  what is in the way: it refuses only reservations.
+- **`operation show` of a registration-pending comment has
+  `item_id: null`.** The journal row's item is not filled for a submission
+  made with no registration. The abandon's preview and result do name the
+  item, from the row's target. Whether other comment rows share this was
+  not checked.
+- **A completed synchronization of a comment that only owes its index
+  hand-off is refused by a resume too.** Running it would be harmless; it
+  is refused to keep one rule. The Cycle that binds `comment add`
+  revisits it.
+- **The test of the reservation's refusal is not a two-call race.** It
+  abandons the submission and then asks for the reservation the running
+  call would ask for next, which is the transaction the refusal is in. No
+  hook pauses a call between its proof and its reservation. A test that
+  runs the replay and the abandon at once is left to the `comment add`
+  Cycle.
+- **Every answer in the two tables of a comment's rows that no test
+  names is derived from the code.** One test drives a registration-pending
+  row through the boundary, and one a comment's synchronization through a
+  resume; the others are at the service's level or untested.
+
 *Resuming.*
 
 - **A resume raises the owner's attempt before the domain says whether it
@@ -2776,7 +2859,7 @@ leave the request's record `accepted`; see Settling.
 | `publication_remote_required`, `publication_remote_in_use`, `ticket_closed`, `slug_already_assigned`, `remote_name_conflict`, `invalid_remote`, the key codes outside a synchronization, and the Input codes not named above | none, unless left `accepted` | The code and message say what is missing. Actions for these belong with the commands that resolve them and are added when a front end needs them. |
 | Any code with no action of its own, `external_change` excepted, on a result left `accepted` | `request.retry`, naming the request | The same request finishes the work. |
 | Any failure that left the request's record `accepted` with the request's own local operation pending, whatever its code | `repo.inspect` if not already offered, then `operation.abandon` naming that operation, after every other action | The same request may still finish the work; where it cannot, this is the way out, and the result is where the caller learns the operation ID. This includes `discovery_pending` and `registration_pending`, where the abandon keeps the commit; the product owner confirmed on 2026-10-12 that it is offered there, after the forward action. |
-| `recovery_required`, or `external_change` on a confirmed command, that already offers `repo.inspect` | `operation.resume` for each pending local operation of the repository that is not the request's own and that a resume would take up now, before `repo.inspect`; `operation.abandon` for each pending local operation, oldest first, after it | The request that owns an operation is not offered its resume here. The same list is made for `prepare` and for a result given again from a record, as true when it is read. The abandons are offered whatever caused the result: a pending local operation does refuse the repository's other operations, and the preview of the abandon says what it is. |
+| `recovery_required`, or `external_change` on a confirmed command, that already offers `repo.inspect` | `operation.resume` for each pending local operation of the repository that is not the request's own and that a resume would take up now, before `repo.inspect`; `operation.abandon` for each pending local operation, oldest first, after it | The request that owns an operation is not offered its resume here. The same list is made for `prepare` and for a result given again from a record, as true when it is read. The abandons are offered whatever caused the result, and the preview of the abandon says what it is. A pending local operation does refuse the repository's other operations, with one exception that is offered all the same: a comment submission that waits for its registration refuses only the reservation of a synchronization, so its abandon can be offered to a request it was not in the way of. |
 
 `operation.abandon` is offered under either of the last two rows only for
 an operation nothing is seen against abandoning; see
@@ -2848,6 +2931,8 @@ index hand-off, then the key journal, then the local one.
 | A pending operation only its own request goes on with (a save, whose body no record holds; a key generation or deletion; an enablement that has not registered its repository; a fenced synchronization), while an unfinished record holds it | Nothing. The row is left exactly as it was. | `original_request_required`, with a `request.retry` action naming that request |
 | The same, for a fenced synchronization no unfinished record holds | Nothing. | `external_change`, no action |
 | The same, for a local or key operation no unfinished record holds | Nothing. | `recovery_required`, with `repo.inspect`, and `operation.abandon` for a local row where the abandon rule allows it |
+| A synchronization that a comment submission's binding keeps, where any other synchronization would be taken up: pending and not fenced, or completed with its index hand-off owed | Nothing. The domain is asked nothing and the row is left as it was, so the comment's own retry can still publish it. | `recovery_required`. `operation.resume` is offered for it by no result, and the operation reads give it no next action. A fenced one is still `external_change`, and one that ended owing nothing still `already_applied`. |
+| A comment submission that waits for its registration | Nothing. | `recovery_required`, with its `operation.abandon` offered |
 | A poll, a promotion or a closure that has not ended | Nothing. No request of the boundary begins one. | `invalid_input`, no action; confirmed by the product owner on 2026-10-12 |
 
 The hand-off rule asks for both the step and the state. The step must be
@@ -2859,6 +2944,11 @@ the publication remote record their commit before they bring the
 registration up to it, so such a row can owe more than the hand-off. The
 state alone is not enough either: a refresh would complete any pending
 row it was given, also one whose write never happened.
+`comment_registration_pending` counts as a step that says the work is
+done, but its row is stored as completed and so never meets the state
+half of the rule. `comment_checkpoint_intent` is left out of the steps by
+name: from the intent on a commit may exist, and only Git says whether it
+does, which a refresh does not prove.
 
 `operation.resume` is offered on a result only where a resume would take
 the operation up, asked with the same question once the call is over.
@@ -3182,6 +3272,80 @@ This section describes `abandon_operation` and its binding as built.
 - A refresh or rebuild row can be abandoned too, though repeating it is
   simpler.
 
+**A comment submission's rows.** Wave 02 Cycle 07's `submit_comment` is on
+the branch and is bound by no command, so its rows exist only where
+something calls the service directly. The journal's readers are truthful
+to them all the same. A submission has two operations: its own local row,
+under the caller's operation ID, and a synchronization under a second ID
+that its binding in `comment_publication_bindings` keeps.
+
+The three steps a submission adds, and how each is read:
+
+| Step | A checkpoint step | Says the work is done, for a hand-off | Kept when the row goes on |
+| --- | --- | --- | --- |
+| `comment_destination_prepared` | no | no | yes |
+| `comment_checkpoint_intent` | yes | no, by name | yes |
+| `comment_registration_pending` | yes | yes | yes |
+
+None of the three follows an owned write. A row stored as `completed`
+with the step `comment_registration_pending` is a comment that is
+committed and has no registration. It counts as pending for an abandon,
+for the operation list and for the abandon offer, where every other
+question of "pending" reads the state alone
+(`recovery::waits_for_registration`). It refuses the reservation of a
+synchronization and no other local operation.
+
+What the reads and the two commands answer for the submission's own row:
+
+| State or step of the row | `operation list` and `show` | `operation abandon` | `operation resume` |
+| --- | --- | --- | --- |
+| `created`, `branch_observed`, `worktree_observed` | listed | closed, `committed: false` | `recovery_required`, abandon offered |
+| `comment_destination_prepared`, `authoring_destination_observed` | listed | closed, `committed: false`; the comment's file is in `paths` if it was written | `recovery_required` |
+| `comment_checkpoint_intent` | listed | closed, `committed: true`; see the known limits | `recovery_required` |
+| `authoring_checkpoint_observed`, no hand-off begun | listed | closed, `committed: true` | `recovery_required` |
+| `authoritative_observed`, `failed`, `retry`, or `indexing` with an old heartbeat | listed | closed, `committed: true` | the hand-off is run: `ok`, `discovery: current` |
+| `indexing` with a fresh heartbeat | listed | `busy` | the refresh cannot claim the row; its code, the row untouched |
+| `completed` with `comment_registration_pending` | listed | closed, `committed: true`, no paths | `recovery_required`, abandon offered; nothing changed |
+| `completed` with another checkpoint step | not listed; shown by ID | `already_applied` | `already_applied` |
+| `completed` with `rejected` | not listed | `already_applied` | `already_applied` |
+| `completed` with `abandoned` | not listed | `already_applied` | `external_change` |
+
+And for its synchronization, named by the binding's ID:
+
+| State | `operation list` and `show` | `operation abandon` | `operation resume` |
+| --- | --- | --- | --- |
+| No remote row yet | absent | `operation_not_found` | `operation_not_found` |
+| Pending, not fenced, whatever it holds | listed, with no next action | `invalid_input`: another journal's | `recovery_required`, nothing changed |
+| Fenced | listed | `invalid_input` | `external_change` |
+| Completed, index hand-off owed | listed, with no next action | `invalid_input` | `recovery_required`, nothing changed |
+| Completed or cancelled, nothing owed | not listed | `invalid_input` | `already_applied` |
+
+A resume refuses a comment's synchronization in every state in which it
+would take another synchronization up, until `comment add` is bound. A
+resume would publish the context as it stands and end the
+synchronization, without the compound operation's check that what is
+published holds the comment; where the context had been reset, that makes
+the receipt unpublishable for good, which the comment's own retry does
+not. The product owner's ruling of 2026-10-13 is that the boundary leaves
+it. The cost is that the boundary offers no exit for such a
+synchronization before C4 or D4; it cannot create one either.
+
+A refresh, or a `folder create`, under the ID a comment's binding keeps
+for its synchronization is refused before anything is changed, unless it
+is that synchronization's index hand-off. The check is one function,
+`comment_child_may_begin`, asked by `begin_or_reconcile` and by
+`recovery::require_refresh_can_begin`, beside `recovery::in_the_way`.
+
+**An abandoned submission is never published.** The abandon closes the
+submission's row and keeps the commit, the row and the binding. After it
+the submission is refused in three places with `OperationAbandoned`:
+where its binding is read, which is the first thing its replay, its
+publication-only retry and its cancellation do; and inside the
+transaction that would reserve its synchronization. The second is what
+holds against a call that was already past its proof of the checkpoint
+when the abandon landed: nothing is reserved, nothing reaches the remote,
+and that call answers saved with publication pending, not an error.
+
 **Liveness.** An operation is abandoned only when nothing shows a call at
 work under it.
 
@@ -3207,7 +3371,12 @@ work under it.
   `save_document`, `save_ticket`, `repair_item`, `add_remote`,
   `remove_remote`, `set_publication_remote`, `enable` and
   `submit_comment`; a `create_and_enable` that is taken up again goes
-  through `enable`. Nothing is written. The first call is therefore
+  through `enable`. Nothing is written. A comment differs in its answer:
+  the compound operation has no index-pending outcome. Its guard is
+  reached only before the checkpoint, by a row a refresh has claimed, and
+  answers `RecoveryRequired` with the row untouched and nothing
+  committed; after the checkpoint the operation's own replay holds the
+  rule and answers saved with its local indexing pending. The first call is therefore
   never answered `recovery_required` for a request whose record finishes
   `ok`. `create_folder` guards the close of its refresh row the same way:
   a row with a fresh heartbeat is not closed, and the request stays
@@ -4213,9 +4382,10 @@ F1 changed no existing public function. F2 changes these:
       `save_document`, `save_ticket`, `add_remote`, `remove_remote`,
       `set_publication_remote`, `enable` (and so a `create_and_enable`
       that is taken up again, which goes through it) and
-      `submit_comment` return their index-pending outcome straight after
-      they begin, with no step recorded, when their row is pending under
-      a live index-owner heartbeat. One check,
+      `submit_comment` return straight after they begin, with no step
+      recorded, when their row is pending under a live index-owner
+      heartbeat: each its index-pending outcome, and `submit_comment`,
+      which has none since Cycle 07, `RecoveryRequired`. One check,
       `RepositoryService::is_being_indexed`, is shared with
       `repair_item`. This changes what an existing function does: a
       second live call no longer takes the row from the first, and a
@@ -4239,6 +4409,16 @@ F1 changed no existing public function. F2 changes these:
       `not_repository_root` is "That path is inside a repository but is
       not a root this command takes.", which is true when a mutation
       gives it for a linked worktree root; a read's golden holds it too.
+    - With the merge of Wave 02 Cycle 07: the three comment steps are
+      variants of `LocalStep`; `recovery::waits_for_registration`,
+      `comment_child_may_begin` and `is_comment_synchronization` are
+      new; reading the binding of an abandoned submission, and reserving
+      its synchronization, are refused with `OperationAbandoned`; the
+      operation read lists a comment that waits for its registration and
+      gives a comment's synchronization no next action. The migration of
+      `comment_publication_bindings` arrives with the merge. No journal
+      action, error kind, result code, recovery action, schema or golden
+      was added.
     - F1's `HostPinDto` and `host_pin.schema.json` name the stored pin
       `pinned_algorithm` and `pinned_fingerprint`, with the two read
       goldens that hold them.

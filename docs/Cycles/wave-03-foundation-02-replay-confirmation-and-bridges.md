@@ -275,6 +275,32 @@ path an envelope reports. The test now uses the canonical path (`134017d`);
 a run narrowed to the three failing targets (38444964170) passed before the
 matrix was restored.
 
+The tables and runs above are the record for the branch before main's
+Wave 02 Cycle 07 was merged into it. The gate of the integrated branch is
+recorded here:
+
+Local gate on Linux (x86_64) through Devenv, 2026-10-13, at code commit
+`81f1f90` (main's Cycle 07 merged and reconciled):
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | 0 | |
+| `cargo fmt --check` | 0 | |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | |
+| `cargo test --all-features --locked --no-fail-fast` | 101 | 2156 passed, 0 failed in the libtest targets; the seven SSH-harness targets passed 41 (`comment_publication`), 25, 15, 63, 31 and 105 cases, and `mutation_remote` failed one case (below) |
+| `cargo run --locked --bin manyhands-cli` | 0 | |
+| `cargo test --locked --test mutation_replay --test mutation_confirmation --test mutation_contract --test mutation_bridges --test mutation_relationships --test mutation_remote` (no `desktop` feature) | 0 | 657 passed, 0 failed in 5 targets; `mutation_remote` passed 88 SSH cases |
+
+The one failure was `a_retry_while_the_first_call_is_still_running_takes_the_synchronization_over`,
+a case that races two calls of one request while the test server holds a
+transport. It ended in the harness's watchdog with no message, while another
+full test suite was running on the same machine in a different worktree. The
+same target passed all 88 cases in the run without the `desktop` feature a
+few minutes later, and in three further runs with every feature. It is
+recorded as a timing failure under load, not a defect.
+
+INTEGRATION-CI-PLACEHOLDER
+
 ## Decisions For The Product Owner
 
 All thirteen were decided by the product owner on 2026-10-10; decisions 12
@@ -461,11 +487,14 @@ Smaller rulings the design makes. None was overruled at approval:
 ## Implementation Outcome (2026-10-13)
 
 Status: **accepted by the product owner on 2026-10-13; ticket closed on its
-branch, pull request opened, not merged.** The branch was cut from main at
-`f87ce81`; main has since gained Wave 02 Cycle 07 (comment publication), and
-the branch does not yet contain it. Bringing main into the branch, and
-verifying the result, is owed before the merge. The Cycle is built on
-the ticket branch at code head `765e43a`. This section records what was
+branch, pull request opened, not merged.** The Cycle was built on the
+ticket branch at code head `765e43a`, from main at `f87ce81`. Main then
+gained Wave 02 Cycle 07, comment publication, and by the product owner's
+decision of 2026-10-13 it was merged into the branch and reconciled, in
+commits `cb13669..81f1f90`; see
+[Integration of Wave 02 Cycle 07](#integration-of-wave-02-cycle-07-2026-10-13).
+The branch contains main at `d1ca887`. The re-review and the gate of the
+integrated branch are recorded where their placeholders stand. This section records what was
 built, what is still owed and what was found. The execution ledger holds
 the rulings behind it and the
 [design](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md)
@@ -535,10 +564,71 @@ ID of a recorded key registry change (confirmed as a known limit,
 design lists it once, under "Departures from the RFCs". The RFC texts are
 not amended on this branch.
 
+### Integration of Wave 02 Cycle 07 (2026-10-13)
+
+Two decisions of the product owner, both of 2026-10-13:
+
+- **Integrate main's Cycle 07 into the branch and reconcile as needed,**
+  before the merge.
+- **Leave `comment add` to the later Cycle.** The boundary binds no
+  comment command, as the approved scope has it; the first of C4 or D4
+  binds it. `publication_pending` stays unregistered.
+
+What was done, in commits `cb13669..81f1f90`:
+
+- **The merge** (`79c8248`) of main at `d1ca887`. Seven files conflicted
+  and each was resolved as the union of both sides: the native workflow's
+  test list, the two harness-less test targets, the shared test support,
+  the reservation's checks, the journal's steps, and `submit_comment`,
+  which keeps Cycle 07's retained creation time together with this
+  Cycle's `created_by`. Cycle 07's three journal steps became values of
+  this Cycle's closed step enumeration. The independent review found the
+  merge clean: nothing of either side lost, duplicated or changed in
+  meaning.
+- **Reconciliation** (`a6659c7`, `7da639e`). A comment submission that
+  was abandoned is refused by its replay, its publication-only retry and
+  its cancellation. A comment that is committed and waits for its
+  registration, which Cycle 07 stores as a completed row, is listed by
+  the operation read, can be abandoned, and has its abandon offered; it
+  had refused every synchronization of the repository with nothing listed
+  to explain it. A refresh under the ID a comment keeps for its
+  synchronization is refused before anything is changed.
+- **Fix round** (`2455240`, `11cad5e`, `4535ba3`, `fdb6a68`,
+  `81f1f90`), after the review's one important finding. An abandoned
+  submission's synchronization is refused inside the transaction that
+  would reserve it, so a call already in its publication half publishes
+  nothing. `operation resume` takes up no synchronization that belongs to
+  a comment, in any state, until `comment add` is bound, and the
+  operation reads do not offer a resume for one (ruled 2026-10-13: a
+  resume there can make the comment unpublishable for good, which the
+  comment's own retry cannot). A comment that waits for its registration
+  is tested through the boundary.
+
+No command, result code, recovery action, schema or golden was added, and
+no test of Cycle 07's was altered. Four of this Cycle's tests changed to
+call Cycle 07's signature of `submit_comment`.
+
+What this leaves for the Cycle that binds `comment add` is listed in the
+design under "Commands bound in F2": an observed form of the compound
+operation, a decision on divergence, which call a retry is, the two
+operation IDs of one request, `publication_pending`, a hand-off-only
+entry, and `repository_not_enabled` for the retry and the cancellation.
+The limits the integration adds are in the design's known limits under
+"Comment submissions": among them, that abandoning a submission spends
+its comment ID and can leave an uncommitted file that keeps its context
+from synchronizing until it is removed.
+
+Before the fix round the gate on `7da639e` passed: every command exited
+0, with 2,152 tests passed and none failed across 30 targets. No native
+run exists yet for the merged tree; Cycle 07's `comment_publication`
+target and this Cycle's mutation targets have not shared one.
+
 ### Open obligations
 
-- Product-owner acceptance of the Cycle, and each of publishing, merging
-  and closing, which need their own authorization.
+- Merging and worktree cleanup, which need their own authorization. The
+  product owner accepted the handoff and the ticket was closed on its
+  branch on 2026-10-13.
+- The re-review, the gate and a native run of the integrated branch.
 - The final gate and the native run on the final head; their results
   are recorded under the acceptance table.
 - The RFC departures the design lists have no amendment to the RFCs. C-track
@@ -761,6 +851,29 @@ host approval.
 The gate on `1815366`, before the touch-up, passed: the checks, formatting
 and lints clean, 2,111 tests passed and none failed across 30 targets. The results of the final gate and of
 the native run are recorded under the acceptance table.
+
+### Integration review (2026-10-13)
+
+The merge of main's Wave 02 Cycle 07 and the two reconciliation commits
+were reviewed independently, by reading. Verdict: **not approved**, on one
+important finding with a small fix; no critical finding and six minors.
+The merge itself was found clean. The important finding was that a
+submission abandoned while its replay or retry was already in its
+publication half was still published and reported so; it is fixed in the
+reserving transaction. Of the minors, the rule for a resume of a comment's
+synchronization was ruled and built, the live-indexing guard for a comment
+was kept with a test that fails without it, a registration-pending comment
+was tested through the boundary, and three are recorded in the design as
+known limits. The re-review of the fix round:
+
+approved, with no critical or important finding and three minor ones, all
+about test strength or a path nothing reaches today. They are left for the
+Cycle that binds `comment add`: the fixture of the live-indexing guard's test
+forces a row state the indexer cannot claim; the answer an in-flight caller
+gets after its reservation is refused is not tested end to end; and
+`restart_remote_synchronization` does not check for an abandoned parent,
+which no caller can reach it with. The review was by reading; the gate ran
+the code.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,
