@@ -10,6 +10,109 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 5 Spec P2 Reconciliation Correction — 2026-10-14T01:40:07Z
+
+### Correction And Final GREEN — 2026-10-14T02:19:44Z
+
+Removed only the clean/original-tip requirement from the fully materialized
+owned-context row and its now-unused clean observation. A direct context branch,
+deterministic path, exact Task 4 ownership and regular index still prove the
+materialization. Unfinished intent then enters the **existing step 5** unchanged
+canonical validator under the same single lease; only successful validation
+marks complete, retaining original owner and creation OID. Present delegates
+normal cleanliness/ancestry classification to the existing classifier. No Git
+mutation is performed for this reconciliation row.
+
+The conservative **branch-only** row is byte-for-byte unchanged: branch_created,
+exact original direct OID, no path/admin/registration. Partial, wrong identity,
+symbolic branch and missing-index states still refuse. No approved-document or
+schema change; no exception broadened. Parent/shared helper bodies, Task 4's
+ownership wrapper and classification are unchanged.
+
+Four new regression tests exercise **8 positive cases** (document/ticket ×
+Current, untracked Dirty, valid canonical-edit Dirty, actual descendant-commit
+LocalAhead) and **3 refusal controls** (malformed canonical source, foreign
+standalone replacement, missing index). Every positive proves full root and
+target snapshots/config unchanged, original owner/OID retained with complete,
+one registration, normal classification and repeat Present with no effects.
+Refusal controls prove root plus actual replacement-target snapshots and
+unfinished intent remain unchanged across repeated calls. The malformed source
+now reaches final canonical validation rather than being refused solely for
+dirty status. Earlier failed-checkout, ambiguous-intent and strict branch-only
+tests remain green. No fake transport, sleep, developer key/global config change
+or new testing seam. No setup or production trial failure after recorded RED.
+
+Final sequential Devenv evidence on the unchanged-after-verification Rust tree:
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::poll_materialization_owned_unfinished_` | RED **1 passed/3 failed/567 filtered**, then GREEN **4 passed/567 filtered** |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **44 passed**, 527 filtered |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,648 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0 |
+
+Full log `tool_138173849001kHezuxNuakarWT`: **571 library**, **779 ordinary
+integration**, **289 unchanged real-SSH** (41 comment, 25 merge, 15 observation,
+63 synchronization, 31 fixture, 114 transport), **9 doctests**. One full gate
+for this fix, started with the longer bound justified by prior Task 5 timing;
+no timeout/repeated broad gate here. The existing thousand-item characterization
+remains ignored. Native matrix not run or claimed.
+
+P2 **technically corrected, awaiting SPEC re-review** by
+`ses_ec7f49995ffeVTGZBqRN4rzEoX`, before any quality review. Incremental fix base
+`4dc35de84fab433a299c4de8c640ad5647ceb15c`; cumulative Task 5 review base
+`ab07d0d3096a0e6129add1ba32a2f977a131b80a`; exact local head returned after
+the new fix/bookkeeping commit. Canonical GREEN/re-review comment
+`01M4W3AQQGAF0YJ28908ABW64Q`. Only poll.rs, poll_tests.rs, ledger, open ticket
+and two new comments change. Status/diff/recent log inspected, git diff --check
+and scripts/show-ticket canonical schema/rendering validated before staging only
+intended files. Task 2 SQL kind-immutability minor deferred final, ticket open,
+Task 6 unstarted; no subagents, push/PR/native dispatch/merge/closure/removal.
+
+Controller conveys spec review `ses_ec7f49995ffeVTGZBqRN4rzEoX`: **BLOCKED P2**.
+`poll.rs:739–743` demands clean worktree and original target OID for an unfinished
+intent even after the worktree was fully created and is valid/owned. This narrows
+the design's valid materialized row: retained untracked work, a valid canonical
+edit or a new local commit should finish final validation/intent completion and
+then classify normally (Dirty/LocalAhead/Current), with Git left unchanged.
+
+Verified clean fix base `4dc35de84fab433a299c4de8c640ad5647ceb15c` in the assigned
+worktree/branch. Complete Task 5 review base remains
+`ab07d0d3096a0e6129add1ba32a2f977a131b80a`. Prior controller preflight and Task 0
+gate trusted; no fetch/rebase. Correction only, no amendment, subagents or Task 6.
+The owner exception already permits only final step 5's unchanged canonical
+validator under the same lease, including completion of the interrupted step;
+no other scan permission. D1–D4 and accepted⇒active-only policy unchanged.
+Task 2 SQL kind-immutability minor remains deferred final. Quality not started;
+spec re-review must precede it.
+
+### Meaningful Regression RED Before Predicate Change
+
+Added four real-Git test groups. Each first interrupts at public
+PollAfterMaterializationWorktree, proves InjectedFailure at that boundary,
+branch_created intent/original owner/OID, exact owned worktree with index, and
+clean initial checkout. Positive groups then add an untracked file, append a
+valid canonical body edit, or make an actual local descendant commit. The test
+requires Present, full root/target Git/config snapshot preservation, immutable
+original intent owner/OID with complete, normal Dirty/LocalAhead/Current
+classification and an idempotent next call. Both document and ticket variants
+will be exercised at GREEN; RED loops stop at their first failing document case.
+Negative controls retain malformed canonical source, foreign standalone
+substitution and missing index with unchanged artifacts/intent.
+
+Before any production change:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::poll_materialization_owned_unfinished_`
+exits **101: 1 passed, 3 failed, 567 filtered**. All three positive regressions
+fail at Refused(MaterializationIncomplete), expected Present. Negative controls
+pass against the old predicate; the clean Current control passes before the
+untracked RED. No compile/setup failure in this regression run.
+`git diff --exit-code` confirms production/shared helpers and approved documents
+unchanged at RED. Only poll_tests.rs changed before this record. Canonical
+Node-generated RED comment `01M4W126TJWXJJCPW4FMSJD99K` precedes correction.
+
 ## Task 5 Implementation And Review Handoff — 2026-10-14T01:30:16Z
 
 Task 5 delivered locally, review base

@@ -668,7 +668,6 @@ struct MaterializationGitState {
     path_present: bool,
     registration_present: bool,
     valid: bool,
-    clean: bool,
 }
 impl MaterializationGitState {
     fn observe(
@@ -696,19 +695,12 @@ impl MaterializationGitState {
                 std::fs::symlink_metadata(linked.path().join("index"))
                     .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
             });
-        let clean = linked.as_ref().is_some_and(|linked| {
-            let index = linked.path().join("index");
-            std::fs::symlink_metadata(index)
-                .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
-                && sync::require_clean_target(linked, target).is_ok()
-        });
         Self {
             branch,
             branch_present,
             path_present,
             registration_present,
             valid,
-            clean,
         }
     }
 }
@@ -736,10 +728,10 @@ fn reconcile_materialization(
             MaterializationAction::Refused(PollDisposition::BlockedByLocalState)
         };
     };
-    if observed.valid
-        && (intent.step == MaterializationStep::Complete
-            || (observed.clean && observed.branch == Some(intent.oid)))
-    {
+    // Fully materialized ownership is independent of later local edits or
+    // commits. Step 5's canonical validator still gates unfinished completion;
+    // the caller then classifies local work normally without changing Git.
+    if observed.valid {
         return MaterializationAction::Present;
     }
     if none {

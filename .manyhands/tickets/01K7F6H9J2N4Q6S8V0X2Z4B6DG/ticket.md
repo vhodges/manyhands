@@ -134,6 +134,16 @@ and the baseline.
   comment `01M4W0G54ZF0M98PXS90NJFEJH`.
 - [ ] Independent Task 5 spec review of complete range from
   `ab07d0d3096a0e6129add1ba32a2f977a131b80a`, including approved exception.
+  Reviewer `ses_ec7f49995ffeVTGZBqRN4rzEoX`: BLOCKED P2, unfinished but fully
+  valid owned worktree incorrectly requires clean/original tip before Present.
+  Fix authorized at `4dc35de84fab433a299c4de8c640ad5647ceb15c`; RED before
+  predicate correction: 1 passed/3 failed/567 filtered, comment
+  `01M4W126TJWXJJCPW4FMSJD99K`. Await spec re-review before quality.
+  P2 technically corrected: fully valid owned worktree finishes unchanged final
+  validator and complete without cleanliness/original-tip gate; original intent
+  owner/OID and Git preserved. Strict branch-only resume unchanged. GREEN:
+  4 regressions/44 poll tests; four Rust gates PASS (1,648 passed, 1 existing
+  ignored). Re-review comment `01M4W3AQQGAF0YJ28908ABW64Q`; no amendment.
 - [ ] Independent Task 5 quality review after spec approval.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
@@ -154,7 +164,8 @@ permits a local task commit and canonical bookkeeping, no subagents/network/reba
 Task 5 is delivered after the owner's narrow step-5 exception; historical blocked
 checkpoints remain separate. Review range starts `ab07d0d3096a0e6129add1ba32a2f977a131b80a`
 and includes approved-document reconciliation plus Task 5 implementation.
-Awaiting independent spec then quality review; Task 6 has not started.
+Spec P2 technically corrected, awaiting spec re-review before quality;
+Task 6 has not started.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 6–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.

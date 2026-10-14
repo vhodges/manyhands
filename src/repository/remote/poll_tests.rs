@@ -635,6 +635,223 @@ fn poll_materialization_document_and_ticket_once_reopen_and_later_poll() {
     }
 }
 
+fn interrupted_owned_worktree(kind: AuthoringKind) -> (MaterializationFixture, git2::Repository) {
+    let f = MaterializationFixture::new(kind, false);
+    let service = RepositoryService::open_at_with_failure_point_for_testing(
+        f.local._data.path(),
+        crate::repository::FailurePoint::PollAfterMaterializationWorktree,
+    )
+    .unwrap();
+    assert!(
+        matches!(f.run(&service), Err(SynchronizationError::Repository(error)) if error.kind == crate::repository::RepositoryErrorKind::InjectedFailure)
+    );
+    assert_eq!(
+        f.intent(),
+        Some((
+            f.request.operation_id.to_string(),
+            f.request.oid.to_string(),
+            "branch_created".into()
+        ))
+    );
+    let linked = poll_materialized_target(
+        &f.local.root,
+        f.local.plan.primary_branch(),
+        &SynchronizationTarget::Context {
+            kind,
+            item_id: f.request.item_id.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(linked.head().unwrap().target(), Some(f.request.oid));
+    assert!(linked.statuses(None).unwrap().is_empty());
+    assert!(linked.path().join("index").is_file());
+    (f, linked)
+}
+
+fn assert_owned_completion_preserves_git_and_classifies(
+    f: &MaterializationFixture,
+    linked: &git2::Repository,
+    expected: PollDisposition,
+) {
+    let target = SynchronizationTarget::Context {
+        kind: f.request.kind,
+        item_id: f.request.item_id.clone(),
+    };
+    let local = linked.head().unwrap().target().unwrap();
+    let before = snapshot(&f.local.root, &f.local.repository);
+    let target_before = snapshot(&f.path(), linked);
+    let config_before = fs::read(f.local.repository.commondir().join("config")).unwrap();
+    let service = RepositoryService::open_at(f.local._data.path()).unwrap();
+    let mut request = f.request.clone();
+    request.operation_id = crate::repository::OperationId::new();
+    assert_eq!(
+        service
+            .materialize_context(&f.local.root, &f.local.plan, &f.configuration, &request)
+            .unwrap(),
+        PollMaterializationOutcome::Present,
+    );
+    assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+    assert_eq!(snapshot(&f.path(), linked), target_before);
+    assert_eq!(
+        fs::read(f.local.repository.commondir().join("config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        f.intent(),
+        Some((
+            f.request.operation_id.to_string(),
+            f.request.oid.to_string(),
+            "complete".into()
+        )),
+    );
+    assert_eq!(f.local.repository.worktrees().unwrap().len(), 1);
+    assert_eq!(
+        classify_local_target(
+            &f.local.root,
+            f.local.plan.primary_branch(),
+            &target,
+            PollTrackingState::Present(f.request.oid)
+        )
+        .unwrap(),
+        LocalPollClassification::Unchanged {
+            disposition: expected,
+            local_oid: Some(local)
+        },
+    );
+    assert_eq!(
+        f.run(&service).unwrap(),
+        PollMaterializationOutcome::Present
+    );
+    assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+    assert_eq!(snapshot(&f.path(), linked), target_before);
+    assert_eq!(f.intent().unwrap().2, "complete");
+}
+
+#[test]
+fn poll_materialization_owned_unfinished_current_or_untracked_is_present_then_classified() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for untracked in [false, true] {
+            let (f, linked) = interrupted_owned_worktree(kind);
+            if untracked {
+                fs::write(f.path().join("local.txt"), b"retained local work").unwrap();
+            }
+            assert_owned_completion_preserves_git_and_classifies(
+                &f,
+                &linked,
+                if untracked {
+                    PollDisposition::Dirty
+                } else {
+                    PollDisposition::Current
+                },
+            );
+        }
+    }
+}
+
+#[test]
+fn poll_materialization_owned_unfinished_valid_canonical_edit_is_present_then_dirty() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let (f, linked) = interrupted_owned_worktree(kind);
+        let path = match kind {
+            AuthoringKind::Document => f.path().join("docs/item.md"),
+            AuthoringKind::Ticket => f
+                .path()
+                .join(format!(".manyhands/tickets/{POLL_ID}/ticket.md")),
+        };
+        let mut source = fs::read(&path).unwrap();
+        source.extend_from_slice(b"\nRetained canonical body edit.\n");
+        fs::write(path, source).unwrap();
+        assert_owned_completion_preserves_git_and_classifies(&f, &linked, PollDisposition::Dirty);
+    }
+}
+
+#[test]
+fn poll_materialization_owned_unfinished_local_commit_is_present_then_local_ahead() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let (f, linked) = interrupted_owned_worktree(kind);
+        let path = match kind {
+            AuthoringKind::Document => PathBuf::from("docs/item.md"),
+            AuthoringKind::Ticket => {
+                PathBuf::from(format!(".manyhands/tickets/{POLL_ID}/ticket.md"))
+            }
+        };
+        let mut source = fs::read(f.path().join(&path)).unwrap();
+        source.extend_from_slice(b"\nRetained local commit.\n");
+        fs::write(f.path().join(&path), source).unwrap();
+        let mut index = linked.index().unwrap();
+        index.add_path(&path).unwrap();
+        index.write().unwrap();
+        let tree = linked.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = linked.find_commit(f.request.oid).unwrap();
+        let sig =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(2, 0))
+                .unwrap();
+        let advanced = linked
+            .commit(Some("HEAD"), &sig, &sig, "local work", &tree, &[&parent])
+            .unwrap();
+        assert_ne!(advanced, f.request.oid);
+        assert!(linked.statuses(None).unwrap().is_empty());
+        assert_owned_completion_preserves_git_and_classifies(
+            &f,
+            &linked,
+            PollDisposition::LocalAhead,
+        );
+    }
+}
+
+#[test]
+fn poll_materialization_owned_unfinished_revalidation_refuses_malformed_or_foreign_contexts() {
+    for case in ["malformed", "foreign", "missing_index"] {
+        let (f, linked) = interrupted_owned_worktree(AuthoringKind::Document);
+        match case {
+            "malformed" => fs::write(
+                f.path().join("docs/item.md"),
+                b"---\nmanyhands_managed: true\nmanyhands_kind: document\nid: [\n---\n",
+            )
+            .unwrap(),
+            "foreign" => {
+                drop(linked);
+                fs::rename(f.path(), f.local.root.join("retained_owned")).unwrap();
+                let foreign = git2::Repository::init(f.path()).unwrap();
+                copy_fixture_objects(&f.local.repository, &foreign);
+                foreign
+                    .reference(
+                        &format!("refs/heads/{}", f.branch()),
+                        f.request.oid,
+                        false,
+                        "fixture",
+                    )
+                    .unwrap();
+                foreign
+                    .set_head(&format!("refs/heads/{}", f.branch()))
+                    .unwrap();
+                foreign.checkout_head(None).unwrap();
+            }
+            "missing_index" => fs::remove_file(linked.path().join("index")).unwrap(),
+            _ => unreachable!(),
+        }
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let intent = f.intent();
+        let actual = git2::Repository::open(f.path()).unwrap();
+        let target_before = snapshot(&f.path(), &actual);
+        let service = RepositoryService::open_at(f.local._data.path()).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                f.run(&service).unwrap(),
+                PollMaterializationOutcome::Refused(PollDisposition::MaterializationIncomplete),
+                "{case}"
+            );
+            assert_eq!(
+                snapshot(&f.local.root, &f.local.repository),
+                before,
+                "{case}"
+            );
+            assert_eq!(snapshot(&f.path(), &actual), target_before, "{case}");
+            assert_eq!(f.intent(), intent, "{case}");
+        }
+    }
+}
+
 #[test]
 fn poll_materialization_two_services_race_under_root_lease() {
     let f = MaterializationFixture::new(AuthoringKind::Document, false);
