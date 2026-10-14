@@ -105,9 +105,14 @@ malformed diagnostics. Raw-output map/count verification **PASS**, with 12 rows,
 122 exact names, zero missing PASS lines and 1,766 total passing tests.
 Increment changes only polling test, living map/ledger, Cycle evidence,
 ticket and that comment: **5 files**. Complete Task 8 range through returned HEAD
-contains **8 files** (prior seven plus polling test); complete whole-branch range
+contains **9 files** (prior seven plus polling test and third comment); complete whole-branch range
 contains **81 files**, including 43 canonical comments. Exact return SHA follows
 the authorized new local commit; no amend.
+
+Permission-test checkpoint: `48c612149a21037046559a1efb52c297a51b2341`.
+Post-commit name inventory corrected the cumulative Task 8 file count from 8 to 9;
+this ledger-only correction is a separate local commit, with no Rust change or
+gate rerun. Increment and whole-branch counts remain 5 and 81 respectively.
 
 Controller SPEC, whole-branch quality and independent whole-branch reviews remain
 **PENDING / unrun by implementer**. Task 8 unchecked, ticket open. All five native
