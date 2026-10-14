@@ -2270,6 +2270,19 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
         Ok(())
     })?;
     ssh_harness::observation(&[8, t0.elapsed().as_millis()]);
+    for _ in 0..50 {
+        ssh_harness::observation(&[
+            11,
+            t0.elapsed().as_millis(),
+            p.server.active_helpers() as u128,
+            p.server.upload_pack_bytes() as u128,
+            p.server.connections() as u128,
+        ]);
+        if p.server.active_helpers() == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     p.no_push_since(n)?;
     ssh_harness::observation(&[9, t0.elapsed().as_millis()]);
     p.privacy()?;
