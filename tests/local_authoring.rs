@@ -5242,6 +5242,70 @@ fn an_abandoned_comment_s_synchronization_is_refused_its_reservation() {
     assert_eq!(remote_rows(), 0);
 }
 
+/// A refresh may borrow any operation's ID, and claims the pending row it
+/// is given. So a comment's row can be under a live index owner before
+/// its checkpoint: its file written, its commit not made, no receipt on
+/// its binding. The submission sent again then finds nothing to prove
+/// from Git and comes to the local half, which would record its steps on
+/// the row and commit under the owner. It is stopped first: the row is
+/// that call's, nothing is recorded on it, and nothing is committed.
+#[test]
+fn a_comment_s_row_being_indexed_before_its_checkpoint_is_left_as_it_is() {
+    let fixture = support::born_repository();
+    commit_source(&fixture, "docs/fixture.md", &support::document_source());
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+    let context = context_from(
+        enabled
+            .service
+            .prepare_context(target(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+            ))
+            .unwrap(),
+    );
+    let head = support::head_commit(&Repository::open(&context.worktree).unwrap());
+    let operation_id = support::new_operation_id();
+    let request = || {
+        comment_request_with_operation_id(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Document,
+                support::document_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Body\n",
+            ),
+            operation_id,
+        )
+    };
+    let failing = support::FailOnce::at(FailurePoint::BeforeCheckpointCommit)
+        .open_service(enabled.data_directory.path());
+    assert_eq!(
+        comment_error(failing.submit_comment_with_test_session(request())).kind,
+        RepositoryErrorKind::InjectedFailure
+    );
+    let owner = support::operations::LiveIndexOwner::on(
+        enabled.data_directory.path(),
+        &operation_id.to_string(),
+    );
+
+    let beside = enabled.service.submit_comment_with_test_session(request());
+
+    assert_eq!(
+        comment_error(beside).kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    owner.assert_left_alone();
+    assert_eq!(
+        support::head_commit(&Repository::open(&context.worktree).unwrap()),
+        head
+    );
+}
+
 #[test]
 fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     let fixture = support::born_repository();

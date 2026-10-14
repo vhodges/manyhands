@@ -2602,8 +2602,13 @@ impl RepositoryService {
             &authoring_write_target(&request.target, &paths),
         )?;
         // As for a save: a row a call is indexing under is that call's
-        // to finish, and the comment is committed or it would not have
-        // handed off.
+        // to finish. A submission whose checkpoint is proved from Git
+        // does not come here: its replay goes on from the receipt, and
+        // the hand-off it repairs leaves an indexing row alone. What
+        // comes here is a row with no proved checkpoint that a refresh
+        // has claimed, as a refresh may claim any pending row it is given
+        // the ID of. The steps below would be recorded on it, and the
+        // commit made, under that call.
         if record.is_pending
             && self.is_being_indexed(&root, operation, request.target.operation_id)?
         {
