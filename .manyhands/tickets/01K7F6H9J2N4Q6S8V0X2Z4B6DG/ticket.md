@@ -255,8 +255,8 @@ and the baseline.
   - [x] Resolve Task 6 duplicate attachment: one helper/pass per audit or normal
     path; existing local-only/persisted/malformed/startup validation tests pass.
   - [x] Final-tree sequential Devenv check/fmt/Clippy/full test/CLI PASS:
-    **1,766 passed, 0 failed, 1 existing ignored**, including 74 polling SSH cases
-    after the permission follow-up. Lockfile hashes unchanged.
+    **1,779 passed, 0 failed, 1 existing ignored**, including 84 polling SSH cases
+    after the whole-review corrections. Lockfile hashes unchanged.
   - [x] Record all 12 acceptance rows, exact passing names and property coverage
     in the dated ledger; explicitly retain unproven dimensions rather than
     marking them met. Cycle evidence links this checkpoint.
@@ -268,6 +268,21 @@ and the baseline.
     gate above supersedes first checkpoint counts; trials retained in ledger.
   - [ ] Controller-dispatched Task 8 SPEC, whole-branch quality and independent
     whole-branch review/resolution; no approval claimed by this implementer.
+  - [x] Controller reports historical Task 8 checkpoint SPEC
+    `ses_ec5708ca9ffe05wyiELtDB2hks` and quality
+    `ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE through 7d62da7; these are not
+    final whole-branch approval.
+  - [ ] Whole-branch review `ses_ec567b276ffe5pzt4rGBeBRgPy` BLOCKED four
+    Important/P1 findings. All now technically corrected locally, awaiting SPEC
+    and whole-branch re-review: external Git ref-creation overwrite; stale flag
+    rollback after surviving Git effects; late new automatic invalid-config gate;
+    retry backoff cleared by invalid-plan/endpoint fencing. Meaningful REDs before
+    every production correction recorded in dated ledger and comment
+    `01M4XAKP3A86SHJNACTQEHBQH3`; GREEN/re-review checkpoint
+    `01M4XDWY880M77Q8V1F52K7AA4`. Added 3 library/10 real-SSH cases; no forced
+    local update or shared observer/sync behavior change. Final gate above includes
+    all 13 regressions, existing observer/privacy/permission cases. Current map:
+    12 rows plus property supplements, 135 exact passing names, zero missing.
   - [ ] Final approved-review recording, final review-ready comment and Task 8
     tick await controller review resolution and subsequent resume.
   - [ ] All five native executions **PENDING AUTHORIZATION**; workflow wiring
@@ -316,7 +331,7 @@ once, while dirty, divergent, conflicted, malformed, inaccessible,
 unrecognized, renamed, and remotely deleted contexts remain unchanged and
 actionable.
 
-Task 8 local checkpoint: required final-tree checks pass with 1,766 tests and
+Task 8 local checkpoint: required final-tree checks pass with 1,779 tests and
 unchanged lockfiles. Exact command results, all 12 acceptance rows, commit ranges,
 failure history and remaining gates are in the
 [execution ledger](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14).

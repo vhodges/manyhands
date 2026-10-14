@@ -12,6 +12,257 @@ use time::OffsetDateTime;
 
 struct PanicCredentials;
 
+#[test]
+fn whole_review_materialization_held_external_ref_transaction_is_refused() {
+    use std::io::{BufRead, Write};
+    struct ChildGuard(Option<std::process::Child>);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let f = MaterializationFixture::new(AuthoringKind::Document, false);
+    let name = format!("refs/heads/{}", f.branch());
+    let mut child = ChildGuard(Some(
+        std::process::Command::new("git")
+            .args(["update-ref", "--stdin"])
+            .current_dir(&f.local.root)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                f.local._data.path().join("no-global-config"),
+            )
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    ));
+    let mut input = child.0.as_mut().unwrap().stdin.take().unwrap();
+    let mut output = std::io::BufReader::new(child.0.as_mut().unwrap().stdout.take().unwrap());
+    writeln!(input, "start\ncreate {name} {}\nprepare", f.local.old).unwrap();
+    input.flush().unwrap();
+    for expected in ["start: ok\n", "prepare: ok\n"] {
+        let mut line = String::new();
+        output.read_line(&mut line).unwrap();
+        assert_eq!(line, expected);
+    }
+    // Actual external Git holds the ref lock but has not committed the ref.
+    assert!(f.local.repository.find_reference(&name).is_err());
+    let result = f.run(&f.local.service);
+    writeln!(input, "commit").unwrap();
+    input.flush().unwrap();
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    drop(input);
+    let status = child.0.take().unwrap().wait_with_output().unwrap().status;
+    assert!(status.success());
+    assert_eq!(line, "commit: ok\n");
+    assert!(matches!(
+        result,
+        Ok(PollMaterializationOutcome::Refused(
+            PollDisposition::MaterializationIncomplete
+        ))
+    ));
+    assert_eq!(
+        f.local.repository.refname_to_id(&name).unwrap(),
+        f.local.old
+    );
+    assert!(!f.path().exists());
+    assert!(f.local.repository.find_worktree(POLL_ID).is_err());
+    assert_eq!(
+        f.intent(),
+        Some((
+            f.request.operation_id.to_string(),
+            f.request.oid.to_string(),
+            "intended".into()
+        ))
+    );
+}
+
+#[test]
+fn whole_review_materialization_new_ref_and_existing_packed_symbolic_matrix() {
+    for shape in ["new", "same", "other", "packed", "symbolic", "dangling"] {
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        let name = format!("refs/heads/{}", f.branch());
+        match shape {
+            "new" => {}
+            "same" => {
+                f.local
+                    .repository
+                    .reference(&name, f.request.oid, false, "fixture")
+                    .unwrap();
+            }
+            "other" | "packed" => {
+                f.local
+                    .repository
+                    .reference(&name, f.local.old, false, "fixture")
+                    .unwrap();
+            }
+            "symbolic" | "dangling" => {
+                f.local
+                    .repository
+                    .reference_symbolic(
+                        &name,
+                        if shape == "symbolic" {
+                            "refs/heads/main"
+                        } else {
+                            "refs/heads/unborn"
+                        },
+                        false,
+                        "fixture",
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        if shape == "packed" {
+            assert!(
+                std::process::Command::new("git")
+                    .args(["pack-refs", "--all"])
+                    .current_dir(&f.local.root)
+                    .env("GIT_CONFIG_NOSYSTEM", "1")
+                    .env(
+                        "GIT_CONFIG_GLOBAL",
+                        f.local._data.path().join("no-global-config")
+                    )
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+            assert!(!f.local.repository.path().join(&name).exists());
+        }
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let result = f.run(&f.local.service).unwrap();
+        if shape == "new" {
+            assert_eq!(result, PollMaterializationOutcome::Materialized);
+            f.assert_complete();
+        } else {
+            assert_eq!(
+                result,
+                PollMaterializationOutcome::Refused(PollDisposition::BlockedByLocalState)
+            );
+            assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+            assert!(f.intent().is_none());
+            assert!(!f.path().exists());
+            assert!(f.local.repository.find_worktree(POLL_ID).is_err());
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn whole_review_materialization_external_git_branch_create_race() {
+    if let Some(root) = std::env::var_os("MANYHANDS_POLL_RACE_ROOT") {
+        let root = PathBuf::from(root);
+        let data = PathBuf::from(std::env::var_os("MANYHANDS_POLL_RACE_DATA").unwrap());
+        let service = RepositoryService::open_at(&data).unwrap();
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let request = PollMaterializationRequest {
+            operation_id: crate::repository::OperationId::parse(
+                &std::env::var("MANYHANDS_POLL_RACE_OP").unwrap(),
+            )
+            .unwrap(),
+            kind: AuthoringKind::Document,
+            item_id: POLL_ID.parse().unwrap(),
+            oid: std::env::var("MANYHANDS_POLL_RACE_INCOMING")
+                .unwrap()
+                .parse()
+                .unwrap(),
+        };
+        let configuration = service.observation_configuration(&root, &plan).unwrap();
+        let result = service.materialize_context(&root, &plan, &configuration, &request);
+        let repo = git2::Repository::open(&root).unwrap();
+        let name = std::env::var("MANYHANDS_POLL_RACE_REF").unwrap();
+        let competing: git2::Oid = std::env::var("MANYHANDS_POLL_RACE_COMPETING")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert_eq!(
+            repo.refname_to_id(&name).unwrap(),
+            competing,
+            "external local work must not be overwritten"
+        );
+        assert!(matches!(
+            result,
+            Ok(PollMaterializationOutcome::Refused(
+                PollDisposition::MaterializationIncomplete | PollDisposition::BlockedByLocalState
+            ))
+        ));
+        assert!(!root.join(".manyhands/worktrees").join(POLL_ID).exists());
+        assert!(repo.find_worktree(POLL_ID).is_err());
+        let db = Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT operation_ulid,target_oid,step FROM remote_poll_materializations",
+                [],
+                |r| Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?
+                ))
+            )
+            .unwrap(),
+            (
+                request.operation_id.to_string(),
+                request.oid.to_string(),
+                "intended".into()
+            )
+        );
+        return;
+    }
+    // The shim invokes real external Git only at libgit2's O_CREAT lock syscall,
+    // after every ordinary non-force absence check, with no scheduling sleeps.
+    let f = MaterializationFixture::new(AuthoringKind::Document, false);
+    let compiler = std::process::Command::new("cc")
+        .args(["-shared", "-fPIC", "-Wall", "-Wextra", "-Werror"])
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/poll_branch_lock_probe.c"
+        ))
+        .arg("-o")
+        .arg(f.local._data.path().join("ref-lock-probe.so"))
+        .arg("-ldl")
+        .output()
+        .unwrap();
+    assert!(
+        compiler.status.success(),
+        "reference probe compilation must succeed"
+    );
+    let name = format!("refs/heads/{}", f.branch());
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "repository::remote::poll::tests::whole_review_materialization_external_git_branch_create_race", "--nocapture", "--test-threads=1"])
+        .env("LD_PRELOAD", f.local._data.path().join("ref-lock-probe.so"))
+        .env("MANYHANDS_POLL_RACE_ROOT", &f.local.root)
+        .env("MANYHANDS_POLL_RACE_DATA", f.local._data.path())
+        .env("MANYHANDS_POLL_RACE_REF", &name)
+        .env("MANYHANDS_POLL_RACE_LOCK", f.local.repository.path().join(format!("{name}.lock")))
+        .env("MANYHANDS_POLL_RACE_OP", f.request.operation_id.to_string())
+        .env("MANYHANDS_POLL_RACE_INCOMING", f.request.oid.to_string())
+        .env("MANYHANDS_POLL_RACE_COMPETING", f.local.old.to_string())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", f.local._data.path().join("no-global-config"))
+        .output().unwrap();
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("external Git committed before reference lock"),
+        "actual lock-boundary injection must execute"
+    );
+    assert_eq!(
+        f.local.repository.refname_to_id(&name).unwrap(),
+        f.local.old,
+        "real external creation must survive the poll"
+    );
+    assert!(
+        output.status.success(),
+        "materialization must refuse external branch and retain intent"
+    );
+}
+
 fn review_restart_gate(reason: PollIneligibility) {
     for interrupted in [false, true] {
         let f = PollFixture::new();

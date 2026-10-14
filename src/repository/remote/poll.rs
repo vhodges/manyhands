@@ -426,10 +426,32 @@ impl RepositoryService {
             {
                 return Ok(refused(PollDisposition::MaterializationIncomplete));
             }
+            // libgit2's non-force branch() checks absence before acquiring the
+            // ref lock. External Git does not share our repository lease, so
+            // lock first and prove absence while that exact lock is held.
+            let mut ref_tx = repository
+                .transaction()
+                .map_err(|_| SynchronizationError::ExternalChange)?;
+            if ref_tx.lock_ref(reference.remote_ref()).is_err() {
+                return Ok(refused(PollDisposition::MaterializationIncomplete));
+            }
+            match repository.find_reference(reference.remote_ref()) {
+                Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+                _ => return Ok(refused(PollDisposition::MaterializationIncomplete)),
+            }
+            // This is creation of a proven-absent ref, never a forced update.
+            ref_tx
+                .set_target(
+                    reference.remote_ref(),
+                    target_oid,
+                    None,
+                    "poll context creation",
+                )
+                .and_then(|_| ref_tx.commit())
+                .map_err(|_| SynchronizationError::ExternalChange)?;
             let branch = repository
-                .branch(&context.branch, &commit, false)
-                .map_err(|_| SynchronizationError::ExternalChange)?
-                .into_reference();
+                .find_reference(reference.remote_ref())
+                .map_err(|_| SynchronizationError::ExternalChange)?;
             state::with_transaction(self, root, |tx, id| {
                 state::advance_materialization(tx, id, intent, MaterializationStep::BranchCreated)
             })?;
@@ -1186,7 +1208,6 @@ impl RepositoryService {
             }
         }
         if request.invocation == RemotePollInvocation::Automatic
-            && replay_reservation.is_some()
             && let AutomaticPollEligibility::NotEligible {
                 reason,
                 next_eligible_at,
@@ -1203,8 +1224,10 @@ impl RepositoryService {
             Err(error) => {
                 session.clear_cached_passphrase();
                 state::with_transaction(self, &root, |tx, id| {
-                    state::configure(tx, id, None, false)?;
                     let policy = state::read_snapshot(tx, id)?.polling().clone();
+                    // Configuration fencing clears observer retry state. Full
+                    // poll attention uses the pre-failure policy in this same TX.
+                    state::configure(tx, id, None, false)?;
                     let now = OffsetDateTime::now_utc();
                     state::record_outcome(
                         tx,
@@ -1234,16 +1257,6 @@ impl RepositoryService {
         if replay_reservation.is_some() {
             // Restart still requires the original target, before configuration writes.
             self.reserve_remote_poll(&root, request.operation_id, &target, priority)?;
-        } else if request.invocation == RemotePollInvocation::Automatic
-            && let AutomaticPollEligibility::NotEligible {
-                reason,
-                next_eligible_at,
-            } = self.automatic_poll_eligibility(&root)?
-        {
-            return Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible {
-                reason,
-                next_eligible_at,
-            }));
         }
         let configuration = self.observation_configuration(&root, &plan)?;
         let may_reserve = state::with_transaction(self, &root, |tx, id| {
@@ -1251,7 +1264,7 @@ impl RepositoryService {
             if state::has_pending_conflict(tx, id)? {
                 return Ok(false);
             }
-            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())?;
+            state::configure_poll_endpoints(tx, id, &plan, &configuration.endpoint_digest())?;
             Ok(true)
         })?;
         if !may_reserve {
@@ -1597,6 +1610,9 @@ impl RepositoryService {
                                         && context.state() == super::RemoteContextState::Observed
                                 });
                         if !intent.is_empty() || !registered_local {
+                            // Independently durable before any provisioning
+                            // effect: later intent/disposition writes may fail.
+                            self.poll_prepare_local_effect(root, owner)?;
                             match self
                                 .materialize_context_unlocked(
                                     root,
@@ -1636,8 +1652,9 @@ impl RepositoryService {
                             LocalPollClassification::FastForward {
                                 local_oid,
                                 tracking_oid,
-                            } => self
-                                .poll_fast_forward_unlocked(
+                            } => {
+                                self.poll_prepare_local_effect(root, owner)?;
+                                self.poll_fast_forward_unlocked(
                                     root,
                                     plan,
                                     configuration,
@@ -1648,7 +1665,8 @@ impl RepositoryService {
                                     },
                                     &repository,
                                 )
-                                .map_err(poll_local_error)?,
+                                .map_err(poll_local_error)?
+                            }
                         };
                     }
                     row.after_oid = direct_oid(&repository, reference.remote_ref());
@@ -1660,13 +1678,6 @@ impl RepositoryService {
                         }) != before_admin;
                     state::with_transaction(self, root, |tx, id| {
                         super::reservation::owned(self, tx, id, owner)?;
-                        if changed {
-                            tx.execute(
-                                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-                                [id],
-                            )
-                            .map_err(|_| state::recovery_required())?;
-                        }
                         state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, &row)
                     })?;
                     local_changes |= changed;
@@ -1777,6 +1788,25 @@ impl RepositoryService {
             })
         }
     }
+    fn poll_prepare_local_effect(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+    ) -> Result<(), RepositoryError> {
+        // Called under the lease after frozen-input/ownership validation, but
+        // before Git can change. A failed effect can conservatively leave the
+        // index stale; a surviving effect must never be hidden by SQLite rollback.
+        state::with_transaction(self, root, |tx, id| {
+            super::reservation::owned(self, tx, id, owner)?;
+            tx.execute(
+                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
+                [id],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })
+    }
+
     fn poll_configuration_matches(
         &self,
         root: &Path,

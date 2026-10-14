@@ -270,8 +270,8 @@ Implementation Tasks 0–7 have controller-reported SPEC/quality approvals throu
 controller-dispatched reviews remain pending. The
 [dated execution ledger acceptance map](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14)
 maps every acceptance row and dimension to exact names observed passing in the
-final-tree local gate: **1,766 passed, 0 failed, 1 existing ignored**, including
-**74 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
+final-tree local gate: **1,779 passed, 0 failed, 1 existing ignored**, including
+**84 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
 pass; Cargo/devenv lockfile hashes are unchanged.
 
 Concrete passing journeys include `poll_all_three_fast_forward`,
@@ -293,6 +293,17 @@ and full local snapshot/ref preservation after guarded restoration. **Row 6 is
 fully LOCAL-proved**. This cfg(unix) case executed on Linux as UID 1000; it fails
 if permissions are ineffective rather than silently skipping. Windows ACL
 permission-denied preservation proof remains pending native verification.
+
+Whole-branch reviewer `ses_ec567b276ffe5pzt4rGBeBRgPy` subsequently blocked four
+Important/P1 findings. Meaningful REDs preceded poll-local fixes: locked
+absence-before-new-ref creation; durable stale marker before Git effects;
+automatic gating before invalid live config; pre-fence retry policy retained on
+configuration/endpoint attention. Three library and ten new real-SSH regressions
+pass in the final gate above. The ledger's row supplements explicitly map all
+four findings, including cancelled restart after a failed disposition/intent write
+and all 12 eligibility × invalid-config combinations. **Technically corrected,
+awaiting SPEC and whole-branch re-reviews**; earlier Task 8 SPEC/quality approvals
+apply only to their historical checkpoint, not final Cycle approval.
 
 Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 native executions
 are each **PENDING AUTHORIZATION**. Manual workflow wiring and local Linux tests

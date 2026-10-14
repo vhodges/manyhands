@@ -10,6 +10,268 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 8 Whole-Branch Corrections: Verified Re-Review Handoff — 2026-10-14T14:46:46Z
+
+All four Important/P1 findings from whole reviewer
+`ses_ec567b276ffe5pzt4rGBeBRgPy` are **technically corrected locally; independent
+SPEC and whole-branch re-reviews PENDING**. No final approval or Task 8 completion
+claimed. Exact correction base `7d62da772174e753feb02421bbc469b5cf13fcb2`;
+complete Task 8 review range starts `b0f005531879c5ee2806ed13052bdd157df627d7`;
+whole-branch review starts `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17` through
+returned checkpoint HEAD. Historical checkpoint SPEC `ses_ec5708ca9ffe05wyiELtDB2hks`
+and quality `ses_ec56c4e36ffe44uv6nZQOvA20P` approvals do not approve this increment
+or resolve the whole reviewer. Prior Tasks 0–7/minor/permission evidence trusted.
+
+### Finding Resolution And Actual Regression Evidence
+
+**R1 — atomic local branch creation.** Poll materialization now obtains the Git
+reference transaction lock, rechecks **absence under that held lock**, and only
+then sets/commits a brand-new direct ref. There is **no forced local update**, no
+old-zero forced primitive, branch deletion or upstream setting. Any existing
+direct/packed/symbolic ref or failed lock yields typed MaterializationIncomplete;
+the original intent owner/target/Intended step remains and no worktree is created.
+Ordinary pre-existing-state classification remains BlockedByLocalState.
+
+Three exact P namespace tests pass (namespace key in living acceptance map):
+
+- `whole_review_materialization_external_git_branch_create_race`: Linux-only
+  isolated C syscall-boundary observer intercepts only the expected O_CREAT ref
+  lock open and synchronously invokes **real external Git update-ref** before
+  permitting that syscall. This hits the gap **inside** old libgit2 branch(false),
+  not an earlier app-level check. Probe execution marker is mandatory; competing
+  local OID must survive; intent fields unchanged; no worktree/path/registration.
+  Old meaningful RED **0/1**, actual overwritten OIDs; new GREEN. No production
+  test hook, timing sleep or fabricated transport. Compiler artifact is in the
+  disposable fixture only. Test fixture source tests/support/poll_branch_lock_probe.c
+  is committed; reviewer scratch scripts/keys are not. C syscall test is Linux
+  local proof only, not macOS/Windows execution evidence.
+- `whole_review_materialization_held_external_ref_transaction_is_refused`:
+  portable real Git `update-ref --stdin` start/create/prepare holds the absent ref
+  lock; poll refuses without adopting, then Git commits the competing ref.
+  Protocol responses provide barriers, no sleeps; child is reaped on failure.
+  Old typed-refusal RED **0/1**, now GREEN.
+- `whole_review_materialization_new_ref_and_existing_packed_symbolic_matrix`:
+  actual new ref has exact target, registered worktree and no upstream; same-OID,
+  other-OID, packed, symbolic and dangling symbolic states remain snapshot-exact
+  with no intent/adoption. Baseline already GREEN, honestly hardening/control.
+
+**R2 — durable stale state before effects.** Full poll records refresh_required
+in an independent short owned transaction under the repository lease **before**
+potential branch/worktree provisioning or clean FF. Frozen inputs and ownership
+are validated first; no ineligible/busy path reaches this write. A failed or
+blocked candidate may conservatively remain stale, but SQLite disposition/intent
+rollback cannot hide surviving Git effects. Post-effect disposition write no
+longer owns the only stale marker. Existing cancellation/replay code reads the
+durable flag and correctly returns IndexPending without refetching; reservation
+and shared synchronization code need no change.
+
+Exact SSH tests `poll_whole_review_disposition_fault_cancel_keeps_index_pending`
+and `poll_whole_review_branch_record_fault_cancel_keeps_index_pending`: each
+first establishes a real completed poll and refresh_required=false, then proves
+actual surviving FF/checkout or branch creation with failed SQLite row write.
+Each old RED fails on actual false stale flag. GREEN additionally proves reopen,
+cancel/restart returns **IndexPending/Cancelled with NotReached target**, zero
+new connections, unchanged Git snapshot/all refs, and ordinary index-only repair
+followed by Complete replay with the exact same report and no fetch. Materialization
+keeps original owner/target/Intended row and creates no worktree. These directly
+strengthen acceptance rows **4, 9 and 10**, not just a helper implementation test.
+
+**R3 — eligibility before live config.** Immutable ID/kind/invocation validation
+and terminal replay remain first. The single automatic gate now covers **all new
+and restarted executions before live plan/config/endpoints/reservation**, so an
+invalid config cannot write a failure for a disabled/paused/suspended/not-due call.
+Four exact SSH tests `poll_whole_review_new_auto_invalid_config_disabled`,
+`poll_whole_review_new_auto_invalid_config_paused`,
+`poll_whole_review_new_auto_invalid_config_recovery_suspended`,
+`poll_whole_review_new_auto_invalid_config_not_due` prove **all 12 gate × absent/
+malformed/no-publication forms**. They check exact NotEligible/deadline, zero
+connections/helper invocations/prompts/operation or policy SQL writes, preserved
+entire remote snapshot, batch digest, local structural snapshot and all refs.
+Each old absent-config form meaningfully RED before production; all forms GREEN.
+Existing config-independent terminal replay and other-kind/invocation refusal
+tests still pass unchanged.
+
+**R4 — preserve pre-failure retry policy.** Invalid-plan path captures policy
+before configure(None) fencing and writes attention/outcome/time with that same
+pre-failure backoff in the **same transaction**. For valid-but-changed endpoints,
+new full-poll-only configure_poll_endpoints wraps the **unchanged** existing fence
+and restores only captured retry metadata inside the same transaction. Generation,
+history invalidation and active-owner fencing remain intact. Finish still decides
+success-clear / automatic network-double / attention-retain / explicit-retain.
+Advertisement observer keeps calling its unchanged configure_endpoints; its
+production behavior and existing tests are unchanged.
+
+Exact SSH tests `poll_whole_review_invalid_config_automatic_retains_backoff` and
+`poll_whole_review_invalid_config_explicit_retains_backoff` cover **all six mode ×
+invalid-config forms**, seeded backoff 120 and expired deadline 12345 (automatic
+is genuinely eligible). New tests `poll_whole_review_endpoint_attention_automatic_retains_backoff`
+and `poll_whole_review_endpoint_attention_explicit_retains_backoff` prove retention
+across actual valid endpoint-generation changes and UnlockRequired attention.
+Each old test meaningfully RED at cleared-backoff assertion before R4 production
+edits. All GREEN: backoff 120 retained; automatic attention deadline = completion
++ interval 300; explicit deadline remains 12345; Git/config snapshot and all refs
+unchanged by poll. Earlier eligibility tests separately prove no automatic prompt
+when blocked/ineligible; an available fresh session's first cancelled unlock
+prompts once in either mode, preserving existing session semantics.
+
+### Trials, Focused GREEN And Final Sequential Gate
+
+All exact initial RED commands/trials are in the dated checkpoint below and
+canonical RED comment `01M4XAKP3A86SHJNACTQEHBQH3`. Additional R4 endpoint commands,
+each **0 passed/1 failed** at original line 1942, before its production fix:
+
+- `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_endpoint_attention_automatic_retains_backoff`
+- `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_endpoint_attention_explicit_retains_backoff`
+
+One post-fix fixture assertion trial is retained honestly: endpoint automatic
+case reached correct retained backoff/deadline, then falsely expected zero prompts
+from a fresh **not-yet-blocked** session. Existing locked_session test establishes
+a cancelled unlock before asserting no automatic reprompt. Correct only the new
+test's first-prompt expectation to one; no production/session-policy change.
+Pre-RED C warn_unused_result and Rust temporary-borrow compilation failures are
+recorded below separately. No final-gate failure, timeout or subsequent Rust edit.
+
+Focused sequential commands/results (all through Devenv):
+
+| Exact command | GREEN |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::whole_review_materialization_` | 3 passed, 615 filtered |
+| `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_disposition_fault_cancel_keeps_index_pending` | 1 SSH passed |
+| `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_branch_record_fault_cancel_keeps_index_pending` | 1 SSH passed |
+| `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_new_auto_invalid_config` | 4 SSH passed (12 forms) |
+| `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_invalid_config` | 2 SSH passed (6 forms) |
+| `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_endpoint_attention` | 2 SSH passed |
+| `devenv shell -- cargo test --locked --lib remote::poll` | 79 passed, 539 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state` | 61 passed, 557 filtered |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | 40 passed, 578 filtered |
+
+After all Rust/C fixture edits, the exact mandatory check/fmt/Clippy/full-test/CLI
+chain ran sequentially with `&&` under a 3,600,000 ms bound and completed. Raw log
+`/home/vhodges/.local/share/opencode/tool-output/tool_13abfb03d001iszyUfPlRyalaF`.
+
+| Exact command | Final result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,779 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+| `git diff --check` | PASS, repeated after bookkeeping |
+| `sha256sum Cargo.lock devenv.lock` | Entry/final hashes identical |
+
+Actual runtime breakdown **618 library + 779 ordinary integration + 373 SSH +
+9 doctests**. Binary targets 0. SSH harness=false output reports **84 polling,
+15 observation, 63 synchronization, 25 merge recovery, 41 comment publication,
+31 fixture, 114 transport**. No glob counts, private child/negative controls or
+ignored characterization counted as additional successes. New regressions add
+**3 library + 10 SSH** over the previous 1,766 checkpoint. Existing observer,
+synchronization, merge, publication, privacy and permission case bodies unchanged
+and all pass in this gate. Actual partial PACK observations remain 131,029 bytes /
+0 newly indexed objects / incoming commit not indexed, not a portable requirement.
+
+```text
+8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8  Cargo.lock
+d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e  devenv.lock
+```
+
+Available DISPLAY=:1 / WAYLAND_DISPLAY=wayland-1 / XDG_RUNTIME_DIR=/run/user/1000
+inspected. Optional actual desktop process smoke:
+`timeout --signal=TERM --kill-after=10s 60s devenv shell -- cargo run --locked --features desktop --bin manyhands`.
+Build finished 9.07 s, actual manyhands process launched without startup error,
+no app output before intentional timeout **124**; scoped process check confirms
+none remains. **Process startup only, no visual inspection/interaction claimed**.
+No Rust edits after final gate or smoke; only canonical evidence updates follow.
+
+### Acceptance Map, Scope And Re-Review
+
+The living 12-row map below plus its **R1–R4 property supplements** now names
+**135 distinct exact passing tests**; every name is checked against the latest
+full raw output, with **zero missing PASS names**. Rows 1/2 explicitly add invalid
+config and endpoint attention dimensions; rows 4/9/10 add cancelled recovery after
+unrecorded Git effects; row 7 adds locked absence/external Git/packed/symbolic proof.
+Literal permission-denied row 6 remains locally proved; Unix/Linux-only probes
+do not claim Windows ACL/native results. Accepted canonical index-title exception
+is unchanged, all recovery/output and other raw-store privacy probes still pass.
+
+Post-gate evidence checks **PASS**: exactly 12 acceptance rows, four supplements,
+135 distinct names, zero missing runtime PASS lines; Node summary aggregation
+confirms 1,406 ordinary including library/doctests + 373 SSH = 1,779; canonical
+scripts/show-ticket renders the open ticket and all **46 comments**, including
+all three new checkpoints, without malformed diagnostics. Initial map wrapper
+also counted historical RED-table labels as supplements (18 instead of four);
+restricting to exact `R1 |`…`R4 |` cells fixes the wrapper only, with no missing
+test names in either run. No Rust/test failure or rerun caused by that wrapper.
+
+Increment inventory: poll.rs, state.rs, poll_tests.rs, tests/remote_polling.rs,
+new tests/support/poll_branch_lock_probe.c, ledger, Cycle evidence, ticket and
+three new canonical comments = **11 files**. Whole Task 8 range = **15 files**;
+whole branch = **85 files**, including **46 canonical comments**. Exact inventory
+and counts verified before local commit. No dependency/lockfile, schema, CLI/
+desktop/library-toolchain, approved design/plan or shared synchronization/observer/
+reservation/transport body changes; necessary state wrapper is poll-specific.
+No production test hook introduced. C source is fixture-only; no compiler artifact
+or reviewer scratch key/script is staged. D1–D4, accepted⇒active-only amendment and
+sole Task 5 unchanged final-validator canonical collection under the same lease
+exception remain; network/prompts/discovery/index-refresh outside the lease.
+
+Re-review-ready canonical comment `01M4XDWY880M77Q8V1F52K7AA4`; canonical renderer
+confirms open ticket and 46 comments with no malformed diagnostics. Return new
+local checkpoint SHA for **SPEC re-review then whole-branch re-review** by
+`ses_ec567b276ffe5pzt4rGBeBRgPy`; controller owns dispatch and review resolution.
+Do not tick Task 8 or close ticket until all required reviews are signed off.
+Five native targets and Windows ACL permission coverage **PENDING AUTHORIZATION /
+native verification**; manual workflow undispatched. No subagents, push, PR,
+merge, closure or worktree removal. Local implementation corrections are ready
+for review, not final Cycle completion.
+
+## Task 8 Whole-Branch Corrections: Meaningful RED — 2026-10-14T13:55:34Z
+
+Whole reviewer `ses_ec567b276ffe5pzt4rGBeBRgPy` **BLOCKED four Important/P1**
+findings at clean correction base `7d62da772174e753feb02421bbc469b5cf13fcb2`.
+Task 8 SPEC `ses_ec5708ca9ffe05wyiELtDB2hks` and quality
+`ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE are historical checkpoint approvals,
+not final whole-branch approval. Entry comment `01M4XAKP38XWB5KBYYDHJQ77WZ`.
+Scratch reproductions under /tmp/opencode/cycle08-whole-review read/verified;
+scratch scripts/keys not committed. Same branch/worktree, inline, no subagents,
+no repeated preflight. Complete Task 8 base b0f0055 and whole-branch base d1ca887
+remain the exact SHAs recorded below. No production edit before these REDs.
+
+| Finding / exact sequential Devenv command | Meaningful RED |
+| --- | --- |
+| R1 `devenv shell -- cargo test --locked --lib remote::poll::tests::whole_review_materialization_external_git_branch_create_race` | **0 passed/1 failed/615 filtered**, actual external Git commits just before libgit2 ref-lock open; injection marker confirmed; resulting ref is poll incoming instead of competing local OID |
+| R1 additional `devenv shell -- cargo test --locked --lib remote::poll::tests::whole_review_materialization_held_external_ref_transaction_is_refused` | **0/1/617 filtered**, real external Git prepared transaction holds absent ref lock; old poll returns ExternalChange instead of typed incomplete refusal; external transaction committed/reaped before assertions |
+| R2 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_disposition_fault_cancel_keeps_index_pending` | **0/1**, assertion at original line 1955: actual FF/checkout survived failed disposition write but refresh_required=false |
+| R2 materialization `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_branch_record_fault_cancel_keeps_index_pending` | **0/1**, same durable-flag assertion after actual branch creation with immutable Intended row and no worktree |
+| R3 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_new_auto_invalid_config_disabled` | **0/1**, expected NotEligible, original line 1832 |
+| R3 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_new_auto_invalid_config_paused` | **0/1**, same absent-config behavior |
+| R3 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_new_auto_invalid_config_recovery_suspended` | **0/1**, same absent-config behavior |
+| R3 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_new_auto_invalid_config_not_due` | **0/1**, same absent-config behavior |
+| R4 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_invalid_config_automatic_retains_backoff` | **0/1**, original line 1882: backoff None rather than prior 120 |
+| R4 `devenv shell -- cargo test --locked --test remote_polling poll_whole_review_invalid_config_explicit_retains_backoff` | **0/1**, same cleared-backoff behavior |
+
+R3's four cases each carry all three invalid-config forms (12 combinations);
+R4's two cases carry the same three forms (six combinations). Their first absent
+form fails at RED; remaining forms and exact zero connection/helper/prompt/write
+and metadata/snapshot assertions execute at GREEN. R2 RED checks actual surviving
+Git effects before its durable flag; reopen/cancel/restart IndexPending and later
+index-only repair assertions are present for GREEN. Not claiming those later
+assertions executed at RED.
+
+Preliminary fixture-only failures: R1 C observer compilation rejected an unchecked
+write() under -Werror; standalone Devenv cc diagnostic identified it and code now
+checks the result. SSH test compile rejected two short-lived reference strings;
+retain a target_ref binding. Both corrected before actual behavioral RED runs,
+not mislabeled RED. Existing direct/new/OID/packed/symbolic/dangling matrix ran
+**1 passed/617 filtered** before production, honestly baseline hardening.
+RED checkpoint comment `01M4XAKP3A86SHJNACTQEHBQH3`.
+
+Next: atomic **lock→absence recheck→transaction new-ref commit**, no forced local
+update; durable pre-effect stale flag; automatic gate before all live config for
+new/restart execution after identity/terminal replay; preserve pre-fence full-poll
+failure policy without changing advertisement observer behavior. D1–D4, sole Task
+5 validator lease exception, schema/dependencies/frontends unchanged. Task 8 open/
+unchecked; full corrected-tree gates and controller re-review remain pending.
+
 ## Task 8 Permission-Denied Evidence Follow-Up — 2026-10-14T13:11:49Z
 
 **IN PROGRESS / CONTROLLER REVIEWS PENDING.** Owner explicitly required closing
@@ -247,7 +509,7 @@ No Rust edits followed the full gate or the startup check.
 ### All 12 Acceptance Rows: Exact Named Passing Tests And Dimensions
 
 Names below are exact test identifiers observed as `... ok` in the latest full
-gate (permission follow-up log above), not inferred from source declarations. Namespace key: **P** =
+gate (whole-branch corrections log above), not inferred from source declarations. Namespace key: **P** =
 `repository::remote::poll::tests` (poll_tests.rs), **S** =
 `repository::remote::state::persistence_tests` (state_tests.rs), **R** =
 `repository::remote::reservation::tests` (reservation_tests.rs), **T** =
@@ -261,7 +523,7 @@ gate passes but its native runtime dimension is pending, **not native-proved**.
 | --- | --- | --- |
 | 1. Eligibility / explicit bypass | Disabled, paused, recovery-suspended, not-due, zero connections/prompts/new reservation and unchanged outcome/policy → SSH `poll_policy_disabled`, `poll_policy_paused`, `poll_policy_recovery_suspended`, `poll_policy_not_due`; blocked-session no automatic prompt → SSH `poll_locked_blocked_session_no_automatic_prompt`; precedence and no writes → P `eligibility_policy_precedence_wins_over_due_and_future_deadlines`, `ineligible_policy_writes_nothing_even_when_deadline_needs_clamping`, `task6_automatic_gates_do_not_reserve_or_change_outcome`; active/interrupted automatic restart gates → P `review_restart_auto_gate_disabled`, `review_restart_auto_gate_paused`, `review_restart_auto_gate_recovery_suspended`, `review_restart_auto_gate_not_due`; explicit restart bypass/manual identity → P `review_explicit_restart_preserves_manual_identity_and_bypasses_policy_gates` | Proved locally |
 | 2. Durable time / retry policy | Attempt/deadline migration, rollback and reopen → S `attempt_migration_preserves_existing_rows_and_is_a_no_op_on_second_start`, `finishing_attempt_timestamps_commit_and_roll_back_with_the_outcome`; all nine outcome categories × automatic/explicit atomic finish → R `finish_updates_attempt_deadline_and_phase_atomically_from_pre_finish_policy`; category/invocation pure table → P `next_eligibility_result_table_covers_every_category_and_invocation`; 60→120→240→480→900→900 for transport/protocol → P `network_retry_deadlines_start_at_sixty_double_and_cap_at_nine_hundred`, SSH `poll_unreachable_backoff_cap_and_explicit_failure`; rejected key/host attention → SSH `poll_rejected_key_attention_without_backoff`, `poll_unapproved_host_without_backoff`; larger interval/max-backoff clamp, one durable write and countdown with no reservation → P `rollback_clamp_uses_larger_of_interval_and_maximum_backoff`, `stored_clamp_is_written_once_and_counts_down_without_reserving`; malformed UTC values fail closed → S `attempt_columns_reject_non_integer_negative_and_unrenderable_timestamps`, integration `corrupt_poll_times_fail_closed_at_snapshot_reopen_gate_and_status` (remote_reservation target) | Proved locally |
-| 3. Scoped fetch / guard / no push / complete batch | Exact primary/document/ticket objects and tracking, excluded malformed/outside objects, no tags/FETCH_HEAD/prune/unrelated refs, rewind tracking only → T `poll_fetch_set`; absent primary/empty set → T `poll_absent_primary_and_empty_set`; old-value race/noncommit/partial guarded write → T `poll_tracking_race`, `poll_noncommit_tip`, `poll_partial_guarded_write`; fetch advertisement consistency → T `poll_download_advertisement`; complete batch replacement/deletion authority → S `only_complete_batches_replace_current_and_deletion_retains_last_successful_oid`; batch + initial NotReached atomic/foreign-owner rollback → P `task6_atomic_batch_extension_rolls_back_and_rejects_foreign_owner`, `task6_disposition_insert_fault_rolls_back_advertisement_and_old_report`; no poll receive-pack advertisement/command/update → every one of 74 SSH cases, concretely `poll_all_three_fast_forward`, `poll_materialize_document_once`, `poll_materialize_ticket_once` | Proved locally |
+| 3. Scoped fetch / guard / no push / complete batch | Exact primary/document/ticket objects and tracking, excluded malformed/outside objects, no tags/FETCH_HEAD/prune/unrelated refs, rewind tracking only → T `poll_fetch_set`; absent primary/empty set → T `poll_absent_primary_and_empty_set`; old-value race/noncommit/partial guarded write → T `poll_tracking_race`, `poll_noncommit_tip`, `poll_partial_guarded_write`; fetch advertisement consistency → T `poll_download_advertisement`; complete batch replacement/deletion authority → S `only_complete_batches_replace_current_and_deletion_retains_last_successful_oid`; batch + initial NotReached atomic/foreign-owner rollback → P `task6_atomic_batch_extension_rolls_back_and_rejects_foreign_owner`, `task6_disposition_insert_fault_rolls_back_advertisement_and_old_report`; no poll receive-pack advertisement/command/update → every one of 84 SSH cases, concretely `poll_all_three_fast_forward`, `poll_materialize_document_once`, `poll_materialize_ticket_once` | Proved locally |
 | 4. Manual/local priority / safe stop / repeat safety | Advertisement/in-transfer automatic yield and successful manual retry → SSH `poll_automatic_advertisement_yields_to_manual`, `poll_automatic_in_transfer_yields_to_manual`; explicit operation Busy → SSH `poll_explicit_advertisement_makes_manual_busy`; D4 local-save retry/no new journal row → SSH `poll_local_save_requests_automatic_yield`, R `update_local_prepared_journal_guard_yields_without_creating_local_rows`; cancel/yield every update boundary, release/fence/unchanged policy → R `update_requests_at_every_boundary_release_slot_preserve_policy_and_fence_owner`; safe-point ordering/active one-slot/repeated local mutation → R `update_local_stage_is_ordered_repeatable_active_and_completion_requires_discovery`; partial cursor/report/unchanged completed local target on restart → SSH `poll_partial_batch_yield_report_and_restart`, P `task6_yield_between_targets_keeps_changed_primary_and_restart_is_current`; D3 real retained divergence blocks both modes with zero connections → SSH `poll_retained_real_divergence_conflict_blocks_both_invocations` | Proved locally |
 | 5. Strict clean FF once | Primary/document/ticket/all-three branch/index/files/tracking plus second/current full refs and no new objects → SSH `poll_primary_fast_forward`, `poll_document_fast_forward`, `poll_ticket_fast_forward`, `poll_all_three_fast_forward`, `poll_already_current`; first-poll direct/symbolic sentinels retained in those five cases; pure equal/behind/ahead/diverged and ancestry errors → P `poll_relation_equal_behind_ahead_and_diverged_are_pure`, `poll_relation_surfaces_both_ancestry_errors_without_guessing`; local FF then exact current snapshot → P `poll_fast_forward_primary_and_context_advance_files_index_branch_then_are_current`; immediate local/tracking/config/endpoint reobservation → P `poll_fast_forward_reobserves_ref_tracking_configuration_and_endpoint_before_mutation`, SSH `poll_tracking_changed_before_target_fences` | Proved locally |
 | 6. Exceptional local preservation / disposition | Tracked dirty/staged/untracked/conflicted/ahead/diverged → SSH `poll_tracked_dirty`, `poll_staged_dirty`, `poll_untracked_dirty`, `poll_git_conflicted_without_pending_record`, `poll_local_ahead`, `poll_diverged`; seven dirty/merge/index variants with full snapshots → P `poll_classification_dirty_and_conflicted_states_preserve_full_snapshot`; wrong context/primary branch and missing directory → SSH `poll_context_wrong_branch`, `poll_primary_wrong_branch`, `poll_missing_worktree_directory`; detached/unregistered/primary elsewhere/symlink → P `poll_wrong_or_detached_head_and_primary_not_at_root_are_inaccessible`, `poll_missing_and_unregistered_contexts_are_inaccessible_and_unchanged`, `poll_symlink_deterministic_path_is_inaccessible_without_following_it`; ignored destructive collisions → SSH `poll_ignored_directory_collision_preserved`, P `poll_retiring_directory_ignored_descendants_are_dirty_before_any_checkout`; foreign/admin/backlink ownership → SSH `poll_foreign_worktree_ownership_refused`, P `poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink`; fixed guidance → P `poll_dispositions_have_only_fixed_guidance`; literal Unix permission-denied directory and .git access, Inaccessible, no local effects, full snapshot after guarded restoration, denied mode unchanged during poll and complete direct/symbolic refs with only fetched tracking advancement → SSH `poll_unix_permission_denied_worktree_preserves_local_state` | **Fully LOCAL-proved; Unix permission case executed on Linux, Windows ACL native proof pending** |
@@ -271,6 +533,17 @@ gate passes but its native runtime dimension is pending, **not native-proved**.
 | 10. Index separation / no second fetch | Failure/crash retains authoritative poll result and durable stale flag, repair by ordinary fresh refresh ID, completed replay without transport → SSH `poll_after_completion_failure_index_only_recovery`, `poll_refresh_failure_index_only_recovery`; P `task6_index_failure_and_crash_leave_repairable_flag_without_poll_id_reuse`; original reports remain independently owned when next poll replaces stored targets → P `review_original_report_survives_second_poll_before_refresh_return` | Proved locally |
 | 11. Privacy / rows / sidecars / diagnostics / output | Accepted document/ticket title absent from recovery rows, formatted result/snapshot and isolated raw output; legitimate canonical index title present in live DB and backup (not falsely forbidden in raw scans); body/endpoint/key/passphrase/rejected-title/malformed-name absent from rows/DB/nonempty WAL/VACUUM backup → SSH `poll_recovery_database_wal_backup_privacy`; output stdout, beyond-prefix stderr on failing child, clean failure, missing inventory, both accepted-title negative controls → SSH `poll_output_capture_negative_controls`; metadata schema/rollback/corruption/privacy and malformed name redaction → S `task6_disposition_schema_upgrade_rollback_corruption_and_privacy`, `malformed_response_names_never_enter_database_wal_backups_or_public_formatting`; all-case final privacy scans and exact fixed guidance → P `poll_dispositions_have_only_fixed_guidance`; type-only/mode-only/name-content-boundary snapshot negative controls → SSH `poll_snapshot_detects_type_only_changes`, `poll_snapshot_detects_permission_only_changes`, `poll_snapshot_detects_name_content_boundary_changes` | Proved locally with canonical index-content title exception |
 | 12. Required gate / honest native evidence | Exact commands and runtime totals above passed on final changed Rust tree; two new SQL tests plus all named evidence tests pass in that gate; CLI exits 0; hashes unchanged; bounded desktop process startup above. Each native target below explicitly pending authorization; manual wiring proves no native execution | **Local gate PASS; native execution not proved** |
+
+The following whole-review supplements are part of the same living acceptance
+map and its raw-output name verification. They add the reproduced missing
+property dimensions without replacing earlier proving cases:
+
+| Finding | Acceptance rows / additional dimension | Exact passing names |
+| --- | --- | --- |
+| R1 | Rows 7/8: actual external Git creates inside old non-force absence window; lock-first absence recheck preserves competing ref/immutable intent/no worktree; prepared Git lock refusal; new/direct same/different/packed/symbolic/dangling matrix | P `whole_review_materialization_external_git_branch_create_race`, `whole_review_materialization_held_external_ref_transaction_is_refused`, `whole_review_materialization_new_ref_and_existing_packed_symbolic_matrix` |
+| R2 | Rows 4/9/10: surviving FF or branch after failed SQLite row write stays durably stale; reopen cancel/restart returns IndexPending/Cancelled/NotReached, preserves all Git state, later index-only repair/replay makes zero new connections | SSH `poll_whole_review_disposition_fault_cancel_keeps_index_pending`, `poll_whole_review_branch_record_fault_cancel_keeps_index_pending` |
+| R3 | Row 1: every disabled/paused/suspended/not-due × absent/malformed/no-publication form gates before config; zero actual connections/helpers/prompts/reservations/policy or operation writes; unchanged deadlines/outcome/batch/local snapshot/all refs | SSH `poll_whole_review_new_auto_invalid_config_disabled`, `poll_whole_review_new_auto_invalid_config_paused`, `poll_whole_review_new_auto_invalid_config_recovery_suspended`, `poll_whole_review_new_auto_invalid_config_not_due` |
+| R4 | Row 2: automatic/explicit × three invalid config forms and valid changed endpoint attention retain backoff 120; automatic interval deadline / explicit unchanged deadline; no local Git mutation; existing observer fencing semantics unchanged | SSH `poll_whole_review_invalid_config_automatic_retains_backoff`, `poll_whole_review_invalid_config_explicit_retains_backoff`, `poll_whole_review_endpoint_attention_automatic_retains_backoff`, `poll_whole_review_endpoint_attention_explicit_retains_backoff` |
 
 Cancellation supplements row 4/9 at each orchestration boundary: SSH
 `poll_cancel_before_transport`, `poll_cancel_after_advertisement`,

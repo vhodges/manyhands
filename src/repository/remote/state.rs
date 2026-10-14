@@ -2146,6 +2146,29 @@ pub(in super::super) fn configure_endpoints(
     Ok(generation)
 }
 
+/// Full update polling retains retry policy across its own configuration fence.
+/// The unchanged advertisement observer still uses configure_endpoints directly.
+pub(super) fn configure_poll_endpoints(
+    tx: &Transaction<'_>,
+    id: i64,
+    plan: &RemoteRefPlan,
+    digest: &[u8; 32],
+) -> Result<i64, RepositoryError> {
+    let backoff = read_snapshot(tx, id)?
+        .polling()
+        .automatic_backoff()
+        .map(|value| value.as_secs());
+    let generation = configure_endpoints(tx, id, plan, digest)?;
+    // Restore only retry metadata, in the same fenced transaction. The actual
+    // completion writer decides clear/double/retain from its outcome/invocation.
+    tx.execute(
+        "UPDATE remote_polling_state SET automatic_backoff_seconds=?2 WHERE repository_id=?1",
+        params![id, backoff],
+    )
+    .map_err(|_| recovery_required())?;
+    Ok(generation)
+}
+
 fn read_endpoint_digest(
     connection: &Connection,
     id: i64,

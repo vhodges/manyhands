@@ -44,6 +44,46 @@ const BAD_REF: &str = "refs/heads/manyhands/ticket/poll-private-malformed-canary
 const MODE: u32 = 0o100644;
 
 const CASES: &[ssh_harness::Case] = &[
+    (
+        "poll_whole_review_endpoint_attention_automatic_retains_backoff",
+        whole_review_endpoint_automatic,
+    ),
+    (
+        "poll_whole_review_endpoint_attention_explicit_retains_backoff",
+        whole_review_endpoint_explicit,
+    ),
+    (
+        "poll_whole_review_disposition_fault_cancel_keeps_index_pending",
+        whole_review_disposition_cancel,
+    ),
+    (
+        "poll_whole_review_branch_record_fault_cancel_keeps_index_pending",
+        whole_review_branch_cancel,
+    ),
+    (
+        "poll_whole_review_new_auto_invalid_config_disabled",
+        whole_review_auto_disabled,
+    ),
+    (
+        "poll_whole_review_new_auto_invalid_config_paused",
+        whole_review_auto_paused,
+    ),
+    (
+        "poll_whole_review_new_auto_invalid_config_recovery_suspended",
+        whole_review_auto_suspended,
+    ),
+    (
+        "poll_whole_review_new_auto_invalid_config_not_due",
+        whole_review_auto_not_due,
+    ),
+    (
+        "poll_whole_review_invalid_config_automatic_retains_backoff",
+        whole_review_attention_automatic,
+    ),
+    (
+        "poll_whole_review_invalid_config_explicit_retains_backoff",
+        whole_review_attention_explicit,
+    ),
     ("poll_primary_fast_forward", primary_fast_forward),
     ("poll_document_fast_forward", document_fast_forward),
     ("poll_ticket_fast_forward", ticket_fast_forward),
@@ -1751,6 +1791,265 @@ fn policy_suspended() -> Result<(), FixtureError> {
 }
 fn policy_not_due() -> Result<(), FixtureError> {
     policy_case(PollIneligibility::NotDue)
+}
+
+fn invalidate_config(p: &Pair, shape: usize) -> Result<(), FixtureError> {
+    let path = p.b.root.join(".manyhands/config.toml");
+    match shape {
+        0 => fixed(std::fs::remove_file(path)),
+        1 => fixed(std::fs::write(path, b"invalid TOML [")),
+        2 => fixed(std::fs::write(
+            path,
+            b"format_version = 1\nprimary_branch = \"main\"\n",
+        )),
+        _ => unreachable!(),
+    }
+}
+fn whole_review_invalid_auto(reason: PollIneligibility) -> Result<(), FixtureError> {
+    for shape in 0..3 {
+        let p = Pair::new()?;
+        p.poll()?; // Establish an actual completed batch and a fresh index first.
+        invalidate_config(&p, shape)?;
+        let db = p.b.db()?;
+        let next = time::OffsetDateTime::now_utc().unix_timestamp() + 60;
+        let (enabled, paused, suspended) = match reason {
+            PollIneligibility::Disabled => (false, false, false),
+            PollIneligibility::Paused => (true, true, false),
+            PollIneligibility::RecoverySuspended => (true, false, true),
+            PollIneligibility::NotDue => (true, false, false),
+        };
+        fixed(db.execute("UPDATE remote_polling_state SET enabled=?1,paused=?2,recovery_suspended=?3,next_eligible_at=?4,automatic_backoff_seconds=120,latest_outcome='completed',latest_attempt_at=123", rusqlite::params![enabled,paused,suspended,next]))?;
+        let before = fixed(p.b.service.remote_snapshot(&p.b.root))?;
+        let local = snapshot(&p.b)?;
+        let refs = all_refs(&p.b.repo()?)?;
+        let batch = observation_digest(&p.b)?;
+        fixed(db.execute_batch("CREATE TABLE whole_review_writes(n INTEGER);INSERT INTO whole_review_writes VALUES(0);CREATE TRIGGER whole_review_policy AFTER UPDATE ON remote_polling_state BEGIN UPDATE whole_review_writes SET n=n+1;END;CREATE TRIGGER whole_review_new_op AFTER INSERT ON remote_operation_records BEGIN UPDATE whole_review_writes SET n=n+1;END;CREATE TRIGGER whole_review_op AFTER UPDATE ON remote_operation_records BEGIN UPDATE whole_review_writes SET n=n+1;END;"))?;
+        let connections = p.server.connections();
+        let helpers = p.server.helper_invocations();
+        let ops = count(&p.b, "remote_operation_records")?;
+        let prompts = Arc::new(AtomicUsize::new(0));
+        let mut s = SessionCredentials::new(Provider {
+            prompts: prompts.clone(),
+            cancelled: false,
+        });
+        let result = p.poll_with(
+            &p.b.service,
+            p.request(RemotePollInvocation::Automatic),
+            &mut s,
+        );
+        assert!(
+            matches!(result, Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible{reason:r,next_eligible_at:Some(deadline)})) if r==reason && deadline.unix_timestamp()==next)
+        );
+        assert_eq!(p.server.connections(), connections);
+        assert_eq!(p.server.helper_invocations(), helpers);
+        assert_eq!(prompts.load(Ordering::SeqCst), 0);
+        assert_eq!(count(&p.b, "remote_operation_records")?, ops);
+        assert_eq!(
+            fixed(db.query_row("SELECT n FROM whole_review_writes", [], |r| {
+                r.get::<_, i64>(0)
+            }))?,
+            0
+        );
+        assert_eq!(fixed(p.b.service.remote_snapshot(&p.b.root))?, before);
+        assert_eq!(snapshot(&p.b)?, local);
+        assert_eq!(all_refs(&p.b.repo()?)?, refs);
+        assert_eq!(observation_digest(&p.b)?, batch);
+        p.finish()?;
+    }
+    Ok(())
+}
+fn whole_review_auto_disabled() -> Result<(), FixtureError> {
+    whole_review_invalid_auto(PollIneligibility::Disabled)
+}
+fn whole_review_auto_paused() -> Result<(), FixtureError> {
+    whole_review_invalid_auto(PollIneligibility::Paused)
+}
+fn whole_review_auto_suspended() -> Result<(), FixtureError> {
+    whole_review_invalid_auto(PollIneligibility::RecoverySuspended)
+}
+fn whole_review_auto_not_due() -> Result<(), FixtureError> {
+    whole_review_invalid_auto(PollIneligibility::NotDue)
+}
+
+fn whole_review_invalid_attention(invocation: RemotePollInvocation) -> Result<(), FixtureError> {
+    for shape in 0..3 {
+        let p = Pair::new()?;
+        p.poll()?;
+        invalidate_config(&p, shape)?;
+        fixed(p.b.db()?.execute_batch("UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=12345,latest_attempt_at=123,latest_outcome='completed'"))?;
+        let connections = p.server.connections();
+        let local = snapshot(&p.b)?;
+        let refs = all_refs(&p.b.repo()?)?;
+        let result = p.poll_with(&p.b.service, p.request(invocation), &mut session());
+        assert!(matches!(result, Err(RemotePollError::Transport(_))));
+        let after = fixed(p.b.service.remote_snapshot(&p.b.root))?;
+        assert_eq!(
+            after.latest_outcome(),
+            Some(RemoteOutcomeCategory::ConfigurationRequired)
+        );
+        assert_eq!(
+            after.polling().automatic_backoff().map(|b| b.as_secs()),
+            Some(120)
+        );
+        let attempt = after.latest_attempt_at().unwrap();
+        assert!(attempt.unix_timestamp() > 123);
+        assert_eq!(
+            after.next_eligible_at().unwrap().unix_timestamp(),
+            if invocation == RemotePollInvocation::Automatic {
+                attempt.unix_timestamp() + 300
+            } else {
+                12345
+            }
+        );
+        assert_eq!(p.server.connections(), connections);
+        assert_eq!(snapshot(&p.b)?, local);
+        assert_eq!(all_refs(&p.b.repo()?)?, refs);
+        p.finish()?;
+    }
+    Ok(())
+}
+fn whole_review_attention_automatic() -> Result<(), FixtureError> {
+    whole_review_invalid_attention(RemotePollInvocation::Automatic)
+}
+fn whole_review_attention_explicit() -> Result<(), FixtureError> {
+    whole_review_invalid_attention(RemotePollInvocation::Explicit)
+}
+
+fn whole_review_endpoint_attention(invocation: RemotePollInvocation) -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    p.poll()?;
+    fixed(p.b.db()?.execute_batch(
+        "UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=12345",
+    ))?;
+    fixed(
+        p.b.repo()?
+            .remote_set_url("origin", &format!("{}/changed", p.server.url())),
+    )?;
+    let before = snapshot(&p.b)?;
+    let refs = all_refs(&p.b.repo()?)?;
+    let prompts = Arc::new(AtomicUsize::new(0));
+    let mut s = SessionCredentials::new(Provider {
+        prompts: prompts.clone(),
+        cancelled: true,
+    });
+    let result = p.poll_with(&p.b.service, p.request(invocation), &mut s);
+    assert!(matches!(result, Err(RemotePollError::Transport(_))));
+    let after = fixed(p.b.service.remote_snapshot(&p.b.root))?;
+    assert_eq!(
+        after.latest_outcome(),
+        Some(RemoteOutcomeCategory::UnlockRequired)
+    );
+    assert_eq!(
+        after.polling().automatic_backoff().map(|b| b.as_secs()),
+        Some(120)
+    );
+    assert_eq!(
+        after.next_eligible_at().unwrap().unix_timestamp(),
+        if invocation == RemotePollInvocation::Automatic {
+            after.latest_attempt_at().unwrap().unix_timestamp() + 300
+        } else {
+            12345
+        }
+    );
+    // This fresh session is not blocked yet: its first cancelled unlock prompts
+    // once in either mode. The separate blocked-session case proves no reprompt.
+    assert_eq!(prompts.load(Ordering::SeqCst), 1);
+    assert_eq!(snapshot(&p.b)?, before);
+    assert_eq!(all_refs(&p.b.repo()?)?, refs);
+    p.finish()
+}
+fn whole_review_endpoint_automatic() -> Result<(), FixtureError> {
+    whole_review_endpoint_attention(RemotePollInvocation::Automatic)
+}
+fn whole_review_endpoint_explicit() -> Result<(), FixtureError> {
+    whole_review_endpoint_attention(RemotePollInvocation::Explicit)
+}
+
+fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let target_ref = if materialization {
+        reference(T)
+    } else {
+        MAIN.into()
+    };
+    p.poll()?;
+    let db = p.b.db()?;
+    assert!(!fixed(db.query_row(
+        "SELECT refresh_required FROM repositories",
+        [],
+        |r| r.get::<_, bool>(0)
+    ))?);
+    let tip = if materialization {
+        publish_new(&p, T)?
+    } else {
+        p.publish(MAIN, p.base()?, &[("remote", Some((b"remote\n", MODE)))])?
+    };
+    fixed(db.execute_batch(if materialization {
+        "CREATE TRIGGER whole_review_failure BEFORE UPDATE OF step ON remote_poll_materializations WHEN NEW.step='branch_created' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
+    } else {
+        "CREATE TRIGGER whole_review_failure BEFORE UPDATE ON remote_poll_dispositions WHEN NEW.disposition='fast_forwarded' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
+    }))?;
+    let req = p.request(RemotePollInvocation::Explicit);
+    assert!(matches!(
+        p.poll_with(&p.b.service, req.clone(), &mut session()),
+        Err(RemotePollError::Repository(_))
+    ));
+    assert_eq!(fixed(p.b.repo()?.refname_to_id(&target_ref))?, tip);
+    if materialization {
+        assert!(!p.b.worktree(T).exists());
+        assert_eq!(
+            material_intent(&p)?,
+            (
+                req.operation_id.to_string(),
+                tip.to_string(),
+                "intended".into()
+            )
+        );
+    } else {
+        clean_checkout(&p, None, tip)?;
+    }
+    // The effect precedes its failed SQLite row write: this must already be
+    // durable, even if a subsequent restart only acknowledges cancellation.
+    assert!(fixed(db.query_row(
+        "SELECT refresh_required FROM repositories",
+        [],
+        |r| r.get::<_, bool>(0)
+    ))?);
+    fixed(db.execute_batch("DROP TRIGGER whole_review_failure"))?;
+    let before = snapshot(&p.b)?;
+    let refs = all_refs(&p.b.repo()?)?;
+    let second = p.b.reopen()?;
+    fixed(second.cancel_remote_operation(&p.b.root, req.operation_id))?;
+    let connections = p.server.connections();
+    let mut restart = req.clone();
+    restart.restart = true;
+    let (cancelled, pending) = report(fixed(p.poll_with(&second, restart, &mut session()))?)?;
+    assert!(pending);
+    assert_eq!(cancelled.completion(), PollCompletion::Cancelled);
+    assert_eq!(
+        row(&cancelled, &target_ref).disposition(),
+        PollDisposition::NotReached
+    );
+    assert_eq!(p.server.connections(), connections);
+    assert_eq!(snapshot(&p.b)?, before);
+    assert_eq!(all_refs(&p.b.repo()?)?, refs);
+    fixed(second.refresh_repository(RefreshRepositoryRequest {
+        root: p.b.root.clone(),
+        operation_id: OperationId::new(),
+    }))?;
+    let (replay, pending) = report(fixed(p.poll_with(&second, req, &mut session()))?)?;
+    assert!(!pending);
+    assert_eq!(replay, cancelled);
+    assert_eq!(p.server.connections(), connections);
+    assert_eq!(snapshot(&p.b)?, before);
+    assert_eq!(all_refs(&p.b.repo()?)?, refs);
+    p.finish()
+}
+fn whole_review_disposition_cancel() -> Result<(), FixtureError> {
+    whole_review_effect_cancel(false)
+}
+fn whole_review_branch_cancel() -> Result<(), FixtureError> {
+    whole_review_effect_cancel(true)
 }
 fn backoff() -> Result<(), FixtureError> {
     let mut p = Pair::new()?;
