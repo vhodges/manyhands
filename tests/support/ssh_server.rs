@@ -121,6 +121,7 @@ pub(super) async fn serve(
             _ = shutdown.changed() => break,
             result = listener.accept() => {
                 let Ok((socket, _)) = result else { break };
+                shared.sockets.fetch_add(1, Ordering::SeqCst);
                 let shared = shared.clone();
                 sessions.spawn(async move {
                     if boundary(&shared, FixtureBoundary::Handshake).await.is_err() { return; }

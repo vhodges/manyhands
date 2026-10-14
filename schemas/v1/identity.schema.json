@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 commit identity",
+  "description": "The identity a commit in the repository would carry, and the initials a short code would be composed with.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "email", "source"],
+  "required": ["name", "email", "source", "initials", "initials_source"],
   "properties": {
     "name": {
       "type": ["string", "null"]
@@ -12,6 +13,7 @@
       "type": ["string", "null"]
     },
     "source": {
+      "description": "The level of Git configuration that holds the name and the email. With none, both are null.",
       "type": "string",
       "enum": [
         "repository",
@@ -20,6 +22,19 @@
         "system",
         "program_data",
         "application",
+        "none"
+      ]
+    },
+    "initials": {
+      "description": "The initials a short code assigned now, with none given for the call, would be composed with: two or three ASCII letters or digits in lower case. Null when initials_source is none.",
+      "type": ["string", "null"]
+    },
+    "initials_source": {
+      "description": "Where the initials come from: repository is manyhands.initials in the repository's own Git configuration, and derived is the name. A manyhands.initials that is not two or three ASCII letters or digits is not used and nothing is derived in its place: that is none, as is a name initials cannot be derived from.",
+      "type": "string",
+      "enum": [
+        "repository",
+        "derived",
         "none"
       ]
     }

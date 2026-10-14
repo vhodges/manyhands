@@ -10,7 +10,7 @@ use git2::{Config, ConfigLevel, Repository, RepositoryInitOptions, Signature, Ti
 use manyhands::{
     repository::{
         Accessibility, ConfigurationState, IdentityAvailability, IdentitySource, IndexState,
-        ReadError, RepositoryService,
+        InitialsSource, ReadError, RepositoryService,
     },
     results::{ProblemCode, ResultCode},
 };
@@ -534,7 +534,107 @@ fn identity_reports_the_configuration_level_it_came_from() {
     assert_eq!(incomplete.source, IdentitySource::None);
     assert_eq!(
         serde_json::to_value(&incomplete).unwrap(),
-        json!({"name": null, "email": null, "source": "none"})
+        json!({
+            "name": null,
+            "email": null,
+            "source": "none",
+            "initials": null,
+            "initials_source": "none"
+        })
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// The initials a short code would be composed with, and where they come
+/// from: the repository's own `manyhands.initials`, or the name of the
+/// identity a commit would carry.
+#[test]
+fn identity_reports_initials_and_where_they_come_from() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let local = || Config::open(&fixture.repository.path().join("config")).unwrap();
+    let read = || enabled.service.repository_identity(&repo).unwrap();
+    let initials = |identity: &manyhands::repository::IdentityDto| {
+        (identity.initials.clone(), identity.initials_source)
+    };
+
+    // Derived from the local name, "Manyhands Test".
+    assert_eq!(
+        initials(&read()),
+        (Some("mt".to_owned()), InitialsSource::Derived)
+    );
+
+    // The repository's own setting comes first, in lower case.
+    local().set_str("manyhands.initials", "QA7").unwrap();
+    let configured = read();
+    assert_eq!(
+        initials(&configured),
+        (Some("qa7".to_owned()), InitialsSource::Repository)
+    );
+    assert_eq!(configured.source, IdentitySource::Repository);
+    assert_eq!(
+        serde_json::to_value(&configured).unwrap(),
+        json!({
+            "name": "Manyhands Test",
+            "email": "manyhands-test@example.invalid",
+            "source": "repository",
+            "initials": "qa7",
+            "initials_source": "repository"
+        })
+    );
+
+    // A setting that is no initials is not used, and nothing is derived
+    // in its place: a short code would be refused for it.
+    local().set_str("manyhands.initials", "toolong").unwrap();
+    assert_eq!(initials(&read()), (None, InitialsSource::None));
+    local().remove("manyhands.initials").unwrap();
+
+    // A name initials cannot be derived from: it begins with a letter
+    // that is not ASCII.
+    local().set_str("user.name", "Élodie Example").unwrap();
+    let underivable = read();
+    assert_eq!(initials(&underivable), (None, InitialsSource::None));
+    assert_eq!(underivable.source, IdentitySource::Repository);
+
+    // A one-word name gives its first two characters.
+    local().set_str("user.name", "Ada").unwrap();
+    assert_eq!(
+        initials(&read()),
+        (Some("ad".to_owned()), InitialsSource::Derived)
+    );
+
+    // Derived from an identity found outside the repository, and set in
+    // the repository with no identity at all.
+    local().remove("user.name").unwrap();
+    local().remove("user.email").unwrap();
+    let with = |config: &mut Config| {
+        enabled
+            .service
+            .repository_identity_with_config_for_testing(&repo, config)
+            .unwrap()
+    };
+    let (_global_directory, mut global) = isolated_config(
+        ConfigLevel::Global,
+        "[user]\nname = Other Name\nemail = other@example.invalid\n[manyhands]\ninitials = zz\n",
+    );
+    let from_global = with(&mut global);
+    assert_eq!(from_global.source, IdentitySource::Global);
+    // `manyhands.initials` outside the repository is not this
+    // repository's.
+    assert_eq!(
+        initials(&from_global),
+        (Some("on".to_owned()), InitialsSource::Derived)
+    );
+    let nobody = with(&mut Config::new().unwrap());
+    assert_eq!(nobody.source, IdentitySource::None);
+    assert_eq!(initials(&nobody), (None, InitialsSource::None));
+    local().set_str("manyhands.initials", "ab").unwrap();
+    let only_initials = with(&mut Config::new().unwrap());
+    assert_eq!(only_initials.source, IdentitySource::None);
+    assert_eq!(
+        initials(&only_initials),
+        (Some("ab".to_owned()), InitialsSource::Repository)
     );
     assert_git_transport_uninitialized();
 }

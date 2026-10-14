@@ -218,6 +218,15 @@ impl fmt::Debug for RedactedConflictBytes {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ExpectedConfiguration(pub(super) [u8; 32]);
 
+#[cfg(test)]
+impl ExpectedConfiguration {
+    /// A digest of no configuration, for a test outside this module that
+    /// needs a value of the type.
+    pub(crate) fn for_testing() -> Self {
+        Self([0; 32])
+    }
+}
+
 impl fmt::Debug for ExpectedConfiguration {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("ExpectedConfiguration(<redacted>)")

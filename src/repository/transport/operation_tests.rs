@@ -32,6 +32,9 @@ pub(crate) enum Checkpoint {
     Prepared,
     ProviderReturned,
     Authenticated,
+    /// The host's trust was finalized for the connection: a pin an
+    /// approval asked for is stored, and the call has not returned.
+    HostTrustFinalized,
     Reconnected,
     TrackingDownloaded,
     BeforeTrackingWrite,

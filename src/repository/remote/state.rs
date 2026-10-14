@@ -8,7 +8,11 @@ use super::{
     RemoteRefClassification, RemoteRefPlan, RemoteRefTarget,
     merge::{ConfirmedCommitIdentity, IntegrationStage},
 };
-use crate::repository::{RepositoryError, RepositoryErrorKind, RepositoryOperation};
+use crate::repository::{
+    ReadError, RepositoryError, RepositoryErrorKind, RepositoryOperation,
+    recovery::{FinalKind, JournalRow, PendingOperation},
+};
+use crate::results::ResultCode;
 use crate::{canonical::ItemId, repository::AuthoringKind};
 
 pub(in super::super) fn recovery_required() -> RepositoryError {
@@ -1961,24 +1965,7 @@ fn operation_from_row(row: &rusqlite::Row<'_>) -> Result<StoredRemoteOperation, 
     {
         return Err(recovery_required());
     }
-    let phase = match text("phase")?.as_str() {
-        "reserved" => RemoteOperationPhase::Reserved,
-        "advertising" => RemoteOperationPhase::Advertising,
-        "persisting" => RemoteOperationPhase::Persisting,
-        "completed" => RemoteOperationPhase::Completed,
-        "interrupted" => RemoteOperationPhase::Interrupted,
-        "cancelled" => RemoteOperationPhase::Cancelled,
-        "failed" => RemoteOperationPhase::Failed,
-        "fetch_prepared" => RemoteOperationPhase::FetchPrepared,
-        "fetch_observed" => RemoteOperationPhase::FetchObserved,
-        "local_prepared" => RemoteOperationPhase::LocalPrepared,
-        "local_fast_forwarded" => RemoteOperationPhase::LocalFastForwarded,
-        "push_prepared" => RemoteOperationPhase::PushPrepared,
-        "push_returned" => RemoteOperationPhase::PushReturned,
-        "push_verified" => RemoteOperationPhase::PushVerified,
-        "reconciling" => RemoteOperationPhase::Reconciling,
-        _ => return Err(recovery_required()),
-    };
+    let phase = stored_phase(&text("phase")?).ok_or_else(recovery_required)?;
     let priority = match text("priority")?.as_str() {
         "poll" => RemoteOperationPriority::Poll,
         "manual" => RemoteOperationPriority::Manual,
@@ -2217,6 +2204,251 @@ pub(super) fn read_operation(
         audit_merge_evidence(connection, record)?;
     }
     Ok(record)
+}
+
+/// The phase a remote operation record names, or `None` for a name no
+/// phase has.
+fn stored_phase(stored: &str) -> Option<RemoteOperationPhase> {
+    Some(match stored {
+        "reserved" => RemoteOperationPhase::Reserved,
+        "advertising" => RemoteOperationPhase::Advertising,
+        "persisting" => RemoteOperationPhase::Persisting,
+        "completed" => RemoteOperationPhase::Completed,
+        "interrupted" => RemoteOperationPhase::Interrupted,
+        "cancelled" => RemoteOperationPhase::Cancelled,
+        "failed" => RemoteOperationPhase::Failed,
+        "fetch_prepared" => RemoteOperationPhase::FetchPrepared,
+        "fetch_observed" => RemoteOperationPhase::FetchObserved,
+        "local_prepared" => RemoteOperationPhase::LocalPrepared,
+        "local_fast_forwarded" => RemoteOperationPhase::LocalFastForwarded,
+        "push_prepared" => RemoteOperationPhase::PushPrepared,
+        "push_returned" => RemoteOperationPhase::PushReturned,
+        "push_verified" => RemoteOperationPhase::PushVerified,
+        "reconciling" => RemoteOperationPhase::Reconciling,
+        _ => return None,
+    })
+}
+
+/// Where the remote operation `operation_id` of the registration at
+/// `root_path` stands, for the mutation boundary's settling.
+///
+/// This reads the row's own columns and nothing else: it needs no
+/// repository on disk, and it does not audit the row as `read_operation`
+/// does. A root with no registration has no remote operations.
+///
+/// An operation is pending in a phase that holds the registration's
+/// reservation, and when it was interrupted or it failed: it then stopped
+/// with work that only a call under its ID takes up again, a pending
+/// merge conflict among it. A completed or a cancelled operation is
+/// final, and owes work while its index hand-off is pending or its
+/// reconciliation is recorded as required, because Git may hold what it
+/// started.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_operation(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<JournalRow, ReadError> {
+    let row: Option<(String, bool, bool)> = connection
+        .query_row(
+            "SELECT operation.phase, operation.index_pending,
+                    operation.reconciliation_required
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((stored, index_pending, reconciliation_required)) = row else {
+        return Ok(JournalRow::Absent);
+    };
+    let phase = stored_phase(&stored).ok_or_else(|| ReadError::new(ResultCode::InternalError))?;
+    let owes_work = index_pending || reconciliation_required;
+    Ok(match phase {
+        RemoteOperationPhase::Reserved
+        | RemoteOperationPhase::Advertising
+        | RemoteOperationPhase::Persisting
+        | RemoteOperationPhase::FetchPrepared
+        | RemoteOperationPhase::FetchObserved
+        | RemoteOperationPhase::LocalPrepared
+        | RemoteOperationPhase::LocalFastForwarded
+        | RemoteOperationPhase::PushPrepared
+        | RemoteOperationPhase::PushReturned
+        | RemoteOperationPhase::PushVerified
+        | RemoteOperationPhase::Reconciling
+        | RemoteOperationPhase::Interrupted
+        | RemoteOperationPhase::Failed => JournalRow::Pending(PendingOperation::Remote { phase }),
+        RemoteOperationPhase::Completed => JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work,
+            checkpointed: true,
+        },
+        RemoteOperationPhase::Cancelled => JournalRow::Final {
+            kind: FinalKind::Cancelled,
+            owes_work,
+            checkpointed: true,
+        },
+    })
+}
+
+/// Whether the remote operation `operation_id` of the registration at
+/// `root_path` was begun under another configuration generation than
+/// the registration is at now. A change of the remote's endpoints or of
+/// the selected key raises the generation and interrupts every operation
+/// that held the reservation; nothing takes such an operation up again,
+/// since a restart refuses a row of another generation. `false` for no
+/// row.
+///
+/// The generation is what the domain itself tests. An operation that
+/// ran to its end keeps the generation it ran under and is not fenced
+/// by this: its caller asks only of a row that has not ended.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_fenced(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<bool, ReadError> {
+    Ok(connection
+        .query_row(
+            "SELECT operation.configuration_generation != polling.configuration_generation
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+               JOIN remote_polling_state polling ON polling.repository_id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// What the remote operation `operation_id` of the registration at
+/// `root_path` synchronizes: the target a call that takes it up again
+/// is made with. The outer `None` is no row; the inner one a row that
+/// is no synchronization's: a poll, a promotion or a closure, which
+/// nothing takes up again under its ID.
+///
+/// As `lookup_operation`, this reads the row's own columns and nothing
+/// else. Whether the row can be taken up is the domain's to decide, when
+/// it is called with the target: it validates the whole row then.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_synchronization_target(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<Option<SynchronizationTarget>>, ReadError> {
+    let row: Option<(String, Option<String>, Option<String>)> = connection
+        .query_row(
+            "SELECT operation.action, operation.kind, operation.item_id
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((action, kind, item_id)) = row else {
+        return Ok(None);
+    };
+    let unreadable = || ReadError::new(ResultCode::InternalError);
+    Ok(Some(match action.as_str() {
+        "synchronize_primary" => Some(SynchronizationTarget::Primary),
+        "synchronize_context" => {
+            let kind = match kind.as_deref() {
+                Some("document") => AuthoringKind::Document,
+                Some("ticket") => AuthoringKind::Ticket,
+                Some(_) | None => return Err(unreadable()),
+            };
+            let item_id = item_id
+                .and_then(|item_id| item_id.parse().ok())
+                .ok_or_else(unreadable)?;
+            Some(SynchronizationTarget::Context { kind, item_id })
+        }
+        "poll" | "promote" | "close" => None,
+        _ => return Err(unreadable()),
+    }))
+}
+
+/// The columns `lookup_push` reads: the checkpoint, the commit the push
+/// was of, and the kind and the commit of the outcome.
+type PushColumns = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+/// What a synchronization's row holds of its push.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StoredPush {
+    /// The commit the operation set out to push, or published.
+    pub(crate) commit: Oid,
+    /// Whether the row alone says the remote accepted it.
+    pub(crate) accepted: bool,
+}
+
+/// What the synchronization `operation_id` of the registration at
+/// `root_path` recorded of its push. `None` for no row, and for a row
+/// that had not got as far as a push.
+///
+/// This is the stored checkpoint, which `lookup_operation` does not
+/// carry. The row says the remote holds the commit when the transport
+/// call that pushed it returned, `push_returned`, when the remote was
+/// then asked and advertised it, `push_verified`, or when the operation
+/// ended as `published`. It does not say so at `push_prepared`, which
+/// is the intent recorded before the call: a call that failed there may
+/// or may not have been taken by the remote, and only asking the remote
+/// can tell. An operation that ended as already current pushed nothing.
+///
+/// `push_verified` without an outcome is also what a remote that was
+/// already current is recorded as, so there the row says the remote
+/// holds the commit and not that this operation put it there. The call
+/// that verified it knows which, and is told by
+/// `SynchronizationObserver::verified`; a later call that has only the
+/// row reads it as the synchronization itself does on a restart, as
+/// published, so that a push is never understated.
+///
+/// The publication attempts a merging synchronization appends are not
+/// read: the boundary's synchronizations never merge and have none.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lookup_push(
+    connection: &Connection,
+    root_path: &str,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<StoredPush>, ReadError> {
+    let row: Option<PushColumns> = connection
+        .query_row(
+            "SELECT operation.sync_checkpoint, operation.push_oid,
+                    operation.authoritative_kind, operation.authoritative_oid
+               FROM remote_operation_records operation
+               JOIN repositories repository ON repository.id = operation.repository_id
+              WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2",
+            params![root_path, operation_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((checkpoint, push, authority, authoritative)) = row else {
+        return Ok(None);
+    };
+    let (commit, accepted) = match authority.as_deref() {
+        Some("published") => (authoritative, true),
+        Some(_) => (None, false),
+        None => (
+            push,
+            matches!(
+                checkpoint.as_deref(),
+                Some("push_returned" | "push_verified")
+            ),
+        ),
+    };
+    commit
+        .map(|oid| {
+            Oid::from_str(&oid)
+                .map(|commit| StoredPush { commit, accepted })
+                .map_err(|_| ReadError::new(ResultCode::InternalError))
+        })
+        .transpose()
 }
 
 /// The remote operations the status reads look at: the one with this ID,
@@ -4727,4 +4959,43 @@ impl RemoteObservationOutcome {
     pub fn snapshot(&self) -> &RemoteSnapshot {
         &self.snapshot
     }
+}
+
+/// What a registration holds of polling, as the preview of a remote's
+/// removal reads it: the policy, and the remote polling observes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PollingPolicy {
+    pub(crate) enabled: bool,
+    pub(crate) paused: bool,
+    pub(crate) interval_seconds: i64,
+    /// The remote the polling state names, which is the publication
+    /// remote as the index last saw the configuration. `None` when it
+    /// names none.
+    pub(crate) remote_name: Option<String>,
+}
+
+/// The polling policy of the registration whose root is `root_path`.
+/// `None` when no registration has that root, or it has no polling row.
+/// Only these four values are read.
+pub(in super::super) fn select_polling_policy(
+    connection: &Connection,
+    root_path: &str,
+) -> rusqlite::Result<Option<PollingPolicy>> {
+    connection
+        .query_row(
+            "SELECT polling.enabled,polling.paused,polling.interval_seconds,polling.remote_name
+               FROM remote_polling_state AS polling
+               JOIN repositories ON repositories.id=polling.repository_id
+              WHERE repositories.root_path=?1",
+            [root_path],
+            |row| {
+                Ok(PollingPolicy {
+                    enabled: row.get(0)?,
+                    paused: row.get(1)?,
+                    interval_seconds: row.get(2)?,
+                    remote_name: row.get(3)?,
+                })
+            },
+        )
+        .optional()
 }

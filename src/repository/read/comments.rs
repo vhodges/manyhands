@@ -90,9 +90,10 @@ fn stored_comments(
     Ok(comments)
 }
 
-/// Takes `created_by` out of a comment's unknown keys. The author is its
-/// value when that is what `closed_by` may be, a non-empty string with no
-/// NUL; `Err` is any other value, which names nobody.
+/// Takes `created_by` out of a comment's unknown keys, where the parser
+/// leaves a value it does not take for the comment's author. The author is
+/// its value when that is what `closed_by` may be, a non-empty string with
+/// no NUL; `Err` is any other value, which names nobody.
 fn take_author(unknown: &mut serde_yaml::Mapping) -> Result<Option<String>, ()> {
     match unknown.remove(CREATED_BY) {
         None => Ok(None),
@@ -108,10 +109,11 @@ fn comment_dto(mut comment: canonical::Comment, depth: u32, directory: &str) -> 
     // Validation accepted the comment, so its file is named for its ID.
     let path = format!("{directory}{}.md", comment.id);
     let mut problems = Vec::new();
-    let author = take_author(&mut comment.unknown).unwrap_or_else(|()| {
+    let unparsed = take_author(&mut comment.unknown).unwrap_or_else(|()| {
         problems.push(problem(ProblemCode::InvalidField, &path));
         None
     });
+    let author = comment.created_by.take().or(unparsed);
     let unknown = UnknownMetadata::from_yaml(&comment.unknown);
     problems.extend(metadata_problems(&unknown, &path));
     CommentDto {

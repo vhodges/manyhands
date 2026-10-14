@@ -16,8 +16,8 @@ const MARKER_BYTES: &[u8] = b"manyhands SSH host trust reapproval required v1\n"
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) struct HostTrustSnapshot {
-    pub(super) pin: Option<HostKeyIdentity>,
-    pub(super) reapproval_required: bool,
+    pub(in super::super) pin: Option<HostKeyIdentity>,
+    pub(in super::super) reapproval_required: bool,
 }
 
 pub(in super::super) fn migrate_host_pins(

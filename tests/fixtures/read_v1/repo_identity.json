@@ -3,6 +3,8 @@
   "command": "repo identity",
   "data": {
     "email": "manyhands-test@example.invalid",
+    "initials": "mt",
+    "initials_source": "derived",
     "name": "Manyhands Test",
     "source": "repository"
   },

@@ -2,9 +2,9 @@
   "code": "ok",
   "command": "host inspect",
   "data": {
-    "algorithm": "ssh-rsa",
-    "fingerprint": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
     "host": "git.example.invalid",
+    "pinned_algorithm": "ssh-rsa",
+    "pinned_fingerprint": "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU",
     "port": 2222,
     "reapproval_required": true
   },

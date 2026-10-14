@@ -158,7 +158,11 @@ merged Cycle 06 code. The contract above stands; these points refine it.
    save → synchronize path with no fixture refresh.
 2. **Repository-wide conflict block.** A pending synchronization conflict in any
    context makes every other synchronization in the repository return `Busy`,
-   and there is no abandon path yet (ticket `01M4H33R34Z7C7EEKTY1ZCT950`). A
+   and there is no abandon path for a pending conflict yet (ticket
+   `01M4H33R34Z7C7EEKTY1ZCT950`). Wave 03 F2's `operation abandon` closes a
+   local journal row only, a comment submission's among them: it keeps the
+   commit and the binding, and the submission's replay, retry, cancellation
+   and synchronization are refused from then on. A
    comment that can be checkpointed in another writable context is saved locally
    with publication pending/`Busy`. Existing local authoring refuses a new comment
    in the context owned by the pending merge before writing/checkpointing it;

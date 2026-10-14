@@ -506,3 +506,75 @@ fn reservation_tokens_are_bound_to_the_issuing_service_without_paths() {
     assert!(!debug.contains(first.data_directory.path().to_str().unwrap()));
     assert!(!debug.contains(first_fixture.root.to_str().unwrap()));
 }
+
+/// An operation ID whose refresh was abandoned is closed for good. No
+/// reservation is made under it: a synchronization that reused the ID
+/// would otherwise do its remote work before its index hand-off, a row
+/// of the local journal under the same ID, was refused.
+#[test]
+fn an_operation_id_whose_refresh_was_abandoned_is_refused_a_reservation() {
+    use manyhands::repository::{
+        AbandonOperationOutcome, AbandonOperationRequest, FailurePoint, RefreshRepositoryRequest,
+    };
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    configure(&enabled);
+    let root = fixture.root.canonicalize().unwrap();
+    let operation_id = OperationId::new();
+    // A refresh that failed leaves its row pending.
+    let failing = support::FailOnce::at(FailurePoint::BeforeIndexTransactionCommit)
+        .open_service(enabled.data_directory.path());
+    assert!(
+        failing
+            .refresh_repository(RefreshRepositoryRequest {
+                root: root.clone(),
+                operation_id,
+            })
+            .is_err()
+    );
+    drop(failing);
+    assert!(matches!(
+        enabled
+            .service
+            .abandon_operation(AbandonOperationRequest {
+                root: root.clone(),
+                operation_id,
+                expected: None,
+            })
+            .unwrap(),
+        AbandonOperationOutcome::Abandoned(_)
+    ));
+    let rows = |table: &str| -> i64 {
+        Connection::open(enabled.data_directory.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(rows("remote_operation_records"), 0);
+
+    for target in [manual(), poll()] {
+        let refused = enabled
+            .service
+            .reserve_remote_operation(&root, operation_id, &target)
+            .unwrap_err();
+        assert_eq!(refused.kind, RepositoryErrorKind::OperationAbandoned);
+    }
+    // Nothing was reserved, and the repository's reservation is free.
+    assert_eq!(rows("remote_operation_records"), 0);
+    assert!(
+        enabled
+            .service
+            .active_remote_operation(&root)
+            .unwrap()
+            .is_none()
+    );
+    let other = OperationId::new();
+    reserved(
+        enabled
+            .service
+            .reserve_remote_operation(&root, other, &manual())
+            .unwrap(),
+    );
+}

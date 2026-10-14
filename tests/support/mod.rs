@@ -20,12 +20,19 @@ use manyhands::{
 use rusqlite::{Connection, params};
 
 pub mod comment_publication;
+pub mod confirmation;
+pub mod conformance;
 pub mod credentials;
+pub mod git_home;
 pub mod golden;
 pub mod items;
+pub mod mutation;
+pub mod mutation_golden;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;
+pub mod records;
+pub mod repair;
 pub mod schema;
 
 pub struct TestRepository {
@@ -495,7 +502,7 @@ pub fn hold_lease_in_child_for_test(
 }
 
 pub fn wait_for_path(child: &mut Child, path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !path.exists() {
         if let Some(status) = child.try_wait().unwrap() {
             let stdout = child
@@ -759,7 +766,8 @@ pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str
         Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
     let mut statement = connection
         .prepare(
-            "SELECT COALESCE(operation_ulid, ''), action, target, state, completed_step, \
+            "SELECT COALESCE(operation_ulid, ''), action, COALESCE(target, ''), state, \
+                    COALESCE(completed_step, ''), \
                     COALESCE(item_id, ''), COALESCE(context_path, ''), \
                     CAST(observed_at AS TEXT), CAST(persisted_context_count AS TEXT), \
                     COALESCE(redacted_error, '') \
