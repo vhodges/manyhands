@@ -186,6 +186,163 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
             .map_err(|_| recovery_required())?;
     }
     migrate_poll_attempt_times(transaction)?;
+    migrate_poll_materializations(transaction)?;
+    Ok(())
+}
+
+const POLL_MATERIALIZATION_SCHEMA: &str = r#"
+    CREATE TABLE remote_poll_materializations (
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('document','ticket')),
+        item_id TEXT NOT NULL CHECK(length(item_id)=26 AND substr(item_id,1,1) BETWEEN '0' AND '7' AND item_id NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*'),
+        operation_ulid TEXT NOT NULL CHECK(length(operation_ulid)=26 AND substr(operation_ulid,1,1) BETWEEN '0' AND '7' AND operation_ulid NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*'),
+        target_oid TEXT NOT NULL CHECK(length(target_oid)=40 AND target_oid NOT GLOB '*[^0-9a-f]*'),
+        step TEXT NOT NULL CHECK(step IN ('intended','branch_created','complete')),
+        PRIMARY KEY(repository_id,kind,item_id),
+        FOREIGN KEY(repository_id,operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE CASCADE
+    );
+    CREATE TRIGGER remote_poll_materialization_immutable BEFORE UPDATE OF repository_id,kind,item_id,operation_ulid,target_oid ON remote_poll_materializations BEGIN SELECT RAISE(ABORT,'immutable materialization intent'); END;
+    CREATE TRIGGER remote_poll_materialization_forward BEFORE UPDATE OF step ON remote_poll_materializations WHEN NEW.step!='intended' AND (CASE OLD.step WHEN 'intended' THEN 0 WHEN 'branch_created' THEN 1 ELSE 2 END) > (CASE NEW.step WHEN 'intended' THEN 0 WHEN 'branch_created' THEN 1 ELSE 2 END) BEGIN SELECT RAISE(ABORT,'materialization step requires restart'); END;
+    CREATE TRIGGER remote_poll_materialization_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_materializations WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable materialization owner'); END;
+"#;
+const POLL_MATERIALIZATION_OBJECTS: &[(&str, &str)] = &[
+    ("TABLE", "remote_poll_materializations"),
+    ("TRIGGER", "remote_poll_materialization_immutable"),
+    ("TRIGGER", "remote_poll_materialization_forward"),
+    ("TRIGGER", "remote_poll_materialization_owner_immutable"),
+];
+
+fn validate_poll_materialization_schema(connection: &Connection) -> Result<(), RepositoryError> {
+    for &(kind, name) in POLL_MATERIALIZATION_OBJECTS {
+        validate_schema_object(
+            connection,
+            kind,
+            name,
+            schema_object_sql(POLL_MATERIALIZATION_SCHEMA, kind, name)
+                .ok_or_else(recovery_required)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_poll_materializations(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let present: i64 = tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_materializations','remote_poll_materialization_immutable','remote_poll_materialization_forward','remote_poll_materialization_owner_immutable')", [], |row| row.get(0)).map_err(|_| recovery_required())?;
+    if present == 0 {
+        tx.execute_batch(POLL_MATERIALIZATION_SCHEMA)
+            .map_err(|_| recovery_required())?;
+    } else if present != POLL_MATERIALIZATION_OBJECTS.len() as i64 {
+        return Err(recovery_required());
+    }
+    validate_poll_materialization_schema(tx)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum MaterializationStep {
+    Intended,
+    BranchCreated,
+    Complete,
+}
+
+impl MaterializationStep {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Intended => "intended",
+            Self::BranchCreated => "branch_created",
+            Self::Complete => "complete",
+        }
+    }
+}
+
+pub(super) struct MaterializationIntent {
+    pub kind: AuthoringKind,
+    pub item_id: ItemId,
+    pub operation_id: crate::repository::OperationId,
+    pub oid: Oid,
+    pub step: MaterializationStep,
+}
+
+fn parse_materialization(
+    kind: String,
+    item: String,
+    operation: String,
+    target: String,
+    step: String,
+) -> Result<MaterializationIntent, RepositoryError> {
+    let kind = match kind.as_str() {
+        "document" => AuthoringKind::Document,
+        "ticket" => AuthoringKind::Ticket,
+        _ => return Err(recovery_required()),
+    };
+    let item_id = item.parse::<ItemId>().map_err(|_| recovery_required())?;
+    let operation_id =
+        crate::repository::OperationId::parse(&operation).map_err(|_| recovery_required())?;
+    let oid = oid(Some(target))?.ok_or_else(recovery_required)?;
+    let step = match step.as_str() {
+        "intended" => MaterializationStep::Intended,
+        "branch_created" => MaterializationStep::BranchCreated,
+        "complete" => MaterializationStep::Complete,
+        _ => return Err(recovery_required()),
+    };
+    Ok(MaterializationIntent {
+        kind,
+        item_id,
+        operation_id,
+        oid,
+        step,
+    })
+}
+
+#[allow(dead_code)] // Task 6 calls this through materialization's local stage.
+pub(super) fn materialization_intents(
+    connection: &Connection,
+    repository_id: i64,
+    item_id: &ItemId,
+) -> Result<Vec<MaterializationIntent>, RepositoryError> {
+    let rows = connection.prepare("SELECT kind,item_id,operation_ulid,target_oid,step FROM remote_poll_materializations WHERE repository_id=?1 AND item_id=?2")
+        .and_then(|mut q| q.query_map(params![repository_id, item_id.to_string()], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, String>(2)?,r.get::<_, String>(3)?,r.get::<_, String>(4)?)))?.collect::<Result<Vec<_>, _>>()).map_err(|_| recovery_required())?;
+    rows.into_iter()
+        .map(|(k, i, o, t, s)| parse_materialization(k, i, o, t, s))
+        .collect()
+}
+
+#[allow(dead_code)]
+pub(super) fn insert_materialization(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    kind: AuthoringKind,
+    item_id: &ItemId,
+    operation_id: crate::repository::OperationId,
+    target: Oid,
+) -> Result<(), RepositoryError> {
+    let owner: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2 AND action='poll' AND poll_kind='update')", params![repository_id,operation_id.to_string()], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if !owner {
+        return Err(recovery_required());
+    }
+    tx.execute("INSERT INTO remote_poll_materializations(repository_id,kind,item_id,operation_ulid,target_oid,step) VALUES(?1,?2,?3,?4,?5,'intended')", params![repository_id,crate::repository::authoring_kind_segment(&kind),item_id.to_string(),operation_id.to_string(),target.to_string()]).map_err(|_| recovery_required())?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(super) fn advance_materialization(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    intent: &MaterializationIntent,
+    step: MaterializationStep,
+) -> Result<(), RepositoryError> {
+    if tx.execute("UPDATE remote_poll_materializations SET step=?6 WHERE repository_id=?1 AND kind=?2 AND item_id=?3 AND operation_ulid=?4 AND target_oid=?5", params![repository_id,crate::repository::authoring_kind_segment(&intent.kind),intent.item_id.to_string(),intent.operation_id.to_string(),intent.oid.to_string(),step.name()]).map_err(|_| recovery_required())? != 1 { return Err(recovery_required()); }
+    Ok(())
+}
+
+fn audit_poll_materializations(connection: &Connection) -> Result<(), RepositoryError> {
+    validate_poll_materialization_schema(connection)?;
+    let rows = connection.prepare("SELECT m.kind,m.item_id,m.operation_ulid,m.target_oid,m.step,o.action,o.poll_kind FROM remote_poll_materializations m LEFT JOIN remote_operation_records o ON m.repository_id=o.repository_id AND m.operation_ulid=o.operation_ulid")
+        .and_then(|mut q| q.query_map([], |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, String>(2)?,r.get::<_, String>(3)?,r.get::<_, String>(4)?,r.get::<_, Option<String>>(5)?,r.get::<_, Option<String>>(6)?)))?.collect::<Result<Vec<_>, _>>()).map_err(|_| recovery_required())?;
+    for (k, i, o, t, s, action, kind) in rows {
+        parse_materialization(k, i, o, t, s)?;
+        if action.as_deref() != Some("poll") || kind.as_deref() != Some("update") {
+            return Err(recovery_required());
+        }
+    }
     Ok(())
 }
 
@@ -4498,6 +4655,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
+    audit_poll_materializations(&transaction)?;
     for table in [
         "remote_resolution_ref_log_artifacts",
         "remote_resolution_index_artifacts",
@@ -4506,6 +4664,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         "remote_ref_observations",
         "remote_context_states",
         "remote_operation_records",
+        "remote_poll_materializations",
         "remote_integration_steps",
         "remote_integration_windows",
         "remote_identity_confirmations",

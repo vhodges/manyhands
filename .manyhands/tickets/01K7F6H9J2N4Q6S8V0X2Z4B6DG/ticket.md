@@ -112,11 +112,29 @@ and the baseline.
   comment `01M4VQFGNCG4TE2MMA6WD27C3Z`. GREEN: 29 poll/326 remote tests and
   required Rust gates (1,629 passed, 1 ignored). Historical review-ready comment
   `01M4VSWK7DJCKF0FWEA82VZC6Q`; approved agreement unchanged.
-- [ ] Task 5: assigned at clean base `8cb5d777758287b200e09255dc1fa7f254fc4da3`;
-  blocked before production/test edits. Required unchanged
+- [x] Task 5: delivered after owner's narrow exception. Originally assigned at
+  clean base `8cb5d777758287b200e09255dc1fa7f254fc4da3`;
+  historical blocker before production/test edits. Required unchanged
   `validate_context_worktree` in step 5 unconditionally scans canonical files,
-  conflicting with no scan under the single lease. Await owner ruling; evidence
+  conflicting with no scan under the single lease. Historical blocker evidence
   and prior review approvals in comment `01M4VTCVFT1CJHJ0YQ3WC77KTR` and ledger.
+  Owner subsequently answered "yes": ONLY step 5's unchanged validator canonical
+  collection may run under the SAME single lease before complete; all discovery/
+  index-refresh scans, network and prompts outside. D1–D4 unchanged. Approved
+  documents reconciled before production. Resumed at review base
+  `ab07d0d3096a0e6129add1ba32a2f977a131b80a`, controller fetch/rebase a clean
+  no-op at main `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`.
+  Resume comment `01M4VWTXC6JGWH7CXZQ5XPRHF8`; RED before behavior in
+  `01M4VX5NM6TMJ35B0048FWBBN7`. Additive audited intent envelope, one-lease
+  materialization, Git-first conservative D2 reconciliation and public failure
+  boundaries complete. Final focused GREEN 40 poll/50 state/78 enablement;
+  four required Rust gates PASS (1,644 passed, 0 failed, 1 existing ignored).
+  Actual Linux failed checkout retains all partial artifacts; helper bodies,
+  dependencies and frontend/versioned schemas unchanged. GREEN/review-ready
+  comment `01M4W0G54ZF0M98PXS90NJFEJH`.
+- [ ] Independent Task 5 spec review of complete range from
+  `ab07d0d3096a0e6129add1ba32a2f977a131b80a`, including approved exception.
+- [ ] Independent Task 5 quality review after spec approval.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -133,8 +151,10 @@ approved the focused agreement amendment; Task 4 resumed at clean review base
 Task 4 spec and quality are now controller-reported approved after all corrections,
 through `8cb5d777758287b200e09255dc1fa7f254fc4da3`. Fresh Task 5-only assignment
 permits a local task commit and canonical bookkeeping, no subagents/network/rebase.
-Task 5 stopped before implementation at the lease/validator scan contradiction;
-owner ruling required. No Rust change or RED/GREEN run for this checkpoint.
+Task 5 is delivered after the owner's narrow step-5 exception; historical blocked
+checkpoints remain separate. Review range starts `ab07d0d3096a0e6129add1ba32a2f977a131b80a`
+and includes approved-document reconciliation plus Task 5 implementation.
+Awaiting independent spec then quality review; Task 6 has not started.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 6–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.

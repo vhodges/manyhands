@@ -46,8 +46,12 @@ review.
 - A poll never pushes, checkpoints, merges, rebases, stashes, forces a local
   ref, or deletes a branch, worktree or tracking ref. Tests assert the server
   received no update.
-- No network call, prompt or scan holds the repository lease. Every local
-  change re-observes under the lease first.
+- No network call, prompt or scan holds the repository lease, except only
+  Task 5 materialization step 5 may run unchanged `validate_context_worktree`
+  canonical collection under the same single lease before recording `complete`
+  (owner-approved exception, 2026-10-14). Discovery/index-refresh scans, network
+  calls and prompts remain outside. Every local change re-observes under the
+  lease first. D1–D4 unchanged.
 - Recovery rows hold IDs, ref names, OIDs, timestamps and fixed categories
   only. No `Debug` output of requests or session material.
 - Extract shared helpers; do not rewrite synchronization behaviour. Existing

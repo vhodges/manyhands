@@ -10,6 +10,215 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 5 Implementation And Review Handoff — 2026-10-14T01:30:16Z
+
+Task 5 delivered locally, review base
+**`ab07d0d3096a0e6129add1ba32a2f977a131b80a`**. Review the complete range from
+that base to the local feature checkpoint HEAD returned after commit, including
+the owner-approved exception reconciliation. Earlier blocked checkpoints are
+historical, not the implementation range. Controller preflight and Task 0 gate
+trusted, no duplicate fetch/rebase/characterization or subagents. Prior Task 4
+spec/quality approvals and accepted⇒active-only amendment retained. D1–D4 unchanged.
+
+### Delivered Behavior
+
+- Additive `remote_poll_materializations` has only repository/kind/item ID,
+  immutable owning poll ID/target OID and fixed step. Unique per repository/
+  context, repository and owning-operation FKs. Four-object envelope (table,
+  intent immutability, step transition and owner immutability triggers) is
+  installed atomically and exact-SQL validated. The owner trigger survives loss
+  of the table to distinguish partial loss from a genuine old registry.
+  Startup audits IDs/OIDs/steps, update-poll ownership and FKs. Existing registries
+  gain no inferred row; exact table inventory updated.
+- `materialize_context` acquires the root/common lease **once**. It checks the
+  path chain before configuration reads; reobserves frozen plan/endpoints/key
+  and the fetched tracking OID; observes branch/path/admin state before loading
+  intent ownership. It validates conformity before effects, durably records
+  intended in a short cache transaction, creates the branch **without force**,
+  records branch_created, uses exactly authoring's WorktreeAddOptions::reference,
+  validates actual worktree ownership and unchanged canonical validator in step
+  5 only, and records complete. No branch configuration, cleanup or transport.
+- Reconciliation returns typed `Present` for the caller to classify normally;
+  it does not claim Current against a newer incoming OID. Unfinished valid
+  worktree recovery finishes only step 5 with matching retained owner/target.
+  Missing everything starts step 1 regardless of cached step, resetting only
+  step to intended after Git/filesystem absence is observed; immutable context,
+  owner and target are retained. Only recorded branch_created at the recorded
+  **direct** branch OID with no path/admin/registration resumes worktree creation.
+  An intended row plus branch alone is incomplete, including a real failed
+  branch-step transaction. No matching intent means blocked; other partial
+  evidence means incomplete and nothing removed. Later calls retain original
+  intent ownership rather than adopting the caller's new operation ID.
+- Task 4's stronger poll-local ownership proof is consumed unchanged: linked
+  worktree, canonical owner commondir, exact admin/name/path and regular exact
+  gitfile backlink. Poll-local reconciliation also rejects a symbolic branch
+  replacement and absent/nonregular index. Shared repository, discovery,
+  synchronization and refs helper bodies are untouched. repository.rs adds only
+  four **public, non-cfg(test)** FailurePoint variants, used by the existing
+  open_at_with_failure_point_for_testing seam.
+
+### Test Coverage And Honest Trial History
+
+Eleven new poll tests and four new state tests add **15 library tests**. Actual
+Git success proves both document and ticket branch/HEAD at fetched commit,
+one registration at deterministic path, clean index/worktree, no upstream,
+complete intent, shared validation success and active discovery. Second/reopen/
+later-ID calls are snapshot-identical and preserve original intent owner.
+Two services share one data directory and start at a barrier: exactly one
+materializes; the other is Present or the unchanged lease's retryable Busy.
+After both calls return, a retry is Present with one worktree/intent.
+
+Ten initial obstruction cases assert full root/target/index/HEAD/status/ref/admin
+snapshot and config preservation: same/different/elsewhere-checked-out branch,
+file/empty/nonempty/symlink deterministic path, registration elsewhere, redirected
+Manyhands/base. Three successful-creation interruption boundaries prove actual
+Git state and restart without repetition. The fourth uses Task 0's **real Linux
+checkout failure**: regular `a` written, overlong symlink `z` fails; branch,
+worktree .git, admin HEAD/gitdir/commondir and registration remain, index absent.
+Reopen and repeated calls report MaterializationIncomplete with byte-identical
+retained partial artifacts. No fault fabrication or cleanup in the service.
+
+Seven ambiguity cases include intended+branch, moved branch, partial file/dir,
+admin-only, another kind's intent and foreign standalone replacement; repeat
+calls preserve every artifact and row. Tracking/config/endpoint changes are
+ExternalChange before effects. Added all-absent cached-step RED and symbolic
+replacement RED are recorded below before their poll-local corrections. Extra
+hardening covers a real SQL branch-step failure, nonconforming tree, unrelated
+operation, exact schema/privacy columns, SQL immutability, redacted DB/WAL/
+VACUUM backup, corrupt startup rows/nonpoll ownership and registration cascade.
+
+Trials, not successful gates:
+
+- New fixture compile/runtime errors and corrected initial behavioral RED are
+  recorded below. First production compile needed OperationId::parse (not a
+  nonexistent FromStr implementation); no requirement change.
+- Initial poll GREEN trial **34 passed/2 failed**: race test assumed queued
+  lease rather than documented retryable Busy; wrong-kind fixture lacked its
+  incoming tracking ref. Corrected assertions/setup, no production relaxation.
+- Initial state trial **47 passed/1 failed**: old Cycle 04 migration fixture
+  retained new materialization objects while replacing remote operations.
+  Removed the new empty table in that legacy fixture to represent a genuine
+  old registry; all other historical migration assertions retained.
+- Corrupt-row fixture initially left SQLite FK checks on while altering the
+  owning ID; explicitly disabled them for external corruption simulation.
+  Corrected state focused run **50 passed**. No audit production weakening.
+- First full command exceeded the tool's **600,000 ms** limit after all **567
+  library** tests passed and during unchanged comment-publication SSH cases.
+  Log `tool_137e533e7001J3UvUufSYQk3lq` is incomplete, not a passing full gate.
+  Checked own command was gone without touching other worktrees' processes;
+  reran the identical full command with a 3,600,000 ms bound. No Rust change
+  between these two runs; the longer bound was justified by the timeout.
+
+### Final Sequential Devenv Evidence
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **40 passed**, 527 filtered; final symbolic-ref correction included |
+| `devenv shell -- cargo test --locked --lib remote::state` | **50 passed**, 516 filtered; state unchanged afterwards except formatting |
+| `devenv shell -- cargo test --locked --test repository_enablement` | **78 passed** |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | PASS, **1,644 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0 |
+
+Passing full log `tool_137eb5d63001IPUFMOPVHfgzIN`: **567 library**, **779
+ordinary integration**, **289 real-SSH** (41 comment, 25 merge, 15 observation,
+63 synchronization, 31 fixture, 114 transport), **9 compile-fail doctests**.
+The existing thousand-item characterization remains ignored. No new transport
+claim comes from library fixtures; existing SSH targets run unchanged. No native
+matrix or desktop interaction claim. Cargo/devenv lockfiles and dependencies,
+frontends and versioned schema files unchanged. No sleeps/developer keys/global
+Git mutation, fake transport or cfg(test) production fault hook added.
+
+### Review-Ready Checkpoint
+
+Self-reviewed the actual source and approved-exception diff against Task 5.
+Task 5 implementation ticked; independent **spec, then quality** review pending.
+**Task 2 direct-SQL poll-kind immutability minor remains deferred to final Cycle
+review**. Native platform evidence remains pending; Linux failed-checkout shape
+does not prove Windows/macOS behavior. No other owner decision or amendment.
+
+Canonical GREEN comment `01M4W0G54ZF0M98PXS90NJFEJH`. Intended files are six
+Rust/test files, four approved/ledger documents, open ticket and three new
+comments. Shared helper diffs are empty (no visibility widening needed because
+existing parent-private helpers are accessible to descendants); repository.rs
+diff is FailurePoint variants only. Status/full diff/recent log inspected;
+git diff --check and scripts/show-ticket schema/rendering checked before staging
+only these intended files. No Rust edit after final verification. Ticket remains
+open, Task 6 not started, no push/PR/native dispatch/merge/closure/removal.
+
+## Task 5 Owner Exception And Resume — 2026-10-14T00:26:14Z
+
+### Meaningful RED Before Production — 2026-10-14T00:32:06Z
+
+Additional Git-first regression RED before correction:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::poll_materialization_git_absence`
+exits 101, **0 passed, 1 failed, 563 filtered**. No Git branch/path/registration
+with cached branch_created incorrectly returned MaterializationIncomplete
+instead of starting step 1. The design's all-absent row applies to every cached
+step; the reset must retain immutable context/owner/target and is authorized
+only after observing complete Git/filesystem absence under the lease.
+
+Self-review ownership RED before correction:
+`devenv shell -- cargo test --locked --lib remote::poll::tests::poll_materialization_completed_intent`
+exits 101, **0 passed, 1 failed, 566 filtered**. An external replacement of the
+completed intent's direct branch with a symbolic reference to another local
+branch at the same OID incorrectly returned Present. Materialization must
+observe the actual direct reference, not adopt its resolved destination.
+The regression asserts full snapshot preservation and MaterializationIncomplete;
+poll-local correction only, no Task 4/shared helper-body change.
+
+Added seven real-local-Git materialization test groups, two schema groups and
+the exact inventory entry. New API and public FailurePoint variants initially
+compile-RED (27 errors, including two corrected discovery fixture signature
+errors); added behavior-free types/signature with `todo!` only. First runtime
+trial failed in fixture reservation because policy plan had not been configured.
+Compared the working reservation fixture and configured the synthetic plan;
+corrected runtime now reaches the missing materialization placeholder in all
+seven groups. No production behavior or helper body changed before this record.
+
+Sequential exact commands and results:
+
+| Command | RED result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **29 passed, 7 failed, 525 filtered**, exit 101, all seven at missing materialization behavior |
+| `devenv shell -- cargo test --locked --lib remote::state` | **46 passed, 2 failed, 513 filtered**, exit 101; table columns absent; dependent loss-test trigger absent (not yet an exercised partial-loss regression) |
+| `devenv shell -- cargo test --locked --test repository_enablement` | **77 passed, 1 failed**, exit 101; exact table inventory missing remote_poll_materializations |
+
+Matrix loops stop at their first RED; GREEN must exercise remaining cases.
+Tests cover document/ticket success, second/reopen/later-call ownership, two
+services with a barrier, branch/path/registration/redirect preservation, all
+four interruption boundaries including Task 0's actual Linux failed checkout,
+ambiguous intended-branch/partial/admin/foreign-identity state, and configuration/
+tracking/endpoint reobservation. Real repositories and ODB trees, no transport
+claim/fake, sleep, developer key or global Git config change. Public failure
+variants use the existing non-cfg(test) service seam. Canonical RED comment
+`01M4VX5NM6TMJ35B0048FWBBN7` records this checkpoint before production.
+
+Controller conveys owner's **"yes"** approving only Task 5 step 5's unchanged
+`validate_context_worktree` canonical collection under the **same single lease**
+before `complete`. Discovery/index-refresh scans, network calls and prompts remain
+outside. Reconciled plan global constraint, design step 5 and Cycle clarity
+before production. No other design change; accepted⇒active-only conformity
+amendment and D1–D4 unchanged. Earlier blocker and independent confirmation
+`ses_ec8580fb8ffeelwyx0FtUPwU2p` remain separate historical evidence.
+
+Controller reports fresh fetch/rebase clean no-op: main
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`, before/after ticket HEAD and new
+**Task 5 review base** `ab07d0d3096a0e6129add1ba32a2f977a131b80a`.
+Implementer confirmed exact HEAD, clean assigned branch/worktree and ancestry;
+did not repeat network/rebase. Task 0 gate trusted. Prior Task 4 spec
+`ses_ec8bd9b3effeS3OD0g7achFQNy` and quality `ses_ec892692effePXdmvv7I1Ys7ER`
+approvals retained. Task 2 direct-SQL kind-immutability minor remains deferred
+to final review.
+
+Task 5 only resumes inline, no subagents. Meaningful RED precedes production;
+all Rust commands use sequential Devenv. Review range includes the approved
+exception plus implementation. Canonical Node-generated resume comment
+`01M4VWTXC6JGWH7CXZQ5XPRHF8`. Ticket open, Task 5 unticked until delivery,
+Task 6 unstarted; local commit and independent spec then quality handoff only.
+
 ## Task 5 Independent Blocker Confirmation — 2026-10-13T23:46:53Z
 
 Controller conveys independent read-only review

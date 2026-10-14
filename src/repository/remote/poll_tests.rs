@@ -407,6 +407,755 @@ struct LocalFixture {
     old: git2::Oid,
 }
 
+struct MaterializationFixture {
+    local: LocalFixture,
+    request: PollMaterializationRequest,
+    configuration: super::super::observation::ObservationConfiguration,
+}
+
+impl MaterializationFixture {
+    fn new(kind: AuthoringKind, failed_checkout: bool) -> Self {
+        let local = LocalFixture::new();
+        let db =
+            rusqlite::Connection::open(local._data.path().join(crate::repository::REGISTRY_FILE))
+                .unwrap();
+        db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)", [local.root.to_str().unwrap()]).unwrap();
+        state::with_transaction(&local.service, &local.root, |tx, id| {
+            state::configure(tx, id, Some(&local.plan), false)
+        })
+        .unwrap();
+        let item_id: canonical::ItemId = POLL_ID.parse().unwrap();
+        let path = match kind {
+            AuthoringKind::Document => "docs/item.md".to_owned(),
+            AuthoringKind::Ticket => format!(".manyhands/tickets/{POLL_ID}/ticket.md"),
+        };
+        let mut entries = vec![(path.as_str(), item_source(kind, POLL_ID), 0o100644)];
+        // Task 0's real Linux checkout fault: ordinary path written before an
+        // overlong symlink target fails. No synthetic worktree transport/fault.
+        if failed_checkout {
+            entries.push(("a", b"retained".to_vec(), 0o100644));
+            entries.push(("z", vec![b'x'; 5000], 0o120000));
+        }
+        let tree = local
+            .repository
+            .find_tree(fixture_tree(&local.repository, &entries))
+            .unwrap();
+        let sig =
+            git2::Signature::new("Fixture", "fixture@example.invalid", &git2::Time::new(1, 0))
+                .unwrap();
+        let oid = local
+            .repository
+            .commit(
+                None,
+                &sig,
+                &sig,
+                "context",
+                &tree,
+                &[&local.repository.find_commit(local.old).unwrap()],
+            )
+            .unwrap();
+        drop(tree);
+        let target = SynchronizationTarget::Context {
+            kind,
+            item_id: item_id.clone(),
+        };
+        local.tracking(&target, oid);
+        let operation_id = crate::repository::OperationId::new();
+        let operation_target = super::super::RemoteOperationTarget::for_poll(&local.plan);
+        assert!(matches!(
+            local
+                .service
+                .reserve_remote_poll(
+                    &local.root,
+                    operation_id,
+                    &operation_target,
+                    super::super::RemoteOperationPriority::Poll
+                )
+                .unwrap(),
+            super::super::reservation::RemotePollReservationOutcome::Reservation(
+                super::super::RemoteReservationOutcome::Reserved(_)
+            )
+        ));
+        let configuration = local
+            .service
+            .observation_configuration(&local.root, &local.plan)
+            .unwrap();
+        Self {
+            local,
+            request: PollMaterializationRequest {
+                operation_id,
+                kind,
+                item_id,
+                oid,
+            },
+            configuration,
+        }
+    }
+
+    fn run(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<PollMaterializationOutcome, SynchronizationError> {
+        service.materialize_context(
+            &self.local.root,
+            &self.local.plan,
+            &self.configuration,
+            &self.request,
+        )
+    }
+
+    fn path(&self) -> PathBuf {
+        self.local.root.join(".manyhands/worktrees").join(POLL_ID)
+    }
+    fn branch(&self) -> String {
+        format!(
+            "manyhands/{}/{POLL_ID}",
+            match self.request.kind {
+                AuthoringKind::Document => "document",
+                AuthoringKind::Ticket => "ticket",
+            }
+        )
+    }
+    fn db(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(
+            self.local
+                ._data
+                .path()
+                .join(crate::repository::REGISTRY_FILE),
+        )
+        .unwrap()
+    }
+    fn intent(&self) -> Option<(String, String, String)> {
+        use rusqlite::OptionalExtension;
+        self.db()
+            .query_row(
+                "SELECT operation_ulid,target_oid,step FROM remote_poll_materializations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()
+            .unwrap()
+    }
+    fn assert_complete(&self) {
+        let r = &self.local.repository;
+        assert_eq!(
+            r.find_branch(&self.branch(), git2::BranchType::Local)
+                .unwrap()
+                .get()
+                .target(),
+            Some(self.request.oid)
+        );
+        assert_eq!(r.worktrees().unwrap().len(), 1);
+        assert_eq!(
+            r.find_worktree(POLL_ID)
+                .unwrap()
+                .path()
+                .canonicalize()
+                .unwrap(),
+            self.path().canonicalize().unwrap()
+        );
+        let linked = git2::Repository::open(self.path()).unwrap();
+        assert_eq!(
+            linked.head().unwrap().name(),
+            Some(format!("refs/heads/{}", self.branch()).as_str())
+        );
+        assert_eq!(linked.head().unwrap().target(), Some(self.request.oid));
+        assert!(linked.statuses(None).unwrap().is_empty());
+        assert_eq!(
+            linked.index().unwrap().write_tree().unwrap(),
+            linked.find_commit(self.request.oid).unwrap().tree_id()
+        );
+        for suffix in ["remote", "merge"] {
+            assert!(
+                r.config()
+                    .unwrap()
+                    .get_string(&format!("branch.{}.{suffix}", self.branch()))
+                    .is_err()
+            );
+        }
+        let context = crate::repository::ItemContext {
+            root: self.local.root.clone(),
+            worktree: self.path(),
+            branch: self.branch(),
+            kind: self.request.kind,
+            item_id: self.request.item_id.clone(),
+        };
+        crate::repository::validate_context_worktree(
+            r,
+            &context,
+            true,
+            RepositoryOperation::RepositorySnapshot,
+        )
+        .unwrap();
+        assert_eq!(
+            self.intent(),
+            Some((
+                self.request.operation_id.to_string(),
+                self.request.oid.to_string(),
+                "complete".into()
+            ))
+        );
+    }
+}
+
+#[test]
+fn poll_materialization_document_and_ticket_once_reopen_and_later_poll() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let f = MaterializationFixture::new(kind, false);
+        assert_eq!(
+            f.run(&f.local.service).unwrap(),
+            PollMaterializationOutcome::Materialized
+        );
+        f.assert_complete();
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let config_before = fs::read(f.local.repository.commondir().join("config")).unwrap();
+        let later = RepositoryService::open_at(f.local._data.path()).unwrap();
+        assert_eq!(f.run(&later).unwrap(), PollMaterializationOutcome::Present);
+        // A subsequent poll's operation ID must not rewrite the original owner.
+        let mut request = f.request.clone();
+        request.operation_id = crate::repository::OperationId::new();
+        assert_eq!(
+            later
+                .materialize_context(&f.local.root, &f.local.plan, &f.configuration, &request)
+                .unwrap(),
+            PollMaterializationOutcome::Present
+        );
+        assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+        assert_eq!(
+            fs::read(f.local.repository.commondir().join("config")).unwrap(),
+            config_before
+        );
+        f.assert_complete();
+        assert_eq!(
+            crate::repository::discovery::observe_root(&f.local.repository, &f.local.root)
+                .active_contexts
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
+fn poll_materialization_two_services_race_under_root_lease() {
+    let f = MaterializationFixture::new(AuthoringKind::Document, false);
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let service = RepositoryService::open_at(f.local._data.path()).unwrap();
+        let (root, plan, configuration, request, barrier) = (
+            f.local.root.clone(),
+            f.local.plan.clone(),
+            f.configuration.clone(),
+            f.request.clone(),
+            barrier.clone(),
+        );
+        threads.push(std::thread::spawn(move || {
+            barrier.wait();
+            service.materialize_context(&root, &plan, &configuration, &request)
+        }));
+    }
+    barrier.wait();
+    let results: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| matches!(r, Ok(PollMaterializationOutcome::Materialized)))
+            .count(),
+        1
+    );
+    for result in results {
+        assert!(matches!(
+            result,
+            Ok(PollMaterializationOutcome::Materialized | PollMaterializationOutcome::Present)
+                | Err(SynchronizationError::Repository(
+                    crate::repository::RepositoryError {
+                        kind: crate::repository::RepositoryErrorKind::RepositoryBusy,
+                        ..
+                    }
+                ))
+        ));
+    }
+    // The lease is deliberately retryable, not a queued operation. Both racing
+    // calls have returned before this retry; no delay or arbitrary sleep.
+    let later = RepositoryService::open_at(f.local._data.path()).unwrap();
+    assert_eq!(f.run(&later).unwrap(), PollMaterializationOutcome::Present);
+    f.assert_complete();
+}
+
+#[test]
+fn poll_materialization_local_obstruction_matrix_is_byte_exact_unchanged() {
+    for case in [
+        "same_branch",
+        "different_branch",
+        "checked_out_elsewhere",
+        "file",
+        "empty_dir",
+        "nonempty_dir",
+        "registration_elsewhere",
+        "symlink",
+        "redirect_manyhands",
+        "redirect_base",
+    ] {
+        #[cfg(not(unix))]
+        if matches!(case, "symlink" | "redirect_manyhands" | "redirect_base") {
+            continue;
+        }
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        let r = &f.local.repository;
+        fs::create_dir(f.path().parent().unwrap()).unwrap();
+        match case {
+            "same_branch"
+            | "different_branch"
+            | "checked_out_elsewhere"
+            | "registration_elsewhere" => {
+                let oid = if case == "different_branch" {
+                    f.local.old
+                } else {
+                    f.request.oid
+                };
+                let reference = r
+                    .branch(&f.branch(), &r.find_commit(oid).unwrap(), false)
+                    .unwrap()
+                    .into_reference();
+                if matches!(case, "checked_out_elsewhere" | "registration_elsewhere") {
+                    let mut options = git2::WorktreeAddOptions::new();
+                    options.reference(Some(&reference));
+                    r.worktree(
+                        if case == "registration_elsewhere" {
+                            POLL_ID
+                        } else {
+                            "other"
+                        },
+                        &f.local.root.join("elsewhere"),
+                        Some(&options),
+                    )
+                    .unwrap();
+                }
+            }
+            "file" => fs::write(f.path(), b"sentinel").unwrap(),
+            "empty_dir" | "nonempty_dir" => {
+                fs::create_dir(f.path()).unwrap();
+                if case == "nonempty_dir" {
+                    fs::write(f.path().join("sentinel"), b"local").unwrap();
+                }
+            }
+            #[cfg(unix)]
+            "symlink" => std::os::unix::fs::symlink("missing", f.path()).unwrap(),
+            #[cfg(unix)]
+            "redirect_manyhands" | "redirect_base" => {
+                let path = if case == "redirect_manyhands" {
+                    f.local.root.join(".manyhands")
+                } else {
+                    f.path().parent().unwrap().to_owned()
+                };
+                let moved = f.local.root.join("redirected");
+                fs::rename(&path, &moved).unwrap();
+                std::os::unix::fs::symlink(moved, path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = snapshot(&f.local.root, r);
+        let config = fs::read(r.commondir().join("config")).unwrap();
+        assert_eq!(
+            f.run(&f.local.service).unwrap(),
+            PollMaterializationOutcome::Refused(PollDisposition::BlockedByLocalState),
+            "{case}"
+        );
+        assert_eq!(snapshot(&f.local.root, r), before, "{case}");
+        assert_eq!(fs::read(r.commondir().join("config")).unwrap(), config);
+        assert_eq!(f.intent(), None);
+    }
+}
+
+#[test]
+fn poll_materialization_interruptions_reconcile_only_approved_boundary() {
+    use crate::repository::FailurePoint;
+    for (point, step, branch, worktree) in [
+        (
+            FailurePoint::PollAfterMaterializationIntent,
+            "intended",
+            false,
+            false,
+        ),
+        (
+            FailurePoint::PollAfterMaterializationBranch,
+            "branch_created",
+            true,
+            false,
+        ),
+        (
+            FailurePoint::PollAfterMaterializationWorktree,
+            "branch_created",
+            true,
+            true,
+        ),
+    ] {
+        let f = MaterializationFixture::new(AuthoringKind::Ticket, false);
+        let service =
+            RepositoryService::open_at_with_failure_point_for_testing(f.local._data.path(), point)
+                .unwrap();
+        assert!(f.run(&service).is_err());
+        assert_eq!(f.intent().unwrap().2, step);
+        assert_eq!(
+            f.local
+                .repository
+                .find_branch(&f.branch(), git2::BranchType::Local)
+                .is_ok(),
+            branch
+        );
+        assert_eq!(f.path().exists(), worktree);
+        assert_eq!(f.local.repository.find_worktree(POLL_ID).is_ok(), worktree);
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let reopened = RepositoryService::open_at(f.local._data.path()).unwrap();
+        assert_eq!(
+            f.run(&reopened).unwrap(),
+            if worktree {
+                PollMaterializationOutcome::Present
+            } else {
+                PollMaterializationOutcome::Materialized
+            }
+        );
+        f.assert_complete();
+        if worktree {
+            assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+        }
+        let complete = snapshot(&f.local.root, &f.local.repository);
+        assert_eq!(
+            f.run(&reopened).unwrap(),
+            PollMaterializationOutcome::Present
+        );
+        assert_eq!(snapshot(&f.local.root, &f.local.repository), complete);
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn poll_materialization_failed_git_checkout_retains_every_partial_artifact() {
+    let f = MaterializationFixture::new(AuthoringKind::Document, true);
+    let service = RepositoryService::open_at_with_failure_point_for_testing(
+        f.local._data.path(),
+        crate::repository::FailurePoint::PollAfterFailedMaterializationWorktree,
+    )
+    .unwrap();
+    assert!(f.run(&service).is_err());
+    assert_eq!(f.intent().unwrap().2, "branch_created");
+    assert_eq!(fs::read(f.path().join("a")).unwrap(), b"retained");
+    assert!(f.path().join(".git").is_file());
+    assert!(fs::symlink_metadata(f.path().join("z")).is_err());
+    let admin = f
+        .local
+        .repository
+        .commondir()
+        .join("worktrees")
+        .join(POLL_ID);
+    for name in ["HEAD", "gitdir", "commondir"] {
+        assert!(admin.join(name).is_file());
+    }
+    assert!(!admin.join("index").exists());
+    assert!(f.local.repository.find_worktree(POLL_ID).is_ok());
+    assert_eq!(
+        f.local
+            .repository
+            .refname_to_id(&format!("refs/heads/{}", f.branch()))
+            .unwrap(),
+        f.request.oid
+    );
+    let before = snapshot(&f.local.root, &f.local.repository);
+    let reopened = RepositoryService::open_at(f.local._data.path()).unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            f.run(&reopened).unwrap(),
+            PollMaterializationOutcome::Refused(PollDisposition::MaterializationIncomplete)
+        );
+        assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+    }
+}
+
+#[test]
+fn poll_materialization_ambiguous_intents_and_partial_paths_never_retry_or_remove() {
+    for case in [
+        "intended_branch",
+        "moved_branch",
+        "partial_file",
+        "partial_directory",
+        "admin_only",
+        "wrong_kind",
+        "foreign_owner",
+    ] {
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        let point = if case == "intended_branch" {
+            crate::repository::FailurePoint::PollAfterMaterializationIntent
+        } else {
+            crate::repository::FailurePoint::PollAfterMaterializationBranch
+        };
+        let service =
+            RepositoryService::open_at_with_failure_point_for_testing(f.local._data.path(), point)
+                .unwrap();
+        assert!(f.run(&service).is_err());
+        match case {
+            "intended_branch" => {
+                f.local
+                    .repository
+                    .branch(
+                        &f.branch(),
+                        &f.local.repository.find_commit(f.request.oid).unwrap(),
+                        false,
+                    )
+                    .unwrap();
+            }
+            "moved_branch" => {
+                f.local
+                    .repository
+                    .reference(
+                        &format!("refs/heads/{}", f.branch()),
+                        f.local.old,
+                        true,
+                        "fixture external move",
+                    )
+                    .unwrap();
+            }
+            "partial_file" => fs::write(f.path(), b"local").unwrap(),
+            "partial_directory" => {
+                fs::create_dir(f.path()).unwrap();
+                fs::write(f.path().join("local"), b"retained").unwrap();
+            }
+            "admin_only" => {
+                fs::create_dir_all(
+                    f.local
+                        .repository
+                        .commondir()
+                        .join("worktrees")
+                        .join(POLL_ID),
+                )
+                .unwrap();
+            }
+            "wrong_kind" => {
+                let mut request = f.request.clone();
+                request.kind = AuthoringKind::Ticket;
+                f.local.tracking(
+                    &SynchronizationTarget::Context {
+                        kind: request.kind,
+                        item_id: request.item_id.clone(),
+                    },
+                    request.oid,
+                );
+                let before = snapshot(&f.local.root, &f.local.repository);
+                assert_eq!(
+                    service
+                        .materialize_context(
+                            &f.local.root,
+                            &f.local.plan,
+                            &f.configuration,
+                            &request
+                        )
+                        .unwrap(),
+                    PollMaterializationOutcome::Refused(PollDisposition::BlockedByLocalState)
+                );
+                assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+                continue;
+            }
+            "foreign_owner" => {
+                let reference = f
+                    .local
+                    .repository
+                    .find_reference(&format!("refs/heads/{}", f.branch()))
+                    .unwrap();
+                let mut options = git2::WorktreeAddOptions::new();
+                options.reference(Some(&reference));
+                f.local
+                    .repository
+                    .worktree(POLL_ID, &f.path(), Some(&options))
+                    .unwrap();
+                fs::rename(f.path(), f.local.root.join("retained")).unwrap();
+                let foreign = git2::Repository::init(f.path()).unwrap();
+                copy_fixture_objects(&f.local.repository, &foreign);
+                foreign
+                    .reference(
+                        &format!("refs/heads/{}", f.branch()),
+                        f.request.oid,
+                        false,
+                        "fixture",
+                    )
+                    .unwrap();
+                foreign
+                    .set_head(&format!("refs/heads/{}", f.branch()))
+                    .unwrap();
+                foreign.checkout_head(None).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let intent = f.intent();
+        for _ in 0..2 {
+            assert_eq!(
+                f.run(&service).unwrap(),
+                PollMaterializationOutcome::Refused(PollDisposition::MaterializationIncomplete),
+                "{case}"
+            );
+            assert_eq!(
+                snapshot(&f.local.root, &f.local.repository),
+                before,
+                "{case}"
+            );
+            assert_eq!(f.intent(), intent);
+        }
+    }
+}
+
+#[test]
+fn poll_materialization_reobserves_tracking_configuration_and_endpoint() {
+    for case in ["tracking", "config", "endpoint"] {
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        match case {
+            "tracking" => f.local.tracking(
+                &SynchronizationTarget::Context {
+                    kind: f.request.kind,
+                    item_id: f.request.item_id.clone(),
+                },
+                f.local.old,
+            ),
+            "config" => fs::write(
+                f.local.root.join(".manyhands/config.toml"),
+                "format_version=1\nprimary_branch=\"other\"\npublication_remote=\"origin\"\n",
+            )
+            .unwrap(),
+            "endpoint" => f
+                .local
+                .repository
+                .remote_set_url("origin", "ssh://other@example.invalid/repo")
+                .unwrap(),
+            _ => unreachable!(),
+        }
+        let before = snapshot(&f.local.root, &f.local.repository);
+        assert!(
+            matches!(
+                f.run(&f.local.service),
+                Err(SynchronizationError::ExternalChange)
+            ),
+            "{case}"
+        );
+        assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+        assert_eq!(f.intent(), None);
+    }
+}
+
+#[test]
+fn poll_materialization_git_absence_wins_over_any_cached_step() {
+    for step in ["intended", "branch_created", "complete"] {
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        let service = RepositoryService::open_at_with_failure_point_for_testing(
+            f.local._data.path(),
+            crate::repository::FailurePoint::PollAfterMaterializationIntent,
+        )
+        .unwrap();
+        assert!(f.run(&service).is_err());
+        f.db()
+            .execute("UPDATE remote_poll_materializations SET step=?1", [step])
+            .unwrap();
+        assert_eq!(
+            f.run(&service).unwrap(),
+            PollMaterializationOutcome::Materialized,
+            "{step}"
+        );
+        f.assert_complete();
+    }
+}
+
+#[test]
+fn poll_materialization_nonconforming_tree_or_unrelated_operation_creates_nothing() {
+    for case in ["nonconforming", "unrelated_operation"] {
+        let f = MaterializationFixture::new(AuthoringKind::Document, false);
+        let mut request = f.request.clone();
+        if case == "nonconforming" {
+            request.oid = f.local.old;
+            f.local.tracking(
+                &SynchronizationTarget::Context {
+                    kind: request.kind,
+                    item_id: request.item_id.clone(),
+                },
+                request.oid,
+            );
+        } else {
+            request.operation_id = crate::repository::OperationId::new();
+        }
+        let before = snapshot(&f.local.root, &f.local.repository);
+        let result = f.local.service.materialize_context(
+            &f.local.root,
+            &f.local.plan,
+            &f.configuration,
+            &request,
+        );
+        if case == "nonconforming" {
+            assert_eq!(
+                result.unwrap(),
+                PollMaterializationOutcome::Refused(PollDisposition::Nonconforming)
+            );
+        } else {
+            assert!(result.is_err());
+        }
+        assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+        assert_eq!(f.intent(), None);
+    }
+}
+
+#[test]
+fn poll_materialization_step_write_failure_does_not_infer_branch_ownership() {
+    let f = MaterializationFixture::new(AuthoringKind::Document, false);
+    f.db().execute_batch("CREATE TRIGGER fail_branch_step BEFORE UPDATE OF step ON remote_poll_materializations WHEN NEW.step='branch_created' BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+    assert!(f.run(&f.local.service).is_err());
+    assert_eq!(f.intent().unwrap().2, "intended");
+    assert_eq!(
+        f.local
+            .repository
+            .refname_to_id(&format!("refs/heads/{}", f.branch()))
+            .unwrap(),
+        f.request.oid
+    );
+    assert!(!f.path().exists());
+    assert!(f.local.repository.find_worktree(POLL_ID).is_err());
+    f.db()
+        .execute_batch("DROP TRIGGER fail_branch_step")
+        .unwrap();
+    let before = snapshot(&f.local.root, &f.local.repository);
+    assert_eq!(
+        f.run(&f.local.service).unwrap(),
+        PollMaterializationOutcome::Refused(PollDisposition::MaterializationIncomplete)
+    );
+    assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+}
+
+#[test]
+fn poll_materialization_completed_intent_cannot_adopt_a_symbolic_branch_replacement() {
+    let f = MaterializationFixture::new(AuthoringKind::Document, false);
+    assert_eq!(
+        f.run(&f.local.service).unwrap(),
+        PollMaterializationOutcome::Materialized
+    );
+    f.local
+        .repository
+        .branch(
+            "foreign",
+            &f.local.repository.find_commit(f.request.oid).unwrap(),
+            false,
+        )
+        .unwrap();
+    f.local
+        .repository
+        .reference_symbolic(
+            &format!("refs/heads/{}", f.branch()),
+            "refs/heads/foreign",
+            true,
+            "external replacement",
+        )
+        .unwrap();
+    let before = snapshot(&f.local.root, &f.local.repository);
+    assert_eq!(
+        f.run(&f.local.service).unwrap(),
+        PollMaterializationOutcome::Refused(PollDisposition::MaterializationIncomplete)
+    );
+    assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
+}
+
 impl LocalFixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();

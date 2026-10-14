@@ -665,6 +665,10 @@ pub enum RegistryConnectionPhase {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    PollAfterMaterializationIntent,
+    PollAfterMaterializationBranch,
+    PollAfterFailedMaterializationWorktree,
+    PollAfterMaterializationWorktree,
     CommentAfterLocalHandoff,
     CommentAfterDestinationPrepared,
     CommentAfterCheckpointIntent,

@@ -180,6 +180,10 @@ integration.
     every local step is safe to repeat because each acts only on re-observed
     state.
 12. No network call, prompt or discovery scan holds the repository lease.
+    **Owner-approved exception, 2026-10-14:** only Task 5 materialization step 5
+    may run unchanged `validate_context_worktree` canonical collection under
+    the same single lease before recording `complete`. Discovery/index-refresh
+    scans, network calls and prompts remain outside; D1–D4 unchanged.
     Records hold only IDs, ref names, object IDs, timestamps and fixed
     categories. Cycle 03's per-call transport limits stand; there is no total
     poll deadline.

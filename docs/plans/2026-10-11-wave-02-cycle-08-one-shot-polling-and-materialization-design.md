@@ -337,7 +337,12 @@ Under the lease, for a conforming new context:
    `branch_created`.
 4. Create the worktree named `<ULID>` at the deterministic path on that
    branch, with the options local authoring uses.
-5. Verify with `validate_context_worktree`, then record `complete`.
+5. Verify with unchanged `validate_context_worktree`, then record `complete`.
+   **Owner-approved exception, 2026-10-14:** only this Task 5 step may perform
+   that helper's canonical collection under the same single lease acquisition,
+   before `complete`. Discovery/index-refresh scans, network calls and prompts
+   remain outside the lease. No helper-body change or broader scan exception;
+   D1–D4 unchanged.
 
 No upstream configuration is written; no existing context has any, and
 tracking is derived from the ref plan. Reconciliation on any later poll, Git

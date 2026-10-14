@@ -244,6 +244,245 @@ pub(super) fn classify_local_target(
 }
 impl RepositoryService {
     #[allow(dead_code)]
+    pub(super) fn materialize_context(
+        &self,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        request: &PollMaterializationRequest,
+    ) -> Result<PollMaterializationOutcome, SynchronizationError> {
+        use crate::repository::{
+            FailurePoint, ItemContext, branch_checked_out_in_another_worktree,
+            ensure_authoring_worktree_base, validate_context_worktree,
+            validate_deterministic_worktree_path_chain,
+        };
+        use state::{MaterializationIntent, MaterializationStep};
+        let operation = RepositoryOperation::RepositorySnapshot;
+        let repository =
+            git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let _lease = repository_lease(&repository, root, operation)?;
+        let target = SynchronizationTarget::Context {
+            kind: request.kind,
+            item_id: request.item_id.clone(),
+        };
+        let reference = plan.context(request.kind, &request.item_id);
+        let context = ItemContext {
+            root: root.to_owned(),
+            kind: request.kind,
+            item_id: request.item_id.clone(),
+            branch: reference
+                .remote_ref()
+                .trim_start_matches("refs/heads/")
+                .to_owned(),
+            worktree: root
+                .join(".manyhands/worktrees")
+                .join(request.item_id.to_string()),
+        };
+        let refused = PollMaterializationOutcome::Refused;
+
+        // No canonical file collection here: this is the unchanged path-chain
+        // validator only. Refuse redirected parents before reading configuration.
+        if validate_deterministic_worktree_path_chain(&context.worktree, root, operation).is_err() {
+            let owned = state::with_transaction(self, root, |tx, id| {
+                state::materialization_intents(tx, id, &request.item_id)
+            })?;
+            return Ok(refused(if owned.iter().any(|i| i.kind == request.kind) {
+                PollDisposition::MaterializationIncomplete
+            } else {
+                PollDisposition::BlockedByLocalState
+            }));
+        }
+        let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
+            return Err(SynchronizationError::ExternalChange);
+        };
+        let actual_plan = config
+            .publication_remote
+            .as_ref()
+            .and_then(|r| RemoteRefPlan::from_configuration(r, &config.primary_branch).ok());
+        if actual_plan.as_ref() != Some(plan)
+            || self.observation_configuration(root, plan)? != *configuration
+            || repository.refname_to_id(reference.tracking_ref()).ok() != Some(request.oid)
+        {
+            return Err(SynchronizationError::ExternalChange);
+        }
+
+        // Observe Git/filesystem presence first, then consult durable ownership.
+        let observed =
+            MaterializationGitState::observe(&repository, &context, &target, plan.primary_branch());
+        let intents = state::with_transaction(self, root, |tx, id| {
+            state::materialization_intents(tx, id, &request.item_id)
+        })?;
+        if intents.iter().any(|i| i.kind != request.kind) {
+            return Ok(refused(PollDisposition::BlockedByLocalState));
+        }
+        let mut intent = intents.into_iter().next();
+        let action = reconcile_materialization(&observed, intent.as_ref());
+        match action {
+            MaterializationAction::Refused(disposition) => return Ok(refused(disposition)),
+            MaterializationAction::Present => {
+                let retained = intent
+                    .as_ref()
+                    .ok_or(SynchronizationError::RecoveryRequired)?;
+                if retained.step != MaterializationStep::Complete {
+                    // Resuming step 5 only: owner's narrow scan exception.
+                    if validate_context_worktree(&repository, &context, true, operation).is_err() {
+                        return Ok(refused(PollDisposition::MaterializationIncomplete));
+                    }
+                    state::with_transaction(self, root, |tx, id| {
+                        state::advance_materialization(
+                            tx,
+                            id,
+                            retained,
+                            MaterializationStep::Complete,
+                        )
+                    })?;
+                }
+                return Ok(PollMaterializationOutcome::Present);
+            }
+            MaterializationAction::Start | MaterializationAction::ResumeWorktree => {}
+        }
+        if branch_checked_out_in_another_worktree(
+            &repository,
+            &context.worktree,
+            &context.branch,
+            operation,
+            root,
+        )
+        .unwrap_or(true)
+        {
+            return Ok(refused(if intent.is_some() {
+                PollDisposition::MaterializationIncomplete
+            } else {
+                PollDisposition::BlockedByLocalState
+            }));
+        }
+        let target_oid = intent.as_ref().map_or(request.oid, |i| i.oid);
+        let commit = repository
+            .find_commit(target_oid)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        if !conforming_context_tree(
+            &repository,
+            &commit
+                .tree()
+                .map_err(|_| SynchronizationError::RecoveryRequired)?,
+            request.kind,
+            &request.item_id,
+        )? {
+            return Ok(refused(PollDisposition::Nonconforming));
+        }
+        if intent.is_none() {
+            state::with_transaction(self, root, |tx, id| {
+                state::insert_materialization(
+                    tx,
+                    id,
+                    request.kind,
+                    &request.item_id,
+                    request.operation_id,
+                    target_oid,
+                )
+            })?;
+            intent = Some(MaterializationIntent {
+                kind: request.kind,
+                item_id: request.item_id.clone(),
+                operation_id: request.operation_id,
+                oid: target_oid,
+                step: MaterializationStep::Intended,
+            });
+        } else if action == MaterializationAction::Start {
+            // Git-first all-absent restart. Keep the original context, owner and
+            // target; do not synthesize adoption evidence from a cached step.
+            let retained = intent
+                .as_ref()
+                .ok_or(SynchronizationError::RecoveryRequired)?;
+            state::with_transaction(self, root, |tx, id| {
+                state::advance_materialization(tx, id, retained, MaterializationStep::Intended)
+            })?;
+        }
+        let intent = intent
+            .as_ref()
+            .ok_or(SynchronizationError::RecoveryRequired)?;
+        self.check_failure(
+            FailurePoint::PollAfterMaterializationIntent,
+            operation,
+            root,
+        )?;
+        // Parent creation is part of the guarded local provisioning step, after
+        // refusal/conformity/intent. No pre-existing deterministic entry is used.
+        ensure_authoring_worktree_base(root, operation)?;
+        let branch = if action == MaterializationAction::Start {
+            if poll_entry_present(&context.worktree)
+                || poll_registration_present(&repository, &context.item_id.to_string())
+                || repository.find_reference(reference.remote_ref()).is_ok()
+            {
+                return Ok(refused(PollDisposition::MaterializationIncomplete));
+            }
+            let branch = repository
+                .branch(&context.branch, &commit, false)
+                .map_err(|_| SynchronizationError::ExternalChange)?
+                .into_reference();
+            state::with_transaction(self, root, |tx, id| {
+                state::advance_materialization(tx, id, intent, MaterializationStep::BranchCreated)
+            })?;
+            branch
+        } else {
+            repository
+                .find_reference(reference.remote_ref())
+                .map_err(|_| SynchronizationError::ExternalChange)?
+        };
+        self.check_failure(
+            FailurePoint::PollAfterMaterializationBranch,
+            operation,
+            root,
+        )?;
+        if branch.target() != Some(target_oid)
+            || repository.refname_to_id(reference.remote_ref()).ok() != Some(target_oid)
+            || repository.refname_to_id(reference.tracking_ref()).ok() != Some(request.oid)
+            || poll_entry_present(&context.worktree)
+            || poll_registration_present(&repository, &context.item_id.to_string())
+        {
+            return Ok(refused(PollDisposition::MaterializationIncomplete));
+        }
+        validate_deterministic_worktree_path_chain(&context.worktree, root, operation)?;
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&branch)); // exactly local authoring's options
+        if repository
+            .worktree(
+                &context.item_id.to_string(),
+                &context.worktree,
+                Some(&options),
+            )
+            .is_err()
+        {
+            self.check_failure(
+                FailurePoint::PollAfterFailedMaterializationWorktree,
+                operation,
+                root,
+            )?;
+            return Ok(refused(PollDisposition::MaterializationIncomplete));
+        }
+        self.check_failure(
+            FailurePoint::PollAfterMaterializationWorktree,
+            operation,
+            root,
+        )?;
+        // Step 5: canonical collection is the sole approved under-lease scan.
+        // Retain Task 4's stronger ownership proof in addition to the shared check.
+        let valid = poll_materialized_target(root, plan.primary_branch(), &target)
+            .ok()
+            .is_some_and(|linked| {
+                sync::local_oid(&linked).ok() == Some(target_oid)
+                    && sync::require_clean_target(&linked, &target).is_ok()
+            });
+        if !valid || validate_context_worktree(&repository, &context, true, operation).is_err() {
+            return Ok(refused(PollDisposition::MaterializationIncomplete));
+        }
+        state::with_transaction(self, root, |tx, id| {
+            state::advance_materialization(tx, id, intent, MaterializationStep::Complete)
+        })?;
+        Ok(PollMaterializationOutcome::Materialized)
+    }
+
+    #[allow(dead_code)]
     pub(super) fn poll_fast_forward(
         &self,
         root: &Path,
@@ -385,6 +624,135 @@ impl RepositoryService {
         }
         Ok(PollDisposition::FastForwarded)
     }
+}
+
+#[allow(dead_code)]
+#[derive(Clone)]
+pub(super) struct PollMaterializationRequest {
+    pub operation_id: crate::repository::OperationId,
+    pub kind: AuthoringKind,
+    pub item_id: canonical::ItemId,
+    pub oid: git2::Oid,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PollMaterializationOutcome {
+    Materialized,
+    // The caller classifies an existing context against its own tracking OID.
+    Present,
+    Refused(PollDisposition),
+}
+
+fn poll_entry_present(path: &Path) -> bool {
+    !matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+fn poll_registration_present(repository: &git2::Repository, name: &str) -> bool {
+    // The admin directory counts even when libgit2 cannot parse a registration.
+    let base = repository.commondir().join("worktrees");
+    let redirected = match std::fs::symlink_metadata(&base) {
+        Ok(m) => !m.is_dir() || m.file_type().is_symlink(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    };
+    redirected
+        || poll_entry_present(&base.join(name))
+        || repository
+            .worktrees()
+            .map_or(true, |names| names.iter().any(|n| n == Some(name)))
+}
+
+struct MaterializationGitState {
+    branch: Option<git2::Oid>,
+    branch_present: bool,
+    path_present: bool,
+    registration_present: bool,
+    valid: bool,
+    clean: bool,
+}
+impl MaterializationGitState {
+    fn observe(
+        repository: &git2::Repository,
+        context: &crate::repository::ItemContext,
+        target: &SynchronizationTarget,
+        primary: &str,
+    ) -> Self {
+        let branch_ref = format!("refs/heads/{}", context.branch);
+        let branch = repository
+            .find_reference(&branch_ref)
+            .ok()
+            .and_then(|r| r.target());
+        let branch_present = !matches!(repository.find_reference(&branch_ref), Err(e) if e.code() == git2::ErrorCode::NotFound);
+        let path_present = poll_entry_present(&context.worktree);
+        let registration_present =
+            poll_registration_present(repository, &context.item_id.to_string());
+        let linked = if branch_present && path_present && registration_present {
+            poll_materialized_target(&context.root, primary, target).ok()
+        } else {
+            None
+        };
+        let valid = branch.is_some()
+            && linked.as_ref().is_some_and(|linked| {
+                std::fs::symlink_metadata(linked.path().join("index"))
+                    .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+            });
+        let clean = linked.as_ref().is_some_and(|linked| {
+            let index = linked.path().join("index");
+            std::fs::symlink_metadata(index)
+                .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
+                && sync::require_clean_target(linked, target).is_ok()
+        });
+        Self {
+            branch,
+            branch_present,
+            path_present,
+            registration_present,
+            valid,
+            clean,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MaterializationAction {
+    Start,
+    ResumeWorktree,
+    Present,
+    Refused(PollDisposition),
+}
+
+/// No effects and no canonical scan. Git presence is authoritative; a cache
+/// step alone cannot authorize adoption or cleanup of a partial worktree.
+fn reconcile_materialization(
+    observed: &MaterializationGitState,
+    intent: Option<&state::MaterializationIntent>,
+) -> MaterializationAction {
+    use state::MaterializationStep;
+    let none = !observed.branch_present && !observed.path_present && !observed.registration_present;
+    let Some(intent) = intent else {
+        return if none {
+            MaterializationAction::Start
+        } else {
+            MaterializationAction::Refused(PollDisposition::BlockedByLocalState)
+        };
+    };
+    if observed.valid
+        && (intent.step == MaterializationStep::Complete
+            || (observed.clean && observed.branch == Some(intent.oid)))
+    {
+        return MaterializationAction::Present;
+    }
+    if none {
+        return MaterializationAction::Start;
+    }
+    if intent.step == MaterializationStep::BranchCreated
+        && observed.branch == Some(intent.oid)
+        && !observed.path_present
+        && !observed.registration_present
+    {
+        return MaterializationAction::ResumeWorktree;
+    }
+    MaterializationAction::Refused(PollDisposition::MaterializationIncomplete)
 }
 
 /// Inspect only directories a pending file/symlink replacement must retire.
