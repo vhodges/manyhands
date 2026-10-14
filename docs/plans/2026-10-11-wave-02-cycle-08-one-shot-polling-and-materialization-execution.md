@@ -10,6 +10,181 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 7 Quality Corrections: Verified Re-Review Handoff — 2026-10-14T11:28:19Z
+
+QUALITY `ses_ec608e461ffeB8pQQSieLJnzhE`'s **Important and both minors are
+technically corrected**, awaiting **SPEC increment re-review first**, then the
+same quality worker's re-review. Earlier Task 7 SPEC approval through
+`650c827bef529c306bca9b377bb8cfed03efb490` is historical, not approval of this
+increment. That exact SHA is the correction base; complete Task 7 base remains
+`4d89295070715d6a15ced2c08d72aff0dd0ee46f`. Exact local HEAD returned after
+authorized commit. Ticket open, Task 8 **not started**.
+
+### Important: Portable Context Identity
+
+Before edits, the owner's Linux alias reproducer really failed:
+`devenv shell -- env TMPDIR=/proc/self/root/tmp cargo test --locked --test remote_polling poll_materialize_ticket_once`
+— **exit 1, 0 passed/1 failed**, found.len() assertion at original line 967.
+The fixture used raw temporary spelling while discovery stores canonical paths.
+
+discovered_once now canonicalizes the expected worktree and each observed item
+context, following `remote_merge_recovery.rs:1096–1102`. Item ID, exact one-item
+count, title/comment IDs, branch/index/HEAD/tracking, registration and intent
+assertions remain. Audited every new-fixture path comparison: the only other
+file-identity equality is the VACUUM backup inventory, now canonical on both
+sides too. WAL detection compares only the filename suffix. Snapshot registration
+path hashing is deliberately exact before/after artifact observation, not a
+raw-versus-canonical identity comparison; no service result is compared to a raw
+path string or normalized by suffix matching.
+
+Normal **and aliased** entire polling targets each pass **73 cases**, not only
+the originally failing ticket test. Coverage includes document/ticket successful
+materialization, concurrent/second-service/reopen/current paths, intent/branch/
+worktree/branch-record/partial-checkout recovery, and both accepted-title privacy
+indexing/backup/output paths. These are Linux alias-identity regressions, **not
+macOS or Windows runtime proof**. Native verification remains pending.
+
+### Minor 1: First-Poll Sentinel Preservation
+
+stale_tracking now returns the actual before-poll sentinel inventory, checked
+against the explicit expected states: `refs/remotes/origin/stale` is direct at
+the initial base OID with no symbolic target; `refs/remotes/unused/HEAD` has no
+direct OID and points symbolically to that stale ref. Each of the four clean
+update cases and all-three current case captures these states **before the
+first poll** and asserts exact retention **after that first poll**. Legitimate
+main/document/ticket tracking creation/advancement remains allowed and is checked
+against fetched tips. Existing second/current complete all_refs checks remain.
+fetch.prune=true remains an adversarial fixture setting. This is stronger evidence
+for already-correct no-prune behavior; **no artificial first-poll failure claimed**.
+
+### Minor 2: Structural And Permission-Aware Snapshots
+
+files() now hashes explicit directory/file/link/other tags, Unix permission bits
+under cfg(unix), or readonly attributes under cfg(not(unix)). Directory entry
+counts frame recursion; names, file data and link targets carry length prefixes.
+Symlinks use symlink_metadata/read_link without traversal; special files are
+never opened. Root directory attributes, Git config, HEAD/index/merge metadata,
+linked-worktree gitfiles/admin artifacts and parked original checkout files
+use the same structural observation. Missing metadata has an explicit marker.
+Existing canonical/Git-metadata traversal exclusions remain unchanged.
+
+Three new controls use actual ignored/unregistered fixture entries, so Git status
+cannot supply the evidence missing from the filesystem hash:
+
+| Exact test name | Actual change | RED → GREEN |
+| --- | --- | --- |
+| `poll_snapshot_detects_type_only_changes` | Empty regular file → empty directory, equal Unix permissions 700 / equal non-Unix permission attributes | **0/1 → pass** |
+| `poll_snapshot_detects_permission_only_changes` | Unix 644→600 (no execute/content change), then restoration; non-Unix readonly toggle | **0/1 → pass** |
+| `poll_snapshot_detects_name_content_boundary_changes` | Name/data partition `a`+`bc` → `ab`+`c` | **0/1 → pass** |
+
+Each first run compiled and failed on equal before/after hashes **before helper
+edits**; exact commands/RED checkpoint below. Controls assert behavioral detection,
+not a particular digest or encoding. Permission restoration reestablishes the
+original digest. Non-Unix readonly branch is present for native runs but was not
+executed on Linux. All existing preservation cases still pass with stronger hashes.
+
+### Exact Verification And Trial Accounting
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_polling poll_snapshot_detects` | **3 passed** after three individual meaningful REDs |
+| `devenv shell -- env TMPDIR=/proc/self/root/tmp cargo test --locked --test remote_polling poll_materialize` | **2 passed**, document + ticket |
+| `devenv shell -- env TMPDIR=/proc/self/root/tmp cargo test --locked --test remote_polling poll_recovery_database` | **1 passed**, accepted document/ticket indexing/backup/privacy |
+| `devenv shell -- cargo test --locked --test remote_polling` | **73 passed**, 0 failed, normal temporary roots |
+| `devenv shell -- env TMPDIR=/proc/self/root/tmp cargo test --locked --test remote_polling` | **73 passed**, 0 failed, aliased temporary roots |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,763 passed**, 0 failed, 1 existing ignored |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+| `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG` | PASS, open ticket and all three new correction comments rendered, no malformed diagnostics |
+| `git diff --check` | PASS |
+
+Post-gate CLI/canonical/preservation log `tool_13a2ee9a6001R6NmSrOVC0qi7S`;
+production/support/manifest/lockfile/workflow/approved-contract preservation checks
+also exit 0. No Rust edit after the gate or during this canonical bookkeeping.
+
+Final required check/fmt/Clippy/full-test gate ran sequentially after all Rust edits,
+full log `tool_13a0d5ef50016datImfI6Kva9B`: **613 library + 779 ordinary integration
++ 362 SSH-target cases + 9 doctests**. Includes polling **73**, observation **15**,
+synchronization **63**, merge recovery **25**, comment publication **41**, fixture
+**31**, transport **114**. No new production/library tests or dependency changes.
+The three new cases are fixture evidence controls. Full normal and alias targets
+also prove existing real-SSH privacy and zero poll receive-pack assertions remain.
+
+Only failures in this correction are the **four intentional, meaningful REDs**:
+original aliased ticket assertion and three snapshot negative controls. No compile,
+setup, accidental trial, Clippy failure or timeout after RED; all GREEN runs passed
+first time. No fake transport, sleeps, developer keys, global configuration edits
+or production/test-hook changes. Environment overrides are inside Devenv. No Rust
+edit after final gate; only canonical bookkeeping follows.
+
+### Review Scope And Lifecycle
+
+Only tests/remote_polling.rs, ledger, open ticket and three Node-ULID comments
+change from the correction base. Production, tests/support, other SSH case bodies,
+manifest/lockfiles, workflow and approved Cycle/design/plan have empty diffs.
+Prior Task 0/preflight and Task 6 approvals remain trusted, D1–D4/sole Task 5
+validator lease exception unchanged. Carry **Task 2 SQL-kind immutability** and
+**Task 6 duplicate disposition attachment** minors explicitly to final Cycle
+review, separate from the two Task 7 minors now corrected. SPEC increment re-review
+precedes quality re-review by `ses_ec608e461ffeB8pQQSieLJnzhE`; no Task 8 until
+reviews. All five native executions pending; no dispatch/push/PR/merge/closure/
+cleanup or subagents. Re-review-ready comment `01M4X2Q740QMGYS5E2FCG3BQMF`.
+
+## Task 7 Quality Corrections: Snapshot Controls RED — 2026-10-14T10:42:29Z
+
+Added three actual-filesystem negative controls **before changing files()/snapshot**.
+They operate under an ignored, unregistered fixture subtree so Git status does
+not independently detect the change and mask a weak filesystem hash. Exact runs,
+each **exit 1, 0 passed/1 failed** at assert_ne on equal before/after snapshots:
+
+| Exact command | Missing evidence |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_polling poll_snapshot_detects_type_only_changes` | Empty regular file replaced by empty directory, same Unix permission bits (700) / non-Unix attributes |
+| `devenv shell -- cargo test --locked --test remote_polling poll_snapshot_detects_permission_only_changes` | Unix mode 644→600, no execute/content change, then restored; non-Unix control toggles readonly |
+| `devenv shell -- cargo test --locked --test remote_polling poll_snapshot_detects_name_content_boundary_changes` | `a` containing `bc` vs `ab` containing `c`, same concatenated bytes |
+
+All three new controls compile and fail meaningfully against the original helper,
+not fixture setup. Existing Important alias-path RED is already recorded above.
+No production source edit or helper/portability correction preceded these REDs.
+Proceed with length-delimited typed/permission-aware snapshot encoding, canonical
+path comparison and initial sentinel checks. Minor 1 strengthens already-delivered
+no-prune behavior, so no artificial failure claimed for it. Canonical RED checkpoint
+`01M4X03A3WCAP5F16EGZK6AQNR`; ticket open, Task 8 unstarted.
+
+## Task 7 Quality Corrections: Reproduced Important RED — 2026-10-14T10:39:59Z
+
+Controller/user reports Task 7 SPEC approval through
+`650c827bef529c306bca9b377bb8cfed03efb490` (historical approval). QUALITY
+`ses_ec608e461ffeB8pQQSieLJnzhE` **BLOCKED one Important and two minors**.
+Fix all three inline, no subagents, at this verified clean exact correction base
+in the assigned worktree/branch. Complete Task 7 base stays
+`4d89295070715d6a15ced2c08d72aff0dd0ee46f`. Corrected increment needs SPEC
+re-review before the same quality reviewer's re-review; Task 8 unstarted.
+
+Important verified before any test/helper edit: discovered_once compares the
+service's canonical i.context with a raw temporary Side.root-derived path. The
+reference merge-recovery fixture canonicalizes both paths instead. Meaningful
+reproduction command, **exit 1, 0 passed/1 failed**, assertion at found.len():
+
+`devenv shell -- env TMPDIR=/proc/self/root/tmp cargo test --locked --test remote_polling poll_materialize_ticket_once`
+
+This is an actual test portability bug, not a production defect or fake RED.
+Will audit other new-fixture raw/canonical comparisons and verify document,
+ticket, concurrency/materialization recovery and privacy indexing under normal
+and aliased temporary roots. Environment override is inside the Devenv shell.
+
+Minor 1 verified: sentinels are installed before initial fetch but the full ref
+baseline is only taken afterward, so first-poll deletion/mutation escapes. Capture
+exact direct/symbolic sentinel states before first poll and check after it while
+allowing legitimate fetched tracking tips. Minor 2 verified: files() concatenates
+names/content without type, permission or length/structure encoding. Add actual
+type-only/permission-only/field-boundary negative controls before hardening the
+snapshot helper, then record their meaningful RED. No production/dependency/design
+change. Ticket open, native pending, prior Task 0/preflight/Task 6 approvals trusted;
+both earlier deferred minors retained. Entry comment `01M4WZYQSB8Z088S64MG3Z9RJ4`.
+
 ## Task 7 SPEC Evidence Corrections: Verified Re-Review Handoff — 2026-10-14T10:22:41Z
 
 All three P2 evidence findings from `ses_ec64fd841ffe4JHjZ3XJ7I1MOp` are

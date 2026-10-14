@@ -224,6 +224,24 @@ and the baseline.
   Combined privacy fixture's reused comment ID failure/diagnostic trials and exact
   commands/counts recorded in dated ledger; distinct IDs fix fixture only.
   Re-review comment `01M4WYZ203H6WF06FST9VFHZH0`. Quality not started.
+- [x] Controller/user reports Task 7 SPEC approved through
+  `650c827bef529c306bca9b377bb8cfed03efb490`; historical approval.
+- [ ] Task 7 QUALITY `ses_ec608e461ffeB8pQQSieLJnzhE` BLOCKED Important path
+  portability and minors for first-poll sentinel preservation and snapshot
+  type/permission encoding. All-three correction authorized at clean 650c827.
+  Important alias-path RED reproduced before edits (0 passed/1 failed); entry
+  comment `01M4WZYQSB8Z088S64MG3Z9RJ4`. Fix in progress; corrected increment needs
+  SPEC re-review before the same quality reviewer's re-review. Task 8 unstarted.
+  All three technically corrected: canonical both-side path identity and backup
+  comparison; exact direct/symbolic sentinel before/after first poll; typed,
+  length-framed and Unix-mode/non-Unix-readonly filesystem snapshots. Three new
+  real-filesystem negative controls fail meaningfully before helper correction,
+  then pass. Entire target passes **73 normal + 73 aliased** cases, including all
+  materialization and accepted-title privacy/indexing journeys. Required sequential
+  Rust gates PASS (**1,763 passed, 0 failed, 1 existing ignored**). No Rust change
+  after gate; dated ledger retains all four REDs/commands/names/counts. Correction
+  base 650c827; re-review comment `01M4X2Q740QMGYS5E2FCG3BQMF`. Await SPEC increment
+  re-review, then `ses_ec608e461ffeB8pQQSieLJnzhE` quality re-review; no Task 8.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main

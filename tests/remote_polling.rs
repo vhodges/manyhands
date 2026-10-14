@@ -187,6 +187,18 @@ const CASES: &[ssh_harness::Case] = &[
         database_privacy,
     ),
     ("poll_output_capture_negative_controls", capture_controls),
+    (
+        "poll_snapshot_detects_type_only_changes",
+        snapshot_type_control,
+    ),
+    (
+        "poll_snapshot_detects_permission_only_changes",
+        snapshot_permission_control,
+    ),
+    (
+        "poll_snapshot_detects_name_content_boundary_changes",
+        snapshot_boundary_control,
+    ),
 ];
 
 struct Provider {
@@ -692,30 +704,67 @@ fn unchanged(r: &RemotePollReport, reference: &str, d: PollDisposition) {
     assert_eq!(row(r, reference).disposition(), d);
     assert_eq!(d.guidance(), guidance(d));
 }
-// Hash all bytes to keep private path/content out of failure diagnostics.
+// Length/type framing keeps structurally distinct entries distinct; hashes keep
+// private paths and content out of failure diagnostics.
+fn hash_bytes(hash: &mut blake3::Hasher, bytes: &[u8]) {
+    hash.update(&(bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+}
+fn hash_permissions(hash: &mut blake3::Hasher, metadata: &std::fs::Metadata) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        hash.update(b"unix-mode");
+        hash.update(&(metadata.permissions().mode() & 0o7777).to_le_bytes());
+    }
+    #[cfg(not(unix))]
+    {
+        hash.update(b"readonly");
+        hash.update(&[u8::from(metadata.permissions().readonly())]);
+    }
+}
 fn files(path: &Path, hash: &mut blake3::Hasher) -> Result<(), FixtureError> {
-    let mut entries = fixed(std::fs::read_dir(path))?
-        .map(|e| fixed(e).map(|e| e.path()))
-        .collect::<Result<Vec<_>, _>>()?;
-    entries.sort();
-    for p in entries {
-        if p.file_name()
-            .is_some_and(|n| n == ".git" || n == "worktrees")
-        {
-            continue;
-        }
-        hash.update(p.file_name().unwrap().as_encoded_bytes());
-        let m = fixed(std::fs::symlink_metadata(&p))?;
-        if m.is_dir() {
-            files(&p, hash)?;
-        } else if m.file_type().is_symlink() {
-            hash.update(
-                fixed(std::fs::read_link(&p))?
-                    .as_os_str()
-                    .as_encoded_bytes(),
+    let metadata = fixed(std::fs::symlink_metadata(path))?;
+    if metadata.file_type().is_symlink() {
+        hash.update(b"link");
+        hash_permissions(hash, &metadata);
+        hash_bytes(
+            hash,
+            fixed(std::fs::read_link(path))?
+                .as_os_str()
+                .as_encoded_bytes(),
+        );
+    } else if metadata.is_dir() {
+        hash.update(b"directory");
+        hash_permissions(hash, &metadata);
+        let mut entries = fixed(std::fs::read_dir(path))?
+            .map(|e| fixed(e).map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        entries.retain(|p| {
+            !p.file_name()
+                .is_some_and(|n| n == ".git" || n == "worktrees")
+        });
+        entries.sort();
+        hash.update(&(entries.len() as u64).to_le_bytes());
+        for entry in entries {
+            hash_bytes(
+                hash,
+                entry.file_name().ok_or(FixtureError)?.as_encoded_bytes(),
             );
-        } else {
-            hash.update(&fixed(std::fs::read(p))?);
+            files(&entry, hash)?;
+        }
+    } else if metadata.is_file() {
+        hash.update(b"file");
+        hash_permissions(hash, &metadata);
+        hash_bytes(hash, &fixed(std::fs::read(path))?);
+    } else {
+        // Never open a device/FIFO/socket to obtain a snapshot.
+        hash.update(b"other");
+        hash_permissions(hash, &metadata);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            hash.update(&metadata.mode().to_le_bytes());
         }
     }
     Ok(())
@@ -723,7 +772,7 @@ fn files(path: &Path, hash: &mut blake3::Hasher) -> Result<(), FixtureError> {
 fn snapshot(side: &Side) -> Result<[u8; 32], FixtureError> {
     let repo = side.repo()?;
     let mut hash = blake3::Hasher::new();
-    hash.update(&fixed(std::fs::read(repo.commondir().join("config")))?);
+    files(&repo.commondir().join("config"), &mut hash)?;
     let mut refs = fixed(repo.references())?
         .map(|r| {
             let r = fixed(r)?;
@@ -733,14 +782,15 @@ fn snapshot(side: &Side) -> Result<[u8; 32], FixtureError> {
     refs.sort();
     for (name, oid) in refs {
         if !name.starts_with("refs/remotes/") {
-            hash.update(format!("{name} {oid:?}").as_bytes());
+            hash_bytes(&mut hash, name.as_bytes());
+            hash_bytes(&mut hash, format!("{oid:?}").as_bytes());
         }
     }
     let mut paths = vec![side.root.clone()];
     for name in fixed(repo.worktrees())?.iter().flatten() {
         let w = fixed(repo.find_worktree(name))?;
-        hash.update(name.as_bytes());
-        hash.update(w.path().as_os_str().as_encoded_bytes());
+        hash_bytes(&mut hash, name.as_bytes());
+        hash_bytes(&mut hash, w.path().as_os_str().as_encoded_bytes());
         paths.push(w.path().into());
         files(&repo.commondir().join("worktrees").join(name), &mut hash)?;
     }
@@ -751,19 +801,26 @@ fn snapshot(side: &Side) -> Result<[u8; 32], FixtureError> {
         }
         let linked = fixed(git2::Repository::open(&path))?;
         for name in ["HEAD", "index", "MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"] {
-            hash.update(&std::fs::read(linked.path().join(name)).unwrap_or_default());
-            hash.update(&[0]);
+            hash_bytes(&mut hash, name.as_bytes());
+            let file = linked.path().join(name);
+            match std::fs::symlink_metadata(&file) {
+                Ok(_) => files(&file, &mut hash)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    hash.update(b"missing");
+                }
+                Err(_) => return Err(FixtureError),
+            }
         }
         if let Ok(statuses) = linked.statuses(None) {
             for status in statuses.iter() {
-                hash.update(status.path_bytes());
+                hash_bytes(&mut hash, status.path_bytes());
                 hash.update(&status.status().bits().to_le_bytes());
             }
         } else {
             hash.update(b"status unavailable");
         }
         if path.join(".git").is_file() {
-            hash.update(&fixed(std::fs::read(path.join(".git")))?);
+            files(&path.join(".git"), &mut hash)?;
         }
         files(&path, &mut hash)?;
     }
@@ -777,7 +834,7 @@ fn snapshot(side: &Side) -> Result<[u8; 32], FixtureError> {
     let parked = side.root.parent().ok_or(FixtureError)?.join("m");
     if parked.is_dir() {
         files(&parked, &mut hash)?;
-        hash.update(&fixed(std::fs::read(parked.join(".git")))?);
+        files(&parked.join(".git"), &mut hash)?;
     }
     Ok(*hash.finalize().as_bytes())
 }
@@ -789,6 +846,87 @@ fn objects(repo: &git2::Repository) -> Result<Vec<git2::Oid>, FixtureError> {
     }))?;
     ids.sort();
     Ok(ids)
+}
+/// Controls use ignored, unregistered fixture entries: Git status cannot make
+/// the filesystem snapshot look stronger by independently detecting the edit.
+fn snapshot_control_root(p: &Pair) -> Result<PathBuf, FixtureError> {
+    let root = p.b.root.join(".manyhands/worktrees/s");
+    fixed(std::fs::create_dir_all(&root))?;
+    Ok(root)
+}
+fn snapshot_type_control() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let n = p.no_push_baseline()?;
+    let root = snapshot_control_root(&p)?;
+    let entry = root.join("entry");
+    fixed(std::fs::write(&entry, b""))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fixed(std::fs::set_permissions(
+            &entry,
+            std::fs::Permissions::from_mode(0o700),
+        ))?;
+    }
+    let permissions = fixed(std::fs::metadata(&entry))?.permissions();
+    let before = snapshot(&p.b)?;
+    fixed(std::fs::rename(&entry, p._dir.path().join("type-file")))?;
+    fixed(std::fs::create_dir(&entry))?;
+    fixed(std::fs::set_permissions(&entry, permissions))?;
+    let after = snapshot(&p.b)?;
+    assert_ne!(before, after, "empty file and empty directory must differ");
+    p.no_push_since(n)?;
+    p.finish()
+}
+fn snapshot_permission_control() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let n = p.no_push_baseline()?;
+    let entry = snapshot_control_root(&p)?.join("entry");
+    fixed(std::fs::write(&entry, b"unchanged fixture bytes"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fixed(std::fs::set_permissions(
+            &entry,
+            std::fs::Permissions::from_mode(0o644),
+        ))?;
+    }
+    let original = fixed(std::fs::metadata(&entry))?.permissions();
+    let before = snapshot(&p.b)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // No execute/status/content change: both states are writable to owner.
+        fixed(std::fs::set_permissions(
+            &entry,
+            std::fs::Permissions::from_mode(0o600),
+        ))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let mut changed = original.clone();
+        changed.set_readonly(!original.readonly());
+        fixed(std::fs::set_permissions(&entry, changed))?;
+    }
+    let after = snapshot(&p.b)?;
+    fixed(std::fs::set_permissions(&entry, original))?;
+    assert_ne!(before, after, "permission-only change must differ");
+    assert_eq!(snapshot(&p.b)?, before);
+    p.no_push_since(n)?;
+    p.finish()
+}
+fn snapshot_boundary_control() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let n = p.no_push_baseline()?;
+    let root = snapshot_control_root(&p)?;
+    fixed(std::fs::write(root.join("a"), b"bc"))?;
+    let before = snapshot(&p.b)?;
+    fixed(std::fs::rename(root.join("a"), root.join("ab")))?;
+    fixed(std::fs::write(root.join("ab"), b"c"))?;
+    let after = snapshot(&p.b)?;
+    assert_ne!(before, after, "name/content field boundaries must differ");
+    p.no_push_since(n)?;
+    p.finish()
 }
 fn clean_checkout(p: &Pair, item: Option<&str>, oid: git2::Oid) -> Result<(), FixtureError> {
     let reference = item.map(reference).unwrap_or_else(|| MAIN.into());
@@ -817,7 +955,7 @@ fn clean_checkout(p: &Pair, item: Option<&str>, oid: git2::Oid) -> Result<(), Fi
 fn clean_case(items: &[Option<&str>]) -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let base = p.base()?;
-    stale_tracking(&p, base)?;
+    let sentinels = stale_tracking(&p, base)?;
     let mut tips = Vec::new();
     for item in items {
         if let Some(item) = item {
@@ -835,6 +973,7 @@ fn clean_case(items: &[Option<&str>]) -> Result<(), FixtureError> {
         tips.push((*item, reference, tip));
     }
     let r = p.poll()?;
+    assert_eq!(sentinel_states(&p.b.repo()?)?, sentinels);
     for (item, reference, tip) in &tips {
         assert_eq!(
             row(&r, reference).disposition(),
@@ -877,7 +1016,7 @@ fn all_three_fast_forward() -> Result<(), FixtureError> {
 fn already_current() -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let base = p.base()?;
-    stale_tracking(&p, base)?;
+    let sentinels = stale_tracking(&p, base)?;
     for item in [D, T] {
         p.context(item)?;
         let peer = p.a.repo()?;
@@ -886,6 +1025,7 @@ fn already_current() -> Result<(), FixtureError> {
     }
     // Only this initial fetch may introduce the two context tracking refs.
     let initial = p.poll()?;
+    assert_eq!(sentinel_states(&p.b.repo()?)?, sentinels);
     assert_eq!(initial.targets().len(), 3);
     assert!(
         initial
@@ -959,10 +1099,14 @@ fn discovered_once(p: &Pair, item: &str, tip: git2::Oid) -> Result<(), FixtureEr
     );
     clean_checkout(p, Some(item), tip)?;
     let snap = fixed(p.b.service.repository_snapshot(&p.b.root))?;
+    let expected = fixed(std::fs::canonicalize(p.b.worktree(item)))?;
     let found = snap
         .items
         .iter()
-        .filter(|i| i.id.to_string() == item && i.context == p.b.worktree(item))
+        .filter(|i| {
+            i.id.to_string() == item
+                && std::fs::canonicalize(&i.context).is_ok_and(|context| context == expected)
+        })
         .collect::<Vec<_>>();
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].title, accepted_title(item));
@@ -1779,18 +1923,41 @@ fn all_refs(repo: &git2::Repository) -> Result<Vec<RefState>, FixtureError> {
     refs.sort();
     Ok(refs)
 }
-fn stale_tracking(p: &Pair, oid: git2::Oid) -> Result<(), FixtureError> {
+const STALE_TRACKING: &str = "refs/remotes/origin/stale";
+const SYMBOLIC_TRACKING: &str = "refs/remotes/unused/HEAD";
+fn sentinel_states(repo: &git2::Repository) -> Result<Vec<RefState>, FixtureError> {
+    Ok(all_refs(repo)?
+        .into_iter()
+        .filter(|r| [STALE_TRACKING, SYMBOLIC_TRACKING].contains(&r.name.as_str()))
+        .collect())
+}
+fn stale_tracking(p: &Pair, oid: git2::Oid) -> Result<Vec<RefState>, FixtureError> {
     let repo = p.b.repo()?;
-    fixed(repo.reference("refs/remotes/origin/stale", oid, false, "owned D1 sentinel"))?;
+    fixed(repo.reference(STALE_TRACKING, oid, false, "owned D1 sentinel"))?;
     fixed(repo.reference_symbolic(
-        "refs/remotes/unused/HEAD",
-        "refs/remotes/origin/stale",
+        SYMBOLIC_TRACKING,
+        STALE_TRACKING,
         false,
         "owned unrelated sentinel",
     ))?;
     // The complete inventory must preserve these even with backend prune enabled.
     fixed(fixed(repo.config())?.set_bool("fetch.prune", true))?;
-    Ok(())
+    let observed = sentinel_states(&repo)?;
+    let mut expected = vec![
+        RefState {
+            name: STALE_TRACKING.into(),
+            direct: Some(oid),
+            symbolic: None,
+        },
+        RefState {
+            name: SYMBOLIC_TRACKING.into(),
+            direct: None,
+            symbolic: Some(STALE_TRACKING.into()),
+        },
+    ];
+    expected.sort();
+    assert_eq!(observed, expected);
+    Ok(observed)
 }
 fn retained_conflict() -> Result<(), FixtureError> {
     let p = Pair::new()?;
@@ -2554,12 +2721,17 @@ fn database_privacy() -> Result<(), FixtureError> {
     scan_recovery_rows(&backup_db, &p.metadata_probes)?;
     fixed(db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE privacy_fixed(category TEXT); INSERT INTO privacy_fixed VALUES('fixed');"))?;
     let inventory = ssh_privacy::scan(&p.b.data, &p.probes)?;
-    assert!(inventory.iter().any(|(path, n)| path == &backup && *n > 0));
-    assert!(
-        inventory
-            .iter()
-            .any(|(path, n)| path.to_string_lossy().ends_with("-wal") && *n > 0)
-    );
+    let expected_backup = fixed(std::fs::canonicalize(&backup))?;
+    assert!(inventory.iter().any(|(path, n)| {
+        path.canonicalize()
+            .is_ok_and(|path| path == expected_backup)
+            && *n > 0
+    }));
+    assert!(inventory.iter().any(|(path, n)| {
+        path.file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with("-wal"))
+            && *n > 0
+    }));
     assert!(count(&p.b, "remote_poll_dispositions")? > 0);
     assert!(count(&p.b, "remote_poll_materializations")? > 0);
     p.redacted(&format!(
