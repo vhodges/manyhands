@@ -10,6 +10,106 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 6 Entry And Atomic Batch Interface Blocker — 2026-10-14T02:33:54Z
+
+Fresh implementer assigned **Task 6 only**, inline, no subagents, in the exact
+ticket worktree/branch. Verified clean HEAD and task base
+`ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`, registered worktree identity and
+ancestry of the recorded main `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17`.
+Task 0 and prior controller preflight trusted; no fetch/rebase or characterization
+replay. Inspected current AGENTS, approved Task 6/design, ticket/ledger and the
+delivered observation, reservation, polling, state and poll-fetch interfaces.
+
+### Prior Task 5 Reviews Now Approved
+
+Controller/user conveys completed independent reviews after the valid-owned
+unfinished-context dirty/ahead reconciliation correction:
+
+- Spec `ses_ec7f49995ffeVTGZBqRN4rzEoX`: **passed** corrected Task 5.
+- Quality `ses_ec7c4bbc3ffensuQh7z1f1Gqul`: **APPROVE, no findings**.
+- The approvals cover Task 5 through this Task 6 base, cumulative range from
+  `ab07d0d3096a0e6129add1ba32a2f977a131b80a`; historical P2 and RED/GREEN evidence
+  above are retained, with pending re-review status superseded by this report.
+- Accepted tree ⇒ active context only remains approved; rejected trees may still
+  be valid locally. Only Task 5 final unchanged canonical validator may collect
+  sources under its same lease. D1–D4 remain unchanged.
+- **Task 2 minor direct-SQL poll-kind immutability regression remains deferred
+  to final Cycle review**, from `ses_ec9e9909cffeS4kt0Z0ENmyjss`.
+
+### Interface/Ownership Conflict Before Production
+
+Task 6 requires the caller's ordered initial `not_reached` disposition set and
+the complete advertisement to commit in **one transaction**, while consuming
+the delivered `commit_observation_batch` seam. Its explicit file list does not
+include reservation.rs (the inventory-test exception is unrelated).
+
+Source evidence on the exact task base:
+
+- Approved implementation plan Task 6, lines 411–416/431–435/461–463: consume
+  `commit_observation_batch`, commit batch plus initial disposition rows together,
+  and process primary, existing contexts, then new contexts in ref order.
+- Approved design lines 366–372/389–391: one latest set initialized at the batch
+  boundary, before per-target processing; replay reports that stored set.
+- `src/repository/remote/reservation.rs:471–528`: the delivered helper accepts
+  only service/root/owner/plan/observations/time. It opens its own
+  `state::with_transaction`, verifies ownership and stop requests, persists the
+  advertisement, and acknowledges `AfterBatchCommit`. There is no caller-supplied
+  disposition payload or in-transaction extension hook.
+- `src/repository/remote/state.rs:5002–5035`: `with_transaction` opens a separate
+  connection and commits before returning. Wrapping the helper in a second
+  `with_transaction` cannot join its transaction. Writing disposition rows after
+  it returns leaves a crash-visible batch without its required initial rows;
+  writing them before it returns publishes rows without the batch.
+- `state.rs:1968–2024`: the shared advertisement writer receives no owning poll
+  ID or caller-observed ordered local target set. Inferring those from unrelated
+  cache rows or installing an implicit trigger side channel would replace the
+  explicit orchestration boundary rather than consume the delivered interface.
+- Production observation and synchronization callers use the same helper
+  (`observation.rs:268`, `sync.rs:6283`). Their behavior is frozen; the observation
+  operation must remain exactly unchanged.
+
+**Stopped before Rust/test edits** rather than silently splitting the transaction,
+duplicating the ownership/acknowledgment algorithm or extending a file outside the
+Task 6 allowlist. This is an interface/ownership blocker, not evidence that atomic
+polling is infeasible.
+
+### Narrow Owner Ruling Requested — Not Yet Approved
+
+Authorize reservation.rs (and focused reservation tests if needed) for a narrow
+transaction-composition extension: retain the existing helper/signature and its
+observation/synchronization behavior, and provide a full-poll variant or internal
+transaction seam that also writes the caller's ordered initial disposition rows
+before the same transaction acknowledges/commits `AfterBatchCommit`. Preserve
+ownership, cancellation, yield and generation checks. No new phase, safe point,
+transport seam, table beyond the approved disposition table, or scan permission.
+
+This proposal is **not an accepted amendment**. Approved Cycle/design/plan, shared
+helper bodies and production code remain unchanged. Task 6 is blocked/unticked,
+not review-ready; ticket open. No Task 7 work or outward/lifecycle action.
+
+### Verification And Handoff
+
+No Rust command executed; **0 tests run**, no compile RED, behavioral RED, GREEN
+or Rust gate claimed. Planned RED commands remain unrun:
+
+- `devenv shell -- cargo test --locked --lib remote::poll`
+- `devenv shell -- cargo test --locked --lib remote::state`
+
+This is a docs-only blocker checkpoint. Canonical Node-generated comment
+`01M4W44NN8N2BRMZBC1H4AG4HN` records entry, prior approvals and the requested
+ruling. Status/full diff/recent log inspected. Exact checks, each exit **0**:
+
+- `git diff --check`: PASS.
+- `git diff --exit-code -- src tests Cargo.toml Cargo.lock devenv.lock`: PASS,
+  source/test/dependency tree unchanged.
+- `scripts/show-ticket 01K7F6H9J2N4Q6S8V0X2Z4B6DG`: PASS, canonical ticket and
+  new comment rendered with open status and correct Node ULID/timestamp.
+
+Only ledger, open ticket and new comment are staged for the authorized local
+bookkeeping commit. Checkpoint range starts at the exact Task 6 base above;
+new commit head returned after commit. Rust gates and implementation RED/GREEN
+remain required after the ruling authorizes implementation.
+
 ## Task 5 Spec P2 Reconciliation Correction — 2026-10-14T01:40:07Z
 
 ### Correction And Final GREEN — 2026-10-14T02:19:44Z

@@ -132,19 +132,32 @@ and the baseline.
   Actual Linux failed checkout retains all partial artifacts; helper bodies,
   dependencies and frontend/versioned schemas unchanged. GREEN/review-ready
   comment `01M4W0G54ZF0M98PXS90NJFEJH`.
-- [ ] Independent Task 5 spec review of complete range from
+- [x] Independent Task 5 spec review of complete range from
   `ab07d0d3096a0e6129add1ba32a2f977a131b80a`, including approved exception.
   Reviewer `ses_ec7f49995ffeVTGZBqRN4rzEoX`: BLOCKED P2, unfinished but fully
   valid owned worktree incorrectly requires clean/original tip before Present.
   Fix authorized at `4dc35de84fab433a299c4de8c640ad5647ceb15c`; RED before
   predicate correction: 1 passed/3 failed/567 filtered, comment
-  `01M4W126TJWXJJCPW4FMSJD99K`. Await spec re-review before quality.
+  `01M4W126TJWXJJCPW4FMSJD99K`. Historical blocker, subsequently corrected.
   P2 technically corrected: fully valid owned worktree finishes unchanged final
   validator and complete without cleanliness/original-tip gate; original intent
   owner/OID and Git preserved. Strict branch-only resume unchanged. GREEN:
   4 regressions/44 poll tests; four Rust gates PASS (1,648 passed, 1 existing
   ignored). Re-review comment `01M4W3AQQGAF0YJ28908ABW64Q`; no amendment.
-- [ ] Independent Task 5 quality review after spec approval.
+  Controller/user now reports `ses_ec7f49995ffeVTGZBqRN4rzEoX` passed the
+  corrected range through `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`.
+- [x] Independent Task 5 quality review after spec approval:
+  `ses_ec7c4bbc3ffensuQh7z1f1Gqul`, controller/user reports APPROVE, no findings.
+- [ ] Task 6: assigned at exact clean base
+  `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`; stopped before Rust/test edits
+  for an atomic-batch interface/ownership ruling. The required
+  `commit_observation_batch` opens and commits its own transaction without a
+  disposition payload/hook. Initial ordered NotReached rows must commit with
+  that batch; a second transaction violates the contract. Narrow proposal:
+  authorize a reservation.rs transaction-composition extension while preserving
+  the existing helper and observation/synchronization behavior. Not approved;
+  approved documents unchanged. Evidence and requested ruling in ledger/comment
+  `01M4W44NN8N2BRMZBC1H4AG4HN`. No RED/GREEN or Rust gate claimed.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -164,10 +177,13 @@ permits a local task commit and canonical bookkeeping, no subagents/network/reba
 Task 5 is delivered after the owner's narrow step-5 exception; historical blocked
 checkpoints remain separate. Review range starts `ab07d0d3096a0e6129add1ba32a2f977a131b80a`
 and includes approved-document reconciliation plus Task 5 implementation.
-Spec P2 technically corrected, awaiting spec re-review before quality;
-Task 6 has not started.
+Spec P2 corrected; Task 5 spec and quality now controller/user-reported approved
+through `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`. Fresh Task 6-only assignment
+permits local commits and canonical bookkeeping, with no subagents. Task 6 entry
+inspection found the atomic-batch interface/ownership blocker recorded above;
+implementation awaits the narrow owner ruling. Prior Task 0/preflight trusted.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
-Tasks 6–8 have not started. Ticket remains
+Tasks 7–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
 ## Exit Evidence
