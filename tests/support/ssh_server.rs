@@ -416,9 +416,15 @@ async fn relay(
                             match hostile_packets(&mut hostile_pending, marker.as_bytes(), &mut hostile_sideband_sent) { Ok(bytes) => bytes, Err(_) => break }
                         } else { outgoing[..count].to_vec() };
                         if payload.is_empty() { continue; }
+                        // The client shares this process. Where libgit2's socket is
+                        // inheritable (no SOCK_CLOEXEC on macOS; Windows handles), this
+                        // helper holds a copy, so an abandoned client never closes the
+                        // connection and a full send would wait on the helper forever.
+                        // Ending the relay kills the helper and releases that copy.
                         let sent = tokio::select! {
                             result = handle.data(id, payload) => result,
                             _ = shutdown.changed() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => break,
                         };
                         if sent.is_err() { break; }
                         if transfer_started && !receiving {
