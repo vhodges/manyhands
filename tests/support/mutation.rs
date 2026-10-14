@@ -67,9 +67,10 @@ pub fn service_with_clock(data_directory: &Path, clock: &Arc<TestClock>) -> Repo
         .with_clock_for_testing(clock.clone())
 }
 
-/// The three request tables, the three journals and the recorded key
-/// registry changes: every store a request leaves a row in.
-pub const REQUEST_STORES: [&str; 7] = [
+/// The three request tables, the three journals, the recorded key
+/// registry changes and the bindings of comment submissions: every store
+/// a request, or a submission made through the service, leaves a row in.
+pub const REQUEST_STORES: [&str; 8] = [
     "request_records",
     "request_operations",
     "confirmation_records",
@@ -77,6 +78,7 @@ pub const REQUEST_STORES: [&str; 7] = [
     "remote_operation_records",
     "key_material_operations",
     "key_registry_changes",
+    "comment_publication_bindings",
 ];
 
 /// Where a planted sentinel was found.

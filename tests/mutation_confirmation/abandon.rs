@@ -1255,6 +1255,229 @@ fn a_local_row_under_a_synchronization_s_id_is_refused_and_is_not_offered() {
     assert_another_operation_succeeds(&world, "the refused abandon");
 }
 
+/// What a comment's body is here, which no store, preview or result holds.
+const COMMENT_BODY: &str = "SENTINEL-comment-body-7c1e";
+
+/// A comment committed while its repository had no registration leaves a
+/// row that is `completed` and waits for the registration to hand off to
+/// the index. No command of the boundary submits a comment, so the row is
+/// made through the service; what the boundary says of it is asked here.
+///
+/// While it stands no synchronization is reserved. A synchronization is
+/// refused and offered its abandon, `operation show` reads it as it is
+/// stored and the list holds it, a resume does not take it up, since the
+/// hand-off it owes needs the submission's own proof of its commit, and
+/// the abandon closes it, after which the synchronization is no longer
+/// refused for it.
+#[test]
+fn a_comment_that_waits_for_its_registration_is_shown_refused_a_resume_and_abandoned() {
+    use manyhands::repository::{
+        AuthoringKind, AuthoringTarget, CommentIndexingState, CommentSubmissionOutcome,
+        ContextIntent, EnableRepositoryRequest, ExpectedPathObservation, ItemSyncInput,
+        OperationFamily, OperationNextAction, OperationResumeInput, RemoteAddInput,
+        RemoteSelectInput, RemoveRegistrationRequest, SubmitCommentRequest,
+    };
+    use support::comment_publication::TestCommentSession as _;
+    let world = World::new();
+    // A publication remote, so that a synchronization comes to reserve.
+    let added = world.execute(
+        REQUEST_1,
+        Mutation::RemoteAdd(RemoteAddInput {
+            root: world.root.clone(),
+            name: "origin".to_owned(),
+            url: "ssh://git@example.invalid/team/project.git".to_owned(),
+        }),
+    );
+    assert_eq!(added.code, ResultCode::Ok, "{}", added.message);
+    let selected = world.execute(
+        REQUEST_2,
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: world.root.clone(),
+            name: Some("origin".to_owned()),
+        }),
+    );
+    assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+    world
+        .service
+        .remove_registration(RemoveRegistrationRequest {
+            root: world.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let operation = OperationId::new();
+    let operation_id = operation.to_string();
+    let submitted = world
+        .service
+        .submit_comment_with_test_session(SubmitCommentRequest {
+            target: AuthoringTarget {
+                root: world.root.clone(),
+                kind: AuthoringKind::Ticket,
+                item_id: items::item_id(TICKET_A),
+                intent: ContextIntent::Edit,
+                operation_id: operation,
+            },
+            comment_id: items::item_id(items::COMMENT_A),
+            parent_id: None,
+            body: format!("{COMMENT_BODY}\n"),
+            expected_destination: ExpectedPathObservation::Missing,
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert!(matches!(
+        submitted,
+        CommentSubmissionOutcome::Saved {
+            indexing: CommentIndexingState {
+                local_pending: true,
+                ..
+            },
+            ..
+        }
+    ));
+    world
+        .service
+        .enable(EnableRepositoryRequest {
+            root: world.root.clone(),
+            primary_branch: "main".to_owned(),
+            identity: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let waiting = (
+        operation_id.clone(),
+        "completed".to_owned(),
+        Some("comment_registration_pending".to_owned()),
+    );
+    assert!(journal(world.data.path()).contains(&waiting));
+    let item_sync = || {
+        Mutation::ItemSync(ItemSyncInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: items::item_id(TICKET_A),
+        })
+    };
+    let offered_abandon = |envelope: &Envelope<MutationDataDto>| {
+        envelope
+            .recovery
+            .iter()
+            .filter(|action| action.action.as_str() == "operation.abandon")
+            .map(|action| action.operation_id.clone())
+            .collect::<Vec<_>>()
+    };
+
+    // `operation show`, and the list.
+    let repo = world.resolved();
+    let shown = world.service.show_operation(&repo, operation).unwrap();
+    assert_eq!(shown.family, OperationFamily::Local);
+    assert_eq!(shown.action, OperationAction::SubmitComment);
+    assert_eq!(
+        (shown.state.clone(), shown.completed_step.clone()),
+        (waiting.1.clone(), waiting.2.clone())
+    );
+    assert_eq!(shown.next_action, Some(OperationNextAction::Resume));
+    assert!(
+        world
+            .service
+            .list_operations(&repo)
+            .unwrap()
+            .items
+            .contains(&shown)
+    );
+
+    // A synchronization is refused for it, and offered its abandon.
+    let refused = world.execute(REQUEST_3, item_sync());
+    assert_eq!(
+        refused.code,
+        ResultCode::RecoveryRequired,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(offered_abandon(&refused), [Some(operation_id.clone())]);
+
+    // A resume does not take it up, and offers the abandon too.
+    let before = Everything::of(&world);
+    let resumed = world.execute(
+        REQUEST_4,
+        Mutation::OperationResume(OperationResumeInput {
+            root: world.root.clone(),
+            operation_id: operation,
+        }),
+    );
+    assert_eq!(resumed.code, ResultCode::RecoveryRequired);
+    assert_eq!(resumed.outcome, Outcome::Blocked);
+    assert_eq!(resumed.effects, Effects::not_requested());
+    assert_eq!(offered_abandon(&resumed), [Some(operation_id.clone())]);
+    assert!(journal(world.data.path()).contains(&waiting));
+    before.assert_unchanged(&world, "a resume that was refused");
+
+    // The abandon closes it.
+    let mutation = abandon(&world.root, &operation_id);
+    let previewed = prepare_with(&world.service, &mutation);
+    assert_eq!(previewed.code, ResultCode::Ok, "{}", previewed.message);
+    let preview = previewed.data.expect("a preview");
+    let details = abandon_preview(&preview);
+    assert_eq!(details.action, Some(OperationAction::SubmitComment));
+    assert_eq!(details.item_id.as_deref(), Some(TICKET_A));
+    assert!(details.committed);
+    assert_eq!(details.paths, [] as [&str; 0]);
+    let abandoned = execute_confirmed(
+        &world.service,
+        REQUEST_5,
+        &preview.confirmation_id,
+        mutation,
+    );
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+    assert_eq!(abandoned.outcome, Outcome::Success);
+    let data = operation_data(&abandoned);
+    assert_eq!(data.operation_id, operation_id);
+    assert_eq!(data.action, Some(OperationAction::SubmitComment));
+    assert_eq!(
+        (data.state.clone(), data.step.clone()),
+        (waiting.1.clone(), waiting.2.clone())
+    );
+    assert!(data.committed);
+    before.assert_unchanged(&world, "the abandon");
+    assert!(journal(world.data.path()).contains(&(
+        operation_id.clone(),
+        "completed".to_owned(),
+        Some("abandoned".to_owned())
+    )));
+    assert!(
+        !world
+            .service
+            .list_operations(&repo)
+            .unwrap()
+            .items
+            .iter()
+            .any(|listed| listed.operation_id.as_deref() == Some(operation_id.as_str()))
+    );
+
+    // The synchronization is no longer refused for it: it goes on to
+    // what it needs next, and is offered no abandon.
+    let after = world.execute("01ARZ3NDEKTSV4RRFFQ69G5FX6", item_sync());
+    assert_ne!(
+        after.code,
+        ResultCode::RecoveryRequired,
+        "{}",
+        after.message
+    );
+    assert_eq!(offered_abandon(&after), [] as [Option<String>; 0]);
+
+    // The comment's body is in its file and its commit, and nowhere else.
+    for envelope in [&refused, &resumed, &abandoned, &after] {
+        assert!(
+            !serde_json::to_string(envelope)
+                .unwrap()
+                .contains(COMMENT_BODY)
+        );
+    }
+    assert!(
+        !serde_json::to_string(&preview)
+            .unwrap()
+            .contains(COMMENT_BODY)
+    );
+    mutation::assert_request_stores_exclude(world.data.path(), &[COMMENT_BODY]);
+}
+
 /// A save that committed and whose index hand-off then failed is
 /// pending with its checkpoint recorded. Abandoned, its commit stays
 /// where it is, and the preview and the result both say that one was
