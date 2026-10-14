@@ -251,6 +251,19 @@ impl RepositoryService {
         configuration: &super::observation::ObservationConfiguration,
         request: &PollMaterializationRequest,
     ) -> Result<PollMaterializationOutcome, SynchronizationError> {
+        let repository =
+            git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+        self.materialize_context_unlocked(root, plan, configuration, request, &repository)
+    }
+    fn materialize_context_unlocked(
+        &self,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        request: &PollMaterializationRequest,
+        repository: &git2::Repository,
+    ) -> Result<PollMaterializationOutcome, SynchronizationError> {
         use crate::repository::{
             FailurePoint, ItemContext, branch_checked_out_in_another_worktree,
             ensure_authoring_worktree_base, validate_context_worktree,
@@ -258,9 +271,6 @@ impl RepositoryService {
         };
         use state::{MaterializationIntent, MaterializationStep};
         let operation = RepositoryOperation::RepositorySnapshot;
-        let repository =
-            git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let _lease = repository_lease(&repository, root, operation)?;
         let target = SynchronizationTarget::Context {
             kind: request.kind,
             item_id: request.item_id.clone(),
@@ -308,7 +318,7 @@ impl RepositoryService {
 
         // Observe Git/filesystem presence first, then consult durable ownership.
         let observed =
-            MaterializationGitState::observe(&repository, &context, &target, plan.primary_branch());
+            MaterializationGitState::observe(repository, &context, &target, plan.primary_branch());
         let intents = state::with_transaction(self, root, |tx, id| {
             state::materialization_intents(tx, id, &request.item_id)
         })?;
@@ -325,7 +335,7 @@ impl RepositoryService {
                     .ok_or(SynchronizationError::RecoveryRequired)?;
                 if retained.step != MaterializationStep::Complete {
                     // Resuming step 5 only: owner's narrow scan exception.
-                    if validate_context_worktree(&repository, &context, true, operation).is_err() {
+                    if validate_context_worktree(repository, &context, true, operation).is_err() {
                         return Ok(refused(PollDisposition::MaterializationIncomplete));
                     }
                     state::with_transaction(self, root, |tx, id| {
@@ -342,7 +352,7 @@ impl RepositoryService {
             MaterializationAction::Start | MaterializationAction::ResumeWorktree => {}
         }
         if branch_checked_out_in_another_worktree(
-            &repository,
+            repository,
             &context.worktree,
             &context.branch,
             operation,
@@ -361,7 +371,7 @@ impl RepositoryService {
             .find_commit(target_oid)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
         if !conforming_context_tree(
-            &repository,
+            repository,
             &commit
                 .tree()
                 .map_err(|_| SynchronizationError::RecoveryRequired)?,
@@ -411,7 +421,7 @@ impl RepositoryService {
         ensure_authoring_worktree_base(root, operation)?;
         let branch = if action == MaterializationAction::Start {
             if poll_entry_present(&context.worktree)
-                || poll_registration_present(&repository, &context.item_id.to_string())
+                || poll_registration_present(repository, &context.item_id.to_string())
                 || repository.find_reference(reference.remote_ref()).is_ok()
             {
                 return Ok(refused(PollDisposition::MaterializationIncomplete));
@@ -438,7 +448,7 @@ impl RepositoryService {
             || repository.refname_to_id(reference.remote_ref()).ok() != Some(target_oid)
             || repository.refname_to_id(reference.tracking_ref()).ok() != Some(request.oid)
             || poll_entry_present(&context.worktree)
-            || poll_registration_present(&repository, &context.item_id.to_string())
+            || poll_registration_present(repository, &context.item_id.to_string())
         {
             return Ok(refused(PollDisposition::MaterializationIncomplete));
         }
@@ -473,7 +483,7 @@ impl RepositoryService {
                 sync::local_oid(&linked).ok() == Some(target_oid)
                     && sync::require_clean_target(&linked, &target).is_ok()
             });
-        if !valid || validate_context_worktree(&repository, &context, true, operation).is_err() {
+        if !valid || validate_context_worktree(repository, &context, true, operation).is_err() {
             return Ok(refused(PollDisposition::MaterializationIncomplete));
         }
         state::with_transaction(self, root, |tx, id| {
@@ -493,6 +503,16 @@ impl RepositoryService {
         let repository =
             git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
         let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+        self.poll_fast_forward_unlocked(root, plan, configuration, update, &repository)
+    }
+    fn poll_fast_forward_unlocked(
+        &self,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        update: &PollFastForward,
+        repository: &git2::Repository,
+    ) -> Result<PollDisposition, SynchronizationError> {
         let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
             return Err(SynchronizationError::ExternalChange);
         };
@@ -996,6 +1016,814 @@ impl RepositoryService {
         root: &Path,
     ) -> Result<AutomaticPollEligibility, RepositoryError> {
         automatic_poll_eligibility_at(self, root, OffsetDateTime::now_utc())
+    }
+}
+
+// Task 6 contracts; behavior is introduced after the recorded regression RED.
+#[derive(Clone)]
+pub struct PollPublicationRemoteRequest {
+    pub root: std::path::PathBuf,
+    pub operation_id: crate::repository::OperationId,
+    pub invocation: RemotePollInvocation,
+    pub approval: Option<crate::repository::transport::HostApproval>,
+    pub restart: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PollCompletion {
+    Completed,
+    Interrupted,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PollTargetReport {
+    pub(super) target: Option<super::RemoteRefTarget>,
+    pub(super) kind: Option<AuthoringKind>,
+    pub(super) item_id: Option<canonical::ItemId>,
+    pub(super) disposition: PollDisposition,
+    pub(super) before_oid: Option<git2::Oid>,
+    pub(super) after_oid: Option<git2::Oid>,
+}
+impl PollTargetReport {
+    pub fn target(&self) -> Option<&super::RemoteRefTarget> {
+        self.target.as_ref()
+    }
+    pub fn kind(&self) -> Option<AuthoringKind> {
+        self.kind
+    }
+    pub fn item_id(&self) -> Option<&canonical::ItemId> {
+        self.item_id.as_ref()
+    }
+    pub fn disposition(&self) -> PollDisposition {
+        self.disposition
+    }
+    pub fn before_oid(&self) -> Option<git2::Oid> {
+        self.before_oid
+    }
+    pub fn after_oid(&self) -> Option<git2::Oid> {
+        self.after_oid
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemotePollReport {
+    operation_id: crate::repository::OperationId,
+    completion: PollCompletion,
+    completed_at: OffsetDateTime,
+    next_eligible_at: Option<OffsetDateTime>,
+    targets: Vec<PollTargetReport>,
+    outcome: Option<RemoteOutcomeCategory>,
+}
+impl RemotePollReport {
+    pub fn operation_id(&self) -> crate::repository::OperationId {
+        self.operation_id
+    }
+    pub fn completion(&self) -> PollCompletion {
+        self.completion
+    }
+    pub fn completed_at(&self) -> OffsetDateTime {
+        self.completed_at
+    }
+    pub fn next_eligible_at(&self) -> Option<OffsetDateTime> {
+        self.next_eligible_at
+    }
+    pub fn targets(&self) -> &[PollTargetReport] {
+        &self.targets
+    }
+    pub fn outcome(&self) -> Option<RemoteOutcomeCategory> {
+        self.outcome
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemotePollOutcome {
+    NotEligible {
+        reason: PollIneligibility,
+        next_eligible_at: Option<OffsetDateTime>,
+    },
+    Polled(RemotePollReport),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RemotePollResult {
+    Complete(RemotePollOutcome),
+    IndexPending(crate::repository::IndexPending<RemotePollOutcome>),
+}
+pub enum RemotePollError {
+    Repository(RepositoryError),
+    Transport(crate::repository::transport::SshTransportError),
+    Busy,
+    PollYielding,
+    Interrupted,
+    ConflictPending,
+}
+impl std::fmt::Debug for RemotePollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+impl std::fmt::Display for RemotePollError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Repository(_) => "remote poll repository unavailable",
+            Self::Transport(_) => "remote poll transport unavailable",
+            Self::Busy => "remote operation busy",
+            Self::PollYielding => "remote poll yielding",
+            Self::Interrupted => "remote poll interrupted",
+            Self::ConflictPending => "remote poll conflict pending",
+        })
+    }
+}
+impl std::error::Error for RemotePollError {}
+impl From<RepositoryError> for RemotePollError {
+    fn from(e: RepositoryError) -> Self {
+        Self::Repository(e)
+    }
+}
+impl RepositoryService {
+    pub fn poll_publication_remote<P: crate::repository::keys::SessionCredentialProvider>(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        use super::{
+            RemoteOperationPriority, RemoteOperationTarget, RemoteReservationOutcome as R,
+            reservation::RemotePollReservationOutcome as PR,
+        };
+        use crate::repository::transport::*;
+        let (_, root) = crate::repository::canonical_repository_root(
+            &request.root,
+            RepositoryOperation::RepositorySnapshot,
+        )?;
+        let plan = match super::observation::observation_plan(&root) {
+            Ok(plan) => plan,
+            Err(error) => {
+                session.clear_cached_passphrase();
+                state::with_transaction(self, &root, |tx, id| {
+                    state::configure(tx, id, None, false)?;
+                    let policy = state::read_snapshot(tx, id)?.polling().clone();
+                    let now = OffsetDateTime::now_utc();
+                    state::record_outcome(
+                        tx,
+                        id,
+                        RemoteOutcomeCategory::ConfigurationRequired,
+                        policy.automatic_backoff().map(|b| {
+                            super::AutomaticBackoff::from_seconds(b.as_secs())
+                                .expect("validated backoff")
+                        }),
+                    )?;
+                    state::record_poll_attempt(
+                        tx,
+                        id,
+                        now,
+                        next_eligible(
+                            RemoteOutcomeCategory::ConfigurationRequired,
+                            request.invocation,
+                            now,
+                            &policy,
+                        ),
+                    )
+                })?;
+                return Err(RemotePollError::Transport(error));
+            }
+        };
+        let target = RemoteOperationTarget::for_poll(&plan);
+        let priority = if request.invocation == RemotePollInvocation::Automatic {
+            RemoteOperationPriority::Poll
+        } else {
+            RemoteOperationPriority::Manual
+        };
+        // Terminal replay is checked before policy/endpoint/authentication work.
+        let existing = state::with_transaction(self, &root, |tx, id| {
+            state::read_operation(tx, id, request.operation_id)
+        })?;
+        let replay_reservation = if existing.is_some() {
+            match self.reserve_remote_poll(&root, request.operation_id, &target, priority)? {
+                PR::Reservation(r) => Some(r),
+                PR::ConflictPending => return Err(RemotePollError::ConflictPending),
+            }
+        } else {
+            None
+        };
+        if let Some(R::Replay(record)) = &replay_reservation {
+            if matches!(
+                record.phase(),
+                super::RemoteOperationPhase::Completed
+                    | super::RemoteOperationPhase::Cancelled
+                    | super::RemoteOperationPhase::Failed
+            ) {
+                return self.poll_stored_result(&root, request.operation_id);
+            }
+            if !request.restart {
+                return Err(RemotePollError::Interrupted);
+            }
+        }
+        if request.invocation == RemotePollInvocation::Automatic
+            && replay_reservation.is_none()
+            && let AutomaticPollEligibility::NotEligible {
+                reason,
+                next_eligible_at,
+            } = self.automatic_poll_eligibility(&root)?
+        {
+            return Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible {
+                reason,
+                next_eligible_at,
+            }));
+        }
+        let configuration = self.observation_configuration(&root, &plan)?;
+        let may_reserve = state::with_transaction(self, &root, |tx, id| {
+            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            if state::has_pending_conflict(tx, id)? {
+                return Ok(false);
+            }
+            state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())?;
+            Ok(true)
+        })?;
+        if !may_reserve {
+            return Err(RemotePollError::ConflictPending);
+        }
+        let reserved = if request.restart && replay_reservation.is_some() {
+            self.restart_remote_poll(&root, request.operation_id, &target)?
+        } else {
+            match self.reserve_remote_poll(&root, request.operation_id, &target, priority)? {
+                PR::Reservation(r) => r,
+                PR::ConflictPending => return Err(RemotePollError::ConflictPending),
+            }
+        };
+        let owner = match reserved {
+            R::Reserved(o) => o,
+            R::Busy => return Err(RemotePollError::Busy),
+            R::PollYielding => return Err(RemotePollError::PollYielding),
+            R::Replay(_) => return self.poll_stored_result(&root, request.operation_id),
+        };
+        if let Some(result) = self.poll_safe_point(
+            &root,
+            &owner,
+            super::RemoteOperationSafePoint::BeforeTransport,
+        )? {
+            return Ok(result);
+        }
+        let mut stopped = None;
+        let mut last = None;
+        let fetched = self.with_authenticated_remote_policy_expected(
+            VerifySshTransportRequest {
+                root: root.clone(),
+                direction: SshDirection::Fetch,
+                approval: request.approval,
+            },
+            session,
+            request.invocation == RemotePollInvocation::Automatic,
+            configuration
+                .transport_expectation(SshDirection::Fetch)
+                .as_ref(),
+            |remote| {
+                remote.fetch_poll_set(&plan, |_| {
+                    if stopped.is_some() {
+                        return false;
+                    }
+                    let now = std::time::Instant::now();
+                    if last.is_some_and(|at: std::time::Instant| {
+                        now.duration_since(at) < std::time::Duration::from_millis(250)
+                    }) {
+                        return true;
+                    }
+                    last = Some(now);
+                    let decision = super::reservation::poll_progress(self, &owner)
+                        .unwrap_or(super::RemoteSafePointOutcome::Interrupted);
+                    if decision != super::RemoteSafePointOutcome::Continue {
+                        stopped = Some(decision);
+                        false
+                    } else {
+                        true
+                    }
+                })
+            },
+        );
+        // Captured callback intent wins over libgit2's platform-specific abort code.
+        if let Some(decision) = stopped {
+            if let Some(result) = self.poll_safe_point(
+                &root,
+                &owner,
+                super::RemoteOperationSafePoint::AfterAdvertisement,
+            )? {
+                return Ok(result);
+            }
+            self.poll_interrupt(&root, &owner)?;
+            return if decision == super::RemoteSafePointOutcome::Cancelled {
+                self.poll_stored_result(&root, owner.operation_id())
+            } else {
+                Err(RemotePollError::Interrupted)
+            };
+        }
+        match fetched {
+            Ok(advertised) => {
+                self.poll_after_fetch(&root, &owner, &plan, &configuration, advertised)
+            }
+            Err(error) => {
+                if let Some(result) = self.poll_safe_point(
+                    &root,
+                    &owner,
+                    super::RemoteOperationSafePoint::AfterAdvertisement,
+                )? {
+                    return Ok(result);
+                }
+                let decision = self.finish_remote_operation(
+                    &root,
+                    &owner,
+                    super::observation::transport_category(&error.kind),
+                )?;
+                if decision != super::RemoteSafePointOutcome::Continue {
+                    return self.poll_stored_result(&root, owner.operation_id());
+                }
+                Err(RemotePollError::Transport(error))
+            }
+        }
+    }
+
+    /// Everything after a successful real fetch. Local tests supply actual ODB
+    /// commits and test-installed tracking refs; this is not a transport adapter.
+    pub(crate) fn poll_after_fetch(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        advertised: Vec<(String, git2::Oid)>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        use super::{
+            RemoteOperationSafePoint as S, RemoteRefClassification as C,
+            RemoteSafePointOutcome as D,
+        };
+        if let Some(result) = self.poll_safe_point(root, owner, S::AfterAdvertisement)? {
+            return Ok(result);
+        }
+        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+        let previous = state::with_transaction(self, root, |tx, id| state::read_snapshot(tx, id))?;
+        let mut observations = Vec::new();
+        for (name, oid) in advertised {
+            if let Some(result) = self.poll_safe_point(root, owner, S::BetweenObservations)? {
+                return Ok(result);
+            }
+            if let Some(observation) = super::RemoteRefObservation::from_advertisement(
+                plan,
+                &name,
+                oid,
+                plan.tracking_ref_for(&name)
+                    .and_then(|r| repository.refname_to_id(&r).ok()),
+            ) {
+                observations.push(observation);
+            }
+        }
+        let mut existing = std::collections::BTreeMap::new();
+        for branch in repository
+            .branches(Some(git2::BranchType::Local))
+            .map_err(|_| state::recovery_required())?
+        {
+            let (branch, _) = branch.map_err(|_| state::recovery_required())?;
+            if let Some(name) = branch.get().name()
+                && let Some(C::RecognizedContext { kind, item_id }) =
+                    plan.classify_advertised_ref(name)
+            {
+                existing.insert(name.to_owned(), (kind, item_id));
+            }
+        }
+        for context in previous.contexts() {
+            if let (Some(kind), Some(item), Some(target)) =
+                (context.kind(), context.item_id(), context.target())
+                && (context.state() == super::RemoteContextState::Observed
+                    || poll_registration_present(&repository, &item.to_string()))
+            {
+                existing
+                    .entry(target.remote_ref().into())
+                    .or_insert((kind, item.clone()));
+            }
+        }
+        let mut targets = vec![PollTargetReport {
+            target: Some(plan.primary().clone()),
+            kind: None,
+            item_id: None,
+            disposition: PollDisposition::NotReached,
+            before_oid: None,
+            after_oid: None,
+        }];
+        for (kind, item) in existing.values() {
+            targets.push(PollTargetReport {
+                target: Some(plan.context(*kind, item)),
+                kind: Some(*kind),
+                item_id: Some(item.clone()),
+                disposition: PollDisposition::NotReached,
+                before_oid: None,
+                after_oid: None,
+            });
+        }
+        let mut new = observations
+            .iter()
+            .filter(|o| {
+                matches!(o.classification(), C::RecognizedContext { .. })
+                    && o.remote_ref().is_some_and(|r| !existing.contains_key(r))
+            })
+            .collect::<Vec<_>>();
+        new.sort_by_key(|o| o.remote_ref());
+        for o in new {
+            if let C::RecognizedContext { kind, item_id } = o.classification() {
+                targets.push(PollTargetReport {
+                    target: Some(plan.context(*kind, item_id)),
+                    kind: Some(*kind),
+                    item_id: Some(item_id.clone()),
+                    disposition: PollDisposition::NotReached,
+                    before_oid: None,
+                    after_oid: None,
+                });
+            }
+        }
+        for o in &observations {
+            if o.classification() == &C::MalformedContext {
+                targets.push(PollTargetReport {
+                    target: None,
+                    kind: None,
+                    item_id: None,
+                    disposition: PollDisposition::NotReached,
+                    before_oid: None,
+                    after_oid: None,
+                });
+            }
+        }
+        let frozen = targets
+            .iter()
+            .map(|t| {
+                t.target.as_ref().map(|r| {
+                    (
+                        direct_oid(&repository, r.remote_ref()),
+                        repository.refname_to_id(r.tracking_ref()).ok(),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeBatchCommit)? {
+            return Ok(result);
+        }
+        if !self.poll_configuration_matches(root, plan, configuration)? {
+            self.poll_interrupt(root, owner)?;
+            return Err(RemotePollError::Interrupted);
+        }
+        let at = OffsetDateTime::now_utc().unix_timestamp();
+        let decision = super::reservation::commit_observation_batch_with(
+            self,
+            root,
+            owner,
+            plan,
+            &observations,
+            at,
+            |tx, id| state::replace_poll_dispositions(tx, id, owner.operation_id(), &targets, at),
+        )?;
+        if decision != D::Continue {
+            return self.poll_stored_result(root, owner.operation_id());
+        }
+        if let Some(result) = self.poll_safe_point(root, owner, S::AfterBatchCommit)? {
+            return Ok(result);
+        }
+        for (ordinal, row) in targets.iter_mut().enumerate() {
+            if let Some(result) = self.poll_safe_point(root, owner, S::BeforeLocalMutation)? {
+                return Ok(result);
+            }
+            self.poll_boundary(
+                crate::repository::FailurePoint::PollBeforeTarget,
+                Some(ordinal),
+                root,
+            )?;
+            let result = (|| -> Result<(), RemotePollError> {
+                let _lease =
+                    repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+                if !self.poll_configuration_matches(root, plan, configuration)? {
+                    return Err(RemotePollError::Interrupted);
+                }
+                let flags = super::reservation::poll_progress(self, owner)?;
+                if flags != D::Continue {
+                    return Err(RemotePollError::Interrupted);
+                }
+                state::with_transaction(self, root, |tx, id| {
+                    super::reservation::owned(self, tx, id, owner).map(|_| ())
+                })?;
+                if let Some(reference) = &row.target {
+                    let current = (
+                        direct_oid(&repository, reference.remote_ref()),
+                        repository.refname_to_id(reference.tracking_ref()).ok(),
+                    );
+                    if Some(current) != frozen[ordinal] {
+                        return Err(RemotePollError::Interrupted);
+                    }
+                    let observed = observations
+                        .iter()
+                        .find(|o| o.remote_ref() == Some(reference.remote_ref()));
+                    let tracking = match observed {
+                        Some(o) if o.tracking_oid() == Some(o.advertised_oid()) => {
+                            PollTrackingState::Present(o.advertised_oid())
+                        }
+                        Some(_) => return Err(RemotePollError::Interrupted),
+                        None if row.kind.is_some()
+                            && previous.publication_evidence_for(
+                                row.kind.expect("context"),
+                                row.item_id.as_ref().expect("context"),
+                            ) == super::RemotePublicationEvidence::ObservedPublished =>
+                        {
+                            PollTrackingState::RemotelyDeleted
+                        }
+                        None => PollTrackingState::HistoryUnknown,
+                    };
+                    let target = match (row.kind, row.item_id.as_ref()) {
+                        (Some(kind), Some(item)) => SynchronizationTarget::Context {
+                            kind,
+                            item_id: item.clone(),
+                        },
+                        _ => SynchronizationTarget::Primary,
+                    };
+                    row.before_oid = current.0;
+                    let path = row
+                        .item_id
+                        .as_ref()
+                        .map(|id| root.join(".manyhands/worktrees").join(id.to_string()));
+                    let before_present = path.as_ref().is_some_and(|p| poll_entry_present(p));
+                    let before_admin = row
+                        .item_id
+                        .as_ref()
+                        .is_some_and(|id| poll_registration_present(&repository, &id.to_string()));
+                    let mut newly_materialized = false;
+                    if let (
+                        PollTrackingState::Present(oid),
+                        SynchronizationTarget::Context { kind, item_id },
+                    ) = (tracking, &target)
+                    {
+                        let intent = state::with_transaction(self, root, |tx, id| {
+                            state::materialization_intents(tx, id, item_id)
+                        })?;
+                        let registered_local =
+                            repository.find_worktree(&item_id.to_string()).is_ok()
+                                || previous.contexts().iter().any(|context| {
+                                    context.kind() == Some(*kind)
+                                        && context.item_id() == Some(item_id)
+                                        && context.state() == super::RemoteContextState::Observed
+                                });
+                        if !intent.is_empty() || !registered_local {
+                            match self
+                                .materialize_context_unlocked(
+                                    root,
+                                    plan,
+                                    configuration,
+                                    &PollMaterializationRequest {
+                                        operation_id: owner.operation_id(),
+                                        kind: *kind,
+                                        item_id: item_id.clone(),
+                                        oid,
+                                    },
+                                    &repository,
+                                )
+                                .map_err(poll_local_error)?
+                            {
+                                PollMaterializationOutcome::Materialized => {
+                                    row.disposition = PollDisposition::Materialized;
+                                    newly_materialized = true;
+                                }
+                                PollMaterializationOutcome::Present => {}
+                                PollMaterializationOutcome::Refused(d) => {
+                                    row.disposition = d;
+                                }
+                            }
+                        }
+                    }
+                    if row.disposition == PollDisposition::NotReached {
+                        row.disposition = match classify_local_target(
+                            root,
+                            plan.primary_branch(),
+                            &target,
+                            tracking,
+                        )
+                        .map_err(poll_local_error)?
+                        {
+                            LocalPollClassification::Unchanged { disposition, .. } => disposition,
+                            LocalPollClassification::FastForward {
+                                local_oid,
+                                tracking_oid,
+                            } => self
+                                .poll_fast_forward_unlocked(
+                                    root,
+                                    plan,
+                                    configuration,
+                                    &PollFastForward {
+                                        target,
+                                        before: local_oid,
+                                        after: tracking_oid,
+                                    },
+                                    &repository,
+                                )
+                                .map_err(poll_local_error)?,
+                        };
+                    }
+                    row.after_oid = direct_oid(&repository, reference.remote_ref());
+                    let changed = newly_materialized
+                        || row.before_oid != row.after_oid
+                        || path.as_ref().is_some_and(|p| poll_entry_present(p)) != before_present
+                        || row.item_id.as_ref().is_some_and(|id| {
+                            poll_registration_present(&repository, &id.to_string())
+                        }) != before_admin;
+                    state::with_transaction(self, root, |tx, id| {
+                        super::reservation::owned(self, tx, id, owner)?;
+                        if changed {
+                            tx.execute(
+                                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
+                                [id],
+                            )
+                            .map_err(|_| state::recovery_required())?;
+                        }
+                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, row)
+                    })?;
+                } else {
+                    row.disposition = PollDisposition::Malformed;
+                    state::with_transaction(self, root, |tx, id| {
+                        super::reservation::owned(self, tx, id, owner)?;
+                        state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, row)
+                    })?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                if matches!(error, RemotePollError::Interrupted) {
+                    // A pending request gets its normal durable acknowledgement;
+                    // otherwise fence a changed frozen input without retrying.
+                    if let Some(result) =
+                        self.poll_safe_point(root, owner, S::BeforeLocalMutation)?
+                    {
+                        return Ok(result);
+                    }
+                    self.poll_interrupt(root, owner)?;
+                    return self.poll_stored_result(root, owner.operation_id());
+                }
+                return Err(error);
+            }
+        }
+        self.poll_boundary(
+            crate::repository::FailurePoint::PollBeforeDiscovery,
+            None,
+            root,
+        )?;
+        if !self.poll_configuration_matches(root, plan, configuration)? {
+            self.poll_interrupt(root, owner)?;
+            return self.poll_stored_result(root, owner.operation_id());
+        }
+        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeDiscovery)? {
+            return Ok(result);
+        }
+        state::with_transaction(self, root, |tx, id| {
+            super::reservation::owned(self, tx, id, owner)?;
+            tx.execute(
+                "UPDATE repositories SET refresh_required=1 WHERE id=?1",
+                [id],
+            )
+            .map_err(|_| state::recovery_required())?;
+            Ok(())
+        })?;
+        let decision =
+            self.finish_remote_operation(root, owner, RemoteOutcomeCategory::Completed)?;
+        if decision != D::Continue {
+            return self.poll_stored_result(root, owner.operation_id());
+        }
+        self.check_failure(
+            crate::repository::FailurePoint::PollAfterCompletion,
+            RepositoryOperation::RepositorySnapshot,
+            root,
+        )?;
+        let refreshed = self.refresh_repository(crate::repository::RefreshRepositoryRequest {
+            root: root.to_owned(),
+            operation_id: crate::repository::OperationId::new(),
+        });
+        let result = self.poll_stored_result(root, owner.operation_id())?;
+        if matches!(
+            refreshed,
+            Ok(crate::repository::RefreshOutcome::Refreshed { .. })
+        ) {
+            Ok(match result {
+                RemotePollResult::IndexPending(p) => RemotePollResult::Complete(p.authoritative),
+                other => other,
+            })
+        } else {
+            Ok(match result {
+                RemotePollResult::Complete(o) => {
+                    RemotePollResult::IndexPending(crate::repository::IndexPending::new(o))
+                }
+                other => other,
+            })
+        }
+    }
+    fn poll_configuration_matches(
+        &self,
+        root: &Path,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+    ) -> Result<bool, RepositoryError> {
+        Ok(
+            super::observation::observation_plan(root).ok().as_ref() == Some(plan)
+                && self.observation_configuration(root, plan)? == *configuration,
+        )
+    }
+    fn poll_interrupt(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            if let Ok(record) = super::reservation::owned(self, tx, id, owner) {
+                tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome=NULL,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,OffsetDateTime::now_utc().unix_timestamp()]).map_err(|_|state::recovery_required())?;
+                state::record_poll_completion(
+                    tx,
+                    id,
+                    owner.operation_id(),
+                    OffsetDateTime::now_utc().unix_timestamp(),
+                )?;
+            }
+            Ok(())
+        })
+    }
+    fn poll_safe_point(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        point: super::RemoteOperationSafePoint,
+    ) -> Result<Option<RemotePollResult>, RemotePollError> {
+        let decision = match self.remote_safe_point(root, owner, point) {
+            Ok(d) => d,
+            Err(e) => {
+                let record = state::with_transaction(self, root, |tx, id| {
+                    state::read_operation(tx, id, owner.operation_id())
+                })?;
+                if record.is_some_and(|r| r.phase == super::RemoteOperationPhase::Interrupted) {
+                    super::RemoteSafePointOutcome::Interrupted
+                } else {
+                    return Err(e.into());
+                }
+            }
+        };
+        match decision {
+            super::RemoteSafePointOutcome::Continue => Ok(None),
+            _ => self
+                .poll_stored_result(root, owner.operation_id())
+                .map(Some),
+        }
+    }
+    fn poll_stored_result(
+        &self,
+        root: &Path,
+        op: crate::repository::OperationId,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, op)?.ok_or_else(state::recovery_required)?;
+            let (completed_at, next_eligible_at, latest) =
+                state::poll_completion_metadata(tx, id, op)?;
+            let completion = match record.phase {
+                super::RemoteOperationPhase::Interrupted => PollCompletion::Interrupted,
+                super::RemoteOperationPhase::Cancelled => PollCompletion::Cancelled,
+                _ => PollCompletion::Completed,
+            };
+            if completion == PollCompletion::Interrupted && !latest {
+                return Ok(None);
+            }
+            let targets = if latest {
+                state::read_poll_dispositions(tx, id)?
+            } else {
+                Vec::new()
+            };
+            let outcome = RemotePollOutcome::Polled(RemotePollReport {
+                operation_id: op,
+                completion,
+                completed_at,
+                next_eligible_at,
+                targets,
+                outcome: record.outcome,
+            });
+            let pending: bool = tx
+                .query_row(
+                    "SELECT refresh_required FROM repositories WHERE id=?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .map_err(|_| state::recovery_required())?;
+            Ok(Some(if pending {
+                RemotePollResult::IndexPending(crate::repository::IndexPending::new(outcome))
+            } else {
+                RemotePollResult::Complete(outcome)
+            }))
+        })?
+        .ok_or(RemotePollError::Interrupted)
+    }
+}
+
+fn direct_oid(repository: &git2::Repository, reference: &str) -> Option<git2::Oid> {
+    repository
+        .find_reference(reference)
+        .ok()
+        .and_then(|r| r.target())
+}
+fn poll_local_error(e: SynchronizationError) -> RemotePollError {
+    match e {
+        SynchronizationError::ExternalChange => RemotePollError::Interrupted,
+        SynchronizationError::Repository(e) => RemotePollError::Repository(e),
+        _ => RemotePollError::Repository(state::recovery_required()),
     }
 }
 

@@ -6,6 +6,135 @@ const ADVERTISED: &str = "1111111111111111111111111111111111111111";
 const TRACKING: &str = "2222222222222222222222222222222222222222";
 
 #[test]
+fn task6_local_history_unknown_context_also_exposes_its_latest_disposition() {
+    let (_data, root, service) = fixture();
+    with_transaction(&service,root.path(),|tx,id|{
+        configure(tx,id,Some(&plan()),false)?;
+        tx.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(?1,'active','manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV','/local-context','01ARZ3NDEKTSV4RRFFQ69G5FAV')",[id]).unwrap();
+        let op=crate::repository::OperationId::new();
+        insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
+        replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().context(AuthoringKind::Ticket,&ITEM.parse().unwrap())),kind:Some(AuthoringKind::Ticket),item_id:Some(ITEM.parse().unwrap()),disposition:super::super::poll::PollDisposition::HistoryUnknown,before_oid:None,after_oid:None}],123)
+    }).unwrap();
+    let snapshot = with_transaction(&service, root.path(), |tx, id| read_snapshot(tx, id)).unwrap();
+    assert_eq!(
+        snapshot.contexts()[0].latest_disposition(),
+        Some(super::super::poll::PollDisposition::HistoryUnknown)
+    );
+}
+
+#[test]
+fn task6_disposition_schema_upgrade_rollback_corruption_and_privacy() {
+    for change in [
+        "ALTER TABLE remote_poll_dispositions ADD COLUMN body TEXT",
+        "DROP TRIGGER remote_poll_disposition_owner_immutable",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_operation_records SET poll_completed_at=-1 WHERE poll_kind='update'",
+    ] {
+        let (data, root, service) = fixture();
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), false)?;
+            let op = crate::repository::OperationId::new();
+            insert_operation_with_kind(
+                tx,
+                id,
+                op,
+                &RemoteOperationTarget::for_poll(&plan()),
+                RemoteOperationPriority::Poll,
+                Some(PollKind::Update),
+                123,
+            )?;
+            replace_poll_dispositions(
+                tx,
+                id,
+                op,
+                &[super::super::poll::PollTargetReport {
+                    target: None,
+                    kind: None,
+                    item_id: None,
+                    disposition: super::super::poll::PollDisposition::Malformed,
+                    before_oid: None,
+                    after_oid: Some(ADVERTISED.parse().unwrap()),
+                }],
+                123,
+            )
+        })
+        .unwrap();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch(change).unwrap();
+        assert!(RepositoryService::open_at(data.path()).is_err(), "{change}");
+    }
+    let (data, _, service) = fixture();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("DROP TABLE remote_poll_dispositions;DROP TRIGGER remote_poll_disposition_owner_immutable;ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at;").unwrap();
+    assert!(RepositoryService::open_at(data.path()).is_err());
+    assert!(
+        !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_poll_dispositions')",
+            [],
+            |r| r.get::<_, bool>(0)
+        )
+        .unwrap()
+    );
+}
+
+#[test]
+fn task6_disposition_schema_is_empty_atomic_metadata_only() {
+    let (data, root, service) = fixture();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let cols: Vec<String> = db
+        .prepare("PRAGMA table_info(remote_poll_dispositions)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        cols,
+        [
+            "repository_id",
+            "operation_ulid",
+            "ordinal",
+            "classification",
+            "remote_ref",
+            "kind",
+            "item_id",
+            "disposition",
+            "before_oid",
+            "after_oid",
+            "observed_at"
+        ]
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| r
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        0
+    );
+    let before = service.remote_snapshot(root.path()).unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(reopened.remote_snapshot(root.path()).unwrap(), before);
+}
+
+#[test]
+fn task6_partial_disposition_schema_is_not_recreated() {
+    let (data, _, service) = fixture();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("DROP TABLE remote_poll_dispositions")
+        .unwrap();
+    let error = match RepositoryService::open_at(data.path()) {
+        Err(e) => e,
+        Ok(_) => panic!("partial schema adopted"),
+    };
+    assert_eq!(
+        error.kind,
+        crate::repository::RepositoryErrorKind::RecoveryRequired
+    );
+}
+
+#[test]
 fn poll_materialization_schema_migrates_empty_and_is_idempotent() {
     let (data, root, service) = fixture();
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -1133,7 +1262,7 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     connection
-        .execute_batch("DROP TABLE remote_poll_materializations; DROP TABLE remote_publication_attempts; DROP TABLE remote_integration_merge_metadata; DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows; DROP TABLE remote_operation_records")
+        .execute_batch("DROP TABLE remote_poll_dispositions; DROP TABLE remote_poll_materializations; DROP TABLE remote_publication_attempts; DROP TABLE remote_integration_merge_metadata; DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows; DROP TABLE remote_operation_records")
         .unwrap();
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [

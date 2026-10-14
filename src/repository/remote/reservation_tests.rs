@@ -1,4 +1,63 @@
 use super::*;
+
+#[test]
+fn poll_progress_probe_is_read_only_and_fences_flags_and_owner_epoch() {
+    let (data, root, service) = poll_fixture();
+    let owner = match service
+        .reserve_remote_poll(
+            root.path(),
+            OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan()),
+            RemoteOperationPriority::Poll,
+        )
+        .unwrap()
+    {
+        RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("CREATE TABLE probe_writes(n INTEGER);INSERT INTO probe_writes VALUES(0);CREATE TRIGGER probe_update AFTER UPDATE ON remote_operation_records BEGIN UPDATE probe_writes SET n=n+1;END;").unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(
+        db.query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    db.execute_batch("UPDATE remote_operation_records SET yield_requested=1")
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+    db.execute_batch("UPDATE remote_operation_records SET cancel_requested=1")
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    let count = db
+        .query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert_eq!(
+        db.query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        count
+    );
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    assert!(poll_progress(&other, &owner).is_err());
+    db.execute_batch("UPDATE remote_operation_records SET cancel_requested=0,yield_requested=0,owner_epoch=owner_epoch+1").unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+}
 use crate::repository::{
     REGISTRY_FILE,
     remote::{RemoteRefObservation, RemoteRefPlan},

@@ -148,7 +148,7 @@ and the baseline.
   corrected range through `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`.
 - [x] Independent Task 5 quality review after spec approval:
   `ses_ec7c4bbc3ffensuQh7z1f1Gqul`, controller/user reports APPROVE, no findings.
-- [ ] Task 6: assigned at exact clean base
+- [x] Task 6: assigned at exact clean base
   `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`; stopped before Rust/test edits
   for an atomic-batch interface/ownership ruling. The required
   `commit_observation_batch` opens and commits its own transaction without a
@@ -157,7 +157,24 @@ and the baseline.
   authorize a reservation.rs transaction-composition extension while preserving
   the existing helper and observation/synchronization behavior. Not approved;
   approved documents unchanged. Evidence and requested ruling in ledger/comment
-  `01M4W44NN8N2BRMZBC1H4AG4HN`. No RED/GREEN or Rust gate claimed.
+  `01M4W44NN8N2BRMZBC1H4AG4HN`. Historical entry issue now resolved by controller:
+  file list is a planning map; necessary minimal shared transaction extraction is
+  within approved Task 6 scope, no owner amendment. Implementation resumed at
+  `a70a2abcebb4c84694629bb7bd79e048ea1c83c1`, review base remains original ff43d2c.
+  Before behavior: poll RED 44 passed/5 failed/529 filtered, state RED
+  50 passed/2 failed/526 filtered. Details/comment `01M4W4GZ1NQT9JYSJP1YM2ZEJQ`.
+  Delivered public one-shot poll, frozen SSH fetch composition, atomic initial
+  dispositions, ordered same-lease local stages, typed partial reports and fenced
+  replay/restart, fresh-ID index refresh and durable stale flag, audited metadata
+  table/replay times/snapshot accessors, API audit. Added 27 library tests.
+  Final GREEN: 66 poll/54 state/598 library; all four required Rust gates PASS,
+  full total 1,675 passed, 0 failed, 1 existing ignored. CLI smoke exit 0.
+  Incremental meaningful RED/corrections/trials and exact commands in ledger;
+  review-ready comment `01M4WAV9ECDNZ8NFSP7CGSXK85`. Complete review range starts
+  original ff43d2c and includes a70a2ab docs checkpoint. Approved contracts unchanged.
+- [ ] Independent Task 6 spec review of full range from
+  `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7` through returned feature HEAD.
+- [ ] Independent Task 6 quality review after spec approval.
 
 Task 0 is completed and independently reviewed. The owner resumed execution on
 2026-10-13; the controller's fresh fetch/rebase was a clean no-op at main
@@ -181,7 +198,10 @@ Spec P2 corrected; Task 5 spec and quality now controller/user-reported approved
 through `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`. Fresh Task 6-only assignment
 permits local commits and canonical bookkeeping, with no subagents. Task 6 entry
 inspection found the atomic-batch interface/ownership blocker recorded above;
-implementation awaits the narrow owner ruling. Prior Task 0/preflight trusted.
+controller resolved it as an implementation detail within existing authorization.
+Task 6 delivered locally after recorded RED, self-review regressions and final
+verification, ready for independent spec then quality review. Prior Task 0/preflight
+trusted; no repeated characterization. Complete range includes a70a2ab.
 Deferred Task 2 direct-SQL kind-immutability minor remains for final review.
 Tasks 7–8 have not started. Ticket remains
 open; native matrix evidence remains pending separate authorization.

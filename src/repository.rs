@@ -66,19 +66,20 @@ use recovery::{
 pub use remote::{
     AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictEligibility,
     ConflictObservation, ConflictPathToken, EphemeralSynchronizationConflictSides,
-    ExpectedConfiguration, ObservePublicationRemoteRequest, PollIneligibility, PollingInterval,
+    ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
+    PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
     RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
     RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
-    RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration,
-    RemotePollingValueError, RemotePublicationEvidence, RemoteRefClassification,
-    RemoteRefObservation, RemoteRefPlan, RemoteRefPlanError, RemoteRefTarget, RemoteReservation,
-    RemoteReservationOutcome, RemoteSafePointOutcome, RemoteSnapshot,
-    ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
-    SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
-    SynchronizationOutcome, SynchronizationResult, SynchronizationStage, SynchronizationTarget,
-    SynchronizeRemoteRequest,
+    RemoteOutcomeCategory, RemotePollError, RemotePollInvocation, RemotePollOutcome,
+    RemotePollReport, RemotePollResult, RemotePollingConfiguration, RemotePollingValueError,
+    RemotePublicationEvidence, RemoteRefClassification, RemoteRefObservation, RemoteRefPlan,
+    RemoteRefPlanError, RemoteRefTarget, RemoteReservation, RemoteReservationOutcome,
+    RemoteSafePointOutcome, RemoteSnapshot, ResolveSynchronizationOutcome,
+    ResolveSynchronizationRequest, SynchronizationConflictInspection, SynchronizationConflictPath,
+    SynchronizationError, SynchronizationOutcome, SynchronizationResult, SynchronizationStage,
+    SynchronizationTarget, SynchronizeRemoteRequest,
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
@@ -93,6 +94,7 @@ const MAX_DOCUMENT_DIRECTORY_ENTRIES: usize = 1024;
 const MAX_MANAGED_DIRECTORY_DEPTH: usize = 1;
 const MAX_MANAGED_DIRECTORY_ENTRIES: usize = 1024;
 type LifecycleLeaseHook = (LifecycleLeasePhase, Box<dyn FnOnce() + Send>);
+type PollBoundaryHook = Box<dyn FnMut(FailurePoint, Option<usize>) + Send>;
 #[cfg(unix)]
 type OwnedPathHook = (
     Option<PathBuf>,
@@ -235,6 +237,7 @@ pub struct RepositoryService {
     availability: Mutex<IndexAvailability>,
     failure_point: Mutex<Option<FailurePoint>>,
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
+    poll_boundary_hook: Mutex<Option<PollBoundaryHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     index_owner_heartbeat_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -665,6 +668,9 @@ pub enum RegistryConnectionPhase {
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    PollBeforeTarget,
+    PollBeforeDiscovery,
+    PollAfterCompletion,
     PollAfterMaterializationIntent,
     PollAfterMaterializationBranch,
     PollAfterFailedMaterializationWorktree,
@@ -3277,6 +3283,7 @@ impl RepositoryService {
             availability: Mutex::new(availability),
             failure_point: Mutex::new(None),
             lifecycle_lease_hook: Mutex::new(None),
+            poll_boundary_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
             refresh_claim_hook: Mutex::new(None),
             index_owner_heartbeat_hook: Mutex::new(None),
@@ -4577,6 +4584,34 @@ impl RepositoryService {
             .observation_hook
             .lock()
             .expect("test observation hook lock") = Some(Box::new(hook));
+    }
+
+    /// Deterministic local race boundary, available to harness=false SSH tests.
+    /// The poll invokes this with no transport, registry guard or lease held.
+    #[doc(hidden)]
+    pub fn set_poll_boundary_hook_for_testing(
+        &self,
+        hook: impl FnMut(FailurePoint, Option<usize>) + Send + 'static,
+    ) {
+        *self.poll_boundary_hook.lock().expect("poll boundary hook") = Some(Box::new(hook));
+    }
+
+    fn poll_boundary(
+        &self,
+        point: FailurePoint,
+        ordinal: Option<usize>,
+        root: &Path,
+    ) -> Result<(), RepositoryError> {
+        self.check_failure(point, RepositoryOperation::RepositorySnapshot, root)?;
+        if let Some(hook) = self
+            .poll_boundary_hook
+            .lock()
+            .map_err(|_| remote::state::recovery_required())?
+            .as_mut()
+        {
+            hook(point, ordinal);
+        }
+        Ok(())
     }
 
     #[doc(hidden)]

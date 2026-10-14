@@ -187,7 +187,242 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     }
     migrate_poll_attempt_times(transaction)?;
     migrate_poll_materializations(transaction)?;
+    migrate_poll_dispositions(transaction)?;
     Ok(())
+}
+
+const POLL_DISPOSITION_SCHEMA: &str = r#"
+    CREATE TABLE remote_poll_dispositions (
+        repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+        operation_ulid TEXT NOT NULL,
+        ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+        classification TEXT NOT NULL CHECK(classification IN ('primary','context','malformed')),
+        remote_ref TEXT,
+        kind TEXT CHECK(kind IN ('document','ticket')),
+        item_id TEXT,
+        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
+        after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
+        observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
+        PRIMARY KEY(repository_id,ordinal), UNIQUE(repository_id,remote_ref),
+        FOREIGN KEY(repository_id,operation_ulid) REFERENCES remote_operation_records(repository_id,operation_ulid) ON DELETE CASCADE,
+        CHECK((classification='context')=(kind IS NOT NULL)),
+        CHECK((kind IS NULL)=(item_id IS NULL)),
+        CHECK((classification='malformed')=(remote_ref IS NULL))
+    );
+    CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE OF repository_id,operation_ulid,action,poll_kind ON remote_operation_records WHEN EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=OLD.repository_id AND operation_ulid=OLD.operation_ulid) BEGIN SELECT RAISE(ABORT,'immutable disposition owner'); END;
+"#;
+const POLL_DISPOSITION_OBJECTS: &[(&str, &str)] = &[
+    ("TABLE", "remote_poll_dispositions"),
+    ("TRIGGER", "remote_poll_disposition_owner_immutable"),
+];
+fn validate_poll_disposition_schema(db: &Connection) -> Result<(), RepositoryError> {
+    for &(kind, name) in POLL_DISPOSITION_OBJECTS {
+        validate_schema_object(
+            db,
+            kind,
+            name,
+            schema_object_sql(POLL_DISPOSITION_SCHEMA, kind, name).ok_or_else(recovery_required)?,
+        )?;
+    }
+    Ok(())
+}
+fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let n:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if n == 0 {
+        tx.execute_batch(POLL_DISPOSITION_SCHEMA)
+            .map_err(|_| recovery_required())?;
+    } else if n != 2 {
+        return Err(recovery_required());
+    }
+    validate_poll_disposition_schema(tx)?;
+    let cols = tx
+        .prepare("PRAGMA table_info(remote_operation_records)")
+        .and_then(|mut q| {
+            q.query_map([], |r| r.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    let names = ["poll_completed_at", "poll_next_eligible_at"];
+    let n = names
+        .iter()
+        .filter(|name| cols.iter().any(|c| c == **name))
+        .count();
+    if n == 1 {
+        return Err(recovery_required());
+    }
+    if n == 0 {
+        for name in names {
+            tx.execute_batch(&format!("ALTER TABLE remote_operation_records ADD COLUMN {name} INTEGER CHECK({name} IS NULL OR (typeof({name})='integer' AND {name} BETWEEN 0 AND 253402300799))")).map_err(|_|recovery_required())?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn record_poll_completion(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    at: i64,
+) -> Result<(), RepositoryError> {
+    poll_time(Some(at))?;
+    tx.execute("UPDATE remote_operation_records SET poll_completed_at=?3,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND operation_ulid=?2 AND poll_kind='update'",params![id,op.to_string(),at]).map_err(|_|recovery_required())?;
+    Ok(())
+}
+pub(super) fn replace_poll_dispositions(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    rows: &[super::poll::PollTargetReport],
+    at: i64,
+) -> Result<(), RepositoryError> {
+    tx.execute(
+        "DELETE FROM remote_poll_dispositions WHERE repository_id=?1",
+        [id],
+    )
+    .map_err(|_| recovery_required())?;
+    for (ordinal, row) in rows.iter().enumerate() {
+        let classification = if row.kind.is_some() {
+            "context"
+        } else if row.target.is_some() {
+            "primary"
+        } else {
+            "malformed"
+        };
+        tx.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,remote_ref,kind,item_id,disposition,before_oid,after_oid,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,op.to_string(),ordinal as i64,classification,row.target.as_ref().map(RemoteRefTarget::remote_ref),row.kind.map(|k|crate::repository::authoring_kind_segment(&k)),row.item_id.as_ref().map(ToString::to_string),disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string()),at]).map_err(|_|recovery_required())?;
+    }
+    Ok(())
+}
+pub(super) fn update_poll_disposition(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    ordinal: usize,
+    row: &super::poll::PollTargetReport,
+) -> Result<(), RepositoryError> {
+    if tx.execute("UPDATE remote_poll_dispositions SET disposition=?4,before_oid=?5,after_oid=?6 WHERE repository_id=?1 AND operation_ulid=?2 AND ordinal=?3",params![id,op.to_string(),ordinal as i64,disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string())]).map_err(|_|recovery_required())?!=1 { return Err(recovery_required()); }
+    Ok(())
+}
+fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
+    use super::poll::PollDisposition::*;
+    match d {
+        Current => "current",
+        FastForwarded => "fast_forwarded",
+        LocalAhead => "local_ahead",
+        Diverged => "diverged",
+        Dirty => "dirty",
+        Conflicted => "conflicted",
+        Inaccessible => "inaccessible",
+        Materialized => "materialized",
+        Nonconforming => "nonconforming",
+        BlockedByLocalState => "blocked_by_local_state",
+        MaterializationIncomplete => "materialization_incomplete",
+        Malformed => "malformed",
+        RemotelyDeleted => "remotely_deleted",
+        HistoryUnknown => "history_unknown",
+        NotReached => "not_reached",
+    }
+}
+fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryError> {
+    use super::poll::PollDisposition::*;
+    Ok(match value {
+        "current" => Current,
+        "fast_forwarded" => FastForwarded,
+        "local_ahead" => LocalAhead,
+        "diverged" => Diverged,
+        "dirty" => Dirty,
+        "conflicted" => Conflicted,
+        "inaccessible" => Inaccessible,
+        "materialized" => Materialized,
+        "nonconforming" => Nonconforming,
+        "blocked_by_local_state" => BlockedByLocalState,
+        "materialization_incomplete" => MaterializationIncomplete,
+        "malformed" => Malformed,
+        "remotely_deleted" => RemotelyDeleted,
+        "history_unknown" => HistoryUnknown,
+        "not_reached" => NotReached,
+        _ => return Err(recovery_required()),
+    })
+}
+pub(super) fn read_poll_dispositions(
+    db: &Connection,
+    id: i64,
+) -> Result<Vec<super::poll::PollTargetReport>, RepositoryError> {
+    let rows=db.prepare("SELECT d.operation_ulid,d.ordinal,d.classification,d.remote_ref,d.kind,d.item_id,d.disposition,d.before_oid,d.after_oid,d.observed_at,o.remote_name,o.primary_branch,o.action,o.poll_kind FROM remote_poll_dispositions d LEFT JOIN remote_operation_records o ON o.repository_id=d.repository_id AND o.operation_ulid=d.operation_ulid WHERE d.repository_id=?1 ORDER BY d.ordinal")
+        .and_then(|mut q|q.query_map([id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,Option<String>>(4)?,r.get::<_,Option<String>>(5)?,r.get::<_,String>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<String>>(8)?,r.get::<_,i64>(9)?,r.get::<_,String>(10)?,r.get::<_,String>(11)?,r.get::<_,String>(12)?,r.get::<_,Option<String>>(13)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    let mut result = Vec::new();
+    let mut operation = None;
+    for (
+        op,
+        ordinal,
+        class,
+        reference,
+        kind,
+        item,
+        d,
+        before,
+        after,
+        at,
+        remote,
+        primary,
+        action,
+        poll_kind,
+    ) in rows
+    {
+        crate::repository::OperationId::parse(&op).map_err(|_| recovery_required())?;
+        if ordinal != result.len() as i64
+            || operation.as_ref().is_some_and(|old| old != &op)
+            || action != "poll"
+            || poll_kind.as_deref() != Some("update")
+        {
+            return Err(recovery_required());
+        }
+        operation = Some(op);
+        poll_time(Some(at))?;
+        let plan = RemoteRefPlan::from_configuration(&remote, &primary)
+            .map_err(|_| recovery_required())?;
+        let (target, kind, item_id) = match (class.as_str(), reference, kind, item) {
+            ("primary", Some(r), None, None) if r == plan.primary().remote_ref() => {
+                (Some(plan.primary().clone()), None, None)
+            }
+            ("context", Some(r), Some(k), Some(i)) => {
+                let kind = match k.as_str() {
+                    "document" => AuthoringKind::Document,
+                    "ticket" => AuthoringKind::Ticket,
+                    _ => return Err(recovery_required()),
+                };
+                let item = i.parse::<ItemId>().map_err(|_| recovery_required())?;
+                let target = plan.context(kind, &item);
+                if target.remote_ref() != r {
+                    return Err(recovery_required());
+                }
+                (Some(target), Some(kind), Some(item))
+            }
+            ("malformed", None, None, None) => (None, None, None),
+            _ => return Err(recovery_required()),
+        };
+        result.push(super::poll::PollTargetReport {
+            target,
+            kind,
+            item_id,
+            disposition: disposition(&d)?,
+            before_oid: oid(before)?,
+            after_oid: oid(after)?,
+        });
+    }
+    Ok(result)
+}
+pub(super) fn poll_completion_metadata(
+    db: &Connection,
+    id: i64,
+    op: crate::repository::OperationId,
+) -> Result<(OffsetDateTime, Option<OffsetDateTime>, bool), RepositoryError> {
+    let (at,next,latest):(Option<i64>,Option<i64>,bool)=db.query_row("SELECT coalesce(poll_completed_at,updated_at),poll_next_eligible_at,EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE repository_id=?1 AND operation_ulid=?2) FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2",params![id,op.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(|_|recovery_required())?;
+    Ok((
+        poll_time(at)?.ok_or_else(recovery_required)?,
+        poll_time(next)?,
+        latest,
+    ))
 }
 
 const POLL_MATERIALIZATION_SCHEMA: &str = r#"
@@ -1625,6 +1860,7 @@ pub struct RemoteContextSnapshot {
     tracking_oid: Option<Oid>,
     publication_evidence: RemotePublicationEvidence,
     state: RemoteContextState,
+    latest_disposition: Option<super::poll::PollDisposition>,
 }
 
 impl RemoteContextSnapshot {
@@ -1647,6 +1883,7 @@ impl RemoteContextSnapshot {
             tracking_oid,
             publication_evidence,
             state,
+            latest_disposition: None,
         }
     }
 
@@ -1685,12 +1922,21 @@ impl RemoteContextSnapshot {
     pub fn state(&self) -> RemoteContextState {
         self.state
     }
+    pub fn latest_disposition(&self) -> Option<super::poll::PollDisposition> {
+        self.latest_disposition
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RemoteSnapshotPolicy {
+    configuration: RemotePollingConfiguration,
+    dispositions: Vec<super::poll::PollTargetReport>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteSnapshot {
     // Keep the snapshot compact inside public result enums as attempt state grows.
-    polling: Box<RemotePollingConfiguration>,
+    polling: Box<RemoteSnapshotPolicy>,
     latest_outcome: Option<RemoteOutcomeCategory>,
     latest_attempt_at: Option<OffsetDateTime>,
     next_eligible_at: Option<OffsetDateTime>,
@@ -1708,7 +1954,10 @@ impl RemoteSnapshot {
         contexts: Vec<RemoteContextSnapshot>,
     ) -> Self {
         Self {
-            polling: Box::new(polling),
+            polling: Box::new(RemoteSnapshotPolicy {
+                configuration: polling,
+                dispositions: Vec::new(),
+            }),
             latest_outcome,
             latest_attempt_at: None,
             next_eligible_at: None,
@@ -1719,7 +1968,7 @@ impl RemoteSnapshot {
     }
 
     pub fn polling(&self) -> &RemotePollingConfiguration {
-        &self.polling
+        &self.polling.configuration
     }
 
     pub fn latest_outcome(&self) -> Option<RemoteOutcomeCategory> {
@@ -1732,6 +1981,16 @@ impl RemoteSnapshot {
 
     pub fn next_eligible_at(&self) -> Option<OffsetDateTime> {
         self.next_eligible_at
+    }
+    pub fn poll_dispositions(&self) -> &[super::poll::PollTargetReport] {
+        &self.polling.dispositions
+    }
+    pub fn primary_disposition(&self) -> Option<super::poll::PollDisposition> {
+        self.polling
+            .dispositions
+            .iter()
+            .find(|r| r.target.is_some() && r.kind.is_none())
+            .map(|r| r.disposition)
     }
 
     pub fn observations(&self) -> &[RemoteRefObservation] {
@@ -4656,6 +4915,17 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
     audit_poll_materializations(&transaction)?;
+    validate_poll_disposition_schema(&transaction)?;
+    let times=transaction.prepare("SELECT poll_completed_at,poll_next_eligible_at,action,poll_kind FROM remote_operation_records").and_then(|mut q|q.query_map([],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    for (at, next, action, kind) in times {
+        poll_time(at)?;
+        poll_time(next)?;
+        if (at.is_some() || next.is_some())
+            && (action != "poll" || kind.as_deref() != Some("update"))
+        {
+            return Err(recovery_required());
+        }
+    }
     for table in [
         "remote_resolution_ref_log_artifacts",
         "remote_resolution_index_artifacts",
@@ -4665,6 +4935,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         "remote_context_states",
         "remote_operation_records",
         "remote_poll_materializations",
+        "remote_poll_dispositions",
         "remote_integration_steps",
         "remote_integration_windows",
         "remote_identity_confirmations",
@@ -4724,6 +4995,7 @@ fn read_snapshot_rows(
     snapshot.history_unknown = policy.history_unknown;
     snapshot.latest_attempt_at = policy.latest_attempt_at;
     snapshot.next_eligible_at = policy.next_eligible_at;
+    snapshot.polling.dispositions = read_poll_dispositions(connection, repository_id)?;
     let query = if audit_history {
         "SELECT id,remote_name,primary_branch,configuration_generation,observed_at,is_current FROM remote_observation_batches WHERE repository_id=?1 ORDER BY id"
     } else {
@@ -4921,6 +5193,18 @@ fn read_snapshot_rows(
     if !current_contexts.is_empty() {
         return Err(recovery_required());
     }
+    for context in &mut snapshot.contexts {
+        context.latest_disposition = snapshot
+            .polling
+            .dispositions
+            .iter()
+            .find(|r| {
+                r.target == context.target
+                    && (r.target.is_some()
+                        || r.disposition == super::poll::PollDisposition::Malformed)
+            })
+            .map(|r| r.disposition);
+    }
     // Local discovery has its own validation and recovery contract. Startup's
     // remote audit must not reinterpret unrelated local-cache corruption.
     if audit_history {
@@ -4956,6 +5240,18 @@ fn read_snapshot_rows(
             evidence,
             RemoteContextState::HistoryUnknown,
         ));
+    }
+    for context in &mut snapshot.contexts {
+        context.latest_disposition = snapshot
+            .polling
+            .dispositions
+            .iter()
+            .find(|row| {
+                row.target == context.target
+                    && (row.target.is_some()
+                        || row.disposition == super::poll::PollDisposition::Malformed)
+            })
+            .map(|row| row.disposition);
     }
     Ok(snapshot)
 }

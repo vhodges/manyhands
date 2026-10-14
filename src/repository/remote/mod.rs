@@ -9,7 +9,11 @@ pub use merge::{
     ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
-pub use poll::{AutomaticPollEligibility, PollIneligibility};
+pub use poll::{
+    AutomaticPollEligibility, PollCompletion, PollDisposition, PollIneligibility,
+    PollPublicationRemoteRequest, PollTargetReport, RemotePollError, RemotePollOutcome,
+    RemotePollReport, RemotePollResult,
+};
 pub use sync::{
     EphemeralSynchronizationConflictSides, PublishPendingReason, SynchronizationConflictInspection,
     SynchronizationConflictPath, SynchronizationError, SynchronizationOutcome,

@@ -10,6 +10,233 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Task 6 Delivered Locally For Review — 2026-10-14T04:31:06Z
+
+**Complete Task 6 review base:** `ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`.
+Include historical docs checkpoint `a70a2abcebb4c84694629bb7bd79e048ea1c83c1`
+and the feature/bookkeeping commit whose exact HEAD is returned after commit.
+The controller clarification resolved the entry interface issue within existing
+Task 6 authorization; **no owner amendment or approved-contract change**.
+Prior Task 5 spec/quality approvals and Task 0/preflight evidence remain trusted.
+
+### Delivered Interfaces And Ordered Orchestration
+
+- Public `poll_publication_remote`, request/result/outcome/report/error types,
+  PollCompletion/PollDisposition/PollTargetReport and public re-exports. Request
+  has only root/op ID/invocation/approval/restart and no Debug. Reports use
+  accessors and validated IDs/refs/OIDs/times/fixed categories; errors render fixed
+  text without inner Debug. The outcome accessor retains the existing fixed
+  operation category for before-batch cancellation and older terminal replay.
+- Terminal replay precedes eligibility/endpoints/authentication; interrupted
+  replay requires explicit restart, observe/update identity stays distinct.
+  New automatic attempts gate before endpoint configuration/reservation; explicit
+  bypass preserves policy flags. Missing remote records configuration-required
+  without transport. D3 and pending-local gates precede transport; automatic Busy
+  and manual PollYielding use the delivered arbitration and D4 remains unchanged.
+- Real fetch uses Task 3's combined frozen/automatic authenticated scope and exact
+  parsed fetch set. Caller progress probes read flags/generation/epoch from one
+  bounded read-only query, throttled to 250 ms; no lease, migration or write.
+  Captured stop reason is sticky and wins over backend GenericError classification.
+  Everything after successful fetch is one crate-private `poll_after_fetch` entry.
+- Shared batch transaction body extracted once into `commit_observation_batch_with`.
+  Existing observation/synchronization helper/signature forwards a no-op callback;
+  their transaction and acknowledgment algorithm is unchanged. Poll's initial
+  ordered NotReached rows commit after the advertisement and before the same
+  AfterBatchCommit acknowledgment. Callback faults roll back both and checkpoint.
+- Targets process primary, existing local contexts by ref, new remote contexts by
+  ref, then redacted malformed entries. Remote-only history does not promote a
+  new remote context into the local group. Each target takes BeforeLocalMutation,
+  a single short common lease, frozen plan/config/endpoint/key/ref re-observation,
+  classification/guarded FF or Task 5 materialization, durable row/refresh flag,
+  release. Registered inaccessible contexts classify normally; owned incomplete
+  intents still use Task 5 reconciliation. Task 4/5 wrappers retain their behavior
+  with poll-local unlocked bodies enabling that same lease acquisition.
+- Stop/fence after batch returns Interrupted/Cancelled reports with processed rows
+  retained and remaining NotReached; changed targets durably require refresh and
+  no discovery runs on the stop path. Final configuration fence also runs before
+  discovery. Success sets refresh-required before finish, writes policy/times once,
+  releases reservation, then ordinary index refresh outside lease under a fresh
+  internal ID. Index failure preserves the report/flag; ordinary local refresh
+  recovery resumes that separate journal ID without transport. Poll record never
+  gains synchronization index_pending authority.
+
+### Durable Metadata, Audit And Privacy
+
+One latest `remote_poll_dispositions` set per repository, with exact-SQL checked
+table/owner trigger installed all-or-nothing, repository and operation FKs, startup
+row/identity/OID/time/schema audits and exact sorted inventory entry. Only the
+approved target metadata columns are stored. Initial NotReached rows are replaced
+per processed target; a later batch replaces the set. Latest-ID replay uses rows;
+older terminal replay returns an empty target list and original completion/outcome.
+
+Two nullable **metadata-only** operation columns, poll_completed_at and
+poll_next_eligible_at, retain each attempt's completion/deadline. They are necessary
+because latest policy timestamps/interval can change after an older ID completes;
+deriving replay from current policy would rewrite its outcome. They migrate as a
+pair in the same transaction; partial migration rolls back the new table too.
+Their stop/finish writes are update-kind-only and atomic with existing phase writes;
+old observe/sync rows gain NULLs, not inferred evidence. Startup validates times
+and rejects non-update ownership of those fields. No new phase or safe point.
+
+RemoteSnapshot exposes poll_dispositions/primary_disposition plus existing times;
+RemoteContextSnapshot exposes latest_disposition, including projected local-only
+HistoryUnknown contexts. State enum/versioned DTO schemas stay unchanged.
+Dispositions use the existing boxed snapshot policy allocation to avoid public
+result-size growth. DB/live WAL/VACUUM backup and report checks exclude canonical
+body, malformed raw ref and endpoint privacy probes. Fixed guidance only.
+
+Observation.rs changes are **three visibility widenings only**; the public
+observe_publication_remote body is byte-for-byte unchanged. Sync/refs/discovery/
+read/frontend/helper bodies and dependencies/lockfiles/approved documents have
+empty diffs against review base. API audit poll-once/R09/R13/R16 now names the
+operation/results and separates downstream adapters, drafts and scheduling.
+
+### Verification, Counts And Honest Trial Record
+
+**27 new library tests**: 22 poll, 4 state, 1 reservation. Real local Git/ODB
+fixtures install tracking refs and test the post-fetch library stage, not a fake
+transport. Public non-cfg(test) FailurePoint boundaries plus the hidden public
+poll-boundary callback support deterministic actual external local/tracking/ref/
+endpoint changes outside lease/registry/transport scopes and harness=false reuse.
+No sleeps, global Git mutation or developer keys. Existing SSH suites unchanged.
+
+Original recorded RED: poll **44 passed/5 failed/529 filtered**, state **50 passed/
+2 failed/526 filtered** before behavior. Incremental RED and fixture trials are
+retained below, including final endpoint fence, local-only snapshot projection,
+wrong-category/target-order corrections and actual refresh-journal resumption.
+First full gate reached inventory **77 passed/1 failed**, not a full pass. One
+subsequent gate stopped at Clippy's collapsible local-group predicate before full
+tests; collapsed it without behavior change. No timeout or fake passing gate.
+
+Final sequential Devenv evidence:
+
+| Exact command | Final result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **66 passed**, 532 filtered |
+| `devenv shell -- cargo test --locked --lib remote::state` | **54 passed**, 544 filtered |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | **40 passed**, 556 filtered (before final poll-only fixes; final full gate includes all 40) |
+| `devenv shell -- cargo test --locked --lib` | **598 passed**, 0 failed |
+| `devenv shell -- cargo check --all-features --locked` | PASS |
+| `devenv shell -- cargo fmt --check` | PASS |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS |
+| `devenv shell -- cargo test --all-features --locked` | **1,675 passed, 0 failed, 1 existing ignored** |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0, no window |
+
+Focused/library log `tool_138890967001rT9hVw0cMRVbWb`; final full sequential gate
+log `tool_1388f80350017D54xCWWMkT8Kp`: **598 library**, **779 ordinary integration**,
+**289 unchanged real-SSH** (41 comment, 25 merge, 15 observation, 63 synchronization,
+31 fixture, 114 transport), **9 compile-fail doctests**. Enablement inventory **78
+passed** in full gate. Existing thousand-item characterization remains ignored.
+No Rust change after that final gate; only canonical bookkeeping follows.
+
+### Review Handoff And Remaining Gates
+
+Task 6 implementation is ticked and ready for controller's **independent spec,
+then quality review** of the full range. No subagent dispatched. **Task 2 minor
+direct-SQL poll-kind immutability regression remains explicitly deferred to final
+Cycle review** (`ses_ec9e9909cffeS4kt0Z0ENmyjss`). Whole-poll real-SSH/native exit
+evidence is still pending; Task 6 library results do not claim it. No Task 7 work,
+native dispatch, desktop interaction, push, PR, merge, closure or worktree removal.
+Ticket remains **open**. D1–D4, accepted⇒active-only and the sole Task 5 final
+canonical validator same-lease exception remain unchanged.
+
+Canonical GREEN/review-ready comment `01M4WAV9ECDNZ8NFSP7CGSXK85`. Status/diff/log
+and source/interface/contract diffs inspected before staging only intended files.
+Whitespace and scripts/show-ticket canonical schema/rendering checked before the
+authorized local `feat: add one-shot remote poll` commit. Full range includes the
+earlier docs-only issue/clarification checkpoint; exact head returned after commit.
+
+## Task 6 Clarification, Resume And RED — 2026-10-14T02:40:36Z
+
+### Incremental Validation And Snapshot Regression RED
+
+First sequential required gate passed check/fmt/Clippy, then full tests stopped
+at enablement inventory **77 passed/1 failed** because the new table was appended
+out of alphabetic order (actual SQL inventory is sorted). Library **596** and
+earlier untouched SSH suites had passed; this is not a complete full-suite pass.
+Log `tool_1386d29760019wg6haq5fQMBL3`. Corrected expected inventory order only.
+Self-review then found two orchestration category/order bugs. Before production
+correction, `devenv shell -- cargo test --locked --lib remote::poll::tests::task6_`
+is **20 passed/2 failed/576 filtered**: a registered worktree on a wrong branch
+was BlockedByLocalState instead of Inaccessible; remote-only advertisement history
+was put before an existing local context. Initial wrong-head fixture attempted to
+reuse main (backend refuses because root checks it out); corrected to a real
+unoccupied foreign branch, then both failures are behavioral RED. Only remote
+contexts actually locally present/cached active enter the existing group; without
+an owned materialization intent, a registered local context classifies normally.
+Owned incomplete materialization still uses Task 5's conservative reconciliation.
+
+Additional deterministic local-race tests use public, non-cfg(test) FailurePoint
+boundaries and a hidden public callback seam usable by harness=false SSH tests.
+Callbacks run outside lease/registry/transport scopes, then production reobserves.
+Before wiring the boundary, `devenv shell -- cargo test --locked --lib
+remote::poll::tests::task6_` is **18 passed/2 failed/576 filtered**: target boundary
+not reached, final endpoint case completes instead of stopping. Wiring will then
+exercise actual external local-ref/tracking/endpoint changes, not fabricated
+transport. The boundary does not permit a caller-supplied fetch result.
+With the public boundaries wired, the identical command is **19 passed/1 failed/
+576 filtered** before the final fence correction: actual local/tracking/endpoint
+changes before context processing now prove Interrupted with primary retained;
+an actual endpoint change after the last target still incorrectly completes and
+scans. Added final configuration re-observation only after this behavioral RED.
+
+Initial five new poll cases GREEN **49 passed**. Expanded stop/order/replay/index
+matrix trial **53 passed/1 failed**: later refresh incorrectly used a new ID after
+an injected refresh had created a failed local journal row. Existing index recovery
+requires resuming that ordinary refresh ID; corrected fixture to retrieve/resume
+it, proving it differs from poll ID. No production recovery-policy change.
+Further gate matrix trial **58 passed/1 failed**: assertion used nonexistent local
+`phase` column instead of `state='created'`; corrected fixture only.
+State trial **51 passed/1 failed**: Cycle 04 migration fixture replaced operation
+records but retained the new empty disposition table with its FK. Drop that table
+with the other modern evidence tables to represent genuine legacy schema.
+Clippy trial found seven needless borrows after poll-local lease extraction, one
+cloned fixture slice, and snapshot growth affecting RefreshOutcome. Corrected
+borrows/slice and grouped dispositions into the existing private boxed snapshot
+policy allocation, retaining public shapes; no suppression of those diagnostics.
+
+Self-review finds local-only HistoryUnknown contexts are appended after existing
+dispositions are attached. Meaningful regression before correction:
+`devenv shell -- cargo test --locked --lib remote::state::persistence_tests::task6_local_history_unknown_context_also_exposes_its_latest_disposition`
+exits **101, 0 passed/1 failed/589 filtered**, expected Some(HistoryUnknown), got
+None. Initial trial used an intentionally synthetic cached path through the full
+local-cache validator (IndexUnavailable), then a function-pointer coercion failed
+to compile; corrected to the existing state test's direct reconstruction closure.
+Only that final assertion run is behavioral RED. Correction follows this record.
+
+Controller clarifies the file list is a planning map, not a prohibition on
+necessary shared-seam edits. Atomic batch plus initial rows was already approved:
+a minimal reservation.rs/reservation_tests.rs transaction extraction is within
+Task 6 authority. The entry issue below is **resolved as an implementation detail,
+not an owner amendment**. Approved contracts unchanged. Preserve the existing
+observation and synchronization paths exactly using one internal transaction
+implementation, no duplicated ownership/acknowledgment logic. Review base remains
+`ff43d2c3873e4c9cbd9f9f579c5cdd0ef4c513a7`, including docs checkpoint
+`a70a2abcebb4c84694629bb7bd79e048ea1c83c1`. Clean resume HEAD verified.
+
+Tests first, behavior-free signatures/todo only before RED. Initial poll compile
+trial had nine wrong module qualification errors for existing transport/key types;
+corrected imports, then executed meaningful runtime RED before behavior:
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::poll` | **44 passed, 5 failed, 529 filtered**, exit 101; missing atomic callback/public gates/post-fetch behavior |
+| `devenv shell -- cargo test --locked --lib remote::state` | **50 passed, 2 failed, 526 filtered**, exit 101; disposition columns absent; dependent partial-loss fixture cannot yet drop absent table |
+
+Atomic test writes in the callback after verifying the advertisement exists,
+returns an error, and requires rollback of batch, callback write and checkpoint;
+also rejects another service's ownership token before invoking its callback.
+Other tests require primary ref/index/files advancement, exact terminal replay
+without credentials, four automatic gates with no reservation/outcome writes,
+configuration fencing, and atomic-batch cancellation returning NotReached without
+discovery. State tests require exact metadata-only columns and partial-loss refusal.
+Library fixtures install real local tracking refs and drive one post-fetch seam;
+no fake transport. Public types carry no endpoint/key/passphrase. One temporary
+private-interface visibility warning will be resolved with visibility-only widening.
+Canonical RED/resume comment `01M4W4GZ1NQT9JYSJP1YM2ZEJQ` precedes production.
+Task 6 in progress, ticket open; prior Task 5 approvals and Task 2 deferred minor
+retained; no subagents or Task 7 work.
+
 ## Task 6 Entry And Atomic Batch Interface Blocker — 2026-10-14T02:33:54Z
 
 Fresh implementer assigned **Task 6 only**, inline, no subagents, in the exact

@@ -6,7 +6,7 @@ use std::{fmt, path::PathBuf};
 
 /// Process-only equality evidence. Never serialized or included in Debug/errors.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct ObservationConfiguration {
+pub(crate) struct ObservationConfiguration {
     plan: RemoteRefPlan,
     fetch: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
     push: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
@@ -324,7 +324,7 @@ impl RepositoryService {
     }
 }
 
-fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTransportError> {
+pub(super) fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTransportError> {
     let mut error = SshTransportError {
         root: root.to_owned(),
         remote_name: String::new(),
@@ -345,7 +345,7 @@ fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTranspor
     RemoteRefPlan::from_configuration(&remote, &config.primary_branch).map_err(|_| error)
 }
 
-fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
+pub(super) fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
     use SshTransportErrorKind::*;
     match kind {
         ConfigurationInvalid | PublicationRemoteMissing | UsernameRequired | EndpointChanged => {

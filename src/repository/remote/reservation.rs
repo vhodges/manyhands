@@ -463,7 +463,55 @@ fn acknowledge(
             None,
         )?;
     }
+    if result != RemoteSafePointOutcome::Continue
+        && record.poll_kind == Some(state::PollKind::Update)
+    {
+        let id = tx
+            .query_row(
+                "SELECT repository_id FROM remote_operation_records WHERE id=?1",
+                [record.id],
+                |r| r.get(0),
+            )
+            .map_err(|_| state::recovery_required())?;
+        state::record_poll_completion(tx, id, record.operation_id, now())?;
+    }
     Ok(result)
+}
+
+/// Read-only, bounded progress probe. Never migrates, takes a lease or writes.
+pub(super) fn poll_progress(
+    service: &RepositoryService,
+    owner: &RemoteReservation,
+) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    if !Arc::ptr_eq(&service.remote_reservation_scope, &owner.scope) {
+        return Err(state::recovery_required());
+    }
+    let db = rusqlite::Connection::open_with_flags(
+        &service.registry_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|_| state::recovery_required())?;
+    db.busy_timeout(std::time::Duration::from_millis(250))
+        .map_err(|_| state::recovery_required())?;
+    let (yielded,cancelled,generation,epoch,phase,policy_generation):(bool,bool,i64,i64,String,i64)=db.query_row("SELECT o.yield_requested,o.cancel_requested,o.configuration_generation,o.owner_epoch,o.phase,p.configuration_generation FROM remote_operation_records o JOIN remote_polling_state p ON p.repository_id=o.repository_id WHERE o.repository_id=?1 AND o.operation_ulid=?2",params![owner.repository_id,owner.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(|_|state::recovery_required())?;
+    Ok(
+        if generation != owner.generation
+            || policy_generation != owner.generation
+            || epoch != owner.epoch
+            || !matches!(
+                phase.as_str(),
+                "reserved" | "advertising" | "persisting" | "local_prepared"
+            )
+        {
+            RemoteSafePointOutcome::Interrupted
+        } else if cancelled {
+            RemoteSafePointOutcome::Cancelled
+        } else if yielded {
+            RemoteSafePointOutcome::Interrupted
+        } else {
+            RemoteSafePointOutcome::Continue
+        },
+    )
 }
 
 /// The only observation publication path for a reservation. Ownership, requests,
@@ -475,6 +523,29 @@ pub(in super::super) fn commit_observation_batch(
     plan: &super::RemoteRefPlan,
     observations: &[super::RemoteRefObservation],
     observed_at: i64,
+) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    commit_observation_batch_with(
+        service,
+        root,
+        owner,
+        plan,
+        observations,
+        observed_at,
+        |_, _| Ok(()),
+    )
+}
+
+/// Full poll supplies metadata writes in the same ownership-checked transaction.
+/// Existing observation/synchronization callers use the no-op wrapper above.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn commit_observation_batch_with(
+    service: &RepositoryService,
+    root: &Path,
+    owner: &RemoteReservation,
+    plan: &super::RemoteRefPlan,
+    observations: &[super::RemoteRefObservation],
+    observed_at: i64,
+    write: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
         let record = owned(service, tx, id, owner)?;
@@ -516,6 +587,7 @@ pub(in super::super) fn commit_observation_batch(
         } else {
             state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
         }
+        write(tx, id)?;
         if synchronization {
             // Fresh Fetch evidence cannot erase an unresolved local/push checkpoint.
             tx.execute("UPDATE remote_operation_records SET phase=CASE WHEN reconciliation_required=1 THEN 'reconciling' ELSE 'fetch_observed' END,sync_checkpoint=CASE WHEN reconciliation_required=1 THEN sync_checkpoint ELSE 'fetch_observed' END WHERE id=?1",[record.id]).map_err(|_| state::recovery_required())?;
@@ -576,6 +648,9 @@ fn finish(
     }
     tx.execute("UPDATE remote_operation_records SET phase=?2,outcome=?3,updated_at=max(updated_at,?4) WHERE id=?1",
         params![record.id,phase,state::outcome_name(category),completed_at.unix_timestamp()]).map_err(|_| state::recovery_required())?;
+    if record.poll_kind == Some(state::PollKind::Update) {
+        state::record_poll_completion(tx, id, record.operation_id, completed_at.unix_timestamp())?;
+    }
     Ok(())
 }
 
