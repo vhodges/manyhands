@@ -270,8 +270,8 @@ Implementation Tasks 0–7 have controller-reported SPEC/quality approvals throu
 controller-dispatched reviews remain pending. The
 [dated execution ledger acceptance map](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14)
 maps every acceptance row and dimension to exact names observed passing in the
-final-tree local gate: **1,765 passed, 0 failed, 1 existing ignored**, including
-**73 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
+final-tree local gate: **1,766 passed, 0 failed, 1 existing ignored**, including
+**74 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
 pass; Cargo/devenv lockfile hashes are unchanged.
 
 Concrete passing journeys include `poll_all_three_fast_forward`,
@@ -286,10 +286,13 @@ dimension checks rather than inferring coverage from these example names.
 Recovery/diagnostic/output scans reject accepted document/ticket titles. Raw
 DB/WAL/backup scans permit those titles only as legitimate canonical discovery
 index content; all body, endpoint, secret, malformed-name and rejected-title
-sentinels remain forbidden. Literal permission-denied unreadability has no named
-poll preservation test in this checkpoint; the ledger records row 6 as partially
-proved, not fully met. Missing, unregistered, redirected, foreign and wrong-branch
-inaccessibility is proved separately.
+sentinels remain forbidden. Literal permission-denied unreadability is now proved
+by `poll_unix_permission_denied_worktree_preserves_local_state`: actual directory
+and .git PermissionDenied, Inaccessible/fixed guidance, retained denied permissions,
+and full local snapshot/ref preservation after guarded restoration. **Row 6 is
+fully LOCAL-proved**. This cfg(unix) case executed on Linux as UID 1000; it fails
+if permissions are ineffective rather than silently skipping. Windows ACL
+permission-denied preservation proof remains pending native verification.
 
 Linux x86_64/aarch64, Windows x86_64/aarch64 and macOS aarch64 native executions
 are each **PENDING AUTHORIZATION**. Manual workflow wiring and local Linux tests

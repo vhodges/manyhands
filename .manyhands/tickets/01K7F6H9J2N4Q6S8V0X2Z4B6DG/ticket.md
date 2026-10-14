@@ -255,10 +255,17 @@ and the baseline.
   - [x] Resolve Task 6 duplicate attachment: one helper/pass per audit or normal
     path; existing local-only/persisted/malformed/startup validation tests pass.
   - [x] Final-tree sequential Devenv check/fmt/Clippy/full test/CLI PASS:
-    **1,765 passed, 0 failed, 1 existing ignored**. Lockfile hashes unchanged.
+    **1,766 passed, 0 failed, 1 existing ignored**, including 74 polling SSH cases
+    after the permission follow-up. Lockfile hashes unchanged.
   - [x] Record all 12 acceptance rows, exact passing names and property coverage
     in the dated ledger; explicitly retain unproven dimensions rather than
     marking them met. Cycle evidence links this checkpoint.
+  - [x] Owner-required row 6 follow-up: named real-SSH public API case
+    `poll_unix_permission_denied_worktree_preserves_local_state` proves actual
+    PermissionDenied and Inaccessible/full preservation with guarded restoration.
+    Row 6 fully LOCAL-proved on Linux as UID 1000; ineffective permissions fail
+    rather than skip. Windows ACL/native evidence remains pending. New final-tree
+    gate above supersedes first checkpoint counts; trials retained in ledger.
   - [ ] Controller-dispatched Task 8 SPEC, whole-branch quality and independent
     whole-branch review/resolution; no approval claimed by this implementer.
   - [ ] Final approved-review recording, final review-ready comment and Task 8
@@ -297,7 +304,8 @@ verification now complete; controller/user reports **SPEC and quality APPROVE**.
 Task 7 final SPEC and quality approvals are now controller-reported through b0f0055.
 Task 8 resolved both deferred minors and prepared local verification evidence;
 independent controller reviews and their resolution remain pending. The acceptance
-map records the literal unreadable-permissions coverage gap and pending native proof.
+map now closes the literal unreadable-permissions gap locally with a named Unix
+case and retains pending native/Windows ACL proof.
 Ticket remains
 open; native matrix evidence remains pending separate authorization.
 
@@ -308,7 +316,7 @@ once, while dirty, divergent, conflicted, malformed, inaccessible,
 unrecognized, renamed, and remotely deleted contexts remain unchanged and
 actionable.
 
-Task 8 local checkpoint: required final-tree checks pass with 1,765 tests and
+Task 8 local checkpoint: required final-tree checks pass with 1,766 tests and
 unchanged lockfiles. Exact command results, all 12 acceptance rows, commit ranges,
 failure history and remaining gates are in the
 [execution ledger](../../../docs/plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14).

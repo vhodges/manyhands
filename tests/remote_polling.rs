@@ -63,6 +63,11 @@ const CASES: &[ssh_harness::Case] = &[
     ("poll_diverged", diverged),
     ("poll_context_wrong_branch", context_wrong_branch),
     ("poll_missing_worktree_directory", missing_directory),
+    #[cfg(unix)]
+    (
+        "poll_unix_permission_denied_worktree_preserves_local_state",
+        permission_denied_worktree,
+    ),
     ("poll_primary_wrong_branch", primary_wrong_branch),
     ("poll_remote_deleted_preserves_local_work", remote_deleted),
     (
@@ -1345,6 +1350,97 @@ fn context_wrong_branch() -> Result<(), FixtureError> {
 fn missing_directory() -> Result<(), FixtureError> {
     exceptional(Exception::Missing)
 }
+
+#[cfg(unix)]
+fn permission_denied_worktree() -> Result<(), FixtureError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    struct RestorePermissions {
+        path: PathBuf,
+        original: std::fs::Permissions,
+    }
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            // Also restore on a failed assertion or early fixture error. The
+            // normal path explicitly checks restoration before result assertions.
+            let _ = std::fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
+    let p = Pair::new()?;
+    p.context(T)?;
+    let base = p.base()?;
+    let tr = reference(T);
+    let incoming = p.publish(&tr, base, &[("remote", Some((b"remote\n", MODE)))])?;
+    {
+        let local = fixed(git2::Repository::open(p.b.worktree(T)))?;
+        assert_eq!(fixed(local.head())?.target(), Some(base));
+        assert_eq!(
+            fixed(fixed(local.index())?.write_tree())?,
+            fixed(local.find_commit(base))?.tree_id()
+        );
+        assert!(fixed(local.statuses(None))?.is_empty());
+    }
+    let before = snapshot(&p.b)?;
+    let mut expected_refs = all_refs(&p.b.repo()?)?;
+    // Fetch may create/advance this one tracking ref, but no other ref or
+    // symbolic target may change while the checked-out context is inaccessible.
+    let destination = tracking(&tr);
+    if let Some(state) = expected_refs.iter_mut().find(|r| r.name == destination) {
+        state.direct = Some(incoming);
+        state.symbolic = None;
+    } else {
+        expected_refs.push(RefState {
+            name: destination,
+            direct: Some(incoming),
+            symbolic: None,
+        });
+    }
+    expected_refs.sort();
+    let restore = RestorePermissions {
+        path: p.b.worktree(T),
+        original: fixed(std::fs::metadata(p.b.worktree(T)))?.permissions(),
+    };
+    fixed(std::fs::set_permissions(
+        &restore.path,
+        std::fs::Permissions::from_mode(0o000),
+    ))?;
+    let denied_read = std::fs::read(restore.path.join(".git"));
+    let denied_directory = std::fs::read_dir(&restore.path);
+    // Fail rather than silently passing/skipping when root or ambient privileges
+    // make chmod ineffective. The guard restores permissions even on this panic.
+    assert!(matches!(denied_read, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+    assert!(matches!(denied_directory, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+
+    let result = p.poll_with(
+        &p.b.service,
+        p.request(RemotePollInvocation::Explicit),
+        &mut session(),
+    );
+    let denied_after = std::fs::read(restore.path.join(".git"));
+    let mode_after = std::fs::metadata(&restore.path).map(|m| m.permissions().mode() & 0o7777);
+    fixed(std::fs::set_permissions(
+        &restore.path,
+        restore.original.clone(),
+    ))?;
+    drop(restore);
+
+    assert!(matches!(denied_after, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
+    assert_eq!(
+        fixed(mode_after)?,
+        0,
+        "poll must preserve denied permissions"
+    );
+    let (r, _) = report(fixed(result)?)?;
+    assert_eq!(r.completion(), PollCompletion::Completed);
+    unchanged(&r, &tr, PollDisposition::Inaccessible);
+    assert_eq!(snapshot(&p.b)?, before);
+    assert_eq!(all_refs(&p.b.repo()?)?, expected_refs);
+    assert_eq!(fixed(p.b.repo()?.refname_to_id(&tr))?, base);
+    assert!(!p.b.worktree(T).join("remote").exists());
+    p.finish()
+}
+
 fn primary_wrong_branch() -> Result<(), FixtureError> {
     exceptional(Exception::PrimaryWrong)
 }
