@@ -2,6 +2,53 @@ use super::*;
 use crate::repository::keys::KeyMaterialErrorKind;
 
 #[test]
+fn polling_status_reads_stored_next_eligibility_as_utc_or_empty() {
+    let data = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    git2::Repository::init(&root).unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(data.path().join(crate::repository::REGISTRY_FILE)).unwrap();
+    connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)", [root.to_str().unwrap()]).unwrap();
+    // Supply the future column on the old production tree so the red assertion
+    // proves the read omits a stored deadline, rather than a missing SQL column.
+    let exists = connection
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .any(|name| name.unwrap() == "next_eligible_at");
+    if !exists {
+        connection
+            .execute_batch("ALTER TABLE remote_polling_state ADD COLUMN next_eligible_at INTEGER")
+            .unwrap();
+    }
+    let repo = service.resolve_repository(&root).unwrap();
+    assert_eq!(
+        service.polling_status(&repo).unwrap().next_eligible_at,
+        None
+    );
+    connection
+        .execute_batch("UPDATE remote_polling_state SET next_eligible_at=1767225600")
+        .unwrap();
+    assert_eq!(
+        service
+            .polling_status(&repo)
+            .unwrap()
+            .next_eligible_at
+            .as_deref(),
+        Some("2026-01-01T00:00:00Z")
+    );
+    connection
+        .execute_batch("UPDATE remote_polling_state SET next_eligible_at=NULL")
+        .unwrap();
+    assert_eq!(
+        service.polling_status(&repo).unwrap().next_eligible_at,
+        None
+    );
+}
+
+#[test]
 fn a_local_state_is_passed_on_only_when_it_has_the_form_of_a_name() {
     for name in [
         "created",

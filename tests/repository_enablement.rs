@@ -606,6 +606,8 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_integration_windows",
             "remote_observation_batches",
             "remote_operation_records",
+            "remote_poll_dispositions",
+            "remote_poll_materializations",
             "remote_polling_state",
             "remote_publication_attempts",
             "remote_ref_observations",

@@ -7,11 +7,140 @@ use rusqlite::Connection;
 
 mod support;
 
+// Task 1 review hardening: direct reads must reject corruption even when SQLite
+// checks were bypassed. These assertions cover already-implemented validation.
+#[test]
+fn corrupt_poll_times_fail_closed_at_snapshot_reopen_gate_and_status() {
+    for column in ["latest_attempt_at", "next_eligible_at"] {
+        for value in ["-1", "253402300800", "'invalid'", "1.5"] {
+            let fixture = support::born_repository();
+            let enabled = support::enabled_repository(&fixture);
+            let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+            Connection::open(enabled.data_directory.path().join(REGISTRY_FILE))
+                .unwrap()
+                .execute_batch(&format!("PRAGMA ignore_check_constraints=ON; UPDATE remote_polling_state SET {column}={value}"))
+                .unwrap();
+            assert_eq!(
+                enabled
+                    .service
+                    .remote_snapshot(&fixture.root)
+                    .unwrap_err()
+                    .kind,
+                RepositoryErrorKind::RecoveryRequired
+            );
+            // The policy gate/status projection consumes the deadline only;
+            // attempt time is validated by the full snapshot/startup audit.
+            if column == "next_eligible_at" {
+                assert_eq!(
+                    enabled
+                        .service
+                        .automatic_poll_eligibility(&fixture.root)
+                        .unwrap_err()
+                        .kind,
+                    RepositoryErrorKind::RecoveryRequired
+                );
+                assert_eq!(
+                    enabled.service.polling_status(&repo).unwrap_err().code(),
+                    manyhands::results::ResultCode::InternalError
+                );
+            }
+            match RepositoryService::open_at(enabled.data_directory.path()) {
+                Err(error) => assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired),
+                Ok(_) => panic!("accepted corrupt {column}={value}"),
+            }
+        }
+    }
+}
+
+#[test]
+fn poll_time_null_and_inclusive_utc_boundaries_remain_readable() {
+    for value in [None, Some(0), Some(253402300799_i64)] {
+        let fixture = support::born_repository();
+        let enabled = support::enabled_repository(&fixture);
+        let db = Connection::open(enabled.data_directory.path().join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE remote_polling_state SET latest_attempt_at=?1,next_eligible_at=?1",
+            [value],
+        )
+        .unwrap();
+        let reopened = RepositoryService::open_at(enabled.data_directory.path()).unwrap();
+        let snapshot = reopened.remote_snapshot(&fixture.root).unwrap();
+        assert_eq!(
+            snapshot
+                .latest_attempt_at()
+                .map(|time| time.unix_timestamp()),
+            value
+        );
+        assert_eq!(
+            snapshot
+                .next_eligible_at()
+                .map(|time| time.unix_timestamp()),
+            value
+        );
+        let repo = reopened.resolve_repository(&fixture.root).unwrap();
+        let status = reopened.polling_status(&repo).unwrap();
+        assert_eq!(
+            status.next_eligible_at.as_deref(),
+            match value {
+                None => None,
+                Some(0) => Some("1970-01-01T00:00:00Z"),
+                _ => Some("9999-12-31T23:59:59Z"),
+            }
+        );
+        reopened.automatic_poll_eligibility(&fixture.root).unwrap();
+    }
+}
+
 fn configure(enabled: &support::EnabledRepository) {
     Connection::open(enabled.data_directory.path().join(REGISTRY_FILE))
         .unwrap()
         .execute_batch("UPDATE remote_polling_state SET remote_name='origin',primary_branch='main'")
         .unwrap();
+}
+
+#[test]
+fn failed_observation_records_attempt_and_deadline_in_finishing_transaction() {
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    configure(&enabled);
+    let owner = reserved(
+        enabled
+            .service
+            .reserve_remote_operation(&fixture.root, OperationId::new(), &poll())
+            .unwrap(),
+    );
+    enabled
+        .service
+        .remote_safe_point(
+            &fixture.root,
+            &owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    enabled
+        .service
+        .finish_remote_operation(
+            &fixture.root,
+            &owner,
+            manyhands::repository::RemoteOutcomeCategory::TransportUnavailable,
+        )
+        .unwrap();
+    let snapshot = enabled.service.remote_snapshot(&fixture.root).unwrap();
+    let attempt = snapshot
+        .latest_attempt_at()
+        .expect("finish must record attempt")
+        .unix_timestamp();
+    assert_eq!(
+        snapshot.next_eligible_at().unwrap().unix_timestamp(),
+        attempt + 60
+    );
+    assert!(
+        enabled
+            .service
+            .active_remote_operation(&fixture.root)
+            .unwrap()
+            .is_none()
+    );
 }
 
 fn poll() -> RemoteOperationTarget {
@@ -368,7 +497,15 @@ fn remote_reservation_blocks_new_local_lifecycle_without_taking_git_lease() {
             url: "https://example.invalid/repo".into(),
         })
         .unwrap_err();
-    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(error.kind, RepositoryErrorKind::RepositoryBusy);
+    assert!(
+        enabled
+            .service
+            .active_remote_operation(&fixture.root)
+            .unwrap()
+            .unwrap()
+            .yield_requested()
+    );
     assert_eq!(before, support::repository_and_worktree_snapshot(&fixture));
 }
 

@@ -321,11 +321,14 @@ async fn relay(
     let mut status = None;
     let mut transfer_started = false;
     let mut transfer_checked = false;
+    let mut transferred = 0;
+    let mut pack_bytes = UploadPackBytes::default();
     let mut advertisement_checked = false;
     let mut hostile_pending = Vec::new();
     let mut hostile_sideband_sent = false;
     let mut commands = ReceiveCommands::default();
     let mut race_prefix = Vec::new();
+    let mut abandoned = false;
     loop {
         if status.is_some() && !output_open {
             break;
@@ -361,6 +364,23 @@ async fn relay(
                 match result {
                     Ok(0) | Err(_) => output_open = false,
                     Ok(count) => {
+                        if transfer_started && !receiving {
+                            let gate = {
+                                let mut hold = shared.transfer_hold.lock().unwrap();
+                                if hold.as_ref().is_some_and(|h| transferred >= h.after_bytes) {
+                                    hold.take()
+                                } else { None }
+                            };
+                            if let Some(hold) = gate {
+                                if hold.gate.reached.send(()).is_err() { break; }
+                                let released = tokio::select! {
+                                    result = hold.gate.release => result.is_ok(),
+                                    _ = shutdown.changed() => false,
+                                    _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                                };
+                                if !released { break; }
+                            }
+                        }
                         if !advertisement_checked {
                             advertisement_checked = true;
                             if boundary(&shared, FixtureBoundary::Advertisement).await.is_err() { break; }
@@ -368,6 +388,12 @@ async fn relay(
                         if transfer_started && !transfer_checked {
                             transfer_checked = true;
                             if boundary(&shared, FixtureBoundary::Transfer).await.is_err() { break; }
+                        }
+                        if transfer_started && !receiving
+                            && matches!(*shared.fault.lock().unwrap(), Some(Fault::DisconnectAfterTransferBytes(after)) if transferred >= after)
+                        {
+                            shared.byte_disconnects.fetch_add(1, Ordering::SeqCst);
+                            break;
                         }
                         if receiving && !commands.updates.is_empty() && matches!(*shared.fault.lock().unwrap(), Some(Fault::Disconnect(FixtureBoundary::AfterReceivePack))) {
                             // Wait for the actual helper to commit its ref update, then lose
@@ -391,11 +417,27 @@ async fn relay(
                             match hostile_packets(&mut hostile_pending, marker.as_bytes(), &mut hostile_sideband_sent) { Ok(bytes) => bytes, Err(_) => break }
                         } else { outgoing[..count].to_vec() };
                         if payload.is_empty() { continue; }
+                        // The client shares this process. Where libgit2's socket is
+                        // inheritable (no SOCK_CLOEXEC on macOS; Windows handles), this
+                        // helper holds a copy, so an abandoned client never closes the
+                        // connection and a full send would wait on the helper forever.
+                        // Ending the relay kills the helper and releases that copy.
+                        // On Windows other inheritors can still hold it, so the
+                        // abandoned channel gets no further session messages.
                         let sent = tokio::select! {
                             result = handle.data(id, payload) => result,
                             _ = shutdown.changed() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => { abandoned = true; break },
                         };
                         if sent.is_err() { break; }
+                        if transfer_started && !receiving {
+                            transferred += count;
+                            // Observation only: never modify forwarded bytes or
+                            // change behavior for other fixture protocol cases.
+                            if let Ok(bytes) = pack_bytes.feed(&outgoing[..count]) {
+                                shared.upload_pack_bytes.fetch_add(bytes, Ordering::SeqCst);
+                            }
+                        }
                     }
                 }
             },
@@ -448,9 +490,11 @@ async fn relay(
             shared.receive_updates_changed.notify_all();
         }
     }
-    let _ = handle.exit_status_request(id, code).await;
-    let _ = handle.eof(id).await;
-    let _ = handle.close(id).await;
+    if !abandoned {
+        let _ = handle.exit_status_request(id, code).await;
+        let _ = handle.eof(id).await;
+        let _ = handle.close(id).await;
+    }
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
     shared.helper_audits.lock().unwrap().1 += 1;
@@ -497,6 +541,90 @@ fn hostile_packets(
         output.extend(packet);
     }
     Ok(output)
+}
+
+/// Count only complete sideband-1 payloads of the forwarded upload response.
+/// A partial packet is retained until its remainder is forwarded; progress and
+/// ACK/control packets count zero. No bytes are synthesized or rewritten.
+#[derive(Default)]
+struct UploadPackBytes {
+    pending: Vec<u8>,
+    invalid: bool,
+}
+impl UploadPackBytes {
+    fn feed(&mut self, bytes: &[u8]) -> Result<usize, FixtureError> {
+        if self.invalid {
+            return Err(FixtureError);
+        }
+        let result = self.count(bytes);
+        if result.is_err() {
+            // Unsupported output never counts and cannot grow the observer's
+            // buffer for the remainder of an unrelated fixture relay.
+            self.invalid = true;
+            self.pending.clear();
+        }
+        result
+    }
+    fn count(&mut self, bytes: &[u8]) -> Result<usize, FixtureError> {
+        self.pending.extend_from_slice(bytes);
+        let mut payload = 0;
+        while self.pending.len() >= 4 {
+            let size = fixed(usize::from_str_radix(
+                fixed(std::str::from_utf8(&self.pending[..4]))?,
+                16,
+            ))?;
+            let size = if size == 0 {
+                4
+            } else if (4..=65_520).contains(&size) {
+                size
+            } else {
+                return Err(FixtureError);
+            };
+            if self.pending.len() < size {
+                break;
+            }
+            if self.pending.get(4) == Some(&1) && size > 4 {
+                payload += size - 5;
+            }
+            self.pending.drain(..size);
+        }
+        Ok(payload)
+    }
+}
+pub(super) fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
+    let mut response = b"0008NAK\n".to_vec();
+    for (band, body) in [
+        (2, b"progress text".as_slice()),
+        (1, b"PACKowned payload".as_slice()),
+        (2, b"more progress".as_slice()),
+        (1, b"continued pack payload".as_slice()),
+    ] {
+        response.extend_from_slice(format!("{:04x}", body.len() + 5).as_bytes());
+        response.push(band);
+        response.extend_from_slice(body);
+    }
+    response.extend_from_slice(b"0000");
+    for width in [1, 2, 3, 7, 16_384] {
+        let mut parser = UploadPackBytes::default();
+        let mut total = 0;
+        for bytes in response.chunks(width) {
+            total += parser.feed(bytes)?;
+        }
+        assert_eq!(
+            total,
+            b"PACKowned payload".len() + b"continued pack payload".len()
+        );
+        assert!(parser.pending.is_empty());
+    }
+    let mut parser = UploadPackBytes::default();
+    assert_eq!(parser.feed(b"0008NAK\n0000")?, 0);
+    assert_eq!(parser.feed(b"0009\x01PA")?, 0); // incomplete payload not forwarded in full
+    assert_eq!(parser.feed(b"CK")?, 4);
+    let mut malformed = UploadPackBytes::default();
+    assert!(malformed.feed(b"ffff").is_err());
+    assert!(malformed.feed(&response).is_err());
+    assert!(malformed.pending.is_empty());
+    Ok(())
 }
 
 // Only the bounded command prefix is parsed. Pack bytes remain opaque and are

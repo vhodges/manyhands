@@ -696,6 +696,16 @@ fn begin_or_reconcile(
             return Err(super::remote::state::recovery_required());
         }
     }
+    // An automatic poll yields to local work: request it and refuse
+    // retryably. Any other active remote operation is refused below.
+    if let Some(id) = active_automatic_poll(&transaction, root_path)? {
+        transaction.execute("UPDATE remote_operation_records SET yield_requested=1,updated_at=max(updated_at,?2) WHERE id=?1", params![id, time::OffsetDateTime::now_utc().unix_timestamp().max(0)])
+            .map_err(|_| super::remote::state::recovery_required())?;
+        // Commit the request before returning a retryable error. No local
+        // journal row has been inserted and no Git effect has begun.
+        transaction.commit().map_err(RepositoryError::sqlite)?;
+        return Err(poll_yielding(operation));
+    }
     // Read here, where it always was, and acted on below: a row of the
     // requested ID that is of another root or was abandoned is answered
     // as that before a pending row of another operation is.
@@ -1362,11 +1372,13 @@ fn in_the_way(
 
 /// Refuses a root on which a refresh under `operation_id` would be
 /// refused before it began: with `OperationMismatch` for an ID that is a
-/// comment's synchronization and whose hand-off is not yet due, and with
-/// `RecoveryRequired` for a remote operation that holds its reservation,
+/// comment's synchronization and whose hand-off is not yet due, with
+/// `RepositoryBusy` while an automatic poll holds the reservation, and
+/// with `RecoveryRequired` for any other remote operation that holds it,
 /// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
 /// for a call that would otherwise change something first and find the
-/// refresh refused after. Nothing is written.
+/// refresh refused after. Nothing is written: the refresh, not this
+/// question, asks an automatic poll to yield.
 pub(super) fn require_refresh_can_begin(
     connection: &Connection,
     root: &Path,
@@ -1384,6 +1396,9 @@ pub(super) fn require_refresh_can_begin(
     )? {
         return Err(mismatch(operation, root));
     }
+    if active_automatic_poll(connection, root_path)?.is_some() {
+        return Err(poll_yielding(operation));
+    }
     match in_the_way(
         connection,
         root_path,
@@ -1395,6 +1410,27 @@ pub(super) fn require_refresh_can_begin(
         Pending::Nothing | Pending::Own(_) => Ok(()),
         Pending::Another => Err(recovery_required(operation, root)),
     }
+}
+
+/// The automatic poll holding `root_path`'s remote reservation, if one
+/// does. At most one remote operation holds a repository's reservation.
+fn active_automatic_poll(
+    connection: &Connection,
+    root_path: &str,
+) -> Result<Option<i64>, RepositoryError> {
+    connection.query_row(
+        "SELECT remote_operation_records.id FROM remote_operation_records JOIN repositories ON repositories.id=remote_operation_records.repository_id WHERE repositories.root_path=?1 AND action='poll' AND priority='poll' AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",
+        [root_path], |row| row.get(0)).optional().map_err(|_| super::remote::state::recovery_required())
+}
+
+/// The retryable refusal of local work while an automatic poll yields.
+fn poll_yielding(operation: RepositoryOperation) -> RepositoryError {
+    RepositoryError::new(
+        operation,
+        None,
+        RepositoryErrorKind::RepositoryBusy,
+        "repository is busy; retry after the poll yields",
+    )
 }
 
 /// The longest state or step name a local operation is taken to have.
@@ -2178,8 +2214,9 @@ mod abandoned_row_tests {
         connection
             .execute_batch(
                 "CREATE TABLE remote_operation_records (
-                    operation_ulid TEXT, repository_id INTEGER, action TEXT, kind TEXT,
-                    item_id TEXT, phase TEXT, authoritative_kind TEXT)",
+                    id INTEGER PRIMARY KEY, operation_ulid TEXT, repository_id INTEGER,
+                    action TEXT, priority TEXT, kind TEXT, item_id TEXT, phase TEXT,
+                    authoritative_kind TEXT)",
             )
             .unwrap();
         connection
@@ -2205,6 +2242,64 @@ mod abandoned_row_tests {
         assert_eq!(begin(CHILD), Err(RepositoryErrorKind::OperationMismatch));
         // Any other ID is asked only what is pending.
         assert_eq!(begin("01ARZ3NDEKTSV4RRFFQ69G5FAD"), Ok(()));
+    }
+
+    /// An automatic poll yields to local work, so a call that asks first
+    /// whether its refresh can begin is told to retry, as the refresh
+    /// itself would be. Asking writes nothing: the refresh, not the
+    /// question, requests the yield. Any other active remote operation
+    /// still refuses the refresh outright.
+    #[test]
+    fn a_refresh_asked_about_during_an_automatic_poll_is_busy_not_recovery() {
+        let connection = journal("save_ticket", "completed", Some("completed"), 7);
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path) VALUES (1, '/repository');
+                 CREATE TABLE remote_operation_records (
+                    id INTEGER PRIMARY KEY, operation_ulid TEXT, repository_id INTEGER,
+                    action TEXT, priority TEXT, kind TEXT, item_id TEXT, phase TEXT,
+                    authoritative_kind TEXT, yield_requested INTEGER NOT NULL DEFAULT 0);",
+            )
+            .unwrap();
+        let root = Path::new("/repository");
+        let begin = || {
+            require_refresh_can_begin(
+                &connection,
+                root,
+                RepositoryOperation::CreateFolder,
+                OperationId::parse("01ARZ3NDEKTSV4RRFFQ69G5FAD").unwrap(),
+            )
+            .map_err(|error| error.kind)
+        };
+        let active = |action: &str, priority: &str| {
+            connection
+                .execute_batch("DELETE FROM remote_operation_records")
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO remote_operation_records
+                        (id, repository_id, action, priority, phase) VALUES (1, 1, ?1, ?2, 'advertising')",
+                    params![action, priority],
+                )
+                .unwrap();
+        };
+
+        active("poll", "poll");
+        assert_eq!(begin(), Err(RepositoryErrorKind::RepositoryBusy));
+        let requested: i64 = connection
+            .query_row(
+                "SELECT yield_requested FROM remote_operation_records WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(requested, 0, "asking requests no yield");
+
+        // An explicit poll holds manual priority and does not yield.
+        active("poll", "manual");
+        assert_eq!(begin(), Err(RepositoryErrorKind::RecoveryRequired));
+        active("synchronize", "manual");
+        assert_eq!(begin(), Err(RepositoryErrorKind::RecoveryRequired));
     }
 
     fn abandoned_journal() -> Connection {

@@ -76,6 +76,10 @@ name = "comment_publication"
 harness = false
 
 [[test]]
+name = "remote_polling"
+harness = false
+
+[[test]]
 name = "editor_feasibility"
 path = "tests/editor_feasibility.rs"
 required-features = ["editor-probe"]

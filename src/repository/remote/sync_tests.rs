@@ -7243,26 +7243,7 @@ fn absent_test_hook_root_keeps_its_exact_fallback_key() {
 }
 
 fn registered_worktree_gitdir_text(worktree: &Path) -> String {
-    let gitdir = worktree.join(".git");
-    let text = gitdir.to_str().expect("fixture Git path must be UTF-8");
-    // libgit2 reads this field verbatim, then dirname scans only '/'. Encode
-    // Git metadata, not native path display; Unix backslashes are literal names.
-    #[cfg(windows)]
-    let text = {
-        use std::path::{Component, Prefix};
-        let text = match gitdir.components().next() {
-            // Match Git's ordinary drive/UNC presentation, so '..' remains
-            // meaningful without discarding the UNC server/share root.
-            Some(Component::Prefix(prefix)) => match prefix.kind() {
-                Prefix::VerbatimDisk(_) => text[4..].to_owned(),
-                Prefix::VerbatimUNC(_, _) => format!(r"\\{}", &text[8..]),
-                _ => text.to_owned(),
-            },
-            _ => text.to_owned(),
-        };
-        text.replace('\\', "/")
-    };
-    format!("{text}\n")
+    super::super::git_metadata_link_text(&worktree.join(".git"))
 }
 
 #[test]

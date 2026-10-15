@@ -497,7 +497,7 @@ fn local_target(
 
 /// Identity validation is also needed before inspecting an owned unfinished
 /// merge. It deliberately makes no claim about cleanliness or effect proof.
-fn materialized_target(
+pub(super) fn materialized_target(
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
@@ -551,7 +551,7 @@ fn materialized_target(
     Ok(linked)
 }
 
-fn require_clean_target(
+pub(super) fn require_clean_target(
     linked: &git2::Repository,
     target: &SynchronizationTarget,
 ) -> Result<(), SynchronizationError> {
@@ -632,7 +632,7 @@ fn require_clean_target_with(
     drop(commit);
     Ok(())
 }
-fn local_oid(repository: &git2::Repository) -> Result<git2::Oid, SynchronizationError> {
+pub(super) fn local_oid(repository: &git2::Repository) -> Result<git2::Oid, SynchronizationError> {
     repository
         .head()
         .and_then(|h| h.peel_to_commit())
@@ -673,9 +673,10 @@ struct PreparedMerge {
 
 /// Ephemeral ODB-only source evidence. Shape and bytes are retained even when
 /// decoding/parsing fails; neither failure can hide a changed canonical path.
-struct CanonicalTreeSnapshot {
-    sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-    entries: std::collections::BTreeMap<Vec<u8>, (git2::Oid, i32, Option<git2::ObjectType>)>,
+pub(super) struct CanonicalTreeSnapshot {
+    pub(super) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+    pub(super) entries:
+        std::collections::BTreeMap<Vec<u8>, (git2::Oid, i32, Option<git2::ObjectType>)>,
 }
 
 enum MergePreparation {
@@ -4557,7 +4558,7 @@ impl RepositoryService {
         ))
     }
 
-    fn canonical_tree_sources(
+    pub(super) fn canonical_tree_sources(
         repository: &git2::Repository,
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
@@ -7328,7 +7329,7 @@ fn authority_outcome(
         },
     }
 }
-fn fast_forward(
+pub(super) fn fast_forward(
     repository: &git2::Repository,
     branch: &str,
     old: git2::Oid,

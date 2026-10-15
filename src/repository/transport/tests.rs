@@ -3,6 +3,21 @@ use super::trust::{HostTrustSnapshot, publish_reapproval_marker, read_reapproval
 use super::*;
 use crate::repository::{REGISTRY_FILE, RepositoryService};
 
+#[test]
+fn transport_poll_stop_is_sticky_and_independent_of_backend_error_code() {
+    let attempt = CallbackAttempt::default();
+    assert!(attempt.poll_progress(|| true));
+    assert!(!attempt.poll_progress(|| false));
+    assert!(!attempt.poll_progress(|| panic!("stopped callback must not be re-entered")));
+    assert!(attempt.poll_stopped());
+    let error = git2::Error::from_str("backend returned GenericError, not User");
+    assert_eq!(error.code(), git2::ErrorCode::GenericError);
+    assert_eq!(
+        super::remote::backend_failure(&attempt, &error, false),
+        SshTransportErrorKind::TransportUnavailable
+    );
+}
+
 fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
     use crate::repository::keys::*;
     PreparedSshAttempt {
