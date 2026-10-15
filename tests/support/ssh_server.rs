@@ -328,6 +328,7 @@ async fn relay(
     let mut hostile_sideband_sent = false;
     let mut commands = ReceiveCommands::default();
     let mut race_prefix = Vec::new();
+    let mut abandoned = false;
     loop {
         if status.is_some() && !output_open {
             break;
@@ -421,10 +422,12 @@ async fn relay(
                         // helper holds a copy, so an abandoned client never closes the
                         // connection and a full send would wait on the helper forever.
                         // Ending the relay kills the helper and releases that copy.
+                        // On Windows other inheritors can still hold it, so the
+                        // abandoned channel gets no further session messages.
                         let sent = tokio::select! {
                             result = handle.data(id, payload) => result,
                             _ = shutdown.changed() => break,
-                            _ = tokio::time::sleep(Duration::from_secs(5)) => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => { abandoned = true; break },
                         };
                         if sent.is_err() { break; }
                         if transfer_started && !receiving {
@@ -487,9 +490,11 @@ async fn relay(
             shared.receive_updates_changed.notify_all();
         }
     }
-    let _ = handle.exit_status_request(id, code).await;
-    let _ = handle.eof(id).await;
-    let _ = handle.close(id).await;
+    if !abandoned {
+        let _ = handle.exit_status_request(id, code).await;
+        let _ = handle.eof(id).await;
+        let _ = handle.close(id).await;
+    }
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
     shared.helper_audits.lock().unwrap().1 += 1;

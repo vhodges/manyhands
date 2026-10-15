@@ -3114,7 +3114,11 @@ fn database_privacy() -> Result<(), FixtureError> {
     }
     fixed(backup_db.execute_batch("DROP TABLE remote_title_probe;"))?;
     scan_recovery_rows(&backup_db, &p.metadata_probes)?;
-    fixed(db.execute_batch("BEGIN IMMEDIATE; CREATE TABLE privacy_fixed(category TEXT); INSERT INTO privacy_fixed VALUES('fixed');"))?;
+    // Hold a live rollback journal on the backup, as the synchronization and
+    // merge privacy cases do. A write transaction on the live WAL database
+    // would take Windows' mandatory -shm byte-range lock and block the scan's
+    // raw read; the retained live WAL (autocheckpoint off) is still scanned.
+    fixed(backup_db.execute_batch("PRAGMA journal_mode=DELETE; BEGIN IMMEDIATE; CREATE TABLE privacy_fixed(category TEXT); INSERT INTO privacy_fixed VALUES('fixed');"))?;
     let inventory = ssh_privacy::scan(&p.b.data, &p.probes)?;
     let expected_backup = fixed(std::fs::canonicalize(&backup))?;
     assert!(inventory.iter().any(|(path, n)| {
@@ -3133,7 +3137,7 @@ fn database_privacy() -> Result<(), FixtureError> {
         "{:?}",
         fixed(p.b.service.remote_snapshot(&p.b.root))?
     ))?;
-    fixed(db.execute_batch("ROLLBACK"))?;
+    fixed(backup_db.execute_batch("ROLLBACK"))?;
     p.finish()
 }
 const CONTROL: &[u8] = b"poll-private-output-control-canary";
