@@ -2261,6 +2261,32 @@ fn priority(transfer: bool, explicit: bool, local: bool) -> Result<(), FixtureEr
         }
         Ok(())
     })?;
+    // TEMPORARY Windows relay diagnostics: [11, ms, active, bytes, phase] samples
+    // and [12, events...] whenever relay exit/teardown events change.
+    let t0 = std::time::Instant::now();
+    let mut seen = usize::MAX;
+    for _ in 0..50 {
+        let events = p.server.relay_events();
+        if events.len() != seen {
+            seen = events.len();
+            ssh_harness::observation(
+                &std::iter::once(12)
+                    .chain(events.iter().map(|&e| e as u128))
+                    .collect::<Vec<_>>(),
+            );
+        }
+        ssh_harness::observation(&[
+            11,
+            t0.elapsed().as_millis(),
+            p.server.active_helpers() as u128,
+            p.server.upload_pack_bytes() as u128,
+            p.server.relay_phase() as u128,
+        ]);
+        if p.server.active_helpers() == 0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
     p.no_push_since(n)?;
     p.privacy()?;
     p.server.clear_fault();

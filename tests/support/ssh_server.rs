@@ -328,10 +328,15 @@ async fn relay(
     let mut hostile_sideband_sent = false;
     let mut commands = ReceiveCommands::default();
     let mut race_prefix = Vec::new();
+    // TEMPORARY Windows relay diagnostics: exit reason 9 = other break.
+    let mut exit_reason = 9;
+    let phase = |code| shared.relay_phase.store(code, Ordering::SeqCst);
     loop {
         if status.is_some() && !output_open {
+            exit_reason = 4;
             break;
         }
+        phase(20);
         tokio::select! {
             _ = shutdown.changed() => break,
             result = child.wait(), if status.is_none() => { status = Some(result); input.take(); },
@@ -351,6 +356,7 @@ async fn relay(
                             if !apply_receive_race(&shared, &commands, race) { break; }
                             std::mem::take(&mut race_prefix)
                         } else { incoming[..count].to_vec() };
+                        phase(29);
                         let written = tokio::select! {
                             result = input.as_mut().unwrap().write_all(&payload) => result,
                             _ = shutdown.changed() => break,
@@ -372,6 +378,7 @@ async fn relay(
                             };
                             if let Some(hold) = gate {
                                 if hold.gate.reached.send(()).is_err() { break; }
+                                phase(30);
                                 let released = tokio::select! {
                                     result = hold.gate.release => result.is_ok(),
                                     _ = shutdown.changed() => false,
@@ -407,6 +414,7 @@ async fn relay(
                             }
                         }
                         let fault = *shared.fault.lock().unwrap();
+                        phase(22);
                         if transfer_started && let Some(Fault::Pace(delay)) = fault {
                             tokio::select! { _ = tokio::time::sleep(delay) => {}, _ = shutdown.changed() => break }
                         }
@@ -421,12 +429,13 @@ async fn relay(
                         // helper holds a copy, so an abandoned client never closes the
                         // connection and a full send would wait on the helper forever.
                         // Ending the relay kills the helper and releases that copy.
+                        phase(21);
                         let sent = tokio::select! {
                             result = handle.data(id, payload) => result,
-                            _ = shutdown.changed() => break,
-                            _ = tokio::time::sleep(Duration::from_secs(5)) => break,
+                            _ = shutdown.changed() => { exit_reason = 2; break },
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => { exit_reason = 1; break },
                         };
-                        if sent.is_err() { break; }
+                        if sent.is_err() { exit_reason = 3; break; }
                         if transfer_started && !receiving {
                             transferred += count;
                             // Observation only: never modify forwarded bytes or
@@ -460,12 +469,17 @@ async fn relay(
     } else {
         true
     };
+    let event = |code| shared.relay_events.lock().unwrap().push(code);
+    event(exit_reason);
     let code = match status {
         Some(Ok(_)) if !audit_released => 1,
         Some(Ok(status)) => status.code().unwrap_or(1) as u32,
         _ => {
-            let _ = child.kill().await;
+            phase(23);
+            event(if child.kill().await.is_ok() { 10 } else { 11 });
+            phase(24);
             let _ = child.wait().await;
+            event(12);
             1
         }
     };
@@ -487,9 +501,16 @@ async fn relay(
             shared.receive_updates_changed.notify_all();
         }
     }
+    phase(25);
     let _ = handle.exit_status_request(id, code).await;
+    event(13);
+    phase(26);
     let _ = handle.eof(id).await;
+    event(14);
+    phase(27);
     let _ = handle.close(id).await;
+    event(15);
+    phase(28);
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
     shared.helper_audits.lock().unwrap().1 += 1;
