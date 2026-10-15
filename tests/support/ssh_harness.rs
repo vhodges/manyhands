@@ -96,6 +96,7 @@ fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
     };
     let filter = options.filter.as_ref();
     let mut count = 0;
+    let mut failed = 0;
     for (name, _) in cases {
         if filter.is_some_and(|filter| {
             !(if options.exact {
@@ -115,14 +116,21 @@ fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
         } else {
             run_isolated(name)
         };
+        // Each case runs in its own child and temporary root, so one failure
+        // cannot contaminate later cases; run them all, then fail the target.
         if result.is_err() {
             eprintln!("test {name} ... FAILED (isolated child or watchdog failure)");
-            std::process::exit(1);
+            failed += 1;
+            continue;
         }
         println!("test {name} ... ok");
         count += 1;
     }
     println!("{count} SSH cases passed");
+    if failed > 0 {
+        eprintln!("{failed} SSH cases failed");
+        std::process::exit(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
