@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
 title: "Wave 02 Cycle 08: One-Shot Polling And Materialization"
 type: "cycle"
-status: "open"
+status: "closed"
+closed_at: "2026-10-15T13:46:50Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -430,3 +432,9 @@ execution-ledger section. Ticket remains open.
 Evidence is in canonical comment `01M4ZT04SJPB8TJ79XS6M3V7JP` and the latest
 execution-ledger section. Ticket remains open; PR, merge and closure are separate
 owner decisions.
+
+## Closure
+
+The owner authorized ticket closure, a local merge to main with push, and removal
+of the ticket branch and worktree on 2026-10-15. Closure follows the green
+four-target native run on the integrated branch recorded above.
