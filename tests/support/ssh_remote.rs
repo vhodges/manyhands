@@ -143,9 +143,6 @@ pub(super) struct Shared {
     pub helper_audits: Mutex<(usize, usize)>,
     pub helper_audits_changed: Condvar,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    // TEMPORARY Windows relay diagnostics.
-    pub relay_phase: AtomicUsize,
-    pub relay_events: Mutex<Vec<usize>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
     pub transfer_hold: Mutex<Option<TransferGate>>,
@@ -332,8 +329,6 @@ impl SshRemoteFixture {
             helper_audits: Mutex::new((0, 0)),
             helper_audits_changed: Condvar::new(),
             helper_tasks: Mutex::new(Vec::new()),
-            relay_phase: AtomicUsize::new(0),
-            relay_events: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
             transfer_hold: Mutex::new(None),
@@ -557,12 +552,6 @@ impl SshRemoteFixture {
     }
     pub fn active_helpers(&self) -> usize {
         self.shared.active_helpers.load(Ordering::SeqCst)
-    }
-    pub fn relay_phase(&self) -> usize {
-        self.shared.relay_phase.load(Ordering::SeqCst)
-    }
-    pub fn relay_events(&self) -> Vec<usize> {
-        self.shared.relay_events.lock().unwrap().clone()
     }
     pub fn completed_helpers(&self) -> usize {
         self.shared.completed_helpers.load(Ordering::SeqCst)
