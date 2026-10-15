@@ -397,3 +397,21 @@ Latest [Build 38659928602](https://github.com/vhodges/manyhands/actions/runs/386
 on `3960926` is **FAILURE** (Windows only). Native acceptance remains blocked.
 Evidence is in canonical comment `01M4YHQ2W11HVSHSDJ5J4YZ8V2` and the latest
 execution-ledger section. Ticket remains open.
+
+## Native Matrix Green — 2026-10-15
+
+- [x] Keep-going test execution (`81dc3a6`): `cargo test --no-fail-fast` and the
+  SSH harness runs every isolated case before failing its target.
+- [x] Windows diagnostic run 38670260226 located the remaining in-transfer stall
+  (relay wedged in `exit_status_request` after killing its helper) and exposed a
+  masked `poll_recovery_database_wal_backup_privacy` failure.
+- [x] Both corrected in `b794460`; temporary markers removed.
+- [x] Windows aarch64 dropped from the native matrix (`7fa3b4f`, owner decision).
+- [x] [Build 38677739080](https://github.com/vhodges/manyhands/actions/runs/38677739080)
+  on `b794460`: **SUCCESS** on all four targets: Linux x86_64 and aarch64 (1,700
+  each), macOS aarch64 (1,688), Windows x86_64 (1,597).
+- [ ] Merge current `origin/main` (five conflicting files) and obtain native
+  evidence on the integrated branch.
+
+Evidence is in canonical comment `01M4YY6DXC7Z8RBKYQHPK7HBP2` and the latest
+execution-ledger section. Ticket remains open.

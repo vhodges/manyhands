@@ -347,6 +347,17 @@ still fail the in-transfer yield case, cause not yet diagnosed. See the
 The branch also needs a merge of current `origin/main` (five conflicting files).
 Native acceptance remains blocked.
 
+A keep-going Windows diagnostic run then located the remaining stall (the relay
+wedged in channel teardown after killing its helper) and exposed a masked WAL
+privacy-scan failure caused by a live write lock. Both were corrected in
+`b794460`, and Windows aarch64 was dropped from the matrix by owner decision.
+[Build 38677739080](https://github.com/vhodges/manyhands/actions/runs/38677739080)
+on `b794460` passed all four targets: Linux x86_64/aarch64 (1,700 each), macOS
+aarch64 (1,688) and Windows x86_64 (1,597). See the
+[green-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#native-matrix-green--2026-10-15t044743z).
+Native acceptance on the integrated branch still requires merging current
+`origin/main` and a native run of the result.
+
 ## Self-Review And Lifecycle
 
 The decision audit in the [execution ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md)

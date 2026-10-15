@@ -10,6 +10,58 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Native Matrix Green — 2026-10-15T04:47:43Z
+
+The owner authorized a Windows diagnostic run with keep-going execution,
+dropping Windows aarch64 from the matrix, and a confirming run. All pushes were
+fast-forwards.
+
+| Run | Commit | Purpose | Conclusion |
+| --- | --- | --- | --- |
+| [38670260226](https://github.com/vhodges/manyhands/actions/runs/38670260226) | `626432a` | Keep-going plus temporary relay phase/teardown markers | Windows x86_64 failure; cancelled once only Windows aarch64 remained |
+| [38677739080](https://github.com/vhodges/manyhands/actions/runs/38677739080) | `b794460` | Both Windows fixes, aarch64 dropped, markers removed | **success** (03:43:25Z–04:47:08Z) |
+
+`81dc3a6` adds `--no-fail-fast` to the workflow's `cargo test` (main already
+has it) and makes the SSH harness run every isolated case, then fail its target
+with a count, instead of exiting at the first failed case. Each case already
+runs in its own child process and temporary root.
+
+On Windows x86_64 the diagnostic markers showed the in-transfer relay in its
+send for 5 s, then: stall bound fired, helper kill succeeded, helper exited, and
+the relay waited in `handle.exit_status_request` for the remaining 20 s. The
+client socket is still held by another inheritor (not identified), so the SSH
+session stays wedged writing into it. `b794460` marks a stall-bounded relay as
+abandoned and skips its exit-status/EOF/close messages before recording its
+audit. All other interrupt, disconnect and cancel polling cases passed on
+Windows in that run.
+
+Keep-going also exposed `poll_recovery_database_wal_backup_privacy`, the only
+other Windows failure. It held `BEGIN IMMEDIATE` on the live WAL database while
+`ssh_privacy::scan` read every data file. In WAL mode that takes the write lock,
+a mandatory byte-range lock in `-shm` on Windows, which blocks the raw read. The
+synchronization (`remote_synchronization.rs:1553`) and merge
+(`remote_merge_recovery.rs:3510`) privacy cases hold their journal on the
+`VACUUM INTO` backup in `DELETE` mode and pass on Windows. `b794460` uses the
+same pattern; `wal_autocheckpoint=0` keeps the live `-wal` populated for the
+existing assertion. This cause is inferred from that comparison and the green
+result, not observed directly.
+
+Windows aarch64 is removed from the matrix in `7fa3b4f` by owner decision.
+
+| Native target | Configured tests on `b794460` | Polling SSH cases | Job |
+| --- | --- | --- | --- |
+| Linux x86_64 | PASS 1,700 (618 lib, 709 ordinary, 373 SSH) | 84 | [116235077517](https://github.com/vhodges/manyhands/actions/runs/38677739080/job/116235077517) |
+| Linux aarch64 | PASS 1,700 (618 lib, 709 ordinary, 373 SSH) | 84 | [116235077668](https://github.com/vhodges/manyhands/actions/runs/38677739080/job/116235077668) |
+| macOS aarch64 | PASS 1,688 (609 lib, 707 ordinary, 372 SSH) | 83 | [116235077665](https://github.com/vhodges/manyhands/actions/runs/38677739080/job/116235077665) |
+| Windows x86_64 | PASS 1,597 (579 lib, 652 ordinary, 366 SSH) | 82 | [116235077685](https://github.com/vhodges/manyhands/actions/runs/38677739080/job/116235077685) |
+
+Lower macOS and Windows counts are platform-gated cases, not failures.
+`git merge-tree --write-tree HEAD origin/main` (`56ddf23`) still reports conflicts
+in `.github/workflows/build.yml`, `src/repository.rs`,
+`src/repository/recovery.rs`, `src/repository/remote/state.rs` and
+`tests/support/ssh_server.rs`; the integrated branch needs its own native run.
+Ticket stays open. Canonical result comment: `01M4YY6DXC7Z8RBKYQHPK7HBP2`.
+
 ## Native Failure Correction Runs — 2026-10-15T01:09:37Z
 
 The owner authorized diagnosing and correcting the first native failures, with
