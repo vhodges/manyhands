@@ -375,3 +375,25 @@ native acceptance remains blocked, despite the retained local review approval.
 No retry, second dispatch, PR, merge, closure or worktree removal was performed.
 Results and evidence are recorded in canonical comment `01M4XWFCGW9N53Y99FMXFHPGER`
 and the latest execution-ledger section. Ticket remains open.
+
+## Native Failure Correction Runs — 2026-10-15
+
+- [x] Owner authorized diagnosing and correcting the native failures, with normal
+  pushes and Build dispatches (runs 38624653318, 38631189454, 38659928602).
+- [x] Windows library fixture corrected in `24ae070`: poll identity fixtures now
+  write `gitdir` links as Git metadata, not native path text. Both Windows targets
+  pass all 579 library tests.
+- [x] macOS in-transfer yield corrected in `3960926`: the fixture relay ends a
+  stalled send so an inherited client socket is released. macOS passes all 1,688
+  configured tests, including 83 polling SSH cases.
+- [x] Temporary diagnostic observations (`91aebec`, `a3021a4`) removed in `3960926`.
+- [x] Linux x86_64 and aarch64 remain PASS (1,700 configured tests each).
+- [ ] Windows x86_64 and aarch64: `poll_automatic_in_transfer_yields_to_manual`
+  still FAILS after 48 polling cases (1,181 passed each); cause not yet diagnosed.
+- [ ] Merge current `origin/main` (five conflicting files) and obtain native
+  evidence on the integrated branch.
+
+Latest [Build 38659928602](https://github.com/vhodges/manyhands/actions/runs/38659928602)
+on `3960926` is **FAILURE** (Windows only). Native acceptance remains blocked.
+Evidence is in canonical comment `01M4YHQ2W11HVSHSDJ5J4YZ8V2` and the latest
+execution-ledger section. Ticket remains open.

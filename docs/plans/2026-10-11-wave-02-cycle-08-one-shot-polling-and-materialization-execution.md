@@ -10,6 +10,70 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Native Failure Correction Runs — 2026-10-15T01:09:37Z
+
+The owner authorized diagnosing and correcting the first native failures, with
+normal pushes of the ticket branch and full Build dispatches. All pushes were
+fast-forwards; no history was rewritten.
+
+| Run | Commit | Purpose | Conclusion |
+| --- | --- | --- | --- |
+| [38624653318](https://github.com/vhodges/manyhands/actions/runs/38624653318) | `91aebec` | Windows fixture fix plus temporary stage timings | failure (macOS, Windows) |
+| [38631189454](https://github.com/vhodges/manyhands/actions/runs/38631189454) | `a3021a4` | Temporary relay-state samples | failure (macOS, Windows) |
+| [38659928602](https://github.com/vhodges/manyhands/actions/runs/38659928602) | `3960926` | Relay fix; diagnostics removed | failure (Windows only) |
+
+### Windows Library Fixture
+
+`poll_context_identity_requires_exact_registered_admin_and_gitfile_backlink`
+wrote worktree admin `gitdir` links with `path.display()`. libgit2 reads that
+field verbatim and its dirname scans only `/`, so a Windows path yielded `.` and
+the linked workdir resolved to the runner checkout. `sync_tests.rs` already had
+an encoder for this (`registered_worktree_gitdir_text`). `24ae070` moves it to a
+shared test-only `git_metadata_link_text` in `remote/mod.rs`, takes the full
+link target, and uses it for the `backlink` and `same_common_admin` cases. Since
+run 38624653318 both Windows targets pass all 579 library tests, including this
+one. Production identity checks are unchanged.
+
+### In-Transfer Yield Fixture Deadlock
+
+Temporary observations, relayed through the harness's numeric observation
+channel, showed the client side behaving correctly on every target: the hold is
+reached, manual sync gets `PollYielding`, and the poll returns `Interrupted`. The
+failure is the following `no_push_since` → `wait_for_helper_audits` 10 s
+barrier. Relay-state samples every 500 ms after the poll returned:
+
+| Target | Forwarded upload-pack bytes after return | Active helper |
+| --- | --- | --- |
+| Linux (both) | 198,145 → unchanged | ended within 500 ms |
+| macOS aarch64 | 198,147 → 329,177, then frozen | still active at 30 s |
+| Windows (both) | 198,148 → 329,178, then frozen | still active at 28 s |
+
+libgit2 `streams/socket.c` opens its socket with `SOCK_CLOEXEC`, which
+`util/posix.h` defines as `0` where absent (macOS); Windows socket handles are
+inheritable by default. The SSH fixture runs in the client's process and spawns
+`git upload-pack` after the client socket exists, so the helper inherits a copy.
+After the interrupted poll closes its socket, that copy keeps the connection
+open, the relay blocks forwarding into it, and the helper blocks on its full
+stdout. `3960926` bounds the relay's forwarding send at 5 s; ending the relay
+kills the helper and releases the copy. Passing cases never stall a send.
+
+On `3960926`, macOS aarch64 passed all 1,688 configured tests (609 library, 707
+ordinary integration, 372 SSH including 83 polling); the in-transfer case took
+9.2 s. Linux x86_64/aarch64 passed 1,700 each. Both Windows targets still fail
+`poll_automatic_in_transfer_yields_to_manual` after 48 polling cases (1,181
+passed each), taking about 19 s as before. The remaining Windows cause is not
+diagnosed; the diagnostics were removed in this commit, so this run does not
+locate it.
+
+Production observation, not changed: on macOS and Windows any child process
+started during a libgit2 SSH operation inherits the connection socket.
+
+`git merge-tree --write-tree HEAD origin/main` (`56ddf23`) reports conflicts in
+`.github/workflows/build.yml`, `src/repository.rs`, `src/repository/recovery.rs`,
+`src/repository/remote/state.rs` and `tests/support/ssh_server.rs`. Native
+acceptance remains **blocked**. Ticket stays open. Canonical result comment:
+`01M4YHQ2W11HVSHSDJ5J4YZ8V2`.
+
 ## First Authorized Native Build Run — 2026-10-14T18:58:25Z
 
 The owner authorized publishing the reviewed ticket branch, dispatching one full

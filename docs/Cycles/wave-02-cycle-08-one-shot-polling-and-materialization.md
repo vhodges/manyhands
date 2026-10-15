@@ -335,6 +335,18 @@ Native acceptance is blocked pending correction and verified native reruns.
 Further dispatches require fresh authorization. Ticket remains open; PR, merge,
 closure and worktree removal remain separately authorized lifecycle actions.
 
+Authorized correction runs followed. The Windows library failure was a fixture
+encoding `gitdir` links as native path text (fixed in `24ae070`). The macOS
+in-transfer failure was a fixture deadlock: libgit2's client socket is
+inheritable on macOS and Windows, so the in-process SSH fixture's helper kept the
+abandoned connection open (fixed in `3960926` by ending a stalled relay send).
+[Build 38659928602](https://github.com/vhodges/manyhands/actions/runs/38659928602)
+on `3960926` passed Linux x86_64/aarch64 and macOS aarch64; both Windows targets
+still fail the in-transfer yield case, cause not yet diagnosed. See the
+[correction-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#native-failure-correction-runs--2026-10-15t010937z).
+The branch also needs a merge of current `origin/main` (five conflicting files).
+Native acceptance remains blocked.
+
 ## Self-Review And Lifecycle
 
 The decision audit in the [execution ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md)
