@@ -415,3 +415,18 @@ execution-ledger section. Ticket remains open.
 
 Evidence is in canonical comment `01M4YY6DXC7Z8RBKYQHPK7HBP2` and the latest
 execution-ledger section. Ticket remains open.
+
+## Integrated With Main — 2026-10-15
+
+- [x] Merged `origin/main` (`56ddf23`) as `f91bbb9`; five conflicts resolved,
+  no rebase.
+- [x] Integration gap fixed in `bb526e8`: `create_folder`'s refresh pre-check
+  answers `RepositoryBusy`, not `RecoveryRequired`, while an automatic poll runs.
+- [x] [Build 38726617896](https://github.com/vhodges/manyhands/actions/runs/38726617896)
+  on `bb526e8`: **SUCCESS** on all four targets: Linux x86_64 and aarch64 (2,716
+  each), macOS aarch64 (2,704), Windows x86_64 (2,597).
+- [x] Branch contains current `origin/main`.
+
+Evidence is in canonical comment `01M4ZT04SJPB8TJ79XS6M3V7JP` and the latest
+execution-ledger section. Ticket remains open; PR, merge and closure are separate
+owner decisions.

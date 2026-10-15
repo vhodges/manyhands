@@ -10,6 +10,64 @@ id: "01M4NM26RWRM6ATDHN16HV1M9S"
 
 # One-Shot Polling And Materialization Execution Ledger
 
+## Integrated With Main — 2026-10-15T12:53:37Z
+
+The owner authorized merging current `origin/main` and fixing the integration
+gap found during it. Merge commit `f91bbb9` has parents `0ed116b` (ticket) and
+`56ddf23` (main); no history was rewritten.
+
+| Conflict | Resolution |
+| --- | --- |
+| `.github/workflows/build.yml` | Main's test list plus `--test remote_polling`; Windows aarch64 stays removed |
+| `src/repository.rs` | Union of both sides' `remote` re-exports |
+| `src/repository/remote/state.rs` | Main's `stored_phase()` (same phase set) followed by Cycle 08 `poll_kind` parsing |
+| `src/repository/recovery.rs` | Main moved the active-remote refusal into `in_the_way()`; `begin_or_reconcile` first asks an active automatic poll to yield and returns `RepositoryBusy`, then calls `in_the_way()` for every other case |
+| `tests/support/ssh_server.rs` | Both sides counted accepted sockets; main's `sockets`/`accepted_sockets()` kept, Cycle 08's duplicate `connections` removed and its 13 uses switched |
+
+`tests/remote_polling.rs` also needed main's new `canonical::Comment::created_by`;
+the fixture sets `None`, which serializes exactly as before. The
+`remote_active_reservation` unique index allows one active reservation per
+repository, so finding the automatic poll with its own query is equivalent to
+the former single active-row query. Main added no other copy of the
+active-remote check.
+
+Integration gap, fixed in `bb526e8`: main's `require_refresh_can_begin`, the
+pre-check `create_folder` runs before making a directory, is documented as the
+refresh's own test, but kept answering `RecoveryRequired` during an automatic
+poll while the refresh now answers `RepositoryBusy`. The pre-check now answers
+`RepositoryBusy` and writes nothing; the refresh makes the yield request.
+`active_automatic_poll()` and `poll_yielding()` are shared by both paths. The
+new unit test
+`a_refresh_asked_about_during_an_automatic_poll_is_busy_not_recovery` failed
+first (`RecoveryRequired`), then passed; it also proves no yield is requested
+and that explicit polls and manual synchronization stay `RecoveryRequired`. The
+existing pre-check test's minimal remote table gained the real `id` and
+`priority` columns the check reads.
+
+Local evidence before dispatch (Devenv): `cargo fmt --check` and `cargo clippy
+--all-targets --all-features --locked -- -D warnings` PASS; library 772,
+`journal_rejection` 26, `local_authoring` 140, `mutation_bridges` 129,
+`mutation_replay` 304 and `remote_polling` 84 SSH cases PASS. The merge alone had
+also passed `canonical_foundation` 62, `mutation_contract` 43,
+`mutation_relationships` 27, `mutation_confirmation` 154 and `mutation_remote`
+88 SSH cases.
+
+Merge-only run 38720983976 on `f91bbb9` was cancelled once `bb526e8` superseded
+it. [Build 38726617896](https://github.com/vhodges/manyhands/actions/runs/38726617896)
+on `bb526e8`: **success** (2026-10-15T11:20:22Z–12:52:55Z).
+
+| Native target | Configured tests on `bb526e8` | Polling SSH cases | Job |
+| --- | --- | --- | --- |
+| Linux x86_64 | PASS 2,716 (772 lib, 1,483 ordinary, 461 SSH) | 84 | [116393950165](https://github.com/vhodges/manyhands/actions/runs/38726617896/job/116393950165) |
+| Linux aarch64 | PASS 2,716 (772 lib, 1,483 ordinary, 461 SSH) | 84 | [116393950049](https://github.com/vhodges/manyhands/actions/runs/38726617896/job/116393950049) |
+| macOS aarch64 | PASS 2,704 (763 lib, 1,481 ordinary, 460 SSH) | 83 | [116393950050](https://github.com/vhodges/manyhands/actions/runs/38726617896/job/116393950050) |
+| Windows x86_64 | PASS 2,597 (732 lib, 1,411 ordinary, 454 SSH) | 82 | [116393949657](https://github.com/vhodges/manyhands/actions/runs/38726617896/job/116393949657) |
+
+`origin/main` is still `56ddf23` and is an ancestor of the branch. Native
+acceptance on the integrated branch is met. Ticket stays open; PR, merge to
+main and closure are separate owner decisions. Canonical result comment:
+`01M4ZT04SJPB8TJ79XS6M3V7JP`.
+
 ## Native Matrix Green — 2026-10-15T04:47:43Z
 
 The owner authorized a Windows diagnostic run with keep-going execution,

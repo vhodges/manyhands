@@ -355,8 +355,15 @@ privacy-scan failure caused by a live write lock. Both were corrected in
 on `b794460` passed all four targets: Linux x86_64/aarch64 (1,700 each), macOS
 aarch64 (1,688) and Windows x86_64 (1,597). See the
 [green-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#native-matrix-green--2026-10-15t044743z).
-Native acceptance on the integrated branch still requires merging current
-`origin/main` and a native run of the result.
+Current `origin/main` (`56ddf23`) was then merged as `f91bbb9`. One integration
+gap was fixed in `bb526e8`: main's refresh pre-check for `create_folder` now
+answers `RepositoryBusy`, like the refresh itself, while an automatic poll runs.
+[Build 38726617896](https://github.com/vhodges/manyhands/actions/runs/38726617896)
+on `bb526e8` passed all four targets: Linux x86_64/aarch64 (2,716 each), macOS
+aarch64 (2,704) and Windows x86_64 (2,597). See the
+[integration ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#integrated-with-main--2026-10-15t125337z).
+Native acceptance on the integrated branch is met; PR, merge and closure remain
+owner decisions.
 
 ## Self-Review And Lifecycle
 
