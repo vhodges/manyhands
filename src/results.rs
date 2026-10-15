@@ -153,6 +153,140 @@ impl<T> Envelope<T> {
             recovery,
         }
     }
+
+    /// The result of a mutation whose outcome the caller has decided; its
+    /// message is the code's. A binding that knows what stopped the request
+    /// and what it had done uses `classified_mutation` instead, which
+    /// derives the outcome.
+    ///
+    /// It starts with no request or operation ID, no effect, no data and no
+    /// recovery action; the `with_` methods set what the command has. Data
+    /// may accompany any outcome.
+    ///
+    /// An outcome that the code or the effects contradict is a mistake in
+    /// the caller, caught in debug builds: `success` and `noop` carry a
+    /// code with no failure class, every other outcome a code with one,
+    /// `cancelled` the `cancelled` code, and `blocked` and `error` no
+    /// durable effect.
+    pub fn mutation(
+        command: impl Into<String>,
+        scope: Scope,
+        outcome: Outcome,
+        code: ResultCode,
+    ) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            command: command.into(),
+            request_id: None,
+            operation_id: None,
+            outcome,
+            code,
+            message: code.message().to_owned(),
+            scope,
+            effects: Effects::not_requested(),
+            data: None,
+            recovery: Vec::new(),
+        }
+        .checked()
+    }
+
+    /// The result of a mutation, with the outcome `Outcome::of_mutation`
+    /// derives from what the binding knows: whether the request was
+    /// cancelled, the code, the effects, and `local_change`, a durable
+    /// change that no effect shows.
+    ///
+    /// `cancelled` is set exactly when `code` is `cancelled`; anything else
+    /// is a mistake in the caller, caught in debug builds.
+    pub fn classified_mutation(
+        command: impl Into<String>,
+        scope: Scope,
+        cancelled: bool,
+        code: ResultCode,
+        effects: Effects,
+        local_change: bool,
+    ) -> Self {
+        debug_assert!(
+            cancelled == matches!(code, ResultCode::Cancelled),
+            "a cancellation carries the cancelled code"
+        );
+        let outcome = Outcome::of_mutation(cancelled, code, &effects, local_change);
+        Self {
+            effects,
+            ..Self::mutation(command, scope, outcome, code)
+        }
+        .checked()
+    }
+
+    /// Asserts, in debug builds, what `mutation` documents.
+    fn checked(self) -> Self {
+        let has_class = self.code.failure_class().is_some();
+        match self.outcome {
+            Outcome::Success | Outcome::Noop => debug_assert!(
+                !has_class,
+                "success and noop carry a code with no failure class"
+            ),
+            Outcome::Partial => {
+                debug_assert!(has_class, "a failure carries a code with a failure class");
+            }
+            Outcome::Blocked | Outcome::Error => {
+                debug_assert!(has_class, "a failure carries a code with a failure class");
+                debug_assert!(
+                    !self.effects.is_durable(),
+                    "a durable effect with work remaining is partial"
+                );
+            }
+            Outcome::Cancelled => debug_assert!(
+                matches!(self.code, ResultCode::Cancelled),
+                "a cancellation carries the cancelled code"
+            ),
+        }
+        self
+    }
+
+    pub fn with_request_id(mut self, request_id: impl Into<String>) -> Self {
+        self.request_id = Some(request_id.into());
+        self
+    }
+
+    pub fn with_operation_id(mut self, operation_id: impl Into<String>) -> Self {
+        self.operation_id = Some(operation_id.into());
+        self
+    }
+
+    /// Sets the effects. The outcome is not derived again, so it must
+    /// already agree with them; see `mutation`.
+    pub fn with_effects(mut self, effects: Effects) -> Self {
+        self.effects = effects;
+        self.checked()
+    }
+
+    pub fn with_data(mut self, data: T) -> Self {
+        self.data = Some(data);
+        self
+    }
+
+    pub fn with_recovery(mut self, recovery: Vec<RecoveryAction>) -> Self {
+        self.recovery = recovery;
+        self
+    }
+
+    /// The class a front end maps to its exit status, in the CLI contract's
+    /// classification order:
+    ///
+    /// 1. A cancellation is `Cancelled`.
+    /// 2. A durable effect with work remaining, which is what `partial`
+    ///    reports, is `Incomplete`, whatever stopped it. The code still
+    ///    names what did.
+    /// 3. Any other failure takes its code's own class.
+    /// 4. `success` and `noop` have none.
+    pub fn failure_class(&self) -> Option<FailureClass> {
+        match self.outcome {
+            Outcome::Cancelled => Some(FailureClass::Cancelled),
+            Outcome::Partial => Some(FailureClass::Incomplete),
+            Outcome::Blocked | Outcome::Error => self.code.failure_class(),
+            Outcome::Success | Outcome::Noop => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -176,6 +310,48 @@ pub struct Effects {
 }
 
 impl Effects {
+    /// Whether the effects show completed work on canonical content or Git
+    /// that stays when the request stops: a file `written`, a checkpoint
+    /// `committed`, a publication `published`, an integration `complete`
+    /// or a cleanup `complete`.
+    ///
+    /// `not_requested`, `unchanged` and `pending` show no completed work.
+    /// `current` shows none either: a publication that is `current` was
+    /// found so, not made so, and discovery describes the index, which is
+    /// rebuilt from the repository. `commit_oid` names a commit and does
+    /// not say that this request made it.
+    pub const fn is_durable(&self) -> bool {
+        let written = match self.write {
+            WriteEffect::Written => true,
+            WriteEffect::NotRequested | WriteEffect::Unchanged => false,
+        };
+        let committed = match self.checkpoint {
+            CheckpointEffect::Committed => true,
+            CheckpointEffect::NotRequested
+            | CheckpointEffect::Unchanged
+            | CheckpointEffect::Pending => false,
+        };
+        let published = match self.publication {
+            PublicationEffect::Published => true,
+            PublicationEffect::NotRequested
+            | PublicationEffect::Current
+            | PublicationEffect::Pending => false,
+        };
+        let integrated = match self.integration {
+            IntegrationEffect::Complete => true,
+            IntegrationEffect::NotRequested | IntegrationEffect::Pending => false,
+        };
+        let cleaned = match self.cleanup {
+            CleanupEffect::Complete => true,
+            CleanupEffect::NotRequested | CleanupEffect::Pending => false,
+        };
+        match self.discovery {
+            DiscoveryEffect::NotRequested | DiscoveryEffect::Current | DiscoveryEffect::Pending => {
+                written || committed || published || integrated || cleaned
+            }
+        }
+    }
+
     /// The only value a read produces.
     pub fn not_requested() -> Self {
         Self {
@@ -212,7 +388,8 @@ macro_rules! recovery_actions {
             }
 
             /// The keys of the action's `arguments`. An action carries all
-            /// of them, or none when the result names no repository.
+            /// of them, or, when one of them is `root` and the result
+            /// names no repository, none.
             pub const fn argument_keys(self) -> &'static [&'static str] {
                 match self {
                     $(Self::$variant => &[$($argument),*]),+
@@ -229,6 +406,23 @@ recovery_actions! {
     IndexRefresh => "index.refresh", ["root"];
     /// Inspect the repository whose root is `root`.
     RepoInspect => "repo.inspect", ["root"];
+    /// Resume the operation the action names.
+    OperationResume => "operation.resume", [];
+    /// Submit the request `request_id` again.
+    RequestRetry => "request.retry", ["request_id"];
+    /// Prepare the command again for a new confirmation.
+    RequestPrepare => "request.prepare", [];
+    /// Cancel the request `request_id`, then submit it once more: that
+    /// call ends it cancelled and lets go of what it holds.
+    RequestCancel => "request.cancel", ["request_id"];
+    /// Abandon the operation the action names, in the repository at `root`.
+    OperationAbandon => "operation.abandon", ["root"];
+    /// Set the identity of the repository at `root`.
+    RepoIdentitySet => "repo.identity_set", ["root"];
+    /// Approve the host `authority` for the repository at `root`.
+    HostApprove => "host.approve", ["authority", "root"];
+    /// Replace the pin of the host `authority` for the repository at `root`.
+    HostReplace => "host.replace", ["authority", "root"];
 }
 
 impl Serialize for RecoveryActionKind {
@@ -274,6 +468,19 @@ impl RecoveryAction {
             arguments,
         }
     }
+
+    /// The action for one operation: `operation_id` is set, and
+    /// `arguments` follows the rule of `new`.
+    pub fn for_operation(
+        action: RecoveryActionKind,
+        operation_id: impl Into<String>,
+        arguments: impl IntoIterator<Item = (&'static str, serde_json::Value)>,
+    ) -> Self {
+        Self {
+            operation_id: Some(operation_id.into()),
+            ..Self::new(action, arguments)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -312,7 +519,9 @@ macro_rules! result_codes {
                 }
             }
 
-            /// `None` only for `ok`.
+            /// The code's own class: `None` only for `ok` and for
+            /// `already_applied`, a no-op. For the class of a result, which
+            /// also depends on its outcome, see `Envelope::failure_class`.
             pub const fn failure_class(self) -> Option<FailureClass> {
                 match self {
                     $(Self::$variant => $class),+
@@ -330,11 +539,13 @@ result_codes! {
     NotRepository => "not_repository", Some(FailureClass::Input),
         "No Git repository exists at that path.";
     NotRepositoryRoot => "not_repository_root", Some(FailureClass::Input),
-        "That path is inside a repository but is not its root or a linked worktree root.";
+        "That path is inside a repository but is not a root this command takes.";
     BareRepository => "bare_repository", Some(FailureClass::Input),
         "The repository has no working tree.";
     RepositoryNotRegistered => "repository_not_registered", Some(FailureClass::Blocked),
-        "The repository is not enabled in Manyhands.";
+        "The repository is not registered with Manyhands.";
+    RepositoryNotEnabled => "repository_not_enabled", Some(FailureClass::Input),
+        "The repository has never been enabled in Manyhands; enable it first.";
     RepositoryInaccessible => "repository_inaccessible", Some(FailureClass::Blocked),
         "The repository cannot be read.";
     InvalidId => "invalid_id", Some(FailureClass::Input),
@@ -351,16 +562,117 @@ result_codes! {
         "No host pin exists for that authority.";
     OperationNotFound => "operation_not_found", Some(FailureClass::Input),
         "No operation has that ID.";
+    RelationshipCycle => "relationship_cycle", Some(FailureClass::Input),
+        "Those relationships would form a cycle.";
+    InvalidRelationship => "invalid_relationship", Some(FailureClass::Input),
+        "A relationship names an item that is not a ticket.";
     IndexUnavailable => "index_unavailable", Some(FailureClass::Blocked),
         "The index is degraded and must be rebuilt.";
     Busy => "busy", Some(FailureClass::Transient),
         "The repository is busy; try again.";
     InternalError => "internal_error", Some(FailureClass::Internal),
         "An internal error occurred.";
+    InvalidInput => "invalid_input", Some(FailureClass::Input),
+        "The request input is not valid.";
+    RequestMismatch => "request_mismatch", Some(FailureClass::Input),
+        "That request ID was already used for a different request.";
+    RequestNotFound => "request_not_found", Some(FailureClass::Input),
+        "No request has that ID.";
+    ConfirmationMismatch => "confirmation_mismatch", Some(FailureClass::Input),
+        "The confirmation was prepared for a different request.";
+    NotConfirmable => "not_confirmable", Some(FailureClass::Input),
+        "That command does not take a confirmation.";
+    SlugAlreadyAssigned => "slug_already_assigned", Some(FailureClass::Input),
+        "The item already has a short code.";
+    OccupiedPath => "occupied_path", Some(FailureClass::Input),
+        "Something already exists at that path.";
+    NotRepairable => "not_repairable", Some(FailureClass::Input),
+        "That item cannot be repaired by this command.";
+    RemoteNameConflict => "remote_name_conflict", Some(FailureClass::Input),
+        "A remote with that name already exists.";
+    InvalidRemote => "invalid_remote", Some(FailureClass::Input),
+        "That remote cannot be used.";
+    KeyNotDeletable => "key_not_deletable", Some(FailureClass::Input),
+        "That key cannot be deleted by Manyhands.";
+    ConfirmationRequired => "confirmation_required", Some(FailureClass::Blocked),
+        "The command needs a confirmation; prepare it first.";
+    ConfirmationExpired => "confirmation_expired", Some(FailureClass::Blocked),
+        "The confirmation has expired; prepare the command again.";
+    ConfirmationNotFound => "confirmation_not_found", Some(FailureClass::Blocked),
+        "No confirmation has that ID; prepare the command again.";
+    ConfirmationUsed => "confirmation_used", Some(FailureClass::Blocked),
+        "The confirmation was already used.";
+    ExternalChange => "external_change", Some(FailureClass::Blocked),
+        "What the request was based on has changed.";
+    RecoveryRequired => "recovery_required", Some(FailureClass::Blocked),
+        "Recovery is required before this can continue.";
+    OriginalRequestRequired => "original_request_required", Some(FailureClass::Blocked),
+        "The original request must be submitted again to finish the operation.";
+    IdentityRequired => "identity_required", Some(FailureClass::Blocked),
+        "A name and an email are required.";
+    InitialsRequired => "initials_required", Some(FailureClass::Blocked),
+        "Initials are required to assign a short code.";
+    InvalidSlugConfiguration => "invalid_slug_configuration", Some(FailureClass::Blocked),
+        "The short code configuration is not valid.";
+    IdentityAmbiguous => "identity_ambiguous", Some(FailureClass::Blocked),
+        "The identity to use is ambiguous.";
+    TicketClosed => "ticket_closed", Some(FailureClass::Blocked),
+        "The ticket is closed.";
+    WrongBranch => "wrong_branch", Some(FailureClass::Blocked),
+        "The repository is not on the branch this needs.";
+    WorktreeNotClean => "worktree_not_clean", Some(FailureClass::Blocked),
+        "The working tree has uncommitted changes in the way.";
+    WorktreeConflicted => "worktree_conflicted", Some(FailureClass::Blocked),
+        "The working tree has unresolved conflicts.";
+    InvalidConfiguration => "invalid_configuration", Some(FailureClass::Blocked),
+        "The Manyhands configuration is not valid.";
+    PublicationRemoteRequired => "publication_remote_required", Some(FailureClass::Blocked),
+        "No publication remote is selected.";
+    PublicationRemoteInUse => "publication_remote_in_use", Some(FailureClass::Blocked),
+        "That remote is the selected publication remote.";
+    MergeRequired => "merge_required", Some(FailureClass::Blocked),
+        "The local and remote branches have diverged and must be merged.";
+    RemoteBranchDeleted => "remote_branch_deleted", Some(FailureClass::Blocked),
+        "The published branch was deleted on the remote.";
+    PushRejected => "push_rejected", Some(FailureClass::Blocked),
+        "The remote rejected the push.";
+    NoSelectedKey => "no_selected_key", Some(FailureClass::Blocked),
+        "No key is selected.";
+    KeyUnavailable => "key_unavailable", Some(FailureClass::Blocked),
+        "The selected key cannot be read.";
+    KeyRejected => "key_rejected", Some(FailureClass::Blocked),
+        "The remote rejected the selected key.";
+    SelectedKeyInUse => "selected_key_in_use", Some(FailureClass::Blocked),
+        "That key is the selected key.";
+    UnlockRequired => "unlock_required", Some(FailureClass::Blocked),
+        "The key must be unlocked.";
+    UnlockFailed => "unlock_failed", Some(FailureClass::Blocked),
+        "The key could not be unlocked.";
+    HostApprovalRequired => "host_approval_required", Some(FailureClass::Blocked),
+        "The host must be approved before connecting.";
+    HostReplacementRequired => "host_replacement_required", Some(FailureClass::Blocked),
+        "The host's key differs from the approved one and must be replaced.";
+    HostMismatch => "host_mismatch", Some(FailureClass::Blocked),
+        "The host did not present the expected fingerprint.";
+    DiscoveryPending => "discovery_pending", Some(FailureClass::Incomplete),
+        "The change is recorded; the index has not been updated yet.";
+    RegistrationPending => "registration_pending", Some(FailureClass::Incomplete),
+        "The repository was initialized; its registration is not complete.";
+    PollYielding => "poll_yielding", Some(FailureClass::Transient),
+        "A poll is finishing; try again.";
+    RemoteUnavailable => "remote_unavailable", Some(FailureClass::Transient),
+        "The remote could not be reached; try again.";
+    TransportUnavailable => "transport_unavailable", Some(FailureClass::Transient),
+        "The transport is not available; try again.";
+    Cancelled => "cancelled", Some(FailureClass::Cancelled),
+        "The request was cancelled.";
+    AlreadyApplied => "already_applied", None,
+        "The request was already applied; nothing changed.";
 }
 
 impl ResultCode {
-    /// The outcome an envelope carrying this code reports.
+    /// The outcome a read's envelope carrying this code reports. A
+    /// mutation's outcome is given to `Envelope::mutation` instead.
     pub const fn outcome(self) -> Outcome {
         match self.failure_class() {
             None => Outcome::Success,
@@ -370,6 +682,45 @@ impl ResultCode {
             }
             Some(FailureClass::Incomplete) => Outcome::Partial,
             Some(FailureClass::Cancelled) => Outcome::Cancelled,
+        }
+    }
+}
+
+impl Outcome {
+    /// The outcome of a mutation, in the CLI contract's classification
+    /// order. This is the one place it is decided.
+    ///
+    /// 1. A cancelled request is `cancelled`.
+    /// 2. A code that stops the request, one with a failure class, after a
+    ///    durable effect is `partial`, whatever the code. A durable effect
+    ///    is one `Effects::is_durable` finds, or `local_change`: a change
+    ///    to identity, keys, remotes, host trust or a registration, which
+    ///    no effect shows.
+    /// 3. Otherwise a code that stops the request gives the outcome of its
+    ///    own class, as for a read.
+    /// 4. A code with no class is `noop` for `already_applied` and
+    ///    `success` otherwise.
+    pub const fn of_mutation(
+        cancelled: bool,
+        code: ResultCode,
+        effects: &Effects,
+        local_change: bool,
+    ) -> Self {
+        if cancelled {
+            return Self::Cancelled;
+        }
+        match code.failure_class() {
+            Some(_) if effects.is_durable() || local_change => Self::Partial,
+            Some(
+                FailureClass::Input
+                | FailureClass::Blocked
+                | FailureClass::Incomplete
+                | FailureClass::Transient
+                | FailureClass::Internal
+                | FailureClass::Cancelled,
+            ) => code.outcome(),
+            None if matches!(code, ResultCode::AlreadyApplied) => Self::Noop,
+            None => Self::Success,
         }
     }
 }

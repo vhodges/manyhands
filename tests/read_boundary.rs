@@ -12,8 +12,9 @@ use std::{
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, DependencyDirection, IndexStatusState, LeaseKind, ReadError,
-        RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
+        ClosureFilter, DependencyDirection, IndexStatusState, LeaseKind, ProposedRelationships,
+        ReadError, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+        transport::SshAuthority,
     },
     results::{Outcome, ResultCode},
 };
@@ -507,6 +508,8 @@ fn repository_with_items() -> (support::TestRepository, support::EnabledReposito
         1_000,
     );
     items::create_document_context(&enabled.service, root, items::DOCUMENT_B, "docs/b.md");
+    // A folder, which the folder list answers with from the index.
+    std::fs::create_dir_all(root.join("docs/folder")).unwrap();
     items::write(
         root,
         "docs/marker.md",
@@ -566,6 +569,11 @@ fn every_item_read(
     let ticket = items::ticket_path(items::TICKET_A);
     let outcome = |result: Result<(), ReadError>| result.map_err(|error| error.code());
     vec![
+        outcome(
+            service
+                .list_document_folders(repo)
+                .map(|list| assert_eq!(list.items.len(), 1)),
+        ),
         outcome(service.list_documents(repo).map(drop)),
         outcome(
             service
@@ -679,6 +687,54 @@ fn every_item_read(
         ),
         outcome(service.ticket_critical_path(repo).map(drop)),
         outcome(service.find_tickets_by_slug(repo, "mh-vh-k9x2b").map(drop)),
+        // One proposal that is accepted with an unresolved target, and one
+        // whose answer is a rejection: both are reads that succeed.
+        outcome(
+            service
+                .check_ticket_relationships(
+                    repo,
+                    &items::item_id(items::TICKET_A),
+                    &ProposedRelationships {
+                        deps: vec![items::item_id(items::TICKET_ABSENT)],
+                        parent: None,
+                    },
+                )
+                .map(|check| assert_eq!(check.rejection, None)),
+        ),
+        outcome(
+            service
+                .check_ticket_relationships(
+                    repo,
+                    &items::item_id(items::TICKET_A),
+                    &ProposedRelationships {
+                        deps: vec![items::item_id(items::TICKET_A)],
+                        parent: Some(items::item_id(items::DOCUMENT_A)),
+                    },
+                )
+                .map(|check| {
+                    assert_eq!(
+                        check.rejection.map(|rejection| rejection.code),
+                        Some(ResultCode::InvalidRelationship)
+                    );
+                }),
+        ),
+        outcome(
+            service
+                .observe_path(repo, None, path("docs/a.md"))
+                .map(|observed| assert!(observed.exists)),
+        ),
+        outcome(
+            service
+                .observe_path(repo, None, path("docs/absent.md"))
+                .map(|observed| assert!(!observed.exists)),
+        ),
+        outcome(
+            service
+                .observe_path(repo, Some(&worktree), path("docs/moved/b.md"))
+                .map(|observed| assert!(!observed.exists)),
+        ),
+        // A directory, which is no item path either.
+        outcome(service.observe_path(repo, None, path("docs")).map(drop)),
         outcome(
             service
                 .show_path(repo, None, path("../outside.md"))
@@ -763,6 +819,7 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
             Ok(()),
             Ok(()),
             Ok(()),
+            Ok(()),
             Err(ResultCode::ItemNotFound),
             Ok(()),
             Ok(()),
@@ -783,6 +840,12 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
             Ok(()),
             Ok(()),
             Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Ok(()),
+            Err(ResultCode::InvalidPath),
             Err(ResultCode::InvalidPath),
         ]
     );
@@ -793,6 +856,109 @@ fn item_reads_change_nothing_in_the_repository_or_its_worktrees() {
     assert!(before == support::repository_and_worktree_snapshot(&fixture));
     // Objects, refs, reflogs and each worktree's administrative files.
     assert!(git_before == support::repository_git_file_bytes(&fixture));
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn observe_path_gives_a_file_its_token_and_an_absent_path_one_of_its_branch_and_path() {
+    let (fixture, enabled) = repository_with_items();
+    let service = &enabled.service;
+    let repo = service.resolve_repository(&fixture.root).unwrap();
+    let worktree = fs::canonicalize(&fixture.root)
+        .unwrap()
+        .join(".manyhands/worktrees")
+        .join(items::DOCUMENT_B);
+    let path = std::path::Path::new;
+    let observe = |context: Option<&std::path::Path>, at: &str| {
+        service.observe_path(&repo, context, path(at)).unwrap()
+    };
+
+    // A file has the token the item reads give it.
+    let file = observe(None, "docs/a.md");
+    let shown = service.show_path(&repo, None, path("docs/a.md")).unwrap();
+    assert!(file.exists);
+    assert_eq!(file.path, "docs/a.md");
+    assert_eq!(Some(&file.observation), shown.observation.as_ref());
+    assert_eq!(file.context, shown.context);
+    let in_context = observe(Some(&worktree), "docs/b.md");
+    assert_eq!(
+        Some(&in_context.observation),
+        service
+            .show_item(&repo, &items::item_id(items::DOCUMENT_B))
+            .unwrap()
+            .observation
+            .as_ref()
+    );
+
+    // Nothing at the path: a token of the branch and the path.
+    let absent = observe(None, "docs/absent.md");
+    assert!(!absent.exists);
+    assert!(absent.observation.starts_with("v1:") && absent.observation.len() == 67);
+    assert_eq!(absent, observe(None, "docs/absent.md"));
+    assert_ne!(
+        absent.observation,
+        observe(None, "docs/other.md").observation,
+        "by path"
+    );
+    let elsewhere = observe(Some(&worktree), "docs/absent.md");
+    assert!(!elsewhere.exists);
+    assert_ne!(absent.context.branch, elsewhere.context.branch);
+    assert_ne!(absent.observation, elsewhere.observation, "by branch");
+    // Below a directory that does not exist, and where a ticket would be.
+    assert!(!observe(None, "docs/none/absent.md").exists);
+    assert!(!observe(None, &items::ticket_path("01ARZ3NDEKTSV4RRFFQ69G5FZZ")).exists);
+    // Not the token of a file there, empty or not.
+    fs::write(fixture.root.join("docs/absent.md"), "").unwrap();
+    let empty = observe(None, "docs/absent.md");
+    assert!(empty.exists);
+    assert_ne!(empty.observation, absent.observation);
+
+    // A directory, a path that is not a plain relative one, and a context
+    // that is not one of the repository's are invalid paths.
+    let code = |context: Option<&std::path::Path>, at: &str| {
+        service
+            .observe_path(&repo, context, path(at))
+            .unwrap_err()
+            .code()
+    };
+    fs::create_dir(fixture.root.join("docs/folder.md")).unwrap();
+    assert_eq!(code(None, "docs/folder.md"), ResultCode::InvalidPath);
+    assert_eq!(code(None, "docs"), ResultCode::InvalidPath);
+    assert_eq!(code(None, ".manyhands/tickets"), ResultCode::InvalidPath);
+    // A path no item can be at is not observed, whether or not a file is
+    // there: the read `show_path` refuses is refused here, and nothing
+    // of such a file is digested.
+    fs::write(fixture.root.join("notes.txt"), "not an item\n").unwrap();
+    for path in [
+        ".git/config",
+        ".git/HEAD",
+        "fixture.txt",
+        "notes.txt",
+        "notes/absent.txt",
+        ".manyhands/config.toml",
+        "docs/absent.txt",
+    ] {
+        assert_eq!(code(None, path), ResultCode::InvalidPath, "{path}");
+        assert_eq!(
+            code(None, path),
+            service
+                .show_path(&repo, None, std::path::Path::new(path))
+                .unwrap_err()
+                .code(),
+            "{path}"
+        );
+    }
+    assert_eq!(code(None, "../outside.md"), ResultCode::InvalidPath);
+    assert_eq!(code(None, "/docs/a.md"), ResultCode::InvalidPath);
+    assert_eq!(code(None, "docs//a.md"), ResultCode::InvalidPath);
+    assert_eq!(
+        code(None, ".manyhands/worktrees/x/docs/a.md"),
+        ResultCode::InvalidPath
+    );
+    assert_eq!(
+        code(Some(&fixture.root.join("docs")), "a.md"),
+        ResultCode::InvalidPath
+    );
     assert_git_transport_uninitialized();
 }
 

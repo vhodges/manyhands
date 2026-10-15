@@ -312,6 +312,7 @@ fn comment(item: &str) -> String {
         item_id: item.parse().unwrap(),
         parent_id: None,
         created_at: time::OffsetDateTime::from_unix_timestamp(1_767_225_600).unwrap(),
+        created_by: None,
         body: BODY.into(),
         unknown: serde_yaml::Mapping::new(),
     }))
@@ -1742,7 +1743,7 @@ fn policy_case(reason: PollIneligibility) -> Result<(), FixtureError> {
     };
     fixed(db.execute("UPDATE remote_polling_state SET enabled=?1,paused=?2,recovery_suspended=?3,next_eligible_at=?4,latest_outcome='completed'",rusqlite::params![enabled,paused,suspended,next]))?;
     let before = fixed(p.b.service.remote_snapshot(&p.b.root))?;
-    let connections = p.server.connections();
+    let connections = p.server.accepted_sockets();
     let helpers = p.server.helper_invocations();
     let ops = count(&p.b, "remote_operation_records")?;
     let prompts = Arc::new(AtomicUsize::new(0));
@@ -1758,7 +1759,7 @@ fn policy_case(reason: PollIneligibility) -> Result<(), FixtureError> {
     assert!(
         matches!(result,RemotePollResult::Complete(RemotePollOutcome::NotEligible{reason:r,..}) if r==reason)
     );
-    assert_eq!(p.server.connections(), connections);
+    assert_eq!(p.server.accepted_sockets(), connections);
     assert_eq!(p.server.helper_invocations(), helpers);
     assert_eq!(prompts.load(Ordering::SeqCst), 0);
     assert_eq!(count(&p.b, "remote_operation_records")?, ops);
@@ -1824,7 +1825,7 @@ fn whole_review_invalid_auto(reason: PollIneligibility) -> Result<(), FixtureErr
         let refs = all_refs(&p.b.repo()?)?;
         let batch = observation_digest(&p.b)?;
         fixed(db.execute_batch("CREATE TABLE whole_review_writes(n INTEGER);INSERT INTO whole_review_writes VALUES(0);CREATE TRIGGER whole_review_policy AFTER UPDATE ON remote_polling_state BEGIN UPDATE whole_review_writes SET n=n+1;END;CREATE TRIGGER whole_review_new_op AFTER INSERT ON remote_operation_records BEGIN UPDATE whole_review_writes SET n=n+1;END;CREATE TRIGGER whole_review_op AFTER UPDATE ON remote_operation_records BEGIN UPDATE whole_review_writes SET n=n+1;END;"))?;
-        let connections = p.server.connections();
+        let connections = p.server.accepted_sockets();
         let helpers = p.server.helper_invocations();
         let ops = count(&p.b, "remote_operation_records")?;
         let prompts = Arc::new(AtomicUsize::new(0));
@@ -1840,7 +1841,7 @@ fn whole_review_invalid_auto(reason: PollIneligibility) -> Result<(), FixtureErr
         assert!(
             matches!(result, Ok(RemotePollResult::Complete(RemotePollOutcome::NotEligible{reason:r,next_eligible_at:Some(deadline)})) if r==reason && deadline.unix_timestamp()==next)
         );
-        assert_eq!(p.server.connections(), connections);
+        assert_eq!(p.server.accepted_sockets(), connections);
         assert_eq!(p.server.helper_invocations(), helpers);
         assert_eq!(prompts.load(Ordering::SeqCst), 0);
         assert_eq!(count(&p.b, "remote_operation_records")?, ops);
@@ -1877,7 +1878,7 @@ fn whole_review_invalid_attention(invocation: RemotePollInvocation) -> Result<()
         p.poll()?;
         invalidate_config(&p, shape)?;
         fixed(p.b.db()?.execute_batch("UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=12345,latest_attempt_at=123,latest_outcome='completed'"))?;
-        let connections = p.server.connections();
+        let connections = p.server.accepted_sockets();
         let local = snapshot(&p.b)?;
         let refs = all_refs(&p.b.repo()?)?;
         let result = p.poll_with(&p.b.service, p.request(invocation), &mut session());
@@ -1901,7 +1902,7 @@ fn whole_review_invalid_attention(invocation: RemotePollInvocation) -> Result<()
                 12345
             }
         );
-        assert_eq!(p.server.connections(), connections);
+        assert_eq!(p.server.accepted_sockets(), connections);
         assert_eq!(snapshot(&p.b)?, local);
         assert_eq!(all_refs(&p.b.repo()?)?, refs);
         p.finish()?;
@@ -2020,7 +2021,7 @@ fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError>
     let refs = all_refs(&p.b.repo()?)?;
     let second = p.b.reopen()?;
     fixed(second.cancel_remote_operation(&p.b.root, req.operation_id))?;
-    let connections = p.server.connections();
+    let connections = p.server.accepted_sockets();
     let mut restart = req.clone();
     restart.restart = true;
     let (cancelled, pending) = report(fixed(p.poll_with(&second, restart, &mut session()))?)?;
@@ -2030,7 +2031,7 @@ fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError>
         row(&cancelled, &target_ref).disposition(),
         PollDisposition::NotReached
     );
-    assert_eq!(p.server.connections(), connections);
+    assert_eq!(p.server.accepted_sockets(), connections);
     assert_eq!(snapshot(&p.b)?, before);
     assert_eq!(all_refs(&p.b.repo()?)?, refs);
     fixed(second.refresh_repository(RefreshRepositoryRequest {
@@ -2040,7 +2041,7 @@ fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError>
     let (replay, pending) = report(fixed(p.poll_with(&second, req, &mut session()))?)?;
     assert!(!pending);
     assert_eq!(replay, cancelled);
-    assert_eq!(p.server.connections(), connections);
+    assert_eq!(p.server.accepted_sockets(), connections);
     assert_eq!(snapshot(&p.b)?, before);
     assert_eq!(all_refs(&p.b.repo()?)?, refs);
     p.finish()
@@ -2387,7 +2388,7 @@ fn retained_conflict() -> Result<(), FixtureError> {
     assert!(fixed(fixed(git2::Repository::open(p.b.worktree(T)))?.index())?.has_conflicts());
     let before = snapshot(&p.b)?;
     let refs = all_refs(&p.b.repo()?)?;
-    let connections = p.server.connections();
+    let connections = p.server.accepted_sockets();
     let helpers = p.server.helper_invocations();
     let ops = count(&p.b, "remote_operation_records")?;
     for invocation in [
@@ -2398,7 +2399,7 @@ fn retained_conflict() -> Result<(), FixtureError> {
             p.poll_with(&p.b.service, p.request(invocation), &mut session()),
             Err(RemotePollError::ConflictPending)
         ));
-        assert_eq!(p.server.connections(), connections);
+        assert_eq!(p.server.accepted_sockets(), connections);
         assert_eq!(p.server.helper_invocations(), helpers);
         assert_eq!(snapshot(&p.b)?, before);
         assert_eq!(all_refs(&p.b.repo()?)?, refs);
@@ -2707,13 +2708,13 @@ fn disconnect_download_case(invocation: RemotePollInvocation) -> Result<(), Fixt
     p.privacy()?;
     p.server.clear_fault();
     let second = p.b.reopen()?;
-    let connections = p.server.connections();
+    let connections = p.server.accepted_sockets();
     let (replay, _) = report(fixed(p.poll_with(&second, req, &mut session()))?)?;
     assert_eq!(
         replay.outcome(),
         Some(RemoteOutcomeCategory::TransportUnavailable)
     );
-    assert_eq!(p.server.connections(), connections);
+    assert_eq!(p.server.accepted_sockets(), connections);
     assert_eq!(observation_digest(&p.b)?, batch);
     let (r, _) = report(fixed(p.poll_with(
         &second,

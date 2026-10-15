@@ -784,10 +784,11 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
-            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path FROM comment_publication_bindings b
+            let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path,o.state,o.completed_step FROM comment_publication_bindings b
                 JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
-                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?))).optional().map_err(|_| state::recovery_required())?;
-            if let Some((kind, item, checkpoint, parent_root)) = binding {
+                |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?,r.get::<_, String>(4)?,r.get::<_, Option<String>>(5)?))).optional().map_err(|_| state::recovery_required())?;
+            if let Some((kind, item, checkpoint, parent_root, parent_state, parent_step)) = binding
+            {
                 let registered_root: String = tx
                     .query_row(
                         "SELECT root_path FROM repositories WHERE id=?1",
@@ -805,17 +806,49 @@ impl RepositoryService {
                 {
                     return Err(mismatch());
                 }
+                // The submission this synchronization is of was abandoned.
+                // Its row is under another ID than the one reserved here,
+                // so the refusal below, which reads the row of this ID,
+                // does not see it. A replay or a retry that read its
+                // binding before the abandon comes here next, and is
+                // stopped in the transaction that would reserve: nothing
+                // is begun on the remote for it.
+                if parent_state == "completed"
+                    && crate::repository::recovery::is_abandoned_step(parent_step.as_deref())
+                {
+                    return Err(crate::repository::recovery::abandoned(
+                        RepositoryOperation::SubmitComment,
+                        root,
+                    ));
+                }
                 if checkpoint.is_none() {
                     return Err(state::recovery_required());
                 }
             }
-            let local_id: bool = tx
+            // The last step of the local row under the ID, when there is
+            // one.
+            let local: Option<Option<String>> = tx
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+                    "SELECT completed_step FROM operation_records WHERE operation_ulid=?1 ORDER BY id LIMIT 1",
                     [operation_id.to_string()],
                     |row| row.get(0),
                 )
+                .optional()
                 .map_err(|_| state::recovery_required())?;
+            // An ID whose local operation was abandoned is closed for
+            // good: nothing is reserved or replayed under it, so no
+            // remote work is begun whose index hand-off, a local row
+            // under the same ID, would then be refused.
+            if local
+                .as_ref()
+                .is_some_and(|step| crate::repository::recovery::is_abandoned_step(step.as_deref()))
+            {
+                return Err(crate::repository::recovery::abandoned(
+                    RepositoryOperation::RepositorySnapshot,
+                    root,
+                ));
+            }
+            let local_id = local.is_some();
             let other_root: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",params![operation_id.to_string(), repository_id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
             if is_sync(target) && other_root {
                 return Err(mismatch());
@@ -927,6 +960,26 @@ impl RepositoryService {
             if active(record.phase) {
                 tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
             }
+            Ok(())
+        })
+    }
+
+    /// The cancellation an executor asks of its own operation: recorded
+    /// as `cancel_remote_operation` records one, and only while `owner`
+    /// still owns the operation. The next safe point honors it.
+    pub(crate) fn request_synchronization_cancellation(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<(), RepositoryError> {
+        self.check_failure(
+            crate::repository::FailurePoint::BeforeSynchronizationCancellation,
+            RepositoryOperation::RepositorySnapshot,
+            root,
+        )?;
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_| state::recovery_required())?;
             Ok(())
         })
     }
@@ -2008,6 +2061,24 @@ impl RepositoryService {
             {
                 return Err(state::recovery_required());
             }
+            let record_id = record.id;
+            let write = || {
+                tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?2,expected_oid=?3,local_oid=?4,tracking_oid=?5,primary_tracking_oid=?6,push_oid=?7,push_advertised_oid=?8,updated_at=max(updated_at,?9) WHERE id=?1",
+                    params![record_id,checkpoint.name(),evidence.expected_oid.map(|v|v.to_string()),evidence.local_oid.map(|v|v.to_string()),evidence.tracking_oid.map(|v|v.to_string()),evidence.primary_tracking_oid.map(|v|v.to_string()),evidence.push_oid.map(|v|v.to_string()),evidence.push_advertised_oid.map(|v|v.to_string()),now()]).map_err(|_| state::recovery_required())
+            };
+            // That the push returned is an effect that has happened, and
+            // is recorded before a requested cancellation or yield is
+            // acknowledged: the operation may then end, and its row says
+            // the remote took its push. Every other checkpoint is an
+            // intent or a local step, and a request is honored before it
+            // is written.
+            let record = if checkpoint == C::PushReturned {
+                write()?;
+                state::read_operation(tx, id, owner.operation_id)?
+                    .ok_or_else(state::recovery_required)?
+            } else {
+                record
+            };
             if let Some(point) = record.completed_step {
                 let decision = acknowledge(tx, &record, point)?;
                 if decision != RemoteSafePointOutcome::Continue {
@@ -2016,8 +2087,9 @@ impl RepositoryService {
             } else if record.cancel_requested || record.yield_requested {
                 return acknowledge(tx, &record, RemoteOperationSafePoint::BeforeFetch);
             }
-            tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?2,expected_oid=?3,local_oid=?4,tracking_oid=?5,primary_tracking_oid=?6,push_oid=?7,push_advertised_oid=?8,updated_at=max(updated_at,?9) WHERE id=?1",
-                params![record.id,checkpoint.name(),evidence.expected_oid.map(|v|v.to_string()),evidence.local_oid.map(|v|v.to_string()),evidence.tracking_oid.map(|v|v.to_string()),evidence.primary_tracking_oid.map(|v|v.to_string()),evidence.push_oid.map(|v|v.to_string()),evidence.push_advertised_oid.map(|v|v.to_string()),now()]).map_err(|_| state::recovery_required())?;
+            if checkpoint != C::PushReturned {
+                write()?;
+            }
             Ok(RemoteSafePointOutcome::Continue)
         })
     }

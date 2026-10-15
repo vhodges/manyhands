@@ -22,8 +22,8 @@ use super::{
     UnplannableTicketDto,
     items::{
         Related, StoredItem, behind, effective_rows, is_completely_observed, item_not_found,
-        stored_comment_targets, stored_index_state, stored_item_dto, stored_items, stored_problems,
-        ticket_list_order,
+        stored_comment_targets, stored_comments_among, stored_index_state, stored_item_dto,
+        stored_items, stored_problems, ticket_list_order,
     },
 };
 use crate::{
@@ -308,6 +308,23 @@ impl TicketGraph {
     pub(super) fn on_parent_cycle(&self, id: &str) -> bool {
         self.position(id)
             .is_some_and(|ticket| self.on_parent_cycle[ticket])
+    }
+
+    /// The dependency cycle the ticket is on, closed tickets counted: its
+    /// IDs, ascending. `None` for a ticket on no such cycle.
+    pub(super) fn dependency_cycle_ids(&self, id: &str) -> Option<Vec<String>> {
+        let cycle = self.cycle_of[self.position(id)?]?;
+        Some(self.names(&self.cycles[cycle]))
+    }
+
+    /// The parent cycle the ticket is on: its IDs, ascending. `None` for a
+    /// ticket whose `parent` links do not lead back to it.
+    pub(super) fn parent_cycle_ids(&self, id: &str) -> Option<Vec<String>> {
+        let ticket = self.position(id)?;
+        self.parent_cycles
+            .iter()
+            .find(|cycle| cycle.contains(&ticket))
+            .map(|cycle| self.names(cycle))
     }
 
     /// Every dependency cycle and then every parent cycle, each once, each
@@ -760,13 +777,13 @@ fn parent_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
 
 /// What one relationship read has to answer from: the effective copy of
 /// every ticket the index holds, and what they are to each other.
-struct Tickets<'a> {
+pub(super) struct Tickets<'a> {
     by_id: BTreeMap<&'a str, &'a StoredItem>,
-    related: Related<'a>,
-    index: IndexStateDto,
+    pub(super) related: Related<'a>,
+    pub(super) index: IndexStateDto,
     /// Whether the last refresh saw every ticket there is to see. When it
     /// did not, an answer made from the tickets may lack some of them.
-    complete: bool,
+    pub(super) complete: bool,
 }
 
 impl Tickets<'_> {
@@ -817,10 +834,24 @@ impl RepositoryService {
         repo: &ResolvedRepository,
         read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
     ) -> Result<T, ReadError> {
+        self.read_tickets_naming(repo, &[], read)
+    }
+
+    /// `read_tickets` for a read that is given IDs no stored edge may
+    /// name: those of `named` that are a stored comment's are known as
+    /// comments too. Nothing else differs, and with no `named` nothing
+    /// does.
+    pub(super) fn read_tickets_naming<T>(
+        &self,
+        repo: &ResolvedRepository,
+        named: &[String],
+        read: impl FnOnce(&Tickets<'_>) -> Result<T, ReadError>,
+    ) -> Result<T, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, _) = stored_index_state(connection, repo)?;
             let stored = stored_items(connection, repo)?;
-            let comments = stored_comment_targets(connection, repo)?;
+            let mut comments = stored_comment_targets(connection, repo)?;
+            comments.extend(stored_comments_among(connection, repo, named)?);
             let (rows, is_behind) = effective_rows(repo, &stored);
             let related = Related::of(&rows, &comments);
             let complete =

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 preview effect",
+  "description": "One thing a command that needs confirmation will do, as an entry of its preview's effects. head_moved: HEAD is made to name the primary branch, in a repository whose HEAD names another branch that has no commit. worktree_exclusion_written: the repository's own exclude file, .git/info/exclude, is made to ignore the directory Manyhands keeps its worktrees in. remote_removed: the remote is taken out of the repository's own Git configuration; with it Git removes the remote's tracking references (remote_tracking_refs_removed) and the upstream of every local branch that follows it (branch_upstreams_removed), each listed when the repository has any. registration_removed: the repository is taken out of the repository list; with it go what Manyhands cached of it: the index of its contexts, items, comments, problems and configuration (index_dropped), the journal of its local operations (operation_records_dropped), and its polling policy, what polling observed of its remote and the records of its synchronizations (remote_state_dropped). None of the four touches a file under the repository's root or anything Git holds. private_key_file_deleted and public_key_file_deleted: the two files of a key Manyhands generated are deleted from the user's key store, each named in the preview's details. key_unregistered: the key is taken out of the key list, with the record that Manyhands made its files. operation_closed: a pending local operation is closed as abandoned, so that it no longer refuses other operations on its repository; with it goes the record of the unfinished request that began the operation (request_released), listed when there is one, and that request's ID is then free. Neither touches a file under the repository's root or anything Git holds. host_pinned: a host that has no pin is given one, the key the request names, once the host is seen to present it. host_pin_replaced: a host's pin is changed to the key the request names, likewise. Neither publishes or fetches anything, and neither moves a reference. The last four are a repair's. context_created: the editing context of the repaired item is made from the primary branch, its branch and its worktree, listed when the item has none. id_adopted: an ID is assigned to a file that holds no valid one, the ID the corrected source carries, which the preview's details name. source_written: the corrected source is written over the nonconforming file in that context. checkpoint_committed: that file is committed there. None of the four writes the primary worktree or moves the primary branch.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["effect"],
+  "properties": {
+    "effect": {
+      "type": "string",
+      "enum": [
+        "directory_created",
+        "repository_initialized",
+        "identity_written",
+        "head_moved",
+        "worktree_exclusion_written",
+        "configuration_written",
+        "initialization_committed",
+        "repository_registered",
+        "remote_removed",
+        "remote_tracking_refs_removed",
+        "branch_upstreams_removed",
+        "registration_removed",
+        "index_dropped",
+        "operation_records_dropped",
+        "remote_state_dropped",
+        "private_key_file_deleted",
+        "public_key_file_deleted",
+        "key_unregistered",
+        "operation_closed",
+        "request_released",
+        "host_pinned",
+        "host_pin_replaced",
+        "context_created",
+        "id_adopted",
+        "source_written",
+        "checkpoint_committed"
+      ]
+    }
+  }
+}

@@ -130,8 +130,9 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
+    /// Every socket the listener accepted, whatever became of it.
+    pub sockets: AtomicUsize,
     pub authentication_attempts: AtomicUsize,
-    pub connections: AtomicUsize,
     pub upload_pack_bytes: AtomicUsize,
     pub byte_disconnects: AtomicUsize,
     pub rejected_authentications: AtomicUsize,
@@ -316,8 +317,8 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
+            sockets: AtomicUsize::new(0),
             authentication_attempts: AtomicUsize::new(0),
-            connections: AtomicUsize::new(0),
             upload_pack_bytes: AtomicUsize::new(0),
             byte_disconnects: AtomicUsize::new(0),
             rejected_authentications: AtomicUsize::new(0),
@@ -515,6 +516,12 @@ impl SshRemoteFixture {
     pub fn allow_client_public_key(&self, key: PublicKey) {
         *self.shared.allowed.lock().unwrap() = key;
     }
+    /// How many connections the server has accepted: every socket, also
+    /// one whose client went away before it authenticated, as a client
+    /// that refuses the host's key does.
+    pub fn accepted_sockets(&self) -> usize {
+        self.shared.sockets.load(Ordering::SeqCst)
+    }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
     }
@@ -523,9 +530,6 @@ impl SshRemoteFixture {
             self.shared.authentication_attempts.load(Ordering::SeqCst),
             self.shared.rejected_authentications.load(Ordering::SeqCst),
         )
-    }
-    pub fn connections(&self) -> usize {
-        self.shared.connections.load(Ordering::SeqCst)
     }
     /// Choose one exact virtual target; helpers always receive the owned repo path.
     pub fn expect_command_path(&self, path: &str) {

@@ -9,17 +9,19 @@ use manyhands::{
     repository::{
         Accessibility, ChangeSource, ClosureState, ConfigurationState, CycleKind,
         DependencyDirection, DependencyState, IdentityAvailability, IdentitySource,
-        IndexProblemDto, IndexState, IndexStatusState, ItemContextKind, ItemDto, ItemDtoKind,
-        KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, OperationAction,
-        OperationFamily, OperationNextAction, OperationOwner, PollingInterval, PollingOutcome,
-        ProblemDto, ReadinessFilter, ReadinessReasonCode, ReadinessState, RepositoryService,
+        IndexProblemDto, IndexState, IndexStatusState, InitialsSource, ItemContextKind, ItemDto,
+        ItemDtoKind, KeyDeletionState, KeyGenerationState, KeyOwnership, KeyPrivateSourceState,
+        KeyPublicMetadataState, OperationAction, OperationFamily, OperationNextAction,
+        OperationOwner, PollingInterval, PollingOutcome, PreviewEffect, PreviewIdentitySource,
+        ProblemDto, ProgressStage, ProposedRelationships, ReadinessFilter, ReadinessReasonCode,
+        ReadinessState, RelationshipRejectionDto, RepositoryService, RequestState,
         ResolvedRepository, SharedKeyId, TicketFilter, UnplannableReasonCode,
         transport::SshAuthority,
     },
     results::{
-        CheckpointEffect, CleanupEffect, DiscoveryEffect, Envelope, IntegrationEffect,
-        OperationFailureCode, Outcome, ProblemCode, PublicationEffect, RecoveryActionKind,
-        ResultCode, Scope, WriteEffect,
+        CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, FailureClass,
+        IntegrationEffect, OperationFailureCode, Outcome, ProblemCode, PublicationEffect,
+        RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
     },
 };
 use serde_json::{Value, json};
@@ -470,13 +472,16 @@ fn every_published_schema_uses_only_the_checked_keywords() {
 
 /// The only objects the contract leaves open, by file and location: the
 /// envelope's `data`, which each DTO schema describes; an item's and a
-/// comment's `unknown_metadata`, whose keys are the file's own; and a
-/// recovery action's `arguments`, which each action defines.
-const OPEN_OBJECTS: [(&str, &str); 4] = [
+/// comment's `unknown_metadata`, whose keys are the file's own; a
+/// recovery action's `arguments`, which each action defines; and the
+/// `data` of a request's stored result, which is the envelope's `data` of
+/// the command the request made.
+const OPEN_OBJECTS: [(&str, &str); 5] = [
     ("comment.schema.json", "/properties/unknown_metadata"),
     ("envelope.schema.json", "/properties/data"),
     ("item.schema.json", "/properties/unknown_metadata"),
     ("recovery_action.schema.json", "/properties/arguments"),
+    ("request.schema.json", "/properties/result/properties/data"),
 ];
 
 /// Every schema that can describe an object must close it: `properties`,
@@ -675,6 +680,26 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 
 /// Every `enum` in a published schema, by file and property, with the Rust
 /// list it must equal.
+/// The actions the local store records: what a local operation that is
+/// abandoned can be. They are named, and not taken from `ALL` by
+/// position: an action added before them that is not local would then
+/// pass for one.
+const LOCAL_ACTIONS: [OperationAction; 13] = [
+    OperationAction::CreateAndEnable,
+    OperationAction::Enable,
+    OperationAction::RemoveRegistration,
+    OperationAction::AddRemote,
+    OperationAction::RemoveRemote,
+    OperationAction::SetPublicationRemote,
+    OperationAction::Refresh,
+    OperationAction::Rebuild,
+    OperationAction::PrepareContext,
+    OperationAction::SaveDocument,
+    OperationAction::SaveTicket,
+    OperationAction::SubmitComment,
+    OperationAction::RepairItem,
+];
+
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
@@ -756,6 +781,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "identity.schema.json",
             "source",
             IdentitySource::ALL.map(IdentitySource::as_str).to_vec(),
+        ),
+        (
+            "identity.schema.json",
+            "initials_source",
+            InitialsSource::ALL.map(InitialsSource::as_str).to_vec(),
         ),
         (
             "item.schema.json",
@@ -892,6 +922,77 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             OperationFailureCode::ALL
                 .map(OperationFailureCode::as_str)
                 .to_vec(),
+        ),
+        (
+            "relationship_check.schema.json",
+            "rejection.code",
+            RelationshipRejectionDto::CODES
+                .map(ResultCode::as_str)
+                .to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "state",
+            RequestState::ALL.map(RequestState::as_str).to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "result.outcome",
+            Outcome::ALL.map(Outcome::as_str).to_vec(),
+        ),
+        (
+            "request.schema.json",
+            "result.code",
+            ResultCode::ALL.map(ResultCode::as_str).to_vec(),
+        ),
+        (
+            "request_operation.schema.json",
+            "family",
+            OperationFamily::ALL.map(OperationFamily::as_str).to_vec(),
+        ),
+        (
+            "key_mutation.schema.json",
+            "generation",
+            KeyGenerationState::ALL
+                .map(KeyGenerationState::as_str)
+                .to_vec(),
+        ),
+        (
+            "key_mutation.schema.json",
+            "deletion",
+            KeyDeletionState::ALL.map(KeyDeletionState::as_str).to_vec(),
+        ),
+        (
+            "preview_effect.schema.json",
+            "effect",
+            PreviewEffect::ALL.map(PreviewEffect::as_str).to_vec(),
+        ),
+        (
+            "operation_abandon_preview.schema.json",
+            "details.action",
+            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+        ),
+        (
+            "operation_mutation.schema.json",
+            "action",
+            LOCAL_ACTIONS.map(OperationAction::as_str).to_vec(),
+        ),
+        (
+            "preview.schema.json",
+            "details.identity.source",
+            PreviewIdentitySource::ALL
+                .map(PreviewIdentitySource::as_str)
+                .to_vec(),
+        ),
+        (
+            "progress_event.schema.json",
+            "stage",
+            ProgressStage::ALL.map(ProgressStage::as_str).to_vec(),
+        ),
+        (
+            "cancel.schema.json",
+            "state",
+            RequestState::ALL.map(RequestState::as_str).to_vec(),
         ),
     ]
 }
@@ -1039,6 +1140,35 @@ fn document_list_matches_its_schema_and_golden() {
         repo.root().to_str().unwrap(),
         &list.items.iter().collect::<Vec<_>>(),
         &[enabled.data_directory.path().to_str().unwrap()],
+        &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn document_folder_list_matches_its_schema_and_golden() {
+    let (fixture, enabled) = items::contract_repository();
+    // `docs/notes` holds a document. These hold nothing, and a folder.
+    fs::create_dir_all(fixture.root.join("docs/empty")).unwrap();
+    fs::create_dir_all(fixture.root.join("docs/outer/inner")).unwrap();
+    items::refresh_completely(&enabled.service, &fixture.root);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+
+    let list = enabled.service.list_document_folders(&repo).unwrap();
+    let envelope = Envelope::read_success("folder list", repo.scope(), list.clone());
+
+    assert_eq!(list.items.len(), 4);
+    let mut placeholders = vec![(repo.root().to_str().unwrap(), "<repository>")];
+    if let Some(refreshed_at) = &list.index.refreshed_at {
+        placeholders.push((refreshed_at, "<refreshed-at>"));
+    }
+    golden::assert_contract(
+        &ContractCase {
+            name: "document_folder_list",
+            data_schema: Some("document_folder_list.schema.json"),
+            placeholders: &placeholders,
+            sentinels: &[enabled.data_directory.path().to_str().unwrap()],
+        },
         &envelope,
     );
     assert_git_transport_uninitialized();
@@ -2533,10 +2663,108 @@ fn every_recovery_action_a_read_suggests_carries_exactly_its_registered_argument
         [("index.rebuild".to_owned(), Vec::<String>::new())]
     );
 
-    // Every registered action is one a read suggests.
+    // Reads suggest these three and no other: the rest of the registry
+    // belongs to mutations.
     assert_eq!(
         suggested.into_iter().collect::<Vec<_>>(),
-        RecoveryActionKind::ALL.map(RecoveryActionKind::as_str)
+        ["index.rebuild", "index.refresh", "repo.inspect"]
+    );
+    assert_git_transport_uninitialized();
+}
+
+/// A save whose checkpoint is committed and whose index hand-off is not, as
+/// the CLI contract's example of a partial result.
+fn partial_mutation() -> Envelope<Value> {
+    Envelope::mutation(
+        "ticket update",
+        Scope {
+            repository: Some("/projects/example".to_owned()),
+            item_id: Some(items::TICKET_A.to_owned()),
+            branch: Some(format!("manyhands/ticket/{}", items::TICKET_A)),
+            worktree: Some("/projects/example".to_owned()),
+            remote: None,
+        },
+        Outcome::Partial,
+        ResultCode::DiscoveryPending,
+    )
+    .with_request_id(OPERATION_A)
+    .with_operation_id(OPERATION_B)
+    .with_effects(Effects {
+        write: WriteEffect::Written,
+        checkpoint: CheckpointEffect::Committed,
+        discovery: DiscoveryEffect::Pending,
+        commit_oid: Some("0123456789abcdef0123456789abcdef01234567".to_owned()),
+        ..Effects::not_requested()
+    })
+    .with_data(json!({"id": items::TICKET_A}))
+    .with_recovery(vec![RecoveryAction::for_operation(
+        RecoveryActionKind::OperationResume,
+        OPERATION_B,
+        [],
+    )])
+}
+
+#[test]
+fn a_mutation_that_is_not_a_success_may_carry_data() {
+    let envelope = partial_mutation();
+    let case = ContractCase {
+        name: "mutation_partial",
+        data_schema: Some("new_id.schema.json"),
+        placeholders: &[],
+        sentinels: &[],
+    };
+
+    golden::assert_mutation_contract(&case, &envelope);
+
+    assert_eq!(envelope.failure_class(), Some(FailureClass::Incomplete));
+    let value = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(
+        value["recovery"],
+        json!([{"action": "operation.resume", "operation_id": OPERATION_B, "arguments": {}}])
+    );
+    // The rule for reads still refuses it: a read carries data exactly when
+    // it succeeds.
+    assert!(std::panic::catch_unwind(|| golden::assert_contract(&case, &envelope)).is_err());
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn the_mutation_contract_takes_the_presence_of_data_from_its_case() {
+    let with_data = partial_mutation();
+    let without_data = Envelope::<Value> {
+        data: None,
+        ..partial_mutation()
+    };
+    let case = |data_schema| ContractCase {
+        name: "mutation_partial",
+        data_schema,
+        placeholders: &[],
+        sentinels: &[],
+    };
+
+    // Data the case does not expect, and expected data that is absent.
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(&case(None), &with_data))
+            .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(
+            &case(Some("new_id.schema.json")),
+            &without_data
+        ))
+        .is_err()
+    );
+    // Data that is not what its schema describes.
+    let wrong = Envelope::<Value> {
+        data: Some(json!({"identifier": items::TICKET_A})),
+        ..partial_mutation()
+    };
+    assert!(
+        std::panic::catch_unwind(|| golden::assert_mutation_contract(
+            &case(Some("new_id.schema.json")),
+            &wrong
+        ))
+        .is_err()
     );
     assert_git_transport_uninitialized();
 }
@@ -2739,4 +2967,163 @@ fn a_path_with_nothing_at_it_matches_the_failure_golden() {
         &["absent.md"],
     );
     assert_git_transport_uninitialized();
+}
+
+#[test]
+fn path_observe_matches_its_schema_and_goldens() {
+    let (fixture, enabled) = items::contract_repository();
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let root = repo.root().to_str().unwrap().to_owned();
+
+    for (name, path, exists) in [
+        ("path_observe", "docs/guide.md", true),
+        ("path_observe_absent", "docs/absent.md", false),
+    ] {
+        let observed = enabled
+            .service
+            .observe_path(&repo, None, Path::new(path))
+            .unwrap();
+        assert_eq!(observed.exists, exists, "{name}");
+        let head = observed.context.head_oid.clone().unwrap();
+        let envelope = Envelope::read_success("path observe", repo.scope(), observed);
+        golden::assert_contract(
+            &ContractCase {
+                name,
+                data_schema: Some("path_observation.schema.json"),
+                // The tokens are pinned: a caller stores one and sends it
+                // back.
+                placeholders: &[(&root, "<repository>"), (&head, "<head-oid>")],
+                // No part of the file is in the result.
+                sentinels: &["Guide", "audience"],
+            },
+            &envelope,
+        );
+    }
+
+    std::fs::create_dir(fixture.root.join("docs/folder.md")).unwrap();
+    let error = enabled
+        .service
+        .observe_path(&repo, None, Path::new("docs/folder.md"))
+        .unwrap_err();
+    assert_eq!(error.code(), ResultCode::InvalidPath);
+    assert_failure_contract(
+        "path_observe_directory",
+        "path observe",
+        &error,
+        Some(repo.root()),
+        &[],
+    );
+    assert_git_transport_uninitialized();
+}
+
+fn proposed(deps: &[&str], parent: Option<&str>) -> ProposedRelationships {
+    ProposedRelationships {
+        deps: deps.iter().map(|id| items::item_id(id)).collect(),
+        parent: parent.map(items::item_id),
+    }
+}
+
+#[test]
+fn an_accepted_relationship_check_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_G),
+            &proposed(
+                &[items::RELATED_C, items::TICKET_ABSENT, items::RELATED_C],
+                Some(items::RELATED_B),
+            ),
+        )
+        .unwrap();
+
+    assert_eq!(check.rejection, None);
+    assert_eq!(check.unresolved, [items::TICKET_ABSENT]);
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_G), check);
+    assert_relationship_contract(
+        "relationship_check",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn a_relationship_check_that_finds_a_cycle_matches_its_schema_and_golden() {
+    let (_fixture, enabled, repo, tickets) = relationship_contract();
+
+    // C depends on B, which depends on A.
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_A),
+            &proposed(&[items::RELATED_C], None),
+        )
+        .unwrap();
+
+    let rejection = check.rejection.as_ref().unwrap();
+    assert_eq!(rejection.code, ResultCode::RelationshipCycle);
+    assert_eq!(
+        rejection.ids,
+        [items::RELATED_A, items::RELATED_B, items::RELATED_C]
+    );
+    // The read succeeded: its answer is that the proposal would be rejected.
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_A), check);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_relationship_contract(
+        "relationship_check_cycle",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
+}
+
+#[test]
+fn a_relationship_check_that_finds_a_document_matches_its_schema_and_golden() {
+    let (fixture, enabled, repo, _) = relationship_contract();
+    items::write(
+        &fixture.root,
+        "docs/guide.md",
+        &items::document_source(items::DOCUMENT_A, "Guide", ""),
+    );
+    items::commit(&fixture, &["docs/guide.md"], items::COMMITTED_AT + 100);
+    items::refresh_completely(&enabled.service, &fixture.root);
+    // The check reports the index it answered from, which is this refresh.
+    let tickets = enabled
+        .service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap()
+        .items;
+
+    let check = enabled
+        .service
+        .check_ticket_relationships(
+            &repo,
+            &items::item_id(items::RELATED_D),
+            &proposed(&[items::RELATED_C, items::DOCUMENT_A], None),
+        )
+        .unwrap();
+
+    let rejection = check.rejection.as_ref().unwrap();
+    assert_eq!(rejection.code, ResultCode::InvalidRelationship);
+    assert_eq!(rejection.ids, [items::DOCUMENT_A]);
+    let envelope =
+        Envelope::read_success("ticket check", item_scope(&repo, items::RELATED_D), check);
+    assert_relationship_contract(
+        "relationship_check_invalid",
+        "relationship_check.schema.json",
+        &enabled,
+        &repo,
+        &tickets,
+        &envelope,
+    );
 }

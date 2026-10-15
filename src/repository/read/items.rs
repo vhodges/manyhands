@@ -16,15 +16,19 @@ use rusqlite::{Connection, OptionalExtension};
 use time::OffsetDateTime;
 
 use super::{
-    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, IndexState,
-    IndexStateDto, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, ProblemDto,
-    ReadError, ReadinessState, ResolvedRepository,
+    ChangeSource, ClosureDto, ClosureState, DependencyDto, DependencyState, DocumentFolderDto,
+    DocumentFolderListDto, IndexState, IndexStateDto, ItemContextDto, ItemContextKind, ItemDto,
+    ItemDtoKind, ItemListDto, PathObservationDto, ProblemDto, ReadError, ReadinessState,
+    RelationshipCheckDto, RelationshipRejectionDto, ResolvedRepository,
     graph::{TicketGraph, TicketNode},
     index_state, root_action,
 };
 use crate::{
     canonical::{self, ItemId},
-    repository::{GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata},
+    repository::{
+        GuardedFile, RepositoryOperation, RepositoryService, discovery::UnknownMetadata,
+        mutation::absent_token,
+    },
     results::{
         ProblemCode, RecoveryAction, RecoveryActionKind, ResultCode, absolute_path_string,
         timestamp_string,
@@ -98,6 +102,17 @@ impl TicketFilter {
                     })
             })
     }
+}
+
+/// The `deps` and `parent` a save would give a ticket: the whole of each,
+/// not a change to what the ticket has. An empty `deps` and no `parent`
+/// propose a ticket with neither.
+///
+/// `deps` may be in any order and may repeat an entry.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProposedRelationships {
+    pub deps: Vec<ItemId>,
+    pub parent: Option<ItemId>,
 }
 
 /// The stored problems that say a file is not an item. Only these make a
@@ -346,6 +361,72 @@ impl<'a> Related<'a> {
         nodes.push(ticket);
         TicketGraph::new(nodes)
     }
+
+    /// What giving the ticket `id` these `deps` and this `parent` comes
+    /// to, against what the index holds. `id` need not be a ticket the
+    /// index holds: a ticket about to be created is checked the same way.
+    fn check(
+        &self,
+        id: &str,
+        deps: BTreeSet<String>,
+        parent: Option<String>,
+        index: IndexStateDto,
+        complete: bool,
+    ) -> RelationshipCheckDto {
+        let mut not_tickets = Vec::new();
+        let mut unresolved = Vec::new();
+        let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
+        // The ticket's own ID names the ticket, whether or not the index
+        // holds it yet.
+        for target in named.into_iter().filter(|target| *target != id) {
+            match self.targets.0.get(target.as_str()) {
+                Some(Target::Document | Target::Comment) => not_tickets.push(target.clone()),
+                Some(Target::OpenTicket | Target::ClosedTicket) => {}
+                None => unresolved.push(target.clone()),
+            }
+        }
+        let names_itself = deps.contains(id) || parent.as_deref() == Some(id);
+        let rejection = if !not_tickets.is_empty() {
+            Some(RelationshipRejectionDto {
+                code: ResultCode::InvalidRelationship,
+                ids: not_tickets,
+            })
+        } else if names_itself {
+            // Decided before the graph is asked, which would name every
+            // ticket of a larger cycle the ticket is also on, and would
+            // not see the edge at all for an ID that is no ticket's.
+            Some(RelationshipRejectionDto {
+                code: ResultCode::RelationshipCycle,
+                ids: vec![id.to_owned()],
+            })
+        } else {
+            let closed = self
+                .tickets
+                .iter()
+                .any(|row| row.id == id && row.closed_at.is_some());
+            let proposed = Relationships {
+                parent: parent.clone(),
+                deps: deps.iter().cloned().collect(),
+                ..Default::default()
+            };
+            let graph = self.graph_with(self.targets.node(id, closed, &proposed));
+            graph
+                .dependency_cycle_ids(id)
+                .or_else(|| graph.parent_cycle_ids(id))
+                .map(|ids| RelationshipRejectionDto {
+                    code: ResultCode::RelationshipCycle,
+                    ids,
+                })
+        };
+        RelationshipCheckDto {
+            deps: deps.into_iter().collect(),
+            parent,
+            unresolved,
+            rejection,
+            complete,
+            index,
+        }
+    }
 }
 
 /// The ID of every comment the index holds for the registration that one of
@@ -391,7 +472,7 @@ const IDS_IN_A_STATEMENT: usize = 500;
 
 /// Those of `ids` that are the ID of a comment the index holds for the
 /// registration.
-fn stored_comments_among(
+pub(super) fn stored_comments_among(
     connection: &Connection,
     repo: &ResolvedRepository,
     ids: &[String],
@@ -801,6 +882,56 @@ pub(super) fn is_completely_observed(kind: ItemDtoKind, problems: &[StoredProble
     })
 }
 
+/// Whether the last refresh listed every directory under `docs` of the
+/// primary worktree, whose path in the index is `root`, as far as the
+/// index says. It is the document half of `is_completely_observed`, for
+/// the one context folders are stored for: a problem in an item worktree,
+/// or at the directory that holds them, hides no folder.
+fn folders_are_completely_observed(root: &str, problems: &[StoredProblem]) -> bool {
+    !problems.iter().any(|problem| {
+        let path = Path::new(&problem.path);
+        let is_file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".md"));
+        problem.code == ProblemCode::SourceUnreadable
+            && problem.context.worktree == root
+            && (path == Path::new(DOCUMENTS_DIRECTORY)
+                || (path.starts_with(DOCUMENTS_DIRECTORY) && !is_file))
+    })
+}
+
+/// The folders the index holds for the primary worktree, in path order.
+/// A row whose path is not one under `docs/` is not what a refresh
+/// stores, and fails the read.
+fn stored_folders(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    root: &str,
+) -> Result<Vec<DocumentFolderDto>, ReadError> {
+    let mut statement = connection.prepare(
+        "SELECT discovered_folders.path, discovered_folders.is_empty
+           FROM discovered_folders
+           JOIN contexts ON contexts.id = discovered_folders.context_id
+          WHERE contexts.repository_id = ?1 AND contexts.worktree_path = ?2
+          ORDER BY discovered_folders.path ASC, discovered_folders.id ASC",
+    )?;
+    let rows = statement
+        .query_map(rusqlite::params![repo.registration_id(), root], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter()
+        .map(|(path, empty)| {
+            if path.starts_with(DOCUMENT_PREFIX) && is_plain_relative(&path) {
+                Ok(DocumentFolderDto { path, empty })
+            } else {
+                Err(invalid_stored_data())
+            }
+        })
+        .collect()
+}
+
 pub(super) fn problem(code: ProblemCode, path: &str) -> ProblemDto {
     ProblemDto {
         code,
@@ -1129,7 +1260,7 @@ fn below(root: &Path, relative: &Path) -> PathBuf {
 /// forward slashes, with no NUL, no empty, `.` or `..` component, and not
 /// under the directory that holds item worktrees. This says nothing about whether it
 /// is a place an item can be.
-pub(super) fn is_plain_relative(path: &str) -> bool {
+pub(crate) fn is_plain_relative(path: &str) -> bool {
     !path.is_empty()
         && !path.contains(['\\', '\0'])
         && path
@@ -1532,6 +1663,29 @@ impl RepositoryService {
         self.list_items(repo, ItemDtoKind::Document, None)
     }
 
+    /// Every directory under `docs/` in the primary worktree, ordered by
+    /// path, with whether it is empty.
+    ///
+    /// The list is what the index holds; `index` says how far behind the
+    /// repository that is. No directory is listed and no file is opened:
+    /// a folder made since the last refresh is not here until the next.
+    pub fn list_document_folders(
+        &self,
+        repo: &ResolvedRepository,
+    ) -> Result<DocumentFolderListDto, ReadError> {
+        self.read_session(RepositoryOperation::Read, |connection| {
+            let (index, _) = stored_index_state(connection, repo)?;
+            let root = repo.root().to_str().ok_or_else(invalid_stored_data)?;
+            let problems = stored_problems(connection, repo)?;
+            Ok(DocumentFolderListDto {
+                items: stored_folders(connection, repo, root)?,
+                complete: folders_are_completely_observed(root, &problems),
+                index,
+            })
+        })
+        .map_err(|error| repo.failure(error))
+    }
+
     /// The tickets `filter` matches, ordered by content-change time, latest
     /// first, and then ID. Each says whether it is ready, blocked or closed.
     /// A nonconforming entry for each file under `.manyhands/tickets/` that
@@ -1716,59 +1870,11 @@ impl RepositoryService {
             .to_str()
             .filter(|path| is_plain_relative(path))
             .ok_or_else(ReadError::invalid_path)?;
-        let root = absolute_path_string(repo.root()).ok_or_else(ReadError::invalid_path)?;
-        let worktree = match context {
-            None => root.clone(),
-            Some(context) => fs::canonicalize(context)
-                .ok()
-                .and_then(|context| absolute_path_string(&context))
-                .ok_or_else(ReadError::invalid_path)?,
-        };
+        let worktree = named_worktree(repo, context)?;
         self.read_session(RepositoryOperation::Read, |connection| {
             let (index, refreshed_at) = stored_index_state(connection, repo)?;
-            let context = match stored_contexts(connection, repo)?
-                .into_iter()
-                .find(|context| context.worktree == worktree)
-            {
-                Some(context) if worktree == root || context.kind == ItemContextKind::Active => {
-                    context
-                }
-                Some(_) => return Err(ReadError::invalid_path()),
-                // The root is a context whether or not it has been
-                // observed; unobserved, nothing has verified its branch.
-                None if worktree == root => StoredContext {
-                    kind: ItemContextKind::Unverified,
-                    branch: None,
-                    worktree: root.clone(),
-                    head_oid: None,
-                },
-                None => return Err(ReadError::invalid_path()),
-            };
-            // What the index holds for this file in this context.
-            let here: Vec<ProblemCode> = stored_problems(connection, repo)?
-                .into_iter()
-                .filter(|problem| problem.context.worktree == worktree && problem.path == path)
-                .map(|problem| problem.code)
-                .collect();
-            // A path that is not an item's is read only when a list shows
-            // it: the same rule that makes the entry.
-            let kind = canonical_item_kind(path)
-                .or_else(|| {
-                    ItemDtoKind::ALL
-                        .into_iter()
-                        .find(|kind| path.starts_with(kind.path_prefix()))
-                        .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
-                })
-                .ok_or_else(|| {
-                    // An index that is behind may not yet hold the problem
-                    // that would make this path one a list shows.
-                    let error = ReadError::invalid_path();
-                    if index.state == IndexState::Current {
-                        error
-                    } else {
-                        error.with_recovery(vec![refresh_action(repo)])
-                    }
-                })?;
+            let context = named_context(connection, repo, &worktree)?;
+            let (kind, here) = readable_path(connection, repo, &index, &worktree, path)?;
             let file = match read_item_file(repo, &context.worktree, path)? {
                 ItemFileRead::Found(file) => file,
                 ItemFileRead::Missing => return Err(ReadError::new(ResultCode::PathNotFound)),
@@ -1838,6 +1944,115 @@ impl RepositoryService {
             Ok(item)
         })
     }
+
+    /// `path observe`: the observation token of `path` in a context,
+    /// whether or not anything is there.
+    ///
+    /// A file has the token `show_item` and `show_path` give for it. A
+    /// path where nothing exists has the absent token of the context's
+    /// branch and the path, which a write that expects absence takes.
+    /// Anything else at the path, a directory or a symbolic link among
+    /// them, is `invalid_path`.
+    ///
+    /// `path` and `context` are written as `show_path` takes them and
+    /// are refused where that read refuses them: the path must be one an
+    /// item can be at, or a nonconforming entry the lists show. No other
+    /// file is opened, so no token says anything of what a file that is
+    /// not Manyhands content holds. A move's destination is an item path.
+    /// Nothing is parsed.
+    pub fn observe_path(
+        &self,
+        repo: &ResolvedRepository,
+        context: Option<&Path>,
+        path: &Path,
+    ) -> Result<PathObservationDto, ReadError> {
+        let observe = || -> Result<PathObservationDto, ReadError> {
+            let path = path
+                .to_str()
+                .filter(|path| is_plain_relative(path))
+                .ok_or_else(ReadError::invalid_path)?;
+            let worktree = named_worktree(repo, context)?;
+            let context = self.read_session(RepositoryOperation::Read, |connection| {
+                let (index, _) = stored_index_state(connection, repo)?;
+                let context = named_context(connection, repo, &worktree)?;
+                readable_path(connection, repo, &index, &worktree, path)?;
+                Ok(context)
+            })?;
+            let observed =
+                observe_in_context(repo, context.branch.as_deref(), &context.worktree, path)?;
+            Ok(PathObservationDto {
+                path: path.to_owned(),
+                exists: observed.bytes.is_some(),
+                observation: observed.token,
+                context: ItemContextDto {
+                    kind: context.kind,
+                    branch: context.branch,
+                    worktree: context.worktree,
+                    head_oid: context.head_oid,
+                },
+            })
+        };
+        observe().map_err(|error| repo.failure(error))
+    }
+
+    /// Whether a save that gave the ticket `id` the `deps` and `parent` of
+    /// `proposed` would be rejected, decided without writing anything.
+    ///
+    /// The answer is a success whether or not the proposal is acceptable:
+    /// `rejection` is `None` for one a save may write, and otherwise names
+    /// the code the save would be rejected with.
+    ///
+    /// - A proposed ID the index holds as a document or a comment is
+    ///   `invalid_relationship`, naming every such ID.
+    /// - The proposed edges replace the ticket's stored ones in the graph
+    ///   of every ticket the index holds. A dependency cycle or a parent
+    ///   cycle through the ticket is then `relationship_cycle`, naming the
+    ///   cycle's tickets. A ticket naming itself is a cycle of one. Whether
+    ///   a ticket is closed makes no difference.
+    /// - An ID the index does not hold is accepted and listed in
+    ///   `unresolved`.
+    ///
+    /// When several apply, one is reported: `invalid_relationship`, then the
+    /// ticket naming itself, which names the ticket alone whatever other
+    /// cycle the proposal closes, then a dependency cycle, then a parent
+    /// cycle.
+    ///
+    /// `id` need not be a ticket the index holds, so a ticket can be
+    /// checked before it is created. That `id` is a ticket's and not a
+    /// document's is the save's to decide, not this read's.
+    ///
+    /// The check reads the index and scans nothing. Against an index that
+    /// is behind it uses what the index has: a cycle through a ticket the
+    /// index does not hold yet is accepted here, and is reported on the
+    /// tickets when they are next read, as one that arrives by a merge is.
+    ///
+    /// `index` and `complete` say what the answer was made from, as they do
+    /// on every other ticket relationship read: an answer from an index
+    /// that is not `current`, or with `complete` false, may lack tickets a
+    /// refresh would bring, and so a cycle through them.
+    pub fn check_ticket_relationships(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+        proposed: &ProposedRelationships,
+    ) -> Result<RelationshipCheckDto, ReadError> {
+        let id = id.to_string();
+        let deps: BTreeSet<String> = proposed.deps.iter().map(ToString::to_string).collect();
+        let parent = proposed.parent.as_ref().map(ToString::to_string);
+        // The comments a stored edge names, as every relationship read
+        // has them, and the ones only the proposal names.
+        let named: BTreeSet<&String> = deps.iter().chain(&parent).collect();
+        let named: Vec<String> = named.into_iter().cloned().collect();
+        self.read_tickets_naming(repo, &named, |tickets| {
+            Ok(tickets
+                .related
+                .check(&id, deps, parent, tickets.index.clone(), tickets.complete))
+        })
+        .map_err(|mut error| {
+            error.scope.item_id = Some(id.clone());
+            error
+        })
+    }
 }
 
 /// The nonconforming entries of a list of `kind`: one for each file, in
@@ -1893,6 +2108,115 @@ pub(super) fn item_not_found(repo: &ResolvedRepository, refresh: bool) -> ReadEr
         return error;
     }
     error.with_recovery(vec![refresh_action(repo)])
+}
+
+/// The worktree a caller named as a read's context, as the index writes
+/// one: `None` is the repository root.
+fn named_worktree(repo: &ResolvedRepository, context: Option<&Path>) -> Result<String, ReadError> {
+    match context {
+        None => absolute_path_string(repo.root()),
+        Some(context) => fs::canonicalize(context)
+            .ok()
+            .and_then(|context| absolute_path_string(&context)),
+    }
+    .ok_or_else(ReadError::invalid_path)
+}
+
+/// The context whose worktree is `worktree`: the repository root, or an
+/// item context the index holds as active. Any other is `invalid_path`.
+fn named_context(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    worktree: &str,
+) -> Result<StoredContext, ReadError> {
+    let root = absolute_path_string(repo.root()).ok_or_else(ReadError::invalid_path)?;
+    match stored_contexts(connection, repo)?
+        .into_iter()
+        .find(|context| context.worktree == worktree)
+    {
+        Some(context) if worktree == root || context.kind == ItemContextKind::Active => Ok(context),
+        Some(_) => Err(ReadError::invalid_path()),
+        // The root is a context whether or not it has been observed;
+        // unobserved, nothing has verified its branch.
+        None if worktree == root => Ok(StoredContext {
+            kind: ItemContextKind::Unverified,
+            branch: None,
+            worktree: root,
+            head_oid: None,
+        }),
+        None => Err(ReadError::invalid_path()),
+    }
+}
+
+/// The path rule of the reads by path. `path` is read in the context
+/// whose worktree is `worktree` only when it is a canonical item path,
+/// `docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`, or the path of
+/// a nonconforming entry a list shows for that context: the same rule
+/// that makes the entry. Anything else is `invalid_path`.
+///
+/// Returns the kind of item the path is a place of, and the problems the
+/// index holds for the file there.
+fn readable_path(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    index: &IndexStateDto,
+    worktree: &str,
+    path: &str,
+) -> Result<(ItemDtoKind, Vec<ProblemCode>), ReadError> {
+    // What the index holds for this file in this context.
+    let here: Vec<ProblemCode> = stored_problems(connection, repo)?
+        .into_iter()
+        .filter(|problem| problem.context.worktree == worktree && problem.path == path)
+        .map(|problem| problem.code)
+        .collect();
+    let kind = canonical_item_kind(path)
+        .or_else(|| {
+            ItemDtoKind::ALL
+                .into_iter()
+                .find(|kind| path.starts_with(kind.path_prefix()))
+                .filter(|_| here.iter().any(|code| CONFORMITY_PROBLEMS.contains(code)))
+        })
+        .ok_or_else(|| {
+            // An index that is behind may not yet hold the problem that
+            // would make this path one a list shows.
+            let error = ReadError::invalid_path();
+            if index.state == IndexState::Current {
+                error
+            } else {
+                error.with_recovery(vec![refresh_action(repo)])
+            }
+        })?;
+    Ok((kind, here))
+}
+
+/// What is at a path in a context, as a write's precondition states it.
+pub(crate) struct ObservedPath {
+    /// The file's token, or the absent token of the branch and the path.
+    pub(crate) token: String,
+    /// The file's bytes. `None` when nothing is at the path.
+    pub(crate) bytes: Option<Vec<u8>>,
+}
+
+/// Observes `path` in the context whose worktree is `worktree` and whose
+/// branch the index holds as `branch`. Something at the path that is not a
+/// regular file reached through real directories is `invalid_path`.
+pub(crate) fn observe_in_context(
+    repo: &ResolvedRepository,
+    branch: Option<&str>,
+    worktree: &str,
+    path: &str,
+) -> Result<ObservedPath, ReadError> {
+    match read_item_file(repo, worktree, path)? {
+        ItemFileRead::Found(file) => Ok(ObservedPath {
+            token: observation_token(branch, path, &file.bytes),
+            bytes: Some(file.bytes),
+        }),
+        ItemFileRead::Missing => Ok(ObservedPath {
+            token: absent_token(branch, path),
+            bytes: None,
+        }),
+        ItemFileRead::NotAFile => Err(ReadError::invalid_path()),
+    }
 }
 
 /// The recovery that refreshes this repository's index.
