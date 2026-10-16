@@ -618,6 +618,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "repositories",
             "request_operations",
             "request_records",
+            "retired_contexts",
             "shared_ssh_keys",
             "ssh_host_pins",
         ]

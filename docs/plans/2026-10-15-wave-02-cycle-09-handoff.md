@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 3 committed; Task 4 STOP at T4-1, owner decision pending (2026-10-16)
+## Current: Task 4 reviewed complete at local gate; Task 5 after checkpoint (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -23,22 +23,35 @@ T2-1 mode/type amendment, passed both final reviews and is committed as
 `6d4ad1664462c42c24b4a820024d76d7c86ca8db`.
 
 **Task 3 primary integration is reviewed complete at the local gate and committed
-as `3b925e141bec9ae309024bdbfbf73aa6ab48caae` (`3b925e1`), the current HEAD.** Its prior
+as `3b925e141bec9ae309024bdbfbf73aa6ab48caae` (`3b925e1`).** Its prior
 spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
 with no findings. Those reviews covered the Task 3 change set, including the
 include-context correction, against base `6d4ad16` (full SHA above); the controller
-has since committed it. **Task 4 is stopped at T4-1 pending an owner amendment.**
-No Task 4 production changes remain. This status update changes no source/tests
-and reruns no Rust tests.
+has since committed it. **T4-1 is owner-approved and Task 4 is reviewed complete
+at the local gate, uncommitted for the controller's checkpoint. Task 5 is next
+after that checkpoint.** Current HEAD/review base
+is `79463c53beb400d95a311e558e64caf8efd2beac`, the reviewed blocker checkpoint.
 
-### Task 4: reviewed blocker T4-1 — owner decision pending
+Final controller-reported implementation reviews:
 
-The approved final completion transaction requires atomicity across a Git
+- **SPEC recheck PASSED**, including the physical registration-inventory fix.
+- **QUALITY recheck APPROVED**, both P1 findings resolved, no findings remaining.
+
+These reviews cover the full current uncommitted Task 4 change set against that
+exact base, including SPEC1-P2 and QUALITY2-P1 corrections. They supersede earlier
+pending-recheck statuses; historical evidence is retained. This coordination-only
+update changes no source/tests and reruns no tests. No additional reviewer test
+execution is inferred. Full Task 8/native gates remain deferred.
+
+### Task 4: historical blocker and owner-approved recovery boundary
+
+The original completion transaction required atomicity across a Git
 tracking-ref deletion and SQLite history/retirement/completion state. Existing
 Git and SQLite transactions commit independently. The temporary real-resource
 probe confirmed SQL rollback cannot restore an already-deleted Git ref; its
 exact commands/counts and source anchors are retained in the ledger. The probe
-was removed; Task 4 implementation RED/GREEN has not started.
+was removed before implementation. The historical reviews below apply to that
+blocker evidence; Task 4's new RED/GREEN evidence is in the ledger's resume entry.
 
 - **Independent SPEC confirmed** a material contract contradiction requiring an
   **owner amendment**.
@@ -46,14 +59,19 @@ was removed; Task 4 implementation RED/GREEN has not started.
 - Both reviews were read-only; no reviewer reruns or code changes occurred.
   These are blocker-evidence reviews, not implementation approval. Full Task 8
   and native gates remain deferred.
-- **STOP: no amendment is approved.** The controller will checkpoint the reviewed
-  blocker evidence; this status worker makes no commit. See the ledger and
-  canonical comment `01M51F7Z00N4Q6S8V0X2Z4B6DZ`.
+- The controller checkpointed this reviewed evidence as `79463c5`. Its historical
+  STOP/NOT APPROVED status is superseded by the owner's approval below. See the
+  ledger and canonical comment `01M51F7Z00N4Q6S8V0X2Z4B6DZ` for the original record.
 
-**Proposed minimal amendment — NOT APPROVED:**
+**T4-1 amendment — OWNER APPROVED 2026-10-16.** The owner answered “yes” to
+the controller's final Git-first proposal. The historical STOP/review evidence
+above and in the ledger is superseded by this approval. Resume the full original
+Task 4 test/helper/R1 scope. Fresh controller fetch/rebase was a clean no-op at
+`79463c53beb400d95a311e558e64caf8efd2beac`; origin/main remains `89d04f9`,
+ancestry passed. No additional worker rebase is needed in this execution.
 
 1. Persist the existing planned durable **`branch_deleted` intent** before the
-   tracking-ref effect. No new phase or table is needed by this proposal.
+   tracking-ref effect. No new phase or table is needed by this amendment.
 2. Under the lease and ownership/frozen-configuration checks, delete the tracking
    ref only at the expected **direct OID**, or proceed on verified true absence.
    Wrong/new conflicting OIDs, symbolic refs (including dangling symbolic refs)
@@ -83,8 +101,37 @@ was removed; Task 4 implementation RED/GREEN has not started.
    completion/reservation finish. Tests for rollback of uncommitted SQL must
    distinguish SQL preservation from the surviving Git deletion.
 
-This is a proposal for owner decision, not an amendment to the approved contract.
-Do not implement it or continue Task 4 until that decision is recorded.
+This is the approved recovery boundary. Task 4 supplies helpers/private evidence
+and R1 migration; Tasks 5/6 later supply durable intent/completion/reservation
+composition, with inside-F10/F11 lifecycle tests in Tasks 5–7. Do not implement
+fake Task 5 storage in Task 4. The reviewed implementation remains uncommitted for
+the controller's checkpoint.
+
+Delivered Task 4: lease-owning generic cleanup helpers for both document/ticket
+contexts; ignored/untracked/locked/partial preservation; guarded branch deletion;
+Git-first direct tracking deletion with private evidence/absent-slot ref lock;
+SQL-only retirement; additive migrated/audited R1 table and per-item publication
+evidence. Observed publication consumes retirement in the same SQL batch; other
+history rules stay unchanged. Current observation projection rotates to a new
+batch excluding the retired item, preserving the original pinned synchronization
+pass. Synchronization/poll/merge production code was not changed. Standalone tests
+also prove SQL trigger/outer rollback/deferred-commit failure, fresh Edit from
+primary HEAD, foreign .git-link refusals and unchanged snapshot invariants.
+Reviewed corrections also preserve branches when registrations are incomplete
+through an unfiltered physical admin inventory, reject hidden index flags without
+index mutation, and explicitly prove populated submodule cleanliness recursively
+under the existing lease with bounded/fail-closed inspection.
+
+The runner must retain evidence/ref lock through SQL commit/reconciliation and
+compose real branch_deleted intent, ownership/generation/configuration fencing,
+promotion completion and reservation finish. Tasks 5–7 still own the actual
+F10/F11 lifecycle and uncertain-result outcome/refresh tests. Task 4 does not
+implement those records or claim native Windows pruning was executed. Exact
+commands/counts and final review approvals are in the ledger and comment
+`01M51G7Z00N4Q6S8V0X2Z4B6E0`.
+Retained evidence includes final **34 cleanup tests passed**, **67 state tests**,
+**10 refs tests**, inventory and focused poll/SSH regressions. These are prior
+executions, not reruns by this status update.
 
 ### Task 3: reviewed integration and identity composition
 
@@ -149,7 +196,7 @@ comments `01M5187Z00N4Q6S8V0X2Z4B6DR` (blocker) and
 `01M5197Z00N4Q6S8V0X2Z4B6DS` (approved delivery). The prior spec path/mode-policy
 findings remain resolved. Final quality and spec rechecks both passed, recorded
 in the ledger's final review section and comment `01M51A7Z00N4Q6S8V0X2Z4B6DT`.
-This latest coordination-only update changed no source and reran no tests.
+That historical coordination-only update changed no source and reran no tests.
 
 ### Where things are
 
@@ -157,10 +204,10 @@ This latest coordination-only update changed no source and reran no tests.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
-| Current HEAD / Task 3 checkpoint | `3b925e141bec9ae309024bdbfbf73aa6ab48caae`: reviewed and committed Task 3 primary integration. Its review base was `6d4ad1664462c42c24b4a820024d76d7c86ca8db`. |
+| Current HEAD / Task 4 resume base | `79463c53beb400d95a311e558e64caf8efd2beac`: reviewed blocker evidence. Task 3 checkpoint is `3b925e1`; its review base was `6d4ad16`. |
 | Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Checkpoints | Tasks 0–3 are reviewed and committed (`25514a3`, `3d47027`, `6d4ad16`, `3b925e1`). Task 4 STOP at T4-1: SPEC confirmed owner amendment required; QUALITY approved evidence without findings. Owner decision pending; no production changes. Controller checkpoint of blocker evidence pending. |
+| Checkpoints | Tasks 0–3 reviewed/committed (`25514a3`, `3d47027`, `6d4ad16`, `3b925e1`); blocker evidence reviewed/committed `79463c5`. T4-1 owner-approved. Task 4 reviewed complete at local gate: SPEC recheck PASSED; QUALITY recheck APPROVED, both P1s resolved/no findings. Controller checkpoint pending; Task 5 next afterward. |
 | Ongoing-task preflight | Reuse the controller's completed fetch/rebase/ancestry preflight against `origin/main` at `89d04f901636229392a311241f8e777f0a00962b`. This status pass performs no fetch, rebase or checkpoint commit. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
@@ -179,7 +226,7 @@ This latest coordination-only update changed no source and reran no tests.
    the grounding facts, planning reviews, Task 0 evidence/T0-1 approval, Task 1
    reviewed delivery, Task 2's approved T2-1 correction, and Task 3's internal
    ruling, Q3-1 correction and final independent review results, then Task 4's
-   T4-1 blocker, read-only reviews and unapproved minimal amendment proposal.
+    historical T4-1 blocker/reviews, owner approval and full Task 4 resume evidence.
    Record your evidence here as you go.
 
 Cycle 08's documents (`docs/Cycles/wave-02-cycle-08-*` and
@@ -204,10 +251,9 @@ Two operations are being added:
   5. Deletes the remote context branch, guarded by `push_negotiation`.
   6. Removes the worktree.
   7. Deletes the local branch.
-  8. The approved contract calls for one final transaction deleting the tracking
-     ref/history row, inserting `retired_contexts` and recording `complete`.
-     **T4-1 blocks this cross-resource boundary; see the unapproved proposal
-     above. Do not treat that proposal as the current approved contract.**
+   8. After durable branch_deleted intent and fresh guards, delete tracking first;
+      then atomically retire history, insert `retired_contexts`, record completion
+      and finish applicable reservation in SQL (approved T4-1).
   9. Refreshes the index on every `Ok` return after integration.
 
 Without a remote, it merges locally, cleans up, and reports publication
@@ -244,8 +290,9 @@ the same way comment publication binds its child synchronization.
   new attempt for cancelled/interrupted/rejected/offline/busy/yielding or
   recovery failures. Uncertainty is not absence. Task 0's evidence confirms
   the real child behavior and passed independent reviews.
-- **History stays `observed_published` until completion.** A cleanup that
-  stops early must leave the context under the RFC's explicit-republish rule.
+- **Applicable existing history stays until completion** (`observed_published`
+  when present). Never fabricate it in local-only/cache-loss cases. Early cleanup
+  must not grant new first-publication eligibility.
 - **Errors mean the primary is unchanged.** Integration reconciliation
   searches for a reachable matching merge. Recovery after integration is a
   pending category, never an error.
@@ -259,13 +306,12 @@ the same way comment publication binds its child synchronization.
 
 1. Preserve existing authorization and reviewed evidence; read the latest
    execution ledger. The controller owns checkpoint commits after reviews.
-2. **Task 3 passed both reviews and is committed as `3b925e1`. Task 4 is STOP at
-   T4-1; owner decision pending.** SPEC confirmed a material contradiction requiring
-   owner amendment; QUALITY approved the evidence without findings. Both reviews
-   were read-only, with no reruns. Reuse the retained evidence; do not redispatch
-   completed work or start implementing the unapproved proposal. The controller
-   owns the pending checkpoint of reviewed blocker evidence.
-3. Tasks 0–3 passed their independent reviews. Before subsequent
+2. **Task 4 passed implementation SPEC/QUALITY rechecks and is reviewed complete
+   at the local gate against `79463c5`.** Controller checkpoint is pending;
+   **Task 5 is next after it**. Reuse evidence and approvals rather than
+   redispatching completed work. T4-1 remains approved; no pending owner decision.
+   This status worker makes no source change, test rerun or commit.
+3. Tasks 0–4 passed their independent reviews. Before subsequent
    implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
       the worktree. Never rebase main onto the branch.
@@ -278,8 +324,8 @@ the same way comment publication binds its child synchronization.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
-4. Only after the owner resolves T4-1 and the approved documents consistently
-   record that decision, resume Task 4 and work Tasks 4–8 in order. Each task
+4. After the controller's Task 4 checkpoint, continue Tasks 5–8
+   in order, retaining the approved T4-1 boundary. Each task
    starts with a failing test and its recorded red run. Each ends with a commit
    (only when authorized), a ticket
    comment, and an independent review before the next task. The plan's

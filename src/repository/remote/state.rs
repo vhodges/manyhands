@@ -192,7 +192,74 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     migrate_poll_attempt_times(transaction)?;
     migrate_poll_materializations(transaction)?;
     migrate_poll_dispositions(transaction)?;
+    migrate_retired_contexts(transaction)?;
     Ok(())
+}
+
+const RETIRED_CONTEXT_SCHEMA: &str = "CREATE TABLE retired_contexts (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('document','ticket')),
+    item_id TEXT NOT NULL CHECK(length(item_id)=26),
+    operation_id TEXT NOT NULL CHECK(length(operation_id)=26),
+    retired_oid TEXT NOT NULL CHECK(length(retired_oid)=40 AND retired_oid NOT GLOB '*[^0-9a-f]*' AND retired_oid!='0000000000000000000000000000000000000000'),
+    PRIMARY KEY(repository_id,kind,item_id)
+)";
+
+fn migrate_retired_contexts(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    let migrated:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_retired_contexts')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='retired_contexts')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if !exists {
+        if migrated {
+            return Err(recovery_required());
+        }
+        tx.execute_batch(RETIRED_CONTEXT_SCHEMA)
+            .map_err(|_| recovery_required())?;
+    }
+    validate_schema_object(tx, "TABLE", "retired_contexts", RETIRED_CONTEXT_SCHEMA)?;
+    if !migrated {
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES('cycle_09_retired_contexts')",
+            [],
+        )
+        .map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
+
+fn read_retired_contexts(
+    db: &Connection,
+    repository_id: i64,
+) -> Result<Vec<(AuthoringKind, ItemId)>, RepositoryError> {
+    let rows=db.prepare("SELECT kind,item_id,operation_id,retired_oid FROM retired_contexts WHERE repository_id=?1 ORDER BY kind,item_id")
+        .and_then(|mut q|q.query_map([repository_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    rows.into_iter()
+        .map(|(kind, item, operation, retired)| {
+            let kind = match kind.as_str() {
+                "document" => AuthoringKind::Document,
+                "ticket" => AuthoringKind::Ticket,
+                _ => return Err(recovery_required()),
+            };
+            let item_id: ItemId = item.parse().map_err(|_| recovery_required())?;
+            let operation_id = crate::repository::OperationId::parse(&operation)
+                .map_err(|_| recovery_required())?;
+            let retired_oid = oid(Some(retired))?.ok_or_else(recovery_required)?;
+            if item_id.to_string() != item
+                || operation_id.to_string() != operation
+                || retired_oid.is_zero()
+            {
+                return Err(recovery_required());
+            }
+            Ok((kind, item_id))
+        })
+        .collect()
 }
 
 const POLL_DISPOSITION_SCHEMA: &str = r#"
@@ -1937,6 +2004,7 @@ impl RemoteContextSnapshot {
 struct RemoteSnapshotPolicy {
     configuration: RemotePollingConfiguration,
     dispositions: Vec<super::poll::PollTargetReport>,
+    retired_contexts: Vec<(AuthoringKind, ItemId)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1963,6 +2031,7 @@ impl RemoteSnapshot {
             polling: Box::new(RemoteSnapshotPolicy {
                 configuration: polling,
                 dispositions: Vec::new(),
+                retired_contexts: Vec::new(),
             }),
             latest_outcome,
             latest_attempt_at: None,
@@ -2008,7 +2077,8 @@ impl RemoteSnapshot {
     }
 
     /// Missing rows never prove a deletion. After cache loss, they cannot prove
-    /// first-publication eligibility either, even after recovery is resumed.
+    /// first-publication eligibility either, except for an explicitly retired
+    /// item (R1). A present state row always takes precedence over retirement.
     pub fn publication_evidence_for(
         &self,
         kind: AuthoringKind,
@@ -2018,11 +2088,19 @@ impl RemoteSnapshot {
             .iter()
             .find(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(id))
             .map(|context| context.publication_evidence)
-            .unwrap_or(if self.history_unknown {
-                RemotePublicationEvidence::HistoryUnknown
-            } else {
-                RemotePublicationEvidence::NeverPublished
-            })
+            .unwrap_or(
+                if self.history_unknown
+                    && !self
+                        .polling
+                        .retired_contexts
+                        .iter()
+                        .any(|(k, item)| *k == kind && item == id)
+                {
+                    RemotePublicationEvidence::HistoryUnknown
+                } else {
+                    RemotePublicationEvidence::NeverPublished
+                },
+            )
     }
 }
 
@@ -2310,6 +2388,7 @@ pub(in super::super) fn persist_complete_advertisement(
             };
             transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,tracking_oid,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'observed_published','unmaterialized',?8) ON CONFLICT(repository_id,remote_ref) DO UPDATE SET last_advertised_oid=excluded.last_advertised_oid,tracking_oid=excluded.tracking_oid,publication_evidence='observed_published',state='unmaterialized',observed_at=excluded.observed_at",
                 params![repository_id,target.remote_ref(),target.tracking_ref(),kind,item_id.to_string(),observation.advertised_oid.to_string(),observation.tracking_oid.map(|value|value.to_string()),observed_at]).map_err(|_| recovery_required())?;
+            transaction.execute("DELETE FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3",params![repository_id,kind,item_id.to_string()]).map_err(|_|recovery_required())?;
         }
     }
     Ok(batch)
@@ -5176,6 +5255,12 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
     validate_merge_evidence_schema(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
+    validate_schema_object(
+        &transaction,
+        "TABLE",
+        "retired_contexts",
+        RETIRED_CONTEXT_SCHEMA,
+    )?;
     let times=transaction.prepare("SELECT poll_completed_at,poll_next_eligible_at,action,poll_kind,phase,EXISTS(SELECT 1 FROM remote_poll_dispositions d WHERE d.repository_id=o.repository_id AND d.operation_ulid=o.operation_ulid) FROM remote_operation_records o").and_then(|mut q|q.query_map([],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,bool>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
     for (at, next, action, kind, phase, latest) in times {
         poll_time(at)?;
@@ -5200,6 +5285,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         "remote_observation_batches",
         "remote_ref_observations",
         "remote_context_states",
+        "retired_contexts",
         "remote_operation_records",
         "remote_poll_materializations",
         "remote_poll_dispositions",
@@ -5260,6 +5346,7 @@ fn read_snapshot_rows(
         Vec::new(),
     );
     snapshot.history_unknown = policy.history_unknown;
+    snapshot.polling.retired_contexts = read_retired_contexts(connection, repository_id)?;
     snapshot.latest_attempt_at = policy.latest_attempt_at;
     snapshot.next_eligible_at = policy.next_eligible_at;
     snapshot.polling.dispositions = read_poll_dispositions(connection, repository_id)?;

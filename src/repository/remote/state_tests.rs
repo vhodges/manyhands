@@ -5,6 +5,313 @@ const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const ADVERTISED: &str = "1111111111111111111111111111111111111111";
 const TRACKING: &str = "2222222222222222222222222222222222222222";
 
+fn seed_retirement(db: &Connection, kind: AuthoringKind, item: &str) {
+    db.execute("INSERT INTO retired_contexts(repository_id,kind,item_id,operation_id,retired_oid) VALUES(1,?1,?2,?3,?4)",params![crate::repository::authoring_kind_segment(&kind),item,crate::repository::OperationId::new().to_string(),TRACKING]).unwrap();
+}
+
+#[test]
+fn retirement_r1_missing_row_only_overrides_unknown_history_for_that_item() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let (data, root, service) = fixture();
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, Some(&plan()), true)
+        })
+        .unwrap();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+            .unwrap();
+        seed_retirement(&db, kind, ITEM);
+        let snapshot = service.remote_snapshot(root.path()).unwrap();
+        assert_eq!(
+            snapshot.publication_evidence_for(kind, &ITEM.parse().unwrap()),
+            RemotePublicationEvidence::NeverPublished
+        );
+        assert_eq!(
+            snapshot.publication_evidence_for(kind, &"01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap()),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+        let other_kind = if kind == AuthoringKind::Document {
+            AuthoringKind::Ticket
+        } else {
+            AuthoringKind::Document
+        };
+        assert_eq!(
+            snapshot.publication_evidence_for(other_kind, &ITEM.parse().unwrap()),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT history_unknown FROM remote_polling_state",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM remote_context_states", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        RepositoryService::open_at(data.path()).unwrap();
+    }
+}
+
+#[test]
+fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_atomically() {
+    let (data, root, service) = fixture();
+    let generation = with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), true)
+    })
+    .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    seed_retirement(&db, AuthoringKind::Ticket, ITEM);
+    seed_retirement(&db, AuthoringKind::Ticket, "01BX5ZZKBKACTAV9WEVGEMMVRZ");
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[], 123)
+    })
+    .unwrap();
+    assert!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .contexts()
+            .is_empty()
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM retired_contexts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    db.execute_batch("CREATE TRIGGER fail_retirement_consume BEFORE DELETE ON retired_contexts BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    assert!(
+        with_transaction(&service, root.path(), |tx, id| complete_batch(
+            tx,
+            id,
+            &plan(),
+            generation,
+            &[advertised()],
+            124
+        ))
+        .is_err()
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_context_states", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM retired_contexts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .observations()
+            .is_empty()
+    );
+    db.execute_batch("DROP TRIGGER fail_retirement_consume")
+        .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        complete_batch(tx, id, &plan(), generation, &[advertised()], 124)
+    })
+    .unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM retired_contexts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .publication_evidence_for(AuthoringKind::Ticket, &ITEM.parse().unwrap()),
+        RemotePublicationEvidence::ObservedPublished
+    );
+}
+
+#[test]
+fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
+    let (data, root, service) = fixture();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), true)
+    })
+    .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    seed_retirement(&db, AuthoringKind::Ticket, ITEM);
+    let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+    db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+    assert!(service.remote_snapshot(root.path()).is_err());
+    assert!(
+        matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+}
+
+#[test]
+fn retirement_migration_additive_idempotent_atomic_and_audited() {
+    let (data, root, service) = fixture();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), true)
+    })
+    .unwrap();
+    let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    db.execute_batch("DROP TABLE retired_contexts; DELETE FROM registry_migrations WHERE name='cycle_09_retired_contexts';").unwrap();
+    {
+        let tx = db.transaction().unwrap();
+        migrate(&tx).unwrap();
+        tx.rollback().unwrap();
+    }
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name='retired_contexts'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(service.remote_snapshot(root.path()).unwrap(), before);
+    seed_retirement(&db, AuthoringKind::Document, ITEM);
+    let version = db
+        .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        version
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM retired_contexts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let columns = db
+        .prepare("SELECT name FROM pragma_table_info('retired_contexts') ORDER BY cid")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        [
+            "repository_id",
+            "kind",
+            "item_id",
+            "operation_id",
+            "retired_oid"
+        ]
+    );
+    for column in ["kind", "operation_id", "item_id", "retired_oid"] {
+        // Startup must audit values even when CHECK constraints were bypassed.
+        db.execute_batch("PRAGMA ignore_check_constraints=ON")
+            .unwrap();
+        db.execute(
+            &format!("UPDATE retired_contexts SET {column}='invalid'"),
+            [],
+        )
+        .unwrap();
+        assert!(
+            matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        );
+        db.execute("DELETE FROM retired_contexts", []).unwrap();
+        seed_retirement(&db, AuthoringKind::Document, ITEM);
+    }
+}
+
+#[test]
+fn retirement_partial_or_lost_schema_is_refused_not_repaired() {
+    for case in ["missing", "partial", "orphan"] {
+        let (data, _root, _service) = fixture();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        match case {
+            "missing"=>db.execute_batch("DROP TABLE retired_contexts").unwrap(),
+            "partial"=>db.execute_batch("DROP TABLE retired_contexts; DELETE FROM registry_migrations WHERE name='cycle_09_retired_contexts'; CREATE TABLE retired_contexts(repository_id INTEGER)").unwrap(),
+            _=>{db.execute_batch("PRAGMA foreign_keys=OFF").unwrap();db.execute("INSERT INTO retired_contexts VALUES(999,'ticket',?1,?2,?3)",params![ITEM,crate::repository::OperationId::new().to_string(),TRACKING]).unwrap();},
+        }
+        let version = db
+            .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        assert!(
+            matches!(RepositoryService::open_at(data.path()),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired),
+            "{case}"
+        );
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version
+        );
+    }
+}
+
+#[test]
+fn retirement_preserves_pinned_sync_window_pass_when_retiring_current_observation() {
+    let (data, root, service) = fixture();
+    let repository = git2::Repository::init(root.path()).unwrap();
+    let operation = window_fixture(&service, root.path());
+    let intent = pinned_window(
+        &service,
+        root.path(),
+        operation,
+        Some(TRACKING.parse().unwrap()),
+    );
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        prepare_integration_window(tx, &record, 1, &intent)?;
+        Ok(())
+    })
+    .unwrap();
+    let c = crate::repository::cleanup::ContextCleanup::acquire(root.path()).unwrap();
+    let evidence = c
+        .delete_tracking_ref(
+            Some(&plan()),
+            AuthoringKind::Ticket,
+            &ITEM.parse().unwrap(),
+            Some(TRACKING.parse().unwrap()),
+            crate::repository::OperationId::new(),
+            TRACKING.parse().unwrap(),
+        )
+        .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        crate::repository::cleanup::retire_context(tx, id, &evidence)
+    })
+    .unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.unwrap();
+        assert_eq!(
+            integration_window(tx, &record, 1)?.unwrap().intent,
+            Some(intent.clone())
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .observations()
+            .len(),
+        1
+    );
+    RepositoryService::open_at(data.path()).unwrap();
+    drop(repository);
+}
+
 fn poll_kind_row(db: &Connection) -> Vec<rusqlite::types::Value> {
     db.query_row("SELECT * FROM remote_operation_records", [], |row| {
         (0..row.as_ref().column_count())

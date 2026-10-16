@@ -37,6 +37,11 @@ On 2026-10-16 the owner also approved T2-1's resulting Git mode/type consent
 encoding amendment. The change-set encoding below includes that approval; the
 historical quality blocker and probe evidence remain in the execution ledger.
 
+T4-1's Git-first/atomic-SQL completion amendment was owner-approved on
+2026-10-16. It supersedes the original cross-resource atomicity claim. The local
+cleanup section defines the split interval and commit-uncertainty reconciliation;
+the blocker/reviews are retained as history, not an unresolved decision.
+
 The RFCs settle the external policy:
 
 - promotion is confirmed;
@@ -386,8 +391,10 @@ resolve root, configuration                              (invalid → Repository
         → record remote_deleted                                 [F7 AfterRemoteDeletion]
  → lease: re-check; record worktree_removing; prune → worktree_removed   [F8 DuringWorktreeRemoval]
  → lease: delete local C guarded at context_oid → branch_deleted         [F9 BeforeBranchDeletion]
- → lease + one transaction: delete T(C) guarded; delete state row; insert retired_contexts;
-        record complete; finish promote reservation             [F10 BeforeCompletion]
+  → durable branch_deleted intent; lease + ownership/config checks:
+         delete T(C) guarded at expected direct OID or verified true absence
+    → one SQL transaction: delete state row; insert retired_contexts;
+         record complete; finish applicable reservation          [F10 BeforeCompletion]
                                                                  [F11 AfterCompletion]
  → index-only refresh with a fresh internal ID, outside the lease        [F12 RefreshFailure]
  → Complete | IndexPending
@@ -567,18 +574,33 @@ the prune.
 **Branch.** A ref transaction deletes the branch only when its value is
 `context_oid` and no worktree has it checked out.
 
-**Completion.** The final transaction does all of the following:
+**Completion (T4-1, owner-approved 2026-10-16).** Persist existing planned
+`branch_deleted` intent before the tracking-ref effect. Under the lease and fresh
+ownership/configuration checks, delete `T(C)` only at the expected **direct OID**
+or accept verified true absence. Wrong/new conflicting values, symbolic refs
+(including dangling ones) and unreadable refs stop before any partial SQL change.
+Then one atomic SQL transaction does all of the following:
 
-- deletes `T(C)`, only if it is at `remote_context_oid` or absent;
 - deletes the item's `remote_context_states` row;
 - inserts `retired_contexts`;
 - records `complete`;
 - finishes the reservation.
 
-Until this transaction, the history row still says `observed_published`. A
-cleanup that stops early therefore leaves the context subject to the RFC's
-explicit-republish rule. A context the promotion has not finished deleting is
-never republished silently.
+In the split interval `T(C)` may be absent, while applicable existing history
+stays intact (`observed_published` when present), no retirement exists, and the
+durable record/applicable reservation remain pending/held. Do not manufacture
+observed-published history for local-only/cache-loss cases. Git deletion is not
+rolled back by SQL: rollback of uncommitted SQL preserves SQL only. If a commit
+result is uncertain, reopen and reconcile actual completion and owned record;
+committed completion plus reservation finish replays the stored outcome. Failures
+after integration return `Ok` cleanup pending `RecoveryRequired` plus refresh.
+Same-ID retry rechecks actual Git, ownership and configuration and finalizes SQL
+without repeating completed lifecycle work. Cache loss/ref absence alone is not
+retirement proof. No additional phase/table is needed; `branch_deleted` is the
+prior durable intent. Tasks 5–7 test split boundaries inside F10/F11, SQL statement
+rollback and commit uncertainty/replay. Task 4 exposes guarded Git deletion and
+private validated evidence for SQL retirement; Tasks 5/6 compose completion and
+reservation finish into that SQL transaction. History is never reset early.
 
 The cleanup functions take a kind and an item ID. Cycle 10 reuses them
 unchanged.

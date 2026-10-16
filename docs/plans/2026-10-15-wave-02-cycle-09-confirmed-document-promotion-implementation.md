@@ -23,6 +23,9 @@ id: "01M500Q0YHT5PNGGCQPCBSF3Z5"
 > On 2026-10-16 the owner approved T2-1's resulting Git mode/type digest encoding
 > amendment. Task 2 below implements it; its historical quality blocker is
 > preserved in the execution ledger.
+> On 2026-10-16 the owner approved T4-1's guarded Git-first tracking deletion plus
+> atomic SQL finalization/reconciliation amendment. Task 4 below implements its
+> standalone seams; Tasks 5–7 compose and test the real lifecycle boundaries.
 
 **Goal:** Two headless operations:
 
@@ -214,7 +217,7 @@ and executable-document fixes retained. The recorded targeted selector passes
 all 53 tests; no tests were rerun for this status update. Historical task
 checklists/evidence remain below and in the execution ledger. The controller
 committed this checkpoint as `6d4ad16`; Task 3 has since completed both reviews
-as recorded below, and Task 4 is next. Full Task 8/native gates remain deferred.
+as recorded below. Full Task 8/native gates remain deferred.
 
 **Files:** new `src/repository/promotion/{mod.rs, observe.rs,
 observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
@@ -299,17 +302,17 @@ observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
 
 ## Task 3: Primary Integration
 
-**Completion summary — 2026-10-16:** reviewed complete at the local gate. Prior
+**Completion summary — 2026-10-16:** reviewed complete, committed as `3b925e1`. Prior
 spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
-with no findings. The review boundary is the full current **uncommitted Task 3
+with no findings. The review boundary was the full **Task 3
 change set against `6d4ad1664462c42c24b4a820024d76d7c86ca8db`**, including the
 proposed-identity/include-context correction. T3-1 is the resolved internal
 engineering ruling below, with no pending owner decision; historical suggestions
 remain superseded in the ledger. Final recorded targeted evidence is 31 passing
 integration tests, three focused include regressions and 42 passing shared bridge
 identity regressions, with previous observation/sync evidence retained. No source
-change or Rust test rerun was made for this status update. Controller checkpoint
-pending; **Task 4 is next**. Historical task checklists/evidence remain below;
+change or Rust test rerun was made for that status update. The controller has
+committed the reviewed change as `3b925e1`. Historical task checklists/evidence remain below;
 the full Task 8/native gates remain deferred.
 
 **Files:** new `src/repository/promotion/{integrate.rs, integrate_tests.rs}`.
@@ -384,6 +387,19 @@ storage here.
 
 ## Task 4: Generic Context Cleanup And Retirement
 
+**Completion summary — 2026-10-16:** reviewed complete at the local gate under
+owner-approved T4-1. SPEC recheck PASSED the physical registration-inventory fix;
+QUALITY recheck APPROVED both P1 findings resolved, with no findings remaining.
+Review boundary is the full current uncommitted Task 4 change set against
+`79463c53beb400d95a311e558e64caf8efd2beac`, including SPEC1-P2 and QUALITY2-P1
+corrections. Controller checkpoint pending; **Task 5 is next after it**. Historical
+blocker/approval/review evidence and exact RED/GREEN commands remain in the ledger.
+This status-only update changes no source/tests and reruns no tests; approvals
+are controller-reported and no extra reviewer executions are inferred. Prior
+evidence includes 34 passing cleanup tests, 67 state tests, 10 refs tests and
+targeted inventory/poll/SSH checks. Full Task 8/native gates and Task 5/6
+composition obligations remain due.
+
 **Files:** new `src/repository/cleanup.rs`, `cleanup_tests.rs`;
 `src/repository/remote/state.rs`, `state_tests.rs`, `refs.rs`,
 `refs_tests.rs`, `sync.rs` (first-publication eligibility only).
@@ -398,16 +414,19 @@ storage here.
   `WorktreeRemoval` is `Removed`, `AlreadyAbsent`, `Changed` or
   `RecoveryRequired`;
 - `delete_context_branch(kind, id, oid) -> BranchDeletion`;
-- `retire_context(tx, kind, id, expected_tracking, operation_id, oid)`, which
-  in one transaction deletes the tracking ref, deletes the state row and
-  inserts `retired_contexts`;
+- guarded tracking-ref deletion first, returning private validated evidence;
+  `retire_context(tx, repository_id, evidence)` deletes the state row and
+  inserts `retired_contexts` in SQL. Kind/item/repository/operation evidence is
+  bound across the seam; no fake Task 5 record storage is introduced;
 - the `retired_contexts` table (R1) and its migration;
 - the retired-item rule in `publication_evidence_for` and first-publication
   eligibility.
 
-All take a kind and an item ID.
+All take a kind and an item ID directly or through private bound evidence.
+The helpers are methods of the lease-owning `ContextCleanup`; evidence retains
+the absent tracking-slot ref lock through the caller's SQL commit/reconciliation.
 
-- [ ] Failing tests for the pre-check: clean at the OID → `Ok`. Each of the
+- [x] Failing tests for the pre-check: clean at the OID → `Ok`. Each of the
   following → `Changed`, with a full local snapshot unchanged:
   - dirty tracked;
   - untracked;
@@ -418,12 +437,28 @@ All take a kind and an item ID.
 
   **(D7)** An ignored file present → `IgnoredFiles`, and the file is kept. A
   locked worktree → `Locked`.
-- [ ] Failing tests for retirement:
+- **T4-1 owner-approved amendment (2026-10-16):** durable existing `branch_deleted`
+  intent precedes the guarded direct-OID-or-verified-absence Git deletion under
+  lease/ownership/configuration checks. Wrong/conflicting/symbolic/unreadable refs
+  stop before SQL. Then one SQL transaction retires history, inserts retirement,
+  marks completion and finishes the applicable reservation (last two: Tasks 5/6).
+  Split state keeps applicable existing history, no retirement, pending record and
+  held applicable reservation. Never fabricate history for local-only/cache loss.
+  Rolled-back uncommitted SQL preserves SQL, not deleted Git refs. Uncertain commit
+  results reopen/reconcile actual completion/ownership; committed completion and
+  reservation finish replay stored outcome. After-integration recovery is `Ok`
+  cleanup pending RecoveryRequired plus refresh; same-ID actual-state retry does
+  not repeat lifecycle work. Absence/cache loss alone is not retirement proof.
+  No new phase/table. Tasks 5–7 add inside-F10/F11 statement/commit/replay tests.
+- [x] Failing tests for retirement:
   - the tracking ref at the expected value, or absent → deleted, state row
-    gone, retirement written in one transaction;
+    gone, retirement written atomically in SQL after guarded Git deletion;
   - the tracking ref elsewhere → `Changed`, nothing touched;
-  - an injected failure inside the transaction leaves all three unchanged.
-- [ ] Failing tests for R1 evidence:
+  - injected SQL statement failure/rollback leaves SQL history and retirement
+    unchanged, while an already-deleted tracking ref stays deleted; retry with
+    validated evidence and actual checks finalizes SQL. Do not claim SQL rollback
+    restores Git. Uncertain commit reconciliation belongs to Tasks 5/6 composition.
+- [x] Failing tests for R1 evidence:
   - in a repository with `history_unknown` set, a retired item with no state
     row reads `NeverPublished`, and `plan_clean_integration` permits first
     publication;
@@ -433,26 +468,22 @@ All take a kind and an item ID.
   - a batch without the item does not mark it deleted;
   - the snapshot validation invariant at `state.rs:5429` still holds;
   - the existing synchronization and poll tests are unchanged.
-- [ ] Failing tests for worktree removal: directory and admin entry gone and
+- [x] Failing tests for worktree removal: directory and admin entry gone and
   other worktrees untouched; already absent → `AlreadyAbsent`; a partly
   removed directory with the registration present → `RecoveryRequired` and
   nothing further removed.
-- [ ] Failing tests for branch deletion: at the OID → deleted; at another OID
+- [x] Failing tests for branch deletion: at the OID → deleted; at another OID
   → `Changed`; checked out somewhere → `Changed`; absent → `AlreadyAbsent`.
-- [ ] Failing test for a fresh context: after worktree removal, branch
+- [x] Failing test for a fresh context: after worktree removal, branch
   deletion and retirement, `prepare_context(Edit)` for the item creates a new
   context from the primary head.
-- [ ] Record red:
-
-  ```sh
-  devenv shell -- cargo test --locked --lib cleanup
-  devenv shell -- cargo test --locked --lib remote::state
-  devenv shell -- cargo test --locked --lib remote::refs
-  ```
-
-- [ ] Implement.
-- [ ] Run green. Commit (for example `feat: add verified context cleanup
-  helpers`) and add a ticket comment.
+- [x] Record targeted RED (`cleanup`, new `remote::state` retirement and
+  `remote::refs` retired-context selectors), before production behavior; exact
+  commands/counts are in the ledger. Broader affected state/refs selectors GREEN.
+- [x] Implement; run targeted GREEN and existing affected regressions; add comment.
+- [x] Independent spec/quality rechecks passed; no findings remaining.
+- [ ] Controller checkpoint commit afterward
+  (for example `feat: add verified context cleanup helpers`). No worker commit.
 
 ## Task 5: Promotion Record And Reservation Rules
 
@@ -610,7 +641,12 @@ reservation API.
   - one context push and one primary push;
   - one remote delete;
   - one worktree removal;
-  - one branch deletion.
+    - one branch deletion.
+  Include T4-1's internal F10/F11 split boundaries: before/after guarded Git
+  deletion, SQL statement rollback, commit-result uncertainty, actual completion/
+  ownership reconciliation, and stored-outcome replay after committed completion
+  and reservation finish. Assert retained applicable existing history and no
+  retirement while pending, without fabricated local-only/cache-loss history.
 - [ ] Failing cancellation tests:
   - cancel before integration → `Interrupted`, nothing integrated;
   - cancel after integration stops between steps, and the outcome reports
@@ -822,5 +858,8 @@ characterizations and targeted baseline have been executed and recorded in
 the execution ledger, including the owner-approved T0-1 amendment. Tasks 1–3
 have since been implemented, targeted-verified and independently reviewed, as
 recorded in their checkpoint evidence; Task 3 remains uncommitted for the
-controller. Tasks 4–8 remain planned; their implementation and verification have
-not been run.
+controller at that historical checkpoint; it is now committed as `3b925e1`.
+Task 4 is reviewed complete at the local gate under approved T4-1, including the
+physical-inventory and both hidden-data preservation corrections. Controller
+checkpoint pending; Task 5 next afterward. Tasks 5–8 remain planned; no full/native
+gate or Cycle completion is claimed.

@@ -1418,7 +1418,8 @@ staging. No files were staged and HEAD remains the exact review base above.
 
 ## Task 4 Entry — BLOCKER T4-1: Git/SQLite Completion Atomicity (2026-10-16)
 
-**Current status: Task 4 STOP at T4-1; owner decision pending. Independent SPEC
+**Historical entry status (superseded by owner-approved resume below): Task 4
+STOP at T4-1; owner decision pending. Independent SPEC
 confirmed a material contradiction requiring an owner amendment; QUALITY approved
 the blocker evidence without findings. These are read-only evidence reviews, not
 implementation approval; no reviewer reruns occurred.** The task brief expressly
@@ -1598,3 +1599,361 @@ Review-status update verification: `git diff --check` and `git diff --exit-code
 --short --untracked-files=all` lists exactly three pending paths: this ledger,
 `docs/plans/2026-10-15-wave-02-cycle-09-handoff.md`, and canonical comment
 `01M51F7Z00N4Q6S8V0X2Z4B6DZ`. No code/test changes, reruns or staged files.
+
+## Task 4 Resume — Owner-Approved T4-1 (2026-10-16)
+
+The owner approved (“yes”) the controller's final Git-first amendment, including
+the uncertain-SQL-commit and applicable-existing-history qualifications above.
+Historical blocker/reviews/proposal are preserved; their STOP/NOT APPROVED status
+is superseded. Full original Task 4 scope is authorized now. Cycle/design/plan
+and handoff are being updated consistently before source implementation.
+
+Controller fresh preflight: clean fetch/rebase onto origin/main
+`89d04f901636229392a311241f8e777f0a00962b`; no-op rebase and ancestry passed at
+`79463c53beb400d95a311e558e64caf8efd2beac` (reviewed blocker evidence). Worker
+confirmed clean entry, exact branch/SHAs and reread AGENTS/TDD. No extra rebase,
+subagents or commits. Targeted tests only until Task 8. Task 4 exposes separate
+guarded Git deletion and private validated evidence for SQL retirement; Task 5/6
+will compose durable branch_deleted intent, completion and reservation finish.
+No synthetic promotion storage/phase is authorized or needed here.
+
+### Task 4 RED — before production behavior
+
+All eight new cleanup tests and five state tests plus the refs real-SQL/Git test
+were authored first. Declaration-only unimplemented cleanup stubs enable runnable
+RED; they are not implementation. Inventory expectation now includes retirement.
+
+| Exact command | Actual result before implementation |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib cleanup` | First compile RED: 25 missing cleanup API diagnostics, one unused-import warning, no tests. After declaration-only stubs: **8 passed / 8 failed / 856 filtered**; all eight new tests stop at the missing cleanup behavior; existing matching tests passed. No warnings in runnable RED. |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::retirement` | **0 passed / 5 failed / 867 filtered**, missing retired_contexts schema. |
+| `devenv shell -- cargo test --locked --lib remote::refs::tests::retired_context` | **0 passed / 1 failed / 871 filtered**, missing retired_contexts schema. |
+
+The cleanup matrices cover both kinds, full Git images on refusals, ignored/
+locked preservation, partial/mixed recovery, other worktrees, branch OID and
+all-checkout guards, Git-first split state/SQL trigger rollback/retry, tracking
+conflicts/symbolic/dangling/unreadable refs and fresh prepare_context(Edit).
+State/refs tests cover additive atomic/idempotent/audited migration, schema loss,
+orphan/corrupt rows, R1-only eligibility under unknown history, unchanged invalid
+never-published-row invariant, observation absence and atomic retirement removal.
+
+### Delivered Task 4 Interfaces / Decisions
+
+- `cleanup::ContextCleanup::acquire(root)` owns the actual repository lease.
+  `precheck_context(kind,id,oid)`, `remove_context_worktree(kind,id,oid)` and
+  `delete_context_branch(kind,id,oid)` are generic for document/ticket reuse by
+  Cycle 10. Precheck uses the existing canonical/materialization/clean helpers,
+  plus direct branch/OID, own gitdir/common-dir identity, ignored status and lock
+  checks. Removal repeats it under the same lease and prunes with
+  valid=true/working_tree=true/locked=false. Both path/admin absent is idempotent;
+  mixed states or missing tracked files/.git require recovery without further
+  removal. Dirty, ignored, locked, changed-branch/OID and nonconforming cases keep
+  full file-content/directory snapshots unchanged.
+- Branch deletion reads direct refs and holds a real ref transaction for the
+  compare/remove; scans primary and every registration's own HEAD. It refuses
+  foreign locks, indirect refs and unreadable evidence. Reading registration HEAD
+  directly is essential: `open_from_worktree` still followed a replaced worktree
+  .git link in the regression. An already-absent branch returns without taking a
+  ref lock, which otherwise recreates empty ref directories.
+- `delete_tracking_ref(plan,kind,id,expected,operation_id,oid)` runs Git first,
+  refuses wrong/symbolic/dangling/unreadable refs, and accepts only the expected
+  direct OID or verified absence. It returns non-Clone private
+  `RetirementEvidence`, bound to the lease/root/plan/kind/item/operation/OID, holding
+  an absent-slot ref lock after deletion. Keep evidence until SQL commit or
+  reconciliation; ordinary Git writers cannot recreate the slot meanwhile. A
+  writer bypassing Git locks entirely is still checked again before SQL writes.
+- `retire_context(tx,repository_id,&evidence)` contains only SQL finalization
+  pieces and pre-write root/plan/actual-ref rechecks. It deletes applicable state
+  and inserts the retirement. Its caller must propagate errors/rollback, retain
+  evidence through commit, and reopen/reconcile an uncertain commit result.
+  Actual deferred-constraint commit failure and outer callback rollback were
+  tested with reopened SQL state; neither restores the already-deleted Git ref.
+  Local-only retirement writes no fabricated observed-published row, including
+  with history_unknown set. Fresh Edit provisions at the latest primary HEAD.
+- Deleting a state row while leaving its current advertised observation violates
+  the existing snapshot invariant. Deleting that observation in-place also breaks
+  a sync window pinned to the exact current batch. Final SQL therefore rotates
+  the current projection to a new batch excluding only the retired item, retaining
+  every original batch/observation as historical and every other item's current
+  evidence. A real pinned-window regression was observed RED and now passes;
+  startup audit and unchanged snapshot/window validation remain intact.
+- `state::migrate` now adds `retired_contexts` and marker
+  `cycle_09_retired_contexts` inside the existing service-opening migration TX.
+  Strict schema/value/FK audit, rollback, idempotence, partial/lost schema and
+  table inventory are covered. Existing migration/audit hooks already call this
+  module; no discovery/recovery opener rewrite was needed. Columns are exactly
+  repository_id/kind/item_id/operation_id/retired_oid, with per-repository-kind-item
+  primary key and no paths/content/endpoint fields.
+- Snapshot policy holds private retired-item evidence; a missing state row reads
+  NeverPublished for that exact retired kind/item even under history_unknown.
+  State rows retain precedence and the invalid never_published-row invariant is
+  unchanged. Observed publication deletes retirement in the same batch SQL TX;
+  an absent batch never invents a deleted state for a retirement. Neither the
+  global flag nor unrelated items are reset.
+- `plan_clean_integration` and synchronization already consume
+  `publication_evidence_for`, so no production refs/sync/poll/merge rewrite or
+  eligibility duplication was needed. Remote `mod.rs` widens only a cfg(test)
+  Git-metadata path-formatting helper to repository scope for native-shaped
+  fixtures. No public API/DTO, dependency or GPUI change.
+
+### Exact GREEN / Additional RED And Regression Commands
+
+All commands ran through Devenv in the specified worktree. Initial RED above
+preceded production behavior. Counts below include intermediate failed runs,
+not merely the final result. All final successful executions were warning-free.
+
+| Exact command | Actual runs/results in execution order |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib cleanup` | **9 runs total:** compile RED (25 missing-API diagnostics, one unused import); runnable RED **8 passed/8 failed/856 filtered**; initial implementation **15/1/856**; fixture-corrected **16/0/856**; expanded/ref-lock **22/1/856** (test dropped owned evidence before snapshot); compile failure (one test-only missing borrow); stronger directory snapshot **22/1/856** (absent branch lock recreated empty directories); **23/0/857** after absent-branch/pinned-batch corrections; final **23 passed/0 failed/857 filtered**, 13.23 seconds, after formatting and other-worktree-admin preservation coverage. |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::retirement` | **3 runs:** schema RED **0/5/867**; initial implementation **2/3/867**; corrected fixture history flag/migration observation order **5/0/867**. |
+| `devenv shell -- cargo test --locked --lib remote::refs::tests::retired_context` | **3 runs:** schema RED **0/1/871**; initial implementation **0/1/871**; corrected unknown-history fixture **1/0/871**. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests` | **1 run: 12 passed/1 failed/864 filtered**, discovering that a foreign .git link with identical content/branch/OID could pass reused clean checks. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_foreign_git_link` | **4 runs:** compile failure (one test-helper visibility diagnostic); runnable RED **0/2/876** (unsafe precheck and hidden checkout); **1/1/876** (`open_from_worktree` also followed the foreign link); final **2 passed/0 failed/876 filtered** after own-gitdir validation and actual registration-HEAD inspection. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_retirement_evidence_holds_ref_lock` | **1 RED run: 0/1/878** before evidence retained the absent-slot lock. GREEN is included in final cleanup selector. |
+| `devenv shell -- cargo test --locked --lib remote::state::persistence_tests::retirement_preserves_pinned` | **2 runs:** RED **0/1/879** (retirement damaged the current immutable pinned pass); GREEN **1/0/879** after retaining the original pass and rotating the current projection in SQL. |
+| `devenv shell -- cargo test --locked --lib remote::state` | **2 GREEN runs:** **66/0/813**, then final **67 passed/0 failed/813 filtered**, 8.37 seconds, including pinned-pass regression and all existing state invariants/migrations/audits unchanged. |
+| `devenv shell -- cargo test --locked --lib remote::refs` | **1 GREEN run: 10 passed/0 failed/869 filtered**; existing graph/evidence rules plus new actual Git/SQLite R1 eligibility case. |
+| `devenv shell -- cargo test --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema -- --exact` | **1 GREEN run: 1 passed/0 failed/77 filtered**; normal service-opening inventory includes retirement. |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::task6_absent_known_context_preserves_tracking_and_local_files` | **2 runs:** compile failure from the same test-only missing borrow (no tests); then **1 passed/0 failed/878 filtered**. |
+| `devenv shell -- cargo test --locked --lib remote::poll::tests::poll_ignored_only_is_clean_and_remote_absence_wins_over_dirty` | **2 runs:** same missing-borrow compile failure (no tests); then **1 passed/0 failed/878 filtered**. |
+| `devenv shell -- cargo test --locked --test remote_synchronization context_first_current_fast_forward_local_ahead -- --exact` | **1 GREEN run: 1 SSH case passed**; unchanged first-publication/current/FF/local-ahead behavior. |
+| `devenv shell -- cargo test --locked --test remote_synchronization incompatible_generation_history_unknown -- --exact` | **1 GREEN run: 1 SSH case passed**; non-retired unknown history still refused. |
+| `devenv shell -- cargo fmt` | **2 runs**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 run**, exit 0. |
+
+Systematic investigation separated test setup from implementation defects:
+configure's boolean forces a configuration fence, not history_unknown; fixtures
+now explicitly set that flag. A migration test must snapshot before removing its
+schema. Discovery can synthesize a cached local context until the later refresh;
+the retirement assertion checks its R1 evidence, not premature cache removal.
+The ref-lock/empty-directory/foreign-link/pinned-pass defects above were fixed in
+cleanup only, after failing regression evidence. Tests use actual Git/SQLite and
+isolated service authoring, no mocks, sleeps, developer keys or global config.
+
+### Self-Review / Return For Independent Spec Then Quality Review
+
+**Status: Task 4 implemented and targeted-verified; uncommitted, review-ready
+against `79463c53beb400d95a311e558e64caf8efd2beac`.** There is no pending owner
+decision on T4-1. Historical blocker reviews do not review this implementation.
+The controller owns independent implementation spec/quality review and checkpoint.
+
+Original Task 4 clauses are mapped to retained tests: clean/dirty/staged/untracked/
+new-OID/other-branch/missing-registration/conflict/nonconforming precheck matrices;
+ignored and locked preservation; full Git file-content/directory images; worktree
+path/admin removal/idempotence and other worktree/admin preservation; partial/
+mixed refusal; branch OID/all-checkout/absence/lock guards; direct tracking
+expected/absent/conflicting/symbolic/dangling/unreadable/new-after-delete cases;
+SQL trigger/outer rollback/deferred commit and retry; private evidence root/plan/
+lock binding; exact R1 eligibility and global invariant; observation consumption/
+absence; additive atomic audited migration/inventory; fresh Edit from primary.
+There are **15 new cleanup tests, 6 new state tests and 1 new refs test**, using
+scenario matrices where noted. Existing affected tests were not edited.
+
+Task 5/6 must persist the real branch_deleted intent, validate actual completed
+worktree/branch state and owned generation/configuration before effects, and
+compose promotion complete plus applicable reservation finish with
+`retire_context` in one SQL TX. Retain evidence through commit/reconciliation;
+reopen uncertain commit results and replay committed completion, rather than
+assuming rollback or redoing lifecycle work. They also own post-integration Ok
+cleanup pending RecoveryRequired plus refresh and actual F10/F11 record/reservation
+tests (Tasks 5–7). No fake journal/table/phase was added here. Cache loss/absence
+alone does not authorize retirement; the helper's documented durable-intent and
+ownership preconditions remain the runner's obligation.
+
+Limits: Linux tests prove the named cases, not native Windows open-handle prune
+behavior. Partial deletion is constructed deterministically, not a process kill
+inside libgit2. Full check/clippy/all-features suite/CLI smoke and native gates
+remain deferred to Task 8/authorization. No commits, staging, subagents, push, PR,
+CI dispatch, merge, closure or worktree cleanup. Ticket remains open.
+
+Final inventory/whitespace verification: `git diff --check` exited 0.
+`git diff --exit-code -- Cargo.toml Cargo.lock devenv.nix devenv.lock
+.github/workflows/build.yml src/repository/remote/sync.rs
+src/repository/remote/poll.rs src/repository/remote/refs.rs
+src/repository/remote/merge.rs` exited 0. `git status --short
+--untracked-files=all` lists exactly **14 intended paths**: five Cycle/planning
+documents, repository module plumbing, cleanup source/tests, cfg(test) remote
+helper visibility, state source/tests, refs tests, inventory test and new canonical
+comment `01M51G7Z00N4Q6S8V0X2Z4B6E0`. No staged files; HEAD stays `79463c5`.
+
+## Task 4 SPEC1-P2 — Complete Registration Inventory (2026-10-16)
+
+Spec reviewer finding verified against the actual locked libgit2: after removing
+the owned context, a second registration still holds HEAD at the target branch,
+but removing its commondir or gitdir makes Repository::worktrees omit it. The
+existing branch guard then incorrectly deletes the branch. Both independent
+regressions assert the omission, require Changed and snapshot all Git/worktree
+file contents and directories. Each covers document and ticket kinds.
+
+Before production correction:
+
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing`
+  → **0 passed / 2 failed / 880 filtered**, both returned Deleted instead of Changed.
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_branch_guard`
+  → **0 passed / 3 failed / 880 filtered**, including the expanded invalid/incomplete
+  evidence matrix (first failure: missing HEAD also omitted by libgit2).
+
+No production correction preceded these RED runs. Scope is the deletion guard's
+inventory only; worktree precheck/removal/pruning behavior is retained. No commit
+or delegation; return to the same spec reviewer for recheck after targeted GREEN.
+
+Correction: `branch_is_checked_out` now enumerates the physical common-dir
+worktrees inventory with read_dir instead of the filtered libgit2 list. Every
+entry must be a real directory with readable, ordinary commondir/gitdir/HEAD
+members; metadata links must resolve to this common directory and the registered
+worktree's Git link. Missing/invalid/unreadable members, non-directory inventory
+entries, symlinks/reparse points and enumeration/read errors refuse deletion.
+Each complete registration's own HEAD remains authoritative. A verified absent
+inventory is the only no-registration case. Ref/OID checks and the ref transaction
+remain intact; worktree precheck/removal/pruning code was not changed.
+
+The added matrix also covers missing/invalid HEAD, invalid commondir/gitdir,
+a directory substituted for a metadata member, a file inventory entry and a file
+substituted for the inventory itself. All preservation checks include directory
+entries, files, branch refs, worktree bytes, indexes and registration metadata.
+
+| Exact command | Actual correction-pass results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing` | **1 RED run: 0 passed/2 failed/880 filtered**, before production correction. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_branch_guard` | **2 runs: RED 0 passed/3 failed/880 filtered; GREEN 3 passed/0 failed/880 filtered**, 2.09 seconds. |
+| `devenv shell -- cargo fmt` | **1 run**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 run**, exit 0. |
+| `devenv shell -- cargo test --locked --lib cleanup` | **1 GREEN run: 26 passed/0 failed/857 filtered**, 14.25 seconds, including existing worktree/prune/branch matrices and all three new regressions. |
+
+No warnings. No deps, mocks, sleeps, global config or developer-data changes.
+This pass updates only cleanup source/tests, this ledger and canonical comment
+`01M51G7Z00N4Q6S8V0X2Z4B6E0`; the rest of the existing uncommitted Task 4 inventory
+is retained. `git diff --check` passed. HEAD stays `79463c5`, no staged files or
+commit. **SPEC1-P2 correction is implemented and targeted-verified, ready to return
+to the same spec reviewer for recheck; reviewer acceptance is pending.** No new
+review approval or reviewer test execution is inferred. Full/native gates remain
+deferred as before.
+
+## Task 4 QUALITY2-P1 — Hidden Index Edits / Recursive Submodule Safety
+
+Verified both data-loss findings before production changes. Real Git update-index
+flags on tracked noncanonical `ordinary` hide edits from status while the index
+tree equals HEAD. Both assume-unchanged and skip-worktree incorrectly prechecked
+Ok. Real populated submodules, built locally with tracked .gitmodules ignore=all,
+also prechecked Ok despite ignored/untracked/tracked data hidden below gitlinks.
+No clone, network, global or production config changes are involved in fixtures.
+
+Pre-correction exact runs:
+
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_hidden_index`
+  → **0 passed/2 failed/888 filtered**; both incorrectly returned Ok.
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_submodule`
+  → **1 passed/3 failed/886 filtered**; recursive clean control passed, ignored,
+  hidden dirty and embedded-Git-data refusal cases failed at incorrect Ok.
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_raw_prune_has_no_submodule`
+  → **1 passed/0 failed/889 filtered**: raw prune actually deleted a populated
+  submodule's ignored fixture file and worktree/registration. External child Git
+  metadata survived. This proves raw prune supplies no ignored-submodule safety;
+  it is not an assumed backend property.
+- `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_submodule_unknown_or_advanced`
+  → **0 passed/1 failed/890 filtered**, advanced unpublished nested HEAD wrongly Ok.
+
+All regression tests preceded production correction. The intended correction is
+cleanup-only: refuse hidden index flags without changing index state, explicitly
+inspect populated gitlinks recursively under the existing lease, bound inspection
+and fail closed when safe deletion cannot be proved. Shared synchronization policy
+and the approved spec are unchanged. Return to the same quality reviewer for
+recheck; no commit or delegation.
+
+Implemented a shared **cleanup-only** recursive clean proof, reused by precheck
+and the immediately-before-prune recheck:
+
+- Refuse on-disk assume-unchanged/skip-worktree index entries before status/tree
+  cleanliness checks. Never clear flags, stage bytes or write an index to make
+  the worktree appear safe. Both hidden-edit tests assert status empty/index tree
+  equal HEAD before the refusal and preserve exact index bytes, edited bytes,
+  registration and full directory/file snapshots afterward.
+- Enumerate gitlinks from the actual index, not the superproject's status report.
+  For each populated submodule, validate its local path/Git identity and HEAD at
+  the recorded gitlink OID, then apply the same index-flag/clean/untracked/ignored
+  proof recursively regardless of parent ignore configuration. Inspect ignored
+  descendants explicitly. Missing/inaccessible/unopened/advanced/redirected state
+  is Changed. A foreign linked-worktree registration is not owned by cleanup.
+- All inspection remains under the existing ContextCleanup lease, with no child
+  lease, reservation, transport or configuration mutation. A visited-gitdir set,
+  depth bound and total bound of 64 repositories fail closed on cycles/oversize
+  graphs. The clean nested control asserts the outer lease remains held and zero
+  remote-operation rows before/after; byte snapshots show no cleanup-side registry
+  or external Git metadata changes.
+- A clean worktree alone does not prove embedded submodule Git history disposable.
+  Refuse if the child's gitdir/common-dir would be removed with the context path
+  or registration. Canonicalized removal roots make that containment check native
+  path-representation independent. Clean nested submodules with retained external
+  Git metadata still pass and prune successfully; embedded Git data is preserved.
+
+The new actual-Git fixtures cover depth one/two ignored data, hidden untracked and
+modified tracked bytes, both hidden index flags inside submodules, unpublished
+nested HEAD advance and missing Git linkage. These tests snapshot all working
+files/directories plus external child indexes/objects/config/refs, and preserve
+the original context registration on refusal. The raw-prune characterization is
+retained using disposable ignored data only. No synchronization/poll/merge policy,
+approved contract, dependency or public interface change was made.
+
+| Exact command | Actual correction-pass results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_hidden_index` | **2 runs: RED 0 passed/2 failed/888 filtered; GREEN 2 passed/0 failed/889 filtered**. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_submodule` | **2 runs: RED 1 passed/3 failed/886 filtered; GREEN 5 passed/0 failed/886 filtered**, including the subsequently added unknown/advanced case. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_raw_prune_has_no_submodule` | **1 pre-correction characterization run: 1 passed/0 failed/889 filtered**, proving ignored submodule data is actually deleted by raw prune. Also included in final cleanup GREEN. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests::cleanup_submodule_unknown_or_advanced` | **1 RED run: 0 passed/1 failed/890 filtered**; GREEN is covered by the expanded submodule selector and final cleanup. |
+| `devenv shell -- cargo test --locked --lib cleanup` | **2 runs: 33 passed/1 failed/857 filtered**, then final **34 passed/0 failed/857 filtered**, 16.67 seconds. The intermediate failure was test-only WAL/SHM snapshot timing after adding SQL reservation-count probes; production/Git preservation checks were already green. Moving the snapshot between the test's SQL probes preserved the full assertion and excluded the probes' own connection checkpoint/removal effects. |
+| `devenv shell -- cargo fmt` | **2 runs**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **2 runs**, exit 0. |
+
+Final runs warning-free. `git diff --check` passed, as did unchanged dependency/
+toolchain and production sync/poll/refs/merge checks. This correction pass changes
+only cleanup source/tests, this ledger and comment `01M51G7Z00N4Q6S8V0X2Z4B6E0`;
+the existing 14-path Task 4 inventory remains uncommitted. No full gate, staging,
+commit, subagents or outward action. Native Windows execution remains unclaimed.
+**QUALITY2-P1 is implemented and targeted-verified, ready for the same quality
+reviewer's recheck; acceptance remains pending.** No reviewer approval or rerun
+is inferred. The approved never-discard/ignored rules already require this proof;
+no owner-policy/spec amendment is needed or introduced.
+
+## Task 4 Final Independent Rechecks — Local Gate Complete (2026-10-16)
+
+The controller conveyed the final review results for the full current
+uncommitted Task 4 change set:
+
+- **SPEC recheck PASSED**, including SPEC1-P2's complete physical registration
+  inventory and preservation correction.
+- **QUALITY recheck APPROVED**, both P1 findings resolved and **no findings
+  remaining**, including hidden index flags and recursive submodule safety.
+
+**Task 4 is reviewed complete at the local gate. Task 5 is next after the
+controller's checkpoint.** Exact review base and unchanged HEAD are
+`79463c53beb400d95a311e558e64caf8efd2beac` (`79463c5`). Reviews cover the full
+current uncommitted Task 4 source/tests/documentation change set, including all
+SPEC1-P2/QUALITY2-P1 corrections, not just the last correction. Controller owns
+explicit staging and the pending checkpoint commit. No new commit/range is implied.
+
+T4-1 remains **owner-approved**, with guarded Git-first tracking deletion, separate
+atomic SQL retirement/completion and honest split-state/uncertain-commit
+reconciliation. Historical blocker, owner approval, original review findings,
+RED/GREEN evidence and prior pending-recheck statuses remain preserved; this
+result supersedes the latter. No owner decision or implementation review finding
+remains open for Task 4.
+
+This coordination-only pass updates ledger, handoff, Task 4 plan summary and
+canonical comment `01M51G7Z00N4Q6S8V0X2Z4B6E0`. **No source/test changes, test
+reruns or commit.** Review results are controller-reported; no additional reviewer
+test execution is inferred. Prior evidence is the final **34 passing cleanup
+tests**, **67 state tests**, **10 refs tests**, inventory and focused poll/real-SSH
+regressions. Exact prior commands/counts remain the verification record.
+
+Full Task 8/local/native gates remain deferred. Task 5/6 still compose the real
+durable branch_deleted intent, owned generation/configuration fencing, completion
+and applicable reservation finish, plus F10/F11 lifecycle/uncertain-result tests
+in Tasks 5–7. This is Task 4 local-gate completion, not Cycle closure. No Task 5
+implementation, staging, commit, push, PR, CI, merge, closure or worktree cleanup
+was performed by this status worker; ticket remains open.
+
+Coordination verification: `git diff --check` passed. `git hash-object` checks of
+all eight pending source/test files before and after this pass matched exactly.
+`git status --short --untracked-files=all` retains exactly 14 intended Task 4
+paths, with no staged files. Only the four coordination documents/comment changed
+in this pass; HEAD remains the full review base above. No Rust command was run.

@@ -26,6 +26,7 @@ use time::OffsetDateTime;
 use crate::canonical;
 
 mod bridges;
+mod cleanup;
 mod comment_publication;
 mod coordination;
 pub use comment_publication::*;

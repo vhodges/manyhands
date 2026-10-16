@@ -68,6 +68,11 @@ On 2026-10-16 the owner approved T2-1's resulting Git mode/type digest amendment
 The amended encoding below is part of this approved contract; the historical
 quality blocker and its characterization remain in the execution ledger.
 
+On 2026-10-16 the owner approved T4-1's Git-first completion amendment. The
+guarded tracking deletion and atomic SQL finalization are separate durability
+boundaries with explicit split-state/retry semantics below; the historical
+cross-resource atomicity blocker and independent reviews remain in the ledger.
+
 ## Planning Evidence And Implementation Entry Gate
 
 The existing ticket branch and worktree were reused. A fresh `git fetch
@@ -141,8 +146,9 @@ Implementation requires all of the following:
   6. Delete the remote context branch, guarded.
   7. Remove the worktree.
   8. Delete the local branch.
-  9. In one final transaction: delete the tracking ref, retire the
-     publication history, and record completion.
+   9. After durable `branch_deleted` intent, guardedly delete the tracking ref
+      under the lease; then atomically retire history and record completion in SQL
+      (owner-approved T4-1 amendment below).
   10. Run an index-only refresh on every return after integration.
 - **A durable parent record, `document_promotions`.** It binds the child
   synchronization attempts and the completed steps, and reconciles with Git
@@ -300,8 +306,24 @@ Implementation requires all of the following:
 9. **Local cleanup**, under the lease, re-observing before each step:
    1. Remove the worktree, which must pass the pre-check again.
    2. Delete the local branch, guarded at the recorded OID.
-   3. In one final transaction: delete the tracking ref (guarded), retire the
-      publication history (R1), and record `complete`.
+   3. Persist `branch_deleted` before the tracking-ref effect. Under the lease,
+      recheck ownership/configuration and delete only the expected direct tracking
+      OID or accept verified true absence. Wrong/conflicting, symbolic or unreadable
+      refs stop before SQL changes. Then one SQL transaction deletes history,
+      inserts retirement, records `complete` and finishes the applicable reservation.
+
+      **T4-1, owner-approved 2026-10-16:** Git deletion and SQL commit are separate
+      durability boundaries. In the split interval, applicable existing history
+      remains (`observed_published` when present), no retirement exists, and the
+      pending record/applicable reservation remain held. Never fabricate history
+      for local-only/cache-loss cases. Rolled-back uncommitted SQL preserves SQL,
+      not an already-deleted ref. Uncertain commit results require reopening and
+      reconciling actual completion/ownership; committed completion and reservation
+      finish replay the stored outcome. After-integration uncertainty is `Ok`
+      cleanup pending `RecoveryRequired` plus refresh. Same-ID retry validates actual
+      state and finalizes SQL without repeating prior lifecycle work. Ref absence
+      or cache loss alone is not retirement proof. No new phase/table is required;
+      existing planned `branch_deleted` holds the durable intent.
 
    A change found at any step stops with the same pending categories. A
    partly removed worktree is `cleanup: pending(recovery_required)` and is
