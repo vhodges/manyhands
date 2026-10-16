@@ -1015,3 +1015,403 @@ were made. Prior exact RED/GREEN evidence remains the verification record.
 No commit was made; the controller owns the immediate checkpoint. No Task 3 or
 outward lifecycle action was performed. Historical blocked/pending-review
 sections above are preserved as checkpoint history, superseded by this result.
+
+## Task 3 Entry — BLOCKER T3-1: Confirmation Helper Requires A Sync Owner (2026-10-16)
+
+**Historical entry, superseded by the Task 3 internal ruling/resume below.**
+
+**Status: stopped before implementation; identity policy needs an explicit
+decision. Task 3 is not complete or review-ready as an implementation.** Fresh
+worker read this worktree's AGENTS, TDD and Cycle implementation skills, approved
+Cycle/design/plan, Task 0 characterizations and Task 2 interfaces/evidence. Initial
+status was clean on the exact ticket branch at
+`6d4ad1664462c42c24b4a820024d76d7c86ca8db`. Controller's completed preflight is
+reused; local `origin/main` remains
+`89d04f901636229392a311241f8e777f0a00962b`, and its ancestry check passed. No
+additional fetch/rebase, delegation or commit was performed.
+
+### Required Helper Versus Actual Source
+
+The Task 3 brief and approved plan require consuming `committing_identity`,
+including observation-bound confirmed identity, with only minimal shared-helper
+changes and no synchronization behavior change. Integration must also work
+without a remote. Task 5 storage is expressly outside this task; only immutable
+typed integration evidence/request inputs and a future persistence seam are
+authorized now.
+
+The existing helper is not a standalone identity selector:
+
+- `remote/sync.rs:3214-3220`: it requires a real `RemoteReservation` and a
+  `SynchronizeRemoteRequest`, besides the service/root/repository.
+- `:3221-3239`: complete effective Git identity wins; otherwise absence of a
+  confirmation returns IdentityRequired with the configuration digest. Empty/NUL
+  identity fields or a stale digest return ExternalChange.
+- `:3240-3273`: accepting a confirmation prepares a durable identity intent,
+  records the effect boundary, writes repository-local `user.name`/`user.email`,
+  and records the observed configuration digest. It does not merely use the
+  supplied signature for one commit.
+- `remote/reservation.rs:1734-1743,1896-1923`: these journal calls require an
+  actually owned remote operation. `owned` (`:218-238`) validates service scope,
+  repository, operation row, generation, owner epoch and active phase.
+- `remote/state.rs:4303-4328`: preparing the identity intent first calls
+  `synchronization_record`. At `:3153-3159`, that guard admits only
+  SynchronizePrimary/SynchronizeContext, explicitly excluding Promote. Widening
+  helper visibility or supplying a future promote reservation cannot fix this.
+
+Consequently the local-only confirmed-identity path cannot call the specified
+helper with just the authorized immutable Task 3 input. Reusing a completed
+context child's owner would also fail ownership checks, and no context child
+exists in local-only promotion. Creating a synthetic synchronization operation
+or bypassing its journal would change lifecycle/ownership behavior, not helper
+visibility. No such workaround was implemented.
+
+### Decision Needed — Proposed, Not Approved
+
+Recommended narrow amendment: extract the existing **read-only identity
+selection/confirmation validation** into a shared helper. Keep synchronization's
+current journaled repository-config effect unchanged around that selection.
+Explicitly authorize promotion to use the validated confirmed identity for its
+commit signature **without persisting Git identity config**. Preserve complete
+effective-identity precedence, exact configuration-digest comparison and
+empty/NUL rejection. This introduces no new promotion identity journal or
+synthetic sync owner.
+
+If promotion instead must persist identity configuration exactly as the existing
+helper does, its durable ownership/intent/recovery boundary must be specified
+and scheduled explicitly; the current Task 3 request-value seam does not provide
+it. The approved contract was not silently amended in either direction.
+
+### Verification, Self-Review And Return
+
+- Static call-chain evidence above establishes the dependency/side effects; no
+  runtime failure or failing integration test is claimed. No integration tests,
+  stubs, production behavior or helper visibility edits were authored before
+  resolving this policy boundary.
+- Required RED command `devenv shell -- cargo test --locked --lib
+  promotion::integrate`: **not run**; the module does not yet exist. No GREEN or
+  Rust verification is claimed. Tasks 0–2's recorded test evidence is unchanged.
+- Self-review distinguishes this confirmed helper incompatibility from an
+  approved identity-policy choice. Integration-base, digest, checkout and
+  reconciliation tests remain Task 3 obligations after the decision.
+- `git diff --check` and `git diff --exit-code -- src tests Cargo.toml
+  Cargo.lock devenv.nix devenv.lock` both exited 0. Status showed only this
+  ledger and the new canonical comment; HEAD remains the supplied Task 2 base.
+- Durable changes are this ledger and canonical ticket comment
+  `01M51B7Z00N4Q6S8V0X2Z4B6DV`. Return uncommitted for controller/owner review of
+  T3-1, not implementation spec/quality approval. Task 8/full/native gates remain
+  deferred; the ticket remains open.
+
+## Task 3 Resume — Internal Ruling And Primary Integration (2026-10-16)
+
+**Status: implementation and targeted verification complete; uncommitted and
+ready for controller-owned independent spec review, then quality review.** HEAD
+remains `6d4ad1664462c42c24b4a820024d76d7c86ca8db`. The exact ticket
+worktree/branch and completed controller preflight were retained. No subagents
+were used. The initial T3-1 ledger/comment are preserved as historical evidence,
+not the current decision or a remaining owner-approval gate.
+
+### T3-1 Superseding Internal Engineering Ruling
+
+The controller conveyed independent authority/source review: **T3-1 is helper
+composition, not an unsettled owner policy.** Git workflow RFC Identity
+(`:69-73`, reiterated `:362-363`) and MVP RFC Identity (`:483-488`) already require
+effective identity first and, when missing, explicit confirmation followed by
+repository-local config persistence before committing. The historical
+commit-signature-only proposal conflicts with these authorities and is
+**rejected/superseded**, not implemented. No owner amendment is needed.
+
+Source review also identified the already-approved journal-free atomic bridge
+(`bridges/identity.rs` original module contract `:10-47`, original implementation
+`:529-620`; F2 design `:3401-3503`). Its public setter's own lease, observation
+and stricter validation are not reusable as promotion policy. Extracting its
+lease-held atomic primitive and the synchronization helper's read-only selection
+is permitted by the approved shared-helper extraction rule.
+
+Implemented ruling:
+
+- Complete effective identity wins, ignoring supplied confirmation. Missing and
+  unconfirmed returns IdentityRequired without writing. Otherwise compare the
+  exact effective name/email configuration digest and apply the existing
+  empty/NUL rejection, without bridge-specific email/whitespace rules.
+- Check context/primary evidence, blockers, consent and remote base ancestry
+  before accepting any config write. AlreadyContained needs no identity.
+- Under the integration lease and Git config lock, freshly re-observe effective
+  identity/confirmation before editing and immediately before installation.
+  Install both local identity keys by one atomic rename; preserve initials and
+  unrelated settings. A foreign config lock is refused and never removed.
+- Config is its own atomic recovery evidence; no promotion identity journal,
+  record table or synthetic sync owner is introduced. Installed config stays
+  installed if a later integration step fails. Error means **primary** unchanged,
+  not identity-config rollback.
+- Synchronization retains its current confirmation intent/effect journal and
+  config writes unchanged around the extracted read-only selection.
+- Narrow design/Task 3 plan wording now describes this composition and the
+  immutable evidence/candidate boundary; historical recommendations remain in
+  this ledger and comment `01M51B7Z00N4Q6S8V0X2Z4B6DV` only.
+
+### Delivered Interfaces And Boundaries
+
+- New `promotion/integrate.rs`: `integrate(service, root, &IntegrationRequest,
+  Option<&ConfirmedCommitIdentity>) -> Result<Integrated, DocumentPromotionError>`.
+  `IntegrationRequest::from_preview` captures consent and post-sync observation;
+  the future runner can also reconstruct these internal typed values from its
+  record. This is a fresh-attempt primitive; an integrating replay reconciles
+  persisted evidence before deciding to prepare again.
+- `prepare_integration` takes exactly one repository lease, compares old local
+  primary and synchronized context, and calls Task 2's read-only observation
+  afresh under it. Remote primary/context names, frozen remote and OIDs are
+  checked; digest is recomputed. D2 (local primary ≤ stored tracking primary)
+  is enforced by observation; remote merge additionally requires base ≤ context
+  before object/config effects. Poll advance returns PrimaryAdvanced with no
+  object/ref/index/worktree writes. Integration conflicts require reconfirmation.
+- `PreparedIntegration` owns the lease and exposes immutable `IntegrationEvidence`
+  (base, item/context/primary branch, old local primary, integration kind). The
+  runner must persist **integrating before `write_commit`**. That method returns
+  a lease-owned `IntegrationCandidate` with a commit object but no ref effect
+  (F3). `apply` uses the existing safe/ref-locked `fast_forward` for one old-local-
+  primary → merge update; the returned outcome is F4's persistence seam. No
+  Task 5 storage, migrations or F3/F4 failure-point stubs were added.
+- Trees use context when base ≤ context, or the imported in-memory prepared
+  merge for local divergence. Exact commit subject is `Promote document <ULID>`,
+  author/committer use the resolved identity and parents are ordered [base,
+  context]. AlreadyContained returns the base and writes no commit/ref.
+- Ignored path/ancestor collisions are checked through an in-memory result tree
+  before importing objects or writing a commit. Final application still uses
+  existing safe checkout with ignored overwrites disabled. No sync algorithm
+  was rewritten.
+- `reconcile_integration(repository, base, &IntegrationContext) -> IntegrationState`
+  walks **first parents**, matching exact subject and exactly [base, context].
+  A merge at tip or behind later FF/sync commits returns Integrated; no match
+  with local primary ≤ base returns NotIntegrated, ignoring dangling objects.
+  Missing/uncertain/other history returns the **pending** RecoveryRequired state,
+  never an operation error. A fast-forward error is reconciled before returning;
+  an applied checkout without a successful ref update also returns pending
+  recovery, with no rollback. Deterministic hooks verify both post-effect cases.
+- `DocumentPromotionError` defines only current integration refusals plus
+  IdentityRequired/Repository; Debug/Display emit fixed categories (Repository
+  Debug shows only its kind). Remaining lifecycle variants/re-exports belong to
+  Task 6. Internal stage dead-code allowance is scoped to this as-yet-uncomposed
+  module and should disappear with its runner.
+- `LocalConfigEdit` extracts Git lock/private-copy/source-compare/atomic-install
+  ownership from the identity bridge. The bridge retains its own validation,
+  expected observation, idempotence and failure checkpoint. Config handles drop
+  before the private scratch directory (Windows-compatible ownership order).
+- Shared helpers retain repository-only visibility. The real-SSH source-included
+  target nests the library under `production`; absolute restricted paths from
+  Task 2 and the initial extraction failed to compile there. Equivalent
+  `pub(in super::super)` scope fixes those declarations in sync/state/identity
+  without widening their audience or changing behavior. `fast_forward` alone
+  additionally widens from remote-only to repository-only as required by Task 3.
+
+### Exact RED / GREEN And Regression Evidence
+
+All original 23 integration tests were written before production behavior.
+Declaration-only panic stubs enabled runnable RED, then were fully replaced.
+The privacy regression was added and observed RED before custom error formatting.
+The four later tests extend self-review coverage of post-effect reconciliation,
+D2 and config-lock re-observation; they did not require a behavior fix. All
+commands ran in the exact ticket worktree through Devenv. No full Task 8 gate ran.
+
+| Exact command | Actual runs/results, in execution order for that command |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::integrate` | **7 runs:** (1) compile RED, 45 missing-API/test-API diagnostics, one unused-import warning, no tests; (2) **0 passed / 23 failed / 827 filtered**, 22 stub failures and one collision-fixture PrimaryDirty setup error, one unused-import warning; (3) corrected runnable **RED: 0 passed / 23 failed / 827 filtered**, all at the missing behavior stubs, no warnings; (4) first implementation **23 passed / 1 failed / 827 filtered**, ignored-collision preservation detected one dangling commit; (5) **GREEN: 24 passed / 0 failed / 827 filtered** after the collision pre-check; (6) expanded **27 passed / 0 failed / 827 filtered** including post-effect hooks and D2; (7) final **28 passed / 0 failed / 827 filtered**, no warnings, 5.43 seconds, after config-lock concurrency coverage, evidence/checkpoint assertions and formatting. |
+| `devenv shell -- cargo test --locked --lib promotion::integrate::tests::integration_errors_redact` | **1 RED run: 0 passed / 1 failed / 850 filtered**; derived Repository error Debug exposed sentinel path/message. One transient unused Confirmed payload warning while extraction was not yet consumed; final promotion code consumes it. Fixed custom formatting, verified by final GREEN. |
+| `devenv shell -- cargo test --locked --lib promotion::integrate::tests::ignored_checkout_collision` | **1 diagnostic RED: 0 passed / 1 failed / 850 filtered**, narrowed file-image diagnostics showed exactly one new `.git/objects/...` commit; primary/ref/index/worktrees unchanged. |
+| `devenv shell -- cargo test --locked --lib promotion` | **1 GREEN run: 80 passed / 0 failed / 774 filtered**, no warnings, 16.84 seconds. All 53 approved observation/T2-1 tests plus the then-current 27 integration tests. The additional config-lock test is covered by the final 28-test integration run above. |
+| `devenv shell -- cargo test --locked --test mutation_bridges identity::` | **1 GREEN run: 42 passed / 0 failed / 87 filtered**, no warnings. Existing atomic/name-email/initials/idempotence/validation/lock/link/mode/privacy/boundary regressions unchanged. |
+| `devenv shell -- cargo test --locked --test mutation_bridges identity::placement::` | **1 final GREEN run: 5 passed / 0 failed / 124 filtered**, no warnings, after making config-before-directory drop order explicit. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery confirmed_identity_completes_a_divergent_primary_merge -- --exact` | **2 runs:** first compile failure, 19 restricted-visibility path diagnostics in the source-included library (including Task 2 declarations); equivalent relative repository scope fixed it. Final **1 SSH case passed**, no warnings, exercising the existing sync confirmation/config-persistence/journal path. |
+| `devenv shell -- cargo fmt` | **2 runs**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **2 runs**, exit 0. |
+
+Systematic debugging traced the initial collision fixture's PrimaryDirty result
+to overwriting `info/exclude` and thereby removing the fixture's worktree ignore;
+the fixture now appends its collision rule. The later dangling-object failure
+was separate: git2 0.20.4 `CheckoutBuilder::dry_run` selects CHECKOUT_NONE, while
+libgit2's ignored conflict action is skipped under NONE (`build.rs:350-353`,
+`checkout.c:500-513`). The final read-only ignored-path check avoids relying on
+that dry-run behavior. Preservation snapshots include all fixture Git object,
+ref, reflog, index, registration and working-file content hashes; no production
+algorithm/dependency workaround was used. Tests never use sleeps, developer
+keys or global config writes.
+
+### Self-Review And Controller Return
+
+Self-review checked every original Task 3 case against the tests: poll-style
+base advance writes no objects/ref and keeps full images; leased digest mismatch
+precedes identity persistence; remote parent order/tree/behind-local-primary,
+local generated-blob import and canonical validity; contained/no identity;
+missing/confirmed/stale/empty/NUL/effective-wins identity; atomic/no-half-write,
+unrelated settings/initials and foreign locks; changed primary/context; ignored
+collision; first-parent reachable/dangling/no-match/uncertain reconciliation;
+and post-effect pending outcomes. The seam test proves one held lease, no object
+before the future integrating checkpoint and a usable registry transaction after
+observation. The new config-race test covers both stale partial identity and a
+complete effective identity appearing under the config lock, with foreign bytes
+preserved. Debug redaction is explicit.
+
+No unresolved product-policy contradiction remains. Native Windows execution
+and the full Rust/CLI checks remain Task 8/later authorization gates; Linux
+targeted success is not native proof. Task 5 must wire durable integrating
+evidence before `write_commit`; Task 6 must map pending integration recovery to
+the approved partial `Ok` outcome, reconcile integrating replay before preparing
+again, and compose the rest of the lifecycle. These are the planned downstream
+obligations, not stubbed Task 3 behavior.
+
+Current canonical checkpoint comment: `01M51C7Z00N4Q6S8V0X2Z4B6DW`. All changes
+remain uncommitted for the controller's independent **spec then quality review**;
+the controller owns the authorized checkpoint commit. No push, PR, native CI,
+merge, closure, cleanup, dependency or global configuration change was performed.
+
+Final inventory checks: `git diff --check` exited 0; `git diff --exit-code --
+Cargo.toml Cargo.lock devenv.nix devenv.lock .github/workflows/build.yml` exited 0.
+Status contains the two new integration files, promotion module, identity bridge,
+sync/state helper changes, three plan/design/ledger documents and the historical
+plus current canonical comments (11 intended paths). HEAD is still the supplied
+Task 2 base. No implementation stub remains in `integrate.rs`.
+
+## Task 3 Quality Review Correction — Q3-1: Proposed Identity Include Context (2026-10-16)
+
+**Status: quality finding verified and fixed with targeted TDD; uncommitted for
+the same quality reviewer's recheck.** The controller conveyed **SPEC PASS** and
+one important quality finding. No independent quality approval is claimed by
+this implementer. Base remains `6d4ad1664462c42c24b4a820024d76d7c86ca8db` in the
+same exact ticket branch/worktree. All prior uncommitted Task 3 changes and
+historical evidence are retained.
+
+### Verification Of Finding
+
+The reviewer supplied a concrete include-resolution counterexample. Verified:
+`LocalConfigEdit` edits a copy at `.git/manyhands-identity-.../config`, so an
+ordinary relative include is resolved from the wrong directory there. The
+pre-install `select()` in promotion re-read the **original current config**,
+which is still missing identity; it did not establish what the **proposed**
+config would mean after installation. The public identity bridge's rejection
+of included/ambiguous identity meant its existing tests did not exercise this
+new promotion use.
+
+The retained regression uses original empty local name/email followed by
+`[include] path = identity.inc`; `.git/identity.inc` holds an empty user.email.
+With a valid confirmation the original implementation returned Merged, although
+the installed real include overrode the confirmed email. A second regression
+established the same problem for an active onbranch conditional include with a
+nested relative include. Both were observed failing before any repair.
+
+### Narrow Repair And Invariants
+
+- Added `LocalConfigEdit::would_persist_identity`, called by promotion under its
+  existing repository lease and config lock immediately before `install`.
+  Missing/confirmed selection and validation remain the same shared sync policy.
+- Keep the existing protected scratch directory and atomic installation. Moving
+  the edited file beside the original would fix ordinary relative paths alone:
+  standalone git2 Config parsing lacks repository context for conditional
+  includes (`config_file.c:721-728`). No scratch relocation, include-path rewrite,
+  external Git process, new dependency or new identity validation policy is used.
+- Snapshot libgit2's effective configuration in the **original repository
+  context**, and read its local backend's ordered root/included entries. Merge
+  the actual proposed root name/email fields/order with that native include
+  expansion. Every other proposed root field/directive must exactly match;
+  otherwise refuse the unprovable edit. Git evaluates the relative, nested,
+  onbranch and gitdir includes; the new code does not parse include conditions.
+- Account for unchanged higher-priority worktree/app backend identity values.
+  Accept only when the proposed effective name/email exactly equal the selected
+  confirmed values. A mismatch refuses before config replacement or tree/commit
+  creation, keeping config, primary and all fixture file images unchanged.
+  Includes that do not override the proposed identity still work: no blanket
+  rejection of includes or included identity was added.
+- Factor the existing source-byte comparison into `require_unchanged_source` so
+  proposal checking and final atomic installation both detect a noncooperating
+  writer. The public bridge still uses its original observation/validation and
+  installation path; it does not invoke the promotion-specific proposal check.
+
+### Exact RED / GREEN And Regression Evidence
+
+Three focused tests were added before the repair. Besides the supplied ordinary
+relative include, they cover active/inactive onbranch includes, an exact active
+gitdir condition, nested relative includes, and positive cases where include
+data is unrelated or overridden by the final local user section. Accepted cases
+read the actual installed effective identity through a fresh repository handle;
+refused cases compare the complete Git/worktree/config file image.
+
+| Exact command | Correction-pass runs/results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::integrate::tests::proposed_identity_` | **4 runs:** initial RED **0 passed / 3 failed / 855 filtered** (ordinary/conditional bugs reproduced; positive fixture also had an unintended empty earlier user section); corrected runnable RED **1 passed / 2 failed / 855 filtered**, both failures were erroneous Merged outcomes; first repair **2 passed / 1 failed / 855 filtered**, reaching a previously unexecuted gitdir-fixture activation assertion; after correcting the exact gitdir pattern, **GREEN: 3 passed / 0 failed / 855 filtered**, 1.09 seconds. No warnings. |
+| `devenv shell -- cargo test --locked --lib promotion::integrate` | **1 final GREEN: 31 passed / 0 failed / 827 filtered**, no warnings, 6.39 seconds. All previous 28 Task 3 tests plus the three quality regressions. |
+| `devenv shell -- cargo test --locked --test mutation_bridges identity::` | **1 GREEN: 42 passed / 0 failed / 87 filtered**, no warnings, 3.26 seconds. The shared source-compare factoring and public bridge's existing atomic/ambiguous/include/placement/privacy behavior are covered without running unrelated bridge tests. |
+| `devenv shell -- cargo fmt` | **1 correction-pass run**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 correction-pass run**, exit 0. |
+
+Systematic debugging separated both fixture issues from the production bug:
+libgit2 writes into the first existing user section, so the positive fixture now
+has exactly one user section at the intended side of the include. The gitdir
+fixture originally used a trailing slash, which means a directory-prefix match
+rather than the exact Git directory; the exact condition now omits that slash,
+and its active marker is asserted before attempting promotion. Neither required
+a production policy change. No full/local/native gate or unrelated SSH suite
+was rerun for this correction.
+
+### Self-Review And Return
+
+Checked ordered native include expansion against actual proposed root-entry
+placement, all non-identity root-field equality, nested include depth, active and
+inactive repository conditions, higher-backend priority, raw optional values
+(including valueless entries), preserved atomic/source-change checks and fixed
+redacted errors. Complete effective identity still bypasses confirmation/editing;
+missing identity still writes nothing; confirmed config from an accepted earlier
+step still follows the existing no-rollback rule. The new pre-install refusal
+adds no public policy or journal.
+
+This correction changes only `bridges/identity.rs`, `promotion/integrate.rs`,
+`promotion/integrate_tests.rs`, this ledger and canonical comment
+`01M51D7Z00N4Q6S8V0X2Z4B6DX`, on top of the prior uncommitted Task 3 work. Ready
+for the **same quality reviewer** to verify Q3-1 resolved. No commit, subagent,
+push, PR, CI, merge, closure, cleanup, dependency or global-config action was
+performed. Full Task 8/native checks remain deferred.
+
+Correction inventory checks: `git diff --check` exited 0, and `git diff
+--exit-code -- Cargo.toml Cargo.lock devenv.nix devenv.lock
+.github/workflows/build.yml` exited 0. HEAD is unchanged at the supplied Task 2
+base; the current uncommitted Task 3 inventory adds only the quality-response
+comment to the previous path list.
+
+## Task 3 Final Independent Reviews — Local Gate Complete (2026-10-16)
+
+The controller conveyed the final review results for the current uncommitted
+Task 3 change set, including the Q3-1 include-context repair:
+
+- **Spec review: PASS**, previously reported and retained.
+- **Same quality reviewer: APPROVED. Q3-1 resolved; no findings remain.**
+
+**Task 3 is reviewed complete at the local gate. Task 4 is next after the
+controller's checkpoint.** Exact review base and unchanged HEAD are
+`6d4ad1664462c42c24b4a820024d76d7c86ca8db` (`6d4ad16`). The review boundary is
+the full current uncommitted Task 3 source/documentation change set against that
+base, including all retained tests and the quality correction; no new commit or
+commit range is implied. The controller owns explicit staging and the checkpoint
+commit.
+
+T3-1 remains a **resolved internal engineering ruling**, with RFC-compliant
+atomic repository-local identity persistence before commit. There is no pending
+owner-policy question. Its historical commit-only suggestion is preserved but
+superseded. Q3-1's root-context include validation and regression evidence are
+retained unchanged. Previous blocked/review-ready entries are historical states,
+superseded by these final review results.
+
+This coordination-only pass updates the handoff to Task 3 complete/Task 4 next,
+adds the plan's Task 3 completion summary, records this ledger status and adds
+canonical comment `01M51E7Z00N4Q6S8V0X2Z4B6DY`. **No source changes or Rust test
+reruns** were made. Verification remains the recorded final 31 passing integration
+tests, three passing focused include regressions, 42 passing shared bridge
+identity regressions and prior observation/synchronization evidence. Review
+approvals are controller-reported; no additional reviewer test execution is
+inferred.
+
+The full Task 8/local/native gates and later cleanup/storage/runner work remain
+due. This is Task 3 completion, not completion or closure of the Cycle. No commit,
+Task 4 implementation or outward lifecycle action was performed by this status
+worker; the ticket stays open.
+
+Coordination verification: `git diff --check` exited 0. `git status --short
+--untracked-files=all` lists 14 intended Task 3 paths (six source files, four
+planning documents and four canonical comments) for the controller's explicit
+staging. No files were staged and HEAD remains the exact review base above.

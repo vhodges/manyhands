@@ -88,7 +88,8 @@ stops for review.
 | `src/repository/promotion/record.rs`, `record_tests.rs` (new) | `document_promotions` schema, migration, steps, reconciliation table |
 | `src/repository/promotion/run.rs`, `run_tests.rs` (new) | Lifecycle orchestration, children, cancellation, refresh |
 | `src/repository/cleanup.rs`, `cleanup_tests.rs` (new) | Generic pre-check (clean, ignored, locked), worktree removal, branch deletion, completion transaction pieces (reused by Cycle 10) |
-| `src/repository/remote/sync.rs`, `refs.rs` | Visibility of `prepare_clean_merge`, `import_prepared_tree`, `committing_identity`, `fast_forward`, `materialized_target`, `require_clean_target`, `canonical_tree_sources`; retired-item first-publication rule in the eligibility check |
+| `src/repository/remote/sync.rs`, `refs.rs` | Repository-scoped merge/observation/fast-forward helpers; extract read-only selection from `committing_identity`, preserving its owned journal; retired-item first-publication rule in the eligibility check |
+| `src/repository/bridges/identity.rs` | Extract the lease-held atomic local-config edit primitive for promotion; retain the existing public identity bridge's policy and behavior |
 | `src/repository/remote/state.rs`, `reservation.rs` | `retired_contexts` table and migration; `publication_evidence_for` retired rule; batch deletes a retirement on `observed_published`; history-row delete helper; `promote` reservation finish/restart rules; read text at `:2898`/`:2937` |
 | `src/repository/transport/remote.rs`, `callbacks.rs` | `SshDirection::Delete` mapping, `delete_exact`, `push_negotiation` guard |
 | `src/repository/recovery.rs`, `src/repository.rs`, `src/repository/discovery.rs` | ID cross-check, `FailurePoint` variants, migration call, table inventory, re-exports |
@@ -211,9 +212,9 @@ reviewer approved T2-1 resolved with no critical/important/minor findings; the
 same spec reviewer rechecked the amended code/docs and passed, with context-path
 and executable-document fixes retained. The recorded targeted selector passes
 all 53 tests; no tests were rerun for this status update. Historical task
-checklists/evidence remain below and in the execution ledger. The controller's
-checkpoint commit is pending; Task 3 is next. Full Task 8/native gates remain
-deferred.
+checklists/evidence remain below and in the execution ledger. The controller
+committed this checkpoint as `6d4ad16`; Task 3 has since completed both reviews
+as recorded below, and Task 4 is next. Full Task 8/native gates remain deferred.
 
 **Files:** new `src/repository/promotion/{mod.rs, observe.rs,
 observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
@@ -298,14 +299,43 @@ observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
 
 ## Task 3: Primary Integration
 
+**Completion summary — 2026-10-16:** reviewed complete at the local gate. Prior
+spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
+with no findings. The review boundary is the full current **uncommitted Task 3
+change set against `6d4ad1664462c42c24b4a820024d76d7c86ca8db`**, including the
+proposed-identity/include-context correction. T3-1 is the resolved internal
+engineering ruling below, with no pending owner decision; historical suggestions
+remain superseded in the ledger. Final recorded targeted evidence is 31 passing
+integration tests, three focused include regressions and 42 passing shared bridge
+identity regressions, with previous observation/sync evidence retained. No source
+change or Rust test rerun was made for this status update. Controller checkpoint
+pending; **Task 4 is next**. Historical task checklists/evidence remain below;
+the full Task 8/native gates remain deferred.
+
 **Files:** new `src/repository/promotion/{integrate.rs, integrate_tests.rs}`.
 
-**Consumes:** Task 2 observation, `import_prepared_tree`,
-`committing_identity`, `fast_forward`, the repository lease.
+**Consumes:** Task 2 observation, `import_prepared_tree`, shared read-only
+selection extracted from `committing_identity`, the lease-held atomic local-config
+primitive, `fast_forward`, the repository lease.
 **Produces:** `integrate(service, root, record, identity) ->
 Result<Integrated, DocumentPromotionError>`, which recomputes the observation
 and digest under the lease, and `reconcile_integration(repository, base,
 context) -> IntegrationState`, which searches for a reachable merge.
+
+**T3-1 internal engineering ruling:** extract read-only committing-identity
+selection/digest/confirmation validation from the sync-owner journal. Preserve
+existing synchronization journaling and behavior. Promotion persists a validated
+confirmed name/email atomically to repository-local Git config **before commit**,
+reusing the identity bridge's lease-held atomic primitive without recursively
+calling the public setter or importing its different validation/observation.
+Recheck effective identity and exact confirmation under the integration lease
+and config lock before install. Complete effective identity wins; AlreadyContained
+needs none. Base/blocker/digest refusals precede accepted config writes. Preserve
+unrelated settings/initials and foreign locks; never roll back installed config
+after a later integration refusal. This is already settled RFC policy, not an
+owner-policy amendment. Immutable request/evidence and preparation/candidate
+stages provide Task 5's future integrating-before-ref boundary; do not build its
+storage here.
 
 - [ ] Failing tests:
   - **Integration base rule (review finding 1).** With a remote, the context
@@ -323,8 +353,13 @@ context) -> IntegrationState`, which searches for a reachable merge.
   - Without a remote, divergent: the prepared tree, and the document valid on
     the primary afterwards.
   - Contained: no commit, and the primary unchanged.
-  - Identity missing → `IdentityRequired` with nothing written. A confirmed
-    identity is used.
+   - Identity missing → `IdentityRequired` with nothing written. A confirmed
+     identity is used.
+     Include stale/empty/NUL confirmation refusals, complete-effective precedence,
+     atomic pre-commit local persistence, unrelated settings, no half-write and
+     foreign config-lock preservation. Reuse targeted existing bridge identity
+     regressions for the extracted primitive and a synchronization identity
+     regression for the unchanged journaled caller.
   - The primary changed between the observation and the lease →
     `ExternalChange`, nothing moved.
   - An ignored-file collision in the safe checkout → refused, nothing moved.
@@ -784,5 +819,8 @@ Each task starts red, names its files and commands, and ends with a commit and
 a ticket comment. The seven owner decisions are confined to marked steps, so a
 different answer changes a known set of tests. Task 0's real-path
 characterizations and targeted baseline have been executed and recorded in
-the execution ledger, including the owner-approved T0-1 amendment. Tasks 1–8
-remain planned; their implementation and verification have not been run.
+the execution ledger, including the owner-approved T0-1 amendment. Tasks 1–3
+have since been implemented, targeted-verified and independently reviewed, as
+recorded in their checkpoint evidence; Task 3 remains uncommitted for the
+controller. Tasks 4–8 remain planned; their implementation and verification have
+not been run.

@@ -502,6 +502,162 @@ impl Drop for ConfigLock {
     }
 }
 
+/// A lease-held edit of the repository-local config. The caller owns identity
+/// policy; this primitive owns only Git's lock, the private copy, source compare
+/// and single atomic installation. Dropping it installs nothing.
+pub(in super::super) struct LocalConfigEdit {
+    lock: ConfigLock,
+    source: Vec<u8>,
+    config: Config,
+    scratch: PathBuf,
+    // Drop the scratch config handle before removing its directory (Windows).
+    _private: tempfile::TempDir,
+}
+
+impl LocalConfigEdit {
+    /// The repository lease must already be held. This never acquires it again.
+    pub(in super::super) fn begin(
+        repository: &Repository,
+        root: &Path,
+    ) -> Result<Self, RepositoryError> {
+        let io = |error| RepositoryError::io(OPERATION, Some(root.to_owned()), error);
+        let git = |error| RepositoryError::git(OPERATION, Some(root.to_owned()), error);
+        let path = config_file(repository.commondir(), root)?;
+        let lock = ConfigLock::take(&path, root)?;
+        let source = bytes_or_none(&path).map_err(io)?;
+        let private = private_directory(repository.commondir()).map_err(io)?;
+        let scratch = private.path().join("config");
+        std::fs::write(&scratch, &source).map_err(io)?;
+        let config = Config::open(&scratch).map_err(git)?;
+        Ok(Self {
+            lock,
+            source,
+            config,
+            scratch,
+            _private: private,
+        })
+    }
+
+    pub(in super::super) fn config(&mut self) -> &mut Config {
+        &mut self.config
+    }
+
+    fn require_unchanged_source(&self) -> Result<(), RepositoryError> {
+        let io = |error| RepositoryError::io(OPERATION, Some(self.lock.root.clone()), error);
+        if bytes_or_none(&self.lock.config).map_err(io)? != self.source {
+            return Err(RepositoryError::new(
+                OPERATION,
+                Some(self.lock.root.clone()),
+                RepositoryErrorKind::ExternalChange,
+                "the repository's local configuration changed while locked",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Whether the edited name/email would actually be effective after install.
+    /// Only those two root-file fields may change. Replay their proposed order
+    /// with libgit2's included entries from the ORIGINAL repository context:
+    /// relative paths and conditional/nested includes are evaluated by Git, not
+    /// relative to our private scratch directory. Other root fields/directives
+    /// must match exactly; an unprovable edit is refused, never approximated.
+    pub(in super::super) fn would_persist_identity(
+        &self,
+        repository: &Repository,
+        name: &str,
+        email: &str,
+    ) -> Result<bool, RepositoryError> {
+        use std::collections::VecDeque;
+        type Field = (Vec<u8>, Option<Vec<u8>>);
+        fn slot(name: &[u8]) -> Option<usize> {
+            match name {
+                b"user.name" => Some(0),
+                b"user.email" => Some(1),
+                _ => None,
+            }
+        }
+        fn value(entry: &git2::ConfigEntry<'_>) -> Option<Vec<u8>> {
+            entry.has_value().then(|| entry.value_bytes().to_vec())
+        }
+        fn fields(config: &Config) -> Result<VecDeque<(Field, u32)>, git2::Error> {
+            let mut fields = VecDeque::new();
+            let mut entries = config.entries(None)?;
+            while let Some(entry) = entries.next() {
+                let entry = entry?;
+                fields.push_back((
+                    (entry.name_bytes().to_vec(), value(&entry)),
+                    entry.include_depth(),
+                ));
+            }
+            Ok(fields)
+        }
+        self.require_unchanged_source()?;
+        let git = |error| RepositoryError::git(OPERATION, Some(self.lock.root.clone()), error);
+        let mut actual = repository.config().map_err(git)?;
+        let actual = actual.snapshot().map_err(git)?;
+        let mut original =
+            fields(&actual.open_level(ConfigLevel::Local).map_err(git)?).map_err(git)?;
+        let mut result = [None, None];
+        for (proposed, depth) in fields(&self.config).map_err(git)? {
+            if depth != 0 {
+                continue;
+            }
+            // Root identity fields can be replaced, inserted or repositioned by
+            // Git's writer. Everything else (especially include order) cannot.
+            while original
+                .front()
+                .is_some_and(|((name, _), depth)| *depth == 0 && slot(name).is_some())
+            {
+                original.pop_front();
+            }
+            if let Some(index) = slot(&proposed.0) {
+                result[index] = proposed.1;
+                continue;
+            }
+            if original.pop_front() != Some((proposed, 0)) {
+                return Ok(false);
+            }
+            while original.front().is_some_and(|(_, depth)| *depth > 0) {
+                let ((name, value), _) = original.pop_front().expect("observed included entry");
+                if let Some(index) = slot(&name) {
+                    result[index] = value;
+                }
+            }
+        }
+        if original
+            .iter()
+            .any(|((name, _), depth)| *depth != 0 || slot(name).is_none())
+        {
+            return Ok(false);
+        }
+        // A worktree/app backend can outrank local config. Its unchanged
+        // effective values must also agree; lower-priority global values cannot
+        // override the two explicitly written local fields.
+        let mut priority = [ConfigLevel::Local as i32; 2];
+        let mut entries = actual.entries(None).map_err(git)?;
+        while let Some(entry) = entries.next() {
+            let entry = entry.map_err(git)?;
+            if let Some(index) = slot(entry.name_bytes())
+                && (entry.level() as i32) > ConfigLevel::Local as i32
+                && (entry.level() as i32) >= priority[index]
+            {
+                result[index] = value(&entry);
+                priority[index] = entry.level() as i32;
+            }
+        }
+        Ok(result[0].as_deref() == Some(name.as_bytes())
+            && result[1].as_deref() == Some(email.as_bytes()))
+    }
+
+    /// A noncooperating writer is detected before the atomic replacement.
+    pub(in super::super) fn install(self) -> Result<(), RepositoryError> {
+        let io = |error| RepositoryError::io(OPERATION, Some(self.lock.root.clone()), error);
+        let edited = std::fs::read(&self.scratch).map_err(io)?;
+        self.require_unchanged_source()?;
+        self.lock.replace(&edited)
+    }
+}
+
 impl RepositoryService {
     /// Has `hook` run once in the next `set_local_identity` on this
     /// service that writes, while it holds the lock on the repository's
@@ -515,7 +671,10 @@ impl RepositoryService {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
     }
 
-    fn run_identity_lock_hook(&self) {
+    pub(in super::super) fn identity_name_checkpoint(
+        &self,
+        root: &Path,
+    ) -> Result<(), RepositoryError> {
         let hook = self
             .identity_lock_hook
             .lock()
@@ -524,6 +683,7 @@ impl RepositoryService {
         if let Some(hook) = hook {
             hook();
         }
+        self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, root)
     }
 
     /// Writes a name and an email, and optionally initials, to the local
@@ -567,17 +727,14 @@ impl RepositoryService {
                 "the repository's local identity is not the one that was observed",
             )
         };
-        let io = |error| RepositoryError::io(OPERATION, Some(root.clone()), error);
-        let directory = repository.commondir();
-        let path = config_file(directory, &root)?;
-        let lock = ConfigLock::take(&path, &root)?;
+        let mut edit = LocalConfigEdit::begin(&repository, &root)?;
         // No program that keeps to the lock changes the file from here
         // on. What it holds now is what is edited: a change to any other
         // key that landed before the lock is kept.
-        let source = bytes_or_none(&path).map_err(io)?;
         // The file itself is asked what it holds and whether it says
         // each key once: what it includes is found from where it is.
-        let locked = LocalIdentity::said_once(&Config::open(&path).map_err(git)?, &root)?;
+        let locked =
+            LocalIdentity::said_once(&Config::open(&edit.lock.config).map_err(git)?, &root)?;
         if identity.held_by(&locked) {
             return Ok(SetLocalIdentityOutcome::Unchanged(locked));
         }
@@ -586,22 +743,12 @@ impl RepositoryService {
         if expected.is_some_and(|expected| expected != locked) {
             return Err(changed());
         }
-        // Git sets the keys in a copy, in a directory of this call's own
-        // that only this user can enter: the copy holds everything the
-        // file does, and Git gives it the process's default mode. The
-        // directory is in the Git directory, and goes with the copy on
-        // every way out of here.
-        let private = private_directory(directory).map_err(io)?;
-        let scratch = private.path().join("config");
-        std::fs::write(&scratch, &source).map_err(io)?;
-        let mut config = Config::open(&scratch).map_err(git)?;
-        identity.write(&mut config, &locked, || {
-            self.run_identity_lock_hook();
-            self.check_failure(FailurePoint::AfterLocalIdentityName, OPERATION, &root)
+        identity.write(edit.config(), &locked, || {
+            self.identity_name_checkpoint(&root)
         })?;
         // What Git gives back of what it was given, which is what the
         // repository will hold.
-        let written = LocalIdentity::of(&Config::open(&scratch).map_err(git)?).map_err(git)?;
+        let written = LocalIdentity::of(&Config::open(&edit.scratch).map_err(git)?).map_err(git)?;
         if written != identity.written_over(&locked) {
             return Err(RepositoryError::new(
                 OPERATION,
@@ -610,13 +757,7 @@ impl RepositoryService {
                 "the repository's Git configuration does not give the identity back as given",
             ));
         }
-        let edited = std::fs::read(&scratch).map_err(io)?;
-        // Immediately before the rename: a program that does not keep to
-        // the lock has not written the file meanwhile.
-        if bytes_or_none(&path).map_err(io)? != source {
-            return Err(changed());
-        }
-        lock.replace(&edited)?;
+        edit.install()?;
         Ok(SetLocalIdentityOutcome::Changed(written))
     }
 }

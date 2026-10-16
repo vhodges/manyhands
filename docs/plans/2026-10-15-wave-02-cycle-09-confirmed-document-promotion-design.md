@@ -445,12 +445,36 @@ recomputed.
 - **Tree.** The tree is the context tree, or, without a remote, the imported
   prepared merge tree. A conflict at this point is `ReconfirmationRequired`.
 - **Identity.** `committing_identity` supplies the signature. A missing
-  identity returns `IdentityRequired` before anything is written.
+  identity returns `IdentityRequired` before anything is written. Extract its
+  read-only effective-identity/configuration-digest/confirmation selection for
+  reuse, leaving synchronization's owned identity journal unchanged. A complete
+  effective identity wins even when a confirmation is supplied. Otherwise an
+  exact configuration-bound confirmation, with the same empty/NUL validation,
+  is required. Persist both confirmed values to **local Git configuration before
+  committing**, as required by Git RFC Identity and MVP RFC Identity, SSH, and
+  Secret Handling. Reuse the bridge's lease-held atomic config primitive, not
+  its public setter, observation or stricter validation. Re-observe identity and
+  confirmation under the integration lease and Git config lock before install;
+  preserve unrelated keys and initials. The config replacement is one atomic
+  rename with no promotion identity journal. A foreign lock is preserved and
+  refused. An installed confirmed config remains installed if a later merge/ref
+  step fails: the error invariant concerns the primary, not config rollback.
+  `AlreadyContained` requires no identity. **T3-1 internal engineering ruling:**
+  this composes existing approved mechanisms and RFC policy; it needs no owner
+  policy amendment. The historical commit-only suggestion in the ledger is
+  superseded and must not be implemented.
 - **Ref update.** One guarded ref update moves the local primary from its old
   value to the merge. This is a fast-forward because the local primary ≤
   base ≤ merge.
 - **Already contained.** `AlreadyContained` writes no commit and records the
   base.
+
+Task 3 exposes immutable integration request/evidence values and lease-owned
+preparation/candidate stages. Task 5 supplies storage; the future runner persists
+`integrating` evidence before commit/ref application and uses the candidate seam
+for F3 and the returned outcome for F4. No Task 5 storage or failure-point stub is
+needed in Task 3. Integration uncertainty is a pending category. An error after
+a possibly effective guarded update is reconciled against Git before returning.
 
 **Reconciliation of `integrating`.** A merge counts as present when a commit
 reachable from the local primary has subject `Promote document <ULID>` and

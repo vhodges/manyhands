@@ -1,4 +1,4 @@
-//! Read-only consent evidence for managed-document promotion.
+//! Consent evidence and guarded primary integration for managed documents.
 use super::{RepositoryError, RepositoryService};
 use crate::canonical::ItemId;
 use git2::Oid;
@@ -7,7 +7,55 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
+pub(super) mod integrate;
 pub(super) mod observe;
+
+/// A refusal before promotion has changed the primary. Integration uncertainty
+/// is carried by the internal pending state, never by this error.
+pub enum DocumentPromotionError {
+    Repository(RepositoryError),
+    Blocked(Vec<PromotionBlocker>),
+    ExternalChange,
+    ReconfirmationRequired,
+    PrimaryAdvanced,
+    IdentityRequired {
+        expected_configuration: super::ExpectedConfiguration,
+    },
+}
+
+impl fmt::Debug for DocumentPromotionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Repository(error) => f.debug_tuple("Repository").field(&error.kind).finish(),
+            Self::Blocked(blockers) => f.debug_tuple("Blocked").field(blockers).finish(),
+            Self::ExternalChange => f.write_str("ExternalChange"),
+            Self::ReconfirmationRequired => f.write_str("ReconfirmationRequired"),
+            Self::PrimaryAdvanced => f.write_str("PrimaryAdvanced"),
+            Self::IdentityRequired { .. } => f.write_str("IdentityRequired"),
+        }
+    }
+}
+
+impl fmt::Display for DocumentPromotionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Repository(_) => "promotion repository unavailable",
+            Self::Blocked(_) => "promotion blocked",
+            Self::ExternalChange => "promotion state changed",
+            Self::ReconfirmationRequired => "promotion reconfirmation required",
+            Self::PrimaryAdvanced => "promotion primary advanced",
+            Self::IdentityRequired { .. } => "promotion commit identity required",
+        })
+    }
+}
+impl std::error::Error for DocumentPromotionError {}
+
+impl From<RepositoryError> for DocumentPromotionError {
+    fn from(error: RepositoryError) -> Self {
+        Self::Repository(error)
+    }
+}
 
 #[derive(Clone)]
 pub struct PreviewDocumentPromotionRequest {

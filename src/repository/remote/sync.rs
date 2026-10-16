@@ -497,7 +497,7 @@ fn local_target(
 
 /// Identity validation is also needed before inspecting an owned unfinished
 /// merge. It deliberately makes no claim about cleanliness or effect proof.
-pub(in crate::repository) fn materialized_target(
+pub(in super::super) fn materialized_target(
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
@@ -551,7 +551,7 @@ pub(in crate::repository) fn materialized_target(
     Ok(linked)
 }
 
-pub(in crate::repository) fn require_clean_target(
+pub(in super::super) fn require_clean_target(
     linked: &git2::Repository,
     target: &SynchronizationTarget,
 ) -> Result<(), SynchronizationError> {
@@ -667,19 +667,19 @@ struct PreparedMergeEntry {
     generated: Option<(git2::ObjectType, Vec<u8>)>,
 }
 
-pub(in crate::repository) struct PreparedMerge {
+pub(in super::super) struct PreparedMerge {
     entries: Vec<PreparedMergeEntry>,
 }
 
 /// Ephemeral ODB-only source evidence. Shape and bytes are retained even when
 /// decoding/parsing fails; neither failure can hide a changed canonical path.
-pub(in crate::repository) struct CanonicalTreeSnapshot {
-    pub(in crate::repository) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-    pub(in crate::repository) entries:
+pub(in super::super) struct CanonicalTreeSnapshot {
+    pub(in super::super) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+    pub(in super::super) entries:
         std::collections::BTreeMap<Vec<u8>, (git2::Oid, i32, Option<git2::ObjectType>)>,
 }
 
-pub(in crate::repository) enum MergePreparation {
+pub(in super::super) enum MergePreparation {
     Clean(PreparedMerge),
     Conflict,
 }
@@ -699,7 +699,7 @@ fn index_digest(tree: git2::Oid) -> [u8; 32] {
 /// with a high-priority memory ODB, so preparation never writes the repository.
 /// The result holds the stage-0 entries; only the bytes of objects the merge
 /// itself created are retained, to be imported and verified while applying.
-pub(in crate::repository) fn prepare_clean_merge(
+pub(in super::super) fn prepare_clean_merge(
     path: &Path,
     local: git2::Oid,
     incoming: git2::Oid,
@@ -755,7 +755,7 @@ pub(in crate::repository) fn prepare_clean_merge(
 
 /// Import the objects the merge created and write its tree. An entry that was
 /// already stored is not rewritten; writing the tree fails if it has vanished.
-pub(in crate::repository) fn import_prepared_tree(
+pub(in super::super) fn import_prepared_tree(
     repository: &git2::Repository,
     prepared: &PreparedMerge,
 ) -> Result<git2::Oid, SynchronizationError> {
@@ -3211,19 +3211,25 @@ fn effective_identity(
     })
 }
 
-fn committing_identity(
-    service: &RepositoryService,
-    root: &Path,
-    owner: &RemoteReservation,
+pub(in super::super) enum CommittingIdentity {
+    Effective(CommitIdentity),
+    Confirmed(CommitIdentity),
+}
+
+/// Shared read-only selection. Persistence belongs to the committing caller:
+/// synchronization retains its existing owned journal; promotion uses an atomic
+/// local-config edit under its integration lease and Git's config lock.
+pub(in super::super) fn select_committing_identity(
     repository: &git2::Repository,
-    request: &SynchronizeRemoteRequest,
-) -> Result<CommitIdentity, SynchronizationError> {
+    confirmation: Option<&ConfirmedCommitIdentity>,
+    target: &SynchronizationTarget,
+) -> Result<CommittingIdentity, SynchronizationError> {
     if let Some(identity) = effective_identity(repository)? {
-        return Ok(identity);
+        return Ok(CommittingIdentity::Effective(identity));
     }
-    let Some(confirmation) = request.confirmed_identity.as_ref() else {
+    let Some(confirmation) = confirmation else {
         return Err(SynchronizationError::IdentityRequired {
-            target: request.target.clone(),
+            target: target.clone(),
             expected_configuration: merge::ExpectedConfiguration(configuration_identity_digest(
                 repository,
             )?),
@@ -3237,6 +3243,28 @@ fn committing_identity(
     {
         return Err(SynchronizationError::ExternalChange);
     }
+    Ok(CommittingIdentity::Confirmed(confirmation.identity.clone()))
+}
+
+fn committing_identity(
+    service: &RepositoryService,
+    root: &Path,
+    owner: &RemoteReservation,
+    repository: &git2::Repository,
+    request: &SynchronizeRemoteRequest,
+) -> Result<CommitIdentity, SynchronizationError> {
+    match select_committing_identity(
+        repository,
+        request.confirmed_identity.as_ref(),
+        &request.target,
+    )? {
+        CommittingIdentity::Effective(identity) => return Ok(identity),
+        CommittingIdentity::Confirmed(_) => {}
+    }
+    let confirmation = request
+        .confirmed_identity
+        .as_ref()
+        .expect("validated confirmation");
     let mut input = blake3::Hasher::new();
     input.update(confirmation.confirmation_id.to_string().as_bytes());
     input.update(confirmation.identity.name.as_bytes());
@@ -4558,7 +4586,7 @@ impl RepositoryService {
         ))
     }
 
-    pub(in crate::repository) fn canonical_tree_sources(
+    pub(in super::super) fn canonical_tree_sources(
         repository: &git2::Repository,
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
@@ -7329,7 +7357,7 @@ fn authority_outcome(
         },
     }
 }
-pub(super) fn fast_forward(
+pub(in super::super) fn fast_forward(
     repository: &git2::Repository,
     branch: &str,
     old: git2::Oid,

@@ -4256,7 +4256,7 @@ fn audit_merge_evidence(
     Ok(())
 }
 
-pub(in crate::repository) fn has_pending_conflict(
+pub(in super::super) fn has_pending_conflict(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<bool, RepositoryError> {

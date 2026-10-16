@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 2 reviewed complete at local gate; Task 3 next (2026-10-16)
+## Current: Task 3 reviewed complete at local gate; Task 4 next (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -18,17 +18,43 @@ The remaining Task 0 characterizations are recorded in the ledger, including
 the full replay/restart matrix, merge-tree equivalence and fresh edit context.
 Task 0 passed independent spec and quality review and is committed as `25514a3`.
 Task 1 guarded remote context deletion passed both reviews and is committed as
-`3d47027`, the current HEAD. Task 2 observation/preview is uncommitted. Its spec
-review passed after the context-path and executable-document corrections; its
-48 retained tests remain, with five more T2-1 regressions added. The owner approved
-the T2-1 encoding amendment ("yes" to the controller's recommendation); it is now
-implemented, and **53 targeted tests pass**. Both reviews now PASS: the same
-quality reviewer approved T2-1 resolved with no critical/important/minor findings;
-the same spec reviewer rechecked the amended code/docs and confirmed the prior
-spec fixes remain intact. **Task 2 is complete at the local gate.** The controller
-owns the pending checkpoint commit; Task 3 is next after that checkpoint.
+`3d47027`. Task 2 observation/preview, including its spec corrections and approved
+T2-1 mode/type amendment, passed both final reviews and is committed as
+`6d4ad1664462c42c24b4a820024d76d7c86ca8db`, the current HEAD.
 
-### T2-1: owner-approved amendment implemented and reviewed resolved
+**Task 3 primary integration is reviewed complete at the local gate.** Its prior
+spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
+with no findings. The review boundary is the current uncommitted Task 3 change
+set, including the include-context correction, against base `6d4ad16` (full SHA
+above). The controller owns the pending checkpoint commit; **Task 4 is next**.
+This status update changes no source and reruns no Rust tests.
+
+### Task 3: reviewed integration and identity composition
+
+- Delivered leased re-observation/digest/base guards, exact merge subject/tree/
+  parent order, one guarded primary update, contained handling and first-parent
+  reconciliation with pending recovery after uncertain effects.
+- Immutable request/evidence and lease-owned preparation/candidate stages are
+  the later storage/runner boundary. Task 5 persists integrating evidence before
+  `write_commit`; Task 6 composes the lifecycle and maps pending recovery.
+- **T3-1 is resolved as an internal engineering ruling, not a pending owner
+  decision.** Existing RFC policy requires atomic local identity persistence
+  before commit. The historical commit-only suggestion is superseded. Shared
+  selection retains sync validation/journaling; promotion uses the bridge's
+  lease-held atomic primitive without its differing public-setter policy.
+- **Q3-1 is reviewed resolved.** Before installation, proposed identity is checked
+  against native include expansion in the original repository context, including
+  relative/nested/conditional includes. Preserve the approved correction.
+- Reuse recorded evidence: final integration **31 passed / 0 failed**, focused
+  include regressions **3 passed / 0 failed**, shared bridge identity **42 passed /
+  0 failed**. The earlier promotion selector passed all 53 Task 2 observation
+  tests plus then-current integration tests, and the existing sync identity SSH
+  regression passed. Exact commands/intermediate results are in the ledger;
+  these are prior executions, not reruns or inferred reviewer test results.
+- Final review status is recorded in the ledger and comment
+  `01M51E7Z00N4Q6S8V0X2Z4B6DY`. Full Task 8/native gates remain deferred.
+
+### Retained Task 2 history: T2-1 approved, implemented and reviewed resolved
 
 The original approved digest encoded changed path/category/new blob OID but not resulting
 Git mode/type. With a remote, moving context OIDs are deliberately excluded.
@@ -74,11 +100,11 @@ This latest coordination-only update changed no source and reran no tests.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
-| Current HEAD | `3d470272cbb78cbe614340dbdef56746bfdb85a5`: independently reviewed Task 1 guarded delete. |
+| Current HEAD / Task 3 review base | `6d4ad1664462c42c24b4a820024d76d7c86ca8db`: independently reviewed Task 2 observation/preview. Task 3 is reviewed as the current uncommitted change set against this exact base. |
 | Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Checkpoints | Task 0 is committed as `25514a3`; Task 1 is committed as `3d47027`. Task 2 implementation/spec corrections and approved T2-1 amendment passed both final reviews and are complete at the local gate, with 53 tests GREEN. Task 2 remains uncommitted for the controller's immediate checkpoint. Task 3 next; preserve all WIP. |
-| Ongoing-task preflight | Controller fetched `origin main`, still `89d04f901636229392a311241f8e777f0a00962b`, verified ancestry of current HEAD and expected WIP. No dirty rebase/additional checkpoint was needed for this continuation. |
+| Checkpoints | Tasks 0–2 are reviewed and committed (`25514a3`, `3d47027`, `6d4ad16`). Task 3 spec PASS and final quality approval (Q3-1 resolved, no findings) cover the current uncommitted work. Controller checkpoint pending; Task 4 next. Preserve the full reviewed change set. |
+| Ongoing-task preflight | Reuse the controller's completed fetch/rebase/ancestry preflight against `origin/main` at `89d04f901636229392a311241f8e777f0a00962b`. This status pass performs no fetch, rebase or checkpoint commit. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
 ### Read in this order
@@ -94,7 +120,8 @@ This latest coordination-only update changed no source and reran no tests.
    Tasks 0–8. Follow it exactly.
 5. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md`:
    the grounding facts, planning reviews, Task 0 evidence/T0-1 approval, Task 1
-   reviewed delivery and Task 2 spec corrections/quality blocker T2-1.
+   reviewed delivery, Task 2's approved T2-1 correction, and Task 3's internal
+   ruling, Q3-1 correction and final independent review results.
    Record your evidence here as you go.
 
 Cycle 08's documents (`docs/Cycles/wave-02-cycle-08-*` and
@@ -172,11 +199,11 @@ the same way comment publication binds its child synchronization.
 
 1. Preserve existing authorization and reviewed evidence; read the latest
    execution ledger. The controller owns checkpoint commits after reviews.
-2. **Task 2 passed both final reviews and is complete at the local gate.** The
-   controller makes the pending checkpoint commit; then Task 3 is next. Reuse the
+2. **Task 3 passed both reviews and is complete at the local gate.** The
+   controller makes the pending checkpoint commit; then Task 4 is next. Reuse the
    retained RED/GREEN evidence and review approvals rather than redispatching
-   completed work. This status-update worker performs no commit or Task 3 work.
-3. Tasks 0–2 passed their independent reviews. Before subsequent
+   completed work. This status-update worker performs no commit or Task 4 work.
+3. Tasks 0–3 passed their independent reviews. Before subsequent
    implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
       the worktree. Never rebase main onto the branch.
@@ -189,7 +216,7 @@ the same way comment publication binds its child synchronization.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
-4. After the Task 2 checkpoint, work Tasks 3–8 in order. Each task
+4. After the Task 3 checkpoint, work Tasks 4–8 in order. Each task
    starts with a failing test and its recorded red run. Each ends with a commit
    (only when authorized), a ticket
    comment, and an independent review before the next task. The plan's
