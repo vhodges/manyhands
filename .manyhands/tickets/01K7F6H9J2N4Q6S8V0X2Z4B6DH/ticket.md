@@ -16,8 +16,8 @@ recoverable lifecycle.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md`.
+- [x] Create the implementation plan and record its checkpoints as ticket
   comments.
 
 ## Entry Gate

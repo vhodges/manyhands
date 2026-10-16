@@ -1,0 +1,639 @@
+---
+title: "Wave 02 Cycle 09 Confirmed Managed-Document Promotion Design"
+date: 2026-10-15
+status: approved
+author: "Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M500Q0XQVENN0JVYK5N7Z6AX"
+---
+
+# Confirmed Managed-Document Promotion Design
+
+## Intent And Authority
+
+[Cycle 09](../Cycles/wave-02-cycle-09-confirmed-document-promotion.md) adds
+the first lifecycle that may merge into the primary and delete context state.
+Most of it is composition: deliberate synchronization, the in-memory merge
+preparation, the guarded fast-forward, the remote reservation and the
+index-only refresh. The new parts are:
+
+- a promotion change set and digest;
+- one primary merge path;
+- a guarded remote branch deletion;
+- local worktree and branch removal;
+- a retirement record for first publication;
+- a parent record that binds it all for retry.
+
+The [implementation plan](2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md)
+orders the work. Ticket: `01K7F6H9J2N4Q6S8V0X2Z4B6DH`. The owner approved
+the Cycle, this design and the plan on 2026-10-15, with D1–D7 and R1 as
+recommended. This does not authorize implementation.
+
+The RFCs settle the external policy:
+
+- promotion is confirmed;
+- it synchronizes when a remote exists;
+- it merges with a non-fast-forward commit;
+- it publishes before cleanup;
+- it removes the remote branch before local state;
+- it never cleans up early;
+- it retries only unfinished work.
+
+Seven points the RFCs leave open are owner decisions in the Cycle document.
+Passages that depend on them are marked **(D1)–(D7)**.
+
+## Current Source Boundary
+
+At planning base `89d04f9`:
+
+- **`src/repository/remote/sync.rs`**
+  - `synchronize_remote_observed` runs one synchronization per target.
+    `SynchronizationSettings::refuse_divergence` defaults to merging.
+  - Without a remote, synchronization returns `PublishPending {
+    NoPublicationRemote }` and does no local integration (`:6091-6104`).
+  - A `Cancelled` row replays as `Interrupted` (`:6004-6008`). A row with a
+    child merge is restarted only by a merging caller (`:6043-6067`).
+  - `prepare_clean_merge` (`:702`) computes a merge in a memory ODB and
+    writes nothing. `import_prepared_tree` (`:758`) writes the tree.
+  - `fast_forward` (`:7332`) moves a checked-out branch under a ref lock with
+    a safe checkout. `committing_identity` (`:3214`) resolves the committer.
+  - `materialized_target` (`:500`) and `require_clean_target` (`:554`)
+    define a clean target. Status includes untracked files but not ignored
+    files (`:609-610`).
+- **`src/repository/remote/refs.rs`**
+  - `plan_clean_integration` (`:247-275`) blocks `RemoteContextDeleted` or
+    `HistoryUnknown` only when the tracking context is absent.
+- **`src/repository/remote/state.rs`**
+  - `remote_operation_records` already admits `action = 'promote'` and
+    requires a context ref for it. The unique `remote_active_reservation`
+    index allows one active remote operation per repository.
+  - `remote_context_states` carries `publication_evidence`. A batch marks an
+    absent `observed_published` row `remotely_deleted`.
+  - `publication_evidence_for` (`:2011-2025`) reads a missing row as
+    `HistoryUnknown` whenever the repository flag `history_unknown` is set.
+  - The flag is set on cache loss and on remote reconfiguration (`:2105`), and
+    nothing clears it. A `never_published` row is invalid while it is set
+    (`:5429`).
+- **`src/repository/remote/reservation.rs`**
+  - Provides manual reservation, `PollYielding`, safe points,
+    `finish_remote_operation` and `restart_remote_synchronization`.
+- **`src/repository/transport/remote.rs`**
+  - Push and fetch mappings are strings chosen by `SshDirection`
+    (`:696-735`). `mappings_match_scope` admits only exact fetch and push
+    mappings.
+  - `push_update_reference` records per-ref status (`:473`).
+  - No `push_negotiation` callback exists. git2 0.20.4 provides one, with
+    `PushUpdate::src`/`dst`.
+- **`src/repository/recovery.rs` and `comment_publication.rs`**
+  - `require_no_pending_local` checks only `operation_records` (`:633-643`).
+  - Comment publication completes its journal row first, then binds the
+    child synchronization ID in `comment_publication_bindings`.
+- **`src/repository.rs`**
+  - `prepare_context` refuses an Edit whose branch exists without its
+    worktree at another tip (`:1764-1780`).
+  - `validate_context_worktree` (`:9056`) checks a context.
+  - `refresh_repository` (`:1250`) is the index-only refresh.
+  - `FailurePoint` and the exit-point service opener are the fault seams.
+- **Absent:** no code deletes a worktree, prunes a registration, deletes a
+  context branch or deletes a remote ref. git2 0.20.4 provides
+  `Worktree::prune` with `valid`, `working_tree` and `locked` options.
+- **Tests:** `tests/support/ssh_server.rs` `receive_effect_proven` (`:692`)
+  requires a non-zero new OID.
+- **F2:** `mutation/bind/resume.rs` classifies a promotion `NotResumable`.
+  That classification stays.
+
+## Public Interface
+
+```rust
+pub struct PreviewDocumentPromotionRequest { pub root: PathBuf, pub item_id: ItemId }
+
+RepositoryService::preview_document_promotion(&self, request)
+    -> Result<DocumentPromotionPreflight, RepositoryError>;     // no network, no lease, no write
+
+pub enum DocumentPromotionPreflight {
+    Ready(DocumentPromotionPreview),
+    Blocked { blockers: Vec<PromotionBlocker> },               // every blocker found, fixed order
+}
+
+pub enum PromotionBlocker {
+    NotADocument, ContextMissing, ContextNonconforming, ContextDirty, ContextConflicted,
+    ConflictPending, PrimaryMissing, PrimaryNotCheckedOut, PrimaryDirty, PrimaryConflicted,
+    PrimaryAheadOfRemote,                                      // (D2)
+    ContextBehindRemote,                                       // fetched T(C) not contained in C
+    IntegrationConflict,                                       // (D3)
+    RemoteContextDeleted, HistoryUnknown,                      // (D5)
+    DocumentInvalidAfterIntegration,                           // (D1)
+}
+
+pub struct DocumentPromotionPreview {                          // accessors only
+    item_id, document_path: PathBuf,
+    context_branch: String, context_oid: Oid,
+    primary_branch: String, primary_oid: Oid,
+    publication_remote: Option<String>,
+    tracking_primary: Option<Oid>, tracking_context: Option<Oid>,
+    changes: Vec<PromotionPathChange>,                         // sorted by path
+    integration: PlannedIntegration,                           // MergeCommit | AlreadyContained
+    publication: PlannedPublication,                           // Publish | PendingNoRemote
+    cleanup: PlannedCleanup,                                   // remote_branch: bool, worktree, local_branch
+    expectation: PromotionExpectation,
+}
+pub struct PromotionPathChange { path: PathBuf, change: PathChange /* Added|Modified|Deleted */ }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PromotionExpectation([u8; 32]);                     // redacted Debug; to/from bytes for F2 storage
+
+pub struct PromoteDocumentRequest {
+    pub root: PathBuf, pub operation_id: OperationId, pub item_id: ItemId,
+    pub expected: PromotionExpectation,
+    pub approval: Option<HostApproval>,
+    pub confirmed_identity: Option<ConfirmedCommitIdentity>,
+}
+
+RepositoryService::promote_document<P: SessionCredentialProvider>(
+    &self, request, session: &mut SessionCredentials<P>,
+) -> Result<DocumentPromotionResult, DocumentPromotionError>;
+
+RepositoryService::cancel_document_promotion(&self, root: &Path, id: OperationId)
+    -> Result<bool, RepositoryError>;            // flags the record and its active child or reservation
+
+pub enum DocumentPromotionResult {
+    Complete(DocumentPromotionOutcome),
+    IndexPending(IndexPending<DocumentPromotionOutcome>),
+}
+pub struct DocumentPromotionOutcome {
+    operation_id, integration: PromotionIntegration, publication: PromotionPublication,
+    cleanup: PromotionCleanup,
+}
+pub enum PromotionIntegration { Merged { oid }, AlreadyContained { oid } }
+pub enum PromotionPublication {
+    Published { oid }, AlreadyCurrent { oid },
+    Pending { reason: PromotionPublicationPending },  // NoPublicationRemote | Synchronization(category) | Cancelled
+}
+pub enum PromotionCleanup {
+    Complete,
+    Pending { reason: PromotionCleanupPending },
+    // AwaitingPublication | ContextChanged | IgnoredFiles | RemoteContextChanged
+    // | RemoteDeletionFailed(category) | RecoveryRequired | Cancelled
+}
+
+pub enum DocumentPromotionError {                              // nothing reached the primary
+    Repository(RepositoryError), Transport(SshTransportError),
+    Blocked(Vec<PromotionBlocker>), ExternalChange, ReconfirmationRequired,   // (D4)
+    PrimaryAdvanced,                                           // retryable; next call re-synchronizes
+    ContextSynchronization(Box<SynchronizationError>),          // incl. ConflictPending, IdentityRequired
+    IdentityRequired { expected_configuration: ExpectedConfiguration },
+    Busy, PollYielding, Interrupted, OperationMismatch, RecoveryRequired,
+}
+```
+
+Every error variant means the primary is unchanged. Before an error is
+returned, the integration reconciliation (below) proves that no matching merge
+is reachable. Once integration is recorded, every later call returns `Ok`, and
+publication and cleanup are reported separately. `Debug` output shows IDs,
+OIDs and categories only.
+
+## Change Set And Expectation
+
+The preflight, the post-synchronization check and the check under the
+integration lease all run one function over actual Git state:
+`observe_promotion(repository, config, item) -> PromotionObservation`.
+
+1. **Context.** Find the conforming active context using the discovery rule.
+   It must be materialized on `manyhands/document/<ULID>` and pass
+   `require_clean_target`. The document must be the one managed document that
+   carries the ULID.
+2. **Primary.** It must be checked out at the root, pass
+   `require_clean_target`, and have no pending synchronization conflict in the
+   repository.
+3. **Integration base.**
+   - With a remote, the base is the stored `T(P)`. **(D2)** The local primary
+     must equal `T(P)` or be its strict ancestor. If `T(P)` is absent, the
+     blocker is `PrimaryMissing`.
+   - Without a remote, the base is the local primary.
+4. **Context freshness (remote only).** When `T(C)` exists, it must be an
+   ancestor of the local context. Otherwise the blocker is
+   `ContextBehindRemote`, with guidance to run deliberate synchronization
+   first. The preview is therefore exact about the content the context
+   synchronization will contribute.
+5. **Merge result.**
+   - If the context is an ancestor of the base, the result is
+     `AlreadyContained` and the result tree is the base tree.
+   - Otherwise, if the base is an ancestor of the context, the result tree is
+     the context tree.
+   - Otherwise, use `prepare_clean_merge(base, context)`. A conflict is the
+     blocker `IntegrationConflict` **(D3)**. With a remote, this happens only
+     while the context lacks the latest `T(P)`. The context synchronization
+     fixes that, and the next check takes the second branch.
+6. **Change set.** The tree diff from the base tree to the result tree, with
+   rename detection off. Each entry is a path plus Added, Modified or
+   Deleted. It covers comments under `.manyhands/comments/<ULID>/` and
+   non-canonical files.
+7. **Document validity (D1).** Parse the document from the result tree with
+   the canonical-tree reader. The tree must hold no `.manyhands/worktrees/`
+   entry.
+8. **Publication history (D5).** This step applies only with a remote and
+   only when `T(C)` is absent, which mirrors `plan_clean_integration`.
+   - `ObservedPublished` blocks with `RemoteContextDeleted`.
+   - `HistoryUnknown` blocks with `HistoryUnknown`.
+   - Exception: when the result is `AlreadyContained`, nothing remote remains
+     to publish or delete, so neither blocks. This is the cache-loss recovery
+     path.
+9. **Cleanup set.** The worktree and the local branch are always in it. The
+   remote branch is in it when a remote is configured and the result is not
+   `AlreadyContained` with `T(C)` absent.
+
+`PromotionExpectation` is `blake3("manyhands promotion v1" ‖ fields)`, with
+fixed-width, length-prefixed fields:
+
+- item ID;
+- document path;
+- context and primary branch names;
+- remote name, or a none tag;
+- integration kind;
+- the sorted change set (path, change, new blob OID);
+- the cleanup set;
+- without a remote only, the local primary and context OIDs.
+
+**(D6)** With a remote, the moving OIDs are left out on purpose. The
+operation's own synchronization rewrites the context with a primary merge. A
+collaborator's already-published primary advance moves the base without
+changing what this promotion contributes or publishes. Because of D2, the
+local primary cannot carry unpublished work.
+
+**(D4)** A collaborator's new context commits change the change set, so the
+digest catches them.
+
+## Records
+
+### `document_promotions`
+
+Added by an all-or-nothing migration with marker
+`cycle_09_document_promotions`, and listed in the registry table inventory.
+
+| Column | Meaning |
+| --- | --- |
+| `repository_id`, `operation_id` (unique), `item_id` | Identity |
+| `expectation` | 32-byte digest bound at the first call |
+| `remote_name` | The frozen remote name, or null. A change interrupts the operation |
+| `step` | `confirmed`, `context_synchronized`, `integrating`, `integrated`, `published`, `publication_pending`, `remote_deleted`, `worktree_removing`, `worktree_removed`, `branch_deleted`, `complete`, `abandoned`, `superseded` |
+| `context_attempt`, `context_sync_id`, `primary_attempt`, `primary_sync_id` | The current child attempt number and ID. A new attempt gets a new ID, minted and stored before the child first runs |
+| `base_oid`, `context_oid`, `integration_oid`, `integration_kind` | Integration evidence. `integration_oid` is the merge commit or the contained base |
+| `remote_context_oid` | The remote context OID that deletion must find. It is recorded after context synchronization |
+| `publication_category`, `cleanup_category` | Fixed redacted categories for a pending field |
+| `cancel_requested`, `updated_at` | Cancellation flag and timestamp |
+
+A partial unique index allows one row per item whose step is not
+`complete`, `abandoned` or `superseded`.
+
+Inserting a new row for an item marks the old row `superseded`, in the same
+transaction, when the old row stopped on `context_changed`, `ignored_files`
+or `remote_context_changed`. Any other unfinished row makes the insert
+`Busy`.
+
+A pre-integration refusal records `abandoned`, and replaying that ID returns
+the same refusal. These refusals are `Blocked`, `ExternalChange` and
+`ReconfirmationRequired`.
+
+The row is not an `operation_records` row, so child synchronizations can still
+reserve, and `require_no_pending_local` is unchanged.
+
+ID cross-checks:
+
+- `begin_or_reconcile` refuses an ID that names a promotion.
+- A promotion refuses an ID that names a local record, or a remote record
+  other than its own `promote` reservation (`OperationMismatch`).
+
+### `retired_contexts` (R1)
+
+| Column | Meaning |
+| --- | --- |
+| `repository_id`, `kind`, `item_id` (unique per repository) | The retired context |
+| `operation_id`, `retired_oid` | The promotion and the context OID it deleted |
+
+The row is written only in the final cleanup transaction, after the remote
+deletion has been observed, or when there is no remote. Three changes in
+`state.rs` and `refs.rs`:
+
+- **First-publication evidence.** `publication_evidence_for`, and every
+  first-publication eligibility check, read a missing state row for a retired
+  item as `NeverPublished`, even when `history_unknown` is set.
+- **Removal.** An observation batch that records the item as
+  `observed_published` deletes the retirement row in the same transaction.
+- **Batch.** A retired item has no state row, so a batch never reports it
+  `remotely_deleted`.
+
+No other reading of `history_unknown` changes. The table is not in the
+versioned read contract.
+
+## Lifecycle
+
+```text
+resolve root, configuration                              (invalid → Repository error)
+ → replay: same item+digest → reconcile → resume at step; abandoned → stored refusal;
+           different item/digest → OperationMismatch
+ → new: observe; blockers → Blocked; digest ≠ expected → ExternalChange   (row abandoned)
+        insert row (confirmed)                                   [F1 AfterConfirmed]
+ → remote? context child attempt (manual, merging)
+        ConflictPending / IdentityRequired → return; same attempt continues later
+        cancelled / interrupted / rejected / transport → return; next call: new attempt
+        re-observe with fresh T(P): blocker or digest ≠ expected → ReconfirmationRequired (abandoned)
+        record context_synchronized, context_oid, remote_context_oid   [F2 AfterContextSync]
+ → lease: re-observe; recompute digest (≠ → ReconfirmationRequired, abandoned)
+        remote: base ≰ context_oid → PrimaryAdvanced; step back to confirmed, next attempt
+        record integrating (base, context)
+        build tree; commit "Promote document <ULID>" [base, context]   [F3 BeforeIntegrationRef]
+        guarded update primary old → merge, safe checkout       [F4 AfterIntegrationRef]
+        record integrated; mark refresh required
+ → remote? primary child attempt (manual, merging)
+        Published/AlreadyCurrent → record published              [F5 AfterPublication]
+        otherwise → record publication_pending(category); refresh; return partial
+   no remote → record publication_pending(no_publication_remote)
+ → lease: cleanup pre-check (registered, at context_oid, clean, no ignored, not locked)
+        failure → cleanup pending(context_changed | ignored_files); refresh; return
+ → remote? reserve promote (held to completion)                 [F6 BeforeRemoteDeletion]
+        delete C guarded by remote_context_oid; advertise
+        → record remote_deleted                                 [F7 AfterRemoteDeletion]
+ → lease: re-check; record worktree_removing; prune → worktree_removed   [F8 DuringWorktreeRemoval]
+ → lease: delete local C guarded at context_oid → branch_deleted         [F9 BeforeBranchDeletion]
+ → lease + one transaction: delete T(C) guarded; delete state row; insert retired_contexts;
+        record complete; finish promote reservation             [F10 BeforeCompletion]
+                                                                 [F11 AfterCompletion]
+ → index-only refresh with a fresh internal ID, outside the lease        [F12 RefreshFailure]
+ → Complete | IndexPending
+```
+
+F1–F12 become `FailurePoint` variants, and the Cycle's acceptance row refers
+to these twelve. Cancellation is honored at each child safe point and between
+steps before integration. After integration it is honored only between whole
+steps.
+
+### Context Synchronization
+
+The step calls `synchronize_remote_observed` with
+`SynchronizationTarget::Context` and the current attempt's ID. It passes
+`restart` when that child row exists, and a forwarding observer that maps
+promotion cancellation onto `Cancel`. It passes `confirmed_identity` through.
+
+How the child's end state decides the next call:
+
+| Child end state | Next call |
+| --- | --- |
+| Completed | Use the stored result; never re-run |
+| `ConflictPending`, `IdentityRequired`, `ExternalResolutionRequired` | Same ID with `restart`, after the user's resolution or identity confirmation |
+| `Cancelled`, `Interrupted`, `PushRejected`, transport failure, `Busy`, `PollYielding`, `RecoveryRequired` without a retained merge | New attempt and new ID |
+| `RecoveryRequired` with a retained merge candidate | Same ID with `restart`; a persistent failure surfaces as `ContextSynchronization(RecoveryRequired)` |
+
+Task 0 characterizes each row against the real child before the table is
+fixed. A lost push result is answered by the child's own replay as published,
+with one push.
+
+### Integration
+
+The integration step runs in one lease, after the observation has been
+recomputed.
+
+- **Parents.** The parents are `[base, context]`.
+- **Remote only.** The base must be an ancestor of `context_oid`. A poll that
+  ran between the steps may have advanced `T(P)`. If it did, the step returns
+  `PrimaryAdvanced`, steps the record back to `confirmed` with the next
+  context attempt, and writes nothing. This prevents a merge that takes the
+  context tree from silently dropping primary commits.
+- **Tree.** The tree is the context tree, or, without a remote, the imported
+  prepared merge tree. A conflict at this point is `ReconfirmationRequired`.
+- **Identity.** `committing_identity` supplies the signature. A missing
+  identity returns `IdentityRequired` before anything is written.
+- **Ref update.** One guarded ref update moves the local primary from its old
+  value to the merge. This is a fast-forward because the local primary ≤
+  base ≤ merge.
+- **Already contained.** `AlreadyContained` writes no commit and records the
+  base.
+
+**Reconciliation of `integrating`.** A merge counts as present when a commit
+reachable from the local primary has subject `Promote document <ULID>` and
+parents `[recorded base, recorded context]`. The search walks first parents
+from the local primary back to the recorded base.
+
+- A merge is present: the step is integrated. This holds even if the primary
+  has since moved on, for example after the user's primary synchronization.
+- No merge is present, and the local primary ≤ base: run the step again. A
+  dangling commit object is harmless.
+- Otherwise: `RecoveryRequired` as a cleanup or publication pending
+  category. It is never returned as an error, because the primary may have
+  changed.
+
+### Publication
+
+The publication step runs the primary child with merging enabled, following
+the same attempt table. If a collaborator advanced the primary after the
+context fetch, the child merges with `Merge remote primary` or parks a primary
+conflict, as Cycle 06 already defines.
+
+When the child does not complete, the step records
+`publication: pending(synchronization(category))` and
+`cleanup: pending(awaiting_publication)`. The category is one of conflict,
+rejected, transport, identity, busy, yielding or cancelled. The child is the
+only code that pushes the primary.
+
+### Remote Deletion
+
+Add `AuthenticatedSshRemote::delete_exact(plan, target, expected: Oid) ->
+DeleteObservation`, where `DeleteObservation` is `Deleted`,
+`StillPresent(oid)` or `Changed(oid)`.
+
+- **Mapping.** The mapping is `:refs/heads/manyhands/document/<ULID>`, under
+  a new `SshDirection::Delete`. `mappings_match_scope` admits it only for a
+  context target.
+- **Guard.** A `push_negotiation` callback refuses unless the update's source
+  OID equals `expected`, so the server never receives a deletion of an
+  unexpected value.
+- **Result.** A fresh advertisement decides the result. An ambiguous
+  transport error re-advertises on the next attempt before it pushes again.
+- **RFC mapping.** `Changed` and an unresolvable ambiguity are the Git RFC's
+  "stops and records recovery-required". They surface as
+  `remote_context_changed` and `remote_deletion_failed(category)`.
+
+The step runs inside a manual `promote` reservation with the context ref,
+taken at F6 and finished in the completion transaction. It reaches the
+`BeforeTransport` and `AfterAdvertisement` safe points and uses the existing
+generation fence. While the reservation is held:
+
+- a poll is `Busy`;
+- a poll that started earlier is asked to yield;
+- a configuration or endpoint change interrupts the step.
+
+The reservation module gains `promote` finish and restart rules. A restart
+fences the owner epoch and resumes from the recorded step.
+
+### Local Cleanup
+
+The order follows the RFC: remote, then worktree, then branch.
+
+**Worktree pre-check (D7).** The worktree passes when all of these hold:
+
+- it passes `materialized_target`;
+- `HEAD` is at `context_oid`;
+- `require_clean_target` passes;
+- a second status with `include_ignored` is empty;
+- the worktree is not locked.
+
+The same check runs before remote deletion and again under the lease before
+the prune.
+
+**Prune.** The step records `worktree_removing`, then calls
+`Worktree::prune` with `valid` and `working_tree` set and `locked` unset.
+
+**Reconciliation of `worktree_removing`:**
+
+| Observed | Result |
+| --- | --- |
+| Path and registration both absent | Done |
+| Both present and the pre-check passes | Run again |
+| Anything else | `cleanup: pending(recovery_required)`, nothing more removed |
+
+**Branch.** A ref transaction deletes the branch only when its value is
+`context_oid` and no worktree has it checked out.
+
+**Completion.** The final transaction does all of the following:
+
+- deletes `T(C)`, only if it is at `remote_context_oid` or absent;
+- deletes the item's `remote_context_states` row;
+- inserts `retired_contexts`;
+- records `complete`;
+- finishes the reservation.
+
+Until this transaction, the history row still says `observed_published`. A
+cleanup that stops early therefore leaves the context subject to the RFC's
+explicit-republish rule. A context the promotion has not finished deleting is
+never republished silently.
+
+The cleanup functions take a kind and an item ID. Cycle 10 reuses them
+unchanged.
+
+## Reconciliation On Retry
+
+The row says where to look, and Git decides.
+
+| Row step | Git observation | Resume at |
+| --- | --- | --- |
+| `abandoned` | — | The stored refusal |
+| `confirmed` | — | Re-check consent, then the context child per the attempt table |
+| `context_synchronized` | Context at `context_oid` | Integration; otherwise `ExternalChange` (abandoned) |
+| `integrating` | Per the integration reconciliation | Integrated, or integrate again |
+| `integrated`, `publication_pending` | — | Primary child (remote) or the cleanup pre-check (no remote) |
+| `published` | — | Cleanup pre-check, then deletion |
+| `published` + reservation | Remote context absent | Record `remote_deleted` |
+| `remote_deleted`, `worktree_*`, `branch_deleted` | Per the local cleanup rules | Next local step |
+| `complete` | — | Stored outcome; refresh if still required |
+
+**Cache loss.** Suppose the registry is lost and Git holds a `Promote document
+<ULID>` merge on the primary while the context still exists. The preflight
+then reports `AlreadyContained` with cleanup only. When the remote branch is
+gone, the D5 exception applies. The caller previews and confirms a new ID.
+Nothing is integrated again. This is the RFC rule that cache loss requires
+recovery instead of blind replay.
+
+## Polling And Concurrency
+
+- **Manual priority.** The children and the `promote` reservation all reserve
+  with manual priority, so a running automatic poll yields to each of them.
+- **Polls between steps.** From confirmation until F6, an automatic poll may
+  run between steps. It can fast-forward a clean, strictly behind primary or
+  context, or advance `T(P)`. Every step re-observes, and the integration rule
+  above handles an advanced `T(P)`.
+- **During deletion and cleanup.** From F6 to completion the reservation is
+  held, and a poll is `Busy`. After completion the item has no state row and
+  no tracking ref, so a poll reports nothing for it.
+- **Another clone** keeps its local context. Its next poll reports the context
+  `remotely_deleted` and preserves it.
+
+## Failure Boundaries
+
+| Boundary | State left | Retry does |
+| --- | --- | --- |
+| Blocked, external change, reconfirmation | Row `abandoned`, or no row | Re-preview with a new ID |
+| Primary advanced at integration | Row `confirmed`, next attempt | Re-synchronize, then integrate |
+| Context child fails or conflicts | Child row per Cycles 05/06; primary untouched | Same or new attempt per the table |
+| Crash during integration | `integrating`; primary old or new | Reconcile; never a second merge |
+| Publication fails | `publication_pending`; merge local; context intact | Primary child, then cleanup |
+| Context edited, untracked or ignored files, or locked after integration | `published` or `publication_pending`; every ref kept | Report until resolved; a new promotion supersedes |
+| Remote deletion rejected or changed | `published`; all local state; history `observed_published` | Delete again, or supersede after synchronizing |
+| Crash after the remote deletion | `published` and remote absent | Recorded as deleted, then local cleanup |
+| Partial worktree removal | `worktree_removing` | `recovery_required`; explicit repair |
+| Refresh fails | Any `Ok` return | `IndexPending`; any refresh repairs it |
+
+**Edge case.** A `superseded` row whose worktree was already removed, but
+whose branch then moved outside Manyhands, leaves a branch with no worktree.
+`prepare_context(Edit)` refuses that branch (`repository.rs:1769`). This
+requires external tampering and is reported as the existing mismatched-context
+recovery.
+
+## Alternatives And Rulings
+
+- **One `promote` reservation across the whole lifecycle.** Rejected.
+  Children reserve their own rows, and the unique active index admits only
+  one. Ruling: children are bound per attempt, as comment publication binds
+  them, and the `promote` reservation covers only deletion through
+  completion. Cost: polls can run between earlier steps, which is safe
+  because every step re-observes and of the integration base rule.
+- **Merge without first synchronizing the context.** Rejected when a remote
+  exists. The RFC and PRD order requires synchronization first.
+- **Skip pushing the context because it is about to be deleted.** Rejected.
+  The child is the RFC's synchronization and the only proven push path.
+- **Fast-forward-only integration.** Forbidden by the MVP RFC.
+- **Merge subject.** `Promote document <ULID>`: deterministic, free of user
+  text, and distinct from the synchronization subjects.
+- **Clear the repository `history_unknown` flag, or write a
+  `never_published` row.** Rejected. Clearing the flag would weaken first
+  publication for every item, and the row violates an existing invariant.
+  Ruling R1: an additive `retired_contexts` table scoped to contexts this
+  operation proved it deleted.
+- **Reset the history early in cleanup.** Rejected. A cleanup that stopped
+  early would then allow a silent republish.
+- **Finish a partly removed worktree.** Rejected, matching Cycle 08 D2.
+- **A document lifecycle marker.** The canonical schema has none.
+- **Change the F2 resume classification now.** Out of scope. C5 and D5 own
+  the boundary binding.
+
+These rulings are internal and can be reversed within the approved contract.
+A Task 0 characterization that contradicts one stops work for an amendment.
+
+## Verification And Evidence Gaps
+
+Unit tests cover:
+
+- the observation and the digest;
+- each blocker;
+- the three merge-tree branches;
+- the integration base rule;
+- reconciliation of each step;
+- the attempt table;
+- the delete mapping and the negotiation guard;
+- the cleanup helpers, including ignored and locked worktrees;
+- retirement.
+
+Real SSH tests over two clones cover:
+
+- the happy path, local-only promotion, an already-contained context, and a
+  fresh context after an edit, including in a repository with unknown
+  history;
+- every blocker, D2 through D5 included;
+- a context conflict and its resolution;
+- a poll advancing `T(P)` mid-promotion;
+- a rejected publication, and promotion while offline;
+- a rejected remote deletion, and a changed remote context;
+- interruption at F1 through F12 followed by reopen;
+- polling priority, and polls that run during and after promotion;
+- privacy.
+
+Each preservation case snapshots, before and after:
+
+- worktree bytes, index and status;
+- branch, tracking and remote refs;
+- worktree registrations.
+
+Gaps to close with evidence rather than assumption:
+
+- `push_negotiation` with the locked libgit2 and libssh2;
+- `Worktree::prune` on Windows with open handles and long paths;
+- the native targets, which run only by separately authorized manual
+  dispatch.
