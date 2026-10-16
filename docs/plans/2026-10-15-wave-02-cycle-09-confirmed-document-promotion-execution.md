@@ -1957,3 +1957,296 @@ all eight pending source/test files before and after this pass matched exactly.
 `git status --short --untracked-files=all` retains exactly 14 intended Task 4
 paths, with no staged files. Only the four coordination documents/comment changed
 in this pass; HEAD remains the full review base above. No Rust command was run.
+
+## Task 5 — Promotion Storage And Reservation Composition (2026-10-16)
+
+**Status: implemented and targeted-verified; uncommitted, ready for controller's
+independent spec review then quality review. Neither review is claimed here.**
+Task 4's reviewed checkpoint is now `f641f917113cc252f429860ba5092efcbbfa260c`.
+This fresh worker read worktree AGENTS, approved design/Task 5 and existing seams,
+used TDD inline and spawned no subagents. The controller supplied its freshly
+completed fetch/no-op rebase onto `89d04f901636229392a311241f8e777f0a00962b`;
+the worker confirmed the exact ticket branch, clean initial tree, both SHAs and
+successful origin/main ancestry. It did not repeat that controller preflight or
+touch the main checkout. All edits/commands were in the requested ticket worktree.
+
+### Delivered Contract And Engineering Decisions
+
+- Added `document_promotions`, marker `cycle_09_document_promotions` and the
+  partial unique unfinished-item index in the existing migration transaction.
+  Marked missing/malformed tables or indexes and unmarked partial creation fail
+  closed. A repeated migration audits without writes. Startup checks exact
+  schema, decoded values, foreign keys and cross-journal identities. Legacy
+  registration/local-journal/retirement rows are retained. Normal inventory lists
+  the new table; Task 4's retirement migration is reused unchanged.
+- Typed steps/categories, immutable identity and integration evidence, stored
+  abandoned refusals, Busy for another unfinished item, and supersession only for
+  context_changed/ignored_files/remote_context_changed. Internal RepositoryBusy
+  is the storage representation for the future runner's public Busy mapping.
+  Ordinary saves cannot mark complete or superseded or reopen terminal rows.
+- **Narrow schema additions:** `refusal_category` is a closed CHECKed enum of
+  blocked/external_change/reconfirmation_required; `refusal_blockers` is an
+  optional 1..65535 bitset of the existing 16 declaration-ordered blockers.
+  Relational CHECKs bind these fields to abandoned/blocked. This persists exact
+  content-free refusal replay without a free-text payload or another table.
+- Child IDs are minted internally, collision-checked and stored with checked
+  monotonically increasing attempt numbers before execution. `child_state`
+  reads authoritative child completion first; retained candidates/conflicts/
+  unreleased resolutions keep their original ID independent of the outer error.
+  Missing ownership and failed/unreadable/foreign-scope ownership are distinct.
+  Replacement refuses completed/retained/uncertain/active children. The explicit
+  PrimaryAdvanced reset is allowed only from context_synchronized, clears stale
+  context evidence and persists a newly minted context attempt atomically.
+  Cancellation flags parent and applicable active children/reservation; explicit
+  continuation clears only the parent's stop, not child ownership.
+- Parent/local/remote/current-child/comment-binding IDs are cross-checked under
+  the existing begin/reservation transactions, including foreign repository,
+  action, priority and item scope. Own promote reservations are accepted. Child
+  local refresh is allowed only for exact authoritative synchronization handoff;
+  the pre-existing local/sync/poll/comment guards remain in force.
+- Promote uses existing manual arbitration: automatic polls are Busy, running
+  polls yield and running synchronizations stay Busy. Restart checks generation,
+  increments owner epoch and returns a newly fenced token, also after reopening
+  the service (verified by the final focused reservation run). A recoverable promote
+  cancellation retains the slot and does not write polling history/policy.
+  Superseding a stopped parent atomically terminalizes/fences **only its own
+  promote reservation**, so the replacement is not stranded behind that old slot.
+  Neither path changes synchronization or poll cancellation/restart behavior.
+- **T4-1 composition:** `complete_record(tx, service, repository_id, operation,
+  &evidence, owner)` requires prior branch_deleted intent, matching private
+  retirement evidence, frozen configuration and applicable owned reservation.
+  It calls SQL retirement, marks the parent complete and calls transaction-only
+  `finish_promotion` in that one transaction. The public remote finisher is not
+  used. `RetirementEvidence::matches_promotion` is a read-only bound-evidence
+  predicate; it exposes no constructor, clone, lock or detached proof.
+- The caller retains the existing ContextCleanup/evidence lease and tracking-slot
+  lock through SQL commit and the transaction-scoped `reconcile_completion`.
+  Failure at the last SQL statement preserves every field in eight completion
+  tables, including observed_published history and the held reservation, while
+  the Git ref stays absent. Competing ref recreation remains refused through
+  rollback, actual-state reconciliation and successful commit; dropping evidence
+  finally releases it. Retry finalizes SQL without repeating a Git deletion.
+- Uncertain completion reads the actual parent/reservation rows in a new SQL
+  transaction. It does not demand that mutable retirement/history projections
+  remain unchanged forever: later observed publication legitimately removes
+  retirement, without revoking historical completion. Local-only and contained,
+  absent-remote-context cleanup can complete without an applicable reservation;
+  an actually present reservation must still finish in the same transaction.
+  Neither case fabricates observed-published history.
+- Added lifecycle FailurePoints with the exact design names. F7 reuses the
+  already-existing `AfterRemoteDeletion` variant; the other eleven are new.
+  Their runner call sites remain Task 6. Status projects the parent row's step
+  once, suppressing its reservation duplicate, with no resume offer/new DTO field.
+  F2's `NotResumable` implementation is untouched.
+
+### Exact RED / GREEN Evidence
+
+All Rust commands used Devenv. Missing-API compile RED and test-authoring errors
+are distinguished below from behavioral RED. Test-first declarations initially
+had no storage/reservation implementation. Subsequent added cases demonstrated
+the missing completion, cross-scope, status, cancellation, supersession and
+no-applicable-reservation behavior before their corresponding fixes. No entire
+library/full all-feature gate ran. Counts are passed/failed/filtered.
+
+| Exact command | Actual runs/results in order for that command |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::record` | **13 runs:** compile RED (62 diagnostics, 2 unused-import warnings; includes test-only Busy variant/Debug assumptions); compile failure (3 private read_operation diagnostics, 1 unused import); runnable **9/2/894** (local-only replay binding and completion stub); compile failure (1 test-only shadowed plan call); **10/3/894** (missing reservation cross-check/finalization plus missing fixture observed_at); compile failure (1 missing finish helper after a patch-envelope duplicate-file section was corrected); GREEN **13/0/894**; added status/cancellation RED **14/2/895**; foreign-child-scope RED **17/1/897**; GREEN **19/0/897**; GREEN **20/0/897**; expanded SQL-image/startup GREEN **20/0/897**; final transaction-signature GREEN **20/0/897**. All final runs warning-free. |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | Two runs: initial compile RED (59 missing-API diagnostics, 1 unused import); GREEN **45/0/871** including all existing reservation tests and five new promotion cases. |
+| `devenv shell -- cargo test --locked --lib recovery` | Two runs: initial compile RED (59 missing-API diagnostics, 1 unused import); GREEN **43/0/873**, including the new parent-ID begin guard and existing comment/key/local recovery guards. |
+| `devenv shell -- cargo test --locked --lib remote::reservation::tests::promotion` | Three runs: restart-stub RED **2/1/902**; added held-slot cancellation RED **4/1/910**; final reopened-service/epoch GREEN **5/0/912**. Broad reservation GREEN above also covers the corrections. |
+| `devenv shell -- cargo test --locked --lib promotion` | One run: **104/1/807**; new completed-replay regression intentionally removed retirement after completion and exposed the overly strict projection requirement. Corrected reconciliation to trust actual committed parent/reservation authority; final record GREEN covers it. Prior observation/integration cases passed in this run. |
+| `devenv shell -- cargo test --locked --lib promotion::record::tests::supersession_fences` | RED **0/1/915** (old promote owner stranded the replacement); final record GREEN covers atomic fencing/release. |
+| `devenv shell -- cargo test --locked --lib promotion::record::tests::finalization_without_applicable` | RED **0/1/916** (remote-configured contained/absent-context case incorrectly demanded a reservation); final record GREEN covers local-only and contained no-reservation completion with no fabricated history. |
+| `devenv shell -- cargo test --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema -- --exact` | GREEN **1/0/77**, required inventory target. |
+| `devenv shell -- cargo test --locked --lib read::status` | GREEN **10/0/907**, existing status contracts. The new parent-step/deduplication case is in record GREEN. |
+| `devenv shell -- cargo test --locked --lib cancellation_after_an_interrupted_resolution_is_a_recoverable_stop` | GREEN **1/0/916**, existing real owned-resolution cancellation regression. |
+| `devenv shell -- cargo fmt` | Five runs, exit 0. Formatting only; full Task 8 gates remain deferred. |
+
+The ownership matrix exercises both context and primary bindings against actual
+stored child seams: absent, retained clean candidate, interrupted retained
+conflict, authoritative completed publication and corrupted/unreadable ownership.
+It asserts unchanged child IDs/attempts and refusal to replace ownership. The
+existing owned-resolution regression covers its four real resolution boundaries;
+full parent runner retry/network/error mapping is still Task 6's obligation.
+Test-authoring corrections did not alter existing policy: complete replay must
+not synthesize a remote target for a local-only parent; fixtures must supply
+observed_at and last advertised evidence; loop replay must use the current row's
+ID. Debugging used concrete compiler/SQL errors and snapshot invariants, not
+changed preservation expectations or sleeps.
+
+### Full File Inventory And Review Handoff
+
+Review the complete uncommitted Task 5 change set against **f641f91**, including
+new files (not just tracked `git diff` output):
+
+1. `src/repository/promotion/record.rs` — schema, typed storage, audit, attempts,
+   identity guards, cancellation, finalization and committed-state reconciliation.
+2. `src/repository/promotion/record_tests.rs` — 20 new record/composition tests.
+3. `src/repository/promotion/mod.rs` — record module registration only.
+4. `src/repository/remote/reservation.rs` — scoped ID guard, ownership probe,
+   promote restart/cancellation/transaction-only finish.
+5. `src/repository/remote/reservation_tests.rs` — five new promotion tests.
+6. `src/repository/remote/state.rs` — schema/read visibility and startup audit hook.
+7. `src/repository/recovery.rs` — local begin identity guard and one regression.
+8. `src/repository/discovery.rs` — migration call in existing transaction.
+9. `src/repository.rs` — F1–F12 variants (shared existing F7).
+10. `src/repository/read/status.rs` — parent step projection/deduplication only.
+11. `src/repository/cleanup.rs` — private evidence matching predicate only.
+12. `tests/repository_enablement.rs` — table inventory entry.
+13. This execution ledger.
+14. Canonical comment `01M51H7Z00N4Q6S8V0X2Z4B6E1`.
+
+**Task 6 handoff, not implementation authorization:** compose the actual runner
+with these storage seams and Task 3's real prepare/candidate/apply interfaces;
+commit integrating intent before effects and branch_deleted before tracking
+deletion; hold the private evidence through the outer SQL transaction's commit
+and reopened-state reconciliation. Treat storage RecoveryRequired after integration
+as Ok pending plus refresh. Consume ChildState::Complete without rerunning, retain
+owned/uncertain child IDs, and acknowledge unowned active child cancellation using
+the existing synchronization before asking for a replacement attempt. Preserve
+published history until final SQL. Exercise actual runner F10/F11 process/commit
+uncertainty and F1–F12/SSH boundaries in Tasks 6/7. No run.rs or runner stub added.
+
+No new owner decision is pending. Remaining review/native/full-gate risks are the
+explicitly deferred Task 6/7 orchestration/SSH proof, Task 8 full local gates and
+native Windows open-handle behavior. Targeted results do not claim those gates.
+No dependencies, GPUI, global configuration, developer keys, sleeps, staging,
+commit, push, PR, CI dispatch, merge, ticket closure or worktree cleanup. Ticket
+remains open; controller owns reviews and checkpoint commit afterward.
+
+Final preservation checks: `git diff --check` and `git diff --exit-code --
+Cargo.toml Cargo.lock devenv.nix devenv.lock src/repository/remote/sync.rs
+src/repository/remote/poll.rs src/repository/remote/refs.rs
+src/repository/promotion/integrate.rs src/repository/mutation/bind/resume.rs
+.github/workflows/build.yml` passed. HEAD remains the exact Task 5 base above.
+
+## Task 5 SPEC P2 — Guard The Pre-Effect Refresh Check (2026-10-16)
+
+**Status: correction implemented and targeted-verified, returned to the same SPEC
+reviewer for recheck. SPEC acceptance is pending; no quality approval is claimed.**
+The entire Task 5 change remains uncommitted against
+`f641f917113cc252f429860ba5092efcbbfa260c`. No Task 6 work or checkpoint commit.
+
+### Verified Finding And Narrow Fix
+
+The reviewer identified a real pre-effect hole. `begin_or_reconcile` called the
+new promotion identity guard, but `recovery::require_refresh_can_begin` did not.
+The actual `create_folder` bridge asks that earlier question before marking the
+registration stale and making directories. With a confirmed promotion parent ID
+or a minted, not-yet-run child ID, it could therefore create the directory/change
+the cache and then convert the refresh's late OperationMismatch into a partial
+folder result. The earlier comment-publication guard already checked both paths.
+
+Added three focused tests through **actual `RepositoryService::create_folder`**,
+using enabled disposable repositories and repository-local fixture identity:
+
+- `spec_p2_create_folder_parent_id_preserves_directory_and_cache`;
+- `spec_p2_create_folder_unrun_child_id_preserves_directory_and_cache`;
+- `spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff`.
+
+Both negative tests snapshot every directory/file beneath docs and every row of
+every registry table, with refresh_required proven current beforehand. Before
+production changes, each reported **directory unchanged=false and cache
+unchanged=false**. After the correction they return OperationMismatch with
+left_directories=false, preserve both complete snapshots and leave the entire
+requested ancestor path absent. This verifies the bridge's real side-effect
+boundary, not just a call to the guard.
+
+The positive case uses real reservation/checkpoint/classification seams to create
+authoritative **context and primary** children bound to their promotion. Their
+actual folder calls still return Created(Current), and the actual refresh leaves
+the matching local row exactly refresh / empty target / completed. Wrong-root
+pre-effect use, wrong local action and a nonempty refresh target remain refused.
+
+Production fix: call the existing `promotion::record::validate_local_identity`
+from `recovery::require_refresh_can_begin`, before its existing comment guard and
+poll/pending-operation checks, with the same root, refresh action, ID and empty
+target used by the eventual refresh. Updated the guard's documentation. No new
+identity policy or duplicate implementation; the exact authoritative-child refresh
+exception is retained. Production folder, promotion storage and synchronization
+code are unchanged by this correction.
+
+### Exact Correction-Pass Verification
+
+| Exact command | Actual results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib spec_p2_create_folder` | Three runs: initial **0 passed/3 failed/917 filtered** (two genuine preservation failures, plus a test-only incorrect expectation that an additional already-completed same-ID refresh returns Refreshed); corrected test-only replay assertion, still before production changes, **1 passed/2 failed/917 filtered**, both directory/cache snapshots changed; after the narrow guard fix **3 passed/0 failed/917 filtered**. The positive case already proves its refresh through Created(Current) and the completed exact local row, so no redundant subsequent replay assertion is used. |
+| `devenv shell -- cargo fmt` | One run, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion::record` | Final **23 passed/0 failed/897 filtered**, including strengthened current-cache and wrong-root assertions. |
+| `devenv shell -- cargo test --locked --lib recovery` | **43 passed/0 failed/877 filtered**, retaining comment-child pre-effect/handoff, poll priority and local/key recovery guards. |
+| `devenv shell -- cargo test --locked --test mutation_bridges folder::domain` | **7 passed/0 failed/122 filtered**, actual existing folder bridge regressions. |
+
+All runs used Devenv and were warning-free. The first RED's positive-case failure
+was traced to `refresh_repository_target` returning IndexPending when an already
+completed row cannot be claimed again; only that redundant test assertion was
+removed. The pre-effect preservation expectations were never weakened. No sleeps,
+developer keys, dependency, GPUI or developer/global Git configuration changes.
+
+### Correction Scope And Return
+
+Only these four paths changed during this correction pass:
+
+- `src/repository/recovery.rs` — shared pre-effect guard call and documentation;
+- `src/repository/promotion/record_tests.rs` — actual bridge regressions/helpers;
+- this execution ledger;
+- canonical comment `01M51H7Z00N4Q6S8V0X2Z4B6E1` — appended correction evidence.
+
+The prior full Task 5 file inventory and deferred full/native/Task 6–8 obligations
+remain in force. Return the complete current Task 5 diff against f641f91 to the
+**same SPEC reviewer for P2 recheck**, then quality review after SPEC acceptance.
+No staging, commit, push, PR, CI, merge, closure, cleanup or new delegation.
+Ticket remains open; controller owns the checkpoint after review.
+
+## Task 5 Final Reviews And Nonblocking Lookup Minor (2026-10-16)
+
+**Task 5 is reviewed complete at the local gate. Controller checkpoint pending;
+Task 6 is next after that checkpoint.** The controller conveyed **SPEC PASS**,
+including the P2 pre-effect guard correction, and **QUALITY APPROVED**, with no
+fatal issues and one nonblocking lookup minor worth fixing before checkpoint.
+That minor is now resolved and targeted-verified. Review scope is the full
+current uncommitted Task 5 change set against
+`f641f917113cc252f429860ba5092efcbbfa260c`, not just the last correction. These
+controller-reported approvals supersede pending-SPEC/recheck statuses above;
+historical evidence remains intact. No additional reviewer execution or separate
+minor-fix re-review is inferred.
+
+### Verified Minor And Narrow Resolution
+
+Source inspection confirmed both unnecessary full-history reads:
+
+- begin_record loaded/decoded records(tx, repository_id), then searched for the
+  requested item's unfinished row. It now queries repository_id + item_id with
+  the **exact partial-index predicate**
+  `step NOT IN ('complete','abandoned','superseded')`, decoding only that row.
+  Existing same-ID replay/collision checks still run first; Busy, permitted
+  supersession and stored abandoned refusals keep their existing semantics.
+- promotion_operations loaded/decoded all repository promotions even for one
+  explicit operation ID. That path now uses the existing typed read_record
+  lookup with the same repository scope. Terminal rows still show explicitly;
+  missing rows stay absent. List and startup audit retain the full-history path.
+
+Only `promotion/record.rs` and `read/status.rs` changed in production during this
+pass. No schema, identity guard, refusal encoding, child ownership, transaction,
+reservation, DTO or F2 behavior changed. The requested existing focused tests were
+used; no tests mirroring query implementation were added.
+
+### Exact Verification And Coordination
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | One run, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion::record` | **23 passed/0 failed/897 filtered**, including exact identity/abandoned replay, Busy/supersession, parent-step status and SPEC P2 authoritative-child/side-effect guards. |
+| `devenv shell -- cargo test --locked --lib read::status` | **10 passed/0 failed/910 filtered**. |
+
+All runs warning-free. Earlier targeted verification remains recorded; no broad
+or full/native gate was rerun. The implementation plan's Task 5/current-progress
+summary, fresh-session handoff and canonical comment
+`01M51H7Z00N4Q6S8V0X2Z4B6E1` now reflect reviewed-complete Task 5 and Task 6 next
+after the controller's checkpoint. Task 4's committed base is f641f91.
+
+This pass changes six paths: the two production files above, this ledger,
+implementation-plan coordination, handoff coordination and the existing canonical
+comment. All prior Task 5 pending source/tests remain present. No other source
+change, new test, dependency, GPUI, global config, developer key, sleep, subagent,
+staging, commit or outward lifecycle action. HEAD stays f641f91, ticket open;
+Task 6 has not started. Full Task 8/native gates remain deferred.

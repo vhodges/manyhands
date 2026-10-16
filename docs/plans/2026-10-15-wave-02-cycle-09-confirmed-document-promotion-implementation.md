@@ -392,7 +392,8 @@ owner-approved T4-1. SPEC recheck PASSED the physical registration-inventory fix
 QUALITY recheck APPROVED both P1 findings resolved, with no findings remaining.
 Review boundary is the full current uncommitted Task 4 change set against
 `79463c53beb400d95a311e558e64caf8efd2beac`, including SPEC1-P2 and QUALITY2-P1
-corrections. Controller checkpoint pending; **Task 5 is next after it**. Historical
+corrections. Controller checkpoint is committed as `f641f91`; Task 5's reviewed
+completion is recorded below, with Task 6 next after its checkpoint. Historical
 blocker/approval/review evidence and exact RED/GREEN commands remain in the ledger.
 This status-only update changes no source/tests and reruns no tests; approvals
 are controller-reported and no extra reviewer executions are inferred. Prior
@@ -482,10 +483,23 @@ the absent tracking-slot ref lock through the caller's SQL commit/reconciliation
   commands/counts are in the ledger. Broader affected state/refs selectors GREEN.
 - [x] Implement; run targeted GREEN and existing affected regressions; add comment.
 - [x] Independent spec/quality rechecks passed; no findings remaining.
-- [ ] Controller checkpoint commit afterward
-  (for example `feat: add verified context cleanup helpers`). No worker commit.
+- [x] Controller checkpoint committed as `f641f91`
+  (`feat: add verified context cleanup helpers`). No worker commit.
 
 ## Task 5: Promotion Record And Reservation Rules
+
+**Completion summary — 2026-10-16:** reviewed complete at the local gate,
+uncommitted against `f641f917113cc252f429860ba5092efcbbfa260c`. The controller
+reported **SPEC PASS** (including the P2 pre-effect refresh guard correction) and
+**QUALITY APPROVED** with one nonblocking lookup minor, now resolved. begin_record
+uses the indexed unfinished-item predicate; explicit-ID status uses read_record;
+listing/startup audit retain full history and the identity/refusal semantics are
+unchanged. Latest focused checks pass **23 record tests** and **10 status tests**;
+formatter exited 0. Exact commands/results, prior RED/GREEN and review history
+are in the ledger and canonical comment `01M51H7Z00N4Q6S8V0X2Z4B6E1`.
+Controller owns the pending checkpoint; **Task 6 is next after that checkpoint**.
+No Task 6 implementation or full/native gate is claimed. Historical task
+checklist remains below; the combined run/commit item awaits only controller commit.
 
 **Files:** new `src/repository/promotion/{record.rs, record_tests.rs}`;
 `src/repository/remote/reservation.rs`, `reservation_tests.rs`, `state.rs`;
@@ -859,7 +873,9 @@ the execution ledger, including the owner-approved T0-1 amendment. Tasks 1–3
 have since been implemented, targeted-verified and independently reviewed, as
 recorded in their checkpoint evidence; Task 3 remains uncommitted for the
 controller at that historical checkpoint; it is now committed as `3b925e1`.
-Task 4 is reviewed complete at the local gate under approved T4-1, including the
-physical-inventory and both hidden-data preservation corrections. Controller
-checkpoint pending; Task 5 next afterward. Tasks 5–8 remain planned; no full/native
-gate or Cycle completion is claimed.
+Task 4 is reviewed complete and committed as `f641f91` under approved T4-1,
+including the physical-inventory and both hidden-data preservation corrections.
+Task 5 is reviewed complete at the local gate: SPEC PASS, QUALITY approved, its
+nonblocking lookup minor resolved/targeted-verified. Controller checkpoint pending;
+Task 6 next afterward. Tasks 6–8 remain planned; no full/native gate or Cycle
+completion is claimed.

@@ -1211,7 +1211,7 @@ fn normalized_schema_sql(sql: &str) -> String {
         .collect()
 }
 
-fn validate_schema_object(
+pub(in crate::repository) fn validate_schema_object(
     connection: &Connection,
     kind: &str,
     name: &str,
@@ -2831,7 +2831,7 @@ pub(super) fn read_operation_rows(
     Ok(records)
 }
 
-pub(super) fn read_operation(
+pub(in crate::repository) fn read_operation(
     connection: &Connection,
     repository_id: i64,
     operation_id: crate::repository::OperationId,
@@ -5253,6 +5253,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
+    crate::repository::promotion::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
     validate_schema_object(

@@ -681,6 +681,13 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    super::promotion::record::validate_local_identity(
+        &transaction,
+        root_path,
+        action,
+        &requested,
+        target,
+    )?;
     if !comment_child_may_begin(&transaction, root_path, action, &requested, target)? {
         return Err(mismatch(operation, root));
     }
@@ -1372,7 +1379,8 @@ fn in_the_way(
 
 /// Refuses a root on which a refresh under `operation_id` would be
 /// refused before it began: with `OperationMismatch` for an ID that is a
-/// comment's synchronization and whose hand-off is not yet due, with
+/// promotion's parent or child whose exact authoritative hand-off is not due,
+/// or a comment's synchronization whose hand-off is not yet due, with
 /// `RepositoryBusy` while an automatic poll holds the reservation, and
 /// with `RecoveryRequired` for any other remote operation that holds it,
 /// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
@@ -1387,6 +1395,13 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
+    super::promotion::record::validate_local_identity(
+        connection,
+        root_path,
+        refresh,
+        &operation_id.to_string(),
+        "",
+    )?;
     if !comment_child_may_begin(
         connection,
         root_path,
@@ -2180,6 +2195,46 @@ mod abandoned_row_tests {
     use super::*;
 
     const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAB";
+
+    #[test]
+    fn promotion_parent_id_is_refused_before_local_journal_begin() {
+        let mut db = Connection::open_in_memory().unwrap();
+        crate::repository::discovery::migrate_registry(&mut db).unwrap();
+        db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,'/repository',7,'accessible',0)",[]).unwrap();
+        let op = OperationId::parse(ID).unwrap();
+        {
+            let tx = db.transaction().unwrap();
+            crate::repository::promotion::record::begin_record(
+                &tx,
+                1,
+                op,
+                &"01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+                crate::repository::PromotionExpectation::from_bytes([7; 32]),
+                None,
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(
+            begin_or_reconcile_operation(
+                &mut db,
+                Path::new("/repository"),
+                RepositoryOperation::RefreshRepository,
+                op,
+                ""
+            )
+            .err()
+            .unwrap()
+            .kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM operation_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
 
     /// A journal holding one row, in `state` with `step`, touched at
     /// `observed_at`.

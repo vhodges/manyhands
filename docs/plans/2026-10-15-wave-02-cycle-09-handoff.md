@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 4 reviewed complete at local gate; Task 5 after checkpoint (2026-10-16)
+## Current: Task 5 reviewed complete at local gate; Task 6 after checkpoint (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -27,21 +27,56 @@ as `3b925e141bec9ae309024bdbfbf73aa6ab48caae` (`3b925e1`).** Its prior
 spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
 with no findings. Those reviews covered the Task 3 change set, including the
 include-context correction, against base `6d4ad16` (full SHA above); the controller
-has since committed it. **T4-1 is owner-approved and Task 4 is reviewed complete
-at the local gate, uncommitted for the controller's checkpoint. Task 5 is next
-after that checkpoint.** Current HEAD/review base
-is `79463c53beb400d95a311e558e64caf8efd2beac`, the reviewed blocker checkpoint.
+has since committed it. **T4-1 is owner-approved; Task 4 passed both final reviews
+and is committed as `f641f917113cc252f429860ba5092efcbbfa260c`. Task 5 is now
+reviewed complete at the local gate, uncommitted for the controller's checkpoint.
+Task 6 is next after that checkpoint.** Current HEAD and full Task 5 review base
+are `f641f917113cc252f429860ba5092efcbbfa260c`.
 
-Final controller-reported implementation reviews:
+Final controller-reported Task 5 implementation reviews:
 
-- **SPEC recheck PASSED**, including the physical registration-inventory fix.
-- **QUALITY recheck APPROVED**, both P1 findings resolved, no findings remaining.
+- **SPEC PASS**, including the P2 pre-effect refresh identity correction.
+- **QUALITY APPROVED**, no fatal issues; its single nonblocking lookup minor is
+  resolved in the current tree and targeted-verified.
 
-These reviews cover the full current uncommitted Task 4 change set against that
-exact base, including SPEC1-P2 and QUALITY2-P1 corrections. They supersede earlier
-pending-recheck statuses; historical evidence is retained. This coordination-only
-update changes no source/tests and reruns no tests. No additional reviewer test
-execution is inferred. Full Task 8/native gates remain deferred.
+The review boundary is the full uncommitted Task 5 change set against that exact
+base, not merely the last correction. Prior pending-SPEC states are superseded;
+historical RED/GREEN and review evidence remain in the execution ledger and
+canonical comment `01M51H7Z00N4Q6S8V0X2Z4B6E1`. Approvals are controller-reported;
+no additional reviewer execution or minor-fix re-review is inferred. Full Task
+8/native gates remain deferred; controller owns the pending checkpoint commit.
+
+### Task 5 delivery and Task 6 handoff
+
+Task 5 delivers audited document_promotions storage, typed steps/categories and
+stored refusals, persisted child attempts and ownership-first retry seams,
+cross-journal IDs, promote arbitration/restart/epoch fencing, F1–F12 names and
+parent-step read status. T4-1 completion composes retirement, complete and
+applicable reservation finish in one SQL transaction, with actual-state commit
+reconciliation and the private Git evidence/ref lock retained by the caller.
+SPEC P2 closes create_folder's pre-effect guard hole while preserving the exact
+authoritative child refresh exception.
+
+The final quality minor replaces full-history work in two bounded lookups:
+begin_record selects the requested item's unfinished row with the partial-index
+predicate; explicit-ID status uses read_record. Listing and startup audit retain
+full history. Identity guards, stored refusal replay and outcome semantics stay
+unchanged. Latest exact checks:
+
+- `devenv shell -- cargo fmt` — exit 0.
+- `devenv shell -- cargo test --locked --lib promotion::record` — **23 passed,
+  0 failed, 897 filtered**.
+- `devenv shell -- cargo test --locked --lib read::status` — **10 passed,
+  0 failed, 910 filtered**.
+
+Earlier 45 reservation, 43 recovery, required inventory and focused actual-folder
+checks remain recorded evidence; no broad rerun is inferred. No test was added
+to mirror the query implementation, as requested. Task 6 has not started. After
+the controller's checkpoint, compose the real runner with Task 3's integration
+stages and Task 5's storage/transaction seams; preserve ownership-first child
+selection, integrating/branch_deleted-before-effect ordering and evidence lifetime
+through SQL commit/reconciliation. Tasks 6/7 still prove real F1–F12/F10/F11 and
+SSH orchestration; Task 8 owns the full local gates.
 
 ### Task 4: historical blocker and owner-approved recovery boundary
 
@@ -104,8 +139,8 @@ ancestry passed. No additional worker rebase is needed in this execution.
 This is the approved recovery boundary. Task 4 supplies helpers/private evidence
 and R1 migration; Tasks 5/6 later supply durable intent/completion/reservation
 composition, with inside-F10/F11 lifecycle tests in Tasks 5–7. Do not implement
-fake Task 5 storage in Task 4. The reviewed implementation remains uncommitted for
-the controller's checkpoint.
+fake Task 5 storage in Task 4. That reviewed implementation is committed as
+`f641f91`; Task 5 supplies the real storage/completion composition above.
 
 Delivered Task 4: lease-owning generic cleanup helpers for both document/ticket
 contexts; ignored/untracked/locked/partial preservation; guarded branch deletion;
@@ -124,8 +159,9 @@ under the existing lease with bounded/fail-closed inspection.
 
 The runner must retain evidence/ref lock through SQL commit/reconciliation and
 compose real branch_deleted intent, ownership/generation/configuration fencing,
-promotion completion and reservation finish. Tasks 5–7 still own the actual
-F10/F11 lifecycle and uncertain-result outcome/refresh tests. Task 4 does not
+promotion completion and reservation finish. Task 5 supplies the SQL composition;
+Tasks 6/7 still own actual runner F10/F11 and uncertain-result outcome/refresh
+tests. Task 4 does not
 implement those records or claim native Windows pruning was executed. Exact
 commands/counts and final review approvals are in the ledger and comment
 `01M51G7Z00N4Q6S8V0X2Z4B6E0`.
@@ -204,10 +240,10 @@ That historical coordination-only update changed no source and reran no tests.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
-| Current HEAD / Task 4 resume base | `79463c53beb400d95a311e558e64caf8efd2beac`: reviewed blocker evidence. Task 3 checkpoint is `3b925e1`; its review base was `6d4ad16`. |
+| Current HEAD / Task 5 review base | `f641f917113cc252f429860ba5092efcbbfa260c`: reviewed Task 4 checkpoint. Task 5's full change set is uncommitted against it. |
 | Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Checkpoints | Tasks 0–3 reviewed/committed (`25514a3`, `3d47027`, `6d4ad16`, `3b925e1`); blocker evidence reviewed/committed `79463c5`. T4-1 owner-approved. Task 4 reviewed complete at local gate: SPEC recheck PASSED; QUALITY recheck APPROVED, both P1s resolved/no findings. Controller checkpoint pending; Task 5 next afterward. |
+| Checkpoints | Tasks 0–4 reviewed/committed (`25514a3`, `3d47027`, `6d4ad16`, `3b925e1`, `f641f91`); T4-1 owner-approved. Task 5 reviewed complete: SPEC PASS, QUALITY approved, nonblocking lookup minor resolved/verified. Controller checkpoint pending; Task 6 next afterward. |
 | Ongoing-task preflight | Reuse the controller's completed fetch/rebase/ancestry preflight against `origin/main` at `89d04f901636229392a311241f8e777f0a00962b`. This status pass performs no fetch, rebase or checkpoint commit. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
@@ -306,12 +342,12 @@ the same way comment publication binds its child synchronization.
 
 1. Preserve existing authorization and reviewed evidence; read the latest
    execution ledger. The controller owns checkpoint commits after reviews.
-2. **Task 4 passed implementation SPEC/QUALITY rechecks and is reviewed complete
-   at the local gate against `79463c5`.** Controller checkpoint is pending;
-   **Task 5 is next after it**. Reuse evidence and approvals rather than
-   redispatching completed work. T4-1 remains approved; no pending owner decision.
-   This status worker makes no source change, test rerun or commit.
-3. Tasks 0–4 passed their independent reviews. Before subsequent
+2. **Task 5 is reviewed complete at the local gate against `f641f91`: SPEC PASS,
+   QUALITY approved and the nonblocking lookup minor resolved/verified.**
+   Controller checkpoint is pending; **Task 6 is next after it**. Reuse evidence
+   and approvals rather than redispatching completed work. T4-1 remains approved;
+   no pending owner decision. This worker makes no checkpoint commit or Task 6 change.
+3. Tasks 0–5 passed their independent reviews. Before subsequent
    implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
       the worktree. Never rebase main onto the branch.
@@ -324,7 +360,7 @@ the same way comment publication binds its child synchronization.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
-4. After the controller's Task 4 checkpoint, continue Tasks 5–8
+4. After the controller's Task 5 checkpoint, continue Tasks 6–8
    in order, retaining the approved T4-1 boundary. Each task
    starts with a failing test and its recorded red run. Each ends with a commit
    (only when authorized), a ticket

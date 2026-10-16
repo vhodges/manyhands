@@ -215,7 +215,7 @@ fn active(phase: RemoteOperationPhase) -> bool {
 }
 
 /// Called inside the same immediate transaction as the following state write.
-pub(super) fn owned(
+pub(in crate::repository) fn owned(
     service: &RepositoryService,
     tx: &Transaction<'_>,
     repository_id: i64,
@@ -420,11 +420,46 @@ fn pending_recovery_stage(
     Ok(false)
 }
 
+/// Ownership-first parent probe. A clean candidate still belongs to the child
+/// until it releases/reconciles its integration; outer errors cannot erase it.
+pub(in crate::repository) fn retains_promotion_child(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let window = state::latest_integration_window(db, record)?;
+    for ordinal in 0..=1 {
+        if let Some(step) =
+            state::integration_step_in_window(db, record.id, window.number, ordinal)?
+        {
+            if step.phase != state::IntegrationStepPhase::Applied
+                || state::integration_has_resolution_attempt(db, record, &step)?
+                    && !state::integration_resolution_released(db, record, &step)?
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 fn acknowledge(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
     point: RemoteOperationSafePoint,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+    if record.target.action() == RemoteOperationAction::Promote
+        && (record.cancel_requested || record.yield_requested)
+    {
+        // After F6 this slot excludes polls until completion or explicit
+        // supersession. A recoverable stop must not release it or write poll
+        // bookkeeping; the parent records the cancellation between whole steps.
+        tx.execute("UPDATE remote_operation_records SET phase='reserved',outcome=NULL,completed_step=?2,cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,point_name(point),now()]).map_err(|_|state::recovery_required())?;
+        return Ok(if record.cancel_requested {
+            RemoteSafePointOutcome::Cancelled
+        } else {
+            RemoteSafePointOutcome::Interrupted
+        });
+    }
     // A pending conflict or owned resolution is the recoverable transition a
     // cancellation must preserve: stop this owner without ending the
     // operation, so restart, reacquisition and external repair stay possible.
@@ -703,7 +738,90 @@ fn finish(
     Ok(())
 }
 
+/// SQL-only finalization. Retirement and parent completion belong to this same
+/// caller-owned transaction; promotion never updates automatic poll policy.
+pub(in crate::repository) fn finish_promotion(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    id: i64,
+    owner: &RemoteReservation,
+) -> Result<(), RepositoryError> {
+    let record = owned(service, tx, id, owner)?;
+    if record.target.action() != RemoteOperationAction::Promote
+        || record.priority != RemoteOperationPriority::Manual
+        || record.completed_step != Some(RemoteOperationSafePoint::AfterAdvertisement)
+    {
+        return Err(state::recovery_required());
+    }
+    let complete:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+    if !complete {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE remote_operation_records SET phase='completed',outcome='completed',cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",params![record.id,now()]).map_err(|_|state::recovery_required())?;
+    Ok(())
+}
+
 impl RepositoryService {
+    #[allow(dead_code)] // Composed by the Task 6 promotion runner.
+    pub(crate) fn restart_remote_promotion(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            crate::repository::promotion::record::validate_remote_identity(
+                tx,
+                id,
+                operation_id,
+                target,
+                RemoteOperationPriority::Manual,
+            )?;
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            if record.target != *target
+                || target.action() != RemoteOperationAction::Promote
+                || record.priority != RemoteOperationPriority::Manual
+            {
+                return Err(mismatch());
+            }
+            if let Some(parent) =
+                crate::repository::promotion::record::read_record(tx, id, operation_id)?
+                && matches!(
+                    parent.step,
+                    crate::repository::promotion::record::PromotionStep::Abandoned
+                        | crate::repository::promotion::record::PromotionStep::Superseded
+                )
+            {
+                return Err(state::recovery_required());
+            }
+            if record.phase == RemoteOperationPhase::Completed {
+                return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            if record.generation != state::generation(tx, id)? {
+                return Err(state::recovery_required());
+            }
+            crate::repository::recovery::require_no_pending_local(tx, id)?;
+            if let Some(other) = state::read_operation_rows(tx, id, true)?
+                .into_iter()
+                .find(|other| other.id != record.id)
+            {
+                if other.priority == RemoteOperationPriority::Poll {
+                    tx.execute("UPDATE remote_operation_records SET yield_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",params![other.id,now()]).map_err(|_|state::recovery_required())?;
+                    return Ok(RemoteReservationOutcome::PollYielding);
+                }
+                return Ok(RemoteReservationOutcome::Busy);
+            }
+            let epoch = record
+                .owner_epoch
+                .checked_add(1)
+                .ok_or_else(state::recovery_required)?;
+            tx.execute("UPDATE remote_operation_records SET phase='reserved',completed_step=NULL,outcome=NULL,cancel_requested=0,yield_requested=0,owner_epoch=?2,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,epoch,now()]).map_err(|_|state::recovery_required())?;
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
+            Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
+        })
+    }
     #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn reserve_remote_poll(
         &self,
@@ -784,6 +902,13 @@ impl RepositoryService {
             return Err(mismatch());
         }
         state::with_transaction(self, root, |tx, repository_id| {
+            crate::repository::promotion::record::validate_remote_identity(
+                tx,
+                repository_id,
+                operation_id,
+                target,
+                priority,
+            )?;
             let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path,o.state,o.completed_step FROM comment_publication_bindings b
                 JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
                 |r| Ok((r.get::<_, String>(0)?,r.get::<_, String>(1)?,r.get::<_, Option<String>>(2)?,r.get::<_, String>(3)?,r.get::<_, String>(4)?,r.get::<_, Option<String>>(5)?))).optional().map_err(|_| state::recovery_required())?;
@@ -2108,6 +2233,13 @@ impl RepositoryService {
             if &record.target != target || !is_sync(target) {
                 return Err(mismatch());
             }
+            crate::repository::promotion::record::validate_remote_identity(
+                tx,
+                id,
+                operation_id,
+                target,
+                record.priority,
+            )?;
             if record.authority.is_some() {
                 validate_index_identity(tx, id, operation_id)?;
             } else if tx

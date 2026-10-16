@@ -833,6 +833,18 @@ pub const FAILURE_POINT_EXIT_STATUS: i32 = 86;
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    AfterConfirmed,
+    AfterContextSync,
+    BeforeIntegrationRef,
+    AfterIntegrationRef,
+    AfterPublication,
+    BeforeRemoteDeletion,
+    // F7 uses AfterRemoteDeletion below, shared with remote configuration.
+    DuringWorktreeRemoval,
+    BeforeBranchDeletion,
+    BeforeCompletion,
+    AfterCompletion,
+    RefreshFailure,
     PollBeforeTarget,
     PollBeforeDiscovery,
     PollAfterCompletion,

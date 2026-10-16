@@ -10,6 +10,7 @@ use std::{
 #[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
 pub(super) mod integrate;
 pub(super) mod observe;
+pub(super) mod record;
 
 /// A refusal before promotion has changed the primary. Integration uncertainty
 /// is carried by the internal pending state, never by this error.

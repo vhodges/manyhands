@@ -58,6 +58,21 @@ pub(super) struct RetirementEvidence<'a> {
     retired_oid: Oid,
     _tracking_lock: Option<git2::Transaction<'a>>,
 }
+impl RetirementEvidence<'_> {
+    /// Bind the private Git proof to the parent being completed, without giving
+    /// callers a way to manufacture or detach that proof from its lease/lock.
+    pub(super) fn matches_promotion(
+        &self,
+        operation: OperationId,
+        item: &ItemId,
+        oid: Oid,
+    ) -> bool {
+        self.kind == AuthoringKind::Document
+            && self.operation_id == operation
+            && &self.item_id == item
+            && self.retired_oid == oid
+    }
+}
 impl ContextCleanup {
     pub(super) fn acquire(root: &Path) -> Result<Self, RepositoryError> {
         let (repository, root) =
