@@ -2,7 +2,7 @@ mod merge;
 mod observation;
 mod poll;
 mod refs;
-mod sync;
+pub(super) mod sync;
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
     ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,

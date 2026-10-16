@@ -20,6 +20,9 @@ id: "01M500Q0YHT5PNGGCQPCBSF3Z5"
 > development, with independent spec then quality review at each checkpoint.
 > The owner approved T0-1's ownership-first child retry amendment and targeted
 > tests only until Task 8; these override the original execution/baseline text.
+> On 2026-10-16 the owner approved T2-1's resulting Git mode/type digest encoding
+> amendment. Task 2 below implements it; its historical quality blocker is
+> preserved in the execution ledger.
 
 **Goal:** Two headless operations:
 
@@ -203,6 +206,15 @@ audit.
 
 ## Task 2: Promotion Observation, Change Set And Preview
 
+**Completion summary — 2026-10-16:** complete at the local gate. The same quality
+reviewer approved T2-1 resolved with no critical/important/minor findings; the
+same spec reviewer rechecked the amended code/docs and passed, with context-path
+and executable-document fixes retained. The recorded targeted selector passes
+all 53 tests; no tests were rerun for this status update. Historical task
+checklists/evidence remain below and in the execution ledger. The controller's
+checkpoint commit is pending; Task 3 is next. Full Task 8/native gates remain
+deferred.
+
 **Files:** new `src/repository/promotion/{mod.rs, observe.rs,
 observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
 `src/repository.rs` (module, re-exports).
@@ -253,7 +265,18 @@ observe_tests.rs}`, `src/repository/remote/sync.rs` (visibility),
 - [ ] Failing digest tests:
   - stable across two previews;
   - changes for each bound field (item, path, branches, remote, integration
-    kind, each change entry, cleanup set);
+    kind, each change entry including resulting Git mode/type, cleanup set);
+  - **(T2-1, owner-approved)** retain all four regressions: remote-backed regular
+    `100644` → symlink `120000` and regular → executable `100755`, each with
+    unchanged Added and Modified path categories against the same primary and
+    identical new blob OIDs; each must change the digest;
+  - encode each Added/Modified result-tree mode (including type bits) as u32
+    big endian immediately after its optional new OID. Deleted encodes absent
+    OID plus zero u32, never its old mode. Verify the fixed-width byte encoding
+    and explicit deletion sentinel with a protocol vector. Keep evidence internal
+    and the public path-change DTO unchanged;
+  - retain domain `manyhands promotion v1`, finalizing the unshipped encoding;
+    there is no shipped earlier digest requiring migration;
   - **(D6)** unchanged by a new context OID that only merges the primary,
     and by a `T(P)` advance that touches other paths, with a remote;
   - changed by a new local primary OID without a remote;

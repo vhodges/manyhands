@@ -33,6 +33,10 @@ with subagent-driven development and targeted tests only until Task 8. The
 owner approved the T0-1 ownership-first retry amendment below; the execution
 ledger preserves the original blocker and the approval.
 
+On 2026-10-16 the owner also approved T2-1's resulting Git mode/type consent
+encoding amendment. The change-set encoding below includes that approval; the
+historical quality blocker and probe evidence remain in the execution ledger.
+
 The RFCs settle the external policy:
 
 - promotion is confirmed;
@@ -253,15 +257,35 @@ fixed-width, length-prefixed fields:
 - context and primary branch names;
 - remote name, or a none tag;
 - integration kind;
-- the sorted change set (path, change, new blob OID);
+- the sorted change set (path, change, optional new blob OID, resulting Git entry
+  mode including type bits), **owner-approved T2-1 amendment**;
 - the cleanup set;
 - without a remote only, the local primary and context OIDs.
+
+**T2-1 encoding, approved.** Append the resulting mode immediately after each
+change's new-OID option (present tag plus OID, or absent tag), as exactly four
+bytes of **u32 big endian**. For Added and Modified, take this value from the
+resulting Git tree entry, including type bits (`100644`, `100755`, `120000`,
+etc.), never from local filesystem assumptions. Deleted has no resulting entry:
+its new OID is absent and its mode is the explicit **zero u32 sentinel**. Do not
+bind the deleted entry's old mode. The mode evidence remains internal; the
+public `PromotionPathChange` shape is unchanged.
+
+The domain stays **`manyhands promotion v1`**. No digest using the earlier
+incomplete encoding has shipped; this amendment finalizes v1 rather than
+introducing a compatibility migration. Existing length/count fields are u64 big
+endian; category, option and cleanup tags are single bytes. The mode is appended
+after the OID and before the next change (or the cleanup tags). Other fields and
+their order remain as listed above.
 
 **(D6)** With a remote, the moving OIDs are left out on purpose. The
 operation's own synchronization rewrites the context with a primary merge. A
 collaborator's already-published primary advance moves the base without
 changing what this promotion contributes or publishes. Because of D2, the
 local primary cannot carry unpublished work.
+
+Result-mode binding preserves this invariance: it binds only changed result
+entries, without adding moving commit/tree OIDs or unrelated primary-only paths.
 
 **(D4)** A collaborator's new context commits change the change set, so the
 digest catches them.

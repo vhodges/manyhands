@@ -64,6 +64,10 @@ subagent-driven development and targeted tests only until Task 8. The owner
 also approved T0-1's ownership-first child retry amendment, recorded below
 and in the execution ledger. Outward actions remain separately gated.
 
+On 2026-10-16 the owner approved T2-1's resulting Git mode/type digest amendment.
+The amended encoding below is part of this approved contract; the historical
+quality blocker and its characterization remain in the execution ledger.
+
 ## Planning Evidence And Implementation Entry Gate
 
 The existing ticket branch and worktree were reused. A fresh `git fetch
@@ -207,12 +211,21 @@ Implementation requires all of the following:
    - whether the primary is published or left publish-pending;
    - each cleanup effect.
 
-   The digest is BLAKE3 over a fixed encoding of those facts. **(D6)** When a
+   The digest is BLAKE3 over a fixed encoding of those facts. **(T2-1, approved)**
+   Each sorted change binds path, category, optional new blob OID, then resulting
+   Git entry mode including type bits as a **four-byte big-endian u32**. Added
+   and Modified take the mode from the integrated Git tree; Deleted has no new
+   OID and encodes **zero u32**, not its old mode. This is internal digest
+   evidence and adds no public preview DTO field. The domain remains
+   `manyhands promotion v1`: this finalizes its unshipped encoding, with no
+   previously shipped digest to migrate. **(D6)** When a
    remote is configured, the encoding leaves out the context, local-primary
    and tracking OIDs, because the operation's own synchronization moves the
    context and a collaborator's already-published primary advance moves the
    base. The change set and the D2 relation stand in for them. Without a
-   remote, the encoding binds both local OIDs.
+   remote, the encoding binds both local OIDs. Result-mode binding does not add
+   moving commit/tree OIDs or unrelated primary-only paths, preserving the
+   primary-advance and context-primary-merge invariance.
 3. **Confirmation binding.** `promote_document` takes:
    - the operation ID;
    - the item ID;

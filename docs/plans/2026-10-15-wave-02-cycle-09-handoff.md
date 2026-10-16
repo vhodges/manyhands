@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 0 reviewed; Task 1 next (2026-10-16)
+## Current: Task 2 reviewed complete at local gate; Task 3 next (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -16,9 +16,57 @@ Task 0's delete/prune probes are verified; its interrupted-retained-conflict
 blocker was reviewed and the owner approved the ownership-first amendment.
 The remaining Task 0 characterizations are recorded in the ledger, including
 the full replay/restart matrix, merge-tree equivalence and fresh edit context.
-Independent spec review passed; quality review approved after three
-documentation consistency fixes. No production code or retained test/Cargo
-changes exist yet. Task 1 is next.
+Task 0 passed independent spec and quality review and is committed as `25514a3`.
+Task 1 guarded remote context deletion passed both reviews and is committed as
+`3d47027`, the current HEAD. Task 2 observation/preview is uncommitted. Its spec
+review passed after the context-path and executable-document corrections; its
+48 retained tests remain, with five more T2-1 regressions added. The owner approved
+the T2-1 encoding amendment ("yes" to the controller's recommendation); it is now
+implemented, and **53 targeted tests pass**. Both reviews now PASS: the same
+quality reviewer approved T2-1 resolved with no critical/important/minor findings;
+the same spec reviewer rechecked the amended code/docs and confirmed the prior
+spec fixes remain intact. **Task 2 is complete at the local gate.** The controller
+owns the pending checkpoint commit; Task 3 is next after that checkpoint.
+
+### T2-1: owner-approved amendment implemented and reviewed resolved
+
+The original approved digest encoded changed path/category/new blob OID but not resulting
+Git mode/type. With a remote, moving context OIDs are deliberately excluded.
+Temporary real-Git probes confirmed equal digests for `extra` changing from
+regular `100644` to symlink `120000`, or to executable `100755`, with the same
+blob OID. Both Added and Modified cases were reproduced against an exactly
+unchanged primary; both previews stayed Ready and their path/category change
+vectors were equal. All four expected digest-inequality assertions failed.
+
+Exact RED: `devenv shell -- cargo test --locked --lib promotion::observe::tests::t2_1_ -- --nocapture`
+→ **0 passed / 4 failed / 822 filtered**. The temporary probes were removed;
+`devenv shell -- cargo test --locked --lib promotion::observe`
+→ **48 passed / 0 failed / 774 filtered**. That historical preservation pass did
+not clear T2-1; the owner subsequently approved the encoding amendment below.
+
+**Approved and implemented:** immediately after each optional new OID, bind the
+resulting Git entry mode including type bits as a four-byte **u32 big endian**.
+Added/Modified use the result Git tree entry; Deleted encodes absent OID and
+**zero u32**, not its old mode. Evidence is private; public DTOs are unchanged.
+Keep domain `manyhands promotion v1`, finalizing an unshipped encoding. D6 still
+excludes moving commit/tree OIDs and unrelated primary-only paths.
+
+Retained regression RED/GREEN:
+`devenv shell -- cargo test --locked --lib promotion::observe::tests::t2_1_`
+→ **0 passed / 5 failed / 822 filtered** before the hash fix, then **5 passed /
+0 failed / 822 filtered**. This includes all four mode transitions plus an
+independent fixed-width/deletion-sentinel protocol vector. Final
+`devenv shell -- cargo test --locked --lib promotion::observe`
+→ **53 passed / 0 failed / 774 filtered**, preserving prior spec fixes and
+primary-only/context-primary-merge invariance. Formatter/check passed.
+
+Cycle/design/plan now include the approved amendment. Full historical blocker,
+approval, implementation and verification evidence is in the execution ledger;
+comments `01M5187Z00N4Q6S8V0X2Z4B6DR` (blocker) and
+`01M5197Z00N4Q6S8V0X2Z4B6DS` (approved delivery). The prior spec path/mode-policy
+findings remain resolved. Final quality and spec rechecks both passed, recorded
+in the ledger's final review section and comment `01M51A7Z00N4Q6S8V0X2Z4B6DT`.
+This latest coordination-only update changed no source and reran no tests.
 
 ### Where things are
 
@@ -26,9 +74,11 @@ changes exist yet. Task 1 is next.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
+| Current HEAD | `3d470272cbb78cbe614340dbdef56746bfdb85a5`: independently reviewed Task 1 guarded delete. |
 | Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Checkpoints | Planning and reviewed blocker evidence are committed. Task 0 resume evidence and amendment passed spec and quality review and are ready for the authorized checkpoint commit. |
+| Checkpoints | Task 0 is committed as `25514a3`; Task 1 is committed as `3d47027`. Task 2 implementation/spec corrections and approved T2-1 amendment passed both final reviews and are complete at the local gate, with 53 tests GREEN. Task 2 remains uncommitted for the controller's immediate checkpoint. Task 3 next; preserve all WIP. |
+| Ongoing-task preflight | Controller fetched `origin main`, still `89d04f901636229392a311241f8e777f0a00962b`, verified ancestry of current HEAD and expected WIP. No dirty rebase/additional checkpoint was needed for this continuation. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
 ### Read in this order
@@ -43,7 +93,8 @@ changes exist yet. Task 1 is next.
 4. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md`:
    Tasks 0–8. Follow it exactly.
 5. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md`:
-   the grounding facts, planning reviews, Task 0 evidence and T0-1 approval.
+   the grounding facts, planning reviews, Task 0 evidence/T0-1 approval, Task 1
+   reviewed delivery and Task 2 spec corrections/quality blocker T2-1.
    Record your evidence here as you go.
 
 Cycle 08's documents (`docs/Cycles/wave-02-cycle-08-*` and
@@ -121,7 +172,11 @@ the same way comment publication binds its child synchronization.
 
 1. Preserve existing authorization and reviewed evidence; read the latest
    execution ledger. The controller owns checkpoint commits after reviews.
-2. Task 0 passed independent spec then quality review. Before subsequent
+2. **Task 2 passed both final reviews and is complete at the local gate.** The
+   controller makes the pending checkpoint commit; then Task 3 is next. Reuse the
+   retained RED/GREEN evidence and review approvals rather than redispatching
+   completed work. This status-update worker performs no commit or Task 3 work.
+3. Tasks 0–2 passed their independent reviews. Before subsequent
    implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
       the worktree. Never rebase main onto the branch.
@@ -134,8 +189,9 @@ the same way comment publication binds its child synchronization.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
-3. Then work Tasks 1–8 in order. Each task starts with a failing test and its
-   recorded red run. Each ends with a commit (only when authorized), a ticket
+4. After the Task 2 checkpoint, work Tasks 3–8 in order. Each task
+   starts with a failing test and its recorded red run. Each ends with a commit
+   (only when authorized), a ticket
    comment, and an independent review before the next task. The plan's
    dependency notes allow Tasks 1, 2, 4 and 5 to proceed independently after
    Task 0.

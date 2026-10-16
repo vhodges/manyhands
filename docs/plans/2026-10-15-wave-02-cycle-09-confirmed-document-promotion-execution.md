@@ -672,3 +672,346 @@ independently verifying 38 transport unit tests, four fixture deletion cases,
 approved with no findings; it inspected the race, authentication, privacy and
 fixture proof paths without repeating those passing tests. Task 1 is complete
 at the local task gate; the full Task 8 and native gates remain pending.
+
+## Task 2 — Promotion Observation And Read-Only Preview (2026-10-16)
+
+**Current status: Task 2 complete at the local gate; both amended spec and quality
+reviews PASS. T2-1 resolved, prior spec fixes retained, 53 targeted tests GREEN.
+Uncommitted; controller checkpoint pending. Task 3 is next.** Historical blocker,
+amendment and implementation evidence remain below, followed by the review results.
+Initial implementation evidence follows. Fresh worker read this worktree's
+AGENTS and the TDD/Cycle implementation skills, approved design/Task 2 and prior
+execution evidence. Initial status was clean at
+`3d470272cbb78cbe614340dbdef56746bfdb85a5` on
+`manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. The controller-supplied current
+`origin/main` preflight (`89d04f9`) is reused; no second rebase or delegation.
+Implementation/checkpoint authorization and targeted-tests-until-Task-8 remain
+in force; the controller owns commits after both independent reviews.
+
+### Delivered Interfaces And Decisions
+
+- New `promotion/{mod.rs,observe.rs,observe_tests.rs}` defines the requested
+  preview request, preflight/blockers, accessor-only preview/path changes,
+  planned integration/publication/cleanup, and opaque Copy/Eq expectation with
+  byte round-trip and redacted Debug. Preview/path-change Debug exposes only
+  IDs/OIDs/categories, not paths, branch names, remote names or content.
+- Internal `observe::observe_promotion(repository, root, config, item,
+  snapshot, pending_conflict) -> PromotionObservation` is the reusable actual-Git
+  observation for preview and later post-sync/leased checks. The caller supplies
+  a coherent remote-state view; `into_preflight` emits every independently
+  observable blocker in enum declaration order. No executor/records/integration
+  mutation was added. `RepositoryOperation::Read` is used for repository errors.
+- The public preview reads configuration and the registry read-only, in a short
+  cache-read-guarded SQLite read transaction. It calls the existing snapshot
+  reader/publication-evidence method and pending-conflict query. It takes no
+  repository lease, reserves nothing, does not refresh, and has no transport or
+  credentials path. Actual Git tracking refs, not cached tracking OIDs, decide
+  ancestry and the remote integration base.
+- Context conformity consumes the real `observe_root` active-context discovery
+  rule and `materialized_target`; both targets use `require_clean_target`.
+  Missing context branches are classified before cleanliness, avoiding spurious
+  staged-dirty classification of an unborn HEAD. Primary missing/not checked out
+  are separate. Existing shared primary merge metadata makes **both** targets
+  conflicted; an isolated primary index conflict tests PrimaryConflicted alone.
+- D2/D3/D5 and ContextBehindRemote follow the approved relations and exception.
+  Result selection is base tree / context tree / clean prepared merge. D1 parses
+  the unique managed result document through the canonical-tree snapshot and
+  validates its regular-blob mode, including duplicate/metadata-invalid cases;
+  any `.manyhands/worktrees` entry is rejected.
+- Prepared-tree import runs **only on a separate memory-ODB handle**. The same
+  memory-backend protection surrounds the existing cleanliness helper's index
+  tree verification. A real same-document nonoverlapping merge creates a new
+  blob in memory: its exact OID is digest-bound, but it remains absent from the
+  on-disk ODB. Full fixture Git/worktree/index/ref/object-file digests and all
+  registry table rows remain unchanged, including with the repository lease held.
+- Rename detection stays off; all added/modified/deleted paths are sorted,
+  including comments, noncanonical files and document moves. Digest encoding uses
+  the exact `manyhands promotion v1` domain, u64 big-endian length/count fields,
+  fixed enum/option/cleanup tags, new OIDs (none for deletions), and local-only
+  primary/context OIDs. Remote moving OIDs are deliberately excluded as approved
+  D6; primary-only advances and context-primary merges preserve the digest.
+- `repository.rs` declares/re-exports the API. Existing sync helper/type/field
+  visibility widens to `pub(in crate::repository)` without behavior changes.
+  Two necessary extra visibility-only lines are in `remote/mod.rs` (sync module
+  reachable from its sibling) and `remote/state.rs` (pending-conflict query).
+  No dependency, GPUI, global configuration, developer data, sleeps or native
+  workflow change. All edits used apply_patch inside this ticket worktree.
+
+### Exact RED / GREEN Commands And Results
+
+The initial 38 tests and declaration-only preview/digest stubs preceded all
+production observation/digest behavior. The second required-selector run was
+runnable behavioral RED for every original test. Five additional edge/side-effect
+cases were added during self-review; they confirmed existing behavior. A sixth
+self-review case for a missing context branch supplied a further RED before its
+cleanliness-order fix. Systematic debugging was used for fixture and test
+assumptions; no existing sync behavior was changed to satisfy them.
+
+| Exact command | Runs/results in execution order |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::observe` | **6 runs:** (1) **0 passed / 38 failed / 774 filtered**, fixture setup failed because enablement's configuration needed a fixture checkpoint (one unused-mut warning); (2) required behavioral **RED: 0 passed / 38 failed / 774 filtered**, every assertion reached the empty-blocker stub, no warnings; (3) implementation **32 passed / 6 failed / 774 filtered**, one unused-import warning; (4) **GREEN: 38 passed / 0 failed / 774 filtered**, no warnings; (5) expanded **43 passed / 0 failed / 774 filtered**, no warnings; (6) final **44 passed / 0 failed / 774 filtered**, no warnings, 8.82 seconds. |
+| `devenv shell -- cargo test --locked --lib promotion::observe::tests::context_branch_missing_is_blocked_without_panicking -- --exact` | **1 run, 0 tests / 818 filtered**: exact selector omitted the `repository::` prefix; not counted as verification. |
+| `devenv shell -- cargo test --locked --lib repository::promotion::observe::tests::context_branch_missing_is_blocked_without_panicking -- --exact` | **1 run, RED: 0 passed / 1 failed / 817 filtered**: observed `[ContextMissing, ContextDirty]`, expected only ContextMissing. Reference observation was moved before cleanliness; the final 44-test run above verifies the fix. |
+| `devenv shell -- cargo fmt` | **2 runs**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 run**, exit 0 after the final formatting pass. |
+
+The six intermediate failures were test/setup distinctions: an
+`observed_published` history fixture must retain its last advertised OID to pass
+the existing snapshot invariants; primary common-directory merge metadata is
+shared by both targets, so the isolated-primary test now uses a stage-1 index
+entry; and the registry preservation assertion now compares all actual table
+rows rather than transient SQLite reader bookkeeping files. The unused import
+was removed. The final side-effect cases still compare the complete Git/root
+file map, all registry rows and zero accepted local TCP connections.
+
+### Self-Review And Controller Handoff
+
+- All 16 blocker categories have isolated coverage, with separate tracked,
+  staged and untracked context dirtiness, ahead/diverged ancestry cases, D5
+  positive/negative/contained exceptions, fixed multiple-blocker ordering,
+  all tree-selection branches, sorted full-path/move changes, digest field and
+  new-blob binding, local/remote OID policy and redaction. **44 unit tests added.**
+- Self-review additionally checked unleased missing-ref classification,
+  generated-object isolation, canonical duplicate/metadata validity, actual-ref
+  authority over stale cache, typed accessor visibility and the visibility-only
+  existing-code diff. No material approved-contract contradiction was found.
+- Remaining gates: controller-owned independent spec/quality reviews, and the
+  approved Task 8 full Rust/CLI gate and separately authorized native coverage.
+  The local observation remains a snapshot, not authorization for a later write;
+  future integration must freshly observe and compare consent under its lease.
+- Evidence is this ledger and canonical ticket comment
+  `01M5167Z00N4Q6S8V0X2Z4B6DP`. HEAD stays at the supplied Task 1 base. No commit,
+  push, PR, CI dispatch, merge, ticket closure, cleanup or later-task work.
+
+### Task 2 Spec Review Corrections — 2026-10-16
+
+The controller returned two spec findings for verification and targeted TDD
+correction. Both were confirmed against the approved contract and actual source
+before changes. This supersedes the initial self-review's claim of complete
+contract conformity; the initial execution evidence above remains historical.
+
+| Finding | Verification | Resolution |
+| --- | --- | --- |
+| Preview/digest used the integrated document path instead of its context path | Cycle 09 lines 199–201 explicitly require the path **on the context**. `observe.rs` validated the result path and then assigned that path to the preview. A context at `docs/document.md` already contained by a primary that moved it to `docs/moved.md` reproduced the wrong value. | Result-tree path is now used solely for D1 validity. Preview and expectation use the discovered context document path. The regression asserts AlreadyContained, empty changes, the unchanged context path, digest equality with that path and inequality with the primary's moved path. The public accessor documents this meaning. |
+| Valid executable regular documents were blocked by a poll-only mode restriction | Discovery `collect_source` accepts regular non-symlink files without checking executable permissions; canonical parsing has no mode input. Cycle 08 execution ledger lines 2904–2916 explicitly distinguish the poll-specific non-executable policy from discovery and the canonical-tree snapshot. Promotion's approved D1 requires canonical document validity, not a non-executable restriction. | Result validation accepts both regular blob modes `100644` and `100755`. New tests cover an executable context and an executable AlreadyContained primary result while the context remains `100644`. A negative test retains a valid document's bytes in a `120000` entry and proves symlinks remain invalid. Existing duplicate, invalid-metadata and forbidden-worktree tests remain GREEN. |
+
+Each finding received a failing targeted regression before its production fix.
+No owner amendment, existing discovery/poll behavior change, new dependency or
+later-task work was needed. Only `promotion/observe.rs`,
+`promotion/observe_tests.rs`, the context-path accessor documentation in
+`promotion/mod.rs`, this ledger and the new canonical review-response comment
+were changed in this correction pass.
+
+| Exact command | Actual RED / GREEN results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib repository::promotion::observe::tests::contained_primary_move_preserves_context_document_path_and_digest_binding -- --exact` | **2 runs:** RED **0 passed / 1 failed / 818 filtered**, actual `docs/moved.md` versus required `docs/document.md`; after the path fix, GREEN **1 passed / 0 failed / 818 filtered**. No warnings. |
+| `devenv shell -- cargo test --locked --lib promotion::observe::tests::document_mode_` | **2 runs:** RED **1 passed / 2 failed / 819 filtered**, executable context and contained-result cases each incorrectly blocked by DocumentInvalidAfterIntegration, symlink rejection already passed; after accepting regular executable blobs, GREEN **3 passed / 0 failed / 819 filtered**. No warnings. |
+| `devenv shell -- cargo fmt` | **1 correction-pass run**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 correction-pass run**, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion::observe` | **1 final correction-pass run: 48 passed / 0 failed / 774 filtered**, no warnings, 9.32 seconds. Includes all original 44 cases and four review regressions. |
+
+Review-response comment: `01M5177Z00N4Q6S8V0X2Z4B6DQ`. Changes remain uncommitted
+at base `3d47027` in the same ticket worktree, for the **same spec reviewer's
+recheck** before quality review. No full Task 8 gate or native result is claimed;
+no commit, outward lifecycle action, cleanup or other task was performed.
+
+### Task 2 Quality Review — BLOCKER T2-1: Resulting Git Mode Not Bound (2026-10-16)
+
+Historical pre-approval checkpoint. The owner approved the amendment after this
+stop; see the resume section below for its implementation and verification.
+
+**Status: independently characterized and CONFIRMED; STOP pending owner
+encoding amendment.** The controller reports that Task 2 spec review passed
+after its context-path and executable-document corrections. Those findings
+remain resolved. Quality review then identified a possible material gap in the
+approved encoding itself. This worker verified the contract/source and ran
+temporary real-Git fixture probes before recording the blocker. No production
+hash, policy or approved design was changed.
+
+#### Contract And Source Evidence
+
+- Approved design lines 248–258 explicitly encode sorted changes as **path,
+  change, new blob OID**, with local primary/context OIDs added only without a
+  remote. Lines 260–267 deliberately omit moving remote OIDs (D6), while stating
+  that new context content will change the change set/digest (D4).
+- `promotion/observe.rs:465–484` preserves only path, Added/Modified/Deleted and
+  the new OID. A Git Typechange is normalized to Modified. Resulting Git mode
+  and its type bits are discarded.
+- `promotion/observe.rs:535–550` hashes only those retained change fields;
+  `:557–560` includes primary/context OIDs only for local-only previews. A Git
+  blob's OID binds its bytes, not whether its tree entry is regular, executable
+  or a symlink. Mode/type changes can therefore collide in remote-backed consent
+  even with a completely unchanged primary and a clean, valid managed document.
+- This is a **material design encoding gap**, not permission to add fields
+  silently: the implementation follows the explicit approved encoding. The
+  executable-document spec correction must not be reverted to hide this issue;
+  noncanonical paths are in the approved promotion change set too.
+
+#### Temporary Characterization And Actual Results
+
+Four `#[cfg(unix)]` probes used the existing `Fixture::new(true)`, real Git
+commits, actual filesystem symlinks/chmod, and the public preview method. The
+noncanonical path was `extra`, initially a regular `100644` file containing the
+literal bytes `ordinary.txt`. A symlink to `ordinary.txt` has those same Git blob
+bytes; an executable-bit change preserves them as well. The managed document was
+untouched and remained valid.
+
+For Modified cases, the fixture first committed `extra` with different bytes on
+primary, updated actual `T(P)`, and based the context on that primary while
+preserving its document edit. Primary was then frozen before both observations.
+Added cases left `extra` absent from primary. These avoid a changing-primary
+explanation or add/add merge conflict.
+
+Every probe asserted, **before its final expected inequality**:
+
+- both previews returned Ready and the context commit OID changed;
+- exact primary HEAD OID, tree OID, index bytes, tracking-primary OID and root
+  working-file digest map were unchanged (Git admin/context paths excluded from
+  that working-file map and primary metadata asserted separately);
+- `extra` retained the same path and category, with the **entire** preview change
+  vector equal, plus equal primary/tracking OIDs, integration kind and context
+  document path;
+- the result-context entry had the intended changed mode and the same new blob
+  OID **`5ef2f07219e9778bc697b47b11acb0d807837eb9`**, verified against a Git hash of
+  `ordinary.txt`; both entry objects were blobs.
+
+| Temporary test | Old → new mode | Category relative to unchanged primary | Final result |
+| --- | --- | --- | --- |
+| `t2_1_added_regular_to_symlink_changes_digest` | `100644` → `120000` | Added → Added | Expected `assert_ne!(expectation)` **FAILED**, digests equal |
+| `t2_1_added_executable_bit_changes_digest` | `100644` → `100755` | Added → Added | Expected inequality **FAILED**, digests equal |
+| `t2_1_modified_regular_to_symlink_changes_digest` | `100644` → `120000` | Modified → Modified | Expected inequality **FAILED**, digests equal |
+| `t2_1_modified_executable_bit_changes_digest` | `100644` → `100755` | Modified → Modified | Expected inequality **FAILED**, digests equal |
+
+All four emitted their completed precondition evidence before failing at the
+same final digest inequality. There were no compilation/setup failures or
+warnings. These are Linux/Unix characterization results, not native-platform
+verification. No transport, process sleeps, global config or developer data was
+used.
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::observe::tests::t2_1_ -- --nocapture` | **1 RED run: 0 passed / 4 failed / 822 filtered**, 0.77 seconds, exit 101. Every failure was the final `left != right` expectation assertion after all evidence assertions passed. |
+| `devenv shell -- cargo test --locked --lib promotion::observe` | After removing only the temporary helper/four probes with apply_patch: **1 GREEN run: 48 passed / 0 failed / 774 filtered**, no warnings, 9.22 seconds. This confirms preservation of the existing suite, **not a fix for T2-1**. |
+
+#### Proposed Owner Amendment — NOT APPROVED / NOT IMPLEMENTED
+
+Recommended: bind the **resulting Git entry mode including type bits** for every
+Added/Modified change, alongside path/category/new OID, in a specified fixed-width
+encoding. Define an explicit deletion sentinel (for example reserved zero mode)
+or an unambiguous absence tag for Deleted entries. Preserve D6's primary-only
+invariance: bind the contributed result entry modes, not moving commit/tree OIDs
+or unrelated primary-only paths. Add retained RED/GREEN regressions for both
+mode transitions and both categories after approval, while retaining the existing
+primary-advance/context-primary-merge invariance tests.
+
+The owner must approve the encoding amendment and its consistent Cycle/design/
+plan updates before production implementation. This recommendation is only a
+proposal; the approved documents and production encoding remain unchanged.
+
+#### Preservation And Handoff
+
+- Removed only the temporary helper and four failing probes. All pre-existing
+  Task 2 production/spec-fix WIP and its 48 tests remain intact. No intentionally
+  failing tests remain in the working suite.
+- Updated the fresh-session handoff: Task 0 complete, Task 1 reviewed/committed at
+  `3d47027`, Task 2 uncommitted/spec passed/**quality BLOCKED T2-1**. Canonical
+  blocker comment: `01M5187Z00N4Q6S8V0X2Z4B6DR`.
+- Stop here pending owner decision; no Task 3, commit, push, PR, native dispatch,
+  merge, ticket closure or worktree cleanup. Full Task 8 gates remain deferred.
+
+### Task 2 Resume — Owner-Approved T2-1 Encoding Amendment (2026-10-16)
+
+The owner approved the controller's T2-1 mode/type encoding recommendation
+(**"yes"**, conveyed in the continuation instruction). Implementation authority
+covers this amendment to the existing Task 2 WIP; the controller still owns the
+checkpoint commit after review. The earlier context-path/executable-document
+spec fixes and all 48 tests are preserved. Historical blocker and review evidence
+above is unchanged apart from its explicit historical label.
+
+**Preflight reused for this ongoing task:** the controller fetched `origin main`
+this turn, still `89d04f901636229392a311241f8e777f0a00962b`, verified it is an
+ancestor of HEAD `3d470272cbb78cbe614340dbdef56746bfdb85a5`, and inspected only
+the expected WIP. The worker independently confirmed that HEAD/branch/status.
+No dirty rebase, additional checkpoint or delegation was needed or performed.
+
+#### Approved Encoding And Implementation
+
+- Cycle, design and implementation plan now consistently record T2-1 as
+  **approved**, including the exact byte placement and deletion sentinel.
+- For every sorted path/category change, encode the existing optional new OID,
+  **then exactly four bytes of u32 big-endian resulting Git entry mode including
+  type bits**. Added/Modified read both OID and mode from the integrated result
+  Git tree entry, including memory-ODB prepared results; neither comes from
+  filesystem permission/type assumptions. Deleted has absent new OID and the
+  explicit **zero u32** mode sentinel, not its old entry mode.
+- `PromotionChangeEntry` is private ephemeral encoding evidence. The public
+  preview/path-change DTO fields are unchanged. No dependency or other production
+  module changed in this amendment pass.
+- Keep domain **`manyhands promotion v1`**: no earlier digest has shipped, so
+  this finalizes its unshipped encoding. Other field ordering/lengths/tags remain
+  unchanged. Mode follows the OID before the next change or cleanup tags.
+- D6 still excludes remote-backed moving commit/tree OIDs and unrelated primary
+  paths. Existing primary-only advance and context-primary merge invariance is
+  verified in the final targeted selector. Local-only OID binding remains intact.
+
+#### Retained TDD Evidence
+
+Restored and **retained** the four real-Git mode/type collision cases from the
+historical probe, with the same unchanged-primary, same-blob, Ready-preview and
+equal-path/category assertions. They now require distinct digests after the mode
+transition. The Unix filesystem setup exercises actual symlink/chmod state;
+production encoding reads the resulting Git tree, not those setup assumptions.
+
+Added `t2_1_deletion_encoding_has_zero_big_endian_u32_mode`, an independent
+two-change protocol vector (modified document plus deleted `ordinary.txt`). It
+requires the regular mode bytes `[0,0,0x81,0xa4]`, an absent deletion OID followed
+by `[0,0,0,0]`, and proves that omitting the deletion word or substituting the old
+regular mode gives a different digest. Existing direct field-binding tests were
+adapted to private entry evidence and now also vary only its mode; they retain
+their previous field/new-blob/cleanup assertions.
+
+| Exact command | Actual runs/results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::observe::tests::t2_1_` | **2 runs:** before any production hash change, runnable **RED: 0 passed / 5 failed / 822 filtered**, no warnings, 0.89 seconds. All four collision cases failed at the final inequality; the byte-vector test failed because the old encoding omitted mode words. After implementation, **GREEN: 5 passed / 0 failed / 822 filtered**, no warnings, 0.93 seconds. |
+| `devenv shell -- cargo fmt` | **1 amendment-pass run**, exit 0. |
+| `devenv shell -- cargo fmt --check` | **1 amendment-pass run**, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion::observe` | **1 final amendment-pass run: 53 passed / 0 failed / 774 filtered**, no warnings, 11.60 seconds. All original 48 cases plus the five retained T2-1 tests pass, including deletion encoding, both spec fixes, primary-only/context-primary-merge invariance and read-only memory-ODB behavior. |
+
+#### Self-Review And Return
+
+Self-review checked tree-derived type bits/OIDs, matching sorted evidence and
+public paths, Deleted's absent-entry sentinel, fixed-width endianness, unchanged
+domain/public DTOs, preserved historical approvals and all current planning
+documents' encoding consistency. No additional contract contradiction found.
+
+Current handoff and canonical comment `01M5197Z00N4Q6S8V0X2Z4B6DS` record the
+approved amendment, implementation, exact RED/GREEN and pending quality recheck.
+**Ready for the same quality reviewer, not an independently approved Task 2
+checkpoint.** HEAD remains the Task 1 commit; all Task 2 changes are uncommitted.
+No Task 3, full-suite/Task 8 gate, dependency change, commit, push, PR, native CI,
+merge, closure or cleanup was performed.
+
+### Task 2 Final Independent Reviews — Local Gate Complete (2026-10-16)
+
+The controller conveyed both final review results for the amended Task 2 code
+and documents:
+
+- **Same quality reviewer: PASS.** Approved T2-1 as resolved with **no critical,
+  important or minor findings** remaining.
+- **Same spec reviewer: PASS.** Rechecked the amended code/documents and confirmed
+  the context-path and executable-document spec fixes remain intact.
+
+**Task 2 is complete at the local gate; Task 3 is next after the controller's
+checkpoint.** The approved mode/type amendment, earlier spec corrections and all
+53 passing targeted tests are retained. Task 8 full local checks and separately
+authorized native coverage remain deferred; these task reviews do not claim
+those gates or completion of the whole Cycle.
+
+This coordination-only pass updates the current ledger/handoff status, adds the
+Task 2 plan completion summary and canonical comment
+`01M51A7Z00N4Q6S8V0X2Z4B6DT`. The review results are controller-reported evidence;
+no new reviewer test execution is inferred. **No source changes or test reruns**
+were made. Prior exact RED/GREEN evidence remains the verification record.
+No commit was made; the controller owns the immediate checkpoint. No Task 3 or
+outward lifecycle action was performed. Historical blocked/pending-review
+sections above are preserved as checkpoint history, superseded by this result.

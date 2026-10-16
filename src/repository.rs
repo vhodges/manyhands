@@ -39,6 +39,7 @@ mod native_resolution;
 #[cfg(windows)]
 #[path = "repository/native_resolution/windows.rs"]
 mod native_resolution;
+mod promotion;
 mod read;
 mod recovery;
 mod remote;
@@ -71,6 +72,7 @@ pub use keys::{
     UnregisterSharedKeyOutcome,
 };
 pub use mutation::*;
+pub use promotion::*;
 pub use read::*;
 use recovery::{
     IndexOwner, LocalStep, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,

@@ -497,7 +497,7 @@ fn local_target(
 
 /// Identity validation is also needed before inspecting an owned unfinished
 /// merge. It deliberately makes no claim about cleanliness or effect proof.
-pub(super) fn materialized_target(
+pub(in crate::repository) fn materialized_target(
     root: &Path,
     primary: &str,
     target: &SynchronizationTarget,
@@ -551,7 +551,7 @@ pub(super) fn materialized_target(
     Ok(linked)
 }
 
-pub(super) fn require_clean_target(
+pub(in crate::repository) fn require_clean_target(
     linked: &git2::Repository,
     target: &SynchronizationTarget,
 ) -> Result<(), SynchronizationError> {
@@ -667,19 +667,19 @@ struct PreparedMergeEntry {
     generated: Option<(git2::ObjectType, Vec<u8>)>,
 }
 
-struct PreparedMerge {
+pub(in crate::repository) struct PreparedMerge {
     entries: Vec<PreparedMergeEntry>,
 }
 
 /// Ephemeral ODB-only source evidence. Shape and bytes are retained even when
 /// decoding/parsing fails; neither failure can hide a changed canonical path.
-pub(super) struct CanonicalTreeSnapshot {
-    pub(super) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-    pub(super) entries:
+pub(in crate::repository) struct CanonicalTreeSnapshot {
+    pub(in crate::repository) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
+    pub(in crate::repository) entries:
         std::collections::BTreeMap<Vec<u8>, (git2::Oid, i32, Option<git2::ObjectType>)>,
 }
 
-enum MergePreparation {
+pub(in crate::repository) enum MergePreparation {
     Clean(PreparedMerge),
     Conflict,
 }
@@ -699,7 +699,7 @@ fn index_digest(tree: git2::Oid) -> [u8; 32] {
 /// with a high-priority memory ODB, so preparation never writes the repository.
 /// The result holds the stage-0 entries; only the bytes of objects the merge
 /// itself created are retained, to be imported and verified while applying.
-fn prepare_clean_merge(
+pub(in crate::repository) fn prepare_clean_merge(
     path: &Path,
     local: git2::Oid,
     incoming: git2::Oid,
@@ -755,7 +755,7 @@ fn prepare_clean_merge(
 
 /// Import the objects the merge created and write its tree. An entry that was
 /// already stored is not rewritten; writing the tree fails if it has vanished.
-fn import_prepared_tree(
+pub(in crate::repository) fn import_prepared_tree(
     repository: &git2::Repository,
     prepared: &PreparedMerge,
 ) -> Result<git2::Oid, SynchronizationError> {
@@ -4558,7 +4558,7 @@ impl RepositoryService {
         ))
     }
 
-    pub(super) fn canonical_tree_sources(
+    pub(in crate::repository) fn canonical_tree_sources(
         repository: &git2::Repository,
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
