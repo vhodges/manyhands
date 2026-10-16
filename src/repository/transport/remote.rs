@@ -17,6 +17,15 @@ enum TransferAction {
     FetchTracking,
     PushObjects,
     Push,
+    Delete(git2::Oid),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Consumed by the later promotion orchestrator.
+pub(crate) enum DeleteObservation {
+    Deleted,
+    StillPresent(git2::Oid),
+    Changed(git2::Oid),
 }
 
 pub(crate) struct AuthenticatedSshRemote<'repo, 'a> {
@@ -68,7 +77,9 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         self.recheck_trust()?;
         let effective = match self.context.direction {
             SshDirection::Fetch => self.remote.url(),
-            SshDirection::Push => self.remote.pushurl().or_else(|| self.remote.url()),
+            SshDirection::Push | SshDirection::Delete => {
+                self.remote.pushurl().or_else(|| self.remote.url())
+            }
         };
         expected
             .check(self.prepared)
@@ -187,6 +198,61 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         .map(|_| ())
     }
 
+    /// One guarded command at most. A fresh authenticated advertisement is the
+    /// only result evidence, including after a refused or ambiguously lost push.
+    #[allow(dead_code)] // Consumed by the later promotion orchestrator.
+    pub(crate) fn delete_exact(
+        &mut self,
+        plan: &RemoteRefPlan,
+        target: &SynchronizationTarget,
+        expected: git2::Oid,
+    ) -> Result<DeleteObservation, SshTransportError> {
+        self.validate_plan(plan, SshDirection::Delete)?;
+        let mappings = exact_mappings(plan, target, SshDirection::Delete);
+        let refs: Vec<_> = mappings.iter().map(String::as_str).collect();
+        if expected.is_zero() || !mappings_match_scope(plan, target, SshDirection::Delete, &refs) {
+            return Err(self
+                .context
+                .with_kind(SshTransportErrorKind::ConfigurationInvalid));
+        }
+        let reference = mappings[0].strip_prefix(':').unwrap();
+        // A retry must observe first: never blindly resend an ambiguous delete.
+        if !self
+            .fresh_advertisement()?
+            .iter()
+            .any(|(name, _)| name == reference)
+        {
+            return Ok(DeleteObservation::Deleted);
+        }
+        match self.transfer(
+            &refs,
+            TransferAction::Delete(expected),
+            Some((plan, target)),
+        ) {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind,
+                    SshTransportErrorKind::PushRejected
+                        | SshTransportErrorKind::TransportUnavailable
+                        | SshTransportErrorKind::RemoteUnavailable
+                ) => {}
+            Err(error) => return Err(error),
+        }
+        #[cfg(test)]
+        super::operation_tests::checkpoint(
+            super::operation_tests::Checkpoint::DeleteAttemptReturned,
+        );
+        let advertised = self.fresh_advertisement()?;
+        Ok(
+            match advertised.iter().find(|(name, _)| name == reference) {
+                None => DeleteObservation::Deleted,
+                Some((_, oid)) if *oid == expected => DeleteObservation::StillPresent(*oid),
+                Some((_, oid)) => DeleteObservation::Changed(*oid),
+            },
+        )
+    }
+
     /// Download only the selected Push destination's commit graph. Upload-pack
     /// is explicitly bound to its policy-resolved endpoint, not the fetch URL.
     pub(crate) fn download_push_target(
@@ -298,9 +364,16 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
         }
-        let push =
-            self.context.direction == SshDirection::Push && action != TransferAction::PushObjects;
-        if action != TransferAction::Observe && (action == TransferAction::Push) != push {
+        let push = matches!(
+            self.context.direction,
+            SshDirection::Push | SshDirection::Delete
+        ) && action != TransferAction::PushObjects;
+        if (matches!(action, TransferAction::Delete(_))
+            && (self.context.direction != SshDirection::Delete || scope.is_none()))
+            || (action == TransferAction::Push && self.context.direction != SshDirection::Push)
+            || (action != TransferAction::Observe
+                && matches!(action, TransferAction::Push | TransferAction::Delete(_)) != push)
+        {
             return Err(self
                 .context
                 .with_kind(SshTransportErrorKind::ConfigurationInvalid));
@@ -470,6 +543,13 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
         let rejected = std::cell::Cell::new(false);
         let mut callbacks =
             super::callbacks::build_callbacks(self.prepared, self.passphrase, &attempt);
+        if let TransferAction::Delete(expected) = action {
+            super::callbacks::guard_delete(
+                &mut callbacks,
+                refspecs[0].strip_prefix(':').unwrap(),
+                expected,
+            );
+        }
         callbacks.push_update_reference(|_, status| {
             if status.is_some() {
                 rejected.set(true);
@@ -707,6 +787,20 @@ fn exact_mappings(
         (SshDirection::Push, SynchronizationTarget::Context { kind, item_id }) => {
             vec![plan.context_push_refspec(*kind, item_id)]
         }
+        (
+            SshDirection::Delete,
+            SynchronizationTarget::Context {
+                kind: crate::repository::AuthoringKind::Document,
+                item_id,
+            },
+        ) => {
+            vec![format!(
+                ":{}",
+                plan.context(crate::repository::AuthoringKind::Document, item_id)
+                    .remote_ref()
+            )]
+        }
+        (SshDirection::Delete, _) => Vec::new(),
     }
 }
 
@@ -811,6 +905,75 @@ fn poll_mappings_match_scope(
 mod tests {
     use super::*;
     use std::str::FromStr;
+    #[test]
+    fn transport_delete_scope_is_exact_document_context_only() {
+        let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+        let target = SynchronizationTarget::Context {
+            kind: crate::repository::AuthoringKind::Document,
+            item_id: crate::canonical::ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAX").unwrap(),
+        };
+        let mapping = ":refs/heads/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAX";
+        assert_eq!(
+            exact_mappings(&plan, &target, SshDirection::Delete),
+            [mapping]
+        );
+        assert!(mappings_match_scope(
+            &plan,
+            &target,
+            SshDirection::Delete,
+            &[mapping]
+        ));
+        for invalid in [
+            "",
+            ":refs/heads/main",
+            ":refs/heads/unrelated",
+            ":refs/heads/manyhands/document/bad",
+            ":refs/heads/*",
+            "+:refs/heads/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FAX",
+            "refs/heads/main:refs/heads/main",
+        ] {
+            assert!(!mappings_match_scope(
+                &plan,
+                &target,
+                SshDirection::Delete,
+                &[invalid]
+            ));
+        }
+        assert!(!mappings_match_scope(
+            &plan,
+            &SynchronizationTarget::Primary,
+            SshDirection::Delete,
+            &[":refs/heads/main"]
+        ));
+        assert!(!mappings_match_scope(
+            &plan,
+            &target,
+            SshDirection::Delete,
+            &[]
+        ));
+        assert!(!mappings_match_scope(
+            &plan,
+            &target,
+            SshDirection::Delete,
+            &[mapping, mapping]
+        ));
+        assert!(!mappings_match_scope(
+            &plan,
+            &target,
+            SshDirection::Push,
+            &[mapping]
+        ));
+        let ticket = SynchronizationTarget::Context {
+            kind: crate::repository::AuthoringKind::Ticket,
+            item_id: crate::canonical::ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAX").unwrap(),
+        };
+        assert!(!mappings_match_scope(
+            &plan,
+            &ticket,
+            SshDirection::Delete,
+            &[":refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAX"]
+        ));
+    }
     fn tracking_commit(repository: &git2::Repository, message: &str) -> git2::Oid {
         let tree = repository.treebuilder(None).unwrap().write().unwrap();
         let tree = repository.find_tree(tree).unwrap();

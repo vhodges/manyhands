@@ -29,7 +29,7 @@ impl ObservationConfiguration {
     ) -> Option<&crate::repository::transport::endpoint::SshEndpoint> {
         match direction {
             SshDirection::Fetch => self.fetch.as_ref().ok(),
-            SshDirection::Push => self.push.as_ref().ok(),
+            SshDirection::Push | SshDirection::Delete => self.push.as_ref().ok(),
         }
     }
     // Only validated public SSH locator metadata enters this digest. Endpoint

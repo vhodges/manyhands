@@ -267,7 +267,7 @@ impl RepositoryService {
         // match the raw configured spelling. Validate this actual handle too.
         let effective = match context.direction {
             SshDirection::Fetch => remote.url(),
-            SshDirection::Push => remote.pushurl().or_else(|| remote.url()),
+            SshDirection::Push | SshDirection::Delete => remote.pushurl().or_else(|| remote.url()),
         };
         if effective
             .and_then(|url| super::endpoint::parse_ssh_endpoint(url).ok())
@@ -281,7 +281,7 @@ impl RepositoryService {
             .connect_auth(
                 match context.direction {
                     SshDirection::Fetch => git2::Direction::Fetch,
-                    SshDirection::Push => git2::Direction::Push,
+                    SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
                 },
                 Some(build_callbacks(prepared, passphrase, &attempt)),
                 None,

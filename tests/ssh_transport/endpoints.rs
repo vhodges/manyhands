@@ -68,7 +68,9 @@ fn url_delimiter_preflight() -> Result<(), FixtureError> {
             let url = format!("{}{suffix}", case.fixture.url());
             match direction {
                 SshDirection::Fetch => fixed(repo.remote_set_url("origin", &url))?,
-                SshDirection::Push => fixed(repo.remote_set_pushurl("origin", Some(&url)))?,
+                SshDirection::Push | SshDirection::Delete => {
+                    fixed(repo.remote_set_pushurl("origin", Some(&url)))?
+                }
             }
             assert_preflight_rejected(&case, direction)?;
         }
@@ -138,7 +140,7 @@ fn connect_command(
     let connection = fixed(remote.connect_auth(
         match direction {
             SshDirection::Fetch => git2::Direction::Fetch,
-            SshDirection::Push => git2::Direction::Push,
+            SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
         },
         Some(callbacks),
         None,
@@ -150,7 +152,7 @@ fn connect_command(
     );
     let command = match direction {
         SshDirection::Fetch => format!("git-upload-pack '{target}'"),
-        SshDirection::Push => format!("git-receive-pack '{target}'"),
+        SshDirection::Push | SshDirection::Delete => format!("git-receive-pack '{target}'"),
     };
     assert_eq!(fixture.commands(), vec![command.into_bytes()]);
     assert_eq!(

@@ -376,6 +376,22 @@ impl SshRemoteFixture {
     ) -> Result<(), FixtureError> {
         self.race_update("refs/heads/main", expected, competing)
     }
+    pub fn race_context_update(
+        &self,
+        reference: ObservationRef,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
+        if !matches!(
+            reference,
+            ObservationRef::RemoteDocument
+                | ObservationRef::RemoteTicket
+                | ObservationRef::LocalTicket
+        ) {
+            return Err(FixtureError);
+        }
+        self.race_update(reference.name(), expected, competing)
+    }
     /// The same single competing write for any one owned branch.
     pub fn race_update(
         &self,
@@ -461,6 +477,17 @@ impl SshRemoteFixture {
         fixed(config.set_bool("core.bare", !reject))?;
         fixed(config.set_str(
             "receive.denyCurrentBranch",
+            if reject { "refuse" } else { "ignore" },
+        ))
+    }
+    /// Native receive-pack refusal, scoped to fixture-owned context deletions.
+    pub fn reject_context_deletion(&self, reject: bool) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        let mut config = fixed(repo.config())?;
+        fixed(config.set_bool("core.bare", !reject))?;
+        fixed(repo.set_head(ObservationRef::RemoteDocument.name()))?;
+        fixed(config.set_str(
+            "receive.denyDeleteCurrent",
             if reject { "refuse" } else { "ignore" },
         ))
     }
@@ -647,6 +674,9 @@ pub fn generate_key() -> Result<PrivateKey, FixtureError> {
 
 pub fn receiver_command_fragmentation() -> Result<(), FixtureError> {
     server::receiver_command_fragmentation()
+}
+pub fn deletion_effect_proof(path: &Path, oid: git2::Oid) -> Result<(), FixtureError> {
+    server::deletion_effect_proof(path, oid)
 }
 pub fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
     server::upload_pack_counter_fragmentation()

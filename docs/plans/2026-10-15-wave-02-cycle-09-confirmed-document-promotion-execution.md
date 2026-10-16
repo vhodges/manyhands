@@ -541,3 +541,134 @@ Quality re-review approved the checkpoint with all three findings resolved
 and no remaining findings. Task 0 is complete for the local implementation
 gate; Task 1 may begin. Native gaps and the deferred full Task 8 gate remain
 as recorded above. The controller owns the authorized checkpoint commit.
+
+## Task 1 — Guarded Remote Document-Context Delete (2026-10-16)
+
+**Status: implementation and targeted verification complete; ready for independent
+spec review, then quality review. Uncommitted.** The fresh implementer used the
+controller's completed preflight and Task 0 reviews, read the worktree AGENTS,
+and confirmed clean initial status on the exact ticket branch at `25514a3`.
+No additional fetch/rebase, delegation or outward action was performed. The
+controller owns the checkpoint commit after reviews. The targeted-only override
+continues through Task 8.
+
+### Delivered Interfaces And Decisions
+
+- `SshDirection::Delete` resolves/authenticates against the existing **Push**
+  endpoint, including a distinct configured push URL. Only the exact mapping
+  `:refs/heads/manyhands/document/<ULID>` for the selected document context is
+  admitted; primary, ticket, malformed, wildcard, force, duplicate and empty
+  mappings fail closed. Invalid scope is checked before a transfer reconnect.
+- `AuthenticatedSshRemote::delete_exact(plan, target, expected: git2::Oid) ->
+  Result<DeleteObservation, SshTransportError>` and crate-visible
+  `transport::DeleteObservation::{Deleted, StillPresent(Oid), Changed(Oid)}`.
+  Zero expected OIDs are refused. There is no new public promotion operation.
+- Every call first freshly advertises. Already-absent contexts return `Deleted`
+  without sending a delete. For a present context, at most one delete push is
+  attempted. The callback requires exactly one update, `src() == expected`,
+  zero `dst()`, and the exact destination ref. It emits only fixed refusal text.
+  The mismatch test deliberately reaches negotiation rather than short-circuiting
+  on the pre-advertisement's different OID: zero parsed update commands, four
+  advertisement-only helpers (initial authentication, pre-observation, refused
+  negotiation, post-observation).
+- Rejection or ambiguous transport return is followed by a fresh authenticated
+  advertisement: absent → `Deleted`, expected → `StillPresent`, different →
+  `Changed`. Failure to obtain that advertisement remains an error. A later
+  retry advertises before any push, and never blindly repeats an accepted delete.
+  Existing selected-key, host-trust and endpoint rechecks run on each reconnect;
+  policy failures are propagated rather than converted into observation proof.
+  Reservation/generation/safe-point orchestration remains the later caller's
+  responsibility, using the existing authenticated-scope interfaces.
+- Test-only `Checkpoint::DeleteAttemptReturned` identifies the interval before
+  post-send observation. It proves that a collaborator's replacement wins over
+  successful callback status, and that lost status plus failed observation
+  remains an error until a subsequent observe-first retry proves absence.
+- Fixture hooks: `reject_context_deletion(bool)` uses native receive-pack
+  checked-out-context deletion refusal; `race_context_update(ObservationRef,
+  expected, competing)` reuses the existing deterministic receive race, after
+  advertisement and before forwarding the complete command to receive-pack.
+- Fixture proof snapshots each parsed command's old **direct** OID before
+  forwarding/racing. A deletion receipt requires successful helper completion,
+  non-noop old/new OIDs, a matching old snapshot and actual `NotFound` afterwards.
+  A dangling symbolic ref is not absence. Missing snapshot evidence fails closed.
+  Ordinary push proof retains its existing non-noop/new-tip rule. Snapshot reads
+  are skipped when no new command was parsed, including opaque pack chunks.
+- `SshTransportError` keeps its existing typed context fields/API but now formats
+  Debug using only direction and fixed error kind, omitting authority, root and
+  remote name. Display remains fixed category text. New observations contain only
+  a variant and optional OID. No endpoint, content or secret enters the new
+  records, callback diagnostics or Debug output.
+
+### Exact RED / GREEN Commands And Results
+
+Tests were authored first; initial missing-API compilation failures are separated
+from runnable behavioral RED evidence below. Before implementing the mapping,
+callback, post-push observation or deletion proof, the required library command
+had run, as had both SSH selectors. A declaration-only Delete direction and
+exhaustive endpoint arms then permitted the runnable mapping/privacy RED run;
+the Delete mapping still returned an empty set at that point. The new fixture
+hooks ran before the receipt-proof change, exposing the successful-deletion
+receipt bug. No dependency change or full-suite/check/clippy gate ran.
+
+| Exact command | Actual runs and results, in execution order for that command |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib transport` | **4 runs:** initial compile RED, 7 missing-Delete diagnostics, zero tests executed; runnable RED **36 passed / 2 failed / 736 filtered** (missing delete mapping and endpoint/path-leaking Debug); GREEN **38 passed / 0 failed / 736 filtered**; final GREEN **38 passed / 0 failed / 736 filtered**. |
+| `devenv shell -- cargo test --locked --test ssh_fixture context_delete` | **5 runs:** initial compile RED, 3 missing-hook/proof-helper diagnostics; runnable RED **2 passed / 1 failed** (successful deletion not accepted by receipt); expanded proof RED **2 passed / 2 failed** (receipt and valid guarded-absence proof); GREEN **4 SSH cases passed**; final GREEN **4 SSH cases passed**. Negative proof checks include still-present, unmatched old OID, zero/zero no-op and dangling symbolic ref. |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_delete` | **5 runs:** initial compile RED, 16 missing direction/API/hook/type diagnostics; compile failure with 3 non-exhaustive matches in existing endpoint test helpers, corrected to share Push's cases; GREEN **7 SSH cases passed**; after adding the post-send case, **7 passed / 1 failed** at its incorrect transport-category assertion; final GREEN after receipt hardening **8 SSH cases passed**. |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_delete_post_send_observation -- --exact` | **2 runs:** compile RED for missing checkpoint; final GREEN **1 SSH case passed**, two post-send scenarios. The intervening runnable failure above established that the auth-boundary disconnect is classified by existing backend policy as `KeyRejected`, not `TransportUnavailable`; corrected only the test expectation. Systematic debugging used the auth fault location and existing `backend_failure` classification; no transport policy change. |
+| `devenv shell -- cargo test --locked --test ssh_transport exact_` | **1 run: 15 SSH cases passed** (8 delete cases plus 7 existing exact fetch/push/policy cases). |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | **2 runs:** first shell timeout at 600,000 ms after **52 cases reported passed**, no case failure reported and no completed target result; rerun with 1,800,000 ms shell allowance completed, **63 SSH cases passed**, exit 0. Expected fixture unwind observation remained a passing case. |
+| Unsupported continuation command below | **1 run:** runner rejected `--skip` options, exit 2, **zero cases executed**. No source or runner behavior was changed to accommodate it; the complete target rerun above supplied the regression gate. |
+| `devenv shell -- cargo test --locked --test remote_synchronization fixture_` | **1 final run: 6 SSH cases passed** after the self-review missing-snapshot guard/opaque-pack fast path. |
+| `devenv shell -- cargo test --locked --test remote_synchronization receiver_` | **1 final run: 8 SSH cases passed**; substring selection also includes five fixture receipt/controller cases. |
+| `devenv shell -- cargo fmt` | **2 runs**, exit 0; formatter only, not the deferred full Task 8 gate. |
+
+Exact rejected continuation command (retained so no attempted verification is
+silently omitted):
+
+```sh
+devenv shell -- cargo test --locked --test remote_synchronization -- --skip ignored_ --skip fixture_ --skip synchronization_ --skip hostile_endpoint_redaction --skip receiver_ --skip primary_ --skip context_ --skip distinct_push_ancestry_and_tracking --skip binary_primary_conflict_side_read_is_refused --skip symlink_primary_conflict_side_read_is_refused --skip mixed_mode_primary_conflict_side_read_is_refused --skip worktree_symlink_is_never_followed_during_conflict_side_read --skip remote_change_during_fetch --skip verified_context_immediate_deletion --skip incompatible_generation_history_unknown --skip post_accept_ --skip merge_candidate_race_continues_through_appended_publication --skip merge_candidate_continuation_ambiguous_acceptance_verifies_same_attempt --skip merge_candidate_publication_stop_at_settlement --skip merge_candidate_publication_stop_at_window_append --skip merge_candidate_continuation_cancel_before_push --skip merge_candidate_continuation_takeover_after_push_return --skip merge_candidate_publication_stop_at_stage_observation --skip merge_candidate_publication_stop_at_prepared
+```
+
+### File Scope, Self-Review And Handoff
+
+- Transport implementation/tests: `src/repository/transport/{remote.rs,
+  callbacks.rs, operation_tests.rs}`; fixtures: `tests/support/{ssh_server.rs,
+  ssh_remote.rs}`; covering cases in existing `tests/ssh_fixture.rs` and
+  `tests/ssh_transport/exact.rs`.
+- Necessary enum/API plumbing: `src/repository/transport/{mod.rs, endpoint.rs,
+  operation.rs}`, `src/repository/remote/observation.rs` and
+  `tests/ssh_transport/endpoints.rs`. Each new exhaustive Delete arm uses the
+  existing Push endpoint/direction. `transport/error.rs` owns the tested Debug
+  redaction. These additions are needed because the approved new enum is shared
+  beyond the task's primary files; no front-end behavior was implemented.
+- Durable evidence: this ledger and canonical ticket comment
+  `01M5157Z00N4Q6S8V0X2Z4B6DN`. The implementation plan is not marked reviewed
+  or committed by this worker.
+- Self-review covered exact mapping validation before reconnect, libgit2 OID
+  direction, one-command/no-command receive evidence, post-send state overriding
+  callback status, failed re-advertisement, observe-first retry, distinct Push
+  endpoint, privacy, non-delete proof compatibility and changed-file scope.
+  Final structural verification: `git diff --check` exited 0, as did
+  `git diff --exit-code -- Cargo.toml Cargo.lock devenv.nix devenv.lock`.
+  `git rev-parse HEAD` remains `25514a312370863c7d2fb3082c53c6e7cc14a985`;
+  `git branch --show-current` confirms the exact ticket branch. Status shows
+  only the named source/test files, ledger and new canonical comment; no
+  unrelated initial work existed or was overwritten.
+- No new dependencies, GPUI, sleeps, global config, developer keys or real app
+  data. Fixture faults use the existing owned SSH backend, counters, helper-audit
+  barriers and synchronous checkpoints. No approved-contract contradiction found.
+- **Review boundary:** compare the uncommitted diff to `25514a3`. Task 1 is ready
+  for controller-owned independent spec then quality review. The ticket remains
+  open. Full Rust gates/CLI smoke and native platform coverage remain at Task 8;
+  no native delete proof is claimed. Promotion orchestration, durable cleanup
+   pending/recovery mapping and generation/reservation integration are later tasks.
+
+### Task 1 Independent Reviews
+
+Spec review passed with no findings after inspecting the complete diff and
+independently verifying 38 transport unit tests, four fixture deletion cases,
+15 exact transport cases and 63 synchronization cases. Quality review then
+approved with no findings; it inspected the race, authentication, privacy and
+fixture proof paths without repeating those passing tests. Task 1 is complete
+at the local task gate; the full Task 8 and native gates remain pending.
