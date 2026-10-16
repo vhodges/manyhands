@@ -323,3 +323,221 @@ with no sleeps or external application data/global key/config changes.
   primary-publication reference), Cycle context-synchronization rule, and Task
   6 attempt expectations consistently, then finish the pending Task 0 probes.
   The approved design and production code remain unchanged at this checkpoint.
+
+## Task 0 Resume — Owner-Approved T0-1 Amendment (2026-10-16)
+
+The owner approved the controller's recommended ownership-first amendment
+("yes"). Persisted child ownership takes precedence over error category:
+`Interrupted` with retained conflict or owned resolution keeps the original
+attempt ID and `restart=true`; confirmed absence permits a new ID; uncertain
+ownership is not absence. Authoritative completion is never rerun, and
+retained `RecoveryRequired` continues under the same ID. This applies to both
+context and primary children. Cycle, design lifecycle/table, Task 6 and handoff
+are updated consistently. The historical T0-1 finding/reviews above are kept.
+
+Controller fresh preflight: clean status; `git fetch origin main` observed
+`89d04f901636229392a311241f8e777f0a00962b`; ticket HEAD
+`df4fe56ce0548290293c3f6d96f23f1ddbfc51a2`; ticket-worktree rebase onto
+origin/main was a clean no-op (same before/after HEAD); ancestry passed.
+`d027d98` is the planning checkpoint and `df4fe56` the independently reviewed
+blocker checkpoint. Worker re-read AGENTS and confirmed clean branch status.
+Implementation/checkpoint authority, SDD mode and targeted-tests-until-Task-8
+override persist. This worker returns changes uncommitted for spec then
+quality review; no Task 1 or outward action is authorized here.
+
+Delete/prune evidence is reused without repeating those probes. Pending Task 0
+characterizations are being resumed with throwaway tests and real service
+entry points; results and cleanup will be recorded below.
+
+### Resume Results — Characterizations 3 And 5
+
+**Merge-tree equivalence confirmed.** Throwaway `task0_merge_tree` used two
+fresh `Pair` SSH fixtures. B saved a document body edit on C; A published a
+primary advance, either a separate file or a nonoverlapping title edit of the
+same document. The test fetched that primary to B's actual `T(P)`. A temporary
+bridge in the existing `#[cfg(test)]` sync-tests module called the real private
+`prepare_clean_merge(T(P), C)` and imported its result to compute its tree OID.
+The test then called real `synchronize_remote_observed` for B's document:
+
+- actual commit parents were `[C, T(P)]` and its exact subject was
+  `Merge primary into document <ULID>`;
+- its tree OID equalled the prepared tree OID in both cases;
+- the resulting diff from the new primary changed only the document path,
+  not the primary-only addition. This supports the D4/D6 merge-equivalence
+  premise without pretending to test the as-yet-unimplemented digest.
+
+Anchors: `remote/sync.rs:702-782` (real preparation/import), `:3848-3923`
+(real merge commit, subject and guarded application). The temporary bridge
+wrote only fixture objects; no production visibility or behavior changed.
+
+**Fresh edit context confirmed.** `task0_fresh_context` saved B's document
+edit, installed that commit on the fixture primary, and added a later primary
+commit. It pruned the old context worktree and deleted its branch, attested
+that path/registration/branch were all absent, then called actual
+`prepare_context(Edit)` with a new operation ID. The outcome was **Created**
+at the deterministic path; both context HEAD and branch equalled the latest
+primary OID, and the worktree held the primary's document bytes and its later
+file. Anchors: `repository.rs:1708-1756,1783-1819`.
+
+### Resume Results — Full Child Replay / Restart Matrix
+
+The new probes called `synchronize_remote_observed` directly with default
+merging settings and fixture `SessionCredentials`. The existing regression
+cases call the real `synchronize_remote` wrapper, which delegates directly to
+that entry point (`remote/sync.rs:5945-5955`). No synchronization/transport
+mock or proposed promotion executor supplied a result.
+
+`task0_transient_{primary,context}_{replay,replace}` covered seven end states
+for **both Primary and Document targets**, with separate fixtures for same-ID
+restart and new-attempt strategies: 28 fixture scenarios. Every tested
+non-owned attempt had **zero integration-step rows**. Cancellation used the
+actual observer `Cancel`; interruption set `yield_requested=1` at the observer
+boundary; non-owned recovery used observer `Stop`; transport disconnected at
+authentication; rejection used the receiver's checked-out-branch refusal
+(including selecting the document HEAD for that case). Busy/yielding used
+real manual/poll reservations. No sleeps.
+
+In the following table, **replay** means same ID, `restart=false`; **restart**
+means same ID, `restart=true`. A successful repaired restart is a capability
+of the existing child, not a change to the parent's approved new-attempt
+policy for non-owned failures.
+
+| Actual child state | Replay | Restart | Evidence / approved parent selection |
+| --- | --- | --- | --- |
+| Authoritative Completed | Exact stored `Published` result, no authentication or push | Same stored result, no authentication or push | `task0_authority_and_lost_push`, both targets with normal and initially lost results. Parent consumes stored authority, never reruns. |
+| ConflictPending | `RecoveryRequired`, offline | Same `ConflictPending` before resolution; `Published` after real canonical resolution, one merge/one push | Executed existing `two_clone_document_conflict_resolved_and_published`; same attempt and existing resolution flow. |
+| IdentityRequired | `RecoveryRequired`, offline | Without confirmation: `IdentityRequired` with the same configuration digest. With confirmation: `Published`, one merge/one push | `task0_identity_and_owned_recovery`, both targets; existing primary identity regression also executed. Exactly one remote row exists and no candidate OID exists at the identity boundary. Keep original attempt. |
+| External-resolution-only conflict | `RecoveryRequired`, offline | `ConflictPending` until external repair; a genuine whole-merge repair then publishes with the original ID | Executed `code_conflict_false_repairs_then_external_repair`, then extended it temporarily with explicit direct replay/restart assertions. `ExternalResolutionRequired` itself comes from the real resolver/inspection flow, not the synchronization call; do not manufacture that as a child return. |
+| Cancelled, no retained ownership | `Interrupted` | `Interrupted`, terminal; a new ID publishes | Both-target transient matrix. The synchronization error enum has no Cancelled variant: the persisted cancelled state surfaces as Interrupted. Parent selects a new attempt. |
+| Interrupted, no retained ownership | `RecoveryRequired`, offline | `Published` once the yield is cleared by restart | Both-target transient matrix. Separate replace probes confirmed a new attempt also publishes; parent selects the new attempt per the approved table. |
+| PushRejected, no retained ownership | `RecoveryRequired`, offline | `Published` after receiver refusal is removed | Both-target transient matrix, including real context rejection. Separate replace probes published with a new ID after retiring an active old reservation. |
+| Transport failure, no retained merge | `RecoveryRequired`, offline | `Published` after clearing the authentication disconnect | Both-target transient matrix. Separate replace probes also published under a new ID after retirement. |
+| Busy | Busy while the competing manual reservation exists | Busy while it exists; Published after its release | Both targets; **zero child rows** were inserted. Fresh-ID strategy also succeeds after release. |
+| PollYielding | PollYielding while the poll reservation exists | PollYielding while it exists; Published after acknowledgement/release | Both targets; **zero child rows** were inserted. Fresh-ID strategy also succeeds after release. |
+| RecoveryRequired, no retained merge | RecoveryRequired, offline | Published when observer Stop is no longer supplied | Both-target transient matrix, zero integration rows. Separate replace probes retire an active old reservation then publish a fresh ID. |
+| RecoveryRequired with retained clean candidate | RecoveryRequired, offline | Persistent `Repository(RecoveryRequired)` while the injected checkpoint failure remains; after removal, Published with the **same candidate OID**, one merge and one push | `task0_identity_and_owned_recovery`, both targets. Trigger rejected applied-phase observation after the ref had moved; candidate evidence was present. Same attempt retained. |
+| RecoveryRequired with retained conflict / owned resolution | RecoveryRequired at unresolved evidence; same-ID restart inspects/reconciles, without adopting foreign state | Existing same-ID recovery preserves the original merge/resolution and publishes only after valid repair/continuation | Executed external false-repair regression and both `resolution_and_publication_seams_inventory` cases. The latter stop at resolution/Push/discovery checkpoints and count one resolution/one push. |
+| Interrupted with retained conflict | RecoveryRequired | Original ConflictPending, offline | Reuse reviewed T0-1 document-context evidence above; owner amendment selects original ID. |
+| Interrupted with owned resolution | Existing resolution remains owned, not terminal cancellation | Same-ID synchronization acknowledges interruption; identical resolution attempt subsequently completes | Executed library regression `cancellation_after_an_interrupted_resolution_is_a_recoverable_stop`, four actual owned stages (`resolution_prepared`, `commit_prepared`, and two applied-but-unreleased seams). This complements T0-1; it is a real primary synchronization over fixture Git/DB, not an SSH transport assertion. |
+
+**Lost push result, one push:** `task0_authority_and_lost_push` disconnected
+after receive-pack for both targets without any merge. The first call returned
+Transport, the server withheld report-status, ordinary replay returned
+RecoveryRequired, and same-ID restart recovered `Published`. The receive
+counter stayed at **exactly one update**, and both later ordinary and restart
+replays returned stored Published with zero further authentication, even with
+authentication disconnected. Merge count remained zero. The executed existing
+`resolved_merge_ambiguous_acceptance_and_persistence` adds the retained-
+resolution cases, testing both a lost SSH result and lost `push_verified`
+persistence with one accepted push and unchanged commit inventories.
+
+### Task 6 Integration Notes From Actual Results
+
+- **Do not infer restart from the outer error's terminal/non-terminal label.**
+  Real clean-merge IdentityRequired retained **one remote child row** for
+  both targets, even though it had no candidate; ordinary replay is not
+  sufficient, and confirmed continuation must set restart on that original
+  ID. No separate no-row IdentityRequired synchronization path was observed
+  or fabricated. `committing_identity` is reached under an already reserved
+  owner (`remote/sync.rs:3214-3230,3884`). If an outer operation reports an
+  identity issue before invoking/reserving a child, that is not evidence of
+  a child row. Read the actual child row: absent means first execution, not
+  lost ownership; a failed/unreadable lookup is uncertain ownership, not absence.
+- Busy/PollYielding really insert no row. Their tested same-ID `restart=true`
+  calls after release run as new executions, not resumed work. The parent can
+  still mint a new ID as specified; its restart flag follows actual row
+  existence, not the previous error category.
+- **Retiring an attempt includes its active reservation.** The replace probes
+  first proved no integration ownership. When the failed child still held an
+  active reservation, they called existing `cancel_remote_operation`, then
+  the original-ID synchronization with restart to acknowledge it. That call
+  returned **RecoveryRequired while durably changing the row to cancelled**
+  (the replay arm in `sync.rs:6133-6169`), not Interrupted. A new ID then
+  published for every mode/target. A later cancelled-row replay is Interrupted.
+  This is an implementation detail of the approved retirement/new-attempt
+  rule; treating that acknowledgement's error alone as failed retirement
+  would be incorrect. Retained/uncertain ownership must not enter this path.
+- Historical applied rows are not automatically unfinished ownership. Existing
+  reservation logic distinguishes pending conflict/resolution and applied
+  resolution whose release evidence is incomplete
+  (`remote/reservation.rs:400-417`). Authoritative completion wins first.
+- Source anchors for the measured matrix: `remote/sync.rs:5984-6014`
+  (authority/cancelled/ordinary replay), `:6035-6085` (local owned-merge restart),
+  `:6133-6169` (reservation restart), `:4038-4058` (observer requests);
+  `remote/reservation.rs:856-904` (replay/arbitration/no new row), `:952-963`
+  (cancellation request), `:2099-2168` (restart/acknowledgement).
+
+### Resume Exact Commands And Results
+
+All commands ran in the ticket worktree. Only targeted tests were selected;
+the full gates remain deferred to Task 8. Initial failures below were
+throwaway test assumptions/setup or harness limits, corrected without any
+production change. Systematic-debugging guidance was applied.
+
+| Exact command | Actual results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_` | Two runs of the original three probe cases: first **1 passed/2 failed**; second **2 passed/1 failed**. Merge-tree assertion initially omitted the actual subject's ULID suffix (tree/parents already matched). Fresh-context passed both runs. Transient setup initially attempted reservation before binding the live endpoint configuration; priming through a real AlreadyCurrent synchronization fixed setup. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_transient_matrix -- --exact` | Four runs before splitting: original 14-scenario matrix **1 passed**; expanded 28-scenario matrix **0 passed/1 failed** on the cancellation-acknowledgement error assumption; two more expanded runs **0 passed/1 failed** via the isolated-child/watchdog failure path, without an assertion line, partway through the 25th setup. The harness has a fixed 100-second per-case bound (`tests/support/ssh_harness.rs:237`); splitting the long combined probe into seven-scenario cases below established all 28 scenarios within the unchanged bound. No application failure was reproduced by those bounded cases. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_transient_context_replace -- --exact` | **1 passed**, seven scenarios. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_transient_primary_replay -- --exact` | **1 passed**, seven scenarios. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_transient_primary_replace -- --exact` | **1 passed**, seven scenarios. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_transient_context_replay -- --exact` | **1 passed**, seven scenarios. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_identity_and_owned_recovery -- --exact` | **1 passed**, four scenarios (identity/retained candidate × primary/document). |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery task0_authority_and_lost_push -- --exact` | **1 passed**, four scenarios (normal/lost result × primary/document). |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery two_clone_document_conflict_resolved_and_published -- --exact` | **1 passed**; canonical conflict resolution then original-child publication and authoritative replay. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery confirmed_identity_completes_a_divergent_primary_merge -- --exact` | **1 passed**; unchanged identity regression including stale-confirmation refusal. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery code_conflict_false_repairs_then_external_repair -- --exact` | Two runs, **1 passed each**; second added throwaway explicit ordinary-replay/original-ID-restart assertions before the real external repair. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery resolved_merge_ambiguous_acceptance_and_persistence -- --exact` | **1 passed**, lost transport and lost verified-checkpoint persistence, one accepted push each. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery resolution_and_publication_seams_inventory` | **2 passed** (primary and context), retained-resolution/publication/discovery seams. |
+| `devenv shell -- cargo test --locked --lib cancellation_after_an_interrupted_resolution_is_a_recoverable_stop` | **1 passed/0 failed/771 filtered**, four owned-resolution stages. One dead-code warning for the throwaway merge bridge unused by this library-only selector; the bridge is removed before handoff. |
+
+### Task 0 Resume Handoff / Self-Review
+
+- The approved amendment and SDD/targeted-testing overrides are reflected in
+  Cycle, design, implementation plan and handoff. Historical blocker evidence
+  and approval history are preserved. The caller scan and Linux delete/prune
+  baseline from the reviewed checkpoint are reused; production did not change
+  between checkpoints.
+- **All remaining Task 0 characterization categories now have real-path
+  execution evidence. No new design contradiction was found.** The measured
+  child capabilities are distinguished from the parent's chosen retry policy;
+  reservation retirement and identity-row details are recorded above for Task 6.
+- Removed this worker's merge bridge, eight new SSH cases/helpers and extra
+  external-conflict assertions with `apply_patch`. No production, dependency,
+  retained-test or Cargo changes are intended. No Task 1, commit or outward
+  action has been performed. Controller owns independent spec then quality
+  review and the checkpoint commit.
+- Remaining limits are the already-recorded native Windows open-file/prune
+  gap and deterministic partial-deletion simulation rather than a process kill
+  inside libgit2. Full Rust/CLI/native gates are not claimed; Task 8 owns the
+  full local gate. Unknown-ownership handling of the future promotion executor
+  is a Task 6 test obligation, not a delivered implementation in this probe.
+- Final cleanup verification: `git diff --exit-code -- src tests Cargo.toml
+  Cargo.lock devenv.nix devenv.lock` exited 0, as did `git diff --check`.
+  Status showed exactly the five updated Cycle/planning documents and new
+  canonical comment `01M513H8Z0N4Q6S8V0X2Z4B6DK`. HEAD remains the supplied
+  `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2`; no worker commit.
+
+### Task 0 Resume Reviews — Documentation Consistency Corrections
+
+Spec review passed. Quality review requested three documentation corrections;
+each was verified against the current source and approved contract before
+editing. These complete the approved ownership-first amendment/invariants;
+they add no production behavior or new implementation scope.
+
+| Finding | Verification and resolution |
+| --- | --- |
+| Important: primary-child recovery had a pending mapping but was omitted from the exhaustive publication category list | Cycle outcome invariant (`An error means nothing reached the primary`) and design Public Interface require `Ok` after integration. Added fixed redacted `recovery_required` to the publication category list; persistent recovery with retained primary-child ownership and uncertain ownership yield `Ok` partial publication pending synchronization recovery, cleanup awaiting publication, never post-integration `Err`. Made the attempt-table mapping explicit and added matching Task 6 outcome/redaction/ownership/refresh expectations. |
+| Minor: Task 6/table described ExternalResolutionRequired as a child synchronization result | Source `remote/sync.rs:4777-4805,5320-5349` locates this outcome in conflict read/resolve; Task 0's external-conflict evidence confirms synchronize retains ConflictPending. Changed the table to ConflictPending whose inspection requires external resolution, and Task 6 to the actual inspect/read/resolve → external repair → original-ID restart flow. Explicitly prohibit injecting the impossible synchronize return. |
+| Minor: implementation-plan self-review still claimed nothing had run | Replaced the stale ending with executed Task 0 characterizations/targeted baseline and recorded T0-1 amendment, distinguishing the still-planned implementation/verification of Tasks 1–8. |
+
+Only design/plan prose and review evidence changed in this correction pass.
+No tests were needed or run for these documentation-only corrections.
+`git diff --check` passed (exit 0); `git diff --exit-code -- src tests Cargo.toml
+Cargo.lock devenv.nix devenv.lock` also exited 0. No commit; the controller
+sends the corrections for quality re-review before checkpointing.
+
+Quality re-review approved the checkpoint with all three findings resolved
+and no remaining findings. Task 0 is complete for the local implementation
+gate; Task 1 may begin. Native gaps and the deferred full Task 8 gate remain
+as recorded above. The controller owns the authorized checkpoint commit.

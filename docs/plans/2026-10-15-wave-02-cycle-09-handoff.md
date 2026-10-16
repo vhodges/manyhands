@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: planning approved, implementation not started (2026-10-16)
+## Current: Task 0 reviewed; Task 1 next (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -9,8 +9,16 @@ The owner approved the Cycle, the design and the implementation plan on
 2026-10-15. The owner also accepted the recommended answer to owner decisions
 D1–D7 and internal ruling R1.
 
-No implementation has started. No production code, tests or Cargo files have
-changed.
+Implementation and checkpoint commits are authorized in subagent-driven
+development mode, with independent spec then quality review. Targeted tests
+only until Task 8 override the full Task 0 baseline and Task 6 library run.
+Task 0's delete/prune probes are verified; its interrupted-retained-conflict
+blocker was reviewed and the owner approved the ownership-first amendment.
+The remaining Task 0 characterizations are recorded in the ledger, including
+the full replay/restart matrix, merge-tree equivalence and fresh edit context.
+Independent spec review passed; quality review approved after three
+documentation consistency fixes. No production code or retained test/Cargo
+changes exist yet. Task 1 is next.
 
 ### Where things are
 
@@ -18,9 +26,9 @@ changed.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
-| Local HEAD | `69176ba` (the ticket checkpoint rebased onto `origin/main` `89d04f9`) |
+| Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Uncommitted | The four planning documents, this brief, and two ticket comments under `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/`. They are on disk only. If they are still uncommitted, ask the owner whether to commit them as the planning checkpoint before Task 0. |
+| Checkpoints | Planning and reviewed blocker evidence are committed. Task 0 resume evidence and amendment passed spec and quality review and are ready for the authorized checkpoint commit. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
 ### Read in this order
@@ -35,7 +43,7 @@ changed.
 4. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md`:
    Tasks 0–8. Follow it exactly.
 5. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md`:
-   the grounding facts and the 13 review findings with their resolutions.
+   the grounding facts, planning reviews, Task 0 evidence and T0-1 approval.
    Record your evidence here as you go.
 
 Cycle 08's documents (`docs/Cycles/wave-02-cycle-08-*` and
@@ -90,10 +98,14 @@ the same way comment publication binds its child synchronization.
   with a new attempt.
 - **Nothing strands.** Pre-integration refusals end `abandoned`.
   `context_changed`, `ignored_files` and `remote_context_changed` rows are
-  superseded by a newly confirmed promotion. Cancelled, interrupted, rejected,
-  offline, busy and yielding children get a new attempt ID next time. Task 0
-  must confirm the child end-state table against the real
-  `synchronize_remote_observed` before Task 6.
+  superseded by a newly confirmed promotion. For context and primary children,
+  authoritative completion is never rerun. Retained conflict/owned-resolution
+  evidence takes precedence over errors: an interrupted retained child keeps
+  its original attempt ID with restart; retained `RecoveryRequired` also
+  restarts that ID. Only confirmed absence of retained ownership permits a
+  new attempt for cancelled/interrupted/rejected/offline/busy/yielding or
+  recovery failures. Uncertainty is not absence. Task 0's evidence confirms
+  the real child behavior and passed independent reviews.
 - **History stays `observed_published` until completion.** A cleanup that
   stops early must leave the context under the RFC's explicit-republish rule.
 - **Errors mean the primary is unchanged.** Integration reconciliation
@@ -105,20 +117,20 @@ the same way comment publication binds its child synchronization.
   timestamps and fixed categories. Never a title, body, path content,
   endpoint or secret.
 
-### How to start
+### How to resume
 
-1. Confirm with the owner that **implementation is authorized**. Approving
-   the documents did not grant it. Also confirm whether to commit the
-   planning checkpoint first.
-2. Run Task 0 exactly as the plan specifies:
+1. Preserve existing authorization and reviewed evidence; read the latest
+   execution ledger. The controller owns checkpoint commits after reviews.
+2. Task 0 passed independent spec then quality review. Before subsequent
+   implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
       the worktree. Never rebase main onto the branch.
-   2. Re-scan for new callers.
-   3. Make the five characterizations: guarded delete via `push_negotiation`;
-      `Worktree::prune` (clean, ignored, locked, open file, interrupted);
-      in-memory merge equivalence; fresh context after removal; the
-      child end-state replay table.
-   4. Run the baseline gate.
+   2. Re-scan callers if the source changed.
+   3. Reuse the recorded guarded-delete, prune, in-memory merge equivalence,
+      fresh-context and child replay/restart findings. Review the execution
+      ledger's Task 6 integration notes, especially row existence, cancellation
+      acknowledgement when retiring an active reservation, and ownership.
+   4. Run targeted tests only until Task 8.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
@@ -130,7 +142,7 @@ the same way comment publication binds its child synchronization.
 
 ### Repository rules you must follow
 
-- Run every Rust command as `devenv shell -- cargo …`. The gate is:
+- Run every Rust command as `devenv shell -- cargo …`. The full Task 8 gate is:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -140,8 +152,8 @@ the same way comment publication binds its child synchronization.
   devenv shell -- cargo run --locked --bin manyhands-cli
   ```
 
-  During a task, running only the targeted local tests for the changed code
-  is fine. Do not run the cargo gate on Sprites: that experiment was
+  Until Task 8, the owner requires targeted tests only, including Tasks 0
+  and 6. Do not run the cargo gate on Sprites: that experiment was
   abandoned.
 - **Ticket comments.** Write them directly as canonical files at
   `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/<ULID>.md`, with the same

@@ -59,6 +59,11 @@ approved this Cycle, the design and the plan on 2026-10-15, and accepted the
 recommended answer to D1–D7 and ruling R1. Implementation authority, commits
 and every outward action remain separately gated.
 
+Implementation and checkpoint commits have since been authorized, using
+subagent-driven development and targeted tests only until Task 8. The owner
+also approved T0-1's ownership-first child retry amendment, recorded below
+and in the execution ledger. Outward actions remain separately gated.
+
 ## Planning Evidence And Implementation Entry Gate
 
 The existing ticket branch and worktree were reused. A fresh `git fetch
@@ -224,9 +229,16 @@ Implementation requires all of the following:
      attempt, with merging enabled.
    - `ConflictPending` and `IdentityRequired` are returned inside
      `ContextSynchronization`. The same attempt continues after the existing
-     resolution or identity flow.
-   - A cancelled, interrupted, rejected or transport-failed attempt is
-     retired, and the next call starts a new attempt.
+     resolution or identity flow. Authoritatively completed children use their
+     stored result and never run again.
+   - Retained child ownership takes precedence over the error category.
+     `Interrupted` with a retained conflict or owned resolution keeps the
+     original attempt ID and uses `restart=true`, as does retained
+     `RecoveryRequired`. Only confirmed absence of retained ownership permits
+     an interrupted child to get a new attempt ID; uncertainty is not absence.
+   - A cancelled, rejected or transport-failed attempt without retained
+     ownership is retired, and the next call starts a new attempt. Both
+     context and primary children follow the design's ownership-first table.
    - When the attempt completes, the observation is recomputed against the
      freshly fetched tracking primary. A changed change set returns
      `ReconfirmationRequired`, and the record ends `abandoned` (D4).
@@ -248,6 +260,7 @@ Implementation requires all of the following:
    - When the context is already contained, no commit is made.
 6. **Publication.** This runs only when a remote is configured. The promotion
    runs deliberate primary synchronization as a bound child attempt.
+   It uses the same ownership-first retry rule as the context child.
    - Anything other than published or already current is a partial success,
      `publication: pending(category)`, and cleanup waits.
    - Without a remote, the result is `publication:

@@ -28,7 +28,10 @@ index-only refresh. The new parts are:
 The [implementation plan](2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md)
 orders the work. Ticket: `01K7F6H9J2N4Q6S8V0X2Z4B6DH`. The owner approved
 the Cycle, this design and the plan on 2026-10-15, with D1–D7 and R1 as
-recommended. This does not authorize implementation.
+recommended. Implementation and checkpoint commits were subsequently authorized
+with subagent-driven development and targeted tests only until Task 8. The
+owner approved the T0-1 ownership-first retry amendment below; the execution
+ledger preserves the original blocker and the approval.
 
 The RFCs settle the external policy:
 
@@ -334,8 +337,11 @@ resolve root, configuration                              (invalid → Repository
  → new: observe; blockers → Blocked; digest ≠ expected → ExternalChange   (row abandoned)
         insert row (confirmed)                                   [F1 AfterConfirmed]
  → remote? context child attempt (manual, merging)
+        authoritative completion → stored result; never rerun child
+        retained conflict / owned resolution → same ID, restart (even Interrupted)
         ConflictPending / IdentityRequired → return; same attempt continues later
-        cancelled / interrupted / rejected / transport → return; next call: new attempt
+        no retained ownership: cancelled / interrupted / rejected / transport → new attempt
+        uncertain ownership → recovery; never infer absence or replace attempt
         re-observe with fresh T(P): blocker or digest ≠ expected → ReconfirmationRequired (abandoned)
         record context_synchronized, context_oid, remote_context_oid   [F2 AfterContextSync]
  → lease: re-observe; recompute digest (≠ → ReconfirmationRequired, abandoned)
@@ -345,6 +351,7 @@ resolve root, configuration                              (invalid → Repository
         guarded update primary old → merge, safe checkout       [F4 AfterIntegrationRef]
         record integrated; mark refresh required
  → remote? primary child attempt (manual, merging)
+        same ownership-first attempt rules as context child
         Published/AlreadyCurrent → record published              [F5 AfterPublication]
         otherwise → record publication_pending(category); refresh; return partial
    no remote → record publication_pending(no_publication_remote)
@@ -374,14 +381,27 @@ The step calls `synchronize_remote_observed` with
 `restart` when that child row exists, and a forwarding observer that maps
 promotion cancellation onto `Cancel`. It passes `confirmed_identity` through.
 
-How the child's end state decides the next call:
+For both context and primary children, inspect authoritative completion and
+persisted ownership before classifying the returned error. Retained conflict
+or owned-resolution evidence takes precedence over the error category
+(owner-approved T0-1 amendment). Uncertain ownership is not absence: surface
+recovery rather than replace a possibly owned child.
+
+How the child's end state and ownership decide the next call:
 
 | Child end state | Next call |
 | --- | --- |
 | Completed | Use the stored result; never re-run |
-| `ConflictPending`, `IdentityRequired`, `ExternalResolutionRequired` | Same ID with `restart`, after the user's resolution or identity confirmation |
-| `Cancelled`, `Interrupted`, `PushRejected`, transport failure, `Busy`, `PollYielding`, `RecoveryRequired` without a retained merge | New attempt and new ID |
-| `RecoveryRequired` with a retained merge candidate | Same ID with `restart`; a persistent failure surfaces as `ContextSynchronization(RecoveryRequired)` |
+| `Interrupted` with a retained conflict or owned resolution | Original attempt ID with `restart=true` |
+| `ConflictPending` (including a conflict whose inspection requires external resolution), `IdentityRequired` | Same ID with `restart`, after the user's canonical/external resolution or identity confirmation |
+| `Cancelled`, `Interrupted`, `PushRejected`, transport failure, `Busy`, `PollYielding`, `RecoveryRequired` with confirmed absence of retained ownership | New attempt and new ID |
+| `RecoveryRequired` with a retained merge candidate, conflict or owned resolution | Same ID with `restart`; a persistent failure surfaces as `ContextSynchronization(RecoveryRequired)` before integration, or `Ok` with `publication: pending(synchronization(recovery_required))` for the primary child after integration |
+| Ownership cannot be determined | Surface recovery; do not mint a replacement attempt on an assumption of absence |
+
+`ExternalResolutionRequired` is reported by the existing conflict read/resolve
+flow, not by `synchronize_remote_observed`. An external-only conflict remains
+the original child's `ConflictPending` until a valid external repair allows
+same-ID restart to continue.
 
 Task 0 characterizes each row against the real child before the table is
 fixed. A lost push result is answered by the child's own replay as published,
@@ -431,8 +451,14 @@ conflict, as Cycle 06 already defines.
 When the child does not complete, the step records
 `publication: pending(synchronization(category))` and
 `cleanup: pending(awaiting_publication)`. The category is one of conflict,
-rejected, transport, identity, busy, yielding or cancelled. The child is the
-only code that pushes the primary.
+rejected, transport, identity, busy, yielding, cancelled or `recovery_required`.
+`recovery_required` is a fixed, redacted category for a persistent primary-child
+recovery failure with retained merge/conflict/resolution ownership, or when
+ownership cannot be determined. It contains no raw error, endpoint or content.
+The operation returns an `Ok` partial outcome with that publication category
+and cleanup awaiting publication, never a post-integration `Err`. Retained
+ownership keeps the original child ID; uncertain ownership does not authorize
+a replacement attempt. The child is the only code that pushes the primary.
 
 ### Remote Deletion
 

@@ -15,8 +15,11 @@ id: "01M500Q0YHT5PNGGCQPCBSF3Z5"
 > [design](2026-10-15-wave-02-cycle-09-confirmed-document-promotion-design.md).
 > The owner accepted the recommended answer to D1–D7 and ruling R1; the
 > passages that depend on them are marked **(D1)–(D7)**. Do not implement until
-> implementation is explicitly authorized. Execution mode: direct sequential tasks, each with a ticket
-> comment and an independent review before the next.
+> implementation is explicitly authorized. Implementation and checkpoint
+> commits have since been authorized. Execution mode: subagent-driven
+> development, with independent spec then quality review at each checkpoint.
+> The owner approved T0-1's ownership-first child retry amendment and targeted
+> tests only until Task 8; these override the original execution/baseline text.
 
 **Goal:** Two headless operations:
 
@@ -107,16 +110,20 @@ Task order:
 
 ## Task 0: Refresh Base, Record Decisions, Characterize And Baseline
 
-- [ ] Confirm explicit implementation authorization and the recorded answers
+Evidence collected, including the owner-approved T0-1 amendment. Independent
+spec review passed; quality review approved after the three documented
+consistency fixes. Task 0 is complete for the local implementation gate.
+
+- [x] Confirm explicit implementation authorization and the recorded answers
   to D1–D7.
-- [ ] `git fetch origin main`. Rebase the ticket branch onto it from inside
+- [x] `git fetch origin main`. Rebase the ticket branch onto it from inside
   the ticket worktree. Verify ancestry and a clean status. Record the base and
   the before and after SHAs. Re-read `AGENTS.md` if it changed.
-- [ ] Re-scan for new callers of `synchronize_remote_observed`,
+- [x] Re-scan for new callers of `synchronize_remote_observed`,
   `prepare_context`, `RemoteOperationAction::Promote` and
   `remote_context_states`. Record any Wave 03 consumer as a compatibility
   item.
-- [ ] Characterize with throwaway, uncommitted tests, and record each finding
+- [x] Characterize with throwaway, uncommitted tests, and record each finding
   in the ledger:
   - Over the fixture, a `:refs/heads/<x>` push with a `push_negotiation`
     callback:
@@ -141,19 +148,13 @@ Task order:
     same ID return. Confirm the same-or-new-attempt column before Task 6.
   - What `prepare_context(Edit)` does after the branch and worktree are gone
     and the primary contains the document: it creates from the primary head.
-- [ ] A finding that contradicts the design stops here for an amendment and
+- [x] A finding that contradicts the design stops here for an amendment and
   owner review. Do not adapt silently.
-- [ ] Run and record the baseline:
+- [x] Run and record targeted characterization-relevant baseline tests only.
+  The owner's targeted-testing override defers the full check/fmt/clippy/test
+  gate and CLI smoke run to Task 8.
 
-  ```sh
-  devenv shell -- cargo check --all-features --locked
-  devenv shell -- cargo fmt --check
-  devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
-  devenv shell -- cargo test --all-features --locked
-  devenv shell -- cargo run --locked --bin manyhands-cli
-  ```
-
-- [ ] Add a ticket comment with the base, decisions, characterization results
+- [x] Add a ticket comment with the base, decisions, characterization results
   and baseline.
 
 ## Task 1: Guarded Remote Context Deletion
@@ -498,12 +499,21 @@ reservation API.
     - **(D4)** a context child that brings a new remote path →
       `ReconfirmationRequired`, nothing integrated;
     - a child that only merged the primary → continues;
-    - every row of the design's attempt table: `Cancelled`, `Interrupted`,
-      `PushRejected`, transport failure, `Busy` and `PollYielding` each
-      return their error, and the next call runs a **new** attempt that
-      completes. `ConflictPending`, `IdentityRequired` and a retained merge
-      reuse the same attempt with `restart`. No end state strands the
-      record.
+    - every row of the design's ownership-first attempt table, for both
+      context and primary children: authoritative completion uses the stored
+      result and never reruns; `Interrupted` with retained conflict or owned
+      resolution preserves the original ID with `restart=true`; retained
+      `RecoveryRequired` uses same-ID restart. `ConflictPending` and
+      `IdentityRequired` continue the same attempt after resolution/identity.
+      Include a `ConflictPending` child whose inspection requires external
+      resolution: exercise the existing inspect/read/resolve flow reporting
+      `ExternalResolutionRequired`, then a valid external repair and original-ID
+      restart. Do not inject `ExternalResolutionRequired` as a synchronize
+      return. Only confirmed absence of retained
+      ownership permits `Cancelled`, `Interrupted`, `PushRejected`, transport
+      failure, `Busy`, `PollYielding` or `RecoveryRequired` to start a new
+      attempt. Uncertain ownership surfaces recovery, never assumed absence.
+      No end state strands the record.
   - **Primary advanced:** `T(P)` moves after the context child completes →
     `PrimaryAdvanced`; the next call re-synchronizes with a new attempt and
     integrates once.
@@ -511,8 +521,16 @@ reservation API.
     - `PushRejected` → `Ok` with `publication: Pending`,
       `cleanup: Pending(AwaitingPublication)`, and local context state kept;
     - a retry then publishes and cleans up;
+    - persistent `RecoveryRequired` with retained primary-child ownership, or
+      uncertain ownership → `Ok` partial outcome with
+      `publication: Pending(Synchronization(recovery_required))` and
+      `cleanup: Pending(AwaitingPublication)`, never a post-integration `Err`.
+      Assert the fixed redacted category, retained original child ID, no
+      replacement attempt on uncertainty, and refresh/IndexPending behavior;
     - a cancelled primary attempt → `publication: Pending(cancelled)`; the
-      retry runs a new attempt.
+      retry runs a new attempt only with confirmed absence of retained
+      ownership; retained interrupted conflict/resolution uses the original
+      child ID with restart, just as for the context child.
   - **Remote delete:**
     - `Changed` → `cleanup: Pending(RemoteContextChanged)`, with all local
       state kept and history still `observed_published`;
@@ -556,10 +574,11 @@ reservation API.
   `document promote` and D25 rows to name the delivered operations, their
   results, and what remains for C5/D5 (boundary binding, expiry, preview
   schema values, resume classification).
-- [ ] Run green, then the full library suite:
+- [ ] Run green with targeted promotion tests; the owner deferred the full
+  library suite to Task 8:
 
   ```sh
-  devenv shell -- cargo test --locked --lib
+  devenv shell -- cargo test --locked --lib promotion
   ```
 
 - [ ] Commit (for example `feat: add confirmed document promotion`) and add a
@@ -646,7 +665,9 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
   tree contains B's commit, and the server's primary keeps it.
 - [ ] Child attempts: a cancelled context synchronization and a cancelled
   primary publication each leave the record resumable. The next call
-  completes with a new attempt and one push of each branch.
+  completes with a new attempt when retained ownership is confirmed absent,
+  and one push of each branch. An interrupted child retaining a conflict or
+  owned resolution keeps its original ID with restart for either target.
 - [ ] Interruption and reopen, one case per boundary F1–F12, using the
   exit-point service. Each case asserts:
   - actual refs, worktrees, server refs and the record;
@@ -738,5 +759,7 @@ Every acceptance row in the Cycle names its proving task:
 
 Each task starts red, names its files and commands, and ends with a commit and
 a ticket comment. The seven owner decisions are confined to marked steps, so a
-different answer changes a known set of tests. Nothing here has been run; all
-verification is planned.
+different answer changes a known set of tests. Task 0's real-path
+characterizations and targeted baseline have been executed and recorded in
+the execution ledger, including the owner-approved T0-1 amendment. Tasks 1–8
+remain planned; their implementation and verification have not been run.
