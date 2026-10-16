@@ -1415,3 +1415,186 @@ Coordination verification: `git diff --check` exited 0. `git status --short
 --untracked-files=all` lists 14 intended Task 3 paths (six source files, four
 planning documents and four canonical comments) for the controller's explicit
 staging. No files were staged and HEAD remains the exact review base above.
+
+## Task 4 Entry — BLOCKER T4-1: Git/SQLite Completion Atomicity (2026-10-16)
+
+**Current status: Task 4 STOP at T4-1; owner decision pending. Independent SPEC
+confirmed a material contradiction requiring an owner amendment; QUALITY approved
+the blocker evidence without findings. These are read-only evidence reviews, not
+implementation approval; no reviewer reruns occurred.** The task brief expressly
+requires a stop on a material approved-contract contradiction rather than
+silently weakening all-three failure preservation.
+
+### Entry And Contract
+
+- Reused the controller's completed preflight. Read this worktree's AGENTS, TDD
+  and Cycle implementation skills, approved Cycle/design/plan and prior evidence.
+  Initial status was clean on the exact ticket branch. HEAD is
+  `3b925e141bec9ae309024bdbfbf73aa6ab48caae`; `origin/main` is
+  `89d04f901636229392a311241f8e777f0a00962b`. The ancestry check exited 0.
+  Tasks 0–3 and their reviews remain intact. No fetch/rebase was repeated.
+- Task 4 plan `:401-403,421-425` requires tracking-ref deletion, state-row deletion
+  and retirement insertion in one transaction, with an injected transaction
+  failure leaving **all three unchanged**. Design `:389-390,570-576` also puts
+  completion and reservation finish in that final transaction; Cycle
+  `:300-304` requires the same boundary.
+- `remote/state.rs:5556-5591` supplies a **SQLite-only** transaction. Its contract
+  explicitly says it is never held across Git work; the callback runs before
+  `transaction.commit()`. The requested `retire_context(tx, ...)` receives a
+  borrowed SQL transaction, so it cannot decide whether its caller later rolls
+  back or whether that later SQL commit succeeds.
+- Git ref transactions commit separately (`remote/sync.rs:7371-7377,7405-7410`).
+  No existing enlistment mechanism makes Git refs part of SQLite's rollback or
+  commit. A repository lease and remote reservation exclude cooperating actors;
+  they do not merge those two durability domains. Existing poll code explicitly
+  treats a surviving Git effect as independent of SQL rollback
+  (`remote/poll.rs:1791-1807`).
+
+### Real-Git/SQLite Characterization
+
+A throwaway test in `remote/state_tests.rs` used two isolated existing state
+fixtures, actual Git repositories/commit objects/tracking refs, actual
+`configure`/`complete_batch`/`with_transaction`, and a test-only SQL table named
+`task4_retirement_probe`. That table represented the SQL retirement effect; it
+was **not** a production `retired_contexts` migration or a test of a delivered
+`retire_context` implementation. No mock, dependency, global config, developer
+key, network or sleep was used.
+
+1. Seed a real tracking ref at the fixture commit OID and a real
+   `observed_published` context-state row. Lock the ref and stage its removal.
+2. **Git-first scenario:** inside `with_transaction`, delete the state row,
+   commit the Git ref transaction, then attempt the retirement-effect INSERT.
+   A deterministic SQLite `BEFORE INSERT` trigger raises `ABORT`; the closure
+   returns the existing fixed RecoveryRequired error. SQL rollback restores the
+   original state row and leaves zero retirement-effect rows, but a newly opened
+   Git repository reports the tracking ref **NotFound**. The three resources are
+   not preserved together.
+3. **Unapplied-Git scenario:** stage and then drop the Git ref transaction without
+   committing; commit the SQL deletion/insertion through `with_transaction`.
+   The reopened Git ref remains at the original OID, while SQL has zero state
+   rows and one retirement-effect row. This deterministically represents the
+   unapplied Git side of a SQL-first protocol; it does **not** claim an actual
+   process kill was executed.
+
+Executing all SQL statements before committing Git can avoid the first trigger
+ordering, but cannot make a subsequent SQL commit failure/outer rollback undo a
+committed Git deletion. Committing SQL before Git has the opposite gap. A
+best-effort compensating ref write is a further fallible Git effect, not an
+atomic rollback. These observations establish the missing cross-resource
+mechanism; they do not claim that every possible recovery protocol was tested.
+
+### Exact Commands And Counts
+
+All Rust commands used Devenv in the specified ticket worktree. The first two
+selectors were incorrectly qualified for `--exact`: the actual nested test
+module is `persistence_tests`, not `tests`. Their zero-test results are explicitly
+not verification.
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib remote::state::tests::task4_retirement_cross_resource_characterization -- --exact` | **0 passed / 0 failed / 859 filtered**; no test selected. |
+| `devenv shell -- cargo test --locked --lib repository::remote::state::tests::task4_retirement_cross_resource_characterization -- --exact` | **0 passed / 0 failed / 859 filtered**; no test selected. |
+| `devenv shell -- cargo test --locked --lib task4_retirement_cross_resource_characterization` | **1 passed / 0 failed / 858 filtered**, 0.15 seconds, no warnings; both real-resource scenarios above. This is characterization evidence, not Task 4 implementation GREEN. |
+
+The planned `cleanup`, `remote::state` and `remote::refs` implementation RED/GREEN
+runs have **not** run. No stubs or production behavior were written. The blocker
+was found before starting the implementation TDD cycle, and the passing probe
+must not be reported as a passing Task 4 gate. Full Task 8 checks remain deferred.
+
+### Required Resolution And Self-Review
+
+Controller/contract review must specify an achievable completion durability
+boundary before Task 4 resumes: either supply a real mechanism satisfying the
+literal cross-resource atomicity/failure guarantee, or explicitly amend it to a
+recoverable ordered Git effect plus atomic SQL finalization. An amendment must
+define pre-effect failures, post-Git/pre-SQL failure and crash reconciliation,
+and how applicable existing publication history/reservation ownership remain
+until completion.
+That alternative is **proposed, not approved**; the all-three preservation rule
+has not been relaxed. No Task 5/6 journal or runner was implemented to bridge it.
+
+Self-review: the contradiction is the final cross-resource boundary, not D7,
+R1's missing-row semantics or the clean-worktree design. Those implementation
+obligations remain pending, including generic ticket/document coverage,
+migration/audit/inventory, ignored/locked/partial preservation and fresh Edit.
+The original Linux prune characterizations are retained; Windows open-handle
+behavior remains unverified. No claim of native execution is made.
+
+Removed the entire throwaway test using `apply_patch`. `git diff --exit-code --
+src tests Cargo.toml Cargo.lock devenv.nix devenv.lock` exited 0 after removal.
+At the initial blocker return, durable changes were only this ledger and canonical
+comment `01M51F7Z00N4Q6S8V0X2Z4B6DZ`, returned uncommitted. The ticket stays open. No
+subagents, staging, commit, push, PR, CI dispatch, merge, closure or worktree
+cleanup occurred.
+
+Initial blocker-return verification: `git diff --check` and `git diff --exit-code
+-- src tests Cargo.toml Cargo.lock devenv.nix devenv.lock` both exited 0. `git status --short
+--untracked-files=all` listed exactly the modified ledger and new canonical
+comment above. No source/dependency changes or staged files remain.
+
+### Independent Reviews And Proposed Minimal Amendment — Owner Decision Pending
+
+The controller conveyed the completed independent reviews:
+
+- **SPEC:** confirmed T4-1 is a material approved-contract contradiction and
+  requires an **owner amendment** before implementation resumes.
+- **QUALITY:** approved the blocker evidence **without findings**.
+- Both reviewers worked read-only over the blocker evidence/current diff and
+  relevant source. No reviewer test reruns or code changes occurred. Prior probe
+  counts remain the evidence; neither review clears Task 4 for implementation.
+
+Task 3 is committed as `3b925e141bec9ae309024bdbfbf73aa6ab48caae` (`3b925e1`),
+the unchanged current HEAD. Tasks 0–3 remain reviewed complete at their local
+gates. **Task 4 remains STOP at T4-1; the owner has not approved an amendment.**
+
+**Proposed minimal amendment — NOT APPROVED:**
+
+1. Persist the existing planned **`branch_deleted` intent** durably before the
+   tracking-ref effect. No new phase or table is proposed.
+2. Under the repository lease, validate ownership and frozen configuration, then
+   delete the tracking ref guarded by the expected **direct OID**, or proceed
+   only on verified true absence. Wrong/new conflicting values, symbolic refs
+   (including dangling symbolic refs) and unreadable refs stop cleanup; none is
+   interpreted as eligible absence.
+3. After the guarded Git effect, perform **one SQL transaction** that deletes
+   publication history, inserts `retired_contexts`, marks the promotion complete
+   and finishes the applicable reservation. Git deletion is a separate durable
+   effect, not part of this SQL transaction's rollback guarantee.
+4. In the split interval, the tracking ref may be absent while applicable
+   **existing** SQL history stays intact (`observed_published` when present), no
+   retirement exists, the durable promotion record remains pending and the
+   applicable reservation stays held. Do not manufacture `observed_published`
+   history for local-only or cache-loss cases. SQL statement failure followed by
+   rollback of the uncommitted transaction preserves SQL state, **not an
+   already-deleted Git ref**. An uncertain commit result does not prove SQL is
+   unchanged: reopen and reconcile actual completion. If completion and applicable
+   reservation finish committed, replay the stored outcome. Git deletion may
+   remain whether SQL rolled back or committed. Do not reset history or grant
+   first-publication eligibility early.
+5. Failures after integration return **`Ok` with cleanup pending
+   `RecoveryRequired` and refresh**, rather than a post-integration error. A
+   same-ID retry rechecks actual refs, ownership and configuration and can finish
+   SQL finalization without repeating completed lifecycle work, or replay the
+   stored outcome when actual completion already committed. **Cache loss or
+   ref absence alone is not retirement proof**; the retained durable intent and
+   required actual checks are essential.
+6. Add tests for the newly explicit boundaries **inside F10/F11**, including SQL
+   statement failure and SQL commit failure/uncertainty, split-interval existing
+   history/retirement/pending-record/reservation state, same-ID reconciliation, and wrong/conflicting/
+   symbolic/unreadable ref refusals. Cover reopening/reconciling uncertain commit
+   results and replay of committed completion/reservation finish. Test rollback
+   of uncommitted SQL separately from the surviving Git deletion; do not retain
+   the impossible all-three rollback assertion as a claim about this proposed protocol.
+
+This proposal is recorded for owner decision only. The approved Cycle/design/
+implementation plan have not been amended, and no production, schema, test,
+phase or recovery protocol change was made. The handoff and canonical comment
+now carry the actual review status and proposal. No tests were rerun for this
+documentation-only update. The controller owns the pending checkpoint of the
+reviewed blocker evidence; this worker makes no commit.
+
+Review-status update verification: `git diff --check` and `git diff --exit-code
+-- src tests Cargo.toml Cargo.lock devenv.nix devenv.lock` exited 0. `git status
+--short --untracked-files=all` lists exactly three pending paths: this ledger,
+`docs/plans/2026-10-15-wave-02-cycle-09-handoff.md`, and canonical comment
+`01M51F7Z00N4Q6S8V0X2Z4B6DZ`. No code/test changes, reruns or staged files.

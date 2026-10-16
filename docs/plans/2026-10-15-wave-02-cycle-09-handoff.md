@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 3 reviewed complete at local gate; Task 4 next (2026-10-16)
+## Current: Task 3 committed; Task 4 STOP at T4-1, owner decision pending (2026-10-16)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
@@ -20,14 +20,71 @@ Task 0 passed independent spec and quality review and is committed as `25514a3`.
 Task 1 guarded remote context deletion passed both reviews and is committed as
 `3d47027`. Task 2 observation/preview, including its spec corrections and approved
 T2-1 mode/type amendment, passed both final reviews and is committed as
-`6d4ad1664462c42c24b4a820024d76d7c86ca8db`, the current HEAD.
+`6d4ad1664462c42c24b4a820024d76d7c86ca8db`.
 
-**Task 3 primary integration is reviewed complete at the local gate.** Its prior
+**Task 3 primary integration is reviewed complete at the local gate and committed
+as `3b925e141bec9ae309024bdbfbf73aa6ab48caae` (`3b925e1`), the current HEAD.** Its prior
 spec review PASS is retained; the same quality reviewer approved Q3-1 resolved
-with no findings. The review boundary is the current uncommitted Task 3 change
-set, including the include-context correction, against base `6d4ad16` (full SHA
-above). The controller owns the pending checkpoint commit; **Task 4 is next**.
-This status update changes no source and reruns no Rust tests.
+with no findings. Those reviews covered the Task 3 change set, including the
+include-context correction, against base `6d4ad16` (full SHA above); the controller
+has since committed it. **Task 4 is stopped at T4-1 pending an owner amendment.**
+No Task 4 production changes remain. This status update changes no source/tests
+and reruns no Rust tests.
+
+### Task 4: reviewed blocker T4-1 — owner decision pending
+
+The approved final completion transaction requires atomicity across a Git
+tracking-ref deletion and SQLite history/retirement/completion state. Existing
+Git and SQLite transactions commit independently. The temporary real-resource
+probe confirmed SQL rollback cannot restore an already-deleted Git ref; its
+exact commands/counts and source anchors are retained in the ledger. The probe
+was removed; Task 4 implementation RED/GREEN has not started.
+
+- **Independent SPEC confirmed** a material contract contradiction requiring an
+  **owner amendment**.
+- **Independent QUALITY approved the evidence without findings.**
+- Both reviews were read-only; no reviewer reruns or code changes occurred.
+  These are blocker-evidence reviews, not implementation approval. Full Task 8
+  and native gates remain deferred.
+- **STOP: no amendment is approved.** The controller will checkpoint the reviewed
+  blocker evidence; this status worker makes no commit. See the ledger and
+  canonical comment `01M51F7Z00N4Q6S8V0X2Z4B6DZ`.
+
+**Proposed minimal amendment — NOT APPROVED:**
+
+1. Persist the existing planned durable **`branch_deleted` intent** before the
+   tracking-ref effect. No new phase or table is needed by this proposal.
+2. Under the lease and ownership/frozen-configuration checks, delete the tracking
+   ref only at the expected **direct OID**, or proceed on verified true absence.
+   Wrong/new conflicting OIDs, symbolic refs (including dangling symbolic refs)
+   and unreadable refs stop cleanup.
+3. Then use **one SQL transaction** for history deletion, retirement insertion,
+   promotion completion and applicable reservation finish. This transaction does
+   not atomically include or roll back the preceding Git effect.
+4. During the split interval the ref may be absent, but applicable **existing**
+   SQL history remains intact (`observed_published` when present), no retirement
+   exists, the durable record is pending and the applicable reservation stays
+   held. Do not manufacture `observed_published` history for local-only or
+   cache-loss cases. SQL statement failure followed by rollback of the uncommitted
+   transaction preserves SQL, not an already-deleted Git ref. An uncertain commit
+   result does not prove SQL unchanged: reopen and reconcile actual completion.
+   If completion and applicable reservation finish committed, replay the stored
+   outcome. Git deletion may remain whether SQL rolled back or committed.
+5. After-integration failures return **`Ok` with cleanup pending
+   `RecoveryRequired`, plus refresh**. Same-ID retry performs actual ref,
+   ownership and configuration checks and finalizes SQL without repeating
+   completed lifecycle work, or replays the stored outcome when actual completion
+   already committed. **Cache loss or ref absence alone is not retirement
+   proof**; do not infer retirement without the required durable intent/checks.
+6. Add tests for split boundaries **inside F10/F11**, SQL statement and commit
+   failures/uncertainty, split-state existing-history preservation, same-ID
+   finalization and wrong/conflicting/symbolic/unreadable ref refusals. Cover
+   reopening/reconciling uncertain commit results and replay of committed
+   completion/reservation finish. Tests for rollback of uncommitted SQL must
+   distinguish SQL preservation from the surviving Git deletion.
+
+This is a proposal for owner decision, not an amendment to the approved contract.
+Do not implement it or continue Task 4 until that decision is recorded.
 
 ### Task 3: reviewed integration and identity composition
 
@@ -100,10 +157,10 @@ This latest coordination-only update changed no source and reran no tests.
 | --- | --- |
 | Worktree | `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Work only here, never in the main checkout. |
 | Branch | `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` |
-| Current HEAD / Task 3 review base | `6d4ad1664462c42c24b4a820024d76d7c86ca8db`: independently reviewed Task 2 observation/preview. Task 3 is reviewed as the current uncommitted change set against this exact base. |
+| Current HEAD / Task 3 checkpoint | `3b925e141bec9ae309024bdbfbf73aa6ab48caae`: reviewed and committed Task 3 primary integration. Its review base was `6d4ad1664462c42c24b4a820024d76d7c86ca8db`. |
 | Task 0 resume base | `df4fe56ce0548290293c3f6d96f23f1ddbfc51a2` (reviewed blocker evidence); planning checkpoint `d027d98`; `origin/main` remains `89d04f901636229392a311241f8e777f0a00962b`. Fresh controller fetch/rebase was a clean no-op; ancestry passed. |
 | Published ticket ref | `origin/manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` still at the pre-rebase `f017c73`. A push must reconcile it. Never force-push without explicit owner authority bound to the observed remote SHA. |
-| Checkpoints | Tasks 0–2 are reviewed and committed (`25514a3`, `3d47027`, `6d4ad16`). Task 3 spec PASS and final quality approval (Q3-1 resolved, no findings) cover the current uncommitted work. Controller checkpoint pending; Task 4 next. Preserve the full reviewed change set. |
+| Checkpoints | Tasks 0–3 are reviewed and committed (`25514a3`, `3d47027`, `6d4ad16`, `3b925e1`). Task 4 STOP at T4-1: SPEC confirmed owner amendment required; QUALITY approved evidence without findings. Owner decision pending; no production changes. Controller checkpoint of blocker evidence pending. |
 | Ongoing-task preflight | Reuse the controller's completed fetch/rebase/ancestry preflight against `origin/main` at `89d04f901636229392a311241f8e777f0a00962b`. This status pass performs no fetch, rebase or checkpoint commit. |
 | Main checkout | It has an unrelated untracked `.superpowers/`. Leave it alone. |
 
@@ -121,7 +178,8 @@ This latest coordination-only update changed no source and reran no tests.
 5. `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md`:
    the grounding facts, planning reviews, Task 0 evidence/T0-1 approval, Task 1
    reviewed delivery, Task 2's approved T2-1 correction, and Task 3's internal
-   ruling, Q3-1 correction and final independent review results.
+   ruling, Q3-1 correction and final independent review results, then Task 4's
+   T4-1 blocker, read-only reviews and unapproved minimal amendment proposal.
    Record your evidence here as you go.
 
 Cycle 08's documents (`docs/Cycles/wave-02-cycle-08-*` and
@@ -146,8 +204,10 @@ Two operations are being added:
   5. Deletes the remote context branch, guarded by `push_negotiation`.
   6. Removes the worktree.
   7. Deletes the local branch.
-  8. In one final transaction: deletes the tracking ref, deletes the history
-     row, inserts `retired_contexts`, and records `complete`.
+  8. The approved contract calls for one final transaction deleting the tracking
+     ref/history row, inserting `retired_contexts` and recording `complete`.
+     **T4-1 blocks this cross-resource boundary; see the unapproved proposal
+     above. Do not treat that proposal as the current approved contract.**
   9. Refreshes the index on every `Ok` return after integration.
 
 Without a remote, it merges locally, cleans up, and reports publication
@@ -199,10 +259,12 @@ the same way comment publication binds its child synchronization.
 
 1. Preserve existing authorization and reviewed evidence; read the latest
    execution ledger. The controller owns checkpoint commits after reviews.
-2. **Task 3 passed both reviews and is complete at the local gate.** The
-   controller makes the pending checkpoint commit; then Task 4 is next. Reuse the
-   retained RED/GREEN evidence and review approvals rather than redispatching
-   completed work. This status-update worker performs no commit or Task 4 work.
+2. **Task 3 passed both reviews and is committed as `3b925e1`. Task 4 is STOP at
+   T4-1; owner decision pending.** SPEC confirmed a material contradiction requiring
+   owner amendment; QUALITY approved the evidence without findings. Both reviews
+   were read-only, with no reruns. Reuse the retained evidence; do not redispatch
+   completed work or start implementing the unapproved proposal. The controller
+   owns the pending checkpoint of reviewed blocker evidence.
 3. Tasks 0–3 passed their independent reviews. Before subsequent
    implementation in a fresh session:
    1. Fetch, then rebase the ticket branch onto `origin/main` from inside
@@ -216,7 +278,8 @@ the same way comment publication binds its child synchronization.
 
    A characterization that contradicts the design stops work for an owner
    amendment. Do not adapt silently.
-4. After the Task 3 checkpoint, work Tasks 4–8 in order. Each task
+4. Only after the owner resolves T4-1 and the approved documents consistently
+   record that decision, resume Task 4 and work Tasks 4–8 in order. Each task
    starts with a failing test and its recorded red run. Each ends with a commit
    (only when authorized), a ticket
    comment, and an independent review before the next task. The plan's
