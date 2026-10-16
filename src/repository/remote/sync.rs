@@ -7,6 +7,7 @@ mod tests;
 #[path = "windows_resolution.rs"]
 mod windows_resolution;
 use super::*;
+use crate::repository::promotion::record::ChildExecution;
 use crate::repository::{keys::*, transport::*, *};
 use reservation::{PublicationIntent, PublicationSettlement, PushIntentRelation};
 use state::{
@@ -472,6 +473,21 @@ fn local_target(
     primary: &str,
     target: &SynchronizationTarget,
 ) -> Result<git2::Repository, SynchronizationError> {
+    checked_target(root, primary, target, false)
+}
+fn inspected_target(
+    root: &Path,
+    primary: &str,
+    target: &SynchronizationTarget,
+) -> Result<git2::Repository, SynchronizationError> {
+    checked_target(root, primary, target, true)
+}
+fn checked_target(
+    root: &Path,
+    primary: &str,
+    target: &SynchronizationTarget,
+    filesystem: bool,
+) -> Result<git2::Repository, SynchronizationError> {
     let linked = materialized_target(root, primary, target)?;
     if let SynchronizationTarget::Context { kind, item_id } = target {
         let repository =
@@ -483,12 +499,13 @@ fn local_target(
             branch: format!("manyhands/{}/{}", authoring_kind_segment(kind), item_id),
             worktree: root.join(".manyhands/worktrees").join(item_id.to_string()),
         };
-        validate_context_worktree(
-            &repository,
-            &context,
-            true,
-            RepositoryOperation::RepositorySnapshot,
-        )
+        let operation = RepositoryOperation::RepositorySnapshot;
+        if filesystem {
+            validate_context_worktree(&repository, &context, true, operation)
+        } else {
+            validate_context_worktree_identity(&repository, &context, operation)
+                .and_then(|()| validate_context_tree(&linked, &context, operation))
+        }
         .map_err(|_| SynchronizationError::TargetNotMaterialized)?;
     }
     require_clean_target(&linked, target)?;
@@ -4004,6 +4021,124 @@ fn integrate_divergence(
     Ok(local)
 }
 
+/// Task 6's injected child seam executes the real local synchronization stack;
+/// only advertisement/transport/publication are supplied by its fixture. No
+/// production path uses this adapter or manufactures a synchronization owner.
+#[cfg(test)]
+pub(in crate::repository) fn promotion_test_drive_local(
+    service: &RepositoryService,
+    request: &SynchronizeRemoteRequest,
+    incoming: git2::Oid,
+) -> Result<git2::Oid, SynchronizationError> {
+    promotion_test_drive_local_inner(service, request, incoming, None)
+}
+#[cfg(test)]
+pub(in crate::repository) fn promotion_test_drive_local_bound(
+    service: &RepositoryService,
+    request: &SynchronizeRemoteRequest,
+    incoming: git2::Oid,
+    execution: &ChildExecution,
+) -> Result<git2::Oid, SynchronizationError> {
+    execution.validate_request(request)?;
+    promotion_test_drive_local_inner(service, request, incoming, Some(execution))
+}
+#[cfg(test)]
+fn promotion_test_drive_local_inner(
+    service: &RepositoryService,
+    request: &SynchronizeRemoteRequest,
+    incoming: git2::Oid,
+    execution: Option<&ChildExecution>,
+) -> Result<git2::Oid, SynchronizationError> {
+    let root = &request.root;
+    let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
+        return Err(SynchronizationError::RecoveryRequired);
+    };
+    let plan = RemoteRefPlan::from_configuration(
+        config
+            .publication_remote
+            .as_deref()
+            .ok_or(SynchronizationError::RecoveryRequired)?,
+        &config.primary_branch,
+    )
+    .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let configuration = service.observation_configuration(root, &plan)?;
+    let selected = target_ref(&plan, &request.target);
+    let repo = git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let target = request.target.operation_target(&plan);
+    let existing = state::with_transaction(service, root, |tx, id| {
+        if let Some(execution) = execution {
+            execution.validate(tx, id, request.operation_id)?;
+        }
+        state::read_operation(tx, id, request.operation_id)
+    })?;
+    let reservation = if existing.is_some() {
+        service.synchronization_restart_owned(root, request.operation_id, &target, execution)?
+    } else {
+        service.synchronization_reserve_owned(root, request.operation_id, &target, execution)?
+    };
+    let RemoteReservationOutcome::Reserved(owner) = reservation else {
+        return Err(SynchronizationError::RecoveryRequired);
+    };
+    let linked = materialized_target(root, &config.primary_branch, &request.target)?;
+    let local = local_oid(&linked)?;
+    let mut evidence = existing
+        .as_ref()
+        .map(|r| r.sync_evidence.clone())
+        .unwrap_or(state::SynchronizationEvidence {
+            expected_oid: Some(local),
+            local_oid: Some(local),
+            primary_tracking_oid: Some(incoming),
+            tracking_oid: Some(incoming),
+            ..Default::default()
+        });
+    if existing.is_some() {
+        reconcile_pending_candidate(
+            service,
+            root,
+            &config.primary_branch,
+            &request.target,
+            &owner,
+            &mut evidence,
+        )?;
+    } else {
+        service.checkpoint_synchronization(root, &owner, Checkpoint::FetchPrepared, &evidence)?;
+        // Fixture advertisement has fetched this actual ODB object. Scope and
+        // all frozen refs are still rechecked by the real integration helper.
+        repo.reference(
+            selected.tracking_ref(),
+            incoming,
+            true,
+            "fixture advertisement",
+        )
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    }
+    let primary = repo
+        .refname_to_id(plan.primary().tracking_ref())
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let context = if matches!(request.target, SynchronizationTarget::Primary) {
+        None
+    } else {
+        Some(incoming)
+    };
+    integrate_divergence(
+        service,
+        DivergenceInputs {
+            root,
+            primary_branch: &config.primary_branch,
+            target: &request.target,
+            request,
+            owner: &owner,
+            plan: &plan,
+            configuration: &configuration,
+            selected: &selected,
+            primary_tracking: Some(primary),
+            selected_tracking: Some(incoming),
+            context,
+            primary,
+        },
+    )
+}
+
 /// Classify a fresh Push-direction advertisement against one recorded intent
 /// from actual commit ancestry. The advertised object is already local: the
 /// Push observation downloads and re-proves an unknown target before this.
@@ -4055,7 +4190,74 @@ fn graph_plan(
         refs::CleanIntegrationError::Ancestry(_) => SynchronizationError::RecoveryRequired,
     })
 }
+#[cfg(test)]
+pub(in crate::repository) fn promotion_test_publication_plan(
+    service: &RepositoryService,
+    root: &Path,
+    target: &SynchronizationTarget,
+) -> Result<(), SynchronizationError> {
+    let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
+        return Err(SynchronizationError::RecoveryRequired);
+    };
+    let plan = RemoteRefPlan::from_configuration(
+        config
+            .publication_remote
+            .as_deref()
+            .ok_or(SynchronizationError::RecoveryRequired)?,
+        &config.primary_branch,
+    )
+    .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let repository = materialized_target(root, &config.primary_branch, target)?;
+    let publication = state::with_transaction(service, root, |tx, id| {
+        Ok(match target {
+            SynchronizationTarget::Primary => RemotePublicationEvidence::NeverPublished,
+            SynchronizationTarget::Context { kind, item_id } => {
+                state::read_snapshot(tx, id)?.publication_evidence_for(*kind, item_id)
+            }
+        })
+    })?;
+    let context = if matches!(target, SynchronizationTarget::Primary) {
+        None
+    } else {
+        repository
+            .refname_to_id(target_ref(&plan, target).tracking_ref())
+            .ok()
+    };
+    graph_plan(
+        &repository,
+        target,
+        local_oid(&repository)?,
+        repository.refname_to_id(plan.primary().tracking_ref()).ok(),
+        context,
+        publication,
+    )
+    .map(|_| ())
+}
 impl RepositoryService {
+    fn synchronization_reserve_owned(
+        &self,
+        root: &Path,
+        op: OperationId,
+        target: &RemoteOperationTarget,
+        execution: Option<&ChildExecution>,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        match execution {
+            Some(execution) => self.reserve_promotion_child(root, op, target, execution),
+            None => self.reserve_remote_operation(root, op, target),
+        }
+    }
+    fn synchronization_restart_owned(
+        &self,
+        root: &Path,
+        op: OperationId,
+        target: &RemoteOperationTarget,
+        execution: Option<&ChildExecution>,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        match execution {
+            Some(execution) => self.restart_promotion_child(root, op, target, execution),
+            None => self.restart_remote_synchronization(root, op, target),
+        }
+    }
     fn synchronization_boundary(
         &self,
         root: &Path,
@@ -4091,12 +4293,17 @@ impl RepositoryService {
         primary: &str,
         target: &SynchronizationTarget,
     ) -> Result<git2::Oid, SynchronizationError> {
+        let observed = local_oid(&inspected_target(root, primary, target)?)?;
         let repository =
             git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
         let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
-        local_oid(&local_target(root, primary, target)?)
+        let current = local_oid(&local_target(root, primary, target)?)?;
+        if current != observed {
+            return Err(SynchronizationError::ExternalChange);
+        }
+        Ok(current)
     }
-    fn synchronization_configuration_matches(
+    pub(in crate::repository) fn synchronization_configuration_matches(
         &self,
         root: &Path,
         plan: &RemoteRefPlan,
@@ -4125,7 +4332,30 @@ impl RepositoryService {
             &mut crate::repository::transport::AuthenticatedSshRemote<'_, '_>,
         ) -> Result<T, SshTransportError>,
     ) -> Result<T, SynchronizationError> {
-        self.synchronization_boundary(&request.root, owner)?;
+        self.with_scoped_action_remote(
+            request,
+            session,
+            plan,
+            expected,
+            |root| self.synchronization_boundary(root, owner),
+            operation,
+        )
+    }
+
+    /// Shared authenticated action fence. The caller supplies its own owned
+    /// boundary; synchronization and promotion keep their distinct journals.
+    pub(in crate::repository) fn with_scoped_action_remote<P: SessionCredentialProvider, T>(
+        &self,
+        request: VerifySshTransportRequest,
+        session: &mut SessionCredentials<P>,
+        plan: &RemoteRefPlan,
+        expected: &super::observation::ObservationConfiguration,
+        boundary: impl Fn(&Path) -> Result<(), SynchronizationError>,
+        operation: impl FnOnce(
+            &mut crate::repository::transport::AuthenticatedSshRemote<'_, '_>,
+        ) -> Result<T, SshTransportError>,
+    ) -> Result<T, SynchronizationError> {
+        boundary(&request.root)?;
         if !self.synchronization_configuration_matches(&request.root, plan, expected)? {
             return Err(SynchronizationError::ExternalChange);
         }
@@ -4138,7 +4368,7 @@ impl RepositoryService {
             crate::repository::transport::operation_tests::Checkpoint::ActionSnapshotChecked,
         );
         self.with_authenticated_remote_expected(request, session, &expectation, |remote| {
-            if let Err(error) = self.synchronization_boundary(&root, owner) {
+            if let Err(error) = boundary(&root) {
                 return Ok(Err(error));
             }
             match self.synchronization_configuration_matches(&root, plan, expected) {
@@ -4149,7 +4379,7 @@ impl RepositoryService {
             remote.require_action_expectation(&expectation)?;
             let result = operation(remote)?;
             remote.require_action_expectation(&expectation)?;
-            if let Err(error) = self.synchronization_boundary(&root, owner) {
+            if let Err(error) = boundary(&root) {
                 return Ok(Err(error));
             }
             match self.synchronization_configuration_matches(&root, plan, expected) {
@@ -5989,15 +6219,48 @@ impl RepositoryService {
     /// `synchronize_remote`.
     pub fn synchronize_remote_observed<P: SessionCredentialProvider>(
         &self,
+        request: SynchronizeRemoteRequest,
+        session: &mut SessionCredentials<P>,
+        settings: SynchronizationSettings,
+        observer: &mut dyn SynchronizationObserver,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        self.synchronize_remote_observed_inner(request, session, settings, observer, None)
+    }
+    /// Parent-issued attempt identity never disappears into the ordinary-sync
+    /// path. The reservation/restart transaction revalidates it atomically.
+    pub(in crate::repository) fn synchronize_promotion_child_observed<
+        P: SessionCredentialProvider,
+    >(
+        &self,
+        request: SynchronizeRemoteRequest,
+        session: &mut SessionCredentials<P>,
+        observer: &mut dyn SynchronizationObserver,
+        execution: &ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        execution.validate_request(&request)?;
+        self.synchronize_remote_observed_inner(
+            request,
+            session,
+            SynchronizationSettings::default(),
+            observer,
+            Some(execution),
+        )
+    }
+    fn synchronize_remote_observed_inner<P: SessionCredentialProvider>(
+        &self,
         mut request: SynchronizeRemoteRequest,
         session: &mut SessionCredentials<P>,
         settings: SynchronizationSettings,
         observer: &mut dyn SynchronizationObserver,
+        execution: Option<&ChildExecution>,
     ) -> Result<SynchronizationResult, SynchronizationError> {
         let (_, root) =
             canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
         request.root = root.clone();
         let existing = state::with_transaction(self, &root, |tx, id| {
+            if let Some(execution) = execution {
+                execution.validate(tx, id, request.operation_id)?;
+            }
             let other_root: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",rusqlite::params![request.operation_id.to_string(),id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
             if other_root {
                 return Err(identity_error());
@@ -6012,8 +6275,12 @@ impl RepositoryService {
         if let Some(record) = &existing
             && record.authority.is_some()
         {
-            let RemoteReservationOutcome::Replay(inspection) =
-                self.reserve_remote_operation(&root, request.operation_id, &record.target)?
+            let RemoteReservationOutcome::Replay(inspection) = self.synchronization_reserve_owned(
+                &root,
+                request.operation_id,
+                &record.target,
+                execution,
+            )?
             else {
                 return Err(SynchronizationError::RecoveryRequired);
             };
@@ -6032,16 +6299,27 @@ impl RepositoryService {
         if let Some(record) = &existing
             && record.phase == RemoteOperationPhase::Cancelled
         {
-            self.reserve_remote_operation(&root, request.operation_id, &record.target)?;
+            self.synchronization_reserve_owned(
+                &root,
+                request.operation_id,
+                &record.target,
+                execution,
+            )?;
             return Err(SynchronizationError::Interrupted);
         }
         if let Some(record) = &existing
             && !request.restart
         {
-            self.reserve_remote_operation(&root, request.operation_id, &record.target)?;
+            self.synchronization_reserve_owned(
+                &root,
+                request.operation_id,
+                &record.target,
+                execution,
+            )?;
             return Err(SynchronizationError::RecoveryRequired);
         }
-        if existing.is_none()
+        if execution.is_none()
+            && existing.is_none()
             && let Some(oid) = self.local_synchronization_replay(&request)?
         {
             return self.synchronization_refresh(
@@ -6075,10 +6353,11 @@ impl RepositoryService {
                 if settings.refuse_divergence {
                     return Err(SynchronizationError::RecoveryRequired);
                 }
-                let owner = match self.restart_remote_synchronization(
+                let owner = match self.synchronization_restart_owned(
                     &root,
                     request.operation_id,
                     &record.target,
+                    execution,
                 )? {
                     RemoteReservationOutcome::Reserved(owner) => owner,
                     RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
@@ -6117,6 +6396,9 @@ impl RepositoryService {
             return Err(SynchronizationError::RecoveryRequired);
         };
         let Some(remote_name) = config.publication_remote.as_ref() else {
+            if execution.is_some() {
+                return Err(SynchronizationError::ExternalChange);
+            }
             if existing.is_some() {
                 return Err(SynchronizationError::RecoveryRequired);
             }
@@ -6143,6 +6425,9 @@ impl RepositoryService {
         // restart reconciles persisted endpoint identity BEFORE receiving ownership.
         let configuration = self.observation_configuration(&root, &plan)?;
         state::with_transaction(self, &root, |tx, id| {
+            if let Some(execution) = execution {
+                execution.validate(tx, id, request.operation_id)?;
+            }
             state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })?;
         let mut prior = None;
@@ -6156,7 +6441,7 @@ impl RepositoryService {
             prior = Some(record.clone().into());
             RemoteReservationOutcome::Reserved(owner)
         } else {
-            self.reserve_remote_operation(&root, request.operation_id, &target)?
+            self.synchronization_reserve_owned(&root, request.operation_id, &target, execution)?
         };
         let reservation = match reservation {
             RemoteReservationOutcome::Replay(record) => {
@@ -6175,7 +6460,7 @@ impl RepositoryService {
                     return Err(SynchronizationError::RecoveryRequired);
                 }
                 prior = Some(record);
-                self.restart_remote_synchronization(&root, request.operation_id, &target)
+                self.synchronization_restart_owned(&root, request.operation_id, &target, execution)
                     .map_err(|error| {
                         if error.kind == RepositoryErrorKind::RecoveryRequired {
                             SynchronizationError::RecoveryRequired
@@ -7246,12 +7531,16 @@ impl RepositoryService {
         tests::run_local_binding_hook(request.operation_id);
         let repository = git2::Repository::open(&request.root)
             .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let observed = local_oid(&inspected_target(&request.root, primary, &request.target)?)?;
         let _lease = repository_lease(
             &repository,
             &request.root,
             RepositoryOperation::RefreshRepository,
         )?;
         let oid = local_oid(&local_target(&request.root, primary, &request.target)?)?;
+        if oid != observed {
+            return Err(SynchronizationError::ExternalChange);
+        }
         let _guard = cache_write_guard(
             &self.registry_path,
             &request.root,

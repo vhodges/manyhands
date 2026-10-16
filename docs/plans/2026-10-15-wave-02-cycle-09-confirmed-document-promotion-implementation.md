@@ -572,6 +572,36 @@ reservation API.
 
 ## Task 6: Orchestrate, Retry And Refresh
 
+**Reviewed complete at the targeted local gate — 2026-10-16.** The controller/owner
+conveyed **SPEC PASS and QUALITY FINAL APPROVE, no remaining findings**, covering
+the full uncommitted Task 6 change against exact base
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`, including the accepted concurrency fence
+and authoritative-completion correction. No Task 6 review/owner decision remains
+pending. Controller checkpoint is next; **Task 7 follows that checkpoint**.
+Final recorded selector: `devenv shell -- cargo test --locked --lib promotion`
+**188 passed/0 failed/807 filtered**, 188.09s, warning-free. Formatter/check pass.
+The 75 runner cases/helpers include both-role completion/cancel priority and real child handoff/reservation races,
+canonical mode/type controls, actual scan-entry try-lock probes and outside/
+inside races as well as genuine local child
+merge/conflict/resolve/external-repair/owned-resolution/candidate recovery, both-role
+attempt policy, qualified real F10/F11 process exits, SQL rollback/commit uncertainty,
+configuration/cancellation/cleanup/refresh and stored replay. Exact RED/GREEN and
+test-to-obligation mapping and final review status are in the ledger. No Task 7/
+full/native gate or worker commit is claimed. This status-only update runs no
+Rust/test commands and changes no source.
+
+**T6-1 resume — owner-approved 2026-10-16.** Cycle 09 inherits Cycle 06's
+backend-lock exception. The historical immediate inside-F10 retry failure is
+preserved in the ledger. Keep the real process-exit test; assert pending cleanup
+RecoveryRequired plus refresh and full history/retirement/reservation/effect-counter
+preservation before any repair. Only in the quiesced disposable fixture, verify
+and remove the exact known backend lock as simulated operator repair, then retry
+the identical request to finish unfinished SQL/replay completion. No production
+automatic lock removal, ownership inference or new lock journal. This qualifies
+inside-F10/F11 acceptance in Tasks 6–8, including Task 7's exit cases; all other
+obligations and the T4-1 one-SQL-transaction boundary remain unchanged. Rare backend
+crash recovery explicitly costs operator intervention. No new owner decision due.
+
 **Files:** new `src/repository/promotion/{run.rs, run_tests.rs}`,
 `src/repository/promotion/mod.rs`, `src/repository.rs` (re-exports),
 `docs/research/wave-03-api-audit.md`.
@@ -582,7 +612,7 @@ reservation API.
 `DocumentPromotionResult`, `DocumentPromotionOutcome` and
 `DocumentPromotionError`, in the design's lifecycle order.
 
-- [ ] Failing local-repository tests (no remote):
+- [x] Failing local-repository tests (no remote):
   - full lifecycle →
     `Merged`, `Pending(NoPublicationRemote)`, `Complete`;
   - contained → `AlreadyContained`;
@@ -594,7 +624,7 @@ reservation API.
   - a blocker → `Blocked`;
   - after cache loss, a contained context previews as cleanup only and a new
     ID completes it without a second merge.
-- [ ] Failing tests with an injected child double (a test seam on the
+- [x] Failing tests with an injected child double (a test seam on the
   synchronization call), covering:
   - **Context child:**
     - a context `ConflictPending` returns inside `ContextSynchronization`,
@@ -648,9 +678,10 @@ reservation API.
   - **History not reset early:** with a cleanup that stops after remote
     deletion, a following item synchronization of the context returns
     `RemoteContextDeleted` and does not republish.
-- [ ] Failing interruption tests: for each of F1–F12, the exit-point
+- [x] Failing interruption tests: for each of F1–F12, the exit-point
   service stops there. A reopened service with the same request reconciles
-  and finishes. Counters prove:
+  and finishes, subject to T6-1's preserve/pending-before-operator-repair
+  qualification for ambiguous backend locks. Counters prove:
   - at most one merge commit;
   - one context push and one primary push;
   - one remote delete;
@@ -661,36 +692,40 @@ reservation API.
   ownership reconciliation, and stored-outcome replay after committed completion
   and reservation finish. Assert retained applicable existing history and no
   retirement while pending, without fabricated local-only/cache-loss history.
-- [ ] Failing cancellation tests:
+- [x] Failing cancellation tests:
   - cancel before integration → `Interrupted`, nothing integrated;
   - cancel after integration stops between steps, and the outcome reports
     exactly what was done with a `cancelled` category;
   - a retry finishes.
-- [ ] Failing index tests:
+- [x] Failing index tests:
   - refresh success → `Complete`;
   - an injected refresh failure → `IndexPending` with the same outcome, and a
     later `refresh_repository` lists the document from the primary only;
   - every partial `Ok` return after integration (publication pending, cleanup
     pending) also refreshes, so discovery shows the merged primary.
-- [ ] Record red:
+- [x] Record red:
 
   ```sh
   devenv shell -- cargo test --locked --lib promotion
   ```
 
-- [ ] Implement. Re-export the public types. Update the API audit's
+- [x] Implement. Re-export the public types. Update the API audit's
   `document promote` and D25 rows to name the delivered operations, their
   results, and what remains for C5/D5 (boundary binding, expiry, preview
   schema values, resume classification).
-- [ ] Run green with targeted promotion tests; the owner deferred the full
+- [x] Run green with targeted promotion tests; the owner deferred the full
   library suite to Task 8:
 
   ```sh
   devenv shell -- cargo test --locked --lib promotion
   ```
 
-- [ ] Commit (for example `feat: add confirmed document promotion`) and add a
-  ticket comment.
+- [x] Add checkpoint/approval/review-ready ticket comments and return the full
+  Task 6 work uncommitted for independent spec then quality review.
+- [x] Final independent reviews conveyed: SPEC PASS; QUALITY FINAL APPROVE;
+  no remaining findings on the full Task 6 change against 8d06577.
+- [ ] Controller checkpoint of reviewed-complete Task 6 (for example
+  `feat: add confirmed document promotion`); no worker commit authorized.
 
 ## Task 7: Prove Promotion Over Real SSH
 
@@ -876,6 +911,9 @@ controller at that historical checkpoint; it is now committed as `3b925e1`.
 Task 4 is reviewed complete and committed as `f641f91` under approved T4-1,
 including the physical-inventory and both hidden-data preservation corrections.
 Task 5 is reviewed complete at the local gate: SPEC PASS, QUALITY approved, its
-nonblocking lookup minor resolved/targeted-verified. Controller checkpoint pending;
-Task 6 next afterward. Tasks 6–8 remain planned; no full/native gate or Cycle
-completion is claimed.
+nonblocking lookup minor resolved/targeted-verified; checkpoint is now `8d06577`.
+Task 6 is reviewed complete under approved T6-1: SPEC PASS, QUALITY FINAL APPROVE,
+no remaining findings; recorded targeted verification is 188 promotion tests.
+It remains uncommitted against exact base 8d06577 for the controller checkpoint.
+Task 7 is next after that checkpoint; Tasks 7–8 remain planned, with no full/native
+gate or Cycle completion claimed. No current Task 6 review or owner question.

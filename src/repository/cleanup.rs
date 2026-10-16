@@ -3,7 +3,7 @@ use super::{
     AuthoringKind, OperationId, RemoteRefPlan, RepositoryError, RepositoryLease,
     RepositoryOperation, authoring_kind_segment, item_context,
     remote::{state, sync},
-    repository_lease, validate_context_worktree,
+    repository_lease, validate_context_worktree_identity,
 };
 use crate::canonical::ItemId;
 use git2::Oid;
@@ -94,10 +94,9 @@ impl ContextCleanup {
         };
         let context = item_context(&self.root, kind, id.clone());
         if oid.is_zero()
-            || validate_context_worktree(
+            || validate_context_worktree_identity(
                 &self.repository,
                 &context,
-                true,
                 RepositoryOperation::RepositorySnapshot,
             )
             .is_err()
@@ -126,6 +125,14 @@ impl ContextCleanup {
                 .ok()
                 .and_then(|r| r.target())
                 != Some(oid)
+        {
+            return Precheck::Changed;
+        }
+        // The recorded clean OID is canonical authority. Do not invoke the
+        // filesystem canonical-context scanner while this capability owns the
+        // common lease; materialization/status/ignored checks remain below.
+        if super::validate_context_tree(&linked, &context, RepositoryOperation::RepositorySnapshot)
+            .is_err()
         {
             return Precheck::Changed;
         }
@@ -239,6 +246,35 @@ impl ContextCleanup {
             Ok(BranchDeletion::Deleted)
         })();
         result.unwrap_or(BranchDeletion::Changed)
+    }
+    /// Revalidate a previously completed local cleanup without repeating its
+    /// destructive helpers. The capability keeps the repository lease through
+    /// this proof, the following tracking effect and final SQL transaction.
+    pub(super) fn require_local_cleanup_absent(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> Result<(), TrackingDeletion> {
+        let context = item_context(&self.root, kind, id.clone());
+        let branch = format!("refs/heads/{}", context.branch);
+        if direct_oid(&self.repository, &branch)?.is_some() {
+            return Err(TrackingDeletion::Changed);
+        }
+        let admin = self
+            .repository
+            .commondir()
+            .join("worktrees")
+            .join(id.to_string());
+        match (present(&context.worktree), present(&admin)) {
+            (Ok(false), Ok(false)) => (),
+            (Ok(true), Ok(true)) => return Err(TrackingDeletion::Changed),
+            _ => return Err(TrackingDeletion::RecoveryRequired),
+        }
+        match self.branch_is_checked_out(&branch) {
+            Ok(false) => Ok(()),
+            Ok(true) => Err(TrackingDeletion::Changed),
+            Err(()) => Err(TrackingDeletion::RecoveryRequired),
+        }
     }
     fn branch_is_checked_out(&self, reference: &str) -> Result<bool, ()> {
         let at_branch = |gitdir: &Path| -> Result<bool, ()> {

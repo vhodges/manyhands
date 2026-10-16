@@ -1,6 +1,11 @@
 //! Consent evidence and guarded primary integration for managed documents.
 use super::{RepositoryError, RepositoryService};
 use crate::canonical::ItemId;
+use crate::repository::{
+    ConfirmedCommitIdentity, IndexPending, OperationId, SynchronizationError,
+    keys::{SessionCredentialProvider, SessionCredentials},
+    transport::{HostApproval, SshTransportError},
+};
 use git2::Oid;
 use std::{
     fmt,
@@ -11,11 +16,17 @@ use std::{
 pub(super) mod integrate;
 pub(super) mod observe;
 pub(super) mod record;
+mod run;
+
+#[cfg(test)]
+#[path = "run_tests.rs"]
+mod run_tests;
 
 /// A refusal before promotion has changed the primary. Integration uncertainty
 /// is carried by the internal pending state, never by this error.
 pub enum DocumentPromotionError {
     Repository(RepositoryError),
+    Transport(SshTransportError),
     Blocked(Vec<PromotionBlocker>),
     ExternalChange,
     ReconfirmationRequired,
@@ -23,17 +34,34 @@ pub enum DocumentPromotionError {
     IdentityRequired {
         expected_configuration: super::ExpectedConfiguration,
     },
+    ContextSynchronization(Box<SynchronizationError>),
+    Busy,
+    PollYielding,
+    Interrupted,
+    OperationMismatch,
+    RecoveryRequired,
 }
 
 impl fmt::Debug for DocumentPromotionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Repository(error) => f.debug_tuple("Repository").field(&error.kind).finish(),
+            Self::Transport(error) => f.debug_tuple("Transport").field(&error.kind).finish(),
             Self::Blocked(blockers) => f.debug_tuple("Blocked").field(blockers).finish(),
             Self::ExternalChange => f.write_str("ExternalChange"),
             Self::ReconfirmationRequired => f.write_str("ReconfirmationRequired"),
             Self::PrimaryAdvanced => f.write_str("PrimaryAdvanced"),
             Self::IdentityRequired { .. } => f.write_str("IdentityRequired"),
+            // SynchronizationError's legacy Debug can contain repository paths.
+            Self::ContextSynchronization(error) => f
+                .debug_tuple("ContextSynchronization")
+                .field(&error.to_string())
+                .finish(),
+            Self::Busy => f.write_str("Busy"),
+            Self::PollYielding => f.write_str("PollYielding"),
+            Self::Interrupted => f.write_str("Interrupted"),
+            Self::OperationMismatch => f.write_str("OperationMismatch"),
+            Self::RecoveryRequired => f.write_str("RecoveryRequired"),
         }
     }
 }
@@ -42,11 +70,18 @@ impl fmt::Display for DocumentPromotionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Repository(_) => "promotion repository unavailable",
+            Self::Transport(_) => "promotion transport unavailable",
             Self::Blocked(_) => "promotion blocked",
             Self::ExternalChange => "promotion state changed",
             Self::ReconfirmationRequired => "promotion reconfirmation required",
             Self::PrimaryAdvanced => "promotion primary advanced",
             Self::IdentityRequired { .. } => "promotion commit identity required",
+            Self::ContextSynchronization(_) => "promotion context synchronization incomplete",
+            Self::Busy => "promotion busy",
+            Self::PollYielding => "promotion waiting for automatic observation",
+            Self::Interrupted => "promotion interrupted",
+            Self::OperationMismatch => "promotion operation mismatch",
+            Self::RecoveryRequired => "promotion recovery required",
         })
     }
 }
@@ -56,6 +91,101 @@ impl From<RepositoryError> for DocumentPromotionError {
     fn from(error: RepositoryError) -> Self {
         Self::Repository(error)
     }
+}
+
+#[derive(Clone)]
+pub struct PromoteDocumentRequest {
+    pub root: PathBuf,
+    pub operation_id: OperationId,
+    pub item_id: ItemId,
+    pub expected: PromotionExpectation,
+    pub approval: Option<HostApproval>,
+    pub confirmed_identity: Option<ConfirmedCommitIdentity>,
+}
+impl fmt::Debug for PromoteDocumentRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PromoteDocumentRequest")
+            .field("operation_id", &self.operation_id)
+            .field("item_id", &self.item_id)
+            .finish_non_exhaustive()
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionIntegration {
+    Merged { oid: Oid },
+    AlreadyContained { oid: Oid },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionSynchronizationCategory {
+    Conflict,
+    Rejected,
+    Transport,
+    Identity,
+    Busy,
+    Yielding,
+    RecoveryRequired,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionPublicationPending {
+    NoPublicationRemote,
+    Synchronization(PromotionSynchronizationCategory),
+    Cancelled,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionPublication {
+    Published { oid: Oid },
+    AlreadyCurrent { oid: Oid },
+    Pending { reason: PromotionPublicationPending },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionRemoteDeletionCategory {
+    Transport,
+    Rejected,
+    Configuration,
+    Key,
+    Unlock,
+    Host,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionCleanupPending {
+    AwaitingPublication,
+    ContextChanged,
+    IgnoredFiles,
+    RemoteContextChanged,
+    RemoteDeletionFailed(PromotionRemoteDeletionCategory),
+    RecoveryRequired,
+    Cancelled,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromotionCleanup {
+    Complete,
+    Pending { reason: PromotionCleanupPending },
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentPromotionOutcome {
+    operation_id: OperationId,
+    integration: PromotionIntegration,
+    publication: PromotionPublication,
+    cleanup: PromotionCleanup,
+}
+impl DocumentPromotionOutcome {
+    pub fn operation_id(&self) -> OperationId {
+        self.operation_id
+    }
+    pub fn integration(&self) -> PromotionIntegration {
+        self.integration
+    }
+    pub fn publication(&self) -> PromotionPublication {
+        self.publication
+    }
+    pub fn cleanup(&self) -> PromotionCleanup {
+        self.cleanup
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentPromotionResult {
+    Complete(DocumentPromotionOutcome),
+    IndexPending(IndexPending<DocumentPromotionOutcome>),
 }
 
 #[derive(Clone)]
@@ -226,6 +356,22 @@ pub enum DocumentPromotionPreflight {
 }
 
 impl RepositoryService {
+    pub fn promote_document<P: SessionCredentialProvider>(
+        &self,
+        request: PromoteDocumentRequest,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+        run::promote(self, request, session)
+    }
+    pub fn cancel_document_promotion(
+        &self,
+        root: &Path,
+        id: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        crate::repository::remote::state::with_transaction(self, root, |tx, repository_id| {
+            record::request_cancellation(tx, repository_id, id)
+        })
+    }
     /// Observe local Git and stored publication history without a repository
     /// lease, network access, or a Git/registry mutation. Consent must be checked
     /// again against a fresh observation before any future integration.

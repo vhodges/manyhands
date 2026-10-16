@@ -91,6 +91,13 @@ pub(super) fn prepare_integration(
     identity: Option<&ConfirmedCommitIdentity>,
 ) -> Result<PreparedIntegration, DocumentPromotionError> {
     let (repository, root) = canonical_repository_root(root, RepositoryOperation::Read)?;
+    let observation = observe::prepare(
+        service,
+        PreviewDocumentPromotionRequest {
+            root: root.clone(),
+            item_id: record.context.item_id.clone(),
+        },
+    )?;
     let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
     let context_ref = format!("refs/heads/manyhands/document/{}", record.context.item_id);
@@ -99,15 +106,15 @@ pub(super) fn prepare_integration(
     {
         return Err(DocumentPromotionError::ExternalChange);
     }
-    // Reuses Task 2's coherent read-only state/actual-Git observation. It takes
-    // no repository lease, and drops its cache guard before returning.
-    let preview = match observe::preview(
-        service,
-        PreviewDocumentPromotionRequest {
-            root: root.clone(),
-            item_id: record.context.item_id.clone(),
-        },
-    )? {
+    // Revalidate prepared discovery facts against current bounded Git/checkout/
+    // configuration checks. Canonical result validation reads Git trees only.
+    let preview = match observation.revalidate(service, &repository).map_err(|e| {
+        if e.kind == RepositoryErrorKind::ExternalChange {
+            DocumentPromotionError::ExternalChange
+        } else {
+            e.into()
+        }
+    })? {
         DocumentPromotionPreflight::Ready(preview) => preview,
         DocumentPromotionPreflight::Blocked { blockers } => {
             return Err(
@@ -221,8 +228,42 @@ impl PreparedIntegration {
             oid,
         })
     }
+    /// Reuse the recorded candidate after an F3 interruption, rather than mint
+    /// another promotion commit with a different timestamp/signature.
+    pub(super) fn resume_candidate(
+        self,
+        oid: Oid,
+    ) -> Result<IntegrationCandidate, DocumentPromotionError> {
+        let valid = match &self.tree {
+            IntegrationTree::Contained => oid == self.evidence.base,
+            tree => {
+                let commit = self
+                    .repository
+                    .find_commit(oid)
+                    .map_err(|_| unavailable())?;
+                commit.parent_count() == 2
+                    && commit.parent_id(0).ok() == Some(self.evidence.base)
+                    && commit.parent_id(1).ok() == Some(self.evidence.context.oid)
+                    && commit.summary()
+                        == Some(
+                            format!("Promote document {}", self.evidence.context.item_id).as_str(),
+                        )
+                    && commit.tree_id() == import_tree(&self.repository, tree)?
+            }
+        };
+        if !valid {
+            return Err(unavailable());
+        }
+        Ok(IntegrationCandidate {
+            prepared: self,
+            oid,
+        })
+    }
 }
 impl IntegrationCandidate {
+    pub(super) fn oid(&self) -> Oid {
+        self.oid
+    }
     pub(super) fn apply(self) -> Result<Integrated, DocumentPromotionError> {
         let prepared = self.prepared;
         if matches!(prepared.tree, IntegrationTree::Contained) {
@@ -390,7 +431,7 @@ fn checkout_preflight(root: &Path, tree: &IntegrationTree) -> Result<(), Documen
     }
     Ok(())
 }
-fn primary_clean(root: &Path) -> bool {
+pub(super) fn primary_clean(root: &Path) -> bool {
     let check = || -> Result<(), SynchronizationError> {
         let repository =
             git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;

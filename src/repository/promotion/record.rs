@@ -126,7 +126,7 @@ impl Refusal {
         })
     }
 }
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(in crate::repository) struct PromotionRecord {
     pub repository_id: i64,
     pub operation_id: OperationId,
@@ -444,14 +444,13 @@ pub(in crate::repository) fn records(
         .into_iter()
         .collect()
 }
-pub(in crate::repository) fn begin_record(
+fn existing_record(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
     item: &ItemId,
     expectation: PromotionExpectation,
-    remote: Option<&str>,
-) -> Result<PromotionRecord, RepositoryError> {
+) -> Result<Option<PromotionRecord>, RepositoryError> {
     let existing = read_record(tx, id, op)?;
     let collision:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1) OR EXISTS(SELECT 1 FROM document_promotions WHERE (operation_id=?1 AND repository_id!=?2) OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND (repository_id!=?2 OR action!='promote' OR kind!='document' OR item_id!=?3))",params![op.to_string(),id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if collision {
@@ -464,7 +463,7 @@ pub(in crate::repository) fn begin_record(
         if let Some(reservation) = state::read_operation(tx, id, op)? {
             validate_remote_identity(tx, id, op, &reservation.target, reservation.priority)?;
         }
-        return Ok(r);
+        return Ok(Some(r));
     }
     // A foreign promote row is not proof of a parent, even if its item matches.
     if tx
@@ -477,7 +476,14 @@ pub(in crate::repository) fn begin_record(
     {
         return Err(mismatch());
     }
-    let unfinished = tx
+    Ok(None)
+}
+fn unfinished_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    item: &ItemId,
+) -> Result<Option<PromotionRecord>, RepositoryError> {
+    tx
         .query_row(
             "SELECT * FROM document_promotions WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",
             params![id, item.to_string()],
@@ -485,7 +491,57 @@ pub(in crate::repository) fn begin_record(
         )
         .optional()
         .map_err(|_| state::recovery_required())?
-        .transpose()?;
+        .transpose()
+}
+/// Process-only fence for the exact predecessor observed before unleased
+/// discovery. A different parent or owner cannot be silently superseded.
+#[derive(PartialEq, Eq)]
+pub(in crate::repository) struct ReplacementGuard {
+    repository_id: i64,
+    parent: Option<PromotionRecord>,
+    owner: Option<(OperationId, i64, i64, RemoteOperationPhase, bool, bool, i64)>,
+}
+pub(in crate::repository) fn replacement_guard(
+    tx: &Transaction<'_>,
+    id: i64,
+    item: &ItemId,
+) -> Result<ReplacementGuard, RepositoryError> {
+    let parent = unfinished_record(tx, id, item)?;
+    let owner = parent
+        .as_ref()
+        .map(|parent| state::read_operation(tx, id, parent.operation_id))
+        .transpose()?
+        .flatten()
+        .map(|r| {
+            (
+                r.operation_id,
+                r.generation,
+                r.owner_epoch,
+                r.phase,
+                r.cancel_requested,
+                r.yield_requested,
+                r.updated_at,
+            )
+        });
+    Ok(ReplacementGuard {
+        repository_id: id,
+        parent,
+        owner,
+    })
+}
+/// Caller has validated new consent before this atomic supersession/insert.
+pub(in crate::repository) fn begin_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: PromotionExpectation,
+    remote: Option<&str>,
+) -> Result<PromotionRecord, RepositoryError> {
+    if let Some(existing) = existing_record(tx, id, op, item, expectation)? {
+        return Ok(existing);
+    }
+    let unfinished = unfinished_record(tx, id, item)?;
     if let Some(old) = unfinished {
         if !old.cleanup.is_some_and(CleanupCategory::supersedable) {
             return Err(busy());
@@ -502,11 +558,54 @@ pub(in crate::repository) fn begin_record(
         }
         tx.execute("UPDATE document_promotions SET step='superseded',updated_at=max(updated_at,?2) WHERE operation_id=?1",params![old.operation_id.to_string(),now()]).map_err(|_|state::recovery_required())?;
     }
+    insert_record(tx, id, op, item, expectation, remote, None)
+}
+/// A refused new request is terminal from insertion. It can coexist with the
+/// original unfinished parent without superseding/fencing that parent's owner.
+pub(in crate::repository) fn refuse_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: PromotionExpectation,
+    remote: Option<&str>,
+    refusal: &Refusal,
+) -> Result<PromotionRecord, RepositoryError> {
+    if let Some(existing) = existing_record(tx, id, op, item, expectation)? {
+        return Ok(existing);
+    }
+    if unfinished_record(tx, id, item)?
+        .is_some_and(|old| !old.cleanup.is_some_and(CleanupCategory::supersedable))
+    {
+        return Err(busy());
+    }
+    insert_record(tx, id, op, item, expectation, remote, Some(refusal))
+}
+fn insert_record(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: OperationId,
+    item: &ItemId,
+    expectation: PromotionExpectation,
+    remote: Option<&str>,
+    refusal: Option<&Refusal>,
+) -> Result<PromotionRecord, RepositoryError> {
     if let Some(remote) = remote {
         crate::repository::RemoteRefPlan::from_configuration(remote, "main")
             .map_err(|_| state::recovery_required())?;
     }
-    tx.execute("INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at) VALUES(?1,?2,?3,?4,?5,'confirmed',?6)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,now()]).map_err(|_|state::recovery_required())?;
+    let (category, blockers) = refusal
+        .map(Refusal::encoded)
+        .transpose()?
+        .map_or((None, None), |(category, blockers)| {
+            (Some(category), blockers)
+        });
+    let step = if refusal.is_some() {
+        "abandoned"
+    } else {
+        "confirmed"
+    };
+    tx.execute("INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,now(),category,blockers]).map_err(|_|state::recovery_required())?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)
 }
 pub(in crate::repository) fn save_record(
@@ -551,6 +650,106 @@ pub(in crate::repository) fn save_record(
 pub(in crate::repository) enum ChildRole {
     Context,
     Primary,
+}
+/// Private, process-only identity of a parent-issued attempt. It holds no lock
+/// and grants no ownership until the reservation SQL validates the current
+/// durable binding. In particular, a formerly-bound no-row ID cannot fall back
+/// to an ordinary synchronization when another executor replaces its attempt.
+#[derive(Clone)]
+pub(in crate::repository) struct ChildExecution {
+    repository_id: i64,
+    parent: OperationId,
+    item: ItemId,
+    expectation: PromotionExpectation,
+    role: ChildRole,
+    attempt: u32,
+    child: OperationId,
+}
+pub(in crate::repository) fn child_execution(
+    r: &PromotionRecord,
+    role: ChildRole,
+) -> Result<ChildExecution, RepositoryError> {
+    let (attempt, child) = match role {
+        ChildRole::Context => (r.context_attempt, r.context_sync_id),
+        ChildRole::Primary => (r.primary_attempt, r.primary_sync_id),
+    };
+    if attempt == 0 || r.remote_name.is_none() {
+        return Err(mismatch());
+    }
+    Ok(ChildExecution {
+        repository_id: r.repository_id,
+        parent: r.operation_id,
+        item: r.item_id.clone(),
+        expectation: r.expectation,
+        role,
+        attempt,
+        child: child.ok_or_else(mismatch)?,
+    })
+}
+impl ChildExecution {
+    pub(in crate::repository) fn validate_request(
+        &self,
+        request: &crate::repository::SynchronizeRemoteRequest,
+    ) -> Result<(), RepositoryError> {
+        let matches = match (&self.role, &request.target) {
+            (ChildRole::Primary, crate::repository::SynchronizationTarget::Primary) => true,
+            (
+                ChildRole::Context,
+                crate::repository::SynchronizationTarget::Context {
+                    kind: AuthoringKind::Document,
+                    item_id,
+                },
+            ) => item_id == &self.item,
+            _ => false,
+        };
+        if request.operation_id != self.child || !matches {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+    pub(in crate::repository) fn validate(
+        &self,
+        db: &Connection,
+        id: i64,
+        op: OperationId,
+    ) -> Result<(), RepositoryError> {
+        if id != self.repository_id || op != self.child {
+            return Err(mismatch());
+        }
+        let parent = read_record(db, id, self.parent)?.ok_or_else(mismatch)?;
+        let (attempt, child, allowed) = match self.role {
+            ChildRole::Context => (
+                parent.context_attempt,
+                parent.context_sync_id,
+                parent.step == PromotionStep::Confirmed,
+            ),
+            ChildRole::Primary => (
+                parent.primary_attempt,
+                parent.primary_sync_id,
+                matches!(
+                    parent.step,
+                    PromotionStep::Integrated | PromotionStep::PublicationPending
+                ),
+            ),
+        };
+        if parent.item_id != self.item
+            || parent.expectation != self.expectation
+            || attempt != self.attempt
+            || child != Some(self.child)
+        {
+            return Err(mismatch());
+        }
+        let record = state::read_operation(db, id, op)?;
+        // Exact, current authoritative handoff remains valid after parent
+        // progress/completion; this path can never create/restart remote work.
+        if record.as_ref().is_some_and(|r| r.authority.is_some()) {
+            return Ok(());
+        }
+        if !allowed || (parent.cancel_requested && record.is_none()) {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
 }
 /// Authoritative completion is consumed first. Retained includes clean candidates,
 /// installed conflicts and unreleased owned resolutions, regardless of outer error.

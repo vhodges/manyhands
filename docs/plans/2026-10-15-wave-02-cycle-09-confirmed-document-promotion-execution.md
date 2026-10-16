@@ -2250,3 +2250,984 @@ comment. All prior Task 5 pending source/tests remain present. No other source
 change, new test, dependency, GPUI, global config, developer key, sleep, subagent,
 staging, commit or outward lifecycle action. HEAD stays f641f91, ticket open;
 Task 6 has not started. Full Task 8/native gates remain deferred.
+
+## Task 6 — STOP T6-1: Process-Exit Leaves The Tracking Absence Lock (2026-10-16)
+
+**Task 6 is incomplete and blocked. The blocker evidence is ready for independent
+review; the implementation is not spec/quality-review-ready as a completed task.**
+The owner explicitly requires a stop on a real contract contradiction. This is
+the required process-exit case inside F10, not an ordinary failure-injection unwind
+or a hypothetical concern. No recovery policy was silently weakened and no stale
+Git lock was removed automatically.
+
+### Entry And Scope
+
+- Reused the supplied controller preflight, clean exact ticket worktree and branch
+  at `8d06577` (Tasks 0–5 reviewed/committed), `origin/main=89d04f9`. Verified clean
+  initial status, worktree root, recent history and ancestry (exit 0). No new
+  fetch/rebase was required within the controller's preflight boundary.
+- Read worktree AGENTS, approved implementation/design and actual Task 1–5 seams,
+  Task 0's measured ownership table, TDD/executing-plans/cycle/debugging guidance.
+  No subagents. All Rust commands used Devenv and targeted selectors. Full gates
+  remain deferred to Task 8. No dependency, GPUI, CLI/desktop/F2 adapter, global
+  configuration, developer key, sleep, staging, commit or outward action.
+- Implemented only in the ticket worktree; every source change below remains
+  uncommitted and unreviewed. Preserve this work when resuming; do not replay the
+  reviewed Tasks 0–5.
+
+### Reproduction And Actual Durable State
+
+`promotion::run_tests::process_exit_f1_through_f12_and_inside_f10_reopens_without_repeated_effects`
+uses real repositories, actual promotion storage, Task 3 integration, Task 4 local
+cleanup/retirement and Task 5 reservation/completion. Only child transport calls
+are injected, as the Task 6 plan permits. Each child uses real reservation rows
+and stores authoritative completion. Counters in the disposable fixture registry
+count child publication/delete calls and actual local-helper effects. The service
+in a subprocess is `open_at_with_exit_point_for_testing`; no destructor runs.
+
+1. The twelve published F1–F12 exit cases (test indices 0–11) each reopen and
+   finish under the original operation ID, with exactly one promotion commit,
+   one context/primary publication, one remote-delete call, one actual worktree
+   removal and one actual branch deletion. Stored completion replays without
+   further child/deletion calls.
+2. Test index **12** installs an internal-F10 test-only exit callback immediately
+   after `ContextCleanup::delete_tracking_ref` returns its private evidence, and
+   before `complete_record` executes SQL. The subprocess exits with the expected
+   `FAILURE_POINT_EXIT_STATUS`, using the same actual service/cleanup path.
+3. Reopened actual state is: tracking ref absent; promotion **branch_deleted**;
+   existing history **observed_published**; **zero retired_contexts**; Promote
+   reservation still **advertising**. These assertions pass before retry. The
+   tracking slot's `.lock` file exists and its exact contents are **empty**.
+4. A fresh service and the original request return
+   `IndexPending(outcome { publication: Published, cleanup: Pending(RecoveryRequired) })`.
+   No completed lifecycle work is repeated, but the required same-ID completion
+   fails. The test remains RED; the lock is not erased to force a green result.
+
+Root cause: `cleanup.rs::delete_tracking_ref` commits the Git removal, then creates
+a **second git2 ref transaction** and locks the absent slot. `RetirementEvidence`
+keeps that transaction through SQL completion. On normal return or rollback Rust
+drops it and removes the lock, which is why unwind/reopen tests pass. Process exit
+leaves the filesystem `.lock` behind; it is not an OS-only lock released by exit.
+On retry, the same helper's `transaction.lock_ref` refuses it before SQL. Its
+empty contents carry no operation/owner/identity evidence distinguishing this
+orphan from a legitimate foreign Git writer's lock. Durable branch_deleted intent
+and ref absence alone are not such evidence. Blind deletion would weaken the
+guard against ordinary Git writers. A safe recoverable absence-guard ownership
+mechanism is missing from the approved composition seams.
+
+The current safe refusal preserves T4-1's history/reservation invariant, but does
+not satisfy the required inside-F10 process-exit/same-ID-finalization acceptance.
+Controller/spec review must resolve that contract/seam gap before implementation
+continues. No amendment, lock adoption, new phase/table or cleanup algorithm has
+been implemented. Normal helper composition and the settled identity policy do
+not need reopening; this evidence is specifically the crash-persistent ref lock.
+
+### Provisional Implementation And File Inventory
+
+- `src/repository/promotion/run.rs` (new): provisional lifecycle, durable replay,
+  ownership-first children, integration candidate reuse, publication/cleanup
+  pending categories, cancellation, retirement composition and fresh-ID refresh.
+  Consumes existing algorithms; no duplicate merge or cleanup algorithm.
+- `src/repository/promotion/run_tests.rs` (new): 25 named tests/helpers, including
+  actual local lifecycle, no-identity contained cleanup, abandoned replay/new ID,
+  conflict at execution, identity, lost-result authority, a 24-case both-role
+  structural ownership-policy matrix, uncertainty, primary-only/new-path consent,
+  F2 primary advance, cleanup preservation, rejected publication/deletion retry,
+  SQL rollback, wrong/symbolic refs, cache loss, cancellation, refresh and process
+  exits. The structural matrix seeds real **prepared child ownership**; it must
+  not be described as actual installed conflict/resolution/external-repair proof.
+- `src/repository/promotion/mod.rs`: approved request/result/outcome/accessor and
+  error shapes, content-free formatting, public promote/cancel entry points.
+  `repository.rs` already re-exports `promotion::*`; no edit is necessary there.
+- `src/repository/promotion/integrate.rs`: narrow candidate-OID accessor and
+  validated `resume_candidate`, reusing the existing prepared tree/commit evidence
+  after F3 instead of creating a second commit with a changed timestamp.
+- `src/repository/remote/{mod.rs,observation.rs,state.rs}`: repository-scope access
+  to observation configuration/fence and authority OID, without algorithm changes.
+- `src/repository/remote/sync.rs`: extracted the existing authenticated scope and
+  frozen-configuration fence into `with_scoped_action_remote`, retaining the
+  synchronization-owned boundary via its wrapper. Promotion supplies its own
+  reservation boundary; no synthetic synchronization owner for local integration.
+- `src/repository/remote/reservation.rs`: cfg(test)-only bridge seeds real prepared
+  child ownership without exposing production synchronization internals.
+- `docs/research/wave-03-api-audit.md`: preview is present, provisional execution
+  and retry remain explicitly blocked; C5/D5 prepare/execute binding, ten-minute
+  expiry, preview schema and F2 NotResumable boundary remain pending.
+- This ledger and canonical comment `01M51J7Z00N4Q6S8V0X2Z4B6E2` record the stop.
+
+### Exact Commands And Results
+
+All counts below are actual targeted executions, not full-library gates. Initial
+compile failures and fixture errors are distinguished from behavior RED.
+
+| Exact command | Runs/results in execution order |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion` | Initial compile RED: 16 missing-API/import diagnostics, zero tests. Declaration-only runner runnable RED: **112 passed/6 failed/807 filtered** (five new lifecycle failures; one scaffold error-conversion regression in the existing foreign-config-lock test, reverted). Final blocked verification: **137 passed/1 failed/807 filtered**, 75.83s, warning-free. The sole failure is the actual process-exit lock blocker above. No full Task 6 GREEN is claimed. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests` | Runnable RED **0/11/920**; compile failure (private authority OID); **9/2/920**; GREEN **11/0/920**; expanded **14/3/920**; GREEN **17/0/920**; compile failure (test-private generation helper); expanded **23/2/920**. Green subsets do not clear the later expanded gate. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::post_child_new_path` | Four diagnostic failures while fixing a test fixture's cross-handle parent objects: ContextBehindRemote, then actual merge ancestry/zero-parent evidence, finally before-reset parent-count failure. Find both parents through the committing root handle; subsequent 17-case runner GREEN includes both consent scenarios. No production digest/merge algorithm changed. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::ownership_first` | Compile failure (private test-only child journal types); runnable RED **0/1/939** (Busy reused the bound no-row attempt); two **0/1/939** fixture-diagnostic failures (prepared retained child's fake completion forgot reconciliation_required=0); GREEN **1/0/939**, 20.84s, all 24 both-role scenarios. Parent now persists a fresh attempt for no-row Busy/yielding retries; retained attempts keep same-ID restart. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::process_exit` | Four failed runs: missing split-state history exposed an unconfigured fixture endpoint generation; nested key lookup exposed a fixture cache-lock recursion; after moving snapshot acquisition outside the TX, two runs reached the actual inside-F10 pending result (the latter names boundary 12 and the surviving lock). Final broad targeted run reproduces the same blocker with exact empty-lock/history/retirement/reservation assertions. |
+| `devenv shell -- cargo fmt` | One run, exit 0. |
+
+Other diagnosed failures: new remote fixtures initially changed root config without
+checkpointing/merging it; fixture setup now keeps primary/context config coherent.
+Cancellation changed the durable parent after the executor's snapshot, so runner
+saves re-read the cancellation bit in the same SQL transaction rather than
+overwriting it. Invalid live configuration on a retry after integration originally
+escaped as Err; the new pre-read/validated stored authority returns Ok pending.
+Both fixes have passing targeted coverage in the final 137 passing cases.
+
+The deletion-pending reservation correctly prevents the existing refresh gate
+from acquiring its index claim; those results are IndexPending with discovery
+marked stale, not a claimed successful refresh. Full results and publication
+pending paths without that reservation refresh normally. No bypass of refresh
+arbitration was introduced.
+
+### Remaining Work / Return
+
+Task 6 is **not complete**. Resolve T6-1 before proceeding. Still due: genuine
+installed context conflict canonical/external resolution and owned-resolution
+composition cases (the current matrix is structural); persistent retained-recovery
+and more cancellation/refresh assertions; runner-level supersession and explicit
+early-history RemoteContextDeleted coverage; SQL commit-result uncertainty versus
+actual committed completion, and complete boundary/negative-case review. Task 7
+real SSH and Task 8/full/native gates are untouched. The provisional API audit
+must not be changed to delivered until the complete Task 6 gate passes.
+
+All current work is preserved uncommitted for controller review of the blocker.
+No independent reviewer was spawned or approval inferred. Ticket remains open.
+
+Final inventory verification: `git diff --check` exited 0. `git diff --exit-code --
+Cargo.toml Cargo.lock devenv.nix devenv.lock .github/workflows/build.yml src/bin
+src/desktop src/repository/mutation` exited 0. Status contains exactly the twelve
+paths inventoried above (nine source files, audit, ledger and new comment), with
+no staged changes. HEAD remains `8d06577f6af17e2532d072d7ee14419dbf8a84b4`.
+
+## Task 6 Resume — Owner-Approved T6-1 (2026-10-16)
+
+The owner reports explicit approval via the question tool: Cycle 09 inherits
+Cycle 06's backend-lock exception. Ambiguous crash locks are preserved with `Ok`
+cleanup pending RecoveryRequired plus refresh/IndexPending. Only after an operator
+quiesces writers and verifies/repairs affected backend metadata may the identical
+request resume unfinished SQL. No automatic deletion/adoption, new lock journal
+or further owner question. Rare inside-F10/F11 recovery explicitly costs operator
+intervention. Independent review confirmed the existing refusal safe, citing
+Cycle 06 contract 228–242 and approved 2026-10-08 Task 4 protocol 36–46; the actual
+fixture-only operator simulation at sync_tests 15283–15303 was verified in source.
+
+Historical T6-1 blocker/evidence above are preserved, superseded as a blocker by
+this approval. Cycle/design/plan/handoff now consistently qualify inside-F10/F11
+acceptance. All T4-1 SQL history/retirement/reservation and once-only effects remain.
+No production lock mechanism or removal is needed or authorized.
+
+Resume status/branch/HEAD/origin-main remain the supplied exact worktree at 8d06577
+and 89d04f9. Existing uncommitted work is preserved; no stash/rebase/commit, subagent
+or outward action. Read AGENTS/TDD/review guidance and actual predecessor recovery
+precedent. All original Task 6 obligations remain in scope. Targeted checks only.
+
+Post-approval RED, before qualifying the retained crash test:
+`devenv shell -- cargo test --locked --lib promotion::run_tests::process_exit`:
+**0 passed/1 failed/944 filtered**, 11.05s, warning-free. It reproduces the old
+immediate-finish expectation's failure at internal boundary 12; this is now a
+contract-qualified recovery result, not a production automatic-repair defect.
+
+## Task 6 Complete At Targeted Local Gate — Independent Reviews Next (2026-10-16)
+
+**The whole bounded Task 6 implementation is ready for independent spec then
+quality review, uncommitted against `8d06577f6af17e2532d072d7ee14419dbf8a84b4`.**
+No independent approval is inferred, and no Task 7/8 gate is claimed. T6-1 is
+owner-approved and resolved as a contract qualification; the historical blocker
+and failed immediate-retry test remain recorded above. No other blocker remains.
+Controller owns review/checkpoint; this worker did not stage/commit or delegate.
+
+### Approved Crash Behavior And Real Evidence
+
+The retained real-process test runs **fourteen** scenarios: F1–F12, exit after
+tracking deletion/before SQL, and exit after SQL commit/before the absence guard
+is dropped. It uses actual Git, Task 3/4/5 helpers, process exit (no destructors),
+reopened services and disposable-registry effect counters. Child network/publication
+calls alone use the approved injected seam; local child integration tests separately
+execute the real synchronization merge/reconciliation/resolution stack.
+
+- Before **any** repair in the pre-SQL crash case, retry returns IndexPending with
+  cleanup pending RecoveryRequired, preserves the complete Git/worktree byte image,
+  empty ambiguous lock, applicable history/current observations, zero retirement,
+  branch_deleted intent and held reservation. No child/delete/removal counters
+  repeat; discovery is stale after the attempted refresh. This is expected T6-1.
+- Only in the parent-owned disposable fixture, with its subprocess reaped and no
+  active writers, assertions verify exact ref absence, retained SQL/intent/history
+  and the exact regular empty lock. The test simulates operator removal of that
+  one known lock. The **identical request** then finishes the one SQL transaction,
+  with one of each effect and stored replay. Production never removes/adopts the lock.
+- In the post-SQL-commit exit case, actual complete/retirement/reservation finish
+  are durable. The identical request replays that authority with no child/delete
+  calls, preserves the surviving backend lock, and refreshes only as required.
+  Ref/cache/lock absence is never used as completion or retirement authority.
+- Real deferred-FK SQL commit failure and an earlier statement-trigger rollback
+  each retain existing SQL history/observations, no retirement and pending parent/
+  held reservation while the independently committed Git ref remains absent.
+  Retry finishes without repeated lifecycle effects. A test-only lost commit-result
+  seam returns an error **after actual commit**; actual-record reconciliation proves
+  complete/finished and replays instead of reporting a fabricated rollback.
+
+### Final Interfaces And Narrow Composition Decisions
+
+The approved public API is implemented in promotion/mod.rs: PromoteDocumentRequest,
+promote_document with caller SessionCredentials, cancellation returning bool,
+DocumentPromotionResult::{Complete,IndexPending}, outcome accessors and separate
+integration/publication/cleanup enums with fixed pending categories. Errors and
+Debug output are content/path/endpoint/secret-free. The existing repository.rs
+`pub use promotion::*` already exports every new type; no redundant export edit.
+
+The runner resolves registered roots/configuration, binds/replays item+digest,
+stores terminal abandoned refusals, respects indexed Busy/three-category
+supersession, persists attempt IDs before children, consumes completed child
+authority without rerunning, and honors actual ownership before errors. Busy/
+yielding/no-row transients receive fresh attempts; active non-owned transients
+are cancelled/acknowledged and **durable** cancellation is checked even when the
+acknowledgement returns RecoveryRequired. Uncertain ownership never mints a replacement.
+
+Actual canonical resolution exposed an important composition distinction: after
+resolution releases its local artifacts, the **original child still owns its
+publication continuation**. The narrow reservation::promotion_child_has_resolution
+query reuses existing integration-window/resolution evidence for same-ID restart;
+it does not misclassify every historical applied step as unfinished ownership.
+Genuine canonical/external repair, interrupted retained conflict/owned resolution,
+real primary identity confirmation and applied-but-uncheckpointed clean candidates
+are tested, in addition to the original both-role structural policy matrix.
+
+Integration uses the existing prepared/candidate lease stages and persists intent
+before any ref. A validated candidate is reused across F3. The recorded base's
+immutable configuration identifies the original primary on post-effect retries,
+so live primary renames cannot redirect cleanup. Reachability and shared
+primary_clean proof gate pre-integration errors: a dirty partial checkout is
+pending RecoveryRequired, even if the ref did not move. Lease/SQL/cancellation-clear
+failures after a matching effect become Ok pending plus refresh. Superseded
+post-effect IDs report their stored partial outcome without resuming cleanup.
+
+Publication uses manual merging children, passing host approval/confirmed identity
+and a cancellation observer. The exact-delete adapter reuses the extracted existing
+authenticated-scope/endpoint fence, reaches BeforeTransport/AfterAdvertisement,
+and checks generation/ownership. Cleanup runs the actual strengthened Task 4
+precheck before reservation **and again after F6 immediately before transport**;
+its lease is dropped before credentials/network. Each local step rechecks live
+configuration, ownership and actual state under the cleanup lease. Pending deletion
+keeps history and all local state; typed deletion failures cover configuration,
+key, unlock, host, transport and rejection. No merge/prune/deletion algorithm is
+duplicated, and no synthetic synchronization owner is used for local integration.
+
+Every Ok post-effect path marks discovery stale and attempts fresh-internal-ID
+index-only refresh outside the lease. A held Promote reservation correctly makes
+the existing refresh arbitration defer the claim as IndexPending. Existing
+discovery deliberately leaves active items to their contexts; partial-refresh
+tests verify the updated primary HEAD and actual canonical primary document while
+that active-item override survives. Completed cleanup is verified as a single
+primary-only public item. No discovery/F2 read-policy redesign was introduced.
+
+### Task 6 Obligation → Passing Evidence
+
+Runner test names below are under `promotion::run_tests`; existing Task 2/3/5
+selectors in the final promotion run retain their original coverage.
+
+| Obligation | Named passing evidence |
+| --- | --- |
+| Local full lifecycle, ordered parents, no remote and contained | local_full_lifecycle_and_exact_replay; runner_local_divergence_preserves_prepared_primary_tree_and_complete_discovery; contained_cleanup_needs_no_identity_or_new_merge |
+| External digest, new blocker, execution-only conflict and abandoned replay/new ID | changed_digest_is_durably_abandoned_and_new_id_succeeds; new_blocker_is_stored_and_replayed_before_any_child; execution_only_local_conflict_abandons_without_primary_effect |
+| Identity/local atomic persistence and operation mismatch | identity_and_mismatch_do_not_strand_the_item; all existing promotion::integrate identity/include/config-lock tests |
+| Cache loss/AlreadyContained without republish/remerge, fresh Edit/R1 | cache_loss_contained_context_cleans_without_another_merge_or_child; contained_remote_cache_recovery_skips_deleted_context_child_and_does_not_remerge; later_edit_after_runner_completion_provisions_fresh_context_and_first_publication |
+| Both-role ownership matrix/identity/conflict/transients/Busy/yielding/lost result, no strand | ownership_first_attempt_matrix_both_children_has_no_permanent_strand (24 scenarios); uncertain_child_ownership_fails_closed_without_replacement_and_primary_returns_pending |
+| Genuine conflict inspect/read/resolve/external repair; interrupted conflict/owned resolution and original IDs | genuine_context_conflict_resolves_canonical_and_external_and_reuses_owned_resolution (four scenarios); genuine_primary_owned_resolution_stays_pending_on_recovery_then_publishes_same_child |
+| Actual retained clean candidate after ref effect/checkpoint failure | actual_applied_child_candidate_is_reused_after_lost_checkpoint_for_both_roles |
+| Actual primary IdentityRequired and confirmation on original child | actual_primary_identity_required_keeps_original_child_for_confirmed_continuation |
+| Fresh T(P), context new path versus primary-only merge, PrimaryAdvanced reset | post_child_new_path_reconfirms_but_primary_only_merge_preserves_consent; advance_after_f2_resets_context_attempt_and_integrates_once; existing Task 3 base/no-object tests |
+| Rejected publication, retained/uncertain recovery Ok pending, current/publication replay | publication_rejection_is_pending_and_retry_only_publishes_and_cleans; genuine_primary_owned_resolution_stays_pending_on_recovery_then_publishes_same_child; uncertain_child_ownership_fails_closed_without_replacement_and_primary_returns_pending; already_current_publication_is_stored_and_replayed_without_children_or_deletion |
+| Changed/StillPresent/ambiguous deletion, category redaction, tracking evidence preserved | deletion_changed_and_still_present_keep_context_and_retry; ambiguous_delete_result_is_pending_then_observe_only_retry_finishes; deletion_failures_are_fixed_redacted_categories_and_keep_history; wrong_and_symbolic_tracking_refs_stop_before_any_retirement_sql |
+| Dirty/untracked/moved/ignored preservation before delete and F6 recheck, supersession | cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_delete; f6_rechecks_dirty_or_ignored_context_under_lease_before_deletion; supersession_finishes_new_committed_context_and_fences_old_remote_changed_owner |
+| History not reset early; explicit deleted-publication barrier | early_remote_delete_keeps_history_and_explicit_deleted_publication_barrier (real history and shared production graph planner returns RemoteContextDeleted; held reservation still excludes transport) |
+| F1–F12 and inside F10/F11 process exits, at most one actual local helper effect/candidate/publication/delete | every_interruption_reopens_with_one_candidate_and_only_unfinished_children; process_exit_f1_through_f12_and_inside_f10_reopens_without_repeated_effects (14 real exits, qualified T6-1) |
+| Statement rollback, real SQL commit failure, lost committed result, stored complete/finish | tracking_git_sql_split_retains_history_parent_and_owner_and_retries_same_id; final_sql_commit_failure_rolls_back_all_history_and_retry_finishes; lost_completion_commit_result_reopens_actual_complete_authority; existing promotion::record finalization/rollback/no-fabrication cases |
+| Partial prune/checkout refusal; no stub finishing or post-effect Err | partial_worktree_prune_requires_recovery_and_never_finishes_a_stub; integrating_retry_with_partial_checkout_is_pending_until_verified_baseline_repair; post_ref_retry_lease_failure_and_cancel_clear_failure_never_become_errors |
+| Cancellation before integration, at child safe points, after integration between whole steps, retry reset | cancellation_before_and_after_integration_preserves_and_retry_finishes; cancel_at_pre_ref_and_each_local_boundary_stops_before_the_whole_step; consent_identity_cancellation_forwarding_and_network_seams_never_hold_a_lease; genuine owned-resolution interruption cases |
+| Live valid/invalid configuration changes, endpoint generation, no further cleanup | valid_configuration_changes_after_integration_stop_before_any_cleanup_effect; integrated_configuration_failure_is_ok_pending_even_when_configuration_is_invalid |
+| Refresh success/failure/partial authoritative result/primary-only completion | refresh_failure_keeps_identical_authoritative_outcome_and_replay_repairs_index; partial_refresh_failure_preserves_outcome_and_later_refresh_shows_integrated_primary; later_edit_after_runner_completion_provisions_fresh_context_and_first_publication; all full/partial runner cases |
+| Exact consent/session forwarding and no lease across network seams | consent_identity_cancellation_forwarding_and_network_seams_never_hold_a_lease |
+| Content-free request/error/outcome formatting | fixed_error_and_request_formatting_never_includes_content_paths_or_endpoints; local_full_lifecycle_and_exact_replay; existing promotion Debug/column inventory tests |
+
+### Resume Exact RED / GREEN And Verification
+
+All commands below ran through Devenv in the specified worktree. No Task 7 target,
+entire-library selector, dependency command, full check/clippy/test gate or native
+workflow ran. Counts distinguish fixture assumptions/missing test bridges from
+behavioral regressions; no failed crash case was removed or skipped.
+
+| Exact command | Resume runs/results in execution order |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::process_exit` | Post-approval old-expectation RED **0/1/944**, 11.05s; qualified pre-repair preservation/operator-fixture-repair GREEN **1/0/944**, 12.28s. Later final gate includes the additional actual-committed F11 exit. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::genuine_context` | Initial compile RED: missing test-only local-driver bridge and incorrect external-resolution enum assumption; then **0/1/945** on cached fixture index; **0/1/945** on real canonical resolution replacing its child ID; **0/1/945** on test assumption that safe plain-code side-read must itself reject (inspection/resolve correctly require external repair); GREEN **1/0/945**, 4.54s, four scenarios. Same-ID composition fixed from the real resolution evidence. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests` | Expanded **29/1/920** (valid primary rename redirected cleanup; one not-yet-used test-seam warning); compile RED missing test-only graph-plan bridge; **31/5/920** (pre-ref cancellation, deletion categories, contained deleted-context child, post-ref lease error, supersession fixture missing real primary merge); GREEN **36/0/920**, 63.25s; expanded **39/2/920**, 64.76s (late-F6 dirty precheck and discovery test assumption). All final corrections pass the final 159-case selector. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::lost_completion` | Strengthened actual-seam-execution assertion RED **0/1/949**, then wired lost-return seam/reconciliation GREEN **1/0/949**, 0.95s. An earlier expanded test had not proved hook execution; no false positive is retained. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::valid_configuration` | GREEN **1/0/949**, 1.60s, three valid-config/endpoint scenarios after fixing the immutable primary/live cleanup fence. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::partial_refresh_failure` | Diagnostic **0/1/960**: public discovery selected active context; diagnostic **0/1/960**: observe_root intentionally filters that active item from root item rows as well; corrected assertion verifies primary HEAD/canonical file and primary-only list after completion; GREEN **1/0/960**, 0.87s. No discovery production change. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::f6_` | GREEN **1/0/960**, 1.35s, dirty and ignored late-F6 scenarios after adding the second actual leased precheck before transport. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::actual_applied` | Initial compile failure in new test assertions treating cancel_remote_operation's unit result as bool; corrected fixture API use; GREEN **1/0/964**, 1.90s, both real applied candidate/checkpoint-failure cases. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::genuine_` | GREEN **2/0/963**, 4.85s, after adding actual cancellation acknowledgement with owned resolutions to both real conflict cases. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::integrating_retry` | Behavioral RED **0/1/965**, 0.41s (dirty partial checkout escaped as Err); shared Task 3 primary_clean proof now gates that error; GREEN **1/0/965**, 0.56s. |
+| `devenv shell -- cargo fmt` | Two resume runs, both exit 0. |
+| `devenv shell -- cargo fmt --check` | Two resume runs, both exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion` | First 158-case run hit the outer shell's 120-second combined fmt/build/test timeout, **no final result claimed**. Reran unchanged selector with a 300-second command timeout: **158 passed/0 failed/807 filtered**, 119.70s. After the meaningful partial-checkout regression/correction and superseded replay check, final **159 passed/0 failed/807 filtered**, **116.65s**, warning-free. This remains a targeted promotion selector, not the entire library gate. |
+
+### Complete Uncommitted File Inventory
+
+Nine source paths:
+
+1. `src/repository/promotion/run.rs` — new complete parent runner/Direct adapter.
+2. `src/repository/promotion/run_tests.rs` — new 46 named runner tests/helpers,
+   real-process harness, real local-child integration seam, counters and fixtures.
+3. `src/repository/promotion/mod.rs` — public types, redacted formatting and service
+   entry points. Existing repository.rs wildcard re-export is sufficient.
+4. `src/repository/promotion/integrate.rs` — candidate OID/resume seam and shared
+   primary_clean proof visibility; existing preparation/apply algorithms reused.
+5. `src/repository/remote/mod.rs` — repository-scope observation module visibility.
+6. `src/repository/remote/observation.rs` — narrow snapshot/fence visibility.
+7. `src/repository/remote/reservation.rs` — released-resolution continuation query
+   using existing typed evidence; cfg(test)-only structural child-seeding bridge.
+8. `src/repository/remote/state.rs` — narrow authority-OID/generation visibility.
+9. `src/repository/remote/sync.rs` — shared scoped authenticated-action fence
+   extraction; cfg(test)-only adapters to **existing** local child integration/
+   reconciliation and publication planning, not production mock algorithms.
+
+Six documentation paths:
+
+- `docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md`;
+- `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-design.md`;
+- `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md`;
+- this execution ledger;
+- `docs/plans/2026-10-15-wave-02-cycle-09-handoff.md`;
+- `docs/research/wave-03-api-audit.md` — headless preview/promote/cancel/results/
+  retry now delivered at the local gate; C5/D5 boundary prepare/execute, ten-minute
+  expiry, preview schema/serialization and current F2 NotResumable remain pending.
+
+Three canonical comments under `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/`:
+
+- `01M51J7Z00N4Q6S8V0X2Z4B6E2.md` — historical blocker, retained;
+- `01M51K7Z00N4Q6S8V0X2Z4B6E3.md` — owner approval/resume checkpoint;
+- `01M51P7Z00N4Q6S8V0X2Z4B6E4.md` — complete local-gate review handoff (uncommitted comment ID corrected to the ULID alphabet; content/history retained).
+
+### Review / Remaining Gates
+
+Self-review checked the full Task 6 diff against 8d06577 for public contract,
+ownership-first retry, before-ref durable intent, original primary binding,
+post-effect error conversion including partial checkout, configuration/generation
+fences, double precheck before remote deletion, safe-point cancellation, T4-1 SQL
+atomicity, T6-1 operator exception, fresh-ID unleased refresh and redaction. Original
+Task 6 obligations are mapped above; there is no deferred Task 6 implementation
+item. **Independent spec and quality reviews remain pending**, followed by the
+controller's authorized checkpoint. No worker approval/commit is claimed.
+
+Remaining risks/gates are explicitly bounded: real SSH transport/counter and
+poll/concurrency acceptance in Task 7; full/local/native gates in Task 8; the
+approved rare ambiguous-backend-lock interval needs operator intervention; held
+reservation can defer indexing as IndexPending. C5/D5 own the frontend boundary.
+No dependency, GPUI, CLI/desktop/F2 binding, global configuration, developer key,
+sleep, subagent, staging, commit, push, PR, CI, merge, closure or cleanup action.
+Ticket remains open; HEAD remains 8d06577 and all eighteen paths are uncommitted.
+
+Final handoff checks: `git diff --check`, `git diff --cached --exit-code` and
+`git diff --exit-code -- Cargo.toml Cargo.lock devenv.nix devenv.lock
+.github/workflows/build.yml src/bin src/desktop src/repository/mutation` all
+exited 0. Status lists exactly the eighteen intended paths above. Source has not
+changed since the final 159-test GREEN; subsequent edits are documentation and
+canonical comments only. Exact HEAD remains
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`.
+
+## Task 6 SPEC Corrections — Three Findings Resolved, Same SPEC Recheck Next (2026-10-16)
+
+**All three supplied SPEC findings were verified against the approved contract and
+actual seams, reproduced before production edits, and corrected. Return the full
+uncommitted Task 6 diff against 8d06577 to the same SPEC reviewer before quality.**
+This is implementer verification, not SPEC approval. Existing source/planning work
+and the reviewed Tasks 0–5 checkpoints remain intact; no commit, new delegation,
+Task 7 target or full-library gate was performed.
+
+### Verification Against Contract And Corrections
+
+1. **P1 — terminal cancellation after fully released resolution.** The ownership-
+   first table permits a new attempt for a cancelled child only with proven absence
+   of retained ownership; historical resolution alone is not unfinished ownership.
+   Actual `cancellation_after_a_fully_released_resolution_stays_terminal` source
+   confirms terminal cancellation after release. The runner unconditionally preferred
+   `promotion_child_has_resolution` even for an already classified **Unowned,
+   Cancelled** row. That repeatedly restarted a terminal ID, stranding the parent.
+
+   The released-resolution continuation exception now applies only to nonterminal
+   children. Terminal Cancelled/Failed rows follow the existing acknowledged
+   retirement/new-attempt policy after actual ownership absence is established.
+   Completed authoritative results and retained conflict/owned resolution are still
+   classified **first**, preserving the required original-ID continuation even for
+   interrupted retained ownership. No child synchronization behavior was changed.
+
+   The two new context/primary runner regressions install a real conflict via the
+   existing local child stack, fully resolve/release it through the actual resolver,
+   then invoke real `synchronize_remote_observed` on the continuation with an observer
+   cancelling at **BeforeFetch**. They prove that point was reached, actual durable
+   phase is Cancelled and child ownership is Unowned, then retry the same parent
+   request to completion with a **new child ID**, one promotion merge and no strand.
+   Cancelled-ID probes use actual synchronization replay, not a fabricated error.
+
+2. **P2 — refused replacement superseded a live operation.** The Cycle requires a
+   **new confirmed promotion** before supersession. Previously begin_record's SQL
+   transition fenced/cancelled the original Promote owner and superseded the parent
+   before the runner checked new blockers/digest, then abandoned the replacement.
+
+   For new requests, the runner now validates the local preflight/digest **before**
+   the atomic supersession/confirmed insertion, retaining its repository lease
+   through the short storage transition and dropping it before child/network work.
+   Refused requests use a separate `refuse_record` path that inserts a terminal
+   Abandoned row directly, compatible with the partial unique index, without
+   touching the eligible original parent/reservation. The indexed unfinished lookup,
+   cross-journal ID checks and insertion/encoding are factored/shared; an ineligible
+   unfinished parent still yields Busy. No schema or confirmation-policy amendment.
+
+   Both stale-digest and blocker tests start from a real runner's RemoteContextChanged
+   stop with a live manual Promote reservation. They compare **every column** of the
+   old parent/owner row (including epoch, phase, timestamps and flags), the full Git/
+   worktree byte image, all history/retirement/current-observation rows and effect
+   counts before/after refusal. The new row is Abandoned, the original remains a live
+   continuation, and a subsequently valid confirmed replacement still supersedes
+   and completes. Thus refusal cannot revoke consent for the prior operation.
+
+3. **P2 — BranchDeleted replay trusted completed local cleanup without observing it.**
+   The local cleanup contract requires re-observation under the lease before each
+   step and T4-1 requires actual checks before tracking deletion/final SQL. Previously
+   a retry from BranchDeleted could retire history after a branch/worktree/admin entry
+   reappeared, because that step skipped the earlier destructive helper guards.
+
+   Task 4's lease-owning ContextCleanup now exposes the read-only
+   `require_local_cleanup_absent(kind,id)` capability seam. It checks actual direct
+   branch absence (symbolic refs refuse), deterministic worktree/admin absence and
+   the existing complete checkout-inventory guard. Reappeared state is Changed;
+   mixed/unreadable evidence is RecoveryRequired. It never deletes that state or
+   repeats previously completed destructive steps. The runner calls it under the
+   cleanup lease **before tracking deletion**, and rechecks inside the final SQL
+   closure immediately before complete_record while the same lease/absence guard
+   remain held. A late reappearance after the independent Git effect therefore
+   prevents all SQL retirement/completion/owner-finish writes via rollback.
+
+   Actual reopen cases cover recreated branch at the old OID, a moved OID, symbolic
+   branch, path-only state, admin-only state and a real newly registered worktree.
+   All remain pending at BranchDeleted with byte-identical Git/local state, existing
+   publication history, no retirement and a held reservation; completed effect counts
+   do not repeat. A second regression creates a branch in the test-only post-tracking
+   seam and proves final SQL also refuses while Git's already committed tracking
+   deletion remains (T4-1). A positive complete-record replay test creates a fresh
+   Edit context **after** completion, then proves stored replay preserves it with no
+   child/deletion effects. Complete-record replay bypasses unfinished cleanup checks.
+
+### Exact Correction-Pass RED / GREEN
+
+Only new regressions were selected first, before any production correction. All
+commands ran through Devenv in the same ticket worktree. No compilation/setup
+failure was hidden as behavioral RED; the initial regressions compiled warning-free.
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec3_` | Initial behavioral RED **1 passed/6 failed/966 filtered**, 3.52s. Both real terminal-cancellation continuations strand; both refused replacements mutate the old parent/owner; BranchDeleted reopen and the post-tracking reappearance incorrectly complete. Positive stored-complete/fresh-context replay already passes and stays as a control. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec3_terminal` | After finding 1 correction, **2 passed/0 failed/971 filtered**, 1.63s, context and primary real cancellation after release. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec3_stale` | After finding 2 correction, **1 passed/0 failed/972 filtered**, 1.15s. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec3_blocked` | **1 passed/0 failed/972 filtered**, 1.18s. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec3_` | After all three corrections, **7 passed/0 failed/966 filtered**, 8.38s, including the six actual BranchDeleted reopen variants and the late final-SQL guard. |
+| `devenv shell -- cargo fmt` | One correction-pass run, exit 0. |
+| `devenv shell -- cargo fmt --check` | One correction-pass run, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion` | Broadened only after new regressions passed: **166 passed/0 failed/807 filtered**, **132.69s**, warning-free. Existing retained/interrupted/owned-resolution, record arbitration/identity, T6-1 crash, rollback and full runner cases all remain green. Not the entire library suite. |
+
+### Correction Scope And Return
+
+Correction source paths: `src/repository/promotion/{run.rs,run_tests.rs,record.rs}`
+and `src/repository/cleanup.rs`. Storage helpers share prior identity/index/refusal
+logic; cleanup adds a lease-owned observation seam without changing existing prune/
+branch-delete algorithms. No new table/column/dependency or production child mock.
+The seven new named regressions bring runner cases/helpers to 53. Latest plan,
+handoff and API-audit local-gate summaries are updated to 166; the previous 159-test
+handoff/history above remains historical evidence, not the current gate.
+
+Canonical comment `01M51M7Z00N4Q6S8V0X2Z4B6E5` records this response. All prior
+uncommitted Task 6 paths remain present, with record.rs, cleanup.rs and the new
+response comment added to the previous full inventory. **Same SPEC recheck next;
+quality only after SPEC acceptance.** The owner-approved T6-1 exception and pending
+Task 7/8/C5/D5 gates remain unchanged. No worker commit/staging, subagent, dependency,
+GPUI, global config, developer key, sleep, CLI/desktop/F2 binding, full gate, push,
+PR, CI, merge, closure or cleanup action. HEAD remains 8d06577; ticket stays open.
+
+Correction-pass final inventory checks: `git diff --check`, `git diff --cached
+--exit-code` and the protected-path diff for Cargo/Devenv lockfiles/configuration,
+native workflow, CLI/desktop and mutation/F2 paths all exited 0. The full pending
+inventory is now 21 intended paths (prior 18 plus cleanup.rs, record.rs and this
+response's canonical comment). Source is unchanged since the 166-test GREEN;
+later edits are only documentation/comments. Exact HEAD remains
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`.
+
+## Task 6 Additional SPEC P2 — Discovery Outside The Common Lease (2026-10-16)
+
+**Prior three findings reported resolved by SPEC recheck. The additional discovery/
+lease P2 is now corrected, ready for the same SPEC reviewer before quality.** No
+approval is inferred for this correction. The existing Cycle Bounds/global plan
+rule forbids filesystem discovery while holding the common repository lease; no
+owner amendment or policy exception was sought or introduced.
+
+### Verified Finding And Complete Call-Path Audit
+
+The previous supersession correction acquired `preflight_lease` and then invoked
+preview, which reached `discovery::observe_root` over root and active contexts.
+Task 3 `prepare_integration` independently acquired its lease before preview too.
+Both violated the existing rule. Audit also found full filesystem canonical-context
+validation underneath Task 4 cleanup prechecks and the real synchronization child's
+`inspect_synchronization_local`/local target helpers. Merely moving one preview
+call or dropping the lease before SQL would leave both scan violations and a
+supersession TOCTOU window. All of these reachable promotion paths were addressed.
+
+### Shared Preparation And Bounded Leased Revalidation
+
+- `observe::prepare` performs full root/active-context discovery **without the
+  common lease**, derives the selected item's discovery facts, and captures a
+  process-only guard before/after discovery to reject unstable observations.
+  Public preview still acquires no lease and remains read-only/offline.
+- PreparedObservation::revalidate opens fresh Git handles under the caller's lease,
+  checks checkout/common-dir/registration locators, local HEAD/refs, configuration
+  bytes, index/state/status, and metadata of known canonical/index paths. It does
+  not enumerate filesystem discovery sources or rebuild active-context discovery.
+  Ignored canonical statuses are included so namespace changes cannot hide behind
+  stale facts; known canonical metadata catches stat/index-flag-hidden changes.
+  Checks use existing managed-entry bounds. Unix device/inode and the existing
+  Win32 directory/file identity backend seal locator identity; no new dependency.
+  Configuration bytes are bound even for an existing configuration indirection.
+- The same actual-Git predicate consumes the sealed discovery facts and fresh
+  tracking/history/conflict state. Canonical result validation reads Git trees.
+  Tracking refs are re-observed rather than frozen blindly: a primary-only race
+  still yields the approved PrimaryAdvanced refusal before owned objects/refs.
+  The public expectation encoding and public preview schema are unchanged.
+- New confirmation prepares outside, then takes the lease for bounded revalidation
+  and the short atomic refusal/confirmation/supersession transaction. It also
+  captures the exact indexed predecessor and owner before discovery and compares
+  that guard in SQL (repository identity, whole parent record, owner epoch/phase/
+  generation/requests/timestamp). A changed guard inserts only a terminal refusal
+  where permitted; it never supersedes/fences the old owner. Read failures propagate
+  fail-closed rather than being interpreted as a matching/absent predecessor.
+- Task 3 integration uses that same prepare/revalidate split before identity/object/
+  ref work. No full filesystem discovery occurs in its retained preparation lease.
+- The existing canonical policy is extracted into shared source/item validation,
+  bounded context identity and commit-tree validation. Cleanup uses identity plus
+  the recorded clean commit's canonical tree and its existing strong clean/ignored/
+  recursive-gitlink/lock checks. Synchronization preserves strict filesystem
+  inspection outside its lease, then revalidates the clean target/HEAD/identity/
+  canonical commit inside. Its lease-held local/recovery helpers use the bounded
+  Git form. No full filesystem canonical-context scan remains in those intervals;
+  target identity/cleanliness semantics remain shared rather than duplicated.
+- Index-only refresh was already outside the lease and remains so. The first three
+  SPEC corrections, ownership-first attempt policy, T4-1 completion and T6-1 backend
+  lock exception remain unchanged and pass their existing regressions.
+
+### Actual Scan-Entry Proof And Race Tests
+
+Cfg(test)-only hooks are at **the actual** discovery::observe_root entry and
+canonical_context_at filesystem scanner entry, not a mock preview wrapper. Each
+probe uses the existing non-waiting `leases_are_free`/try-lock mechanism on the
+fixture's actual common directory and a counter. No sleeps, global keys/config,
+production observer bypass or transport mock pretending to be discovery.
+
+Six new `promotion::run_tests::spec4_` cases cover:
+
+1. New success, digest refusal and blocker: every actual root/selected-context scan
+   sees a free common lease; probes must execute. Success includes integration,
+   cleanup and refresh, so the audit is not limited to the initial preview.
+2. Actual Task 3 preparation independently proves its discovery precedes its lease.
+3. A real synchronization-context child reaches/cancels at BeforeFetch, with actual
+   canonical filesystem scanner entry unleased. No credential/network is needed.
+4. Seven outside/inside supersession races change primary ref, context ref, untracked
+   status, configuration, checkout identity, predecessor row or owner epoch after
+   prepared discovery and before lease-held revalidation/SQL. All refuse ExternalChange
+   before any child/new effect, preserve the intentionally raced Git bytes/history/
+   counters and preserve the old parent/owner instead of superseding them.
+5. Four actual integration preparation races change context ref/status/configuration/
+   identity in that interval. All refuse, preserve the post-race byte image and
+   create no promotion commit or other owned object/ref effect.
+6. A tracking-primary advance in the same interval returns PrimaryAdvanced, not a
+   stale integration or dropped primary content; post-race images stay unchanged.
+
+### Exact RED / GREEN And Affected Verification
+
+| Exact command | Actual runs/results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec4_` | Initial behavioral RED **0 passed/3 failed/973 filtered**, 0.90s: both new preflight and Task 3 preparation fail at the actual scan-entry try-lock; the supersession race returns too-late ReconfirmationRequired. One subsequent compile failure was a moved read-view helper's `&Path`/PathBuf conversion, corrected with no tests executed. Initial split GREEN **3/0/973**, 5.90s; expanded audited GREEN **4/0/973**, 5.50s; full six-case GREEN **6/0/973**, 6.10s. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec4_real_context` | Additional audit regression RED **0/1/976**, 0.51s: the real child's canonical filesystem scan still held the common lease after the first split. Fixed the shared child inspection/leased-target path, not the test; included in expanded/final GREEN above. |
+| `devenv shell -- cargo test --locked --lib promotion` | Three passing broadened runs after meaningful guard refinements: **172/0/807**, 158.78s; **172/0/807**, 141.90s after explicit configuration-byte binding; final **172 passed/0 failed/807 filtered**, **134.56s**, after reusing the existing Win32 identity backend for locator seals. All warning-free. Prior seven SPEC regressions remain present and green. |
+| `devenv shell -- cargo test --locked --lib repository::cleanup::tests` | **26 passed/0 failed/953 filtered**, 14.85s; targeted affected Task 4 clean/ignored/partial/identity/submodule/retirement regressions. |
+| `devenv shell -- cargo test --locked --lib remote::sync::tests::local_` | **11 passed/0 failed/968 filtered**, 8.21s; targeted affected local binding, actual-state/replay, safe-point and outside-lease reconciliation cases. |
+| `devenv shell -- cargo test --locked --lib remote::sync::tests::materialized_context` | **1 passed/0 failed/978 filtered**, 0.35s; existing materialized context/authoring identity and cleanliness contract. |
+| `devenv shell -- cargo fmt` / `devenv shell -- cargo fmt --check` | Three correction-pass runs each, all exit 0. |
+
+No entire-library selector, full Rust gate, Task 7 real-SSH target or native CI ran.
+Linux checks do not claim Win32 runtime verification; the added Windows locator
+seal reuses the already existing native backend, with native gates still deferred.
+
+### Correction Inventory / Same-SPEC Return
+
+Source changes for this finding are:
+
+- `src/repository/promotion/{observe.rs,integrate.rs,run.rs,record.rs,run_tests.rs}`;
+- `src/repository/{cleanup.rs,discovery.rs}`;
+- `src/repository/remote/sync.rs`;
+- `src/repository.rs` (shared canonical identity/content split and test-only actual
+  filesystem scanner entry hook; existing promotion re-export remains unchanged).
+
+Latest design/plan/handoff/API-audit summaries and this ledger record the actual
+split/current **172**-test gate and same-SPEC recheck. Comment
+`01M51N7Z00N4Q6S8V0X2Z4B6E6` records this response. A prior uncommitted handoff
+comment's Crockford-excluded `L` in its ID/filename was corrected to valid
+`01M51P7Z00N4Q6S8V0X2Z4B6E4`, with references updated and historical body preserved;
+the original T6-1 blocker comment is unchanged. No published identity was rewritten.
+
+All previous Task 6 changes remain uncommitted against exact HEAD
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`; full pending inventory is now 25 paths
+(prior 21 plus observe.rs, discovery.rs, repository.rs and the new response comment).
+**Return to the same SPEC reviewer before quality.** Prior three findings are
+controller-reported resolved, this correction awaits acceptance, and no review
+approval or worker checkpoint is inferred. Ticket stays open. No subagent,
+dependency, GPUI, CLI/desktop/F2 binding, global config, developer key, sleep,
+staging, commit, push, PR, CI, merge, closure or worktree cleanup action.
+
+Additional-P2 final checks: `git diff --check`, `git diff --cached --exit-code`
+and the protected-path diff for Cargo/Devenv configuration/locks, native workflow,
+CLI/desktop and mutation/F2 paths all exited 0. Status lists the 25 intended pending
+paths. No source edit followed the final 172-test GREEN; subsequent changes are
+documentation/comments only. Exact HEAD is still 8d06577 above.
+
+## Task 6 Remaining SPEC P2 — Canonical Tree Entry Mode/Type (2026-10-16)
+
+**The supplied final SPEC finding was verified, reproduced and corrected. Return
+to the same SPEC reviewer for final recheck before quality.** No SPEC acceptance,
+quality approval, owner policy amendment or commit is inferred.
+
+### Finding And Minimal Correction
+
+The shared validate_context_tree consumed canonical_tree_sources' raw byte sources
+without checking the corresponding entry's mode/type. That snapshot intentionally
+retains symlink Blob entries and their link bytes for whole-tree shape/invariant
+analysis. Thus link bytes that happened to be valid canonical front matter could
+fulfill the target, unlike the old filesystem collector which skips symlinks.
+
+The canonical **item-source** projection in validate_context_tree now accepts a
+source only when snapshot.entries proves **Blob AND mode 100644 or 100755**.
+It filters neither the underlying tree nor the shared raw snapshot/entry map.
+Symlinks (120000) and gitlinks cannot fulfill the target; regular executable blobs
+remain valid under the already approved T2 policy. Canonical parsing/policy and
+all other constraints are unchanged. Whole-tree `.manyhands/worktrees/` checks
+still inspect the original complete tree, before their canonical source projection.
+No scan/lease behavior, identity guard, expectation encoding, schema or dependency
+changed. The production correction is confined to `src/repository.rs`.
+
+### Tests First — Actual Cleanup And Synchronization Paths
+
+Three new `promotion::run_tests::spec5_` cases use actual Git objects and linked
+worktrees. A memory index changes the canonical document entry's recorded mode,
+commits it and checks it out; assertions verify the exact tree mode/object kind.
+For 120000 the Blob's bytes are the fixture's valid canonical document, and on
+Unix the actual worktree entry is verified to be a symlink with those exact link
+bytes (not an ordinary file containing an invalid link string).
+
+- `spec5_cleanup_symlink_front_matter_and_gitlink_cannot_fulfill_target`:
+  both 120000 and 160000 fail the real ContextCleanup precheck and removal attempt;
+  HEAD/index/link presentation and registration remain preserved. This directly
+  exercises the shared validator used before promotion's destructive cleanup.
+- `spec5_sync_symlink_front_matter_and_gitlink_cannot_fulfill_target`:
+  both modes return TargetNotMaterialized through the existing test adapter's real
+  bounded local synchronization stack, before local integration effects. The
+  worktree/index/HEAD image remains unchanged and no promotion commit is created.
+- `spec5_cleanup_and_sync_accept_regular_and_executable_canonical_blobs`:
+  both 100644 and 100755 pass cleanup precheck and the real synchronization path
+  with the same clean OID/image. This prevents an overcorrection to 100644-only.
+
+The generic snapshot reader is unchanged because other consumers need full shape
+evidence. No filesystem fallback or leased discovery was added. All earlier
+scan-entry try-lock/race, predecessor/supersession, terminal-cancellation and
+completion-absence tests remain in the final promotion selector.
+
+### Exact RED / GREEN And Final Targeted Gate
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec5_` | Initial behavioral RED **1 passed/2 failed/979 filtered**, 1.26s, warning-free. Cleanup incorrectly returned Ok for the 120000 front-matter link, and synchronization also accepted it; regular/executable control passed. No production fix preceded this run. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::spec5_` | After the mode/type filter, GREEN **3 passed/0 failed/979 filtered**, 1.43s, warning-free; symlink/gitlink negatives and both regular-mode positives execute. |
+| `devenv shell -- cargo fmt` | One correction-pass run, exit 0. |
+| `devenv shell -- cargo fmt --check` | One correction-pass run, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion` | **175 passed/0 failed/807 filtered**, **152.80s**, warning-free. Includes all six actual lease-free/race probes, all seven prior SPEC regressions, executable-document/digest tests, `result_forbids_worktrees_entries`, and original integration/record/runner coverage. Not the entire library suite. |
+
+### Scope And Final-SPEC Return
+
+Correction code/test paths: `src/repository.rs` and
+`src/repository/promotion/run_tests.rs`. Latest design/plan/handoff/API-audit local
+gate summaries plus this ledger and canonical comment
+`01M51Q7Z00N4Q6S8V0X2Z4B6E7` record the response. The runner now has 62 named
+tests/helpers. The complete prior Task 6 diff is retained uncommitted against
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`; full pending inventory is 26 paths,
+adding only the new response comment to the preceding full inventory. Same SPEC
+recheck is next; quality waits for acceptance. T6-1 and Task 7/8/C5/D5 gates remain.
+No subagent, dependency, GPUI, global config, developer key, sleep, CLI/desktop/F2
+binding, Task 7/full gate, staging, commit, push, PR, CI, merge, closure or worktree
+cleanup action. Ticket stays open; HEAD is unchanged.
+
+## Task 6 QUALITY1 P1 — Atomic Parent/Child Start Fence (2026-10-16)
+
+**QUALITY1's concurrent no-row attempt orphan was verified, reproduced for both
+roles with real conflicts/candidates, and corrected. Return the full uncommitted
+Task 6 diff against 8d06577 for quality recheck.** No review approval or checkpoint
+is inferred. Prior SPEC corrections and T6-1 remain intact and green.
+
+### Actual Race And TDD Evidence
+
+The approved no-row Busy/yielding policy permits minting a new attempt. Before this
+correction, A could persist C1 and pause before synchronization, B could bind C2
+while neither child had a row, and A could start C1 after the generic ID validator
+no longer found its parent binding. That made C1 an ordinary synchronization capable
+of owning a conflict/candidate that the parent no longer tracked. Remote-owner
+epochs cannot fence an executor which had not reserved anything yet.
+
+The new barrier regressions use **independent RepositoryService instances and
+SQLite connections** on the same disposable registry, and real Git/local child
+integration helpers, not fabricated conflict labels. Channels pause A after durable
+ID assignment and pause B after rebinding C2 but before either child reserves.
+A is released/reaped first, then B. Both are always released/reaped before assertions.
+No sleeps, common Git lease held during a pause/network, per-service execution mutex,
+developer key/config, or real SSH transport is used. The ordinary transport seam
+alone is injected, as approved for Task 6.
+
+Four cases cover context/primary × installed conflict/applied clean candidate.
+Two further cases pause A **after early binding validation, immediately before
+reservation SQL**, proving that an entry-only check is insufficient. Initial
+behavioral RED created an actual stale C1 remote row in **all six cases**, with
+retained merge state; B's parent tracked C2 instead. This is ownership/effect proof,
+not an outer error-category assertion.
+
+### Private Execution Capability And SQL Linearization
+
+The production parent handoff now carries private ChildExecution through
+PromotionIo into `synchronize_promotion_child_observed`, over the existing observed
+synchronization engine. It contains only existing repository/parent/item/expectation,
+role, attempt count and child ID metadata, with private fields and no Debug/serde
+implementation. It holds no lease, lock, transaction or credential/session content.
+
+The child checks request identity and the current parent binding at entry. The
+same fence is checked **inside the immediate reservation transaction**, before
+the ordinary identity/arbitration/replay/insert logic, and inside restart and
+configuration-write transactions. If a peer already replaced C1, C1 fails before
+reservation/effects even though no current ID-index row points back to C1. A private
+parent-issued request never silently switches to the ordinary-sync path or to
+local-only binding. If reservation wins first, attempt replacement sees the actual
+row/ownership in SQL, and the existing remote-owner epoch/safe-point fences protect
+subsequent effects. Binding replacement and reservation cannot pass each other on
+inconsistent no-row observations. No process-local mutex is the authority; existing
+SQLite transaction serialization supplies the cross-process durability boundary.
+
+The fence also checks role-appropriate parent phase and refuses new unstarted work
+when the parent is cancelled/terminal/superseded. Exact **current authoritative**
+child handoff remains valid after parent progress/completion and replays without
+transport. Ordinary public synchronization uses the unchanged unfenced public API
+with its existing ID/target/index/cancellation guards; only the private parent
+adapter requires this additional fence. A child-error return while the parent has
+requested cancellation reports Interrupted, retaining existing parent cancellation
+outcomes rather than misclassifying start refusal as publication recovery.
+
+No persistent claim field, table, new operation phase, lock journal or migration is
+introduced. Existing audited parent attempt/binding columns are sufficient, so
+schema/fingerprints remain unchanged and all existing migration/audit/privacy tests
+pass. The approved no-row Busy/yielding **new ID** policy is preserved, as are
+ownership-first same-ID recovery and complete authoritative/index handoff. This is
+an execution-fencing correction, not a product-policy amendment or whole-parent
+parallel-execution lock.
+
+### New Passing Ownership/Concurrency Cases
+
+All nine new names are under `promotion::run_tests::quality1_`:
+
+- context/primary `*_conflict_rejects_stale_unstarted_attempt`;
+- context/primary `*_candidate_rejects_stale_unstarted_attempt`;
+- context/primary `*_atomic_reservation_rechecks_after_early_validation`;
+- `parent_cancellation_fences_unstarted_children_at_both_handoff_windows`;
+- `confirmed_supersession_fences_late_children_without_ordinary_fallthrough`;
+- `current_authority_handoff_and_ordinary_synchronization_remain_valid`.
+
+The six race cases now prove C1 has **no remote row and no Git/object/ref/worktree
+effect**, only C2 starts, and every actual retained child in the database is exactly
+the parent's current C2. Conflict cases request cancellation through the parent,
+prove retained recovery remains addressable by its current ID, inspect/resolve
+through the existing resolver, and retry to completion under C2. Candidate cases
+remove the fixture checkpoint fault and retry/reconcile the same candidate. Each
+has one promotion merge and no orphan. A stopped installed conflict is already
+Interrupted, so existing cancellation need not set a live-child flag; the test
+checks the parent request and actual reachable retained ownership instead.
+
+Additional cancellation cases cover both roles at both barriers: no stale row or
+effect appears after cancellation, the parent retains its stop request, and an
+explicit retry resets cancellation and finishes with a new child ID. Valid confirmed
+supersession cases finish a replacement while A is paused and prove the late old
+frame cannot create an ordinary child afterward. Positive controls call the real
+private observed entry for current completed authority (including the removed
+context), reject a mismatched private request ID, and exercise legitimate ordinary
+public synchronization through BeforeFetch cancellation without credentials/network.
+
+### Exact RED / GREEN And Affected Targeted Checks
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality1_` | Initial test-hook compile failure: OperationId has no Ord for BTreeMap (3 diagnostics, no tests); corrected the test-only key to its canonical String. Behavioral RED then **0 passed/6 failed/982 filtered**, 2.24s: every stale C1 became an actual remote row. No production fence preceded this RED. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality1_` | After fencing: **3 passed/3 failed/982 filtered**, 2.80s. All orphan/effect assertions passed; three conflict cases reached a later incorrect fixture assertion expecting cancel_requested on an already inactive Interrupted child. Corrected that assertion to parent cancellation plus actual reachable retained ownership, without changing production cancellation policy. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality1_` | Six race cases GREEN **6/0/982**, 4.29s. After adding cancellation/supersession/ordinary-authority controls, expanded GREEN **9/0/982**, 9.54s. |
+| `devenv shell -- cargo fmt` / `devenv shell -- cargo fmt --check` | One correction-pass run each, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion` | Final **184 passed/0 failed/807 filtered**, **163.02s**, warning-free. Includes no-row Busy/yielding policy, all ownership/resolution/cancellation/replay, lease-free/race, canonical-mode, SQL retirement and T6-1 cases. Not the entire library gate. |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | **45 passed/0 failed/946 filtered**, 11.62s; affected ordinary/manual/poll/sync arbitration, epoch/cancellation, private-ID/index handoff and privacy/migration tests remain green. |
+| `devenv shell -- cargo test --locked --lib remote::sync::tests::local_` | **11 passed/0 failed/980 filtered**, 8.13s; affected ordinary/local-only binding, replay, collision, safe-point and local reconciliation behavior remains green. |
+
+### Correction Inventory And Quality Return
+
+Correction source paths: `src/repository/promotion/{record.rs,run.rs,run_tests.rs}`
+and `src/repository/remote/{reservation.rs,sync.rs}`. The test-only local-child
+adapter and existing injected child adapters pass the same private fence into the
+actual reservation/restart gate; this is not a production mock fix. Test barriers
+are outside SQL/common-lease ownership. The public synchronize request/settings/
+observer signatures are unchanged.
+
+Design, latest implementation/handoff/API-audit summaries, this ledger and comment
+`01M51R7Z00N4Q6S8V0X2Z4B6E8` record the private protocol and current 184-test local
+gate (71 runner cases/helpers). All prior uncommitted Task 6 work is retained;
+full inventory is now 27 paths, adding only this response comment to the preceding
+26. **Return to quality recheck; acceptance/checkpoint remain pending.** Exact HEAD
+is `8d06577f6af17e2532d072d7ee14419dbf8a84b4`. No Task 7/full/native gate, new
+dependency, GPUI, global config, developer key, sleep, subagent, CLI/desktop/F2
+binding, staging, commit, push, PR, CI, merge, closure or worktree cleanup action.
+Ticket stays open; T6-1 and later Task 7/8/C5/D5 gates are unchanged.
+
+QUALITY1 final checks: `git diff --check`, `git diff --cached --exit-code` and
+protected Cargo/Devenv/native-workflow/CLI/desktop/F2 diffs all exited 0. Status
+lists the 27 intended pending paths, with nothing staged. Source is unchanged
+since the 184-test GREEN and affected 45/11-test checks; later edits are only
+documentation/comments. Exact HEAD remains 8d06577 above.
+
+## Task 6 Quality P2 — Durable Completion Before Cancellation (2026-10-16)
+
+**QUALITY1's original child-binding concurrency P1 is reported resolved. The
+subsequent completion/cancellation P2 is verified and corrected; return to the
+same quality reviewer.** No acceptance or checkpoint for this response is inferred.
+
+The shared child helper checked `result.is_err() && parent cancellation` before
+probing durable ChildState::Complete. Thus a completed Published/AlreadyCurrent
+child whose outer return was lost could be mislabeled Interrupted. For primary
+publication that incorrectly yielded publication pending Cancelled even though
+the database already held authoritative completion; cleanup alone was unfinished.
+
+The helper now probes authoritative completion **first** for both roles. Only the
+non-complete branch classifies a lost/error return as cancellation. Stored completion
+kind and exact OID win; cancellation cannot undo them. The primary path records
+Published/AlreadyCurrent then stops cleanup as pending Cancelled. The context path
+records ContextSynchronized, then returns Interrupted before integration. Unknown
+state-read failures remain fail-closed rather than proving absence of completion.
+No private execution-fence, ownership/retry policy, public type, schema or migration
+changed; the production correction is solely `promotion/run.rs`.
+
+Four new `promotion::run_tests::quality2_` regressions cover context/primary ×
+Published/AlreadyCurrent. They reuse the existing injected child result seam and
+real fenced reservation/durable authority storage: first complete the child,
+assert the actual row is Completed with authority, call the real parent cancellation
+API, then inject a lost transport return. The primary fixture advances to a real
+later primary tip before completion, so the expected publication OID differs from
+integration and cannot pass by returning a fallback OID.
+
+Assertions verify primary kind/exact OID, cleanup pending Cancelled, Published
+parent step, preserved context and zero early deletions. Context cases verify
+ContextSynchronized/exact context OID, Interrupted and unchanged primary before
+integration. All cases retry the identical parent request, preserve the child ID,
+perform no second invocation/publication for that role (zero pushes for AlreadyCurrent,
+one for Published), complete cleanup and retain exactly one promotion merge.
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality2_` | Behavioral RED **0 passed/4 failed/991 filtered**, 1.21s, warning-free: both primary cases incorrectly report publication pending Cancelled, and both context cases remain Confirmed instead of recording completed synchronization. No production edit preceded RED. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality2_` | After completion-first ordering, GREEN **4 passed/0 failed/991 filtered**, 1.97s, warning-free. |
+| `devenv shell -- cargo fmt` / `devenv shell -- cargo fmt --check` | One correction-pass run each, exit 0. |
+| `devenv shell -- cargo test --locked --lib promotion` | Final **188 passed/0 failed/807 filtered**, **188.09s**, warning-free. All nine QUALITY1 concurrency cases, prior SPEC/mode/lease-free/ownership/cancellation/replay/SQL/T6-1 cases retained. Not the full-library gate. |
+
+Correction code/test files: `src/repository/promotion/{run.rs,run_tests.rs}`.
+Latest design/implementation/handoff/API-audit evidence summaries, this ledger and
+canonical comment `01M51S7Z00N4Q6S8V0X2Z4B6EA` record the response. There are now
+75 named runner tests/helpers; full pending inventory is 28 paths, adding only the
+new response comment to the prior 27. All prior Task 6 changes remain uncommitted
+against `8d06577f6af17e2532d072d7ee14419dbf8a84b4`. Same quality recheck next;
+no Task 7/full/native gate, dependency, GPUI, global config, developer key, sleep,
+subagent, CLI/desktop/F2 binding, staging, commit, push, PR, CI, merge, closure or
+worktree cleanup action. Ticket remains open; later Task 7/8/C5/D5 gates unchanged.
+
+P2 final checks: `git diff --check`, `git diff --cached --exit-code` and protected
+Cargo/Devenv/native-workflow/CLI/desktop/F2 diffs all exited 0. The 28 intended paths
+remain pending with nothing staged; source is unchanged since the 188-test GREEN.
+Only documentation/comments changed after that run. Exact HEAD remains 8d06577.
+
+## Task 6 Final Reviews — Reviewed Complete At Local Gate (2026-10-16)
+
+The controller/owner conveyed final review results for **the entire uncommitted
+Task 6 change against exact checkpoint base
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4`**:
+
+- **SPEC: PASS.**
+- **QUALITY: FINAL APPROVE. No remaining findings.**
+- The private child execution/concurrency fence and authoritative completion-before-
+  cancellation fix are explicitly accepted, with all earlier corrections included.
+
+**Task 6 is reviewed complete at the local gate. Controller checkpoint is next;
+Task 7 follows that checkpoint.** No current Task 6 owner decision, review request,
+finding or implementation item remains pending. Approvals are controller-reported
+from the current instruction; no separate reviewer execution or new test evidence
+is inferred. Review scope is the full Task 6 diff against 8d06577, not just the last
+P2 correction. All earlier blocked/review-ready states above are historical and
+superseded by this final acceptance.
+
+Recorded verification remains **188 passed/0 failed/807 filtered**, 188.09s,
+warning-free, for `devenv shell -- cargo test --locked --lib promotion`, plus the
+previously recorded targeted RED/GREEN, affected reservation/local checks and
+formatter/check results. **No source edit, Rust command or test rerun occurred in
+this status-only pass.** No full/local/native/real-SSH gate is newly claimed.
+
+Historical T6-1 blocker, owner approval and qualified backend-lock exception are
+preserved unchanged. Rare ambiguous backend recovery requiring verified/quiesced
+operator repair is the accepted contract, not a pending owner question. T4-1's
+history/retirement/reservation atomicity and all accepted recovery/publication
+invariants remain in force.
+
+Current handoff and Task 6 plan summary now say reviewed complete/Task 7 after
+controller checkpoint. The API audit marks headless preview/promote/cancel/results/
+retry **delivered and reviewed complete**, supported only by the recorded targeted
+188-test local gate. Remaining domain verification is Task 7 real SSH and Task 8
+full/native gates; C5/D5 still own boundary prepare/execute, ten-minute expiry,
+preview schema values/serialization and current F2 NotResumable resume binding.
+
+This coordination pass changes only this ledger, the current handoff, implementation
+plan's Task 6/final summaries, API audit and new canonical approval comment
+`01M51T7Z00N4Q6S8V0X2Z4B6EB`. All previous pending Task 6 source/docs/comments are
+retained for controller staging; full pending inventory is now **29 paths**. The
+worker did not stage/commit, push, create a PR, dispatch CI, merge, close the ticket,
+remove the worktree, delegate or start Task 7. Ticket stays open, HEAD unchanged.
+
+Documentation-only source-integrity witnesses, captured before this pass:
+
+- tracked `git diff --binary -- src | git hash-object --stdin`:
+  `32a2db497beeaa16c91d4d2d6e54e815ac49ef0c`;
+- untracked `src/repository/promotion/run.rs` Git blob:
+  `2083f0252e34336b57c24631769f8dd8405a4da9`;
+- untracked `src/repository/promotion/run_tests.rs` Git blob:
+  `5b73bcbbeb7b328198da17051e8dc41bdac30998`.
+
+Final staging inventory/diff checks and source-integrity comparison are reported
+with this return. The controller owns the pending reviewed Task 6 checkpoint.
+
+Final coordination verification: `git diff --check` and `git diff --cached
+--exit-code` exited 0; status lists all 29 intended pending paths, nothing staged.
+Both source-integrity witnesses were rechecked and match the before-pass values
+exactly (tracked source diff and both untracked Rust files). No source edit/test
+rerun/commit occurred. Current HEAD remains the exact checkpoint base above.

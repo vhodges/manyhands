@@ -14,7 +14,7 @@ pub(crate) struct ObservationConfiguration {
 }
 
 impl ObservationConfiguration {
-    pub(super) fn transport_expectation(
+    pub(in crate::repository) fn transport_expectation(
         &self,
         direction: SshDirection,
     ) -> Option<crate::repository::transport::SshScopeExpectation> {
@@ -35,7 +35,7 @@ impl ObservationConfiguration {
     // Only validated public SSH locator metadata enters this digest. Endpoint
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.
-    pub(super) fn endpoint_digest(&self) -> [u8; 32] {
+    pub(in crate::repository) fn endpoint_digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
         for endpoint in [&self.fetch, &self.push] {
             match endpoint {
@@ -54,7 +54,7 @@ impl ObservationConfiguration {
 }
 
 impl RepositoryService {
-    pub(super) fn observation_configuration(
+    pub(in crate::repository) fn observation_configuration(
         &self,
         root: &std::path::Path,
         plan: &RemoteRefPlan,

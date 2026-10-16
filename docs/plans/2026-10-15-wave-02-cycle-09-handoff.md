@@ -1,6 +1,44 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 5 reviewed complete at local gate; Task 6 after checkpoint (2026-10-16)
+## Current: Task 6 reviewed complete at local gate; Task 7 after controller checkpoint (2026-10-16)
+
+Tasks 0–5 are reviewed/committed; Task 5 checkpoint is `8d06577`, the current
+unchanged HEAD. Full Task 6 work is uncommitted in this ticket worktree and has
+**SPEC PASS and QUALITY FINAL APPROVE, with no remaining findings**, conveyed by
+the controller/owner. Review covers the complete Task 6 change against exact base
+**`8d06577f6af17e2532d072d7ee14419dbf8a84b4`**, including the concurrency fence,
+authoritative-completion fix, helper extractions and all earlier corrections,
+not merely the last diff. No Task 6 review or owner decision remains pending.
+Final recorded targeted gate:
+`devenv shell -- cargo test --locked --lib promotion` **188 passed/0 failed/807
+filtered**, 188.09s, warning-free. Formatter/check pass. No Task 7/full/native gate
+or worker commit; **controller checkpoint is next, then Task 7**. Exact file
+inventory, changes, RED/GREEN, acceptance mapping and final reviews are recorded
+in the execution ledger. This coordination pass changes only documentation and
+a canonical comment; it runs no Rust commands/tests and makes no commit. Earlier
+handoff states below are historical and superseded by this reviewed-complete status.
+
+The owner approved T6-1 through the question tool: inherit Cycle 06's existing
+backend-lock exception (Cycle 06 contract 228–242; approved 2026-10-08 Task 4
+resolution protocol 36–46). Independent review confirmed the current refusal is
+safe. Ambiguous libgit2 locks after process exit must be preserved with `Ok`
+cleanup pending RecoveryRequired plus refresh/IndexPending. Only after an operator
+quiesces writers and verifies/repairs metadata may the identical request resume
+unfinished SQL. No automatic lock removal/adoption, new lock journal or new owner
+question. The rare inside-F10/F11 interval explicitly costs operator intervention.
+
+Retain the real crash case and assert full preservation/no repeated effect
+counters before **any** repair. In the disposable fixture only, simulate quiesced
+verified operator removal of the exact known lock, then complete under the same
+request. Existing SQL history/retirement/reservation and committed-outcome replay
+invariants remain those of T4-1. This qualifies every inside-F10/F11 immediate-
+retry/finish requirement below; normal recovery remains automatic. Task 6's complete
+implementation and qualified recovery tests are now reviewed accepted; T6-1 is
+approved history, not a pending owner question. Task 7 starts only after the
+controller checkpoint; Task 8/full/native and C5/D5 frontend gates remain later work.
+Exact approval, RED/GREEN and final reviews are in the execution ledger.
+
+## Historical planning and Task 5 handoff (superseded)
 
 You are picking up Wave 02 Cycle 09, **Confirmed Managed-Document
 Promotion**. It is tracked by Manyhands ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DH`.

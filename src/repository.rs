@@ -8733,14 +8733,19 @@ fn canonical_context_at(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<CanonicalContext, RepositoryError> {
+    #[cfg(test)]
+    discovery::scan_checkpoint(root);
     let mut sources = Vec::new();
     collect_canonical_sources(root, &mut sources, operation)?;
+    Ok(canonical_context_from_sources(sources))
+}
+fn canonical_context_from_sources(sources: Vec<(PathBuf, String)>) -> CanonicalContext {
     let candidates = sources
         .iter()
         .filter_map(|(path, source)| canonical::parse_item(path, source).ok())
         .collect();
     let items = canonical::validate_context(sources).items;
-    Ok(CanonicalContext { items, candidates })
+    CanonicalContext { items, candidates }
 }
 
 fn document_path_for_id(
@@ -9074,6 +9079,97 @@ fn validate_context_worktree(
     require_target: bool,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    validate_context_worktree_identity(repository, context, operation)?;
+    let worktree_context = canonical_context_at(&context.worktree, operation)?;
+    validate_context_items(context, worktree_context, require_target, operation)
+}
+/// Same canonical policy as filesystem inspection, using immutable commit data
+/// for lease-held revalidation. No directory walk or working-tree scan occurs.
+fn validate_context_tree(
+    repository: &Repository,
+    context: &ItemContext,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let inspect = || -> Result<CanonicalContext, SynchronizationError> {
+        let tree = repository
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let snapshot = RepositoryService::canonical_tree_sources(repository, &tree)?;
+        let sources = snapshot
+            .sources
+            .iter()
+            .filter_map(|(path, bytes)| {
+                // Match the filesystem collector's regular-file boundary.
+                // A symlink blob contains link bytes, not canonical source;
+                // executable regular blobs remain valid under approved T2.
+                if !matches!(
+                    snapshot.entries.get(path),
+                    Some((_, 0o100644 | 0o100755, Some(git2::ObjectType::Blob)))
+                ) {
+                    return None;
+                }
+                Some((
+                    PathBuf::from(std::str::from_utf8(path).ok()?),
+                    std::str::from_utf8(bytes).ok()?.to_owned(),
+                ))
+            })
+            .collect();
+        Ok(canonical_context_from_sources(sources))
+    };
+    let canonical = inspect().map_err(|_| {
+        RepositoryError::new(
+            operation,
+            Some(context.root.clone()),
+            RepositoryErrorKind::MismatchedAuthoringContext,
+            "the canonical target commit cannot be inspected",
+        )
+    })?;
+    validate_context_items(context, canonical, true, operation)
+}
+fn validate_context_items(
+    context: &ItemContext,
+    worktree_context: CanonicalContext,
+    require_target: bool,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let has_target = worktree_context
+        .items
+        .iter()
+        .any(|item| authoring_item_matches(item, context));
+    let target_candidates = worktree_context
+        .candidates
+        .iter()
+        .filter(|item| canonical_item_has_id(item, &context.item_id))
+        .collect::<Vec<_>>();
+    let only_matching_target_kind = !target_candidates.is_empty()
+        && target_candidates
+            .iter()
+            .all(|item| authoring_item_matches(item, context));
+    if (require_target && (!has_target && !only_matching_target_kind))
+        || (!require_target
+            && (canonical_context_has_duplicate_item_id(&worktree_context, &context.item_id)
+                || worktree_context.candidates.iter().any(|item| {
+                    canonical_item_has_id(item, &context.item_id)
+                        && !authoring_item_matches(item, context)
+                })))
+    {
+        return Err(RepositoryError::new(
+            operation,
+            Some(context.root.clone()),
+            RepositoryErrorKind::MismatchedAuthoringContext,
+            "the deterministic worktree does not contain the requested canonical item",
+        ));
+    }
+    Ok(())
+}
+/// Bounded locator/registration/HEAD proof shared by lease-held callers that
+/// validate canonical content from immutable Git trees instead of scanning FS.
+fn validate_context_worktree_identity(
+    repository: &Repository,
+    context: &ItemContext,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
     validate_existing_authoring_worktree_path(context, operation)?;
     let worktree = repository
         .find_worktree(&context.item_id.to_string())
@@ -9105,35 +9201,6 @@ fn validate_context_worktree(
             Some(context.root.clone()),
             RepositoryErrorKind::MismatchedAuthoringContext,
             "the deterministic worktree has a different checked-out branch",
-        ));
-    }
-    let worktree_context = canonical_context_at(&context.worktree, operation)?;
-    let has_target = worktree_context
-        .items
-        .iter()
-        .any(|item| authoring_item_matches(item, context));
-    let target_candidates = worktree_context
-        .candidates
-        .iter()
-        .filter(|item| canonical_item_has_id(item, &context.item_id))
-        .collect::<Vec<_>>();
-    let only_matching_target_kind = !target_candidates.is_empty()
-        && target_candidates
-            .iter()
-            .all(|item| authoring_item_matches(item, context));
-    if (require_target && (!has_target && !only_matching_target_kind))
-        || (!require_target
-            && (canonical_context_has_duplicate_item_id(&worktree_context, &context.item_id)
-                || worktree_context.candidates.iter().any(|item| {
-                    canonical_item_has_id(item, &context.item_id)
-                        && !authoring_item_matches(item, context)
-                })))
-    {
-        return Err(RepositoryError::new(
-            operation,
-            Some(context.root.clone()),
-            RepositoryErrorKind::MismatchedAuthoringContext,
-            "the deterministic worktree does not contain the requested canonical item",
         ));
     }
     Ok(())

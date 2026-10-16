@@ -325,6 +325,16 @@ Implementation requires all of the following:
       or cache loss alone is not retirement proof. No new phase/table is required;
       existing planned `branch_deleted` holds the durable intent.
 
+      **T6-1, owner-approved 2026-10-16:** Cycle 09 inherits Cycle 06's backend
+      lock recovery exception. An ambiguous Git lock left by process exit is
+      preserved and returns `Ok` cleanup pending `RecoveryRequired` plus refresh
+      (or `IndexPending`). Manyhands never infers ownership or automatically
+      removes the lock, and introduces no lock journal. Only after an operator
+      quiesces relevant writers and verifies/repairs the affected backend metadata
+      may the identical request resume unfinished SQL. This explicitly accepts
+      operator intervention in the rare inside-F10/F11 interval; all T4-1
+      history/retirement/reservation and once-only-effect invariants still apply.
+
    A change found at any step stops with the same pending categories. A
    partly removed worktree is `cleanup: pending(recovery_required)` and is
    never guessed at.
@@ -449,7 +459,7 @@ These rulings are recorded in the design with their reasons:
 | Primary publication failure defers cleanup; a retry publishes and cleans up only | Task 6; Task 7 |
 | Dirty, untracked, ignored (D7) or moved context after integration, a remote deletion failure, or a changed remote context keeps all local and remote state; supersession and retry work | Tasks 4 and 6; Task 7 |
 | Cancelled or interrupted child attempts never strand the record | Tasks 5 and 6; Task 7 |
-| Each of the twelve named boundaries (design "Lifecycle") reconciles from Git with no duplicate merge, push, deletion or removal | Tasks 5 and 6; Task 7 |
+| Each named boundary and inside-F10/F11 split reconciles without duplicate effects; ambiguous backend locks first preserve state with pending RecoveryRequired and refresh, then identical retry finishes only after quiesced, verified operator repair (T6-1) | Tasks 5 and 6; Task 7 |
 | An automatic poll yields to promotion; a poll during or after promotion neither rematerializes nor reports the context deleted in the promoting clone | Task 6; Task 7 |
 | Every `Ok` return after integration refreshes or reports `IndexPending` | Task 6; Task 7 |
 | Records, database, WAL, backup, diagnostics and output hold no title, body, endpoint or secret | Tasks 5 and 7 |

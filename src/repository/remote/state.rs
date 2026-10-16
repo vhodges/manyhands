@@ -1664,7 +1664,7 @@ pub(crate) enum SynchronizationAuthority {
     AlreadyCurrent(Oid),
 }
 impl SynchronizationAuthority {
-    pub(super) fn oid(self) -> Oid {
+    pub(in crate::repository) fn oid(self) -> Oid {
         match self {
             Self::Published(oid) | Self::AlreadyCurrent(oid) => oid,
         }
@@ -3209,7 +3209,7 @@ pub(in super::super) fn select_polling_status(
     ))
 }
 
-pub(super) fn generation(
+pub(in crate::repository) fn generation(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<i64, RepositoryError> {

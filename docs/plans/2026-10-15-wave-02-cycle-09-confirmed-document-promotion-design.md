@@ -206,9 +206,24 @@ OIDs and categories only.
 
 ## Change Set And Expectation
 
-The preflight, the post-synchronization check and the check under the
-integration lease all run one function over actual Git state:
-`observe_promotion(repository, config, item) -> PromotionObservation`.
+The preflight, post-synchronization check and integration share one Git predicate,
+with filesystem discovery **prepared outside the common lease**. PreparedObservation
+retains only ephemeral discovery facts and a bounded checkout/Git/configuration
+guard. Under the lease it revalidates identity, local refs, index/status and known
+canonical-path metadata, then recomputes the Git predicate against fresh tracking
+refs/history/conflicts without calling filesystem discovery. A changed guard
+refuses; a fresh tracking-primary advance still follows PrimaryAdvanced. Result
+canonical validation reads immutable Git trees, not a filesystem discovery walk.
+New-row supersession additionally compares the expected predecessor/owner inside
+the same SQL transaction; stale discovery or a changed owner cannot revoke the
+old operation's consent. Cleanup and synchronization's leased target checks use
+the shared identity/commit-tree policy too, with any filesystem inspection outside
+the lease. This implements the existing Bounds rule, not a policy amendment.
+Canonical item sources in that shared tree validator must have regular-file mode
+`100644` or `100755` **and** object type Blob. Symlink link bytes (`120000`) and
+gitlinks cannot fulfill a canonical target, even when bytes parse as front matter.
+The complete Git tree/snapshot remains available to the unmodified whole-tree
+guards, including the forbidden `.manyhands/worktrees/` check.
 
 1. **Context.** Find the conforming active context using the discovery rule.
    It must be materialized on `manyhands/document/<ULID>` and pass
@@ -412,11 +427,36 @@ The step calls `synchronize_remote_observed` with
 `restart` when that child row exists, and a forwarding observer that maps
 promotion cancellation onto `Cancel`. It passes `confirmed_identity` through.
 
+**Private parent-issued execution fence (QUALITY1 concurrency correction).** The
+production handoff uses a private promotion-child observed adapter over that same
+synchronization engine. Its process-only ChildExecution carries repository/parent/
+item/expectation, role, attempt number and child ID. It holds no lease or SQL guard.
+Entry, configuration-write and, critically, reservation/restart SQL validate the
+**current durable parent binding**. Binding validation and child reservation occur
+in one immediate SQLite transaction, serialized with attempt replacement. Thus a
+worker paused after C1 was persisted cannot start C1 as an ordinary synchronization
+after a peer binds C2; if C1 reserves first, replacement sees its actual row and
+ownership under SQL. Ordinary public synchronization remains unchanged. Current
+authoritative handoff remains an offline replay even after parent completion;
+cancelled/terminal/superseded parents cannot authorize new unstarted work.
+
+No persistent claim fields/table or whole-parent lock is added; existing audited
+binding/attempt fields and remote-owner fencing suffice. No-row Busy/yielding and
+the ownership-first retry table remain unchanged. This is a private execution
+protocol correction, not a new consent or cancellation policy.
+
 For both context and primary children, inspect authoritative completion and
 persisted ownership before classifying the returned error. Retained conflict
 or owned-resolution evidence takes precedence over the error category
 (owner-approved T0-1 amendment). Uncertain ownership is not absence: surface
 recovery rather than replace a possibly owned child.
+This ordering also applies when the outer child return is lost and the parent
+concurrently requests cancellation: consume durable Published/AlreadyCurrent
+authority first. Cancellation may stop unfinished work, not turn completed
+publication into publication-pending Cancelled. After primary completion, report
+the stored kind/exact OID and cleanup pending Cancelled; after context completion,
+record context synchronization before stopping integration. Retry reuses the same
+completed child without publication work.
 
 How the child's end state and ownership decide the next call:
 
@@ -602,6 +642,27 @@ rollback and commit uncertainty/replay. Task 4 exposes guarded Git deletion and
 private validated evidence for SQL retirement; Tasks 5/6 compose completion and
 reservation finish into that SQL transaction. History is never reset early.
 
+**T6-1, owner-approved 2026-10-16 — backend-lock exception.** This Cycle inherits
+[Cycle 06's backend recovery amendment](../Cycles/wave-02-cycle-06-merge-and-conflict-recovery.md)
+and its approved 2026-10-08 Task 4 resolution protocol. A process exit inside
+F10/F11 can leave an ambiguous libgit2 lock. Preserve it and all actual effects;
+return `Ok` cleanup pending `RecoveryRequired` plus refresh/`IndexPending` before
+any operator repair. Do not automatically delete/adopt the lock or infer ownership
+from contents, age or PID, and add no lock journal. Only an operator who quiesces
+writers and verifies/repairs the backend metadata while preserving unrelated
+history permits the **identical request** to revalidate actual refs/ownership and
+resume unfinished SQL. This rare interval explicitly costs operator intervention.
+Pending SQL keeps applicable existing history, no retirement and a held reservation;
+actual committed completion/finish replays its stored outcome instead. Process-exit
+tests assert preservation and no repeated effect counters **before** a disposable-
+fixture-only simulation of verified operator repair, then finish/replay the same
+request. This qualifies the immediate-retry language above and all F10/F11 gates;
+it does not relax ordinary automatic reconciliation or the T4-1 transaction.
+If the atomic SQL completion/finish actually committed before process exit, that
+durable complete row is replay authority even when a backend lock survives. Replay
+preserves the lock and performs no further cleanup effect; it never treats lock
+absence, contents or cache loss as completion proof.
+
 The cleanup functions take a kind and an item ID. Cycle 10 reuses them
 unchanged.
 
@@ -655,6 +716,7 @@ recovery instead of blind replay.
 | Remote deletion rejected or changed | `published`; all local state; history `observed_published` | Delete again, or supersede after synchronizing |
 | Crash after the remote deletion | `published` and remote absent | Recorded as deleted, then local cleanup |
 | Partial worktree removal | `worktree_removing` | `recovery_required`; explicit repair |
+| Ambiguous backend lock after process exit, including inside F10/F11 | Actual effects/history/retirement/parent/reservation preserved | Pending RecoveryRequired plus refresh first; identical retry after quiesced verified operator repair only (T6-1) |
 | Refresh fails | Any `Ok` return | `IndexPending`; any refresh repairs it |
 
 **Edge case.** A `superseded` row whose worktree was already removed, but

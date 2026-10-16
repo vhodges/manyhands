@@ -14,6 +14,25 @@ use crate::repository::{
     OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
 };
 
+#[cfg(test)]
+type PromotionReservationHook = Box<dyn FnOnce()>;
+#[cfg(test)]
+thread_local! {static PROMOTION_RESERVATION_HOOKS:std::cell::RefCell<std::collections::BTreeMap<String,PromotionReservationHook>>=std::cell::RefCell::new(std::collections::BTreeMap::new());}
+#[cfg(test)]
+pub(in crate::repository) fn set_promotion_reservation_hook(
+    op: OperationId,
+    hook: impl FnOnce() + 'static,
+) {
+    PROMOTION_RESERVATION_HOOKS.with(|h| h.borrow_mut().insert(op.to_string(), Box::new(hook)));
+}
+#[cfg(test)]
+fn promotion_reservation_checkpoint(op: OperationId) {
+    if let Some(hook) = PROMOTION_RESERVATION_HOOKS.with(|h| h.borrow_mut().remove(&op.to_string()))
+    {
+        hook();
+    }
+}
+
 /// Ownership is granted once. Exact replay returns inspection, never another token.
 #[derive(Debug)]
 pub struct RemoteReservation {
@@ -442,6 +461,25 @@ pub(in crate::repository) fn retains_promotion_child(
     Ok(false)
 }
 
+/// A user's completed canonical resolution has released its local artifacts,
+/// but publication still belongs to that bound synchronization. This is distinct
+/// from retained (unfinished) ownership and from a no-local-work transient failure.
+pub(in crate::repository) fn promotion_child_has_resolution(
+    db: &rusqlite::Connection,
+    record: &state::StoredRemoteOperation,
+) -> Result<bool, RepositoryError> {
+    let window = state::latest_integration_window(db, record)?;
+    for ordinal in 0..=1 {
+        if let Some(step) =
+            state::integration_step_in_window(db, record.id, window.number, ordinal)?
+            && state::integration_has_resolution_attempt(db, record, &step)?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn acknowledge(
     tx: &Transaction<'_>,
     record: &state::StoredRemoteOperation,
@@ -762,6 +800,40 @@ pub(in crate::repository) fn finish_promotion(
 }
 
 impl RepositoryService {
+    /// Test-only composition bridge for parent ownership-policy cases. It uses
+    /// the real child journal, without exposing synchronization internals to the
+    /// production promotion runner.
+    #[cfg(test)]
+    pub(in crate::repository) fn prepare_promotion_test_child(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        primary: bool,
+        local: git2::Oid,
+        incoming: git2::Oid,
+    ) -> Result<(), RepositoryError> {
+        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+        self.prepare_synchronization_integration(
+            root,
+            owner,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: if primary {
+                    super::merge::IntegrationStage::Primary
+                } else {
+                    super::merge::IntegrationStage::Context
+                },
+                local_oid: local,
+                incoming_oid: incoming,
+                baseline_tree_oid: repository
+                    .find_commit(local)
+                    .map_err(|_| state::recovery_required())?
+                    .tree_id(),
+                baseline_index_digest: [7; 32],
+            },
+        )?;
+        Ok(())
+    }
     #[allow(dead_code)] // Composed by the Task 6 promotion runner.
     pub(crate) fn restart_remote_promotion(
         &self,
@@ -839,6 +911,7 @@ impl RepositoryService {
             target,
             priority,
             Some(state::PollKind::Update),
+            None,
         )
     }
 
@@ -882,7 +955,34 @@ impl RepositoryService {
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         let kind =
             (target.action() == RemoteOperationAction::Poll).then_some(state::PollKind::Observe);
-        match self.reserve_remote_operation_kind(root, operation_id, target, priority, kind)? {
+        match self.reserve_remote_operation_kind(
+            root,
+            operation_id,
+            target,
+            priority,
+            kind,
+            None,
+        )? {
+            RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
+            RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
+        }
+    }
+
+    pub(in crate::repository) fn reserve_promotion_child(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        execution: &crate::repository::promotion::record::ChildExecution,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        match self.reserve_remote_operation_kind(
+            root,
+            operation_id,
+            target,
+            RemoteOperationPriority::Manual,
+            None,
+            Some(execution),
+        )? {
             RemotePollReservationOutcome::Reservation(outcome) => Ok(outcome),
             RemotePollReservationOutcome::ConflictPending => Err(state::recovery_required()),
         }
@@ -895,13 +995,19 @@ impl RepositoryService {
         target: &RemoteOperationTarget,
         priority: RemoteOperationPriority,
         poll_kind: Option<state::PollKind>,
+        execution: Option<&crate::repository::promotion::record::ChildExecution>,
     ) -> Result<RemotePollReservationOutcome, RepositoryError> {
         if priority == RemoteOperationPriority::Poll
             && target.action() != RemoteOperationAction::Poll
         {
             return Err(mismatch());
         }
+        #[cfg(test)]
+        promotion_reservation_checkpoint(operation_id);
         state::with_transaction(self, root, |tx, repository_id| {
+            if let Some(execution) = execution {
+                execution.validate(tx, repository_id, operation_id)?;
+            }
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
                 repository_id,
@@ -2227,7 +2333,28 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.restart_synchronization_guarded(root, operation_id, target, None)
+    }
+    pub(in crate::repository) fn restart_promotion_child(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        execution: &crate::repository::promotion::record::ChildExecution,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.restart_synchronization_guarded(root, operation_id, target, Some(execution))
+    }
+    fn restart_synchronization_guarded(
+        &self,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+        execution: Option<&crate::repository::promotion::record::ChildExecution>,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
+            if let Some(execution) = execution {
+                execution.validate(tx, id, operation_id)?;
+            }
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if &record.target != target || !is_sync(target) {

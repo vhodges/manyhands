@@ -42,6 +42,70 @@ pub(super) fn preview(
     service: &RepositoryService,
     request: PreviewDocumentPromotionRequest,
 ) -> Result<DocumentPromotionPreflight, RepositoryError> {
+    Ok(prepare(service, request)?.preflight)
+}
+
+/// Filesystem discovery facts are gathered only outside the repository lease.
+/// Their process-only guard binds the selected checkout/namespace and actual Git
+/// inputs; revalidation never calls filesystem discovery or enumerates worktrees.
+pub(super) struct PreparedObservation {
+    pub(super) preflight: DocumentPromotionPreflight,
+    pub(super) configuration: canonical::RepositoryConfig,
+    pub(super) repository_id: i64,
+    root: PathBuf,
+    item: ItemId,
+    facts: DiscoveryFacts,
+    guard: [u8; 32],
+}
+struct DiscoveryFacts {
+    not_document: bool,
+    document_path: Option<PathBuf>,
+}
+impl PreparedObservation {
+    pub(super) fn revalidate(
+        &self,
+        service: &RepositoryService,
+        repository: &git2::Repository,
+    ) -> Result<DocumentPromotionPreflight, RepositoryError> {
+        let fresh = git2::Repository::open_ext(
+            &self.root,
+            git2::RepositoryOpenFlags::NO_SEARCH,
+            &[] as &[&std::ffi::OsStr],
+        )
+        .map_err(|_| changed())?;
+        if fresh.commondir().canonicalize().ok() != repository.commondir().canonicalize().ok()
+            || observation_guard(&fresh, &self.root, &self.configuration, &self.item)? != self.guard
+        {
+            return Err(changed());
+        }
+        let (id, snapshot, pending) = read_view(service, &self.root)?;
+        if id != self.repository_id {
+            return Err(changed());
+        }
+        Ok(observe_git(
+            &fresh,
+            &self.root,
+            &self.configuration,
+            &self.item,
+            &snapshot,
+            pending,
+            &self.facts,
+        )?
+        .into_preflight())
+    }
+}
+fn changed() -> RepositoryError {
+    RepositoryError::new(
+        RepositoryOperation::Read,
+        None,
+        RepositoryErrorKind::ExternalChange,
+        "promotion observation changed",
+    )
+}
+pub(super) fn prepare(
+    service: &RepositoryService,
+    request: PreviewDocumentPromotionRequest,
+) -> Result<PreparedObservation, RepositoryError> {
     let operation = RepositoryOperation::Read;
     service.require_index_available(operation, Some(&request.root))?;
     let (repository, root) = canonical_repository_root(&request.root, operation)?;
@@ -58,7 +122,67 @@ pub(super) fn preview(
     };
     // A read-only SQLite transaction provides one coherent history/conflict view.
     // No repository lease, reservation, refresh, migration or transport is used.
-    let (snapshot, pending) = {
+    let (repository_id, snapshot, pending) = read_view(service, &root)?;
+    let before = observation_guard(&repository, &root, &config, &request.item_id)?;
+    let discovered = discovery::observe_root(&repository, &root);
+    let active = discovered
+        .active_contexts
+        .iter()
+        .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
+    let facts = DiscoveryFacts {
+        not_document: active.is_some_and(|a| {
+            a.items
+                .iter()
+                .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)
+        }) || (active.is_none()
+            && discovered
+                .items
+                .iter()
+                .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
+        document_path: active
+            .filter(|a| {
+                a.context.branch.as_deref()
+                    == Some(format!("manyhands/document/{}", request.item_id).as_str())
+            })
+            .and_then(|a| {
+                a.items
+                    .iter()
+                    .find(|i| i.id == request.item_id && i.kind == AuthoringKind::Document)
+            })
+            .map(|i| i.path.clone()),
+    };
+    if before != observation_guard(&repository, &root, &config, &request.item_id)? {
+        return Err(changed());
+    }
+    let preflight = observe_git(
+        &repository,
+        &root,
+        &config,
+        &request.item_id,
+        &snapshot,
+        pending,
+        &facts,
+    )?
+    .into_preflight();
+    let prepared = PreparedObservation {
+        preflight,
+        configuration: config,
+        repository_id,
+        root: root.clone(),
+        item: request.item_id,
+        facts,
+        guard: before,
+    };
+    #[cfg(test)]
+    super::run_tests::observation_prepared(service, &root);
+    Ok(prepared)
+}
+fn read_view(
+    service: &RepositoryService,
+    root: &Path,
+) -> Result<(i64, RemoteSnapshot, bool), RepositoryError> {
+    let operation = RepositoryOperation::Read;
+    let (id, snapshot, pending) = {
         let _guard = cache_read_guard(&service.registry_path, &root, operation)?;
         let mut connection = open_registry_read_only(&service.registry_path)?;
         let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
@@ -73,25 +197,257 @@ pub(super) fn preview(
             .ok_or_else(|| {
                 RepositoryError::new(
                     operation,
-                    Some(root.clone()),
+                    Some(root.to_owned()),
                     RepositoryErrorKind::RepositoryNotRegistered,
                     "promotion requires a registered repository",
                 )
             })?;
         (
+            id,
             state::read_snapshot(&transaction, id)?,
             state::has_pending_conflict(&transaction, id)?,
         )
     };
-    Ok(observe_promotion(
-        &repository,
-        &root,
-        &config,
-        &request.item_id,
-        &snapshot,
-        pending,
-    )?
-    .into_preflight())
+    Ok((id, snapshot, pending))
+}
+
+fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
+    hash.update(&(bytes.len() as u64).to_be_bytes());
+    hash.update(bytes);
+}
+/// Fixed locator metadata and known canonical/index paths, not a discovery walk.
+/// Git status is re-read (including ignored canonical paths) so new namespaces
+/// cannot hide behind cached discovery. Metadata of known canonical files also
+/// catches edits masked by index flags without reading/scanning their contents.
+fn observation_guard(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+) -> Result<[u8; 32], RepositoryError> {
+    fn metadata(
+        hash: &mut blake3::Hasher,
+        path: &Path,
+        contents: bool,
+    ) -> Result<(), RepositoryError> {
+        guard_field(hash, path.as_os_str().as_encoded_bytes());
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                hash.update(&[0]);
+            }
+            Err(_) => return Err(changed()),
+            Ok(m) => {
+                hash.update(&[
+                    1,
+                    u8::from(m.is_dir()),
+                    u8::from(m.is_file()),
+                    u8::from(m.file_type().is_symlink()),
+                ]);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    hash.update(&m.dev().to_be_bytes());
+                    hash.update(&m.ino().to_be_bytes());
+                }
+                #[cfg(windows)]
+                if !m.file_type().is_symlink() {
+                    // Reuse the existing Win32 namespace/identity backend;
+                    // metadata timestamps alone do not identify directories.
+                    let identity = if m.is_dir() {
+                        native_resolution::Directory::open(path).and_then(|d| d.identity())
+                    } else {
+                        let parent = path.parent().ok_or_else(changed)?;
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .ok_or_else(changed)?;
+                        let directory =
+                            native_resolution::Directory::open(parent).map_err(|_| changed())?;
+                        let file = directory
+                            .file(name)
+                            .map_err(|_| changed())?
+                            .ok_or_else(changed)?;
+                        native_resolution::identity(&file)
+                    }
+                    .map_err(|_| changed())?;
+                    for part in identity {
+                        hash.update(&part.to_be_bytes());
+                    }
+                }
+                if !m.is_dir() {
+                    hash.update(&m.len().to_be_bytes());
+                    for time in [m.modified().ok(), m.created().ok()] {
+                        match time.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()) {
+                            Some(t) => {
+                                hash.update(&[1]);
+                                hash.update(&t.as_nanos().to_be_bytes());
+                            }
+                            None => {
+                                hash.update(&[0]);
+                            }
+                        }
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        hash.update(&m.ctime().to_be_bytes());
+                        hash.update(&m.ctime_nsec().to_be_bytes());
+                        hash.update(&m.mode().to_be_bytes());
+                    }
+                    if contents && m.is_file() && !m.file_type().is_symlink() {
+                        guard_field(hash, &std::fs::read(path).map_err(|_| changed())?);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    fn ref_stamp(
+        hash: &mut blake3::Hasher,
+        repo: &git2::Repository,
+        name: &str,
+    ) -> Result<(), RepositoryError> {
+        guard_field(hash, name.as_bytes());
+        match repo.find_reference(name) {
+            Ok(r) => {
+                hash.update(&[1]);
+                guard_field(hash, r.symbolic_target_bytes().unwrap_or_default());
+                if let Some(oid) = r.target() {
+                    guard_field(hash, oid.as_bytes());
+                }
+            }
+            Err(e) if e.code() == git2::ErrorCode::NotFound => {
+                hash.update(&[0]);
+            }
+            Err(_) => return Err(changed()),
+        }
+        Ok(())
+    }
+    fn canonical_path(bytes: &[u8]) -> Option<&Path> {
+        let path = Path::new(std::str::from_utf8(bytes).ok()?);
+        (path
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+            && (path.starts_with("docs")
+                || path.starts_with(".manyhands/tickets")
+                || path.starts_with(".manyhands/comments")))
+        .then_some(path)
+    }
+    let mut hash = blake3::Hasher::new();
+    // Match the configuration reader's bytes even if an existing configuration
+    // uses an indirection: locator metadata alone is not configuration consent.
+    guard_field(
+        &mut hash,
+        &std::fs::read(root.join(canonical::CONFIG_PATH)).map_err(|_| changed())?,
+    );
+    let context = root.join(".manyhands/worktrees").join(item.to_string());
+    let admin = repository
+        .commondir()
+        .join("worktrees")
+        .join(item.to_string());
+    for path in [
+        root.to_owned(),
+        repository.path().into(),
+        repository.commondir().into(),
+        root.join(".git"),
+        root.join(".manyhands"),
+        root.join(canonical::CONFIG_PATH),
+        context.clone(),
+        context.join(".git"),
+        admin.clone(),
+        admin.join("HEAD"),
+        admin.join("gitdir"),
+        admin.join("commondir"),
+        root.join("docs"),
+        context.join("docs"),
+    ] {
+        metadata(&mut hash, &path, true)?;
+    }
+    ref_stamp(
+        &mut hash,
+        repository,
+        &format!("refs/heads/{}", config.primary_branch),
+    )?;
+    ref_stamp(
+        &mut hash,
+        repository,
+        &format!("refs/heads/manyhands/document/{item}"),
+    )?;
+    for path in [root, &context] {
+        let linked = git2::Repository::open_ext(
+            path,
+            git2::RepositoryOpenFlags::NO_SEARCH,
+            &[] as &[&std::ffi::OsStr],
+        );
+        let Ok(linked) = linked else {
+            hash.update(&[0]);
+            continue;
+        };
+        hash.update(&[1]);
+        guard_field(&mut hash, linked.path().as_os_str().as_encoded_bytes());
+        guard_field(&mut hash, linked.commondir().as_os_str().as_encoded_bytes());
+        if let Some(workdir) = linked.workdir() {
+            guard_field(&mut hash, workdir.as_os_str().as_encoded_bytes());
+        }
+        ref_stamp(&mut hash, &linked, "HEAD")?;
+        for name in [
+            "config",
+            "index",
+            "MERGE_HEAD",
+            "MERGE_MSG",
+            "MERGE_MODE",
+            "REBASE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "rebase-apply",
+            "rebase-merge",
+        ] {
+            metadata(&mut hash, &linked.path().join(name), true)?;
+        }
+        let index = linked.index().map_err(|_| changed())?;
+        let mut count = 0;
+        for entry in index.iter() {
+            guard_field(&mut hash, &entry.path);
+            hash.update(entry.id.as_bytes());
+            hash.update(&entry.mode.to_be_bytes());
+            hash.update(&entry.flags.to_be_bytes());
+            hash.update(&entry.flags_extended.to_be_bytes());
+            if let Some(relative) = canonical_path(&entry.path) {
+                count += 1;
+                if count > MAX_DOCUMENT_DIRECTORY_ENTRIES + MAX_MANAGED_DIRECTORY_ENTRIES {
+                    return Err(changed());
+                }
+                metadata(&mut hash, &path.join(relative), false)?;
+            }
+        }
+        for canonical_only in [false, true] {
+            let mut options = git2::StatusOptions::new();
+            options.include_untracked(true).recurse_untracked_dirs(true);
+            if canonical_only {
+                options
+                    .include_ignored(true)
+                    .recurse_ignored_dirs(true)
+                    .pathspec("docs")
+                    .pathspec(".manyhands/tickets")
+                    .pathspec(".manyhands/comments");
+            }
+            let statuses = linked.statuses(Some(&mut options)).map_err(|_| changed())?;
+            hash.update(&(statuses.len() as u64).to_be_bytes());
+            for entry in statuses.iter() {
+                guard_field(&mut hash, entry.path_bytes());
+                hash.update(&entry.status().bits().to_be_bytes());
+                if canonical_only {
+                    count += 1;
+                    if count > MAX_DOCUMENT_DIRECTORY_ENTRIES + MAX_MANAGED_DIRECTORY_ENTRIES {
+                        return Err(changed());
+                    }
+                    if let Some(relative) = canonical_path(entry.path_bytes()) {
+                        metadata(&mut hash, &path.join(relative), false)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(*hash.finalize().as_bytes())
 }
 
 fn ancestor(
@@ -157,40 +513,27 @@ fn cleanliness(
 /// Observe actual Git afresh. The caller supplies a coherently read remote
 /// snapshot and pending-conflict flag; the same function can run after sync or
 /// while the caller already holds the integration lease.
-pub(super) fn observe_promotion(
+fn observe_git(
     repository: &git2::Repository,
     root: &Path,
     config: &canonical::RepositoryConfig,
     item: &ItemId,
     snapshot: &RemoteSnapshot,
     pending: bool,
+    facts: &DiscoveryFacts,
 ) -> Result<PromotionObservation, RepositoryError> {
     let mut observation = PromotionObservation {
         blockers: BTreeSet::new(),
         preview: None,
     };
     let blockers = &mut observation.blockers;
-    let discovered = discovery::observe_root(repository, root);
     let context_branch = format!("manyhands/document/{item}");
     let context_path = root.join(".manyhands/worktrees").join(item.to_string());
     let target = SynchronizationTarget::Context {
         kind: AuthoringKind::Document,
         item_id: item.clone(),
     };
-    let active = discovered
-        .active_contexts
-        .iter()
-        .find(|active| active.context.item_id.as_ref() == Some(item));
-    let not_document = active.is_some_and(|active| {
-        active
-            .items
-            .iter()
-            .any(|found| found.id == *item && found.kind == AuthoringKind::Ticket)
-    }) || (active.is_none()
-        && discovered
-            .items
-            .iter()
-            .any(|found| found.id == *item && found.kind == AuthoringKind::Ticket));
+    let not_document = facts.not_document;
     let mut context_oid = None;
     let mut context_document_path = None;
     if not_document {
@@ -207,14 +550,7 @@ pub(super) fn observe_promotion(
                 } else {
                     cleanliness(&linked, &target, root, blockers)?;
                 }
-                context_document_path = active
-                    .filter(|a| a.context.branch.as_deref() == Some(context_branch.as_str()))
-                    .and_then(|a| {
-                        a.items.iter().find(|found| {
-                            found.id == *item && found.kind == AuthoringKind::Document
-                        })
-                    })
-                    .map(|found| found.path.clone());
+                context_document_path = facts.document_path.clone();
                 if context_document_path.is_none() {
                     blockers.insert(PromotionBlocker::ContextNonconforming);
                 }

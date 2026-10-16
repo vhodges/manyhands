@@ -1,5 +1,5 @@
 mod merge;
-mod observation;
+pub(super) mod observation;
 mod poll;
 mod refs;
 pub(super) mod sync;
