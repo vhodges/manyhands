@@ -22,6 +22,41 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Cycle 09 domain update — 2026-10-16
+
+Wave 02 Cycle 09 Tasks 2–6 now deliver the headless document-promotion API in
+the ticket worktree: `preview_document_promotion`, `promote_document` and
+`cancel_document_promotion`. Task 6's final targeted local selector passes
+**188 tests**, including 75 runner tests/helpers and the owner-qualified T6-1
+backend-lock crash cases. The full uncommitted Task 6 change against exact base
+`8d06577f6af17e2532d072d7ee14419dbf8a84b4` has **SPEC PASS and QUALITY FINAL
+APPROVE, no remaining findings**, conveyed by the controller/owner. The headless
+preview/promote/cancel/results/retry API is delivered and reviewed complete at
+the Task 6 local gate, including the accepted concurrency fence and authoritative
+completion priority. No current Task 6 review or owner decision remains pending.
+Controller checkpoint precedes Task 7. The remaining verification/consumer work is
+Task 7 real SSH, Task 8 full/native gates and C5/D5 boundary/expiry/schema/resume
+binding; this is not merged-main or evidence of those later gates. No tests were
+rerun for this documentation-only review-status update. Historical audit findings
+below retain their original evidence scope except for the updated promotion rows.
+
+Preview returns `Ready(DocumentPromotionPreview)` with whole-branch changes and
+`PromotionExpectation`, or fixed `Blocked` categories. Execution accepts the
+operation/item/digest and session consent, and returns `Complete(outcome)` or
+`IndexPending` with the **same authoritative outcome**. Outcome accessors separate
+`Merged`/`AlreadyContained`, `Published`/`AlreadyCurrent`/publication pending and
+cleanup complete/pending. Cancellation flags the parent and active child or
+Promote reservation. Identical-ID retries reconcile stored/Git authority and run
+only unfinished work; completed replay performs no transport or deletion and only
+refreshes if still required. T6-1 preserves ambiguous backend locks as recovery
+pending before any operator repair; verified/quiesced operator repair precedes
+identical unfinished-SQL retry. Actual committed completion/finish replays instead.
+
+**C5/D5 remain pending:** F2 boundary prepare/execute binding, ten-minute expiry,
+preview schema values/serialization and resume classification. The current F2
+boundary still reports promotion `NotResumable`; domain same-ID retry does not
+change that classification. No CLI/desktop binding or dialog is delivered here.
+
 Task 2 only, under the approved [exploration](wave-03-readiness-exploration.md),
 [design](../plans/2026-10-06-wave-03-readiness-exploration-design.md#api-inventory-design),
 [implementation plan](../plans/2026-10-06-wave-03-readiness-exploration-implementation.md#task-2--inventory-actual-apis-and-ownership)
@@ -483,7 +518,7 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `comment add` — W3-05/10 | Compound `submit_comment`, original receipt and body-free `retry_comment_publication` E-comment; Cycle 07 acceptance in progress | Exact item/context/comment ID/parent + Missing destination; one bound sync child | Scoped checkpoint/discovery, then context sync; separate Saved publication/index state; original action reused on retry | Immediate configured context sync; explicit child restart/cancel; source separate from unsaved item drafts | Local commit identity; caller-owned selected-key session/host approval; confirmation only for child merge | implementation-in-progress | W2-07 over W1-03 and W2-05/06; W3-02/05; R-domain |
 | `item sync` — W3-05/10 | Missing public sync; E-observe/E-reserve and private transfer helpers not service | Exact item/shared context/remote/ref observations; never unsaved caller input | No sync outcomes/tests; future fetch/FF/merge/push/discovery effects C4 | C2 safe cancel + deleted-branch republish consent required | Future selected-key/trust C3 | pending-Wave-02 | W2-05 clean + W2-06 merge; W3-02/05; R-domain |
 | `repo sync` — W3-05/10 | Missing public primary sync; E-observe is advertisement | Exact primary/remote, clean-primary observations | Future fetch/FF/merge/push/discovery, not polling; replay unproved | C2 progress/cancel, no inferred publication intent | Future selected-key/trust C3 | pending-Wave-02 | W2-05/06; W3-02/05; R-domain |
-| `document promote` — W3-06/11 | Missing public preflight/confirmed promotion; future enum action not API | Exact item + whole branch/primary/remote/OIDs/paths/cleanup | Future final checkpoint/sync/merge/primary publish/remote-first cleanup; partial/replay absent | W2-09 preflight then W3-02 expiry/accepted consent/progress C2 | Local identity + selected-key if remote; local-only pending explicit | pending-Wave-02 | W2-09; W3-02/06; R-domain |
+| `document promote` — W3-06/11 | Delivered headless `preview_document_promotion`, `promote_document`, `cancel_document_promotion`; Task 6 reviewed complete: SPEC PASS, QUALITY FINAL APPROVE, no findings | Exact item + whole branch/primary/remote/OIDs/paths/cleanup; local read-only Ready(preview/expectation) or Blocked | Complete(outcome) or IndexPending(same outcome); separate integration/publication/cleanup; identical-ID retry only unfinished work, completed replay no transport/deletion; completed publication wins over cancellation/lost return; accepted concurrency fence and approved T6-1 exception | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema and accepted-consent adapters pending; current F2 resume NotResumable | Local confirmed identity + selected-key/trust if remote; NoPublicationRemote still permits local cleanup | headless domain delivered/reviewed; 188 targeted tests GREEN; frontend pending | W2-09 Task 7/8 gates + C5/D5; R-domain |
 | `ticket close` — W3-06/11 | Missing public close/preflight; ticket serializer fields are not lifecycle | Exact ticket + whole branch, confirmed identity + closed_at/by | Future final closure checkpoint/integration/publication/cleanup; cleanup-only replay absent | W2-10 confirmed preflight + C2; no reopening/status shortcut | Local confirmed identity + optional selected-key/trust | pending-Wave-02 | W2-10; W3-02/06; R-domain |
 | `index status` — W3-01/07 | `repository_snapshot` E-index refresh_required/problems, no full frontend freshness DTO | Explicit root; cache age/stale/failed scan distinguish | Read-only SQLite + cache-lock/open effects C0; no fetch | No consent/implicit refresh | No unlock; metadata/problems redaction C0 | partially-present | W1-04; W3-01; R-read |
 | `index refresh` — W3-04/07 | `refresh_repository` E-index → Refreshed/RetryRequired/IndexPending | Registered root, re-observed contexts; races retain prior rows | Op ID; scan/cache/journal/heartbeat effects only; no Git/canonical rewrite/network | No public progress/cancel; C2; one-shot thread joins | No SSH; source not persisted; C0 | partially-present | W1-04/05; W3-02/04; R-author |
@@ -536,7 +571,7 @@ that capability. Catalog evidence is adjacent domain evidence, never UI proof.
 | D22 drafts survive removed/inaccessible repository or vanished context — W3-08 | E-remove/index do not implement draft store/tests | Persisted draft accessible independent of registration/context/cache | Preserve recovery/export on remove/rebuild; no auto worktree recreation | Explicit recover/discard, no hidden age cleanup | Owner-protected store separate C5 | absent | W3-08 over W3-01/02/03; R-draft |
 | D23 rich/source recoverable comment/reply composer — W3-10 | E-comment local checkpoint only; missing composer/draft/editor | Item/parent/comment IDs, body/base observation | One submission ID, do not include unsaved item draft; same fidelity as D07–D19 | Post and sync vs Save locally labels; partial publication retry | Local identity + future selected-key/trust C3/C4 | absent | W3-08/09 editor, W2-07 domain, W3-10; R-draft + R-domain |
 | D24 saved comment shown once; retry publication only — W3-10 | E-comment exact local replay; missing compound outcome/UI/tests | Retained comment/request/operation ID and original shared context | No new file/checkpoint/timestamp on publication retry C4 | Show completed/local saved and remaining publication; deliberate resume | Same session/trust boundary; redacted partial effects | pending-Wave-02 | W2-07 + W3-02 adapter then 10; R-domain |
-| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Missing; CLI sync/promote/close rows apply, no desktop preflight/UI | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != cleanup; local-only publication pending | Confirm changed target anew, reuse unchanged accepted remainder C2 | Confirmed Git identity + selected-key/trust | pending-Wave-02 | W2-05/06/09/10 + W3-02 then 10/11; R-domain |
+| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
 | D26 canonical conflict base/local/remote/result editing — W3-11 | Missing W2-06 public resolution/read and UI/tests | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Mark resolved, no automatic side choice | Requested source vs redacted progress C0 | pending-Wave-02 | W2-06 + W3-01/02/05 then 11; R-domain |
 | D27 noncanonical external recovery/recheck guidance — W3-11 | Missing public conflict/re-observe DTO/UI; private Git not frontend API | Code/binary/rename/delete/structural conflicts preserved | Open location deliberate; recheck actual Git, never arbitrary staging/publish | Explicit operation resume after real repair; no marker-only inference | Owned redacted recovery arguments C0 | pending-Wave-02 | W2-06 observations + W3-01/02/05 then 11; R-domain |
 | D28 keyboard focus/dialog Escape/action activation — W3-07…12 | Missing full control/focus contract/tests; Button scaffold only | Every core action labeled/focusable, tab order/visible focus/focus return | UI state only, color not sole state signal | Escape cancellation at dialog/request safe boundary | No secret text in UI diagnostics | absent | W3-07 shell, each feature, W3-13 gate; R-shell |

@@ -590,6 +590,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "discovered_comments",
             "discovered_folders",
             "discovered_items",
+            "document_promotions",
             "item_edges",
             "item_problems",
             "key_material_operations",
@@ -618,6 +619,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "repositories",
             "request_operations",
             "request_records",
+            "retired_contexts",
             "shared_ssh_keys",
             "ssh_host_pins",
         ]

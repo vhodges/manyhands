@@ -1168,6 +1168,7 @@ fn same_request_child() {
 
 #[test]
 fn two_processes_submitting_the_same_new_request_make_one_commit() {
+    first_call_reports_commit_while_duplicate_owns_index();
     let world = World::new();
     let token = world.token(TICKET_A);
     let scratch = tempfile::tempdir().unwrap();
@@ -1279,6 +1280,62 @@ fn two_processes_submitting_the_same_new_request_make_one_commit() {
         world.record(REQUEST_1).map(|record| record.state),
         Some(RequestState::Finished)
     );
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+// Force the interleaving seen on native ARM: the original accepted call has
+// not entered the domain when its duplicate commits and owns index discovery.
+fn first_call_reports_commit_while_duplicate_owns_index() {
+    use crate::support::mutation::execute_with;
+    use manyhands::repository::RepositoryService;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let world = World::new();
+    let token = world.token(TICKET_A);
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (first_go_tx, first_go_rx) = mpsc::channel();
+    let first_service = RepositoryService::open_at(world.data.path()).unwrap();
+    first_service.set_request_hook_for_testing(move || {
+        accepted_tx.send(()).unwrap();
+        first_go_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    });
+    let first = {
+        let root = world.root.clone();
+        let token = token.clone();
+        std::thread::spawn(move || execute_with(&first_service, REQUEST_1, save_at(&root, &token)))
+    };
+    accepted_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    let (index_tx, index_rx) = mpsc::channel();
+    let (index_go_tx, index_go_rx) = mpsc::channel();
+    let duplicate_service = RepositoryService::open_at(world.data.path()).unwrap();
+    duplicate_service.set_observation_hook_for_testing(move || {
+        index_tx.send(()).unwrap();
+        index_go_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    });
+    let duplicate = {
+        let root = world.root.clone();
+        let token = token.clone();
+        std::thread::spawn(move || {
+            execute_with(&duplicate_service, REQUEST_1, save_at(&root, &token))
+        })
+    };
+    index_rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    first_go_tx.send(()).unwrap();
+    let first = first.join().unwrap();
+    let commit = world.branch_tip(TICKET_A).unwrap().to_string();
+    // Release and join even when the assertions below fail.
+    index_go_tx.send(()).unwrap();
+    let duplicate = duplicate.join().unwrap();
+    assert_eq!(first.code, ResultCode::DiscoveryPending);
+    assert_eq!(first.effects.commit_oid, Some(commit.clone()));
+    assert_eq!(first.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(recovery_actions(&first), ["operation.resume"]);
+    assert_eq!(duplicate.effects.commit_oid, Some(commit.clone()));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    let replay = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(replay.code, ResultCode::Ok);
+    assert_eq!(replay.effects.commit_oid, Some(commit));
     assert_eq!(world.pending_journal_rows(), 0);
 }
 

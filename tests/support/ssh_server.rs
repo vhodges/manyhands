@@ -341,7 +341,12 @@ async fn relay(
                     Ok(0) | Err(_) => { input.take(); },
                     Ok(count) => {
                         transfer_started = true;
-                        if receiving && commands.feed(&incoming[..count]).is_err() { break; }
+                        if receiving {
+                            if commands.feed(&incoming[..count]).is_err() { break; }
+                            // Capture each complete command's old direct tip before
+                            // forwarding it or applying the deterministic receive race.
+                            commands.observe_old_oids(&shared.repository);
+                        }
                         let race_pending = receiving && shared.receive_race.lock().unwrap().is_some();
                         let payload = if race_pending {
                             race_prefix.extend_from_slice(&incoming[..count]);
@@ -478,15 +483,23 @@ async fn relay(
         } else {
             let repo = git2::Repository::open_bare(&shared.repository).ok();
             let mut updates = shared.receive_updates.lock().unwrap();
-            updates.extend(commands.updates.into_iter().map(|mut update| {
-                update.accepted = code == 0
-                    && update.old_oid != update.new_oid
-                    && repo
-                        .as_ref()
-                        .and_then(|repo| repo.refname_to_id(&update.reference).ok())
-                        == Some(update.new_oid);
-                update
-            }));
+            updates.extend(
+                commands
+                    .updates
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, mut update)| {
+                        update.accepted = code == 0
+                            && repo.as_ref().is_some_and(|repo| {
+                                update_effect_proven(
+                                    repo,
+                                    &update,
+                                    commands.old_oid_matches.get(index) == Some(&true),
+                                )
+                            });
+                        update
+                    }),
+            );
             shared.receive_updates_changed.notify_all();
         }
     }
@@ -634,8 +647,21 @@ struct ReceiveCommands {
     pending: Vec<u8>,
     finished: bool,
     updates: Vec<ReceiveUpdate>,
+    old_oid_matches: Vec<bool>,
 }
 impl ReceiveCommands {
+    fn observe_old_oids(&mut self, path: &Path) {
+        if self.old_oid_matches.len() == self.updates.len() {
+            return;
+        }
+        let repo = git2::Repository::open_bare(path).ok();
+        for update in &self.updates[self.old_oid_matches.len()..] {
+            self.old_oid_matches.push(repo.as_ref().is_some_and(|repo| {
+                repo.find_reference(&update.reference)
+                    .is_ok_and(|reference| reference.target() == Some(update.old_oid))
+            }));
+        }
+    }
     fn feed(&mut self, bytes: &[u8]) -> Result<(), FixtureError> {
         if self.finished {
             return Ok(());
@@ -700,11 +726,50 @@ fn receive_effect_proven(
         .is_some_and(|status| status.as_ref().is_ok_and(|status| status.success()))
         && git2::Repository::open_bare(&shared.repository).is_ok_and(|repo| {
             !commands.updates.is_empty()
-                && commands.updates.iter().all(|update| {
-                    update.old_oid != update.new_oid
-                        && repo.refname_to_id(&update.reference).ok() == Some(update.new_oid)
+                && commands.updates.iter().enumerate().all(|(index, update)| {
+                    update_effect_proven(
+                        &repo,
+                        update,
+                        commands.old_oid_matches.get(index) == Some(&true),
+                    )
                 })
         })
+}
+
+fn update_effect_proven(
+    repo: &git2::Repository,
+    update: &ReceiveUpdate,
+    old_oid_matched: bool,
+) -> bool {
+    update.old_oid != update.new_oid
+        && if update.new_oid.is_zero() {
+            old_oid_matched
+                && matches!(repo.find_reference(&update.reference), Err(error) if error.code() == git2::ErrorCode::NotFound)
+        } else {
+            repo.refname_to_id(&update.reference).ok() == Some(update.new_oid)
+        }
+}
+
+pub(super) fn deletion_effect_proof(path: &Path, oid: git2::Oid) -> Result<(), FixtureError> {
+    let repo = fixed(git2::Repository::open_bare(path))?;
+    let name = super::ObservationRef::RemoteDocument.name();
+    let mut deletion = ReceiveUpdate {
+        reference: name.into(),
+        old_oid: oid,
+        new_oid: git2::Oid::zero(),
+        accepted: false,
+    };
+    fixed(repo.reference(name, oid, true, "owned proof test"))?;
+    assert!(!update_effect_proven(&repo, &deletion, true)); // still present
+    fixed(fixed(repo.find_reference(name))?.delete())?;
+    assert!(!update_effect_proven(&repo, &deletion, false)); // fabricated old OID
+    assert!(update_effect_proven(&repo, &deletion, true)); // actual guarded absence
+    deletion.old_oid = git2::Oid::zero();
+    assert!(!update_effect_proven(&repo, &deletion, true)); // no-op is not deletion
+    deletion.old_oid = oid;
+    fixed(repo.reference_symbolic(name, "refs/heads/missing", true, "owned proof test"))?;
+    assert!(!update_effect_proven(&repo, &deletion, true)); // dangling != absent
+    Ok(())
 }
 
 pub(super) fn receiver_command_fragmentation() -> Result<(), FixtureError> {

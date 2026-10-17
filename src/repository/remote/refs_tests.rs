@@ -16,6 +16,82 @@ use crate::{
 
 const ITEM_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 
+#[test]
+fn retired_context_real_sql_evidence_permits_first_publication_under_unknown_history() {
+    use super::super::state;
+    use crate::repository::{REGISTRY_FILE, RepositoryService};
+    let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[root.path().to_str().unwrap()]).unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&service, root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), true)
+    })
+    .unwrap();
+    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    let repo = git2::Repository::init(root.path()).unwrap();
+    let tree = repo
+        .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    let sig = git2::Signature::new(
+        "Fixture",
+        "fixture@example.invalid",
+        &git2::Time::new(123, 0),
+    )
+    .unwrap();
+    let base = repo.commit(None, &sig, &sig, "base", &tree, &[]).unwrap();
+    let local = repo
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "context",
+            &tree,
+            &[&repo.find_commit(base).unwrap()],
+        )
+        .unwrap();
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        db.execute(
+            "INSERT INTO retired_contexts VALUES(1,?1,?2,?3,?4)",
+            rusqlite::params![
+                crate::repository::authoring_kind_segment(&kind),
+                ITEM_ID,
+                OperationId::new().to_string(),
+                local.to_string()
+            ],
+        )
+        .unwrap();
+        let snapshot = service.remote_snapshot(root.path()).unwrap();
+        let target = SynchronizationTarget::Context {
+            kind,
+            item_id: ITEM_ID.parse().unwrap(),
+        };
+        let result = plan_clean_integration(
+            &target,
+            local,
+            Some(base),
+            None,
+            snapshot.publication_evidence_for(kind, &ITEM_ID.parse().unwrap()),
+            |a, b| repo.graph_descendant_of(b, a),
+        );
+        assert_eq!(
+            result.unwrap(),
+            CleanIntegrationPlan {
+                final_oid: local,
+                local_update: false,
+                push_needed: true
+            }
+        );
+        assert_eq!(
+            snapshot.publication_evidence_for(kind, &"01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap()),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+    }
+}
+
 fn context() -> SynchronizationTarget {
     SynchronizationTarget::Context {
         kind: AuthoringKind::Ticket,

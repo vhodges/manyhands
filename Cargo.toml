@@ -80,6 +80,10 @@ name = "remote_polling"
 harness = false
 
 [[test]]
+name = "document_promotion"
+harness = false
+
+[[test]]
 name = "editor_feasibility"
 path = "tests/editor_feasibility.rs"
 required-features = ["editor-probe"]

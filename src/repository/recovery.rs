@@ -681,6 +681,13 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    super::promotion::record::validate_local_identity(
+        &transaction,
+        root_path,
+        action,
+        &requested,
+        target,
+    )?;
     if !comment_child_may_begin(&transaction, root_path, action, &requested, target)? {
         return Err(mismatch(operation, root));
     }
@@ -1042,9 +1049,15 @@ const INDEXING_STATE: &str = "indexing";
 
 /// The states of a pending row whose operation has handed off to
 /// indexing: the state the hand-off begins in, the state of a call that
-/// has claimed it, and the two a hand-off that did not bring the index
-/// up to date leaves.
-const HAND_OFF_STATES: [&str; 4] = ["authoritative_observed", INDEXING_STATE, "failed", "retry"];
+/// has claimed it, the explicit fence when its observations are invalidated,
+/// and the two a hand-off that did not bring the index up to date leaves.
+const HAND_OFF_STATES: [&str; 5] = [
+    "authoritative_observed",
+    INDEXING_STATE,
+    "index_invalidated",
+    "failed",
+    "retry",
+];
 
 /// Closes the row of a call that was rejected and left nothing behind. The row
 /// no longer blocks the repository, and a repeat of its ID begins again.
@@ -1372,7 +1385,8 @@ fn in_the_way(
 
 /// Refuses a root on which a refresh under `operation_id` would be
 /// refused before it began: with `OperationMismatch` for an ID that is a
-/// comment's synchronization and whose hand-off is not yet due, with
+/// promotion's parent or child whose exact authoritative hand-off is not due,
+/// or a comment's synchronization whose hand-off is not yet due, with
 /// `RepositoryBusy` while an automatic poll holds the reservation, and
 /// with `RecoveryRequired` for any other remote operation that holds it,
 /// or for a pending local row the refresh may not take up. It is the same test the refresh then makes,
@@ -1387,6 +1401,13 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
+    super::promotion::record::validate_local_identity(
+        connection,
+        root_path,
+        refresh,
+        &operation_id.to_string(),
+        "",
+    )?;
     if !comment_child_may_begin(
         connection,
         root_path,
@@ -1829,7 +1850,7 @@ pub(super) fn claim_indexing(
               WHERE id = ?1 AND state IN (
                  'created', 'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
                  'publication_committed', 'initialization_committed', 'authoritative_observed',
-                 'failed', 'observed', 'persisted', 'retry'
+                  'failed', 'observed', 'persisted', 'retry', 'index_invalidated'
              ) OR (id = ?1 AND state = 'indexing' AND observed_at < ?3)",
             params![record_id, now(), stale_before],
         )
@@ -1845,6 +1866,57 @@ pub(super) fn claim_indexing(
         )
         .map_err(RepositoryError::sqlite)?;
     Ok(Some(IndexOwner { record_id, epoch }))
+}
+
+/// A committed promotion invalidates observations collected before its cleanup.
+/// Preserve every journal identity/authoritative step; explicitly fence only live
+/// index owners of this repository in the SAME transaction as completion/stale.
+pub(super) fn invalidate_index_observations(
+    transaction: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    let rows = transaction.prepare(
+        "SELECT id,index_owner_epoch FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state='indexing'"
+    ).and_then(|mut q|q.query_map([repository_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>())
+        .map_err(RepositoryError::sqlite)?;
+    for (id, epoch) in rows {
+        let next = epoch
+            .checked_add(1)
+            .filter(|_| epoch >= 0)
+            .ok_or_else(super::remote::state::recovery_required)?;
+        let changed=transaction.execute(
+            "UPDATE operation_records SET state='index_invalidated',index_owner_epoch=?3,observed_at=?4 WHERE id=?1 AND state='indexing' AND index_owner_epoch=?2",
+            params![id,epoch,next,now()],
+        ).map_err(RepositoryError::sqlite)?;
+        if changed != 1 {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
+
+/// Only the exact prior owner may automatically reclaim this explicit fence.
+/// Foreign/reclaimed/completed/abandoned rows are never adopted. The caller must
+/// discard BOTH observations and re-observe after receiving the new epoch.
+pub(super) fn reclaim_invalidated_indexing(
+    connection: &Connection,
+    owner: IndexOwner,
+    root_key: &str,
+) -> Result<Option<IndexOwner>, RepositoryError> {
+    let fenced = owner
+        .epoch
+        .checked_add(1)
+        .ok_or_else(super::remote::state::recovery_required)?;
+    let next = fenced
+        .checked_add(1)
+        .ok_or_else(super::remote::state::recovery_required)?;
+    let changed=connection.execute(&format!(
+        "UPDATE operation_records SET state='indexing',index_owner_epoch=?4,observed_at=?5 WHERE id=?1 AND root_path=?2 AND state='index_invalidated' AND index_owner_epoch=?3 AND {NOT_ABANDONED}"
+    ),params![owner.record_id,root_key,fenced,next,now()]).map_err(RepositoryError::sqlite)?;
+    Ok((changed == 1).then_some(IndexOwner {
+        record_id: owner.record_id,
+        epoch: next,
+    }))
 }
 
 pub(super) fn transition_indexing(
@@ -2181,6 +2253,46 @@ mod abandoned_row_tests {
 
     const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAB";
 
+    #[test]
+    fn promotion_parent_id_is_refused_before_local_journal_begin() {
+        let mut db = Connection::open_in_memory().unwrap();
+        crate::repository::discovery::migrate_registry(&mut db).unwrap();
+        db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,'/repository',7,'accessible',0)",[]).unwrap();
+        let op = OperationId::parse(ID).unwrap();
+        {
+            let tx = db.transaction().unwrap();
+            crate::repository::promotion::record::begin_record(
+                &tx,
+                1,
+                op,
+                &"01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+                crate::repository::PromotionExpectation::from_bytes([7; 32]),
+                None,
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        assert_eq!(
+            begin_or_reconcile_operation(
+                &mut db,
+                Path::new("/repository"),
+                RepositoryOperation::RefreshRepository,
+                op,
+                ""
+            )
+            .err()
+            .unwrap()
+            .kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM operation_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
     /// A journal holding one row, in `state` with `step`, touched at
     /// `observed_at`.
     fn journal(action: &str, state: &str, step: Option<&str>, observed_at: i64) -> Connection {
@@ -2492,7 +2604,13 @@ mod abandoned_row_tests {
             "publication_committed",
             "remote_changed",
         ] {
-            for state in ["authoritative_observed", "indexing", "failed", "retry"] {
+            for state in [
+                "authoritative_observed",
+                "indexing",
+                "index_invalidated",
+                "failed",
+                "retry",
+            ] {
                 assert!(owes("save_ticket", state, Some(step)), "{step} in {state}");
             }
             // The step is recorded and the hand-off has not begun: an
@@ -2515,6 +2633,7 @@ mod abandoned_row_tests {
             Some("authoring_destination_observed"),
             Some("document_destination_observed"),
             Some("document_move_observed"),
+            Some("comment_checkpoint_intent"),
             Some("repository_initialized"),
             Some("configuration_written"),
         ] {
@@ -2523,6 +2642,7 @@ mod abandoned_row_tests {
                 "worktree_observed",
                 "authoritative_observed",
                 "indexing",
+                "index_invalidated",
                 "failed",
                 "retry",
             ] {
@@ -2532,6 +2652,7 @@ mod abandoned_row_tests {
         // A refresh that failed has no work of its own recorded, and a
         // rebuild's states are not a hand-off's.
         assert!(!owes("refresh", "failed", None));
+        assert!(!owes("refresh", "index_invalidated", None));
         assert!(!owes("rebuild", "observed", None));
         assert!(!owes("rebuild", "error", None));
         // An abandoned row and a rejected one have ended.

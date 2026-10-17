@@ -1,8 +1,8 @@
 mod merge;
-mod observation;
+pub(super) mod observation;
 mod poll;
 mod refs;
-mod sync;
+pub(super) mod sync;
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
     ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,
@@ -41,7 +41,7 @@ pub use state::{
 
 /// Fixture text for a worktree admin `gitdir` link naming `link` exactly.
 #[cfg(test)]
-fn git_metadata_link_text(link: &std::path::Path) -> String {
+pub(super) fn git_metadata_link_text(link: &std::path::Path) -> String {
     let text = link.to_str().expect("fixture Git path must be UTF-8");
     // libgit2 reads this field verbatim, then dirname scans only '/'. Encode
     // Git metadata, not native path display; Unix backslashes are literal names.

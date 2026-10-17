@@ -192,7 +192,99 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
     migrate_poll_attempt_times(transaction)?;
     migrate_poll_materializations(transaction)?;
     migrate_poll_dispositions(transaction)?;
+    migrate_retired_contexts(transaction)?;
+    migrate_context_publication_index(transaction)?;
     Ok(())
+}
+
+const RETIRED_CONTEXT_SCHEMA: &str = "CREATE TABLE retired_contexts (
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('document','ticket')),
+    item_id TEXT NOT NULL CHECK(length(item_id)=26),
+    operation_id TEXT NOT NULL CHECK(length(operation_id)=26),
+    retired_oid TEXT NOT NULL CHECK(length(retired_oid)=40 AND retired_oid NOT GLOB '*[^0-9a-f]*' AND retired_oid!='0000000000000000000000000000000000000000'),
+    PRIMARY KEY(repository_id,kind,item_id)
+)";
+
+const CONTEXT_PUBLICATION_INDEX: &str = "CREATE INDEX remote_context_publication_evidence ON remote_operation_records(repository_id,configuration_generation,kind,item_id,id DESC) WHERE action='synchronize_context'";
+fn migrate_context_publication_index(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_context_publication_evidence')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if !marked {
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_context_publication_evidence')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+        if exists {
+            return Err(recovery_required());
+        }
+        tx.execute_batch(CONTEXT_PUBLICATION_INDEX)
+            .map_err(|_| recovery_required())?;
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES('cycle_09_context_publication_evidence')",
+            [],
+        )
+        .map_err(|_| recovery_required())?;
+    }
+    validate_schema_object(
+        tx,
+        "INDEX",
+        "remote_context_publication_evidence",
+        CONTEXT_PUBLICATION_INDEX,
+    )
+}
+
+fn migrate_retired_contexts(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    let migrated:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_retired_contexts')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='retired_contexts')",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if !exists {
+        if migrated {
+            return Err(recovery_required());
+        }
+        tx.execute_batch(RETIRED_CONTEXT_SCHEMA)
+            .map_err(|_| recovery_required())?;
+    }
+    validate_schema_object(tx, "TABLE", "retired_contexts", RETIRED_CONTEXT_SCHEMA)?;
+    if !migrated {
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES('cycle_09_retired_contexts')",
+            [],
+        )
+        .map_err(|_| recovery_required())?;
+    }
+    Ok(())
+}
+
+fn read_retired_contexts(
+    db: &Connection,
+    repository_id: i64,
+) -> Result<Vec<(AuthoringKind, ItemId)>, RepositoryError> {
+    let rows=db.prepare("SELECT kind,item_id,operation_id,retired_oid FROM retired_contexts WHERE repository_id=?1 ORDER BY kind,item_id")
+        .and_then(|mut q|q.query_map([repository_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    rows.into_iter()
+        .map(|(kind, item, operation, retired)| {
+            let kind = match kind.as_str() {
+                "document" => AuthoringKind::Document,
+                "ticket" => AuthoringKind::Ticket,
+                _ => return Err(recovery_required()),
+            };
+            let item_id: ItemId = item.parse().map_err(|_| recovery_required())?;
+            let operation_id = crate::repository::OperationId::parse(&operation)
+                .map_err(|_| recovery_required())?;
+            let retired_oid = oid(Some(retired))?.ok_or_else(recovery_required)?;
+            if item_id.to_string() != item
+                || operation_id.to_string() != operation
+                || retired_oid.is_zero()
+            {
+                return Err(recovery_required());
+            }
+            Ok((kind, item_id))
+        })
+        .collect()
 }
 
 const POLL_DISPOSITION_SCHEMA: &str = r#"
@@ -1144,7 +1236,7 @@ fn normalized_schema_sql(sql: &str) -> String {
         .collect()
 }
 
-fn validate_schema_object(
+pub(in super::super) fn validate_schema_object(
     connection: &Connection,
     kind: &str,
     name: &str,
@@ -1597,7 +1689,7 @@ pub(crate) enum SynchronizationAuthority {
     AlreadyCurrent(Oid),
 }
 impl SynchronizationAuthority {
-    pub(super) fn oid(self) -> Oid {
+    pub(in super::super) fn oid(self) -> Oid {
         match self {
             Self::Published(oid) | Self::AlreadyCurrent(oid) => oid,
         }
@@ -1937,6 +2029,9 @@ impl RemoteContextSnapshot {
 struct RemoteSnapshotPolicy {
     configuration: RemotePollingConfiguration,
     dispositions: Vec<super::poll::PollTargetReport>,
+    retired_contexts: Vec<(AuthoringKind, ItemId)>,
+    verified_publications: Vec<(AuthoringKind, ItemId)>,
+    fetch_evidence: Option<Vec<(AuthoringKind, ItemId, RemotePublicationEvidence)>>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1963,6 +2058,9 @@ impl RemoteSnapshot {
             polling: Box::new(RemoteSnapshotPolicy {
                 configuration: polling,
                 dispositions: Vec::new(),
+                retired_contexts: Vec::new(),
+                verified_publications: Vec::new(),
+                fetch_evidence: None,
             }),
             latest_outcome,
             latest_attempt_at: None,
@@ -2008,21 +2106,62 @@ impl RemoteSnapshot {
     }
 
     /// Missing rows never prove a deletion. After cache loss, they cannot prove
-    /// first-publication eligibility either, even after recovery is resumed.
+    /// first-publication eligibility either, except for an explicitly retired
+    /// item (R1). A present state row always takes precedence over retirement.
     pub fn publication_evidence_for(
         &self,
         kind: AuthoringKind,
         id: &ItemId,
     ) -> RemotePublicationEvidence {
-        self.contexts
+        let fetched = self.fetch_publication_evidence_for(kind, id);
+        if !self
+            .polling
+            .retired_contexts
             .iter()
-            .find(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(id))
-            .map(|context| context.publication_evidence)
-            .unwrap_or(if self.history_unknown {
+            .any(|(k, item)| *k == kind && item == id)
+            && self
+                .polling
+                .verified_publications
+                .iter()
+                .any(|(k, item)| *k == kind && item == id)
+        {
+            RemotePublicationEvidence::ObservedPublished
+        } else {
+            fetched
+        }
+    }
+
+    /// Fetch planning must not reinterpret a qualified Push proof as a fetched
+    /// ref/absence. The public projection also reports verified Push history.
+    pub(in super::super) fn fetch_publication_evidence_for(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> RemotePublicationEvidence {
+        let explicit = match &self.polling.fetch_evidence {
+            Some(rows) => rows
+                .iter()
+                .find(|(k, item, _)| *k == kind && item == id)
+                .map(|(_, _, e)| *e),
+            None => self
+                .contexts
+                .iter()
+                .find(|context| context.kind == Some(kind) && context.item_id.as_ref() == Some(id))
+                .map(|context| context.publication_evidence),
+        };
+        explicit.unwrap_or(
+            if self.history_unknown
+                && !self
+                    .polling
+                    .retired_contexts
+                    .iter()
+                    .any(|(k, item)| *k == kind && item == id)
+            {
                 RemotePublicationEvidence::HistoryUnknown
             } else {
                 RemotePublicationEvidence::NeverPublished
-            })
+            },
+        )
     }
 }
 
@@ -2310,6 +2449,7 @@ pub(in super::super) fn persist_complete_advertisement(
             };
             transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,last_advertised_oid,tracking_oid,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'observed_published','unmaterialized',?8) ON CONFLICT(repository_id,remote_ref) DO UPDATE SET last_advertised_oid=excluded.last_advertised_oid,tracking_oid=excluded.tracking_oid,publication_evidence='observed_published',state='unmaterialized',observed_at=excluded.observed_at",
                 params![repository_id,target.remote_ref(),target.tracking_ref(),kind,item_id.to_string(),observation.advertised_oid.to_string(),observation.tracking_oid.map(|value|value.to_string()),observed_at]).map_err(|_| recovery_required())?;
+            transaction.execute("DELETE FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3",params![repository_id,kind,item_id.to_string()]).map_err(|_|recovery_required())?;
         }
     }
     Ok(batch)
@@ -2752,7 +2892,7 @@ pub(super) fn read_operation_rows(
     Ok(records)
 }
 
-pub(super) fn read_operation(
+pub(in super::super) fn read_operation(
     connection: &Connection,
     repository_id: i64,
     operation_id: crate::repository::OperationId,
@@ -3130,7 +3270,7 @@ pub(in super::super) fn select_polling_status(
     ))
 }
 
-pub(super) fn generation(
+pub(in super::super) fn generation(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<i64, RepositoryError> {
@@ -3921,6 +4061,9 @@ pub(super) fn bind_publication_candidate(
         "UPDATE remote_publication_attempts SET window_number=?3,candidate_oid=?4,advertised_oid=?5,phase=?6,intent_recorded=?7 WHERE operation_record_id=?1 AND number=?2",
         params![record.id, i64::from(attempt.number), i64::from(window.number), candidate.to_string(), advertised_oid.map(|oid| oid.to_string()), if verified { PublicationPhase::Verified } else { PublicationPhase::Prepared }.name(), i64::from(!verified)],
     ).map_err(|_| recovery_required())?;
+    if verified {
+        consume_retirement_on_publication(tx, record)?;
+    }
     publication_attempt(tx, record, attempt.number)?.ok_or_else(recovery_required)
 }
 
@@ -3957,7 +4100,24 @@ pub(super) fn advance_publication_attempt(
         )
     }
     .map_err(|_| recovery_required())?;
+    if phase == PublicationPhase::Verified {
+        consume_retirement_on_publication(tx, record)?;
+    }
     publication_attempt(tx, record, attempt.number)?.ok_or_else(recovery_required)
+}
+
+/// Consume R1 in the exact transaction recording a verified context publication.
+/// Binding to the envelope ID derives repository/kind/item from immutable journal
+/// identity, never from an independently supplied caller scope.
+pub(super) fn consume_retirement_on_publication(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+) -> Result<(), RepositoryError> {
+    if record.target.action() == RemoteOperationAction::SynchronizeContext {
+        tx.execute("DELETE FROM retired_contexts WHERE EXISTS(SELECT 1 FROM remote_operation_records operation WHERE operation.id=?1 AND operation.repository_id=retired_contexts.repository_id AND operation.kind=retired_contexts.kind AND operation.item_id=retired_contexts.item_id AND operation.action='synchronize_context')",[record.id])
+            .map_err(|_|recovery_required())?;
+    }
+    Ok(())
 }
 
 /// Fixed member order: MERGE_HEAD, MERGE_MSG, MERGE_MODE.
@@ -4256,7 +4416,7 @@ fn audit_merge_evidence(
     Ok(())
 }
 
-pub(super) fn has_pending_conflict(
+pub(in super::super) fn has_pending_conflict(
     connection: &Connection,
     repository_id: i64,
 ) -> Result<bool, RepositoryError> {
@@ -5174,8 +5334,15 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
+    crate::repository::promotion::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
+    validate_schema_object(
+        &transaction,
+        "TABLE",
+        "retired_contexts",
+        RETIRED_CONTEXT_SCHEMA,
+    )?;
     let times=transaction.prepare("SELECT poll_completed_at,poll_next_eligible_at,action,poll_kind,phase,EXISTS(SELECT 1 FROM remote_poll_dispositions d WHERE d.repository_id=o.repository_id AND d.operation_ulid=o.operation_ulid) FROM remote_operation_records o").and_then(|mut q|q.query_map([],|r|Ok((r.get::<_,Option<i64>>(0)?,r.get::<_,Option<i64>>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<String>>(3)?,r.get::<_,String>(4)?,r.get::<_,bool>(5)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
     for (at, next, action, kind, phase, latest) in times {
         poll_time(at)?;
@@ -5200,6 +5367,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         "remote_observation_batches",
         "remote_ref_observations",
         "remote_context_states",
+        "retired_contexts",
         "remote_operation_records",
         "remote_poll_materializations",
         "remote_poll_dispositions",
@@ -5260,6 +5428,7 @@ fn read_snapshot_rows(
         Vec::new(),
     );
     snapshot.history_unknown = policy.history_unknown;
+    snapshot.polling.retired_contexts = read_retired_contexts(connection, repository_id)?;
     snapshot.latest_attempt_at = policy.latest_attempt_at;
     snapshot.next_eligible_at = policy.next_eligible_at;
     snapshot.polling.dispositions = read_poll_dispositions(connection, repository_id)?;
@@ -5463,6 +5632,13 @@ fn read_snapshot_rows(
     // Local discovery has its own validation and recovery contract. Startup's
     // remote audit must not reinterpret unrelated local-cache corruption.
     if audit_history {
+        attach_verified_publications(
+            connection,
+            repository_id,
+            policy.plan.as_ref(),
+            policy.generation,
+            &mut snapshot,
+        )?;
         attach_context_dispositions(&mut snapshot);
         return Ok(snapshot);
     }
@@ -5486,7 +5662,7 @@ fn read_snapshot_rows(
             .plan
             .as_ref()
             .map(|plan| plan.context(kind, &item_id));
-        let evidence = snapshot.publication_evidence_for(kind, &item_id);
+        let evidence = snapshot.fetch_publication_evidence_for(kind, &item_id);
         snapshot.contexts.push(RemoteContextSnapshot::new(
             target,
             Some(kind),
@@ -5497,8 +5673,95 @@ fn read_snapshot_rows(
             RemoteContextState::HistoryUnknown,
         ));
     }
+    attach_verified_publications(
+        connection,
+        repository_id,
+        policy.plan.as_ref(),
+        policy.generation,
+        &mut snapshot,
+    )?;
     attach_context_dispositions(&mut snapshot);
     Ok(snapshot)
+}
+
+/// Qualified immutable Push journals can prove publication even while a distinct
+/// Fetch endpoint has never advertised the context. No Fetch row/ref is invented.
+/// Decode/audit only the newest proof per identity, using the context-only index
+/// so completed poll history is never traversed for this projection.
+fn attach_verified_publications(
+    db: &Connection,
+    id: i64,
+    plan: Option<&RemoteRefPlan>,
+    generation: i64,
+    snapshot: &mut RemoteSnapshot,
+) -> Result<(), RepositoryError> {
+    let Some(plan) = plan else {
+        return Ok(());
+    };
+    let mut proven = Vec::new();
+    for context in &snapshot.contexts {
+        let (Some(kind), Some(item)) = (context.kind, context.item_id.as_ref()) else {
+            continue;
+        };
+        if context.publication_evidence == RemotePublicationEvidence::ObservedPublished
+            || snapshot
+                .polling
+                .retired_contexts
+                .iter()
+                .any(|(k, i)| *k == kind && i == item)
+        {
+            continue;
+        }
+        // Only identities already visible in current Fetch/local projections
+        // need a Push overlay. Never audit unrelated completed history on read.
+        let operation:Option<String>=db.query_row("SELECT operation_ulid FROM remote_operation_records operation WHERE operation.repository_id=?1 AND operation.configuration_generation=?2 AND operation.action='synchronize_context' AND operation.kind=?3 AND operation.item_id=?4 AND operation.remote_name=?5 AND operation.primary_branch=?6 AND (operation.authoritative_kind IS NOT NULL OR (operation.sync_checkpoint='push_verified' AND operation.push_oid IS NOT NULL AND operation.push_oid=operation.push_advertised_oid) OR (SELECT phase FROM remote_publication_attempts attempt WHERE attempt.operation_record_id=operation.id ORDER BY number DESC LIMIT 1)='verified') ORDER BY operation.id DESC LIMIT 1",
+            params![id,generation,crate::repository::authoring_kind_segment(&kind),item.to_string(),plan.remote_name(),plan.primary_branch()],|r|r.get(0)).optional().map_err(|_|recovery_required())?;
+        let Some(operation) = operation else {
+            continue;
+        };
+        let op =
+            crate::repository::OperationId::parse(&operation).map_err(|_| recovery_required())?;
+        let record = read_operation(db, id, op)?.ok_or_else(recovery_required)?;
+        let Some((kind, item)) = record.target.item() else {
+            return Err(recovery_required());
+        };
+        let expected = RemoteOperationTarget::for_context(
+            plan,
+            RemoteOperationAction::SynchronizeContext,
+            kind,
+            item.clone(),
+        )
+        .map_err(|_| recovery_required())?;
+        let attempt = latest_publication_attempt(db, &record)?;
+        let verified = record.authority.is_some()
+            || (record.sync_checkpoint == Some(SynchronizationCheckpoint::PushVerified)
+                && record.sync_evidence.push_oid.is_some()
+                && record.sync_evidence.push_oid == record.sync_evidence.push_advertised_oid)
+            || attempt.is_some_and(|a| a.phase == PublicationPhase::Verified);
+        if record.generation != generation || record.target != expected || !verified {
+            return Err(recovery_required());
+        }
+        proven.push((kind, item.clone()));
+    }
+    if !proven.is_empty() {
+        snapshot.polling.fetch_evidence = Some(
+            snapshot
+                .contexts
+                .iter()
+                .filter_map(|c| Some((c.kind?, c.item_id.clone()?, c.publication_evidence)))
+                .collect(),
+        );
+        for context in &mut snapshot.contexts {
+            if proven
+                .iter()
+                .any(|(k, item)| context.kind == Some(*k) && context.item_id.as_ref() == Some(item))
+            {
+                context.publication_evidence = RemotePublicationEvidence::ObservedPublished;
+            }
+        }
+        snapshot.polling.verified_publications = proven;
+    }
+    Ok(())
 }
 
 fn attach_context_dispositions(snapshot: &mut RemoteSnapshot) {

@@ -26,6 +26,7 @@ use time::OffsetDateTime;
 use crate::canonical;
 
 mod bridges;
+mod cleanup;
 mod comment_publication;
 mod coordination;
 pub use comment_publication::*;
@@ -39,6 +40,7 @@ mod native_resolution;
 #[cfg(windows)]
 #[path = "repository/native_resolution/windows.rs"]
 mod native_resolution;
+mod promotion;
 mod read;
 mod recovery;
 mod remote;
@@ -71,6 +73,7 @@ pub use keys::{
     UnregisterSharedKeyOutcome,
 };
 pub use mutation::*;
+pub use promotion::*;
 pub use read::*;
 use recovery::{
     IndexOwner, LocalStep, RecoveryRecord, advance_after_observation, begin_or_reconcile_operation,
@@ -322,6 +325,7 @@ pub struct RepositoryService {
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     poll_boundary_hook: Mutex<Option<PollBoundaryHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    refresh_persist_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     index_owner_heartbeat_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -830,6 +834,24 @@ pub const FAILURE_POINT_EXIT_STATUS: i32 = 86;
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    AfterConfirmed,
+    AfterContextSync,
+    BeforeIntegrationRef,
+    AfterIntegrationRef,
+    AfterPublication,
+    BeforeRemoteDeletion,
+    // F7 uses AfterRemoteDeletion below, shared with remote configuration.
+    DuringWorktreeRemoval,
+    BeforeBranchDeletion,
+    BeforeCompletion,
+    /// Inside F10: Git tracking deletion has committed, SQL completion has not
+    /// begun, and the backend ref lock is still held by retirement evidence.
+    PromotionAfterTrackingDeletion,
+    /// Inside F10/F11: SQL completion committed, before its result is consumed
+    /// and before the backend ref lock is released (lost commit-result seam).
+    PromotionAfterCompletionCommit,
+    AfterCompletion,
+    RefreshFailure,
     PollBeforeTarget,
     PollBeforeDiscovery,
     PollAfterCompletion,
@@ -1312,6 +1334,54 @@ impl RepositoryService {
         repository_id: i64,
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
+        let first =
+            self.refresh_repository_observed(repository, root.clone(), repository_id, owner);
+        if !first
+            .as_ref()
+            .is_err_and(|e| e.kind == RepositoryErrorKind::RecoveryRequired)
+        {
+            return first;
+        }
+        let operation = RepositoryOperation::RefreshRepository;
+        let reclaimed = {
+            let _guard = cache_write_guard(&self.registry_path, &root, operation)?;
+            let connection = open_registry(&self.registry_path, &mut |_| {})
+                .map_err(|e| e.for_operation(operation, &root))?;
+            let key = registry_root_key(&root, operation)?;
+            recovery::reclaim_invalidated_indexing(&connection, owner, key)
+                .map_err(|e| e.for_operation(operation, &root))?
+        };
+        let Some(fresh) = reclaimed else {
+            return first;
+        };
+        // One bounded fresh pass under a newly claimed epoch of this SAME
+        // record. The original heartbeat cannot touch the new epoch. No scan,
+        // prompt or transport is performed while holding the claim guards.
+        let heartbeat = IndexOwnerHeartbeat::start(
+            self.registry_path.clone(),
+            fresh,
+            root.clone(),
+            self.take_index_owner_heartbeat_hook(),
+        );
+        let result =
+            self.refresh_repository_observed(repository, root.clone(), repository_id, fresh);
+        drop(heartbeat);
+        if result
+            .as_ref()
+            .is_err_and(|e| e.kind != RepositoryErrorKind::RepositoryNotRegistered)
+        {
+            let _ = set_refresh_operation(&self.registry_path, fresh, "failed", None, &root);
+        }
+        result
+    }
+
+    fn refresh_repository_observed(
+        &self,
+        repository: &Repository,
+        root: PathBuf,
+        repository_id: i64,
+        owner: IndexOwner,
+    ) -> Result<RefreshOutcome, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         // Taken before anything is observed: what this refresh stores can be
         // no newer than this, so a file changed while it runs reads as
@@ -1341,6 +1411,21 @@ impl RepositoryService {
         }
         let after = observe_root(repository, &root);
         touch_refresh_index_owner(&self.registry_path, owner, &root)?;
+        if let Some(hook) = self
+            .refresh_persist_hook
+            .lock()
+            .map_err(|_| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.clone()),
+                    RepositoryErrorKind::InjectedFailure,
+                    "the test refresh-persist hook is unavailable",
+                )
+            })?
+            .take()
+        {
+            hook();
+        }
         if let Err(error) =
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)
         {
@@ -3775,6 +3860,7 @@ impl RepositoryService {
             lifecycle_lease_hook: Mutex::new(None),
             poll_boundary_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
+            refresh_persist_hook: Mutex::new(None),
             refresh_claim_hook: Mutex::new(None),
             index_owner_heartbeat_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
@@ -5237,6 +5323,16 @@ impl RepositoryService {
             .refresh_claim_hook
             .lock()
             .expect("test refresh-claim hook lock") = Some(Box::new(hook));
+    }
+
+    /// Both refresh observations have been captured, immediately before SQL
+    /// persistence. No repository lease, cache guard or transaction is held.
+    #[doc(hidden)]
+    pub fn set_refresh_persist_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .refresh_persist_hook
+            .lock()
+            .expect("test refresh-persist hook") = Some(Box::new(hook));
     }
 
     #[doc(hidden)]
@@ -8718,14 +8814,19 @@ fn canonical_context_at(
     root: &Path,
     operation: RepositoryOperation,
 ) -> Result<CanonicalContext, RepositoryError> {
+    #[cfg(test)]
+    discovery::scan_checkpoint(root);
     let mut sources = Vec::new();
     collect_canonical_sources(root, &mut sources, operation)?;
+    Ok(canonical_context_from_sources(sources))
+}
+fn canonical_context_from_sources(sources: Vec<(PathBuf, String)>) -> CanonicalContext {
     let candidates = sources
         .iter()
         .filter_map(|(path, source)| canonical::parse_item(path, source).ok())
         .collect();
     let items = canonical::validate_context(sources).items;
-    Ok(CanonicalContext { items, candidates })
+    CanonicalContext { items, candidates }
 }
 
 fn document_path_for_id(
@@ -9059,6 +9160,98 @@ fn validate_context_worktree(
     require_target: bool,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    validate_context_worktree_identity(repository, context, operation)?;
+    let worktree_context = canonical_context_at(&context.worktree, operation)?;
+    validate_context_items(context, worktree_context, require_target, operation)
+}
+/// Same canonical policy as filesystem inspection, using immutable commit data
+/// for lease-held revalidation. No directory walk or working-tree scan occurs.
+fn validate_context_tree(
+    repository: &Repository,
+    context: &ItemContext,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let inspect = || -> Result<CanonicalContext, ()> {
+        let tree = repository
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .map_err(|_| ())?;
+        let snapshot =
+            RepositoryService::canonical_tree_sources(repository, &tree).map_err(|_| ())?;
+        let sources = snapshot
+            .sources
+            .iter()
+            .filter_map(|(path, bytes)| {
+                // Match the filesystem collector's regular-file boundary.
+                // A symlink blob contains link bytes, not canonical source;
+                // executable regular blobs remain valid under approved T2.
+                if !matches!(
+                    snapshot.entries.get(path),
+                    Some((_, 0o100644 | 0o100755, Some(git2::ObjectType::Blob)))
+                ) {
+                    return None;
+                }
+                Some((
+                    PathBuf::from(std::str::from_utf8(path).ok()?),
+                    std::str::from_utf8(bytes).ok()?.to_owned(),
+                ))
+            })
+            .collect();
+        Ok(canonical_context_from_sources(sources))
+    };
+    let canonical = inspect().map_err(|_| {
+        RepositoryError::new(
+            operation,
+            Some(context.root.clone()),
+            RepositoryErrorKind::MismatchedAuthoringContext,
+            "the canonical target commit cannot be inspected",
+        )
+    })?;
+    validate_context_items(context, canonical, true, operation)
+}
+fn validate_context_items(
+    context: &ItemContext,
+    worktree_context: CanonicalContext,
+    require_target: bool,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let has_target = worktree_context
+        .items
+        .iter()
+        .any(|item| authoring_item_matches(item, context));
+    let target_candidates = worktree_context
+        .candidates
+        .iter()
+        .filter(|item| canonical_item_has_id(item, &context.item_id))
+        .collect::<Vec<_>>();
+    let only_matching_target_kind = !target_candidates.is_empty()
+        && target_candidates
+            .iter()
+            .all(|item| authoring_item_matches(item, context));
+    if (require_target && (!has_target && !only_matching_target_kind))
+        || (!require_target
+            && (canonical_context_has_duplicate_item_id(&worktree_context, &context.item_id)
+                || worktree_context.candidates.iter().any(|item| {
+                    canonical_item_has_id(item, &context.item_id)
+                        && !authoring_item_matches(item, context)
+                })))
+    {
+        return Err(RepositoryError::new(
+            operation,
+            Some(context.root.clone()),
+            RepositoryErrorKind::MismatchedAuthoringContext,
+            "the deterministic worktree does not contain the requested canonical item",
+        ));
+    }
+    Ok(())
+}
+/// Bounded locator/registration/HEAD proof shared by lease-held callers that
+/// validate canonical content from immutable Git trees instead of scanning FS.
+fn validate_context_worktree_identity(
+    repository: &Repository,
+    context: &ItemContext,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
     validate_existing_authoring_worktree_path(context, operation)?;
     let worktree = repository
         .find_worktree(&context.item_id.to_string())
@@ -9090,35 +9283,6 @@ fn validate_context_worktree(
             Some(context.root.clone()),
             RepositoryErrorKind::MismatchedAuthoringContext,
             "the deterministic worktree has a different checked-out branch",
-        ));
-    }
-    let worktree_context = canonical_context_at(&context.worktree, operation)?;
-    let has_target = worktree_context
-        .items
-        .iter()
-        .any(|item| authoring_item_matches(item, context));
-    let target_candidates = worktree_context
-        .candidates
-        .iter()
-        .filter(|item| canonical_item_has_id(item, &context.item_id))
-        .collect::<Vec<_>>();
-    let only_matching_target_kind = !target_candidates.is_empty()
-        && target_candidates
-            .iter()
-            .all(|item| authoring_item_matches(item, context));
-    if (require_target && (!has_target && !only_matching_target_kind))
-        || (!require_target
-            && (canonical_context_has_duplicate_item_id(&worktree_context, &context.item_id)
-                || worktree_context.candidates.iter().any(|item| {
-                    canonical_item_has_id(item, &context.item_id)
-                        && !authoring_item_matches(item, context)
-                })))
-    {
-        return Err(RepositoryError::new(
-            operation,
-            Some(context.root.clone()),
-            RepositoryErrorKind::MismatchedAuthoringContext,
-            "the deterministic worktree does not contain the requested canonical item",
         ));
     }
     Ok(())

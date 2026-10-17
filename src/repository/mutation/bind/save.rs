@@ -251,7 +251,29 @@ pub(crate) fn run<S: Save + ?Sized>(
             // The commit and the effects come from what Git shows, made
             // after the domain call: a save that changed nothing can
             // name a commit it did not make.
-            match confirmed(&root, &accepted.position, &path, report.claimed()) {
+            let commit = if matches!(
+                report,
+                SaveReport::Saved {
+                    claimed: None,
+                    discovered: false
+                }
+            ) {
+                // A duplicate may commit and own discovery before this first
+                // accepted call reaches the domain. The active-owner fast path
+                // returns NoChange for this call, not for the request. Recover
+                // only its journal-backed, intended-content commit in the
+                // accepted range, just as re-entry does; never substitute HEAD.
+                accepted
+                    .read_journal_row(service)
+                    .map_err(|_| Unreadable)
+                    .and_then(|journal| {
+                        path_evidence(save, accepted)
+                            .map(|evidence| Before { journal, evidence }.own())
+                    })
+            } else {
+                confirmed(&root, &accepted.position, &path, report.claimed())
+            };
+            match commit {
                 Ok(commit) => {
                     let (code, effects) = report.result(commit);
                     let standing = standing(report, || accepted.journal_row(service));

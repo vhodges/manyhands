@@ -167,3 +167,23 @@ pub(super) fn build_callbacks<'a>(
     });
     callbacks
 }
+
+/// Locked libgit2 uses src=current remote OID and dst=new OID, even though
+/// a deletion has an empty source refname. Refuse before sending any command.
+pub(super) fn guard_delete<'a>(
+    callbacks: &mut git2::RemoteCallbacks<'a>,
+    reference: &'a str,
+    expected: git2::Oid,
+) {
+    callbacks.push_negotiation(move |updates| {
+        if updates.len() != 1
+            || expected.is_zero()
+            || updates[0].src() != expected
+            || !updates[0].dst().is_zero()
+            || updates[0].dst_refname() != Some(reference)
+        {
+            return Err(git2::Error::from_str("SSH deletion precondition rejected"));
+        }
+        Ok(())
+    });
+}

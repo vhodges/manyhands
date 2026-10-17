@@ -295,7 +295,29 @@ pub(super) struct ObservedCommentThread {
     pub(super) replies: Vec<ObservedCommentThread>,
 }
 
+#[cfg(test)]
+type ScanHook = Box<dyn FnMut()>;
+#[cfg(test)]
+thread_local! { static SCAN_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf,ScanHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
+#[cfg(test)]
+pub(super) fn set_scan_hook(root: PathBuf, hook: impl FnMut() + 'static) {
+    SCAN_HOOKS.with(|h| h.borrow_mut().insert(root, Box::new(hook)));
+}
+#[cfg(test)]
+pub(super) fn clear_scan_hook(root: &Path) {
+    SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
+}
+#[cfg(test)]
+pub(super) fn scan_checkpoint(root: &Path) {
+    let hook = SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
+    if let Some(mut hook) = hook {
+        hook();
+        SCAN_HOOKS.with(|h| h.borrow_mut().insert(root.into(), hook));
+    }
+}
 pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
+    #[cfg(test)]
+    scan_checkpoint(root);
     let mut problems = Vec::new();
     let configuration = observe_configuration(root, &mut problems);
     let configuration_source = fs::read(root.join(canonical::CONFIG_PATH)).ok();
@@ -1707,6 +1729,7 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::keys::migrate_material_schema(&transaction)?;
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
+    super::promotion::record::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     migrate_item_read_schema(connection)?;
     super::recovery::migrate_operation_records(connection)?;

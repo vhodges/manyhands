@@ -41,6 +41,8 @@ pub(crate) enum Checkpoint {
     TrackingWritten,
     /// Client attempt boundary, not receive-side transaction evidence.
     ExactPushStarted,
+    /// Guarded delete returned (possibly ambiguously); no advertisement proof yet.
+    DeleteAttemptReturned,
     /// Fault seam between the caller's snapshot check and scoped preparation.
     ActionSnapshotChecked,
     /// Successful fresh receive-pack list on the independently resolved Push endpoint.
