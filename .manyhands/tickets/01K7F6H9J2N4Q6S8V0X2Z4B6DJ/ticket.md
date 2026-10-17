@@ -16,8 +16,8 @@ integration, publication, and cleanup safety boundary.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-02-cycle-10-confirmed-ticket-closure.md`.
-- [ ] Create the implementation plan and record its checkpoints as ticket
+- [x] Create `docs/Cycles/wave-02-cycle-10-confirmed-ticket-closure.md`.
+- [x] Create the implementation plan and record its checkpoints as ticket
   comments.
 
 ## Entry Gate
