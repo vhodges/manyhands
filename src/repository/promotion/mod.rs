@@ -240,8 +240,8 @@ pub enum PathChange {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct PromotionPathChange {
-    path: PathBuf,
-    change: PathChange,
+    pub(super) path: PathBuf,
+    pub(super) change: PathChange,
 }
 impl PromotionPathChange {
     pub fn path(&self) -> &Path {

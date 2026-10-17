@@ -241,7 +241,7 @@ fn writes(operation: RepositoryOperation) -> Writes {
 /// The item an authoring operation writes, from its row's target:
 /// `authoring-context-v1/<kind>/<item ID>/<intent>`, followed for a write
 /// by the paths it names.
-fn authoring_item(target: Option<&str>) -> Option<String> {
+pub(in super::super) fn authoring_item(target: Option<&str>) -> Option<String> {
     let context = target?.split('\0').next()?;
     let mut parts = context.split('/');
     if parts.next() != Some("authoring-context-v1") {

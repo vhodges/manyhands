@@ -28,6 +28,10 @@ use crate::canonical;
 mod bridges;
 mod cleanup;
 mod closure;
+pub use closure::{
+    ClosureBlocker, ClosureExpectation, PlannedClosure, PreviewTicketClosureRequest,
+    TicketClosurePreflight, TicketClosurePreview,
+};
 mod comment_publication;
 mod coordination;
 pub use comment_publication::*;

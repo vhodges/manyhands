@@ -172,6 +172,18 @@ fn steps_permit_only_designed_transitions() {
         wrong.integration_oid = Some(oid('4'));
         assert!(save_record(&tx, 1, &wrong).is_err(), "{backwards:?}");
     }
+    // The refusal above is the transition itself, not another invalid field:
+    // closing → superseded is never permitted, with or without a remote,
+    // for either closure kind (R-P2).
+    for remote in [false, true] {
+        for kind in [Some(ClosureKind::Record), Some(ClosureKind::Existing)] {
+            assert!(
+                !ClosureStep::Closing.permits(ClosureStep::Superseded, remote, kind),
+                "closing → superseded ({remote}, {kind:?})"
+            );
+        }
+    }
+    assert!(ClosureStep::Closing.permits(ClosureStep::Abandoned, false, Some(ClosureKind::Record)));
     assert_eq!(
         kind_of(begin_closing(
             &tx,

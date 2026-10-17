@@ -543,3 +543,121 @@ verification. fmt is clean, and Clippy with `-D warnings` is clean.
 
 `cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
 --locked -- -D warnings` is clean.
+
+## Task 3 — Closure Observation, Blockers, Preview And Digest (2026-10-17)
+
+### What landed
+
+- **Public API** (`closure/mod.rs`, re-exported from `repository`):
+  `PreviewTicketClosureRequest`, `TicketClosurePreflight`
+  (`Ready` / `Blocked { blockers, identity_configuration }`),
+  `TicketClosurePreview` (accessors only), `PlannedClosure`
+  (`Record { closed_by }` / `Existing { closed_at, closed_by }`, `Debug`
+  shows the variant only) and `RepositoryService::preview_ticket_closure`.
+  The execution types (`CloseTicketRequest`, `TicketClosureError`,
+  `TicketClosureResult`, `TicketClosureOutcome`, `ClosureRecording`) are left
+  to Task 6, which first uses them.
+- **`closure/observe.rs`**: `ClosureObservation` (no `Debug`),
+  `PreparedClosureObservation`, `prepare_observation` (outside the lease),
+  `revalidate_under_lease` (no discovery; guard, registration, pending work,
+  Git and identity re-read), `closed_by_text`, `closed_ticket_bytes` with
+  `ClosureContentError`, `CLOSURE_DIGEST_DOMAIN` and the digest.
+- **`closed_ticket_bytes` (R-P1, C10, R-T0-2)** is complete here, with its
+  round-trip and refusal tests. It compares after canonical normalization:
+  every parsed field, the body and every unknown key must survive, except
+  that `deps` and `parent` may take their canonical form. Preview runs it on
+  the context ticket and on the pre-closure result ticket.
+- **Shared promotion helpers** (`promotion/observe.rs`, no behavior
+  change): `ObservationSeal` (the guard before/after discovery and the
+  revalidation reopen), `open_observation`, `read_view_with` (one registry
+  transaction plus caller reads), `target_cleanliness`/`Cleanliness`,
+  `context_presence`, `primary_presence`, `remote_facts` (D2),
+  `remote_context_history` (D5), `planned_result`, `ChangeEvidence` and
+  `change_evidence`, and the `digest` encoders (D6 `local_oids`). Promotion's
+  `observe_git`, `PreparedObservation` and `expectation` now call them with
+  byte-identical results. `PromotionPathChange`'s fields are `pub(super)`;
+  `bridges::abandon::authoring_item` is `pub(in super::super)` and reused
+  for C12 (R-T0-4), not copied.
+- **Task 2 leftover.** `steps_permit_only_designed_transitions` now asserts
+  `ClosureStep::Closing.permits(Superseded, ..)` is false for both kinds,
+  with and without a remote, and that `Closing → Abandoned` is permitted.
+
+### Decisions and conservative choices
+
+- **Guard scope.** `LifecycleKind::guarded_directory()` stays
+  `.manyhands/tickets`. The design says the guard "hashes the ticket
+  directory, not docs", parallel to the documents directory, and does not
+  name `.manyhands/tickets/<ULID>`. The wider directory is a superset; the
+  index and status walks already cover every canonical path under it.
+- **Base closure** is read from Git at the base (the tracking primary with a
+  remote, else the local primary), never from a worktree. A file naming
+  either closure key counts as closed, so a malformed closure never admits
+  a merge.
+- **`AlreadyClosed`** replaces `ContextMissing` when the base is closed; it
+  is also reported for "not contained, closed" without `IntegrationConflict`
+  (no merge is ever attempted into a closed ticket).
+- **D5** applies only to a context that is not contained in the base: a
+  contained context runs no context child, so nothing could recreate the
+  deleted remote branch (promotion's `AlreadyContained` exemption, extended
+  to the contained-open row). Remote-branch cleanup is planned unless the
+  context is contained and its tracking ref is absent.
+- **`TicketInvalidAfterClosure`** is reported when the pre-closure result
+  has a `.manyhands/worktrees/` entry, not exactly one conforming ticket at
+  `.manyhands/tickets/<ULID>/ticket.md` as a `100644`/`100755` Blob, when
+  `closed_ticket_bytes` refuses the context or result ticket (`Record`), or
+  when the result does not carry exactly the planned `Existing` fields. The
+  context ticket itself must be a canonical Blob, else
+  `ContextNonconforming`.
+- **C12.** A ticket's comment whose own local row is unfinished is reported
+  as both `LocalOperationPending` and `CommentPublicationPending` (its row's
+  target names the ticket). A binding whose publication row was never
+  created is not unfinished (controller ruling). A remote row is unfinished
+  by the status read's rule (`state.rs`): an active phase, an interrupted or
+  failed synchronization, `index_pending` or `reconciliation_required`.
+- **Identity.** A confirmation for another configuration is treated as no
+  confirmation: the fresh expected configuration is returned with
+  `IdentityRequired`. For `Existing`, an identity is selected when available
+  and never blocks. Preview uses a fixed stand-in `closed_by` for the
+  closed-ticket check while the identity is missing (any valid text gives
+  the same verdict).
+- **`needs_context_child`** is `remote && !contained`.
+
+### Tests
+
+- **Red.** The observation code was drafted before its tests, so the red
+  run is a mutation run: with the C12 local check disabled, the relationship
+  normalization exemption removed and `AlreadyClosed` no longer replacing
+  `ContextMissing`, `--lib closure::observe::tests::` failed 6 of 52
+  (`closed_ticket_bytes_normalizes_relationships_without_refusing`,
+  `local_operation_pending`, `pending_local_operation_blocks`,
+  `pending_comment_publication_blocks`,
+  `every_blocker_is_reported_in_fixed_order`,
+  `table_no_context_base_closed_is_already_closed`). The source was then
+  restored byte for byte.
+- **Green.** 52 tests in `closure/observe_tests.rs`: each blocker alone
+  (plus `context_branch_missing`, `primary_tracking_missing`,
+  `context_symlink_ticket_is_nonconforming`), all together in fixed order,
+  `IdentityRequired` only alone and only for `Record`; the integration table
+  (eight tests over the seven rows); `pending_local_operation_blocks` and
+  `pending_comment_publication_blocks` (both rechecked through
+  `revalidate_under_lease`); `context_with_closure_fields_previews_existing`;
+  `preview_lists_whole_branch_changes`;
+  `preview_and_execution_share_closed_ticket_check` (a CRLF hand-written
+  ticket previews; a clean merge of two valid tickets that duplicates a key
+  is refused by `closed_ticket_bytes` and is `TicketInvalidAfterClosure`);
+  the digest (stable, redacted, each bound fact, mode-only changes, D6, time
+  of day); `effective_identity_wins_over_confirmation`,
+  `confirmation_must_match_configuration`; `preview_is_read_only`;
+  `closed_ticket_bytes` round trip (LF and CRLF), relationship
+  normalization and refusals.
+
+| Args | Before | Task 3 | Wall time |
+| --- | --- | --- | --- |
+| `--lib closure::` | 15 | 67 (+52) | 28 s |
+| `--lib closure` (name filter) | — | 71 | 33 s |
+| `--lib promotion` | 197 | 197 | 247 s |
+| `--test document_promotion` | 74 SSH | 74 SSH (unchanged) | 1009 s |
+
+`cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
+--locked -- -D warnings` is clean (it builds every integration target, so
+the source-included `production` wrappers compile).
