@@ -1049,9 +1049,15 @@ const INDEXING_STATE: &str = "indexing";
 
 /// The states of a pending row whose operation has handed off to
 /// indexing: the state the hand-off begins in, the state of a call that
-/// has claimed it, and the two a hand-off that did not bring the index
-/// up to date leaves.
-const HAND_OFF_STATES: [&str; 4] = ["authoritative_observed", INDEXING_STATE, "failed", "retry"];
+/// has claimed it, the explicit fence when its observations are invalidated,
+/// and the two a hand-off that did not bring the index up to date leaves.
+const HAND_OFF_STATES: [&str; 5] = [
+    "authoritative_observed",
+    INDEXING_STATE,
+    "index_invalidated",
+    "failed",
+    "retry",
+];
 
 /// Closes the row of a call that was rejected and left nothing behind. The row
 /// no longer blocks the repository, and a repeat of its ID begins again.
@@ -1844,7 +1850,7 @@ pub(super) fn claim_indexing(
               WHERE id = ?1 AND state IN (
                  'created', 'worktree_observed', 'authoring_checkpoint_observed', 'remote_changed',
                  'publication_committed', 'initialization_committed', 'authoritative_observed',
-                 'failed', 'observed', 'persisted', 'retry'
+                  'failed', 'observed', 'persisted', 'retry', 'index_invalidated'
              ) OR (id = ?1 AND state = 'indexing' AND observed_at < ?3)",
             params![record_id, now(), stale_before],
         )
@@ -1860,6 +1866,57 @@ pub(super) fn claim_indexing(
         )
         .map_err(RepositoryError::sqlite)?;
     Ok(Some(IndexOwner { record_id, epoch }))
+}
+
+/// A committed promotion invalidates observations collected before its cleanup.
+/// Preserve every journal identity/authoritative step; explicitly fence only live
+/// index owners of this repository in the SAME transaction as completion/stale.
+pub(super) fn invalidate_index_observations(
+    transaction: &rusqlite::Transaction<'_>,
+    repository_id: i64,
+) -> Result<(), RepositoryError> {
+    let rows = transaction.prepare(
+        "SELECT id,index_owner_epoch FROM operation_records WHERE root_path=(SELECT root_path FROM repositories WHERE id=?1) AND state='indexing'"
+    ).and_then(|mut q|q.query_map([repository_id],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>())
+        .map_err(RepositoryError::sqlite)?;
+    for (id, epoch) in rows {
+        let next = epoch
+            .checked_add(1)
+            .filter(|_| epoch >= 0)
+            .ok_or_else(super::remote::state::recovery_required)?;
+        let changed=transaction.execute(
+            "UPDATE operation_records SET state='index_invalidated',index_owner_epoch=?3,observed_at=?4 WHERE id=?1 AND state='indexing' AND index_owner_epoch=?2",
+            params![id,epoch,next,now()],
+        ).map_err(RepositoryError::sqlite)?;
+        if changed != 1 {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
+
+/// Only the exact prior owner may automatically reclaim this explicit fence.
+/// Foreign/reclaimed/completed/abandoned rows are never adopted. The caller must
+/// discard BOTH observations and re-observe after receiving the new epoch.
+pub(super) fn reclaim_invalidated_indexing(
+    connection: &Connection,
+    owner: IndexOwner,
+    root_key: &str,
+) -> Result<Option<IndexOwner>, RepositoryError> {
+    let fenced = owner
+        .epoch
+        .checked_add(1)
+        .ok_or_else(super::remote::state::recovery_required)?;
+    let next = fenced
+        .checked_add(1)
+        .ok_or_else(super::remote::state::recovery_required)?;
+    let changed=connection.execute(&format!(
+        "UPDATE operation_records SET state='indexing',index_owner_epoch=?4,observed_at=?5 WHERE id=?1 AND root_path=?2 AND state='index_invalidated' AND index_owner_epoch=?3 AND {NOT_ABANDONED}"
+    ),params![owner.record_id,root_key,fenced,next,now()]).map_err(RepositoryError::sqlite)?;
+    Ok((changed == 1).then_some(IndexOwner {
+        record_id: owner.record_id,
+        epoch: next,
+    }))
 }
 
 pub(super) fn transition_indexing(
@@ -2547,7 +2604,13 @@ mod abandoned_row_tests {
             "publication_committed",
             "remote_changed",
         ] {
-            for state in ["authoritative_observed", "indexing", "failed", "retry"] {
+            for state in [
+                "authoritative_observed",
+                "indexing",
+                "index_invalidated",
+                "failed",
+                "retry",
+            ] {
                 assert!(owes("save_ticket", state, Some(step)), "{step} in {state}");
             }
             // The step is recorded and the hand-off has not begun: an
@@ -2570,6 +2633,7 @@ mod abandoned_row_tests {
             Some("authoring_destination_observed"),
             Some("document_destination_observed"),
             Some("document_move_observed"),
+            Some("comment_checkpoint_intent"),
             Some("repository_initialized"),
             Some("configuration_written"),
         ] {
@@ -2578,6 +2642,7 @@ mod abandoned_row_tests {
                 "worktree_observed",
                 "authoritative_observed",
                 "indexing",
+                "index_invalidated",
                 "failed",
                 "retry",
             ] {
@@ -2587,6 +2652,7 @@ mod abandoned_row_tests {
         // A refresh that failed has no work of its own recorded, and a
         // rebuild's states are not a hand-off's.
         assert!(!owes("refresh", "failed", None));
+        assert!(!owes("refresh", "index_invalidated", None));
         assert!(!owes("rebuild", "observed", None));
         assert!(!owes("rebuild", "error", None));
         // An abandoned row and a rejected one have ended.

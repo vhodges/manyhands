@@ -3231,3 +3231,1098 @@ Final coordination verification: `git diff --check` and `git diff --cached
 Both source-integrity witnesses were rechecked and match the before-pass values
 exactly (tracked source diff and both untracked Rust files). No source edit/test
 rerun/commit occurred. Current HEAD remains the exact checkpoint base above.
+
+## Task 7 — Public-API SSH Evidence And Contract Blockers (2026-10-16)
+
+**Status: BLOCKED / INCOMPLETE, not review-ready for the complete Task 7.**
+The new target retains two ordinary failing acceptance cases. Neither is ignored,
+converted into an expected failure, nor counted as an accepted contract. Owner
+decisions below are required before claiming the requested complete evidence.
+The deletion-OID correction is independently reviewable as an uncommitted fix;
+it does not resolve those policy contradictions or finish Task 7.
+
+### Authority / preflight / scope
+
+- Fresh worker read worktree AGENTS, implementing-a-cycle/TDD instructions, approved
+  implementation plan, ledger, public promotion/remote APIs and existing SSH
+  harnesses; systematic-debugging was used for failures. No subagents.
+- Exact worktree: `.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`, branch
+  `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. Initial status was clean;
+  Tasks 0–6 checkpoints are retained, Task 6 at
+  `c0e972655f04ea67bb9411877b0627e7eb8439ac`.
+- `git fetch origin main`, then `git rebase origin/main` in that worktree:
+  no-op, before/after HEAD both c0e9726; origin/main remains
+  `89d04f901636229392a311241f8e777f0a00962b`. Ancestry succeeded, status clean.
+  Published ticket branch divergence was observed, not modified.
+- Only targeted Rust commands through Devenv. No dependency, GPUI, global config,
+  developer key, sleeps, watchdog changes, staging, commit, push, PR, native
+  workflow dispatch, merge, closure or worktree removal. Task 8 gates remain due.
+
+### T7-1 — Real deletion guard used fetched rather than published OID (fixed locally)
+
+The first runnable case saved a document, previewed and called actual
+`promote_document` against the owned SSH server. Both context and primary were
+published, but promotion returned cleanup pending RecoveryRequired and
+IndexPending; its `remote_context_oid` was absent. No deletion reached receive-pack.
+This is a real lifecycle failure before cache loss, not an authentication fault.
+
+Root cause: synchronization's fetched T(C) may be absent on first publication or
+remain at the earlier checkpoint on subsequent publication. The parent saved
+that tracking observation and passed it as the remote delete guard. Task 6's
+injected deletion adapter did not check that guard against an actual server.
+
+Current minimal correction in `promotion/run.rs`: retain `remote_context_oid`
+as the bound fetched tracking evidence for Git-first local retirement, but obtain
+the remote delete guard from the context child's **durable completed publication
+authority** through existing `record::child_state`. Missing/non-complete authority
+fails closed as pending recovery. No new field/schema/API or synchronization
+behavior is introduced. Configuration/ownership fences still surround the call.
+
+An initial attempted correction stored the published OID in the tracking field.
+That broke 16 existing tests with genuinely older tracking refs; the attempt was
+replaced, not retained. Tracking and verified remote authority are separate facts.
+The final targeted library run restores all 188 tests without modifying them.
+
+Public SSH regressions (actual library import, no source inclusion/private API):
+
+- `first_publication_records_verified_context_oid`: first publish with absent
+  T(C), exact promotion subject and ordered `[base, context]` parents, server
+  primary equals merge, exactly three accepted post-setup commands (context push,
+  primary push, exact-old-OID delete), worktree/local branch/remote context absent.
+  Requires Complete, not a silently consumed IndexPending.
+- `later_publication_deletes_verified_not_stale_tracking_oid`: publish an initial
+  save, publicly synchronize to fetch its tracking tip, save a distinct new edit,
+  promote and require accepted deletion guarded by the **new** checkpoint, with
+  cleanup complete. This covers the stale-present case separately from absence.
+
+### T7-2 — Cache-loss / R1 contradiction (owner decision required)
+
+`cache_loss_fresh_edit_first_publication` executes real promotion/cleanup, attests
+one retirement row, absent context branch/worktree, then removes the actual
+registry and sidecars. It uses the existing public corrupt-cache replacement and
+rebuild path to obtain the required unknown-history state, re-registers/selects
+the fixture key, creates a fresh Edit context at the merged primary and performs
+a distinct **public save**. The retirement count is now zero. The actual public
+snapshot returns HistoryUnknown; actual synchronization returns HistoryUnknown
+and leaves the context unadvertised. Both before/after workflow privacy scans pass.
+No SQL history/retirement insertion, synchronization mock or fabricated result.
+
+The original missing-store-only variant observed NeverPublished and could publish:
+opening a merely absent registry treats it as a new store, so it does **not**
+establish the plan's `history_unknown` premise. The retained test explicitly uses
+the established corrupt-loss/rebuild path, as in `tests/remote_observation.rs`,
+rather than manufacturing the flag with SQL. This distinction is important to
+the evidence; plain deletion alone is not claimed to have set that flag.
+
+Source coherence:
+
+- R1's sole exception reads `retired_contexts` from the registry
+  (`remote/state.rs`, `read_retired_contexts`, `publication_evidence_for`).
+- Cache rebuild cannot recover a row erased with that registry. The global
+  marker carries no per-item retirement proof.
+- T4-1 explicitly states cache loss/ref absence alone is not retirement proof.
+  Inferring a retirement from a reachable old promotion commit would silently
+  weaken that approved rule; a later collaborator branch could have been deleted.
+
+**Recommended minimal amendment, NOT approved:** after total registry loss with
+unknown history, fresh publication remains HistoryUnknown until explicitly
+recovered; R1's automatic exception requires retained durable retirement evidence.
+Alternatively the owner can authorize a new independently durable proof/recovery
+design. No such policy, persistence mechanism or automatic inference was added.
+
+### T7-3 — Literal whole-store title privacy conflicts with discovery (owner decision)
+
+`document_title_absent_from_whole_stores` saves/promotes the canary-title document,
+checks workflow rows, creates a VACUUM INTO backup, and scans the whole database,
+WAL and backup. Discovery has one `discovered_items.title` row equal to the title.
+The literal whole-store requirement fails. The first run found title bytes in the
+checkpointed registry and backup; the strengthened retained case pins a reader
+before authoring and proves them in the WAL and backup (file indices 0=DB, 1=WAL,
+2=backup; final observations `31 0 0`, `31 1 1`, `31 2 1`, `30 1 2`). No title or
+other canary is emitted in parent output.
+
+This is established discovery policy, not a title inserted by promotion storage:
+`discovery.rs` defines `discovered_items.title TEXT NOT NULL` and populates it for
+ordinary document discovery. Removing all title metadata is a broader read/cache
+contract change. Promotion/remote rows and formatted public output scan clean.
+
+**Recommended clarification, NOT approved:** titles remain permitted discovery
+metadata; exclude them only from the *whole-cache* prohibition. Keep titles absent
+from promotion/remote workflow rows and diagnostics/output, and keep bodies,
+comments, endpoint/passphrase/key canaries absent from every whole store. If whole
+cache title secrecy is literal policy, authorize the required discovery redesign.
+
+The test helper makes this distinction explicit: each case scans ALL workflow
+row columns with ALL probes (including title/worktree paths), and whole generated
+stores with non-title secrets; the separate ordinary **failing** title case keeps
+the literal acceptance gate red. This is diagnostic decomposition, not an approved
+privacy waiver or full privacy acceptance. Comment bodies are output canaries
+only so far; a real promoted comment remains part of unfinished case 1.
+
+Five child-only negative controls deliberately emit title, body, comment,
+passphrase and endpoint respectively; `capture_privacy_controls_fail_closed`
+requires OutputPrivacy for all five. It also runs bounded raw-output/overflow
+controls. Child raw bytes are scanned before forwarding; only fixed numeric
+observations appear. A/B registries, WAL/sidecars and VACUUM backups are scanned.
+
+### Exact commands / RED, investigation, GREEN
+
+All commands below ran in the ticket worktree, with unchanged locked dependencies.
+Initial test-authoring/setup failures are separated from behavioral RED. Temporary
+fixed numeric production instrumentation used to locate the boundary was removed.
+
+| Exact command | Actual runs/results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test document_promotion cache_loss_fresh_edit_first_publication -- --exact` | 15 runs: initial compile error (test mistakenly used RemotelyDeleted as publication evidence); 14 failed runnable cases during diagnosis. Initial setup correctly refused PrimaryAheadOfRemote because the fixture's anonymous seed push had not updated T(P); corrected with public primary syncs in both clones. Further runs localized the real absent deletion guard, plus one test-only wrong SQL column name. After the initial attempted guard fix the missing-store variant observed NeverPublished (not unknown); the final corrupt-loss run observed **HistoryUnknown + actual synchronization refusal**, with the title-policy scan still failing at that historical point. This selector has no claimed GREEN. |
+| `devenv shell -- cargo test --locked --test document_promotion first_publication_records_verified_context_oid -- --exact` | 3 failed runs: lifecycle pending-recovery RED, then explicit absent-record assertion RED, then initial guard-fix lifecycle assertions passed but strict title store scan failed. Final green executions are in the complete target runs below; the final regression checks actual delete guard/cleanup, not an incorrectly conflated record field. |
+| `devenv shell -- cargo test --locked --lib promotion` | First **172 passed / 16 failed / 807 filtered**, 172.47s with the rejected tracking-field correction. Final **188 passed / 0 failed / 807 filtered**, 160.50s, with the separate-authority fix. No existing unit tests edited. |
+| `devenv shell -- cargo test --locked --lib genuine_context_conflict_resolves_canonical_and_external_and_reuses_owned_resolution` | **1 passed / 0 failed / 994 filtered**, 4.58s after the corrected guard, before the final 188-test run. |
+| `devenv shell -- cargo test --locked --test document_promotion` | Two runs, both **3 SSH cases passed / 2 failed**, warning-free. First established first/stale guard GREEN, five-control GREEN and both ordinary policy failures. Final strengthened exact-merge/receive assertions and pinned-WAL proof retain the same **3/2** result. Failures are title whole-store absence and unknown-history fresh publication, not watchdog/transport issues; numeric panic locations and source assertions identify them. |
+| `devenv shell -- cargo fmt --all` | Two executions, exit 0 (second immediately precedes final target run). |
+| `devenv shell -- cargo fmt --check` | Exit 0. |
+
+### Remaining full acceptance mapping / honest handoff
+
+Numbering follows the owner's full Task 7 brief. None of the following pending
+items is covered merely by the existing 188 unit tests or earlier Cycle targets.
+
+| Owner case | Current real-SSH evidence / remaining obligation |
+| --- | --- |
+| 1 happy A + comment + B preserved poll | Partial: exact merge/parents/server equality/three receives/local and remote cleanup. Real comment, discovery uniqueness, second-parent Git log and materialized B poll still pending. |
+| 2 local-only then configure/publish | Pending. |
+| 3 AlreadyContained/fresh save/second promotion | Pending; the stale-tracking regression is a separate context publication, not a second promotion. |
+| 4 all offline blockers/full A+B+server snapshots | Pending. Fixture primary observation is setup, not blocker acceptance. |
+| 5 four post-integration preservation/supersession cases | Pending. |
+| 6 cache-loss/unknown-history + interrupted F7 cleanup | First part reproduced as **failing T7-2**; F7 real-SSH exit/cache-loss recovery pending. |
+| 7 D4 versus primary-only advance | Pending. |
+| 8 real divergent conflict/public resolve | Pending for this SSH target; targeted genuine local regression passed but is not SSH proof. |
+| 9 primary rejection/offline at publication boundary | Pending. |
+| 10 delete rejection/raced update/tracking preservation | Pending; no claim based on successful deletion alone. |
+| 11 F2 poll primary advance and retry | Pending. |
+| 12 cancelled/non-owned versus retained interrupted children | Pending for real SSH. |
+| 13 actual process exits F1–F12/inside F10/T6-1 repair | Pending for real SSH. Existing unit exit tests were re-run by the 188-test selector, not recast as SSH proof. |
+| 14 genuine held-poll priority, inter-step polls, Busy and post-completion poll | Pending. |
+| 15 remote rename/config fences | Pending. |
+| 16 privacy/negative controls | Partial workflow-row/store-secret/output/control proof; whole-store title requirement is **failing T7-3**; actual comment and all remaining lifecycle states still pending. |
+
+`Cargo.toml` declares the new harness=false target; the manual native workflow
+only appends `--test document_promotion`, leaving its existing four matrix entries
+and workflow_dispatch-only trigger unchanged. **Native execution pending**; no
+dispatch. Required final affected SSH targets remote_synchronization,
+remote_merge_recovery, remote_polling and comment_publication have **not** run in
+this Task 7 session: the complete acceptance target is not ready. Task 8 broad
+gate/CLI/native approval and fresh complete spec/quality reviews remain pending.
+
+Changed files at this checkpoint: `tests/document_promotion.rs`, `Cargo.toml`,
+`.github/workflows/build.yml`, `src/repository/promotion/run.rs`, this ledger,
+implementation-plan status and canonical comment `01M51V7Z00N4Q6S8V0X2Z4B6EC`.
+Risks: two unresolved contract decisions; incomplete requested SSH matrix; deletion
+guard change requires fresh spec/quality review; all platform/native gates remain
+unverified. The helper does not assert the full title secrecy requirement green.
+Return is an uncommitted **blocked evidence checkpoint**, not completion or the
+requested full Task 7 review-ready handoff. Ticket remains open at c0e9726.
+
+Final checkpoint checks: `git diff --check`, `git diff --cached --exit-code`,
+and `git diff --exit-code -- Cargo.lock devenv.nix devenv.lock` exited 0.
+`git status --short --untracked-files=all` lists exactly the seven intended paths
+above, nothing staged. Source diff contains only the separate delete-authority
+lookup/argument change; no temporary production instrumentation remains. Native
+workflow diff changes only its test-list line. No additional Rust run is inferred
+from these documentation/status checks.
+
+## Historical Task 7 Resume — Approved Bounds, 63-Case Review Handoff
+
+**Superseded evidence claim:** SPEC3-P2 later identified incomplete proof in
+groups 9 and 16 despite all 63 assertions passing: irreversible offline scenarios
+ended without recovery, title controls only positively exercised A and a synthetic
+backup probe table, and the rejected title never crossed production. Do not treat
+this historical section as the corrected complete mapping. The test-only SPEC3-P2
+section below records the actual repairs and final 64-case proof; original RED/
+GREEN counts and implementation decisions here remain historical evidence.
+
+**2026-10-16: IMPLEMENTATION / TARGETED EVIDENCE READY FOR FRESH SPEC THEN
+QUALITY REVIEW. Not reviewed/approved/complete yet.** Full change is uncommitted
+against `c0e972655f04ea67bb9411877b0627e7eb8439ac` in the specified ticket branch/
+worktree. Historical T7-2/T7-3 RED and earlier partial mappings above remain as
+history; their STOP/owner-pending status is superseded by the approval and evidence
+here. All original Task 7 journeys now have real-SSH proof. Task 8 is still deferred.
+
+### Owner approval and execution constraints
+
+The owner conveyed approval of **both bounded amendments through the question
+tool**. Independent review confirmed actual contradictions with Cycles 04/05
+history policy and Cycle 08's accepted-discovery-title exception, not harness bugs:
+
+1. **Retained R1 only.** Unknown-history automatic first publication requires a
+   retained validated retirement row and no masking state. Registry loss erases
+   that proof: HistoryUnknown persists across reopen pending explicit recovery/
+   republication. Absence and old promotion merges never reconstruct it. No new
+   republication API is delivered.
+2. **Narrow title metadata exception.** Only existing accepted
+   `discovered_items.title` metadata and DB/WAL/backup copies may contain titles.
+   All workflow/promotion/retirement/remote/recovery/operation rows, formatted
+   results/diagnostics and child output stay title-free. Raw whole stores,
+   sidecars and backups forbid bodies/comments/endpoints/passphrases/credentials/
+   key material and rejected non-indexed title canaries. No new title-bearing
+   workflow write is introduced.
+
+Cycle, design R1/recovery/privacy, plan, handoff and canonical approval comment
+`01M51W7Z00N4Q6S8V0X2Z4B6ED` now record these bounds consistently. Old failures are
+not reclassified as bugs or silently deleted. The renamed loss case now proves
+the approved negative contract; checkpointed/pinned-WAL title cases positively
+attest the permitted metadata and negatively attest workflow contamination.
+
+This was continuation of the same active task/worktree, retaining its recorded
+fresh no-op fetch/rebase at c0e9726 onto origin/main 89d04f9. No rebasing/stashing
+of dirty work, no subagents, no dependency/GPUI/global-config/developer-key change,
+no sleeps or watchdog changes. Every Rust command used Devenv. No staging, commit,
+push, PR, native dispatch, merge, closure or worktree cleanup. The native workflow
+remains workflow_dispatch-only with the same four entries and just the test added.
+
+### Actual bugs found by the new journeys and bounded fixes
+
+The first guard correction T7-1 above remains part of the review scope. Additional
+failures were investigated before changing behavior; no violated contract was
+marked expected, ignored or skipped:
+
+| Finding | Behavioral RED / root cause / correction |
+| --- | --- |
+| **T7-1 deletion guard** | First-publication and stale-tracking SSH cases prove that the remote delete must use completed child publication authority, not fetched T(C). Keep fetched evidence for local retirement. Historical rejected tracking-field correction and 16 unit failures remain above; final implementation separates them. |
+| **T7-4 retained R1 versus immutable Push history** | `contained_and_fresh_second_promotion` and `retained_r1_unknown_history_and_consumption` genuinely returned RemoteContextDeleted despite an earned retirement row and no state. The Push-absence scan still saw pre-retirement publication envelopes. It now validates the snapshot/retained row/no masking state and exempts only candidates contained in the row's actually retired tip. New ambiguous/verified attempts still fence absence. No ULID/time ordering, absence or historical merge reconstructs a row. |
+| **T7-4 verified publication consumption** | The real first publication succeeded but retirement count remained 1. Consuming only on a later Fetch observation was insufficient. Retirement is now consumed atomically at legacy/new-attempt Push verification and authoritative classification; no consumption at intent. Additional RED controls stopped actual synchronization before classification and after a new Push intent: both initially failed. Final tests prove permission is gone at verified Push and new ambiguous work is not mistaken for old retired history. |
+| **T7-5 deletion race tracking preservation** | After correctly arming Task 1's receive race after primary publication, cleanup reported RemoteContextChanged/server kept B, but A's tracking ref stayed old. Direct deletion now reuses existing exact scoped Fetch to preserve peer objects/tracking on a shared Fetch/Push endpoint, under the same owner/config fences, outside the lease. Distinct Push endpoints do not contaminate Fetch tracking. No merge or republish is performed. |
+| **T7-6 allowed pre-F6 poll** | `poll_between_publication_and_f6` preserved context/primary bytes and sent no receive command, but identical retry stopped at local retirement because the poll had fetched the already-verified context into T(C). Cleanup now admits either its recorded fetched OID or that exact durable context-child authority, compared under the existing lease before guarded deletion. Arbitrary/newer/symbolic/unreadable refs still refuse; existing unit negatives passed unchanged. |
+| **T7-7 F11 refresh handoff** | Real F11 process exit committed completion before discovery was marked stale. Reopen replayed Complete without refreshing obsolete discovery. Final completion SQL now also sets the existing repository refresh_required flag in the same transaction. Refresh stays outside the lease. Real F11 and after-SQL-commit/surviving-lock exits now prove primary-only discovery after replay. |
+| **T7-8 source-inclusion compilation** | The required remote_synchronization command failed with 44 E0433 diagnostics: `pub(in crate::repository)` does not resolve through its source-included `production` wrapper. All 51 same-scope qualifiers in promotion record and remote helpers now use equivalent `pub(in super::super)` repository ancestry. Visibility is not widened, no public capability added, and no old test changed. All four affected targets subsequently compiled and passed. |
+
+Two hidden FailurePoint variants support genuine public-library process exits
+inside the existing F10/F11 boundary: `PromotionAfterTrackingDeletion` and
+`PromotionAfterCompletionCommit`. The first runs with Git-first deletion done,
+SQL not begun and evidence lock retained. The second runs after actual SQL commit
+before its return is consumed/lock released; an injected non-exit error feeds the
+existing actual-completion reconciliation. These add no lifecycle phase/table,
+mock child, lock ownership inference or automatic lock removal.
+
+### Fixture/oracle investigations (not production bugs)
+
+- D5 requires absent T(C). A first push alone does not establish A's fetched
+  history, and Cycle 08 polling preserves tracking. The blocker fixture now
+  observes publication through a second public sync, has B delete, observes A's
+  deleted state, then performs an ordinary fixture Git prune of that exact ref
+  before testing D5 offline. The required zero-connection/full-snapshot assertion
+  begins after this setup; present-T(C) precedence is not weakened.
+- A new preview after a published-primary push needs its fetched T(P) current;
+  preservation/supersession and fresh-context fixtures use an allowed ordinary
+  inter-step/post-completion poll first. The original D2 policy is retained.
+- Publication selection intentionally preserves the live index, per existing
+  `publication_repeated_changes_accept_the_expected_stale_live_index`. The local-
+  only journey starts without publication configuration, later calls the public
+  selector and has the user's fixture Git tooling align only that committed config
+  entry before primary sync. Earlier attempts failed WorktreeNotClean, not a
+  promotion failure. No publication-selector behavior was changed.
+- `reject_context_deletion` checks out the fixture context and therefore must be
+  armed after its first publication. The receive race applies to the next exact
+  command, so it is armed after F5, not before the primary push. Both setup mistakes
+  were corrected before treating the tracking mismatch as T7-5 RED.
+- A failed ordinary HistoryUnknown sync may retain its reservation; loss replay
+  uses the original ID with explicit restart, and the unrelated-item control
+  publicly cancels/acknowledges its failed attempt before testing another target.
+- Cancelling an already parked context before its early replay can return the
+  original ConflictPending. For the actual interrupted-retained cases, the known
+  T0-1 SQL-trigger seam requests cancellation at the real child's new owner epoch,
+  counts exactly one trigger execution, and asserts actual interrupted phase and
+  unchanged conflict bytes. Both targets then resolve publicly under the original
+  ID. No result or integration record is fabricated.
+- A reset may mint a bound-but-unrun ID which T0 permits replacing. The first full
+  target's only failure was an added over-specific `attempt == 2` oracle. It now
+  requires a new ID, attempt > 1 and **exactly two executed context child rows**,
+  preserving the stronger real-work assertion. No runner behavior was changed.
+- A checkpointed WAL may be absent: the checkpoint variant requires the actual
+  DB/backup and records absence, while the pinned reader variant requires/scans
+  its retained WAL. Neither omission is accepted in the pinned variant.
+
+### Historical owner-case mapping (63 passed; groups 9/16 had SPEC3-P2 gaps)
+
+Every ordinary case runs in the existing pre-thread/short-path isolated child
+with output privacy. Only existing public library APIs and owned fixture Git/
+SQL fault seams are used; no source-included library or synchronization mock in
+the new target. Existing fixture holds provide genuine concurrency without sleeps.
+
+| Owner case | Named tests and concrete proof |
+| --- | --- |
+| **1 complete happy + collaborator** | `happy_comment_history_and_collaborator_poll`: actual public document save and public submit_comment, exact merge subject/ordered parents/server primary equality, doc/comment blobs on primary, local/remote branch/worktree absence, one primary discovery item, actual `git log <merge>^2` and revwalk retain edit/comment. B was materialized first; poll fast-forwards B primary and reports RemotelyDeleted while preserving B's context bytes. A's subsequent poll neither reports nor rematerializes it. `first_publication_deletes_verified_context_oid` adds exactly three accepted lifecycle commands; stale-present guard has its own separate case. |
+| **2 local-only** | `local_only_then_primary_publication`: public removal of the fixture's origin, an asserted empty Git remote list and zero new connections during save/promotion, Merged, Pending(NoPublicationRemote), cleanup Complete; later public AddRemote/remote selection plus aligned committed config entry and actual primary synchronization publish a primary containing the original merge, still one promotion merge. This is genuinely zero Git remotes, not just an unselected publication remote. |
+| **3 contained + fresh second promotion** | `contained_and_fresh_second_promotion`: fresh Edit starts at primary, contained promotion creates no merge, a distinct new save has that primary parent and publishes first, then a second real promotion yields exactly two promotion merges and primary-only discovery. |
+| **4 all blockers** | Seven `blocker_*` cases: dirty/conflicted/not-checked-out/ahead primary, dirty context, behind fetched context, observed remote deletion with absent T(C). Both preview and execute refuse; zero accepted sockets and exact recursive content/name/type hashes of **both clones and the bare server**, including Git indexes/refs/registrations, remain unchanged. |
+| **5 post-integration preservation** | Four `preserve_*_then_supersede` cases stop after publication, add tracked edit/untracked/locally-excluded ignored file/worktree lock, retry old ID, require ContextChanged/IgnoredFiles, server context intact and full context/worktree administration/branch unchanged. User saves the edit, removes the file or unlocks; allowed poll/new preview/new ID supersedes the old row and completes. |
+| **6 retained/lost history** | `retained_r1_unknown_history_and_consumption`: actual public corrupt-cache recovery while context is published, real sync/promotion earns retirement, reopen/fresh Edit/distinct save successfully publishes with unknown flag still 1, retirement consumed. Other item in same repo remains HistoryUnknown/no receives; subsequent remote deletion blocks ordinary republication. `cache_loss_fresh_edit_remains_unknown_across_reopen`: actual loss erases retirement, public rebuild/key restore/fresh Edit/save stays HistoryUnknown, no receive update, remote absent/local context and bytes preserved; original-ID reopen/restart remains unknown/no row. `f7_cache_loss_new_confirmed_cleanup_earns_retirement`: actual F7 process exit, loss/rebuild, contained cleanup with a new confirmation/ID performs no second merge or push, earns a new row and permits a distinct subsequent first publication. Extra `r1_*` controls prove verified-before-authority consumption and no exemption for a new ambiguous Push intent. |
+| **7 D4 versus primary-only** | `new_context_content_reconfirms`: B pushes a new path after A preview; A's real child synchronizes but promotion refuses before primary integration; new preview lists B path and changes digest, then succeeds once. `primary_only_advance_preserves_consent`: B's already-published other-path primary change is integrated without reconfirmation and retained on server. |
+| **8 genuine conflict** | `real_context_conflict_public_resolution`: actual divergent context merge/index conflict; public inspect/read/resolve chooses the local canonical side, resolved two-parent checkpoint is checked, identical parent request retries once and produces one promotion merge. No mocked child or private resolver. |
+| **9 publication failure/offline boundary** | `primary_rejection_retry_only_unfinished`: receiver rejects primary, server has no merge, local/remote context retained; clearing fault/retry gives one promotion and exactly three accepted lifecycle updates overall. Historical offline cases proved only the pre-/post-integration refusal/pending boundary, then ended with the fixture shut down; they did **not** prove restoration/identical-request retry. SPEC3-P2 closes that gap below. |
+| **10 rejection and actual deletion race** | `delete_rejection_retry_preserves_local_state` uses Task 1 native receiver fault, preserves bytes/ref and retries successfully. `delete_context_race_preserves_peer_and_tracking` uses B's real commit and Task 1 advertise/receive race, requires RemoteContextChanged, B OID on server **and A tracking**, unchanged local context. |
+| **11 automatic F2 poll** | `poll_f2_primary_advanced_retry_integrates_once` uses an actually eligible Automatic invocation with an explicitly unlocked session after F2. B's other-path published commit advances T(P)/primary; integration refuses PrimaryAdvanced with primary unchanged, no promotion object; retry executes a new context child (exactly two real child rows total), creates one promotion and keeps B's tree/server primary. |
+| **12 both child roles** | `cancelled_{context,primary}_attempt_replaced_once` publicly cancels the actual bound child during credential callback, requires resumable outcome/new ID/attempt 2 and exactly one accepted push per branch plus delete. `interrupted_retained_{context,primary}_keeps_child_id` uses actual parked conflict and T0 epoch cancellation seam, asserts interrupted durable phase/original ID/attempt 1, then public resolution and successful same-ID retry. |
+| **13 process exits and SQL split** | Twelve distinct `exit_f1_*` through `exit_f12_*` cases launch the actual public-library exit service in a separate process, require exit 86, assert exact record step/ref/worktree/server/candidate inventory and pre-exit receive counts, reopen and retry only unfinished work, then replay equality/one merge/one push each/one delete/absent local context/primary-only discovery. Both inside-F10/F11 exits and all SQL fault cases first publicly fetch an **existing T(C)** after F5, assert it equals the published context, and exercise its actual guarded Git deletion (not just pre-existing absence). `exit_inside_f10_git_sql_split_operator_repair` first preserves existing history/no retirement/held reservation/backend lock with Ok pending RecoveryRequired and unchanged receives; only then removes the exact verified empty lock in the quiesced disposable fixture and completes identical retry. `exit_after_sql_commit_replay_preserves_lock` proves stored completion replays without removing the surviving lock. Statement/deferred-commit rollback cases preserve history/retirement/parent/reservation separately from already-deleted Git tracking; unknown commit-result case reconciles actual committed completion. Normal exits also cover verified-absence reconciliation. |
+| **14 genuine priority and inter-step polls** | `automatic_poll_advertisement_yields_to_promotion` uses a real hold and scoped thread, observes first child PollYielding, poll interruption and successful new attempt. `poll_between_publication_and_f6` proves no relied-on checkout/primary mutation/receive command and successful identical retry. Five `poll_busy_at_f6` through `f10` cases require Automatic poll Busy/zero connections/full clone/server snapshots until completion; post-completion polls have no deleted/rematerialized A context. |
+| **15 configuration/generation fence** | `remote_rename_before_integration_fences` and `remote_rename_after_integration_is_pending`: real Git remote rename/config commit between steps, exact after-change images/receive/socket counts unchanged by continuation, pre-effect Interrupted versus post-effect Ok cleanup RecoveryRequired. |
+| **16 bounded privacy, historical partial proof** | Generic helpers scanned A/B workflow/backup rows with all probes and raw stores with non-title secrets. The two positive title cases only attested **A** live/backup/WAL, their negative control only used A's synthetic remote_title_probe table, and REJECTED_TITLE was only a declared/direct scanner probe. Actual comments and five output/overflow controls were covered, but bilateral positive/actual-workflow-row controls and a production-rejected title input were missing. SPEC3-P2 supplies those proofs below without widening any scanner exception. |
+
+### Exact commands and counts — resumed work
+
+Commands ran in the specified worktree. The same expanded `-- --exact` commands
+were used inside ordered shell loops; loops stopped at the first failing case,
+and an unexecuted tail is not reported as a test run. No watchdog increase,
+blanket skip, dependencies or ignored tests were used. Historical pre-approval
+commands/counts above are retained separately. Two case labels were clarified at
+the final checkpoint: first_publication_records_verified_context_oid →
+first_publication_deletes_verified_context_oid; cache_loss_fresh_edit_first_publication
+→ cache_loss_fresh_edit_remains_unknown_across_reopen.
+
+| Exact command / selector | Actual resumed results, in execution order |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test document_promotion privacy_` | **2 passed / 1 failed**: checkpoint WAL absence setup; pinned-WAL and five-control case passed. |
+| `devenv shell -- cargo test --locked --test document_promotion happy_comment_history_and_collaborator_poll -- --exact` | Compile failure: three test-only API/IndexEntry diagnostics; then **1 passed**, initially one unused race-hook Result warning, fixed before later commands. Final full-target runs are warning-free. |
+| `devenv shell -- cargo test --locked --test document_promotion blocker_` | **6 passed / 1 failed**, D5 present-history/tracking prerequisite setup. |
+| `devenv shell -- cargo test --locked --test document_promotion blocker_remote_deleted -- --exact` | **0/1**, then **1/0** after authentic observed-publication and explicit exact-ref prune setup. |
+| `devenv shell -- cargo test --locked --test document_promotion preserve_` | **0 passed/4 failed**, then **4/0** after T(P) was publicly observed before a new confirmation. |
+| `devenv shell -- cargo test --locked --test document_promotion preserve_untracked_then_supersede -- --exact` | **0/1**, fixed numeric checkpoints located the new-preview D2 setup issue. |
+| `devenv shell -- cargo test --locked --test document_promotion privacy_metadata_checkpointed -- --exact` | **1/0**, checkpointed DB/backup with permitted absent WAL. |
+| `devenv shell -- cargo test --locked --test document_promotion cache_loss_fresh_edit_first_publication -- --exact` | **0/1** on a fresh-ID retry against a held failed reservation; then **1/0** with actual original-ID restart after reopen. Final label is the negative loss/reopen name above. |
+| `devenv shell -- cargo test --locked --test document_promotion local_only_then_primary_publication -- --exact` | Seven **0/1** investigations, then **1/0**. Numeric diagnostics separated initial configured-then-disabled setup, actual no-publication initial configuration, and the documented stale live index after public remote selection. A later stronger zero-Git-remotes/public AddRemote control also passed **1/0**. No selector contract/production change. |
+| `devenv shell -- cargo test --locked --test document_promotion contained_and_fresh_second_promotion -- --exact` | Three **0/1** runs (D2 setup, then actual old Push-history refusal with earned retirement); then **1/0** after T7-4. |
+| `devenv shell -- cargo test --locked --test document_promotion retained_r1_unknown_history_and_consumption -- --exact` | Four **0/1** runs: actual old Push-history refusal; retained permission not consumed on successful Push (two probes, count 1); other-item failed reservation blocking a different target. Then **1/0** with all retained-R1/other-item/deletion controls. Additional GREEN executions occurred in the `r1_` filter/full target, not silently counted as extra distinct cases. |
+| `devenv shell -- cargo test --locked --test document_promotion r1_` | **1 passed/2 failed** (new verified-before-authority and ambiguous-new-intent controls RED); then **3/0** after verified-checkpoint consumption/retired-tip qualification. |
+| `devenv shell -- cargo test --locked --test document_promotion new_context_content_reconfirms -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion primary_only_advance_preserves_consent -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion real_context_conflict_public_resolution -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion primary_rejection_retry_only_unfinished -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion offline_before_context_is_preintegration_error -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion offline_after_integration_is_publication_pending -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion delete_rejection_retry_preserves_local_state -- --exact` | **0/1** (fault armed before context existed), then **1/0** after setup correction. |
+| `devenv shell -- cargo test --locked --test document_promotion delete_context_race_preserves_peer_and_tracking -- --exact` | **0/1** (race consumed by primary push), **0/1 actual tracking-preservation RED**, then **1/0** after T7-5. |
+| `devenv shell -- cargo test --locked --test document_promotion poll_f2_primary_advanced_retry_integrates_once -- --exact` | **1/0**; after full-target attempt-number oracle correction, **1/0** again. Final full target additionally proves actual Automatic invocation, not just explicit polling. |
+| `devenv shell -- cargo test --locked --test document_promotion cancelled_` | Compile failure: three test API-return diagnostics; then **2/0**, both public child-role cancellation cases. |
+| `devenv shell -- cargo test --locked --test document_promotion interrupted_retained_` | **1 passed/1 failed** (context early replay returned ConflictPending); final **2/0** at the actual T0-1 epoch-interruption boundary. |
+| `devenv shell -- cargo test --locked --test document_promotion interrupted_retained_context_keeps_child_id -- --exact` | **0/1** characterization confirmed original ConflictPending before choosing the real epoch seam. |
+| `devenv shell -- cargo test --locked --test document_promotion automatic_poll_advertisement_yields_to_promotion -- --exact` | **1/0**, real held advertisement/scoped worker. |
+| `devenv shell -- cargo test --locked --test document_promotion poll_between_publication_and_f6 -- --exact` | **0/1 actual tracking-advance RED**; one compile error in the correction (typed map_err closure); final **1/0** after T7-6. |
+| `devenv shell -- cargo test --locked --test document_promotion poll_busy_` | **5/0**, all five actual Automatic Busy boundaries. |
+| `devenv shell -- cargo test --locked --test document_promotion remote_rename_` | **2/0**, pre-/post-integration outcomes. |
+| `devenv shell -- cargo test --locked --test document_promotion exit_inside_f10_git_sql_split_operator_repair -- --exact` | Compile RED: three missing inside-F10/F11 FailurePoint uses; then **1/0**, genuine subprocess exit/lock-preservation/operator-repair/identical retry. A later strengthened existing-T(C)-deletion setup also passed **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion exit_f` | **11 passed/1 failed**: real F11 stale-discovery crash bug. |
+| `devenv shell -- cargo test --locked --test document_promotion exit_f11_after_completion -- --exact` | **0/1** boundary localization, then **1/0** after atomic stale marker. |
+| `devenv shell -- cargo test --locked --test document_promotion exit_after_sql_commit_replay_preserves_lock -- --exact` | **1/0**; later strengthened existing-T(C)-deletion setup **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion f7_cache_loss_new_confirmed_cleanup_earns_retirement -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion completion_statement_rollback_preserves_history -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion completion_commit_rollback_preserves_history -- --exact` | **1/0**, actual deferred SQL commit failure/rollback. |
+| `devenv shell -- cargo test --locked --test document_promotion completion_unknown_commit_result_reconciles -- --exact` | **1/0**, actual committed SQL plus lost return. |
+| `devenv shell -- cargo test --locked --test document_promotion completion_` | **3/0** with existing-T(C) actual deletion in statement rollback, deferred commit rollback and lost commit-return cases. |
+| `devenv shell -- cargo test --locked --test document_promotion privacy_metadata_` | **2/0** after strengthening the title allowance to exactly one cache column and backup-row contamination controls. |
+| `devenv shell -- cargo test --locked --lib promotion` | **188 passed / 0 failed / 807 filtered**, 182.11s, after all behavioral fixes. Later relative-visibility-only changes preserve the same repository scope and were compiled by the affected source-included targets/public-library target; no extra unit runtime rerun is inferred. |
+| `devenv shell -- cargo test --locked --test document_promotion` | Six resumed full runs: **62 passed/1 failed** (attempt-number oracle), then five runs of **63 passed/0 failed**. Reruns were justified by that failure, relative-visibility fix plus stronger per-column privacy controls, actual Automatic F2 invocation and LF-independent/plain+encrypted-fragment probes, strengthening inside-F10/F11/SQL cases to prove deletion of an existing fetched tracking ref, and the final zero-Git-remotes/public AddRemote input control. No unchanged-tree blanket repetition. Final source tree passed; no further Rust edits followed. |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | First compile failed with **44 E0433 diagnostics**, no tests; after equivalent relative scopes **63 SSH cases passed**, warning-free. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery` | **25 SSH cases passed**, warning-free, one complete run. |
+| `devenv shell -- cargo test --locked --test remote_polling` | **84 SSH cases passed**, warning-free, one complete run. |
+| `devenv shell -- cargo test --locked --test comment_publication` | **41 SSH cases passed**, warning-free, one complete run. |
+| `devenv shell -- cargo fmt --all` | Five resumed executions, exit 0; last immediately before final format-check/63-case run. |
+| `devenv shell -- cargo fmt --check` | Four resumed executions, all exit 0. |
+| `devenv shell -- cargo clippy --locked --test document_promotion -- -D warnings` | Optional targeted probe **FAILED in existing library code with 22 pre-existing lints**, before it could finish test-target linting: 14 result_large_err, four needless_borrow, three collapsible_if, one unnecessary_unwrap. Unchanged identity/integrate/observe/mod/inspection code and unchanged Task 6 control-flow sections match the baseline; no lint suppression, broad gate, or Clippy GREEN is claimed. Carry to Task 8, whose required full gate was explicitly deferred. |
+
+### Changed files, review boundary and remaining gates
+
+Review the **entire uncommitted Task 7 diff against c0e9726**, not merely the
+last fix. Intended inventory (21 paths after both new comments):
+
+- `tests/document_promotion.rs` and `tests/document_promotion/{journeys,advanced,exits}.rs`.
+- `Cargo.toml`, `.github/workflows/build.yml` (new harness=false target / appended
+  manual native test only; same four matrix entries).
+- `src/repository.rs` (two hidden inside-F10/F11 test seams).
+- `src/repository/promotion/{run,record}.rs` (authority/tracking/race/refresh/seams
+  and equivalent record visibility).
+- `src/repository/remote/{observation,reservation,sync,state}.rs` (endpoint equality,
+  verified-R1 consumption/old-new history qualification; equivalent relative
+  scopes; **state has visibility-only changes**).
+- Cycle 09, design, implementation plan, this ledger and handoff.
+- Canonical comments EC (historical blocker), ED (approved bounded amendments),
+  EE (this full review-ready checkpoint) under the existing ticket directory.
+
+No old SSH regression test, lockfile, dependency, GPUI module or global config
+was edited. All 16 original obligation groups are covered above; no Task 7 product
+policy question remains. Fresh independent spec review followed by quality review
+is still required for these implementation changes. The controller owns the
+checkpoint commit only after those reviews. **Task 7 is review-ready, not complete.**
+
+Remaining risks/gates are explicit: native Windows/macOS/other architectures have
+not run; the current four-target workflow is only wired, never dispatched. Rare
+ambiguous backend locks still require the approved operator intervention. Native
+file-handle/long-path/locking behavior remains unproved by Linux. Task 8 must run
+full Rust/CLI/merge integration checks, resolve the carried baseline Clippy findings
+and complete final review/approval. No full all-features check/test/Clippy or CLI
+smoke, push, PR, native dispatch, merge, closure or cleanup was performed here.
+
+Final handoff checks (after the last 63-case run; documentation only changed
+afterward): `git diff --check` and `git diff --cached --exit-code` exited 0.
+`git diff --exit-code -- Cargo.lock devenv.nix devenv.lock
+tests/remote_synchronization.rs tests/remote_merge_recovery.rs
+tests/remote_polling.rs tests/comment_publication.rs
+src/repository/bridges/identity.rs src/repository/promotion/integrate.rs
+src/repository/promotion/observe.rs src/repository/promotion/mod.rs` exited 0,
+confirming unchanged lockfiles/original regression tests and untouched sections
+containing the carried library lints. Status lists exactly the 21 intended paths,
+nothing staged. HEAD remains c0e972655f04ea67bb9411877b0627e7eb8439ac and origin/main
+89d04f901636229392a311241f8e777f0a00962b. No Task 7 commit/review approval is inferred.
+
+## Historical SPEC3-P2 — Test-Only Evidence Corrections (2026-10-16)
+
+SPEC subsequently passed, as conveyed by the owner. QUALITY2 then found two
+implementation issues and a fixture-image minor; the current correction/recheck
+section below supersedes this 64-case handoff without erasing its actual results.
+
+**Current: corrections implemented and targeted-verified; resubmit to SPEC, then
+QUALITY. Not approved/complete.** The earlier 63-case all-covered claim is
+withdrawn for its identified evidence gaps, not retrospectively marked complete.
+Final full `document_promotion` target now passes **64 cases**, including every
+prior journey and one new real rejected-input case. No product-policy or production
+code change, shared fixture edit, dependency, skip, mock child or sleep.
+
+### Review verification and integrity boundary
+
+Read the review against actual `offline_before`/`offline_after` and
+`privacy_title_policy`: offline cases called shutdown and ended; B never received
+the accepted title in these privacy variants; negative contamination was synthetic
+and A-backup-only; REJECTED_TITLE was never submitted. These were real coverage
+gaps. The existing fixture already supports a reversible SSH advertisement
+disconnect, and existing canonical authoring already rejects NUL in titles; no
+new outage fixture API or validation policy was needed.
+
+Re-read worktree AGENTS and used receiving-code-review/TDD/debugging/verification
+guidance. This is continued work on the same dirty ticket branch at exact base
+c0e972655f04ea67bb9411877b0627e7eb8439ac, preserving earlier work and preflight.
+Before/after `git diff -- src | git hash-object --stdin` both equal
+**a9d8060139dd15f7a76b3e125ae31e08d900b7d4**. `git diff --exit-code -- tests/support`
+exited 0. Thus this correction changes no production bytes or shared fixtures;
+prior affected-target and 188-unit evidence is retained, not falsely rerun here.
+
+### P2-1 reversible real SSH outages and identical-request recovery
+
+The RED first extended both old shutdown cases with restoration/identical-request
+completion assertions: both failed. Clearing a transport fault cannot revive a
+stopped listener. The GREEN uses **existing** persistent
+`disconnect_at(FixtureBoundary::Advertisement)` and `clear_fault`, preserving the
+same listener endpoint, repository and server identity/key. It exercises actual
+SSH/helper connections; no mocked child or replaced endpoint.
+
+Both pre-context and after-integration cases now:
+
+- Capture the original parent request (same operation ID/digest/public approval),
+  endpoint/host identity, server primary, local primary/context and worktree bytes.
+- Assert the real transport failure's appropriate outcome: pre-context error with
+  zero promotion merges and absent remote context; post-F4 Ok publication
+  Pending(Transport)/cleanup AwaitingPublication with the existing server context
+  preserved at its exact OID and server primary still at the original base.
+- Assert no receive update during the outage, unchanged local primary/context/
+  bytes, actual failed role child ID/attempt 1 and zero integration/resolution
+  rows belonging to that child. Scan pending workflow/store privacy.
+- Clear the actual fault, assert same endpoint/server key, and retry the identical
+  parent request to completion. Actual stored role child ID changes and attempt
+  becomes 2; old child is retired into a nonactive failed/cancelled/interrupted
+  phase. There is exactly **one promotion merge** and exactly **three accepted
+  lifecycle commands overall**: one context push, one primary push, one delete.
+  No rejected/no-op/extra receive command is accepted as unfinished-work proof.
+- Require final local/remote context cleanup, server primary equality, primary-
+  only discovery and final privacy. The pre-context retry is covered too.
+
+### P2-2 bilateral accepted metadata and actual workflow-row negative controls
+
+Both checkpointed and pinned-WAL variants now author/save/promote in A, then use
+B's **public poll** to discover the accepted title independently. Reader snapshots
+are created for **both** clone databases before production writes when pinning;
+the checkpointed variant requires successful actual WAL truncation checkpoints.
+
+Before any negative injection, each variant asserts:
+
+- Exactly one accepted `discovered_items.title` row in live A, live B, backup A and
+  backup B. Both backups are actual VACUUM INTO copies of their respective stores.
+- Actual title bytes in both checkpointed DB files/both backups, or both retained
+  WAL files/both backups while the pre-write readers are pinned. Numeric witness
+  `[31, side, file, present]` uses side 0=A/1=B and file 0=DB/1=WAL/2=backup. The
+  checkpoint variant permits absent/empty WAL; the pinned variant requires it.
+- Existing all-column workflow scans/all-cache scans and raw non-title-secret
+  whole-store/sidecar/backup scans pass in both clones.
+
+After dropping the pinning readers, the same negative helper runs on all four
+datasets. It selects a **real existing `operation_records` journal row** and updates
+its free-text `target` metadata to a fixture string containing TITLE. It does not
+change action/state/identity/fixed categories, insert synthetic workflow rows,
+disable constraints or add a probe table. UPDATE must succeed for exactly one row
+and the selected row must actually contain TITLE. Both unchanged scanners must
+reject it with the complete probe set, including title; the discovery-title
+exception is still limited to `discovered_items.title`.
+
+Each helper begins with a clean scan and hashes **all columns of all operation
+rows** as a known snapshot, checks it differs while poisoned, explicitly rolls
+back the transaction, then requires exact snapshot and original selected-field
+restoration plus clean scans. No service call runs against poisoned metadata.
+Numeric `[32, side, store]` witnesses show all four controls, with store 0=live,
+1=backup. A test-led intermediate synthetic-table implementation deliberately
+failed the new actual-operation-row witness even though its scanner rejection
+would otherwise pass; the final code has no synthetic probe-table control.
+
+Raw body/comment/endpoint/passphrase/plain+encrypted key/fragment and rejected-title
+probes, both row-scanner variants, all five output negatives and raw/overflow
+controls remain strict and unchanged. Positive title copies are inspected before
+negative injection so test-written bytes cannot masquerade as production metadata.
+
+### P2-3 rejected title crosses public canonical authoring validation
+
+New ordinary case `privacy_rejected_nonindexed_title_input` first establishes a
+valid saved document, then submits a real public `save_document` edit whose title
+is REJECTED_TITLE plus NUL (and whose body carries the existing body/comment
+canaries). Existing canonical validation returns **InvalidPath** before writing.
+The test formats/scans the actual domain error, never the private request/draft,
+and checks public SaveDocument operation/Display for the specific title/NUL
+validation reason, rather than accepting an unrelated InvalidPath refusal.
+It attests a journal row for the exact attempted operation, unchanged source
+bytes/branch OID, no rejected title in either public discovery snapshot or either
+discovered-items table, then scans both stores/sidecars and fresh backups with
+the full strict rejected-title/secret probe set. The sentinel is no longer merely
+a declared probe or ignored fixture file. Initial test-evidence RED was zero
+records for the as-yet-unsubmitted request; invoking the public boundary supplies
+the real rejection witness. This is an evidence-workload RED, not a claim that
+production canonical validation was broken.
+
+### Corrected current mapping — all owner groups retained, 64 passing cases
+
+| Owner group | Current proving cases / correction |
+| --- | --- |
+| 1 happy/comment/collaborator | `happy_comment_history_and_collaborator_poll`, first/stale deletion guards; unchanged and passed in the 64-case run. |
+| 2 local-only/later publication | `local_only_then_primary_publication`; unchanged zero-Git-remotes/public AddRemote proof passed. |
+| 3 contained/fresh second merge | `contained_and_fresh_second_promotion`; unchanged and passed. |
+| 4 offline blockers/full snapshots | All seven `blocker_*`; unchanged and passed. |
+| 5 preservation/supersession | All four `preserve_*_then_supersede`; unchanged and passed. |
+| 6 retained/lost/F7 R1 | Retained R1, new verified/ambiguous Push guards, loss-across-reopen and F7 newly earned retirement; unchanged and passed. |
+| 7 D4/primary-only invariance | `new_context_content_reconfirms`, `primary_only_advance_preserves_consent`; unchanged and passed. |
+| 8 actual conflict/resolution | `real_context_conflict_public_resolution`; unchanged and passed. |
+| **9 rejected/offline publication** | Receiver rejection remains. **Both** `offline_before_context_is_preintegration_error` and `offline_after_integration_is_publication_pending` now use reversible real SSH disconnects, attest server/local preservation while pending and restore/complete identical requests with actual retired/new child IDs and exact once-only receives/merge count. |
+| 10 deletion rejection/race | Both existing deletion fault cases; unchanged and passed. |
+| 11 actual Automatic F2 poll | `poll_f2_primary_advanced_retry_integrates_once`; unchanged and passed. |
+| 12 both child-role cancellation/retained interruption | Four existing cases; unchanged and passed. |
+| 13 F1–F12/inside-F10/F11/SQL/T6-1 | All existing exit and SQL-fault cases, including actual existing-T(C) deletion, pending-before-operator-repair and committed replay retaining locks; unchanged and passed. |
+| 14 genuine priority/inter-step/Busy polls | Held advertisement, pre-F6 poll and five Busy cases; unchanged and passed. |
+| 15 pre-/post-effect config fence | Both remote rename cases; unchanged and passed. |
+| **16 bounded privacy** | Both `privacy_metadata_*` now prove positive metadata in **all four datasets** and checkpoint/pinned-WAL copies, plus real existing operation-row poisoning/rejection/rollback in **all four datasets**. New `privacy_rejected_nonindexed_title_input` exercises public canonical rejection and strict error/discovery/raw-store absence. Five output negatives/overflow controls and every-case strict row/raw-store scans remain. |
+
+### Exact SPEC3-P2 commands, RED/GREEN and rerun scope
+
+All Rust commands used Devenv in the specified worktree. No broad gate, original
+fixture/watchdog change, expected-failure conversion or extra policy amendment.
+
+| Exact command | Actual results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test document_promotion offline_` | RED **0 passed / 2 failed** with retry assertions on the old irreversibly shut-down fixture; GREEN **2 passed / 0 failed** after using/restoring the existing real SSH disconnect fault and adding server/attempt/receive preservation proofs. |
+| `devenv shell -- cargo test --locked --test document_promotion privacy_` | Three runs: RED **1 passed / 3 failed** (B positives missing, new rejected-input operation not submitted; output controls passed); intermediate **2 passed / 2 failed** (bilateral positives and actual rejection now passed, synthetic control failed actual-operation-row witness); GREEN **4 passed / 0 failed** with all four real-row mutation/rollback controls. |
+| `devenv shell -- cargo fmt --all` | Two executions, exit 0 (final reason assertion checked through the public error API). |
+| `devenv shell -- cargo fmt --check` | Three executions, all exit 0. |
+| `devenv shell -- cargo test --locked --test document_promotion` | One final complete execution after all corrections: **64 SSH cases passed / 0 failed**, warning-free. All earlier journeys remained enabled and passed; new case raises count from 63 to 64. |
+| `devenv shell -- cargo test --locked --test document_promotion privacy_rejected_nonindexed_title_input -- --exact` | After the full run, the narrower field-reason assertion initially hit one test-authoring compile error (RepositoryError.message is private). It now uses only public operation/Display; **1 passed / 0 failed**, warning-free. No production accessor or policy was added. All other cases unchanged, so no redundant full-target rerun. |
+| `git diff -- src \| git hash-object --stdin` | Before/after both **a9d8060139dd15f7a76b3e125ae31e08d900b7d4**; existing Task 7 production changes preserved byte-for-byte, no new production policy/code edits. |
+| `git diff --exit-code -- tests/support` | Exit 0, shared SSH fixture/harness/privacy helpers untouched. |
+
+The four required affected SSH targets were **not rerun** in this correction:
+neither their production code nor shared fixtures changed. Their existing results
+remain 63 synchronization / 25 merge recovery / 84 polling / 41 comment publication;
+188 promotion unit results are also retained, not newly executed. Task 8/full/
+native gates and the carried baseline Clippy findings remain pending.
+
+### Files and review return
+
+This correction changes only `tests/document_promotion.rs`,
+`tests/document_promotion/journeys.rs`, the five Cycle 09 evidence/plan/design/
+handoff documents, and canonical review-correction comment
+`01M51Y7Z00N4Q6S8V0X2Z4B6EF`. The earlier full uncommitted Task 7 change is retained;
+total intended pending inventory is now **22 paths**, including four new test
+files and four canonical comments. No changes to advanced/exits test journeys,
+shared fixtures, production, dependencies, lockfiles, GPUI or global config in
+this revision. No subagents, staging, commit, push, PR, native dispatch, merge,
+closure or worktree cleanup. Return the whole uncommitted Task 7 diff against
+c0e9726 for fresh SPEC recheck followed by QUALITY; no review approval inferred.
+
+Final SPEC3-P2 checks: `git diff --check` and `git diff --cached --exit-code`
+passed; unchanged shared fixtures/lockfiles/original four affected test sources
+were verified with `git diff --exit-code`. A broader invariance probe including
+Cargo/native wiring showed their already-pending original target additions, not
+new changes; the unchanged-file check excludes those intentionally dirty paths.
+Status is the expected 22 paths, nothing staged. HEAD remains c0e9726 and the
+production diff fingerprint still matches the before-work witness above.
+
+## QUALITY2 — Owner Fencing, All Verified R1 Routes And Framed Images
+
+**2026-10-17 UTC: all two important findings and the minor implemented and
+targeted-verified; ready for QUALITY recheck, uncommitted.** SPEC PASS was conveyed
+on the preceding 64-case revision. No approval of this new correction is inferred.
+Final full target: **74 SSH cases passed**, with all prior SPEC3-P2 journeys still
+enabled. The final production correction was followed by fresh **63/25/84/41**
+affected SSH target passes. Task 8/full/native gates remain deferred.
+
+### Verification before implementation / execution boundary
+
+Read the reported sites and the existing claim/epoch/heartbeat/persist protocol.
+The scalar refresh_required update could indeed be cleared by an older still-valid
+index owner after its two observations. The generic verified-checkpoint and
+advance wrapper consumed R1, but legacy reconciliation, settlement's direct state
+advance and already-current candidate binding did not. The image helper really
+concatenated unframed names/payloads and gave same-byte symlink/regular nodes the
+same representation, without execution-mode evidence. Each was reproduced before
+its implementation correction; no policy amendment, mock return or blanket skip.
+
+This is continued work in the same ticket worktree/branch at exact HEAD
+`c0e972655f04ea67bb9411877b0627e7eb8439ac`, retaining the earlier active-task
+preflight and all pending work. Read AGENTS and used the already-loaded review/
+TDD/debugging/verification guidance. No subagents, dependencies, GPUI/global config,
+developer keys, sleeps, watchdog changes, staging/commit/push/PR/native dispatch/
+merge/closure/worktree cleanup. The new test threads/processes are actual harness
+actors, not subagents. Every Rust command used Devenv and locked targeted tests.
+
+### Important 1 — atomic observation-owner fencing, not just a stale Boolean
+
+`record::complete_record` now calls `recovery::invalidate_index_observations` in
+the **same transaction** as retirement, refresh_required=1, completion and applicable
+reservation finish. It finds only this repository's currently indexing rows by
+registered root, checked-increments their existing index_owner_epoch and records
+fixed state **index_invalidated**. IDs, operation identities, targets, authoritative
+steps and journal records are preserved. No row is silently deleted or made to
+look completed, and another root's live owner in the same registry is untouched.
+Overflow/failed guarded updates refuse the transaction instead of guessing.
+
+An old token fails the existing `require_index_owner` check before context writes
+or clearing the stale mark. `refresh_repository_claimed` may perform **one bounded
+fresh pass** only after a CAS reclaim of that same record/root at the exact
+one-epoch invalidation boundary, excluding abandoned/reclaimed/completed rows.
+It discards both old observations, starts a heartbeat for the new epoch and scans
+outside the repository/cache claim guards. The old heartbeat cannot touch the
+new owner. Generic claim_indexing also recognizes the explicit resumable state.
+Other recovery/error classes retain the existing handling; there is no resident
+retry loop, timeout-based ownership inference or new generation column/table.
+
+The new hidden `set_refresh_persist_hook_for_testing` is after **both observations
+and the owner touch**, before persistence, with no repository lease/cache guard/
+transaction held. It does not move the existing between-observations hook or
+change its failure-point contract. Its mutex failure retains fixed InjectedFailure
+with RefreshRepository/root classification.
+
+Real, barrier-driven public-library regressions:
+
+- **quality2_f11_fences_older_refresh**: a contained cleanup is stopped at F5;
+  an external refresh observes primary plus materialized context twice and pauses
+  before persistence; an actual F11 subprocess completes cleanup. After release,
+  the old record is explicitly fenced/reclaimed rather than persisting its obsolete
+  context. Epoch witness is **1 → 2 → 3**, identity/authoritative step retained,
+  original record completed, primary-only discovery and identical promotion replay
+  correct. Another simultaneously paused root **shares A's registry** and remains
+  epoch 1/unfenced, then finishes normally.
+- **quality2_f11_preserves_active_child_handoff**: the paused owner belongs to
+  the real bound primary child's authoritative index handoff. A concurrent same-ID
+  promotion executor consumes stored child authority and reaches actual F11. The
+  child performs its fresh owned pass, clears remote index_pending, completes its
+  original record, and the older parent returns stored completed authority rather
+  than its obsolete unfinished-step outcome. `finish_integrated` now checks that
+  matching stored completion before reporting a stale executor's recovery category.
+- **quality2_f11_does_not_adopt_reclaimed_owner**: another legitimate executor
+  of the ORIGINAL refresh identity claims the explicit fence and completes first.
+  The paused old token returns IndexPending, does not adopt/overwrite that owner
+  or completed record, and preserves the fresh primary-only index/epoch 3.
+
+All three retain one promotion merge/no new receive command and prove a subsequent
+ordinary refresh can proceed. The race uses a legitimate AlreadyContained/no-remote-
+deletion-reservation path, so the older refresh is truly live while completion can
+commit; a merged promotion's remote reservation/local-journal guard would otherwise
+stop some interleavings before this window. No lock or owner is removed by a test
+or production shortcut. Existing focused discovery concurrency, injected-failure
+and lease-release tests also pass unchanged.
+
+### Important 2 — every verified write consumes R1 atomically
+
+`state::consume_retirement_on_publication` is the common primitive. It derives the
+repository/kind/item from the immutable context envelope ID, not a separately
+supplied scope. It is called in the same transaction as:
+
+1. Normal legacy PushVerified checkpoint writes.
+2. `reconcile_synchronization` upgrading its legacy checkpoint to PushVerified.
+3. `bind_publication_candidate(... verified=true)` for an already-current candidate.
+4. `advance_publication_attempt(... Verified)` itself, covering settlement's
+   direct Action::Verify **and** the ordinary advance wrapper.
+
+The wrapper-only duplicate is removed. Classification records authority but is
+**not another publication observation** and no longer consumes retirement. Legacy
+reconciliation which has freshly re-proved the exact verified candidate proceeds
+only to classification instead of re-running a Fetch-only first-publication plan
+after consuming R1 on a distinct endpoint.
+
+Three actual two-endpoint tests earn retirement through public recovery/sync/real
+promotion under history_unknown=1, then configure a distinct authenticated Push
+server. The selected fixture key/server trust is verified publicly. Fetch never
+advertises the new context, so its observation cannot consume the permission:
+
+- **quality2_r1_distinct_reconcile_verified**: successful Push STOP after return;
+  restart STOP after verification takes the legacy reconciliation upgrade route.
+- **quality2_r1_distinct_prepare_already_current**: legacy stopped before Push;
+  real peer publication/primary advancement creates an open attempt and an owned
+  integration window whose final candidate is already present at Push. Binding
+  verified=true records AlreadyCurrent without another push.
+- **quality2_r1_distinct_settlement_verified**: real peer/primary changes create
+  an appended attempt; its actual push stops after return. Restart's equal-current
+  settlement directly verifies that attempt before classification.
+
+Each first forces a DELETE-on-retirement SQL failure: retirement remains and the
+verified checkpoint/candidate/attempt write rolls back to push_returned/open/
+returned respectively. After clearing the fixed trigger, STOP before classification
+requires retirement count 0, no authority yet, unknown flag still 1 and no additional
+receive update. This proves co-transactional verification/consumption, not merely
+eventual deletion. Same-ID continuation then completes with no repeated push.
+The original finding is an **incomplete permission-consumption invariant**, not a
+claim that an unauthorized repeat push was demonstrated; existing journal absence
+guards already fenced that class of replay.
+
+Verified Push journals now supply qualified **ObservedPublished** read evidence
+even before classification, while advertised/tracking OIDs stay absent and Fetch
+state remains HistoryUnknown. `fetch_publication_evidence_for` privately preserves
+the original Fetch-only evidence for graph/preflight/poll decisions; no Fetch row
+or ref is fabricated. Only already-visible identities are looked up; newest proof
+is decoded/audited under the current generation/exact plan. Retained validated R1
+still suppresses old proof and masking Fetch state still governs eligibility.
+
+The additive partial index **remote_context_publication_evidence**, marker
+**cycle_09_context_publication_evidence**, bounds those context-only lookups away
+from retained poll history. No table/column or DTO field was added. Its public
+acceptance control simulates the preceding schema with business rows preserved,
+reopens twice idempotently, then requires RecoveryRequired on marked index loss.
+State tests' bounded-read controls pass. One legacy Cycle 04 unit fixture initially
+failed because it dropped/rebuilt the index's underlying table but retained the
+future index marker. That downgrade fixture now clears only this new marker;
+terminal-row/no-inferred-publication assertions and production marked-loss refusal
+remain intact. No audit was relaxed to accommodate the fixture.
+
+The audit also exposed a related inverse edge, proven before its final fix:
+**quality2_late_classification_keeps_new_retirement** pauses actual context sync
+after verified publication, deletes remotely with peer Git, and completes a new
+confirmed contained cleanup through actual F11. Old classification then used to
+delete that newly earned row. Removing classification-time consumption preserves
+the new permission; a distinct fresh edit subsequently publishes and consumes it
+at the proper NEW verification. No synthetic retirement insertion or mock child.
+
+### Minor — injective fixture framing and mode/type evidence
+
+`image` now encodes a fixture-only v2 domain, explicit node-kind tags, fixed-width
+mode/permission/readonly metadata and length-delimited names/payloads/entry counts.
+It never follows symlinks or opens special FIFO/device/socket payloads. Git regular
+versus executable mode uses the Unix owner-execute bit; native permission bits are
+also included, and Windows retains its available readonly/type evidence. Root
+directory metadata is included without binding unrelated temporary root names.
+The production consent digest/protocol is **unchanged**.
+
+Meaningful negative controls prove distinct `a`+`bc` versus `ab`+`c` layouts do not
+collide, same-byte regular/symlink nodes differ, execute-bit changes differ and
+restoring identical files/modes restores the same image. These are counterexamples,
+not expected hash vectors mirroring the encoder. Type/exec control is Unix-only;
+Linux's final target has **74** cases, Windows is expected to omit that one case.
+No native execution has occurred, so platform counts/behavior are not claimed as
+observed native results.
+
+### Current mapping additions
+
+All 16 corrected SPEC3-P2 groups remain exercised by the final full target. The
+existing outage/bilateral privacy/rejected-input cases remain enabled and passed.
+The following supplements close the QUALITY2 implementation gaps:
+
+| Finding / owner obligation | New named proof |
+| --- | --- |
+| Q1; groups 13/14/refresh | quality2_f11_fences_older_refresh; both observations captured, actual F11 exit, old observations rejected, exact same record reclaims epoch 3 and re-observes; foreign root in same registry unchanged. |
+| Q1 compound handoff/no permanent busy | quality2_f11_preserves_active_child_handoff; real bound primary child completes its original refreshed index handoff and clears index_pending, older parent returns stored complete authority. |
+| Q1 no owner adoption | quality2_f11_does_not_adopt_reclaimed_owner; original-ID legitimate takeover completes first, expired old token returns IndexPending without changing that record/cache. |
+| Q2; groups 3/6/verified metadata | Three quality2_r1_distinct_* routes; rollback proves verified write and retirement removal atomic; STOP before classification proves retired gone/ObservedPublished despite no Fetch context; original-ID completion with unchanged receipts. |
+| Q2 additive read support | quality2_publication_index_additive_audited; idempotent prior-schema migration preserves data, marked index loss refuses; state bounded-history tests pass. |
+| Q2 retirement lifecycle ordering | quality2_late_classification_keeps_new_retirement; later confirmed cleanup's new row survives an older classifier and permits its next real fresh publication. |
+| Minor; groups 4/5/10/14 preservation snapshots | quality2_image_name_payload_boundaries and Unix quality2_image_type_and_git_mode; collision/type/mode controls plus all existing framed-image preservation cases in the 74-case target. |
+
+### Exact QUALITY2 commands / RED and GREEN
+
+All commands ran through Devenv in the ticket worktree. Ordered `&&` chains stopped
+on failure; later commands in a failed chain are not counted as executed. Shell
+timeouts covered whole custom targets; no per-case watchdog change or sleep added.
+
+| Exact command | Actual QUALITY2 results |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_image_` | Three runs: RED **0 passed/2 failed** (actual old framing/type collisions); GREEN **2/0**; after precise Git owner-exec mapping refinement **2/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_f11_` | Compile RED: two missing persist-hook method diagnostics; after seam only runnable RED **0/2** (epoch 1→1→1 obsolete writer, active-child old result incomplete); after fencing/handoff corrections **2/0**; strengthened same-registry foreign-root control **2/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_r1_` | RED **0/3**, retired count still 1 at all three real verified routes; after atomic consumption **0/3** on missing qualified snapshot read evidence; GREEN **3/0** after audited Push projection/Fetch separation. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_` | **8/0**, including SQL rollback controls on all routes and additive/marked-loss index control. Later takeover and late-classification cases run below and in final target. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_f11_does_not_adopt_reclaimed_owner -- --exact` | **1/0**. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_late_classification_keeps_new_retirement -- --exact` | RED **0/1**: old classifier deleted new row; GREEN **1/0** after consuming only at true verified transitions. |
+| `devenv shell -- cargo test --locked --lib later_edit_after_runner_completion_provisions_fresh_context_and_first_publication` | **1 passed/0 failed/994 filtered**, 1.03s, after final classification-only correction. |
+| `devenv shell -- cargo test --locked --lib promotion` | **188 passed/0 failed/807 filtered**, 189.51s. Later production change only removes the now-redundant classification deletion; focused fresh-context test above and final 74-case/four affected runs verify it. |
+| `devenv shell -- cargo test --locked --lib remote::state` | Initial **66 passed/1 failed/928 filtered**, 7.96s, on the intentionally downgraded Cycle 04 fixture retaining the new marker; corrected authentic fixture final **67/0/928**, 8.16s. No terminal-row assertions changed. |
+| `devenv shell -- cargo test --locked --lib cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication` | **1/0/994**, 0.14s, after fixture version-marker correction. |
+| `devenv shell -- cargo test --locked --lib remote::reservation` | **45/0/950**, 13.22s. |
+| `devenv shell -- cargo test --locked --test discovery_rebuild concurrent_refreshes_with_the_same_operation_id_have_one_index_owner -- --exact` | **1/0/77**, 0.28s. |
+| `devenv shell -- cargo test --locked --test discovery_rebuild refresh_after_observation_failure_preserves_prior_rows_for_retry -- --exact` | **1/0/77**, 0.27s; original injected-failure/prior-cache retry classification retained. |
+| `devenv shell -- cargo test --locked --test discovery_rebuild refresh_scan_releases_repository_lease_before_observation -- --exact` | **1/0/77**, 0.25s. |
+| `devenv shell -- cargo test --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema -- --exact` | **1/0/77**, 0.07s. |
+| `devenv shell -- cargo test --locked --test document_promotion` | First **73/0**; the subsequently discovered/proven late-classification permission-loss edge justified another production correction/new regression, then final **74 SSH cases passed/0 failed**, warning-free. All original cases and all three review findings covered; no unchanged-tree repetition. |
+| `devenv shell -- cargo test --locked --test remote_synchronization` | **63/0**, then final **63/0** after classification-only correction. |
+| `devenv shell -- cargo test --locked --test remote_merge_recovery` | **25/0**, then final **25/0** after classification-only correction. |
+| `devenv shell -- cargo test --locked --test remote_polling` | **84/0**, then final **84/0** after classification-only correction. |
+| `devenv shell -- cargo test --locked --test comment_publication` | **41/0**, then final **41/0** after classification-only correction. |
+| `devenv shell -- cargo fmt --all` | Three QUALITY2 executions, exit 0. |
+| `devenv shell -- cargo fmt --check` | Three QUALITY2 executions, all exit 0. |
+
+The affected reruns are justified by the changed shared refresh-owner protocol,
+legacy/attempt verification, qualified read projection, and final classification
+ordering. No full all-features gate or optional Clippy rerun was performed here;
+the previously recorded baseline lints and any final-gate findings remain Task 8.
+
+### Review scope / remaining gates
+
+Review the whole uncommitted Task 7 diff against c0e9726, including new quality
+regressions. This QUALITY2 correction adds/changes:
+
+- `src/repository.rs`: post-two-observation test seam and bounded owned fresh pass.
+- `src/repository/recovery.rs`: explicit root-scoped index invalidation/CAS reclaim
+  using existing fields, with generic claim support for the fixed resumable state.
+- `src/repository/promotion/{record,run,observe}.rs`: atomic index-owner fence,
+  concurrent stored-completion priority, Fetch-specific eligibility.
+- `src/repository/remote/{state,reservation,sync,poll}.rs`: all verified transitions,
+  no late classification consumption, qualified indexed Push evidence/read overlay,
+  preserved Fetch-only planning and verified-only legacy continuation.
+- `src/repository/remote/state_tests.rs`: authentic legacy fixture marker reset only.
+- `tests/document_promotion/quality.rs`: ten real/small negative-control cases;
+  journeys registration/framed image and exits launch reuse visibility. Shared
+  `tests/support` and the original four SSH regression sources remain untouched.
+- Cycle/design/plan/handoff/this ledger and canonical comment
+  `01M51Z7Z00N4Q6S8V0X2Z4B6EG` (UTC date reflects the long-running session).
+
+Total intended pending inventory is **28 paths**, with no staging or commit.
+Final production diff witness `git diff -- src | git hash-object --stdin` is
+**d539ccf43b89be9112dc62a3ae9ee56f17c842ab**. Prior SPEC3 fingerprint is historical;
+production intentionally changed for these QUALITY2 fixes. New schema is only an
+audited additive partial index/marker, not a new data table/column. No consent
+digest, public DTO field, CLI/desktop API, new republish API or product policy change.
+
+No known review finding is left unaddressed, but **QUALITY recheck/approval is
+pending**, not inferred from tests. Task 8/full/native gates and recorded Clippy
+carryover remain pending. Backend lock repair exception remains unchanged, no
+automatic lock removal added. Linux counts do not prove Windows/macOS behavior;
+the Unix-only image control will not run on Windows. Native workflow is still
+manual-only, same four entries, never dispatched. Ticket stays open; no commit,
+push, PR, native action, merge, closure, subagent or worktree cleanup.
+
+Final QUALITY2 handoff checks: `git diff --check` and `git diff --cached
+--exit-code` passed; `git diff --exit-code -- Cargo.lock devenv.nix devenv.lock
+tests/support tests/remote_synchronization.rs tests/remote_merge_recovery.rs
+tests/remote_polling.rs tests/comment_publication.rs tests/discovery_rebuild.rs
+tests/repository_enablement.rs` passed. Status is exactly the 28 intended paths,
+nothing staged, HEAD c0e9726. The final source-diff hash was rechecked and matches
+d539ccf43b89be9112dc62a3ae9ee56f17c842ab; only evidence prose changed after the last
+test run. No full/native gate or review approval is newly claimed.
+
+## QUALITY Follow-up — Invalidated Authoritative Local Handoffs Remain Resumable
+
+**2026-10-17 UTC: narrow compatibility correction targeted-verified, uncommitted
+at c0e972655f04ea67bb9411877b0627e7eb8439ac; return for QUALITY recheck.**
+
+The controller accepts the R1 correction, fixture-image minor and F11 mechanism.
+Its remaining important finding is valid: generic refresh could reclaim
+`index_invalidated`, but public `operation.resume` and recovery advice used
+`HAND_OFF_STATES` without that entry. After executor loss an authoritative local
+handoff therefore demanded its original request, or recovery/abandon when there
+was no owning request record, and kept unrelated work blocked.
+
+### Scope and preflight
+
+All work stayed in the existing ticket worktree/branch. `git fetch origin main`
+succeeded; `git merge-base --is-ancestor origin/main HEAD` returned 0. HEAD remains
+c0e972655f04ea67bb9411877b0627e7eb8439ac and freshly fetched main remains
+89d04f901636229392a311241f8e777f0a00962b. Existing 28-path Task 7 work was already
+dirty and preserved. The current-main base is still an ancestor, so no stash,
+checkpoint commit or dirty-tree rebase was needed for this same-task review fix.
+
+Only new production behavior in this follow-up is the extra `index_invalidated`
+entry in `HAND_OFF_STATES` plus an explanatory comment. The existing
+`LocalRow::owes_only_its_hand_off` authoritative-step/pending-state proof is
+unchanged. The remote-first resume binding is unchanged; there is no new F2
+promotion binding, API or feature.
+
+### Regressions and evidence boundaries
+
+- The existing state/step classification matrix now includes `index_invalidated`
+  across authoritative positives and all existing non-authoritative/no-step
+  negatives. Added comment-checkpoint-intent and bare invalidated-refresh
+  negatives ensure state alone cannot establish completed work. Existing
+  pre-handoff, completed, rejected and abandoned negatives remain.
+- `a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss`:
+  a real public save commits and owes indexing. The test explicitly seeds the
+  durable fence/epoch left by invalidation, then reopens without a running
+  executor. Another request offers operation.resume; public resume advances the
+  epoch once and completes the same row/step, reports only discovery current,
+  preserves the saved commit/content, replays its result, lets the original save
+  settle without a second commit, and unblocks the previously refused request.
+- `an_invalidated_authoritative_hand_off_needs_no_original_request_record`:
+  public domain add_remote leaves a real `remote_changed` handoff without any
+  request record. After the seeded fence and reopen, public resume succeeds,
+  completes the same step under a fresh epoch and preserves Git config bytes.
+- `an_invalidated_state_without_an_authoritative_step_still_needs_the_original_request`:
+  an actual save interrupted before its write stays OriginalRequestRequired
+  after a seeded invalidation/reopen. Neither request/journal nor content/commit
+  changes. The matrix separately covers a missing step.
+- `a_resume_does_not_take_up_promotion_through_an_invalidated_local_hand_off`:
+  a seeded unfinished promote remote row remains InvalidInput/NotResumable even
+  with a same-ID authoritative invalidated local shadow; both rows are unchanged
+  and no resume request is recorded. This tests remote-first classification,
+  not execution of promotion through the mutation boundary.
+
+These recovery cases follow the existing resume suite's durable-state fixture
+pattern: no claim of a new genuine process-kill journey. The three real F11
+SSH races were rerun and still prove actual invalidation/epoch fencing, fresh
+observation, foreign-root protection and exact-owner takeover. Together the
+tests cover real fence creation and the previously missing public recovery path.
+
+### Exact RED/GREEN commands
+
+All Cargo commands ran through Devenv in the ticket worktree, with no warnings.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib a_row_owes_only_its_hand_off_once_its_work_is_recorded_and_it_has_handed_off` | RED: 1 failed/994 filtered; `authoring_checkpoint_observed in index_invalidated` was not recognized. |
+| `devenv shell -- cargo test --locked --test mutation_replay invalidated` | RED: 1 failed/1 passed/304 filtered; authoritative save offered only inspect/abandon, missing operation.resume; non-authoritative control passed. Initial GREEN: 2 passed/304 filtered after adding the state. |
+| `devenv shell -- cargo test --locked --test mutation_replay resume::an_invalidated_authoritative_hand_off_needs_no_original_request_record -- --exact` | RED with only the new state entry temporarily removed: Blocked/RecoveryRequired instead of Success/Ok, 1 failed/306 filtered. Entry restored immediately. |
+| `devenv shell -- cargo test --locked --lib recovery::abandoned_row_tests` | GREEN: 12 passed/0 failed/983 filtered. |
+| `devenv shell -- cargo test --locked --test mutation_replay resume::` | Final GREEN: 33 passed/0 failed/275 filtered, 7.61s. Earlier 31-case intermediate run also passed; see fixture correction below. |
+| `devenv shell -- cargo test --locked --test document_promotion quality2_f11` | GREEN: 3 actual SSH cases passed, each observed owner epochs 1 → 2 → 3. |
+| `devenv shell -- cargo test --locked --test mutation_contract an_operation_resume_matches_the_envelope_schema_and_its_goldens -- --exact` | GREEN: 1 passed/0 failed/42 filtered, 0.75s. |
+| `devenv shell -- cargo fmt --all` | Exit 0 after each test-edit checkpoint. |
+
+One intermediate 33-case run had **32 passed/1 fixture error**: the new promotion
+negative tried to change a synchronization's immutable target into `promote`.
+The existing SQL trigger correctly refused `immutable remote operation target`.
+The fixture now inserts the intended promote row directly with valid context
+fields; no trigger/production behavior was changed or bypassed. Final 33-case
+run above includes the corrected negative and all existing resume cases.
+
+### Handoff
+
+This correction touches only `src/repository/recovery.rs`,
+`tests/mutation_replay/resume.rs`, existing Cycle/design/plan/handoff/ledger and
+canonical comment `01M5207Z00N4Q6S8V0X2Z4B6EH`. Total intended pending inventory
+is now **30 paths**, all unstaged/uncommitted. Production diff witness
+`git diff -- src | git hash-object --stdin` is
+**5f4704976c6dcae4fad323727042b3329acafc5c**.
+
+Earlier full 74-case/four-affected-SSH-target runs remain historical; only the
+focused F11 selection was rerun here. No full gate or native execution was
+requested or performed. Existing Task 8 gates/lint carryover remain pending.
+Return the whole uncommitted Task 7 diff for controller QUALITY recheck; approval,
+Task 7 completion and ticket closure are not inferred. No staging, commit,
+subagent, dependency, GPUI/global configuration, push/PR/native dispatch, merge
+or worktree cleanup action.
+
+Final follow-up checks: `devenv shell -- cargo fmt --check`, `git diff --check`
+and `git diff --cached --exit-code` all passed. `git diff --exit-code --
+Cargo.lock devenv.nix devenv.lock tests/support tests/remote_synchronization.rs
+tests/remote_merge_recovery.rs tests/remote_polling.rs tests/comment_publication.rs
+tests/discovery_rebuild.rs tests/repository_enablement.rs
+src/repository/mutation/bind/resume.rs` passed. Full untracked-file status confirms
+30 intended unstaged paths; the final source-diff witness still matches the value
+above. Only documentation/comment edits followed the final test run.
+
+## Task 7 Final Reviews Accepted — Controller Checkpoint, Then Task 8
+
+**2026-10-17 UTC: reviewed complete at the local gate.** The controller reports
+**Task 7 SPEC PASS and QUALITY FINAL APPROVE, no remaining findings**, including
+the final `index_invalidated` public-resume correction. The review boundary is
+the entire uncommitted Task 7 change against exact base
+**c0e972655f04ea67bb9411877b0627e7eb8439ac**, not only the final classifier edit.
+These are controller-reported final approvals; this coordination pass does not
+run an additional review or infer approval from tests. Earlier pending-review
+handoffs are historical and superseded. No current Task 7 owner question or
+review finding remains open.
+
+Task 7 is delivered and reviewed complete at the local gate. **Next action is
+the controller's checkpoint commit, then Task 8.** The worker makes no commit,
+starts no Task 8 implementation and does not close the ticket. Full Rust/CLI,
+whole-branch and native gates remain pending. The **22 carried Clippy findings
+must be fixed in Task 8**, not waived as baseline warnings. Task 7 approval is
+not full/native readiness or Cycle completion.
+
+### Retained verification qualifications
+
+The delivered Task 7 evidence is **74 real-SSH promotion cases**, plus affected
+targets **63 synchronization / 25 merge recovery / 84 polling / 41 comment
+publication**, and the recorded **188** promotion-library tests. The complete
+target runs precede the last narrow resume correction. That final correction
+has focused GREEN evidence: **33 public resume / 12 recovery / 3 real SSH F11 /
+1 resume envelope-schema** tests. The full targets were not rerun after that
+correction. Recovery tests explicitly model the durable invalidation fence and
+reopen; real F11 race tests separately establish actual fence creation. The
+Unix-only image test remains a platform qualification, not Windows/macOS proof.
+Historical RED/GREEN, fixture corrections and all approved policy boundaries
+remain recorded above.
+
+### Coordination-only pass and exact staging boundary
+
+Only this ledger, handoff, implementation-plan Task 7 summary/next-step checklist,
+Cycle evidence and canonical comment `01M5217Z00N4Q6S8V0X2Z4B6EJ` were changed in
+this pass. No source, tests, dependency files or workflow wiring changed; no
+Cargo/formatter/test command was run. HEAD and exact review base remain
+c0e972655f04ea67bb9411877b0627e7eb8439ac. The source diff witness stays
+**5f4704976c6dcae4fad323727042b3329acafc5c**. The tracked non-document diff witness
+(`src tests Cargo.toml Cargo.lock .github devenv.nix devenv.lock`) stays
+**9c4d45eee4710000122cc1096b220015834acb70**. Hashes of the five untracked SSH
+test files were also compared before/after to cover files absent from `git diff`.
+
+**All 31 pending paths below are intended for the controller's Task 7 checkpoint;
+nothing is staged.** Paths are relative to the ticket worktree:
+
+```text
+.github/workflows/build.yml
+Cargo.toml
+docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md
+docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-design.md
+docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md
+docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md
+docs/plans/2026-10-15-wave-02-cycle-09-handoff.md
+src/repository.rs
+src/repository/promotion/observe.rs
+src/repository/promotion/record.rs
+src/repository/promotion/run.rs
+src/repository/recovery.rs
+src/repository/remote/observation.rs
+src/repository/remote/poll.rs
+src/repository/remote/reservation.rs
+src/repository/remote/state.rs
+src/repository/remote/state_tests.rs
+src/repository/remote/sync.rs
+tests/mutation_replay/resume.rs
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M51V7Z00N4Q6S8V0X2Z4B6EC.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M51W7Z00N4Q6S8V0X2Z4B6ED.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M51X7Z00N4Q6S8V0X2Z4B6EE.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M51Y7Z00N4Q6S8V0X2Z4B6EF.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M51Z7Z00N4Q6S8V0X2Z4B6EG.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5207Z00N4Q6S8V0X2Z4B6EH.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5217Z00N4Q6S8V0X2Z4B6EJ.md
+tests/document_promotion.rs
+tests/document_promotion/advanced.rs
+tests/document_promotion/exits.rs
+tests/document_promotion/journeys.rs
+tests/document_promotion/quality.rs
+```
+
+The design, source/test files, wiring and six earlier comments are existing
+reviewed pending work, not edits made by this approval-recording pass. New
+canonical approval comment brings the prior 30-path inventory to 31. No staging,
+commit, push, PR, native dispatch, merge, closure, subagent or worktree cleanup.
+
+Coordination verification: **`git diff --check` passed**;
+**`git diff --cached --exit-code` passed (nothing staged)**. Full untracked-file
+status confirms exactly the 31 paths above. HEAD matches the exact review base.
+Both tracked-diff witnesses and all five untracked SSH-file hashes match their
+pre-edit values, confirming source/tests/wiring unchanged in this pass. These
+are Git/document checks only, not Rust/test/full/native gate reruns.

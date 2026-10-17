@@ -183,6 +183,149 @@ fn a_resume_runs_the_hand_off_a_save_owes_and_the_save_s_request_is_then_finishe
 }
 
 #[test]
+fn a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss() {
+    let (mut world, token, owed) = save_owing_its_hand_off();
+    let operation_id = operation_of(&owed);
+    let commit = world.branch_tip(TICKET_A).unwrap();
+    let source = world.worktree_source(TICKET_A);
+    // Model the durable fence left by promotion completion when this save's
+    // index executor is lost. The real F11 race tests cover writing this fence;
+    // this test covers its public recovery after reopening, with no executor.
+    let changed = items::index(world.data.path())
+        .execute(
+            "UPDATE operation_records SET state='index_invalidated',
+                 index_owner_epoch=index_owner_epoch+1 WHERE operation_ulid=?1",
+            [&operation_id],
+        )
+        .unwrap();
+    assert_eq!(changed, 1);
+    let before = stored(&world, &operation_id);
+    assert_eq!(before.1.as_deref(), Some("authoring_checkpoint_observed"));
+    world.reopen();
+    assert_eq!(stored(&world, &operation_id), before);
+
+    let blocked = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    assert_eq!(blocked.code, ResultCode::RecoveryRequired);
+    assert_eq!(
+        recovery_actions(&blocked),
+        ["operation.resume", "repo.inspect", "operation.abandon"]
+    );
+    assert_eq!(
+        blocked.recovery[0].operation_id.as_deref(),
+        Some(&*operation_id)
+    );
+    assert!(world.record(REQUEST_2).is_none());
+
+    let resumed = world.execute(REQUEST_3, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(resumed.effects, current());
+    let after = stored(&world, &operation_id);
+    assert_eq!(after.0, "completed");
+    assert_eq!(after.1, before.1);
+    assert_eq!(after.3, before.3 + 1);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(world.branch_tip(TICKET_A), Some(commit));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(world.worktree_source(TICKET_A), source);
+    assert_eq!(
+        world.execute(REQUEST_3, resume(&world, &operation_id)),
+        resumed
+    );
+    assert_eq!(stored(&world, &operation_id), after);
+
+    let finished = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(
+        (finished.outcome, finished.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(finished.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(world.branch_commits(TICKET_A), 1);
+    assert_eq!(world.worktree_source(TICKET_A), source);
+    assert_eq!(
+        world.record(REQUEST_1).unwrap().state,
+        RequestState::Finished
+    );
+
+    let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+    assert_eq!(
+        (created.outcome, created.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+}
+
+#[test]
+fn an_invalidated_authoritative_hand_off_needs_no_original_request_record() {
+    let mut world = World::with_service(|data| {
+        FailOnce::at(FailurePoint::BeforeIndexTransactionCommit).open_service(data)
+    });
+    let operation_id = OperationId::new();
+    world
+        .service
+        .add_remote(manyhands::repository::AddRemoteRequest {
+            root: world.root.clone(),
+            name: "origin".into(),
+            url: "ssh://git@example.invalid/team/project.git".into(),
+            operation_id,
+        })
+        .unwrap();
+    let operation_id = operation_id.to_string();
+    assert_eq!(world.request_rows(), 0);
+    let (_, step, observed_at, _) = stored(&world, &operation_id);
+    assert_eq!(step.as_deref(), Some("remote_changed"));
+    set_state(&world, &operation_id, "index_invalidated", observed_at);
+    let before = stored(&world, &operation_id);
+    let config_path = world.root.join(".git/config");
+    let config = std::fs::read(&config_path).unwrap();
+    world.reopen();
+
+    let resumed = world.execute(REQUEST_1, resume(&world, &operation_id));
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok)
+    );
+    assert_eq!(resumed.effects, current());
+    assert_eq!(world.pending_journal_rows(), 0);
+    let after = stored(&world, &operation_id);
+    assert_eq!(after.0, "completed");
+    assert_eq!(after.1, before.1);
+    assert_eq!(after.3, before.3 + 1);
+    assert_eq!(std::fs::read(&config_path).unwrap(), config);
+}
+
+#[test]
+fn an_invalidated_state_without_an_authoritative_step_still_needs_the_original_request() {
+    let mut world =
+        World::with_service(|data| FailOnce::at(FailurePoint::BeforeItemWrite).open_service(data));
+    let token = world.token(TICKET_A);
+    let interrupted = world.execute(REQUEST_1, world.save(TICKET_A, &token));
+    assert_eq!(interrupted.code, ResultCode::InternalError);
+    let operation_id = operation_of(&interrupted);
+    let (_, _, observed_at, _) = stored(&world, &operation_id);
+    set_state(&world, &operation_id, "index_invalidated", observed_at);
+    world.reopen();
+    let before = stored(&world, &operation_id);
+    let owner = world.record(REQUEST_1);
+
+    let refused = world.execute(REQUEST_2, resume(&world, &operation_id));
+    assert_refused(
+        &world,
+        REQUEST_2,
+        &refused,
+        Outcome::Blocked,
+        ResultCode::OriginalRequestRequired,
+    );
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert_eq!(refused.recovery[0].arguments["request_id"], REQUEST_1);
+    assert_eq!(stored(&world, &operation_id), before);
+    assert_eq!(world.record(REQUEST_1), owner);
+    assert_eq!(world.branch_commits(TICKET_A), 0);
+    assert!(!world.worktree_source(TICKET_A).contains(TITLE));
+}
+
+#[test]
 fn a_resume_of_a_save_interrupted_before_its_write_needs_the_original_request() {
     let world =
         World::with_service(|data| FailOnce::at(FailurePoint::BeforeItemWrite).open_service(data));
@@ -1021,6 +1164,52 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     );
     assert!(refused.recovery.is_empty());
     assert_eq!(stored_remote(&world, OPERATION_A), before);
+}
+
+#[test]
+fn a_resume_does_not_take_up_promotion_through_an_invalidated_local_hand_off() {
+    let world = remote_world();
+    items::index(world.data.path())
+        .execute(
+            "INSERT INTO remote_operation_records (
+                 repository_id, operation_ulid, configuration_generation, remote_name,
+                 primary_branch, primary_ref, primary_tracking_ref, context_ref,
+                 context_tracking_ref, kind, item_id, local_branch, action, priority,
+                 phase, created_at, updated_at
+             ) SELECT id, ?1, 0, 'origin', 'main', 'refs/heads/main',
+                      'refs/remotes/origin/main', ?2, ?3, 'document', ?4, ?5,
+                      'promote', 'manual', 'interrupted', ?6, ?6 FROM repositories",
+            rusqlite::params![
+                OPERATION_A,
+                format!("refs/heads/manyhands/document/{TICKET_A}"),
+                format!("refs/remotes/origin/manyhands/document/{TICKET_A}"),
+                TICKET_A,
+                format!("manyhands/document/{TICKET_A}"),
+                operations::STORED_AT,
+            ],
+        )
+        .unwrap();
+    operations::insert_local(
+        world.data.path(),
+        Some(OPERATION_A),
+        "refresh",
+        "index_invalidated",
+        Some("authoritative_observed"),
+    );
+    let before = stored_remote(&world, OPERATION_A);
+    let local = stored(&world, OPERATION_A);
+
+    let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &refused,
+        Outcome::Error,
+        ResultCode::InvalidInput,
+    );
+    assert!(refused.recovery.is_empty());
+    assert_eq!(stored_remote(&world, OPERATION_A), before);
+    assert_eq!(stored(&world, OPERATION_A), local);
 }
 
 #[test]

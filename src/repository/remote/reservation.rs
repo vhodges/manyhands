@@ -19,7 +19,7 @@ type PromotionReservationHook = Box<dyn FnOnce()>;
 #[cfg(test)]
 thread_local! {static PROMOTION_RESERVATION_HOOKS:std::cell::RefCell<std::collections::BTreeMap<String,PromotionReservationHook>>=std::cell::RefCell::new(std::collections::BTreeMap::new());}
 #[cfg(test)]
-pub(in crate::repository) fn set_promotion_reservation_hook(
+pub(in super::super) fn set_promotion_reservation_hook(
     op: OperationId,
     hook: impl FnOnce() + 'static,
 ) {
@@ -234,7 +234,7 @@ fn active(phase: RemoteOperationPhase) -> bool {
 }
 
 /// Called inside the same immediate transaction as the following state write.
-pub(in crate::repository) fn owned(
+pub(in super::super) fn owned(
     service: &RepositoryService,
     tx: &Transaction<'_>,
     repository_id: i64,
@@ -441,7 +441,7 @@ fn pending_recovery_stage(
 
 /// Ownership-first parent probe. A clean candidate still belongs to the child
 /// until it releases/reconciles its integration; outer errors cannot erase it.
-pub(in crate::repository) fn retains_promotion_child(
+pub(in super::super) fn retains_promotion_child(
     db: &rusqlite::Connection,
     record: &state::StoredRemoteOperation,
 ) -> Result<bool, RepositoryError> {
@@ -464,7 +464,7 @@ pub(in crate::repository) fn retains_promotion_child(
 /// A user's completed canonical resolution has released its local artifacts,
 /// but publication still belongs to that bound synchronization. This is distinct
 /// from retained (unfinished) ownership and from a no-local-work transient failure.
-pub(in crate::repository) fn promotion_child_has_resolution(
+pub(in super::super) fn promotion_child_has_resolution(
     db: &rusqlite::Connection,
     record: &state::StoredRemoteOperation,
 ) -> Result<bool, RepositoryError> {
@@ -778,7 +778,7 @@ fn finish(
 
 /// SQL-only finalization. Retirement and parent completion belong to this same
 /// caller-owned transaction; promotion never updates automatic poll policy.
-pub(in crate::repository) fn finish_promotion(
+pub(in super::super) fn finish_promotion(
     service: &RepositoryService,
     tx: &Transaction<'_>,
     id: i64,
@@ -804,7 +804,7 @@ impl RepositoryService {
     /// the real child journal, without exposing synchronization internals to the
     /// production promotion runner.
     #[cfg(test)]
-    pub(in crate::repository) fn prepare_promotion_test_child(
+    pub(in super::super) fn prepare_promotion_test_child(
         &self,
         root: &Path,
         owner: &RemoteReservation,
@@ -968,7 +968,7 @@ impl RepositoryService {
         }
     }
 
-    pub(in crate::repository) fn reserve_promotion_child(
+    pub(in super::super) fn reserve_promotion_child(
         &self,
         root: &Path,
         operation_id: OperationId,
@@ -2321,6 +2321,9 @@ impl RepositoryService {
             if checkpoint != C::PushReturned {
                 write()?;
             }
+            if checkpoint == C::PushVerified {
+                state::consume_retirement_on_publication(tx, &record)?;
+            }
             Ok(RemoteSafePointOutcome::Continue)
         })
     }
@@ -2335,7 +2338,7 @@ impl RepositoryService {
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         self.restart_synchronization_guarded(root, operation_id, target, None)
     }
-    pub(in crate::repository) fn restart_promotion_child(
+    pub(in super::super) fn restart_promotion_child(
         &self,
         root: &Path,
         operation_id: OperationId,
@@ -2509,6 +2512,9 @@ impl RepositoryService {
             }
             tx.execute("UPDATE remote_operation_records SET phase=?2,sync_checkpoint=?3,reconciliation_required=0,local_oid=?4,push_advertised_oid=?5 WHERE id=?1",
                 params![record.id,phase,checkpoint.name(),local_oid.to_string(),push_advertised_oid.map(|v|v.to_string())]).map_err(|_|state::recovery_required())?;
+            if checkpoint == C::PushVerified {
+                state::consume_retirement_on_publication(tx, &record)?;
+            }
             Ok(RemoteSafePointOutcome::Continue)
         })
     }
@@ -2846,6 +2852,10 @@ impl RepositoryService {
             }
             // Verified Git authority survives cancellation/yield. Discovery is
             // non-mutating and must remain the only possible exact-ID retry.
+            // Verification already consumed R1 in its own transaction. Merely
+            // classifying that older proof is not a new publication observation:
+            // a concurrent confirmed cleanup may have earned NEW retirement
+            // since verification, and that later proof must be preserved.
             tx.execute("UPDATE remote_operation_records SET phase='completed',sync_checkpoint='discovery_pending',completed_step='before_discovery',authoritative_kind=?2,authoritative_oid=?3,index_pending=1,outcome='completed',updated_at=max(updated_at,?4) WHERE id=?1",
                 params![record.id,authority.name(),authority.oid().to_string(),now()]).map_err(|_| state::recovery_required())?;
             Ok(RemoteSafePointOutcome::Continue)

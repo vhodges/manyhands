@@ -4025,7 +4025,7 @@ fn integrate_divergence(
 /// only advertisement/transport/publication are supplied by its fixture. No
 /// production path uses this adapter or manufactures a synchronization owner.
 #[cfg(test)]
-pub(in crate::repository) fn promotion_test_drive_local(
+pub(in super::super) fn promotion_test_drive_local(
     service: &RepositoryService,
     request: &SynchronizeRemoteRequest,
     incoming: git2::Oid,
@@ -4033,7 +4033,7 @@ pub(in crate::repository) fn promotion_test_drive_local(
     promotion_test_drive_local_inner(service, request, incoming, None)
 }
 #[cfg(test)]
-pub(in crate::repository) fn promotion_test_drive_local_bound(
+pub(in super::super) fn promotion_test_drive_local_bound(
     service: &RepositoryService,
     request: &SynchronizeRemoteRequest,
     incoming: git2::Oid,
@@ -4191,7 +4191,7 @@ fn graph_plan(
     })
 }
 #[cfg(test)]
-pub(in crate::repository) fn promotion_test_publication_plan(
+pub(in super::super) fn promotion_test_publication_plan(
     service: &RepositoryService,
     root: &Path,
     target: &SynchronizationTarget,
@@ -4212,7 +4212,7 @@ pub(in crate::repository) fn promotion_test_publication_plan(
         Ok(match target {
             SynchronizationTarget::Primary => RemotePublicationEvidence::NeverPublished,
             SynchronizationTarget::Context { kind, item_id } => {
-                state::read_snapshot(tx, id)?.publication_evidence_for(*kind, item_id)
+                state::read_snapshot(tx, id)?.fetch_publication_evidence_for(*kind, item_id)
             }
         })
     })?;
@@ -4303,7 +4303,7 @@ impl RepositoryService {
         }
         Ok(current)
     }
-    pub(in crate::repository) fn synchronization_configuration_matches(
+    pub(in super::super) fn synchronization_configuration_matches(
         &self,
         root: &Path,
         plan: &RemoteRefPlan,
@@ -4344,7 +4344,7 @@ impl RepositoryService {
 
     /// Shared authenticated action fence. The caller supplies its own owned
     /// boundary; synchronization and promotion keep their distinct journals.
-    pub(in crate::repository) fn with_scoped_action_remote<P: SessionCredentialProvider, T>(
+    pub(in super::super) fn with_scoped_action_remote<P: SessionCredentialProvider, T>(
         &self,
         request: VerifySshTransportRequest,
         session: &mut SessionCredentials<P>,
@@ -6228,9 +6228,7 @@ impl RepositoryService {
     }
     /// Parent-issued attempt identity never disappears into the ordinary-sync
     /// path. The reservation/restart transaction revalidates it atomically.
-    pub(in crate::repository) fn synchronize_promotion_child_observed<
-        P: SessionCredentialProvider,
-    >(
+    pub(in super::super) fn synchronize_promotion_child_observed<P: SessionCredentialProvider>(
         &self,
         request: SynchronizeRemoteRequest,
         session: &mut SessionCredentials<P>,
@@ -6722,7 +6720,7 @@ impl RepositoryService {
             SynchronizationTarget::Primary => RemotePublicationEvidence::HistoryUnknown,
             SynchronizationTarget::Context { kind, item_id } => self
                 .remote_snapshot(&root)?
-                .publication_evidence_for(*kind, item_id),
+                .fetch_publication_evidence_for(*kind, item_id),
         };
         // Fetch and Push history are direction-specific. A verified publication
         // at this endpoint must not be recreated after deletion, even when its
@@ -6888,6 +6886,25 @@ impl RepositoryService {
                 context
             };
             resumed = record.sync_checkpoint;
+            if resumed == Some(Checkpoint::PushVerified) {
+                // Fresh owned reconciliation has re-proved this exact legacy
+                // candidate at Push. Only classification remains; replaying a
+                // Fetch-only first-publication plan could reject a consumed R1
+                // permission on a distinct endpoint.
+                if evidence.push_oid != Some(actual) || evidence.push_advertised_oid != Some(actual)
+                {
+                    return Err(SynchronizationError::RecoveryRequired);
+                }
+                return self.finish_synchronization_publication(
+                    &request,
+                    &owner,
+                    &plan,
+                    &configuration,
+                    &target,
+                    Authority::Published(actual),
+                    observer,
+                );
+            }
             match self.synchronization_publication_intent(&root, &owner)? {
                 PublicationIntent::None | PublicationIntent::Legacy(_) => {}
                 PublicationIntent::Open => {
@@ -7423,6 +7440,20 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let current = reservation::owned(self, tx, id, owner)?;
             let Some((kind, item_id)) = current.target.item() else { return Ok(None); };
+            // R1 retires only the previous context's publication history. New
+            // ambiguous/verified attempts must still fence absence, even before
+            // classification consumes the retirement. No timestamp/ULID ordering
+            // or mere absence is retirement proof: require a validated retained
+            // row, no masking state, and ancestry inside its actually retired tip.
+            use rusqlite::OptionalExtension;
+            let snapshot = state::read_snapshot(tx, id)?;
+            let retired: Option<String> = tx.query_row(
+                "SELECT retired_oid FROM retired_contexts WHERE repository_id=?1 AND kind=?2 AND item_id=?3 AND NOT EXISTS(SELECT 1 FROM remote_context_states WHERE repository_id=?1 AND kind=?2 AND item_id=?3)",
+                rusqlite::params![id,authoring_kind_segment(&kind),item_id.to_string()], |row| row.get(0)
+            ).optional().map_err(|_|state::recovery_required())?;
+            let retired = retired.filter(|_| snapshot.fetch_publication_evidence_for(kind,item_id)==RemotePublicationEvidence::NeverPublished)
+                .map(|oid|git2::Oid::from_str(&oid).map_err(|_|state::recovery_required())).transpose()?;
+            let repository=retired.map(|_|git2::Repository::open(root).map_err(|_|state::recovery_required())).transpose()?;
             let mut query = tx.prepare("SELECT operation_ulid FROM remote_operation_records WHERE repository_id=?1 AND action='synchronize_context' AND kind=?2 AND item_id=?3").map_err(|_|state::recovery_required())?;
             let ids = query.query_map(rusqlite::params![id,authoring_kind_segment(&kind),item_id.to_string()],|row|row.get::<_,String>(0)).map_err(|_|state::recovery_required())?.collect::<Result<Vec<_>,_>>().map_err(|_|state::recovery_required())?;
             let mut verified = false;
@@ -7436,11 +7467,16 @@ impl RepositoryService {
                 let evidence = &record.sync_evidence;
                 // A verified newest publication attempt is the same proof as a
                 // legacy PushVerified checkpoint: absence afterwards is deletion.
-                let attempt_verified = state::latest_publication_attempt(tx, &record)?
-                    .is_some_and(|attempt| attempt.phase == state::PublicationPhase::Verified);
+                let attempt = state::latest_publication_attempt(tx, &record)?;
+                let attempt_verified = attempt.as_ref().is_some_and(|attempt| attempt.phase == state::PublicationPhase::Verified);
                 let proven = record.authority.is_some() || attempt_verified || record.sync_checkpoint == Some(Checkpoint::PushVerified) && evidence.push_oid.is_some() && evidence.push_advertised_oid == evidence.push_oid;
                 let intent = evidence.push_oid.is_some() && matches!(record.sync_checkpoint,Some(Checkpoint::PushPrepared | Checkpoint::PushReturned));
                 if proven || intent {
+                    let published=record.authority.map(|a|a.oid()).or(attempt.and_then(|a|a.candidate_oid)).or(evidence.push_oid);
+                    if let (Some(retired),Some(repo),Some(published))=(retired,repository.as_ref(),published)
+                        && (retired==published || repo.graph_descendant_of(retired,published).map_err(|_|state::recovery_required())?) {
+                        continue;
+                    }
                     if record.generation != current.generation || record.target != current.target { incompatible = true; }
                     else if proven { verified = true; }
                     else { ambiguous = true; }

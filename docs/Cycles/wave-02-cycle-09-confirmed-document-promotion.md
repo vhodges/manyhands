@@ -75,6 +75,19 @@ cross-resource atomicity blocker and independent reviews remain in the ledger.
 
 ## Planning Evidence And Implementation Entry Gate
 
+**Task 7 bounded amendments, owner-approved 2026-10-16 through the question
+tool:** independent review confirmed the R1/cache-loss and discovery-title
+contradictions against existing Cycles 04/05 and 08. Under unknown history R1
+requires a retained, validated retirement row and no masking state row. Losing
+the registry loses that proof: remain HistoryUnknown until explicit recovery or
+republication; absence and an old promotion merge never reconstruct it. No new
+republication API is delivered. Only existing accepted discovery metadata in
+`discovered_items.title` and its DB/WAL/backup copies may contain titles. Every
+workflow/promotion/retirement/remote/recovery/operation row, formatted result,
+diagnostic and child output stays title-free. Bodies/comments/endpoints,
+passphrases/credentials/key material remain forbidden in raw whole stores,
+sidecars and backups. No new title-bearing workflow write is permitted.
+
 The existing ticket branch and worktree were reused. A fresh `git fetch
 origin` observed `origin/main` at `89d04f9`. Cycle 08 had merged, and Wave 03
 Foundations F1 and F2 were present. The single ticket checkpoint rebased onto
@@ -431,8 +444,11 @@ These rulings are recorded in the design with their reasons:
 - **R1.** A completed promotion writes a `retired_contexts` row. Only a
   context this operation deleted after integrating it counts as never
   published for its next first publication. This holds even when repository
-  history is unknown. The row is removed when that context is next observed
-  as published.
+  history is unknown, provided the validated retirement row survives and no
+  state row masks it. The row is removed when that context is next observed as
+  published. Registry loss erases this proof and requires explicit recovery;
+  absence or a historical promotion merge is not proof. A newly confirmed,
+  already-contained cleanup can earn new retirement after its actual checks.
 - **Merge commit.** The subject is `Promote document <ULID>`, the first
   parent is the published primary, and an already-contained context gets no
   merge commit.
@@ -444,6 +460,48 @@ These rulings are recorded in the design with their reasons:
 
 ## Acceptance And Exit Evidence
 
+**Task 7 delivered and reviewed complete at the local gate — 2026-10-17 UTC:**
+The controller reports **SPEC PASS and QUALITY FINAL APPROVE, no remaining
+findings**, covering the complete uncommitted Task 7 change against exact base
+**c0e972655f04ea67bb9411877b0627e7eb8439ac**, including the last
+`index_invalidated` resume correction. Controller checkpoint is next, then Task 8.
+This is local Task 7 acceptance, not full/native readiness or Cycle completion.
+The 22 carried Clippy findings **must be fixed in Task 8** along with its required
+full verification gates; ticket remains open. This approval-recording pass changes
+only coordination documents/comment and reruns no tests.
+
+**Accepted final recovery correction (focused verification):** R1/image/F11 and
+the invalidated-local-handoff classifier correction are approved. Established `operation.resume` takes up
+`index_invalidated` only with its existing authoritative-step proof. Reopened
+owned/unowned handoffs complete without repeated effects; non-authoritative
+states and promotion remain refused. Targeted evidence is **33 resume, 12
+recovery, 3 actual SSH F11 races and 1 resume envelope/schema test** passed. The
+new recovery tests model the durable fence plus executor loss/reopen; actual
+fence creation remains covered by the F11 races. No new promotion binding or
+Task 8/full/native gate. Prior full-target results below remain historical.
+
+**Task 7 delivered evidence (full targets before the final narrow correction):**
+The amended acceptance journeys passed **74 real-SSH cases**, including public comment authoring, retained/lost R1,
+genuine child interruption/concurrency, F1–F12 process exits and both inside-F10/
+F11 lock cases. Affected targets pass **63 synchronization, 25 merge recovery,
+84 polling and 41 comment-publication cases**; the targeted promotion library
+selector passes **188 tests**. Exact RED/GREEN, fixes, per-obligation mapping and
+limitations are in the execution ledger. Independent Task 7 review is now approved
+as reported above, while full Task 8 verification and native proof remain pending.
+The full-target counts were not rerun after the final resume correction; its
+focused 33/12/3/1 evidence above is retained. No workflow was dispatched.
+SPEC3-P2 now proves reversible pre-/post-integration SSH outage recovery under
+the identical request, bilateral live/backup title positives and actual workflow-
+row rejection/rollback controls, and a rejected non-indexed title crossing public
+canonical authoring validation. Production/shared fixtures did not change in this
+SPEC3-P2 review correction. QUALITY2 subsequently changed production owner fencing
+and verified-publication bookkeeping, so all four affected targets above were
+rerun for those corrections and passed, before the last narrow resume change.
+Three deterministic F11 races, all
+distinct-endpoint verification routes with SQL rollback controls, the audited
+additive context-proof index and framed snapshot negatives supplement the prior
+journeys. QUALITY approval is controller-reported; no native proof is inferred.
+
 | Acceptance | Proof owner |
 | --- | --- |
 | Preflight reports every blocker and an exact preview with no network, lease or write; the digest is stable and changes with each bound fact | Task 2; Task 7 transport counters |
@@ -452,7 +510,7 @@ These rulings are recorded in the design with their reasons:
 | With a remote, the full lifecycle runs: one `Promote document` merge whose parents are the published primary and the context; the primary published; the remote branch, worktree and branch removed; history inspectable from the primary | Tasks 3–6; Task 7 |
 | Without a remote: local merge, cleanup complete, publication pending; a later remote plus primary synchronization publishes it | Task 6; Task 7 |
 | An already-contained context gets no merge commit; cleanup only, including after cache loss with the remote branch gone | Tasks 2, 3 and 6; Task 7 |
-| A later edit creates a fresh context from the primary, which publishes for the first time, including in a repository with unknown history | Tasks 4 and 6; Task 7 |
+| A later edit creates a fresh context from primary; unknown-history first publication requires retained validated retirement and no masking state. Registry loss stays HistoryUnknown across reopen; a newly confirmed contained cleanup can earn new retirement | Tasks 4 and 6; Task 7 |
 | Dirty or conflicted primary, or primary ahead (D2), blocks with no change | Task 2; Task 7 snapshots |
 | Integration conflict without a remote (D3), new context content (D4) and deleted remote history (D5) each refuse with no change | Tasks 2, 3 and 6; Task 7 |
 | A context conflict during synchronization returns the existing conflict outcome; resolve then retry promotes once | Task 6; Task 7 |
@@ -462,7 +520,7 @@ These rulings are recorded in the design with their reasons:
 | Each named boundary and inside-F10/F11 split reconciles without duplicate effects; ambiguous backend locks first preserve state with pending RecoveryRequired and refresh, then identical retry finishes only after quiesced, verified operator repair (T6-1) | Tasks 5 and 6; Task 7 |
 | An automatic poll yields to promotion; a poll during or after promotion neither rematerializes nor reports the context deleted in the promoting clone | Task 6; Task 7 |
 | Every `Ok` return after integration refreshes or reports `IndexPending` | Task 6; Task 7 |
-| Records, database, WAL, backup, diagnostics and output hold no title, body, endpoint or secret | Tasks 5 and 7 |
+| Workflow/recovery/operation/promotion/retirement/remote rows and diagnostics/output are title-free; only existing accepted discovered_items.title metadata and DB/WAL/backup copies allow titles. Raw whole stores/sidecars/backups contain no bodies/comments/endpoints/credentials/key material or rejected non-indexed title sentinel | Tasks 5 and 7 |
 | The required Devenv checks pass; native evidence is recorded honestly | Task 8 |
 
 ## Self-Review And Lifecycle

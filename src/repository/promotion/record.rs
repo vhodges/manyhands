@@ -20,9 +20,9 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 macro_rules! categories {
     ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
         #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-        pub(in crate::repository) enum $name { $($variant),+ }
+        pub(in super::super) enum $name { $($variant),+ }
         impl $name {
-            pub(in crate::repository) fn name(self)-> &'static str { match self { $(Self::$variant=>$text),+ } }
+            pub(in super::super) fn name(self)-> &'static str { match self { $(Self::$variant=>$text),+ } }
             fn parse(text: &str)->Result<Self,RepositoryError> { match text { $($text=>Ok(Self::$variant),)+ _=>Err(state::recovery_required()) } }
         }
     }
@@ -34,7 +34,7 @@ categories!(PromotionStep {
     BranchDeleted=>"branch_deleted", Complete=>"complete", Abandoned=>"abandoned", Superseded=>"superseded"
 });
 impl PromotionStep {
-    pub(in crate::repository) fn terminal(self) -> bool {
+    pub(in super::super) fn terminal(self) -> bool {
         matches!(self, Self::Complete | Self::Abandoned | Self::Superseded)
     }
     fn permits(self, next: Self, remote: bool) -> bool {
@@ -80,7 +80,7 @@ impl CleanupCategory {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::repository) enum Refusal {
+pub(in super::super) enum Refusal {
     Blocked(Vec<PromotionBlocker>),
     ExternalChange,
     ReconfirmationRequired,
@@ -127,7 +127,7 @@ impl Refusal {
     }
 }
 #[derive(Clone, PartialEq, Eq)]
-pub(in crate::repository) struct PromotionRecord {
+pub(in super::super) struct PromotionRecord {
     pub repository_id: i64,
     pub operation_id: OperationId,
     pub item_id: ItemId,
@@ -194,7 +194,7 @@ const SCHEMA:&str="CREATE TABLE document_promotions (
     CHECK((refusal_category IS 'blocked')=(refusal_blockers IS NOT NULL))
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX document_promotions_unfinished ON document_promotions(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
-pub(in crate::repository) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
+pub(in super::super) fn migrate(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='cycle_09_document_promotions')",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if !marked {
         let partial:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name IN ('document_promotions','document_promotions_unfinished'))",[],|r|r.get(0)).map_err(|_|state::recovery_required())?;
@@ -417,7 +417,7 @@ fn validate(r: &PromotionRecord) -> Result<(), RepositoryError> {
     }
     Ok(())
 }
-pub(in crate::repository) fn read_record(
+pub(in super::super) fn read_record(
     db: &Connection,
     id: i64,
     op: OperationId,
@@ -431,7 +431,7 @@ pub(in crate::repository) fn read_record(
     .map_err(|_| state::recovery_required())?
     .transpose()
 }
-pub(in crate::repository) fn records(
+pub(in super::super) fn records(
     db: &Connection,
     id: i64,
 ) -> Result<Vec<PromotionRecord>, RepositoryError> {
@@ -496,12 +496,12 @@ fn unfinished_record(
 /// Process-only fence for the exact predecessor observed before unleased
 /// discovery. A different parent or owner cannot be silently superseded.
 #[derive(PartialEq, Eq)]
-pub(in crate::repository) struct ReplacementGuard {
+pub(in super::super) struct ReplacementGuard {
     repository_id: i64,
     parent: Option<PromotionRecord>,
     owner: Option<(OperationId, i64, i64, RemoteOperationPhase, bool, bool, i64)>,
 }
-pub(in crate::repository) fn replacement_guard(
+pub(in super::super) fn replacement_guard(
     tx: &Transaction<'_>,
     id: i64,
     item: &ItemId,
@@ -530,7 +530,7 @@ pub(in crate::repository) fn replacement_guard(
     })
 }
 /// Caller has validated new consent before this atomic supersession/insert.
-pub(in crate::repository) fn begin_record(
+pub(in super::super) fn begin_record(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -562,7 +562,7 @@ pub(in crate::repository) fn begin_record(
 }
 /// A refused new request is terminal from insertion. It can coexist with the
 /// original unfinished parent without superseding/fencing that parent's owner.
-pub(in crate::repository) fn refuse_record(
+pub(in super::super) fn refuse_record(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -608,7 +608,7 @@ fn insert_record(
     tx.execute("INSERT INTO document_promotions(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,now(),category,blockers]).map_err(|_|state::recovery_required())?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)
 }
-pub(in crate::repository) fn save_record(
+pub(in super::super) fn save_record(
     tx: &Transaction<'_>,
     id: i64,
     r: &PromotionRecord,
@@ -647,7 +647,7 @@ pub(in crate::repository) fn save_record(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::repository) enum ChildRole {
+pub(in super::super) enum ChildRole {
     Context,
     Primary,
 }
@@ -656,7 +656,7 @@ pub(in crate::repository) enum ChildRole {
 /// durable binding. In particular, a formerly-bound no-row ID cannot fall back
 /// to an ordinary synchronization when another executor replaces its attempt.
 #[derive(Clone)]
-pub(in crate::repository) struct ChildExecution {
+pub(in super::super) struct ChildExecution {
     repository_id: i64,
     parent: OperationId,
     item: ItemId,
@@ -665,7 +665,7 @@ pub(in crate::repository) struct ChildExecution {
     attempt: u32,
     child: OperationId,
 }
-pub(in crate::repository) fn child_execution(
+pub(in super::super) fn child_execution(
     r: &PromotionRecord,
     role: ChildRole,
 ) -> Result<ChildExecution, RepositoryError> {
@@ -687,7 +687,7 @@ pub(in crate::repository) fn child_execution(
     })
 }
 impl ChildExecution {
-    pub(in crate::repository) fn validate_request(
+    pub(in super::super) fn validate_request(
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,
     ) -> Result<(), RepositoryError> {
@@ -707,7 +707,7 @@ impl ChildExecution {
         }
         Ok(())
     }
-    pub(in crate::repository) fn validate(
+    pub(in super::super) fn validate(
         &self,
         db: &Connection,
         id: i64,
@@ -753,13 +753,13 @@ impl ChildExecution {
 }
 /// Authoritative completion is consumed first. Retained includes clean candidates,
 /// installed conflicts and unreleased owned resolutions, regardless of outer error.
-pub(in crate::repository) enum ChildState {
+pub(in super::super) enum ChildState {
     Absent,
     Complete(state::StoredRemoteOperation),
     Retained(state::StoredRemoteOperation),
     Unowned(state::StoredRemoteOperation),
 }
-pub(in crate::repository) fn child_state(
+pub(in super::super) fn child_state(
     db: &Connection,
     r: &PromotionRecord,
     role: ChildRole,
@@ -788,7 +788,7 @@ pub(in crate::repository) fn child_state(
         Ok(ChildState::Unowned(record))
     }
 }
-pub(in crate::repository) fn next_attempt(
+pub(in super::super) fn next_attempt(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -841,7 +841,7 @@ fn mint_attempt(
 /// The sole back-transition: a fresh integration preparation proved primary
 /// advancement before `integrating` intent. A completed context child may be
 /// replaced here; ordinary retries may not replace authoritative completion.
-pub(in crate::repository) fn reset_context_after_primary_advance(
+pub(in super::super) fn reset_context_after_primary_advance(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -860,7 +860,7 @@ pub(in crate::repository) fn reset_context_after_primary_advance(
     mint_attempt(tx, &r, ChildRole::Context)
 }
 /// Checks both parent and child identities in the same transaction as reservation.
-pub(in crate::repository) fn validate_remote_identity(
+pub(in super::super) fn validate_remote_identity(
     db: &Connection,
     id: i64,
     op: OperationId,
@@ -889,7 +889,7 @@ pub(in crate::repository) fn validate_remote_identity(
     }
     Ok(())
 }
-pub(in crate::repository) fn validate_local_identity(
+pub(in super::super) fn validate_local_identity(
     db: &Connection,
     root: &str,
     action: &str,
@@ -934,7 +934,7 @@ pub(in crate::repository) fn validate_local_identity(
     }
     Ok(())
 }
-pub(in crate::repository) fn audit(db: &Connection) -> Result<(), RepositoryError> {
+pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     validate_schema(db)?;
     if db
         .prepare("PRAGMA foreign_key_check(document_promotions)")
@@ -977,7 +977,7 @@ pub(in crate::repository) fn audit(db: &Connection) -> Result<(), RepositoryErro
     Ok(())
 }
 
-pub(in crate::repository) fn complete_record(
+pub(in super::super) fn complete_record(
     tx: &Transaction<'_>,
     service: &RepositoryService,
     id: i64,
@@ -1018,6 +1018,15 @@ pub(in crate::repository) fn complete_record(
         validate_remote_identity(tx, id, op, &remote.target, remote.priority)?;
     }
     cleanup::retire_context(tx, id, evidence)?;
+    super::super::recovery::invalidate_index_observations(tx, id)?;
+    // Completion may be followed immediately by process exit (F11). Its
+    // index-only handoff must be durable in this same transaction so replay
+    // cannot mistake pre-cleanup discovery for an already-refreshed outcome.
+    tx.execute(
+        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
+        [id],
+    )
+    .map_err(|_| state::recovery_required())?;
     tx.execute("UPDATE document_promotions SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
     if let Some(owner) = owner {
         reservation::finish_promotion(service, tx, id, owner)?;
@@ -1026,7 +1035,7 @@ pub(in crate::repository) fn complete_record(
 }
 /// Inspect actual committed parent state after an uncertain commit result.
 /// Git-ref absence is never used as completion/retirement evidence here.
-pub(in crate::repository) fn reconcile_completion(
+pub(in super::super) fn reconcile_completion(
     db: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -1057,7 +1066,7 @@ fn deletion_reservation_required(r: &PromotionRecord) -> bool {
         && !(r.integration_kind == Some(IntegrationKind::AlreadyContained)
             && r.remote_context_oid.is_none())
 }
-pub(in crate::repository) fn request_cancellation(
+pub(in super::super) fn request_cancellation(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
@@ -1074,7 +1083,7 @@ pub(in crate::repository) fn request_cancellation(
 }
 /// Explicit same-ID continuation consumes a parent's inter-step stop. Child
 /// cancellation/ownership is reconciled independently before replacing any ID.
-pub(in crate::repository) fn clear_cancellation(
+pub(in super::super) fn clear_cancellation(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,

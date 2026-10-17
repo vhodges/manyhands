@@ -669,7 +669,7 @@ fn observe_git(
         && integration != Some(PlannedIntegration::AlreadyContained)
         && !not_document
     {
-        match snapshot.publication_evidence_for(AuthoringKind::Document, item) {
+        match snapshot.fetch_publication_evidence_for(AuthoringKind::Document, item) {
             RemotePublicationEvidence::ObservedPublished => {
                 blockers.insert(PromotionBlocker::RemoteContextDeleted);
             }

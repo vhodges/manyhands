@@ -325,7 +325,7 @@ Added by an all-or-nothing migration with marker
 | `step` | `confirmed`, `context_synchronized`, `integrating`, `integrated`, `published`, `publication_pending`, `remote_deleted`, `worktree_removing`, `worktree_removed`, `branch_deleted`, `complete`, `abandoned`, `superseded` |
 | `context_attempt`, `context_sync_id`, `primary_attempt`, `primary_sync_id` | The current child attempt number and ID. A new attempt gets a new ID, minted and stored before the child first runs |
 | `base_oid`, `context_oid`, `integration_oid`, `integration_kind` | Integration evidence. `integration_oid` is the merge commit or the contained base |
-| `remote_context_oid` | The remote context OID that deletion must find. It is recorded after context synchronization |
+| `remote_context_oid` | Fetched tracking-context evidence recorded after synchronization, possibly absent/stale relative to its push. Remote deletion instead uses the bound context child's durable verified publication OID |
 | `publication_category`, `cleanup_category` | Fixed redacted categories for a pending field |
 | `cancel_requested`, `updated_at` | Cancellation flag and timestamp |
 
@@ -363,9 +363,31 @@ deletion has been observed, or when there is no remote. Three changes in
 
 - **First-publication evidence.** `publication_evidence_for`, and every
   first-publication eligibility check, read a missing state row for a retired
-  item as `NeverPublished`, even when `history_unknown` is set.
+  item as `NeverPublished`, even when `history_unknown` is set, only with a
+  **retained validated retirement row**. An existing state row takes precedence.
+  **Owner-approved Task 7 amendment (2026-10-16):** registry loss erases this
+  evidence. Stay HistoryUnknown across reopen pending explicit recovery or
+  republication; absence/an old merge never reconstruct retirement. No new
+  republication API is supplied by this Cycle.
+  Read projections additionally expose current-generation verified Push proof as
+  ObservedPublished, even before authority classification and with a distinct
+  Push endpoint. Existing Fetch fields are never invented: private
+  `fetch_publication_evidence_for` retains Fetch-only history/R1 semantics for
+  synchronization graph planning, preflight and polling. The read overlay uses
+  validated journal evidence only for already-visible identities, with an audited
+  context-only lookup index (`cycle_09_context_publication_evidence` migration).
 - **Removal.** An observation batch that records the item as
   `observed_published` deletes the retirement row in the same transaction.
+  Verified Push publication consumes it with the verified checkpoint too,
+  including before authority classification or with a distinct push endpoint.
+  This includes legacy reconciliation upgrading PushVerified, direct settlement
+  verification and already-current candidate binding, each in the same SQL
+  transaction as its verified write. Classification is not another observation
+  and must not consume a NEW retirement earned after that older verification.
+  Pre-retirement Push journals are retired only when their candidate is contained
+  in the retained row's actual retired tip. New ambiguous/verified attempts keep
+  the ordinary absence barrier; neither ULID/timestamp ordering nor an old merge
+  is a substitute for the validated retained retirement row.
 - **Batch.** A retired item has no state row, so a batch never reports it
   `remotely_deleted`.
 
@@ -402,7 +424,7 @@ resolve root, configuration                              (invalid → Repository
  → lease: cleanup pre-check (registered, at context_oid, clean, no ignored, not locked)
         failure → cleanup pending(context_changed | ignored_files); refresh; return
  → remote? reserve promote (held to completion)                 [F6 BeforeRemoteDeletion]
-        delete C guarded by remote_context_oid; advertise
+         delete C guarded by the context child's verified publication OID; advertise
         → record remote_deleted                                 [F7 AfterRemoteDeletion]
  → lease: re-check; record worktree_removing; prune → worktree_removed   [F8 DuringWorktreeRemoval]
  → lease: delete local C guarded at context_oid → branch_deleted         [F9 BeforeBranchDeletion]
@@ -689,7 +711,71 @@ gone, the D5 exception applies. The caller previews and confirms a new ID.
 Nothing is integrated again. This is the RFC rule that cache loss requires
 recovery instead of blind replay.
 
+This newly confirmed, actually checked cleanup earns a new retirement row on
+completion. It does not reconstruct a lost old row. A fresh edit after *completed*
+promotion plus registry loss remains HistoryUnknown when no such new cleanup has
+earned retirement. Other items remain unknown in the same repository; a later
+observed publication consumes retirement and subsequent remote deletion again
+blocks ordinary republication.
+
+### Task 7 privacy amendment — owner approved 2026-10-16
+
+Only already accepted `discovered_items.title` metadata and its database/WAL/
+backup copies may contain titles (the existing Cycle 08 exception). All workflow,
+promotion, retirement, remote, recovery and operation rows, including backup row
+scans, plus formatted results/diagnostics/child output remain title-free. There
+is no new title-bearing workflow write. Bodies/comment bodies/endpoints,
+passphrases/credentials/key material and rejected non-indexed title sentinels stay
+forbidden in raw whole stores, sidecars and backups. Tests positively attest
+accepted discovery titles in both live clone stores and both backups, in
+checkpointed and pinned-WAL variants. Negative controls update an existing
+`operation_records.target` metadata field transactionally in each of those four
+stores, require the unchanged all-column scanners to reject the title, then
+rollback and compare known row snapshots. A separate public save containing the
+non-indexed title sentinel plus NUL exercises actual canonical validation; its
+formatted error, unchanged source/branch, discovery, and both raw stores/sidecars/
+backups prove rejection and absence. These are evidence controls, not policy changes.
+
 ## Polling And Concurrency
+
+The original fetched `remote_context_oid` is not necessarily the verified remote
+tip: first publication may leave T(C) absent, and a push may leave it stale. The
+delete guard reads completed child authority. Local retirement admits only the
+recorded fetched OID or that exact known verified OID if an allowed pre-F6 poll
+fetched it; arbitrary newer/symbolic/unreadable refs still stop. A Changed delete
+on a shared Fetch/Push endpoint fetches the peer replacement with existing exact
+scoped Fetch, without merging it. A distinct Push endpoint never writes its
+observation into another endpoint's Fetch tracking ref.
+
+Final SQL completion marks repository discovery stale and atomically fences its
+active index observations through the existing `index_owner_epoch` protocol.
+Each affected row is retained as `index_invalidated`, with identity and
+authoritative step unchanged. An old token cannot persist either captured
+observation or clear the stale flag. Its exact same record may CAS-reclaim the
+one-step fence and perform one bounded fresh pass under a new epoch/heartbeat;
+foreign, reclaimed, completed and abandoned records are not adopted. Fresh scans
+remain outside repository/cache guards; no index-owner row is silently deleted.
+An active authoritative child index handoff can finish normally, and legitimate
+ownership loss retains IndexPending behavior. Stored promotion completion wins
+over an older same-ID executor's unfinished snapshot after that handoff.
+
+If the original index executor is lost, `index_invalidated` also qualifies as an
+existing local index-handoff state for public `operation.resume`, but only with
+the same authoritative completed-step proof required of every other handoff
+state. State alone never authorizes recovery of an unfinished write or a bare
+refresh. Resume claims a fresh epoch and re-observes; it does not replay the
+authoritative effect. The remote journal still takes precedence: promotion is
+NotResumable even when a local shadow row meets the handoff predicate. This is
+compatibility with established local recovery, not the deferred F2 binding.
+
+The hidden `set_refresh_persist_hook_for_testing` barrier is after BOTH refresh
+observations and the owner touch, before persistence, without a lease/transaction.
+It proves genuine older-refresh/F11 races, including another root in the same
+registry and an already-reclaimed owner. Existing hidden FailurePoint support additionally
+names `PromotionAfterTrackingDeletion` and `PromotionAfterCompletionCommit`
+inside F10/F11; these are test seams, not extra lifecycle phases or production
+automatic lock repair. T6-1 preserves the ambiguous lock before operator repair,
+and stored completion preserves a surviving lock after SQL commit.
 
 - **Manual priority.** The children and the `promote` reservation all reserve
   with manual priority, so a running automatic poll yields to each of them.

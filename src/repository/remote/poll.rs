@@ -1567,7 +1567,7 @@ impl RepositoryService {
                         }
                         Some(_) => return Err(RemotePollError::Interrupted),
                         None if row.kind.is_some()
-                            && previous.publication_evidence_for(
+                            && previous.fetch_publication_evidence_for(
                                 row.kind.expect("context"),
                                 row.item_id.as_ref().expect("context"),
                             ) == super::RemotePublicationEvidence::ObservedPublished =>

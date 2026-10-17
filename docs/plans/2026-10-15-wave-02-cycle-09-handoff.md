@@ -1,6 +1,160 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 6 reviewed complete at local gate; Task 7 after controller checkpoint (2026-10-16)
+## Current: Task 7 Reviewed Complete At The Local Gate (2026-10-17 UTC)
+
+The controller reports **Task 7 SPEC PASS and QUALITY FINAL APPROVE, no remaining
+findings**, including the final `index_invalidated` public-resume correction.
+These approvals cover the entire uncommitted Task 7 change against exact base
+**c0e972655f04ea67bb9411877b0627e7eb8439ac**, not merely the last correction.
+Task 7 is delivered and reviewed complete at the local gate. No further Task 7
+review or owner decision remains pending. Earlier pending-review states below
+are historical and superseded by this controller-reported approval.
+
+**Next: controller checkpoint of Task 7, then Task 8.** HEAD remains c0e9726;
+the worker has made no checkpoint commit. Task 8 must fix the **22 carried
+Clippy findings** and run the required full Rust/CLI verification, whole-branch
+review and authorized native evidence process. Those gates are still pending;
+Task 7 approval does not establish full/native readiness or Cycle completion.
+The ticket remains open.
+
+Retained local evidence: **74 real-SSH promotion cases**; affected targets
+**63 synchronization / 25 merge recovery / 84 polling / 41 comment publication**;
+targeted promotion library **188**. These full-target results precede the final
+narrow resume correction. The final correction was verified with **33 public
+resume / 12 recovery / 3 actual SSH F11 / 1 envelope-schema** tests, not a fresh
+full-target rerun. The recovery fixtures seed the durable fence and reopen;
+genuine fence creation is separately covered by the F11 races. Unix-only image
+coverage remains qualified for other platforms. Exact evidence is in the ledger.
+
+This approval-recording pass edits only ledger/handoff/plan/Cycle evidence and
+canonical comment `01M5217Z00N4Q6S8V0X2Z4B6EJ`. No source/test/wiring changes or
+Cargo/test reruns. All **31 pending paths** are unstaged/uncommitted; the complete
+inventory is in the ledger and controller return. Production diff witness remains
+`5f4704976c6dcae4fad323727042b3329acafc5c`.
+
+## Historical Invalidated Local Handoff Recovery Correction (review now approved)
+
+The controller's latest QUALITY feedback accepts R1, the image minor and the F11
+mechanism, but identified a remaining recovery-classification integration gap.
+`index_invalidated` is now in `HAND_OFF_STATES`, still gated by the existing
+authoritative-step proof in `LocalRow::owes_only_its_hand_off`. Public
+`operation.resume` can complete that local handoff after executor loss/reopen,
+with or without an original request record. It neither repeats the write/commit
+nor leaves subsequent work blocked. No-step/non-authoritative states remain
+refused. Promotion remains NotResumable even with an authoritative invalidated
+local shadow; no F2 promotion binding was added.
+
+Targeted evidence: **33** public resume tests, **12** recovery tests, **3** actual
+SSH F11 races, and the **1** existing resume envelope/schema golden test passed.
+The owned and unowned regressions ran RED against the old classifier. Recovery
+tests explicitly seed the durable invalidation fence and reopen; they do not
+claim a new process-kill journey. Existing real F11 races prove fence creation.
+Exact commands, fixture correction and proof boundaries are appended to the ledger.
+
+All changes remain unstaged/uncommitted at c0e9726, ready for QUALITY recheck;
+Task 7 approval/completion and Task 8/full/native gates remain pending. Historical
+74-case/four-affected-target results below were not rerun as full targets in this
+narrow correction. Latest production diff witness:
+`5f4704976c6dcae4fad323727042b3329acafc5c`.
+
+## Historical QUALITY2 handoff (superseded by recovery correction above)
+
+SPEC PASS was conveyed on the preceding Task 7 revision. Both important QUALITY2
+findings and its minor are corrected, targeted-verified and uncommitted against
+c0e9726; **QUALITY approval/Task 7 completion remains pending**. Latest full target:
+**74 SSH cases**, including all prior SPEC3-P2 controls. The changed production
+paths justify fresh affected-target runs: synchronization **63**, merge recovery
+**25**, polling **84**, comment publication **41**, all passed. Promotion library
+**188**, state **67**, reservation **45**, focused discovery ownership/failure/lease
+and schema inventory checks passed. Exact RED/GREEN is in the ledger.
+
+Review the new `quality.rs` actual-service regressions and associated implementation:
+
+- Completion explicitly invalidates live index observations with existing owner
+  epochs/state in the same SQL transaction, preserving journal identities and
+  authoritative steps. Exact fenced owners may reclaim once and re-observe;
+  foreign/reclaimed/completed records are never adopted. No network/scan under
+  lease. Ordinary/active bound-child F11 races, shared-registry foreign-root
+  protection and legitimate same-ID takeover are tested. The older parent returns
+  stored complete authority after the child's refreshed handoff.
+- All verified publication transitions consume retirement in their own transaction,
+  including legacy reconciliation, settlement verification and already-current
+  binding. Distinct-endpoint tests stop before classification and force SQL rollback.
+  Qualified Push proof produces ObservedPublished without inventing Fetch data;
+  internal Fetch-only planning is separated. New context-only index/migration is
+  additive/idempotent and marked loss requires recovery. A late classifier cannot
+  delete retirement earned since its earlier verification.
+- Fixture `image` uses kind tags, framed path/payload/entry counts, Git executable
+  mode and native permissions; meaningful type/mode/boundary collision controls
+  pass. This is not a consent-digest change. The type/exec test is Unix-only;
+  local Linux total is 74, native Windows total is expected to omit that one case.
+
+Original SSH regression sources and shared fixtures are untouched. One legacy
+state unit fixture now clears the new index marker when deliberately rebuilding
+its table as authentic Cycle 04; all terminal-row assertions are retained.
+No new product policy, dependencies, GPUI/global config, sleeps, subagents or
+outward actions. Task 8/full/native gates and the previously recorded Clippy
+carryover remain pending. Return the complete uncommitted change for QUALITY
+recheck, not a commit or closure.
+
+## Historical SPEC3-P2 handoff (SPEC later passed; QUALITY2 above supersedes)
+
+All original Task 7 journeys and approved amendment controls are implemented and
+targeted-verified, uncommitted against exact base
+`c0e972655f04ea67bb9411877b0627e7eb8439ac`. **Not approved/complete until fresh
+reviews.** Final evidence: document_promotion **64 SSH cases after SPEC3-P2**, affected
+remote_synchronization **63**, remote_merge_recovery **25**, remote_polling **84**,
+comment_publication **41**, and targeted promotion library **188 passed**. Formatter/
+check passed. Full proof mapping, historical RED, fixes, files and remaining gates
+are in the execution ledger and review-ready ticket comment.
+
+SPEC3-P2 corrected evidence gaps in the earlier 63-case handoff: offline tests now
+restore a real SSH advertisement disconnect at the same endpoint/key and retry
+identical requests through retired/new actual children; privacy positives and
+transactional actual-operation-row negative controls cover live A/live B and both
+backups; the rejected title now crosses public canonical validation and its error/
+discovery/raw-store absence is checked. The final full target passes 64. Only
+`tests/document_promotion.rs`, `tests/document_promotion/journeys.rs` and evidence
+documents/comment changed in this correction. Production diff fingerprint stays
+`a9d8060139dd15f7a76b3e125ae31e08d900b7d4`; shared fixtures are unchanged, so the
+four prior affected-target results were not rerun. Resubmit to SPEC, then QUALITY.
+
+Review the entire Task 7 diff: public-only SSH target/submodules, deletion
+authority versus fetched tracking, raced replacement fetch, allowed pre-F6
+tracking advance, endpoint-qualified retained-R1 old/new journal handling and
+permission consumption at verified publication, durable F11 refresh handoff,
+two hidden inside-F10/F11 exit seams, equivalent relative ancestor visibility
+for original source-included regression harnesses, and amended documents. No old
+regression test was weakened or edited. Four-target native wiring stays manual.
+
+**Task 8 remains next after review/checkpoint, not executed here.** Full Rust/CLI/
+native gates are pending. An optional targeted Clippy command stopped in existing
+library code with **22 pre-existing findings** (14 large-error, four needless-
+borrow, three collapsible-if, one unnecessary-unwrap); no lint category was
+suppressed and no Clippy success is claimed. Carry these into Task 8's gate.
+No subagents, staging, commits or outward actions; ticket stays open.
+
+### Approved Task 7 bounded amendments
+
+Task 6 is reviewed/committed at c0e9726. Task 7 is review-ready, uncommitted, inline
+with no subagents. The owner approved both reviewed amendments through the question
+tool: R1 under unknown history requires **retained validated retirement + no masking
+state**; lost registry evidence stays HistoryUnknown pending explicit recovery/
+republication (no new API, no absence/old-merge inference). Only existing accepted
+`discovered_items.title` metadata and DB/WAL/backup copies allow titles; every
+workflow/recovery/operation/promotion/retirement/remote row and formatted result/
+diagnostic/child output stays title-free. Whole stores/sidecars/backups remain free
+of bodies/comments/endpoints/credentials/key material and rejected non-indexed
+title sentinels. No new title-bearing workflow write. Historical RED is retained.
+
+Task 7 now covers all original journeys plus real public recovery/retained-R1,
+loss-across-reopen, other-item barrier, publication-consumption/deletion, F7 new
+retirement and positive/negative title privacy controls. The deletion-OID fix
+already has absent/stale tracking SSH regressions; fresh full Task 7 spec/quality
+reviews are still due. Full target and four affected SSH targets passed;
+Task 8 broad gates/native execution remain deferred. No commit or outward action.
+
+## Historical Task 6 handoff (superseded)
 
 Tasks 0–5 are reviewed/committed; Task 5 checkpoint is `8d06577`, the current
 unchanged HEAD. Full Task 6 work is uncommitted in this ticket worktree and has

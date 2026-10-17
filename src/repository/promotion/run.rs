@@ -66,21 +66,22 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
         item: &ItemId,
     ) -> Result<DeleteObservation, SynchronizationError> {
         let root = request.root.clone();
-        service.with_scoped_action_remote(
+        let boundary = |root: &Path| {
+            state::with_transaction(service, root, |tx, id| {
+                let r = reservation::owned(service, tx, id, owner)?;
+                if r.cancel_requested || r.yield_requested {
+                    return Err(state::recovery_required());
+                }
+                Ok(())
+            })?;
+            Ok(())
+        };
+        let observed = service.with_scoped_action_remote(
             request,
             self.0,
             plan,
             configuration,
-            |root| {
-                state::with_transaction(service, root, |tx, id| {
-                    let r = reservation::owned(service, tx, id, owner)?;
-                    if r.cancel_requested || r.yield_requested {
-                        return Err(state::recovery_required());
-                    }
-                    Ok(())
-                })?;
-                Ok(())
-            },
+            boundary,
             |remote| {
                 // Reach the advertised safe point before the guarded update,
                 // after credentials/host review, without a repository lease.
@@ -105,7 +106,35 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                     )
                     .map_err(SynchronizationError::from))
             },
-        )?
+        )??;
+        if matches!(observed, DeleteObservation::Changed(_))
+            && configuration.fetch_and_push_share_endpoint()
+        {
+            // Preserve the collaborator's replacement as fetched tracking/object
+            // evidence too. Reuse exact scoped Fetch, outside the lease, under
+            // this same owner/configuration fence; never merge or republish it.
+            service.with_scoped_action_remote(
+                VerifySshTransportRequest {
+                    root,
+                    direction: SshDirection::Fetch,
+                    approval: None,
+                },
+                self.0,
+                plan,
+                configuration,
+                boundary,
+                |remote| {
+                    remote.fetch_exact(
+                        plan,
+                        &SynchronizationTarget::Context {
+                            kind: AuthoringKind::Document,
+                            item_id: item.clone(),
+                        },
+                    )
+                },
+            )?;
+        }
+        Ok(observed)
     }
 }
 
@@ -817,6 +846,16 @@ fn finish_integrated(
     io: &mut impl PromotionIo,
 ) -> DocumentPromotionResult {
     if let Err(category) = finish_steps(service, request, primary, r, io) {
+        // A concurrent same-ID executor may have completed while this child's
+        // index handoff was outside the lease. Stored completion outranks this
+        // executor's now-obsolete unfinished-step snapshot.
+        if let Ok(stored) = load(service, &request.root, r.operation_id)
+            && stored.step == Step::Complete
+            && stored.item_id == r.item_id
+            && stored.expectation == r.expectation
+        {
+            return refresh(service, &request.root, &stored, true);
+        }
         r.cleanup = Some(category);
         let _ = save(service, &request.root, r);
     }
@@ -971,6 +1010,20 @@ fn finish_steps(
                     _ => return Err(Clean::ContextChanged),
                 }
             } // Drop the precheck lease before credentials/advertisement/delete.
+            // T(C) is the fetched, pre-push observation, not necessarily the
+            // context tip the child verified as published. Keep that tracking
+            // evidence for guarded local retirement, but guard the remote delete
+            // with the child's durable publication authority.
+            let published_context = state::with_transaction(service, root, |tx, _| {
+                match record::child_state(tx, r, ChildRole::Context)? {
+                    ChildState::Complete(child) => child
+                        .authority
+                        .map(|authority| authority.oid())
+                        .ok_or_else(state::recovery_required),
+                    _ => Err(state::recovery_required()),
+                }
+            })
+            .map_err(recovery)?;
             let observed = io
                 .delete(
                     service,
@@ -982,7 +1035,7 @@ fn finish_steps(
                     plan.as_ref().unwrap(),
                     owner.as_ref().unwrap(),
                     configuration.as_ref().unwrap(),
-                    r.remote_context_oid.ok_or(Clean::RecoveryRequired)?,
+                    published_context,
                     &r.item_id,
                 )
                 .map_err(|e| deletion_error(&e))?;
@@ -1115,18 +1168,43 @@ fn finish_steps(
             TrackingDeletion::Changed => Clean::ContextChanged,
             TrackingDeletion::RecoveryRequired => Clean::RecoveryRequired,
         })?;
+    // A permitted poll between publication and F6 may fetch the just-published
+    // context into T(C). Both the original fetched value and this exact durable
+    // child authority are bound evidence; arbitrary/newer or symbolic refs are
+    // still refused by the guarded cleanup helper.
+    let mut expected_tracking = r.remote_context_oid;
+    if let Some(plan) = &plan {
+        let published = state::with_transaction(service, root, |tx, _| {
+            Ok(match record::child_state(tx, r, ChildRole::Context)? {
+                ChildState::Complete(child) => child.authority.map(|a| a.oid()),
+                _ => None,
+            })
+        })
+        .map_err(recovery)?;
+        let repo = git2::Repository::open(root).map_err(|_| Clean::RecoveryRequired)?;
+        let target = plan.context(AuthoringKind::Document, &r.item_id);
+        match repo.find_reference(target.tracking_ref()) {
+            Ok(reference) if published.is_some() && reference.target() == published => {
+                expected_tracking = published
+            }
+            Ok(_) => (),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => (),
+            Err(_) => return Err(Clean::RecoveryRequired),
+        }
+    }
     let evidence = cleanup
         .delete_tracking_ref(
             plan.as_ref(),
             AuthoringKind::Document,
             &r.item_id,
-            r.remote_context_oid,
+            expected_tracking,
             r.operation_id,
             oid,
         )
         .map_err(|_| Clean::RecoveryRequired)?;
     #[cfg(test)]
     super::run_tests::tracking_deleted(service, root);
+    boundary(service, root, FailurePoint::PromotionAfterTrackingDeletion).map_err(recovery)?;
     let completed = state::with_transaction(service, root, |tx, id| {
         // Reappearance after the Git tracking effect is also a refusal, with
         // SQL history/retirement/parent/owner unchanged by transaction rollback.
@@ -1137,6 +1215,8 @@ fn finish_steps(
     });
     #[cfg(test)]
     let completed = super::run_tests::completion_returned(service, root, completed);
+    let completed = completed
+        .and_then(|()| boundary(service, root, FailurePoint::PromotionAfterCompletionCommit));
     // A commit error does not prove rollback. Reopen the real durable authority
     // before returning recovery, retaining the Git absence guard throughout.
     if completed.is_err()

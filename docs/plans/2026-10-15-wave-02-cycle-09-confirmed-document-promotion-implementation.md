@@ -577,7 +577,8 @@ conveyed **SPEC PASS and QUALITY FINAL APPROVE, no remaining findings**, coverin
 the full uncommitted Task 6 change against exact base
 `8d06577f6af17e2532d072d7ee14419dbf8a84b4`, including the accepted concurrency fence
 and authoritative-completion correction. No Task 6 review/owner decision remains
-pending. Controller checkpoint is next; **Task 7 follows that checkpoint**.
+pending. The controller committed the reviewed Task 6 checkpoint as **c0e9726**;
+Task 7's review-ready implementation/evidence is recorded below.
 Final recorded selector: `devenv shell -- cargo test --locked --lib promotion`
 **188 passed/0 failed/807 filtered**, 188.09s, warning-free. Formatter/check pass.
 The 75 runner cases/helpers include both-role completion/cancel priority and real child handoff/reservation races,
@@ -724,24 +725,90 @@ crash recovery explicitly costs operator intervention. No new owner decision due
   Task 6 work uncommitted for independent spec then quality review.
 - [x] Final independent reviews conveyed: SPEC PASS; QUALITY FINAL APPROVE;
   no remaining findings on the full Task 6 change against 8d06577.
-- [ ] Controller checkpoint of reviewed-complete Task 6 (for example
+- [x] Controller checkpoint of reviewed-complete Task 6 (for example
   `feat: add confirmed document promotion`); no worker commit authorized.
 
 ## Task 7: Prove Promotion Over Real SSH
 
-**Files:** new `tests/document_promotion.rs`, `Cargo.toml`,
-`.github/workflows/build.yml`.
+**2026-10-17 UTC: Task 7 reviewed complete at the local gate. Controller reports
+SPEC PASS and QUALITY FINAL APPROVE, no remaining findings, including the final
+`index_invalidated` resume correction.** Review covers the whole uncommitted
+Task 7 change against exact base **c0e972655f04ea67bb9411877b0627e7eb8439ac**.
+The controller checkpoint is next, then Task 8; no worker commit is made.
+The accepted local recovery correction makes `index_invalidated` a handoff state
+only with the existing authoritative-step proof. The existing classification
+matrix and four added public resume cases cover reopened owned/unowned handoffs,
+no repeated effects, continued refusal without proof and promotion NotResumable.
+Targeted **33 resume + 12 recovery + 3 SSH F11 + 1 envelope/schema** checks pass;
+the ledger records RED/GREEN and explicit durable-state fixture boundaries. No
+new promotion binding or full gate; this correction is included in final approval.
+The following full-target results precede this narrow follow-up:
+Final required SSH targets pass: document_promotion **74**, synchronization **63**,
+merge recovery **25**, polling **84**, comment publication **41**. Targeted promotion
+library **188 passed**; formatter/check passed. All original Task 7 journeys and
+the approved controls are mapped in the ledger. Task 8/full/native gates remain
+pending. Task 8 must fix the 22 carried Clippy findings from the optional targeted
+probe and establish a clean required gate; they are not waived by Task 7 approval.
+SPEC3-P2 test-only corrections close the previously incomplete outage-retry and
+privacy-control evidence: both outage phases recover at the same endpoint/key
+under identical requests, both live clone databases and both backups receive
+positive/actual-row negative controls, and the rejected title enters public
+canonical validation. The earlier 63-case mapping is historical where noted in
+the ledger. SPEC subsequently passed. QUALITY2 then identified the older-refresh/
+F11 race, incomplete verified R1 transitions and snapshot framing/mode gap. Those
+fixes and ten new quality cases are now recorded in the ledger: explicit owner-
+epoch invalidation/fresh reclaim without row deletion, atomic consumption at every
+verified transition (not classification), qualified Push read evidence without
+fake Fetch fields, additive audited lookup index, and framed fixture snapshots.
+All four affected SSH targets were rerun for those production changes, before the
+final narrow resume correction; that correction retained the focused qualification
+above. Final SPEC/QUALITY approval is controller-reported, not a new review run
+or test rerun by this coordination pass.
+
+**Approved bounded amendments:**
+Independent review confirmed both contradictions against existing Cycles 04/05
+history policy and Cycle 08 discovery-title exception. Unknown-history R1 requires
+retained validated retirement with no masking state; registry loss remains
+HistoryUnknown across reopen, with no reconstruction from absence/old merge and
+no new republication API. Only accepted discovered_items.title metadata/copies
+allow titles; all workflow/recovery/operation rows, results/diagnostics/output
+stay title-free. Whole stores/sidecars/backups exclude bodies/comments/endpoints,
+credentials/key material and rejected non-indexed titles. Concrete public recovery,
+newly earned retirement/F7 cleanup and positive/negative privacy controls are
+required. Every original remaining Task 7 journey now has real-SSH evidence.
+
+**Historical blocked evidence (superseded by approval; RED retained):** Task 6 is committed at
+`c0e9726`. The first public-API SSH cases exposed and regression-tested a remote
+deletion-OID defect; its uncommitted fix and all 188 targeted promotion library
+tests were green. At that checkpoint the SSH target had **3 passed / 2 failed**.
+Those retained failures then required owner reconciliation: complete registry loss also
+erases R1 retirement evidence, and existing discovery intentionally persists
+document titles in its cache, contradicting literal whole-store title absence.
+See the execution ledger's Task 7 section for exact runs, proposed decisions,
+remaining acceptance mapping and limitations. Neither failure is ignored or
+accepted as expected. No full Task 7/review-ready/Task 8/native gate was claimed
+at that historical checkpoint; the current approval/evidence above supersede it.
+
+**Files:** new `tests/document_promotion.rs` and its `journeys.rs`, `advanced.rs`,
+`exits.rs`, `quality.rs` submodules; Cargo/native wiring; bounded regression fixes in promotion
+runner/record, remote observation/sync/reservation, equivalent relative visibility
+in record/remote helpers (including state), and hidden inside-F10/F11 FailurePoints.
+The recovery follow-up adds `tests/mutation_replay/resume.rs` coverage and the
+handoff-state classification entry. QUALITY2 also touches existing service/recovery owner fencing, state Push-proof
+projection/index, Fetch-specific poll/observation planning and one legacy state
+unit fixture's version marker setup. No original SSH regression tests were edited. Full changed-file inventory is in
+the ledger.
 
 **Consumes:** `tests/support/{remote_world, ssh_remote, ssh_harness,
 ssh_privacy}.rs`, the two-clone `Pair`/`Side` shape and `document_target()`
 from `tests/remote_merge_recovery.rs`, and the public API only.
 **Produces:** the Cycle's exit evidence.
 
-- [ ] Declare `[[test]] name = "document_promotion", harness = false`. Reuse
+- [x] Declare `[[test]] name = "document_promotion", harness = false`. Reuse
   the pre-thread initialization, the isolated child and the output-privacy
   architecture. Keep fixture directory names short. Every case ends with the
   privacy scan.
-- [ ] Happy path: clone A edits a document and adds a comment, previews, and
+- [x] Happy path: clone A edits a document and adds a comment, previews, and
   promotes. Assert:
   - the merge commit's subject and parents;
   - the server's primary equals A's primary;
@@ -753,22 +820,22 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
 
   Clone B polls: B's primary fast-forwards, and its context is reported
   `remotely_deleted` and preserved.
-- [ ] Local-only: a repository with no remote promotes, with
+- [x] Local-only: a repository with no remote promotes, with
   `Pending(NoPublicationRemote)` and cleanup complete. Then configure the
   remote and run primary synchronization, which publishes the merge.
-- [ ] Already-contained and fresh-context cases:
+- [x] Already-contained and fresh-context cases:
   - after promotion, an Edit of the document creates a new context from the
     primary;
   - a save and a synchronization publish it as a first publication;
   - a second promotion produces a second merge.
-- [ ] Blockers, each with zero connections and a byte-for-byte unchanged
+- [x] Blockers, each with zero connections and a byte-for-byte unchanged
   snapshot of both clones and the server:
   - dirty primary, conflicted primary, primary not checked out;
   - **(D2)** primary ahead;
   - dirty context;
   - context behind its fetched remote;
   - **(D5)** remote context deleted by B.
-- [ ] Cleanup preservation after integration, each with the remote context
+- [x] Cleanup preservation after integration, each with the remote context
   still on the server and a byte-for-byte unchanged local context:
   - A edits the context file between publication and cleanup;
   - an untracked file appears;
@@ -778,45 +845,53 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
 
   Each case is then superseded by a new preview and promotion that integrates
   the new commit, if any, and completes.
-- [ ] Cache loss and unknown history:
-  - A promotes, the registry is deleted and rebuilt, and an Edit then creates
-    a fresh context. With `history_unknown` set, the new context publishes
-    for the first time because of R1.
+- [x] Cache loss and unknown history:
+  - Public recovery while a published context exists sets unknown history; a
+    real promotion earns retirement, then reopen/fresh Edit/distinct save publishes
+    because of retained R1 while the unknown flag stays set. Other items remain
+    unknown. Publication consumes retirement; subsequent remote deletion blocks.
+  - A promotes and loses its registry: after recovery/rebuild a fresh Edit/save
+    stays HistoryUnknown, sends no receive update, preserves local content and
+    remote absence; reopen/repeat retains unknown history and no retirement.
   - A promotion interrupted at F7 is followed by registry loss. The preview
     reports `AlreadyContained` with cleanup only, and a new ID completes it
     with no second merge and no push.
-- [ ] **(D4)** B pushes a new commit to the context after A's preview. A's
+- [x] **(D4)** B pushes a new commit to the context after A's preview. A's
   promotion synchronizes, then returns `ReconfirmationRequired`. A
   re-preview lists B's path, and promoting with the new digest succeeds. A
   primary-only advance by B between preview and promotion does **not**
   require reconfirmation.
-- [ ] Context divergence with a conflict: A gets `ConflictPending`, resolves
+- [x] Context divergence with a conflict: A gets `ConflictPending`, resolves
   through `resolve_synchronization`, retries, and the promotion completes with
   one merge.
-- [ ] Publication failure: with `reject_primary_updates`, the outcome is
+- [x] Publication failure: with `reject_primary_updates`, the outcome is
   `Pending`, the server has no merge, A keeps its context, and the remote
   context still exists. After clearing the fault, a retry publishes and cleans
-  up. Repeat with the server offline.
-- [ ] Remote deletion failure: `reject_context_deletion` leaves
+  up. Repeat with a reversible real SSH disconnect, prove unchanged server
+  primary/preserved remote context while pending, restore the same endpoint/key
+  and complete the identical request with a retired/new actual transport child,
+  one promotion merge and only unfinished receives. Also retry the pre-context
+  transport failure without integration or receive effects before restoration.
+- [x] Remote deletion failure: `reject_context_deletion` leaves
   `Pending(RemoteDeletionFailed)` and all local state; a retry deletes and
   cleans up. With `race_context_update`, the result is
   `Pending(RemoteContextChanged)`, and B's commit is preserved on the server
   and in A's tracking ref.
-- [ ] Integration base: an automatic poll in A, run between the context
+- [x] Integration base: an automatic poll in A, run between the context
   synchronization (F2) and integration, advances `T(P)` with B's commit to
   another path. A gets `PrimaryAdvanced`. The retry produces one merge whose
   tree contains B's commit, and the server's primary keeps it.
-- [ ] Child attempts: a cancelled context synchronization and a cancelled
+- [x] Child attempts: a cancelled context synchronization and a cancelled
   primary publication each leave the record resumable. The next call
   completes with a new attempt when retained ownership is confirmed absent,
   and one push of each branch. An interrupted child retaining a conflict or
   owned resolution keeps its original ID with restart for either target.
-- [ ] Interruption and reopen, one case per boundary F1–F12, using the
+- [x] Interruption and reopen, one case per boundary F1–F12, using the
   exit-point service. Each case asserts:
   - actual refs, worktrees, server refs and the record;
   - that the retry performs only unfinished work, through server receive
     counters (pushes and deletes) and a merge-commit count.
-- [ ] Priority:
+- [x] Priority:
   - with an automatic poll holding its advertisement, the promotion's first
     child gets `PollYielding`, the poll interrupts, and the retry succeeds;
   - a poll run between the publication and F6 changes nothing the promotion
@@ -824,16 +899,23 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
   - a poll attempted between F6 and completion is `Busy`;
   - a poll after completion neither rematerializes nor reports the context
     deleted in A.
-- [ ] Configuration change: renaming the remote between steps interrupts with
+- [x] Configuration change: renaming the remote between steps interrupts with
   nothing further changed.
-- [ ] Privacy: the document title, body, comment body, endpoint and passphrase
-  sentinel are absent from:
-  - every promotion and remote row;
-  - the database, the WAL and a `VACUUM INTO` backup;
-  - formatted results and child output.
+- [x] Privacy: titles are absent from every workflow/promotion/retirement/remote/
+  recovery/operation row in both registries and backups and from formatted results,
+  diagnostics/child output. Only existing accepted discovered_items.title metadata
+  and DB/WAL/backup copies allow titles. Positively attest these copies and inject
+  accepted titles into actual existing operation journal metadata rows in both
+  live databases and both backups to require scanner rejection, transactional
+  rollback and known-snapshot restoration.
+  Document/comment bodies, endpoints, passphrases/credentials/key material and a
+  rejected non-indexed title sentinel stay absent from RAW whole stores/sidecars/
+  backups. Include an actually authored and promoted comment and an actual public
+  authoring request whose non-indexed title is rejected by canonical validation;
+  scan the formatted domain error without formatting the private request.
 
   Include the negative output controls the other SSH targets use.
-- [ ] Run and record counts:
+- [x] Run and record counts:
 
   ```sh
   devenv shell -- cargo test --locked --test document_promotion
@@ -843,14 +925,23 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
   devenv shell -- cargo test --locked --test comment_publication
   ```
 
-- [ ] Append `--test document_promotion` to the native test command for the
+- [x] Append `--test document_promotion` to the native test command for the
   configured targets. Leave the workflow manual-only. Do not dispatch it;
   record native execution as pending.
-- [ ] Commit (for example `test: prove confirmed document promotion over
+- [x] Obtain Task 7 SPEC PASS and QUALITY FINAL APPROVE, no remaining findings,
+  covering the complete uncommitted change including the last resume correction.
+- [ ] Controller checkpoint commit (for example `test: prove confirmed document promotion over
   SSH`) and add a ticket comment.
+
+  Approval/progress/review-ready comments and evidence are recorded. Task 7 is
+  reviewed complete at the local gate; this remaining checkpoint is controller-
+  owned and is not performed by the worker. Task 8 follows the checkpoint.
 
 ## Task 8: Full Verification, Code Review And Approval Handoff
 
+- [ ] Fix the 22 carried Clippy findings recorded by the earlier targeted probe;
+  they are required Task 8 work, not waived baseline warnings. Establish the
+  full `-D warnings` gate below after the controller's Task 7 checkpoint.
 - [ ] Run and record the full gate, with counts and lockfile hashes:
 
   ```sh
@@ -914,6 +1005,11 @@ Task 5 is reviewed complete at the local gate: SPEC PASS, QUALITY approved, its
 nonblocking lookup minor resolved/targeted-verified; checkpoint is now `8d06577`.
 Task 6 is reviewed complete under approved T6-1: SPEC PASS, QUALITY FINAL APPROVE,
 no remaining findings; recorded targeted verification is 188 promotion tests.
-It remains uncommitted against exact base 8d06577 for the controller checkpoint.
-Task 7 is next after that checkpoint; Tasks 7–8 remain planned, with no full/native
-gate or Cycle completion claimed. No current Task 6 review or owner question.
+The controller committed it as c0e9726. Task 7 is now reviewed complete at the
+local gate: controller-reported SPEC PASS and QUALITY FINAL APPROVE, no findings,
+including the final invalidated-handoff resume correction. Its 74 SSH journeys
+and affected-target counts retain the late focused-test qualification above.
+Controller checkpoint is next, then Task 8, including fixes for all 22 carried
+Clippy findings. Full/native gates and Cycle completion remain pending. This
+coordination pass changes no source and reruns no tests. No current Task 7 owner
+question or review remains pending.

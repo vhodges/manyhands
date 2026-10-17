@@ -325,6 +325,7 @@ pub struct RepositoryService {
     lifecycle_lease_hook: Mutex<Option<LifecycleLeaseHook>>,
     poll_boundary_hook: Mutex<Option<PollBoundaryHook>>,
     observation_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    refresh_persist_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     refresh_claim_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     index_owner_heartbeat_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     registration_git_hook: Mutex<Option<Box<dyn FnOnce() + Send>>>,
@@ -843,6 +844,12 @@ pub enum FailurePoint {
     DuringWorktreeRemoval,
     BeforeBranchDeletion,
     BeforeCompletion,
+    /// Inside F10: Git tracking deletion has committed, SQL completion has not
+    /// begun, and the backend ref lock is still held by retirement evidence.
+    PromotionAfterTrackingDeletion,
+    /// Inside F10/F11: SQL completion committed, before its result is consumed
+    /// and before the backend ref lock is released (lost commit-result seam).
+    PromotionAfterCompletionCommit,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
@@ -1327,6 +1334,54 @@ impl RepositoryService {
         repository_id: i64,
         owner: IndexOwner,
     ) -> Result<RefreshOutcome, RepositoryError> {
+        let first =
+            self.refresh_repository_observed(repository, root.clone(), repository_id, owner);
+        if !first
+            .as_ref()
+            .is_err_and(|e| e.kind == RepositoryErrorKind::RecoveryRequired)
+        {
+            return first;
+        }
+        let operation = RepositoryOperation::RefreshRepository;
+        let reclaimed = {
+            let _guard = cache_write_guard(&self.registry_path, &root, operation)?;
+            let connection = open_registry(&self.registry_path, &mut |_| {})
+                .map_err(|e| e.for_operation(operation, &root))?;
+            let key = registry_root_key(&root, operation)?;
+            recovery::reclaim_invalidated_indexing(&connection, owner, &key)
+                .map_err(|e| e.for_operation(operation, &root))?
+        };
+        let Some(fresh) = reclaimed else {
+            return first;
+        };
+        // One bounded fresh pass under a newly claimed epoch of this SAME
+        // record. The original heartbeat cannot touch the new epoch. No scan,
+        // prompt or transport is performed while holding the claim guards.
+        let heartbeat = IndexOwnerHeartbeat::start(
+            self.registry_path.clone(),
+            fresh,
+            root.clone(),
+            self.take_index_owner_heartbeat_hook(),
+        );
+        let result =
+            self.refresh_repository_observed(repository, root.clone(), repository_id, fresh);
+        drop(heartbeat);
+        if result
+            .as_ref()
+            .is_err_and(|e| e.kind != RepositoryErrorKind::RepositoryNotRegistered)
+        {
+            let _ = set_refresh_operation(&self.registry_path, fresh, "failed", None, &root);
+        }
+        result
+    }
+
+    fn refresh_repository_observed(
+        &self,
+        repository: &Repository,
+        root: PathBuf,
+        repository_id: i64,
+        owner: IndexOwner,
+    ) -> Result<RefreshOutcome, RepositoryError> {
         let operation = RepositoryOperation::RefreshRepository;
         // Taken before anything is observed: what this refresh stores can be
         // no newer than this, so a file changed while it runs reads as
@@ -1356,6 +1411,21 @@ impl RepositoryService {
         }
         let after = observe_root(repository, &root);
         touch_refresh_index_owner(&self.registry_path, owner, &root)?;
+        if let Some(hook) = self
+            .refresh_persist_hook
+            .lock()
+            .map_err(|_| {
+                RepositoryError::new(
+                    operation,
+                    Some(root.clone()),
+                    RepositoryErrorKind::InjectedFailure,
+                    "the test refresh-persist hook is unavailable",
+                )
+            })?
+            .take()
+        {
+            hook();
+        }
         if let Err(error) =
             self.check_failure(FailurePoint::BeforeIndexTransactionCommit, operation, &root)
         {
@@ -3790,6 +3860,7 @@ impl RepositoryService {
             lifecycle_lease_hook: Mutex::new(None),
             poll_boundary_hook: Mutex::new(None),
             observation_hook: Mutex::new(None),
+            refresh_persist_hook: Mutex::new(None),
             refresh_claim_hook: Mutex::new(None),
             index_owner_heartbeat_hook: Mutex::new(None),
             registration_git_hook: Mutex::new(None),
@@ -5252,6 +5323,16 @@ impl RepositoryService {
             .refresh_claim_hook
             .lock()
             .expect("test refresh-claim hook lock") = Some(Box::new(hook));
+    }
+
+    /// Both refresh observations have been captured, immediately before SQL
+    /// persistence. No repository lease, cache guard or transaction is held.
+    #[doc(hidden)]
+    pub fn set_refresh_persist_hook_for_testing(&self, hook: impl FnOnce() + Send + 'static) {
+        *self
+            .refresh_persist_hook
+            .lock()
+            .expect("test refresh-persist hook") = Some(Box::new(hook));
     }
 
     #[doc(hidden)]

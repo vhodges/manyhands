@@ -1897,6 +1897,15 @@ fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication()
     connection
         .execute_batch("DROP TABLE remote_poll_dispositions; DROP TABLE remote_poll_materializations; DROP TABLE remote_publication_attempts; DROP TABLE remote_integration_merge_metadata; DROP TABLE remote_resolution_ref_log_artifacts; DROP TABLE remote_resolution_index_artifacts; DROP TABLE remote_resolution_paths; DROP TABLE remote_resolution_attempts; DROP TABLE remote_identity_confirmations; DROP TABLE remote_integration_steps; DROP TABLE remote_integration_windows; DROP TABLE remote_operation_records")
         .unwrap();
+    // This is an authentic pre-Cycle-09 envelope, not marked loss of its new
+    // context-proof index (DROP TABLE also removed that index). The independent
+    // marked-index-loss acceptance control must continue to require recovery.
+    connection
+        .execute(
+            "DELETE FROM registry_migrations WHERE name='cycle_09_context_publication_evidence'",
+            [],
+        )
+        .unwrap();
     connection.execute_batch(CYCLE04_OPERATION_SCHEMA).unwrap();
     let cases = [
         ("completed", "after_batch_commit", Some("completed"), 0, 0),

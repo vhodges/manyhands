@@ -14,7 +14,14 @@ pub(crate) struct ObservationConfiguration {
 }
 
 impl ObservationConfiguration {
-    pub(in crate::repository) fn transport_expectation(
+    /// Tracking refs describe Fetch history. A Push-only endpoint's observation
+    /// must never be installed as if it had been fetched from another server.
+    pub(in super::super) fn fetch_and_push_share_endpoint(&self) -> bool {
+        self.fetch
+            .as_ref()
+            .is_ok_and(|fetch| self.push.as_ref().is_ok_and(|push| fetch == push))
+    }
+    pub(in super::super) fn transport_expectation(
         &self,
         direction: SshDirection,
     ) -> Option<crate::repository::transport::SshScopeExpectation> {
@@ -35,7 +42,7 @@ impl ObservationConfiguration {
     // Only validated public SSH locator metadata enters this digest. Endpoint
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.
-    pub(in crate::repository) fn endpoint_digest(&self) -> [u8; 32] {
+    pub(in super::super) fn endpoint_digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
         for endpoint in [&self.fetch, &self.push] {
             match endpoint {
@@ -54,7 +61,7 @@ impl ObservationConfiguration {
 }
 
 impl RepositoryService {
-    pub(in crate::repository) fn observation_configuration(
+    pub(in super::super) fn observation_configuration(
         &self,
         root: &std::path::Path,
         plan: &RemoteRefPlan,
