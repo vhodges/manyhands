@@ -4953,3 +4953,25 @@ tests/ssh_transport/synchronization.rs
   workflow dispatch, merge, closure or worktree cleanup occurred.
 - The published ticket ref remains divergent from its planning-time rebase.
   Any future authorized push must reconcile it without an unapproved force push.
+
+## Publication And First Native Dispatch — 2026-10-17
+
+- Owner authorized pushing the ticket branch and running Build once. After the
+  actual divergence was inspected, owner explicitly approved a history-only merge
+  preserving the original published checkpoint, followed by a normal push.
+- Fresh remote ticket SHA was `f017c738161b8acc7b54b88055471cf7ae551765`.
+  It was the sole remote-exclusive commit. Its stable patch ID and rebased
+  `69176ba` both equal `e656e8a4e97f26efa2b8a52c91bd4d9143d23158`.
+- History-only merge `5161f1d8882bb30204dba18576469a200a9b4693` has exactly the
+  pre-merge verified tree `e5ad7abdb9475b6ecc4008f58318dae29cd97b8e`.
+  `git diff --exit-code HEAD^ HEAD` and remote ancestry both passed.
+- Normal push to `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH` succeeded;
+  `git ls-remote` verified that exact SHA. No force push.
+- `gh workflow run build.yml --ref manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH`
+  created [Build run 39023714430](https://github.com/vhodges/manyhands/actions/runs/39023714430).
+  Readback confirmed `workflow_dispatch`, the correct branch and exact SHA above,
+  and all four native jobs queued/running. This is dispatch evidence, not a pass.
+- The following documentation/comment-only checkpoint records this receipt; the
+  implementation tested by that run remains unchanged. No second run is authorized
+  or dispatched here. Ticket remains open; PR, merge, closure and worktree cleanup
+  have not been authorized or performed.

@@ -1,5 +1,23 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
+## Publication Update — Native Build Dispatched 2026-10-17
+
+The owner authorized pushing this branch and one Build dispatch, then explicitly
+approved history-only reconciliation of the equivalent published checkpoint.
+`5161f1d8882bb30204dba18576469a200a9b4693` preserves remote checkpoint
+`f017c738161b8acc7b54b88055471cf7ae551765` without changing the verified file tree:
+`e5ad7abdb9475b6ecc4008f58318dae29cd97b8e`. The normal push succeeded without force.
+
+Native Build run [39023714430](https://github.com/vhodges/manyhands/actions/runs/39023714430)
+is dispatched against that exact merge SHA. Linux x86_64, Linux aarch64, Windows
+x86_64 and macOS aarch64 jobs were confirmed queued/running. No result is claimed
+yet. This publication-record checkpoint changes documentation/comments only; it
+does not change the implementation under test or dispatch another run.
+
+Ticket remains open. A subsequent native dispatch, PR, merge, closure and worktree
+cleanup still require their applicable owner authorizations. Historical statements
+below that publication/native authorization is pending are superseded by this update.
+
 ## Current: Tasks 0–8 Reviewed, Verified And Committed — Owner Review Next
 
 **2026-10-17 UTC: DONE at the local implementation/review/verification gate.**
