@@ -5213,3 +5213,90 @@ Both commands passed: **1 passed, 0 failed, 0 ignored, 1000 filtered out** each.
 P2 correction is ready for the same quality recheck. This is fixture portability
 evidence, not native-platform verification; the preceding native gates remain.
 No workflow changes or commits were made.
+
+## Restored Full Native Run — Windows Regression Fixture Follow-up — 2026-10-17
+
+### Confirmed Native Results And Current Scope
+
+- Controller reports focused [run 39036192892](https://github.com/vhodges/manyhands/actions/runs/39036192892)
+  at **35d4ef7** GREEN for all three platforms and all **22 exact cases**.
+  This includes the original Windows 20, ARM race with deterministic barrier
+  regression, and macOS active-child F11 case with fully successful diagnostics.
+- Controller restored the baseline workflow in separate commit **310d5ee** and
+  dispatched full [run 39036630383](https://github.com/vhodges/manyhands/actions/runs/39036630383).
+  Both Linux targets and macOS passed their full runs. Windows reported **956
+  unit tests passed, 1 failed**; every original Windows failure and every
+  integration target passed. The only failing unit test is the newly added
+  `held_lease_snapshot_checks_all_protected_files_and_empty_lease` regression.
+- macOS now has both focused and full native GREEN evidence. Its original
+  initiating failure remains historically unproven; the independently reproduced
+  cleanup-signal deadlock was fixed, and subsequent native execution passed.
+  A successful rerun does not establish which initiating event occurred earlier.
+- Current clean starting HEAD **bcafcb0** is the controller's workflow-only
+  narrowing to Windows and exactly that new regression. Work stays in the same
+  ticket worktree/branch. This pass changes no workflow, production lease logic,
+  snapshot helper, policy or dependencies, and performs no commit, push,
+  dispatch, rebase or delegation.
+
+### Native RED And Source-Level Cause
+
+Read the saved full-run log at
+`/home/vhodges/.local/share/opencode/tool-output/tool_14a9ea018001jo7b5Ck8dMhmUv`,
+lines **1875–1887**. The regression panics at `coordination.rs:136:40` with
+**OS error 33**, inside the helper's ordinary byte-read branch. Unlike the
+earlier Linux alias failure at the later nonempty assertion, Windows immediately
+rejects the read of its held mandatory-locked file. This native failure is the
+RED evidence for the current correction.
+
+The fixture mixed two path producers: its snapshot root came from Rust's
+canonical temporary parent, but its lease path came directly from libgit2's
+`repo.commondir()`. On Windows, Rust canonicalization uses extended/verbatim
+paths; libgit2's UTF-8 export strips that namespace. Source evidence from the
+locked dependencies:
+
+- `git2-0.20.4/src/repo.rs:466–469`: `commondir()` exposes
+  `git_repository_commondir` through `bytes2path`, without canonicalizing it to
+  Rust's path spelling.
+- `libgit2-sys-0.18.8+1.9.7/libgit2/src/util/win32/path_w32.c:494–517`:
+  `git_win32_path_to_utf8` strips the `\\?\` namespace, converts
+  `\\?\UNC\server\share` to `\\server\share`, and normalizes separators.
+- Its Windows `p_realpath` implementation in `posix_w32.c` uses that exporter.
+
+Thus filesystem-equivalent paths need not compare equal lexically. Canonicalizing
+only the temporary parent corrected the Unix alias case but cannot align an
+independently exported libgit2 path with a Rust verbatim root. The original 20
+snapshot callers walk from their own root using `read_dir`, so their root/path
+spellings remain aligned; the regression alone injected the other producer.
+
+### Fixture-Only Correction And Verification
+
+The test now keeps its TempDir owner separately, canonicalizes the **complete
+created root**, and constructs every snapshot file path from that same root.
+It retains the actual libgit2 lease path separately and, **after acquiring the
+real lease**, asserts equality of both paths' canonical identities. This proves
+the snapshot covers the actual locked file without requiring their input
+spellings to match. The same assertion exercises Windows drive/verbatim or UNC
+spelling differences without stripping prefixes by hand or hard-coding a drive.
+
+All existing checks remain: lock held before/after snapshot, protected
+index/ref/config/registry/user/namesake bytes, rejection of nonempty coordination
+contents, and rejection of a missing lease. The helper's exact path comparison
+and regular/empty requirements are untouched. No error is ignored.
+
+Only the affected regression was run, under normal and aliased TMPDIR:
+
+```sh
+devenv shell -- cargo test --locked --lib repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease -- --exact
+devenv shell -- env TMPDIR=/proc/self/root/tmp/opencode cargo test --locked --lib repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease -- --exact
+```
+
+Both passed: **1 passed, 0 failed, 0 ignored, 1000 filtered out** each.
+`devenv shell -- cargo fmt --check` and `git diff --check` passed;
+`git diff --exit-code -- .github/workflows/build.yml` confirmed no workflow delta.
+Since the shared helper did not change, the original 20 snapshot cases and
+broader suites were not rerun locally.
+
+Ready uncommitted for independent review. **Native Windows validation of this
+fixture correction remains pending** on the controller's exact-test workflow.
+After that gate passes, the controller owns restoration and renewed full native
+verification. Ticket remains OPEN.

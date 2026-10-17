@@ -218,17 +218,27 @@ mod tests {
 
     #[test]
     fn held_lease_snapshot_checks_all_protected_files_and_empty_lease() {
-        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let directory = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let root = directory.path().canonicalize().unwrap();
         let data = tempfile::tempdir().unwrap();
-        let repo = Repository::init(root.path()).unwrap();
-        let lease_path = repo.commondir().join(REPOSITORY_LOCK_FILE);
-        let lease = repository_lease(&repo, root.path(), RepositoryOperation::Read).unwrap();
-        assert!(!leases_are_free(data.path(), root.path()));
+        let repo = Repository::init(&root).unwrap();
+        let git_lease_path = repo.commondir().join(REPOSITORY_LOCK_FILE);
+        // Snapshot callers walk from their own root spelling. On Windows,
+        // canonicalize uses a verbatim prefix that libgit2's exported paths
+        // strip. Prove filesystem identity separately; do not feed libgit2's
+        // spelling to a helper whose contract is deliberately lexical.
+        let lease_path = root.join(".git").join(REPOSITORY_LOCK_FILE);
+        let lease = repository_lease(&repo, &root, RepositoryOperation::Read).unwrap();
         assert_eq!(
-            snapshot_file_hash(root.path(), &lease_path),
+            git_lease_path.canonicalize().unwrap(),
+            lease_path.canonicalize().unwrap()
+        );
+        assert!(!leases_are_free(data.path(), &root));
+        assert_eq!(
+            snapshot_file_hash(&root, &lease_path),
             *blake3::hash(b"").as_bytes()
         );
-        assert!(!leases_are_free(data.path(), root.path()));
+        assert!(!leases_are_free(data.path(), &root));
         for relative in [
             ".git/index",
             ".git/refs/heads/protected",
@@ -237,18 +247,18 @@ mod tests {
             "ordinary",
             "nested/manyhands-operation.lock",
         ] {
-            let path = root.path().join(relative);
+            let path = root.join(relative);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, b"before").unwrap();
-            let before = snapshot_file_hash(root.path(), &path);
+            let before = snapshot_file_hash(&root, &path);
             std::fs::write(&path, b"after").unwrap();
-            assert_ne!(snapshot_file_hash(root.path(), &path), before, "{relative}");
+            assert_ne!(snapshot_file_hash(&root, &path), before, "{relative}");
         }
         drop(lease);
         std::fs::write(&lease_path, b"unexpected protected contents").unwrap();
-        assert!(std::panic::catch_unwind(|| snapshot_file_hash(root.path(), &lease_path)).is_err());
+        assert!(std::panic::catch_unwind(|| snapshot_file_hash(&root, &lease_path)).is_err());
         std::fs::remove_file(&lease_path).unwrap();
-        assert!(std::panic::catch_unwind(|| snapshot_file_hash(root.path(), &lease_path)).is_err());
+        assert!(std::panic::catch_unwind(|| snapshot_file_hash(&root, &lease_path)).is_err());
     }
 
     fn files(directory: &Path) -> Vec<std::ffi::OsString> {
