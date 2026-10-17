@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 SSH host pin",
+  "description": "One pinned host key, as host inspect and the list of pins give it. A stored pin is named pinned_algorithm and pinned_fingerprint in every published shape; pinned_fingerprint is what host replace is given as the old fingerprint.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["host", "port", "pinned_algorithm", "pinned_fingerprint", "reapproval_required"],
+  "properties": {
+    "host": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "pinned_algorithm": {
+      "type": "string"
+    },
+    "pinned_fingerprint": {
+      "type": "string"
+    },
+    "reapproval_required": {
+      "type": "boolean"
+    }
+  }
+}

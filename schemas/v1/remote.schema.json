@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 remote",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "fetch_location",
+    "push_location",
+    "publication_eligible",
+    "selected_for_publication"
+  ],
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "fetch_location": {
+      "type": "string"
+    },
+    "push_location": {
+      "type": "string"
+    },
+    "publication_eligible": {
+      "type": "boolean"
+    },
+    "selected_for_publication": {
+      "type": "boolean"
+    }
+  }
+}

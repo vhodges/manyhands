@@ -40,6 +40,22 @@ The terms **MUST**, **MUST NOT**, **SHOULD**, and **MAY** are normative. A
 conforming implementation MUST preserve unknown front-matter keys and
 user-authored Markdown body content during a read-modify-write operation.
 
+The [desktop/editor RFC](desktop-information-architecture-and-editor.md),
+approved on 2026-10-05, applies that preservation contract to rich-text and
+source modes. Viewing, switching modes and no-change saves preserve original
+source. Rich-text editing retains unsupported constructs and untouched source;
+it does not silently reserialize or simplify an entire document. Actual metadata
+edits preserve unknown values even when YAML formatting changes. As amended on
+2026-10-07, a desktop save after an actual edit may also write the selected
+editor's recorded, meaning-preserving load normalization of the body; the
+desktop/editor RFC bounds that exception. It does not apply to the CLI or the
+headless library.
+
+Browsing and repair MUST NOT silently change identity. Adoption of marker-only
+content explicitly previews any generated ID; existing valid IDs remain stable.
+Repair cannot bypass uniqueness, closure fields or the no-reopening boundary.
+These interface rules introduce no canonical schema or ID migration.
+
 ## Repository Configuration
 
 An enabled repository MUST contain this tracked file:
@@ -65,6 +81,10 @@ optional and is omitted for a local-only repository. `primary_branch` and
 `publication_remote` are nonempty Git reference and remote names respectively.
 Unknown configuration keys MUST be retained when rewriting the file so future
 versions can add settings safely.
+
+The optional keys `ticket_slug_prefix` and `ticket_slug_code_length` are
+defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
+Both may be absent.
 
 An absent, malformed, unsupported-version, or invalid configuration is a
 visible repository problem. It MUST NOT cause Markdown content to be omitted or
@@ -158,6 +178,11 @@ closed_by: "Vince Hodges <vhodges@gmail.com>"
 identity used for the closing checkpoint. The closure lifecycle owns changes to
 these fields.
 
+A ticket may also carry the optional `deps`, `parent` and `slug` fields
+defined by the [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md).
+They never decide conformity, they do not replace the ULID as identity, and
+that RFC owns their validation.
+
 ### Comments
 
 Comments live at `.manyhands/comments/<item-id>/<comment-id>.md` and require:
@@ -176,6 +201,18 @@ created_at: "2026-09-30T12:35:00Z"
 Replies include `parent_id` with another comment ULID for the same `item_id`.
 `created_at` is an RFC 3339 UTC timestamp set when the comment is created and
 never rewritten. The Markdown body is the comment content.
+
+A comment may also carry the optional field below, as amended on 2026-10-07:
+
+```yaml
+created_by: "Vince Hodges <vhodges@gmail.com>"
+```
+
+`created_by` is the confirmed Git identity that created the comment, in the
+same form as a ticket's `closed_by`. It is set when the comment is created and
+never rewritten. It is optional: a comment without it is conforming, and its
+author is reported as unknown. Manyhands does not derive an author from Git
+history.
 
 Comments form a tree of arbitrary depth. Root comments sort by `created_at`,
 then `id`; direct replies use the same ordering beneath their parent. A missing

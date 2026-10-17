@@ -22,6 +22,110 @@ use manyhands::repository::{
 use rusqlite::{Connection, params};
 
 mod support;
+use support::comment_publication::TestCommentSession;
+
+#[test]
+fn corrupt_recovery_publishes_permanent_host_trust_fence() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let marker = data.path().join("ssh-host-trust-reapproval-required");
+    let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+    for _ in 0..2 {
+        fs::write(&registry, b"structurally corrupt registry").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        service
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: fixture.root.clone(),
+                operation_id: OperationId::new(),
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read(&marker).unwrap(),
+            b"manyhands SSH host trust reapproval required v1\n"
+        );
+    }
+}
+
+#[test]
+fn corrupt_recovery_marker_failure_preserves_original_database() {
+    for directory in [false, true] {
+        let fixture = support::born_repository();
+        let data = tempfile::tempdir().unwrap();
+        let marker = data.path().join("ssh-host-trust-reapproval-required");
+        if directory {
+            fs::create_dir(&marker).unwrap();
+        } else {
+            fs::write(&marker, b"invalid version").unwrap();
+        }
+        let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+        fs::write(&registry, b"structurally corrupt registry").unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        assert!(
+            service
+                .rebuild_repository(RebuildRepositoryRequest {
+                    root: fixture.root.clone(),
+                    operation_id: OperationId::new(),
+                })
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(&registry).unwrap(),
+            b"structurally corrupt registry"
+        );
+    }
+}
+
+#[test]
+fn ordinary_rebuild_preserves_host_pins_and_repository_registration() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let registry = data.path().join(manyhands::repository::REGISTRY_FILE);
+    let key =
+        ssh_key::PublicKey::from(ssh_key::private::Ed25519Keypair::from_seed(&[42; 32]).public);
+    let fingerprint = key.fingerprint(ssh_key::HashAlg::Sha256).to_string();
+    let connection = Connection::open(&registry).unwrap();
+    connection
+        .execute(
+            "INSERT INTO ssh_host_pins VALUES ('example.invalid', 22, 'ssh-ed25519', ?1)",
+            [&fingerprint],
+        )
+        .unwrap();
+    drop(connection);
+    service
+        .rebuild_repository(RebuildRepositoryRequest {
+            root: fixture.root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    drop(service);
+    let _service = RepositoryService::open_at(data.path()).unwrap();
+    let connection = Connection::open(&registry).unwrap();
+    let stored: String = connection
+        .query_row(
+            "SELECT sha256 FROM ssh_host_pins WHERE host='example.invalid' AND port=22",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored, fingerprint);
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM repositories", [], |row| row
+                .get::<_, usize>(0))
+            .unwrap(),
+        1
+    );
+    assert!(
+        !data
+            .path()
+            .join("ssh-host-trust-reapproval-required")
+            .exists()
+    );
+}
 
 #[test]
 fn common_git_lease_child() {
@@ -57,21 +161,37 @@ fn common_git_lease_child() {
 fn failed_lease_holder_is_reported_before_ready_timeout() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
+    let missing = fixture.root.join("missing");
+    let repository_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
     let start = Instant::now();
     let panic = std::panic::catch_unwind(|| {
-        support::hold_lease_in_child(
-            &fixture.root.join("missing"),
-            data.path(),
-            LeaseKind::Repository,
-        );
+        support::hold_lease_in_child(&missing, data.path(), LeaseKind::Repository);
     })
     .unwrap_err();
 
     assert!(start.elapsed() < Duration::from_secs(2));
     let message = panic_message(panic.as_ref());
-    assert!(message.contains("child exited before ready"));
-    assert!(message.contains("exit status"));
-    assert!(message.contains("No such file or directory"));
+    let diagnostic = message
+        .strip_prefix("lease holder child exited before ready (")
+        .expect("early child exit has its own diagnostic category");
+    let (status, output) = diagnostic.split_once("):\nstdout:\n").unwrap();
+    // ExitStatus's label differs by host; libtest's panic exit code does not.
+    assert_eq!(status.rsplit_once(": ").unwrap().1, "101");
+    let (stdout, stderr) = output.split_once("\nstderr:\n").unwrap();
+    assert!(stdout.contains("test common_git_lease_child ... FAILED"));
+    assert!(stderr.contains("common_git_lease_child"));
+    assert!(stderr.contains("panicked at"));
+    assert!(stderr.contains("operation: Inspect, kind: Io"));
+    assert!(stderr.contains("kind: NotFound"));
+    assert!(!message.contains("timed out waiting"));
+    assert!(!missing.exists());
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        repository_before
+    );
+    assert_eq!(support::repository_git_file_bytes(&fixture), git_before);
+    assert_eq!(fs::read_dir(data.path()).unwrap().count(), 0);
 }
 
 fn panic_message(panic: &(dyn Any + Send)) -> &str {
@@ -743,9 +863,31 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
 
 #[test]
 fn pending_create_blocks_a_different_create_before_repository_initialization() {
-    let data = tempfile::tempdir().unwrap();
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("created");
+    assert_pending_create_blocks_different_create(parent.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn alias_parent_pending_create_blocks_different_create_without_root_or_cache_mutation() {
+    let parent = tempfile::tempdir().unwrap();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("parent");
+    std::os::unix::fs::symlink(parent.path(), &alias).unwrap();
+    assert!(
+        alias != alias.canonicalize().unwrap(),
+        "request uses a parent alias"
+    );
+    assert_pending_create_blocks_different_create(&alias);
+    assert!(!parent.path().join("created").exists());
+}
+
+fn assert_pending_create_blocks_different_create(parent: &std::path::Path) {
+    let data = tempfile::tempdir().unwrap();
+    let root = parent.join("created");
+    assert!(!root.exists());
+    // Creation keys canonicalize the existing parent, never the absent root.
+    let registered_root = parent.canonicalize().unwrap().join("created");
     let service = RepositoryService::open_at(data.path()).unwrap();
     service
         .with_registry_connection_for_testing(|connection| {
@@ -754,7 +896,10 @@ fn pending_create_blocks_a_different_create_before_repository_initialization() {
                     "INSERT INTO operation_records (
                         root_path, operation_ulid, action, target, state, observed_at
                      ) VALUES (?1, ?2, 'create_and_enable', 'main', 'created', 0)",
-                    params![root.to_str().unwrap(), OperationId::new().to_string()],
+                    params![
+                        registered_root.to_str().unwrap(),
+                        OperationId::new().to_string()
+                    ],
                 )
                 .unwrap();
         })
@@ -969,9 +1114,9 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
     assert!(RepositoryService::open_at(data.path()).is_err());
     let connection = Connection::open(&database).unwrap();
     for table in [
+        "comment_publication_bindings",
         "operation_records",
         "operation_record_contexts",
-        "registry_migrations",
     ] {
         assert!(
             !connection
@@ -980,9 +1125,28 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
                     [table],
                     |row| row.get::<_, bool>(0)
                 )
-                .unwrap()
+                .unwrap(),
+            "unexpected partial recovery table: {table}"
         );
     }
+    // Cycle 09's registry-schema transaction commits before the independent
+    // recovery migration. Its shared marker table must survive, but neither
+    // marker from the failed recovery transaction may leak into it.
+    let committed_markers = connection
+        .prepare("SELECT name FROM registry_migrations ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        committed_markers,
+        [
+            "cycle_09_context_publication_evidence",
+            "cycle_09_document_promotions",
+            "cycle_09_retired_contexts",
+        ]
+    );
     let legacy_columns = connection
         .prepare("SELECT name FROM pragma_table_info('index_operations') ORDER BY cid")
         .unwrap()
@@ -1300,7 +1464,15 @@ fn create_replay_after_repository_initialization_uses_the_observed_step() {
     assert!(failing.create_and_enable(request.clone()).is_err());
     drop(failing);
     let repository = git2::Repository::open(&root).unwrap();
-    assert!(repository.is_empty().unwrap());
+    assert_eq!(
+        repository.find_reference("HEAD").unwrap().symbolic_target(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(
+        repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert_eq!(repository.references().unwrap().count(), 0);
 
     let replay = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(
@@ -1838,7 +2010,7 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
     );
     assert!(
         service
-            .submit_comment(comment_request(&born.root, OperationId::new()))
+            .submit_comment_with_test_session(comment_request(&born.root, OperationId::new()))
             .is_ok()
     );
 
@@ -1967,6 +2139,8 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     context.worktree,
                     fixture
                         .root
+                        .canonicalize()
+                        .unwrap()
                         .join(".manyhands/worktrees")
                         .join(support::document_id().to_string())
                 );

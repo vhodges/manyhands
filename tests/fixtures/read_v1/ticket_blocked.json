@@ -1,0 +1,360 @@
+{
+  "code": "ok",
+  "command": "ticket blocked",
+  "data": {
+    "complete": true,
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "items": [
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:14:20Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+            "state": "open"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR6",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": {
+          "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+          "state": "open"
+        },
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR6/ticket.md",
+        "problems": [],
+        "project": null,
+        "readiness": {
+          "reasons": [
+            {
+              "code": "open_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+              ]
+            }
+          ],
+          "state": "blocked"
+        },
+        "slug": null,
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "G",
+        "type": "task",
+        "unknown_metadata": {}
+      },
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:14:10Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+            "state": "open"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": {
+          "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+          "state": "open"
+        },
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
+        "problems": [
+          {
+            "code": "dependency_cycle",
+            "guidance": "Break the cycle between the tickets' dependencies.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+          },
+          {
+            "code": "parent_cycle",
+            "guidance": "Break the cycle between the tickets' parents.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR5/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+          }
+        ],
+        "project": null,
+        "readiness": {
+          "reasons": [
+            {
+              "code": "open_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+              ]
+            },
+            {
+              "code": "dependency_cycle",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+                "01ARZ3NDEKTSV4RRFFQ69G5FR5"
+              ]
+            }
+          ],
+          "state": "blocked"
+        },
+        "slug": null,
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "F",
+        "type": "task",
+        "unknown_metadata": {}
+      },
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:14:00Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
+            "state": "open"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": {
+          "id": "01ARZ3NDEKTSV4RRFFQ69G5FR5",
+          "state": "open"
+        },
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR4/ticket.md",
+        "problems": [
+          {
+            "code": "dependency_cycle",
+            "guidance": "Break the cycle between the tickets' dependencies.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR4/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR4"
+          },
+          {
+            "code": "parent_cycle",
+            "guidance": "Break the cycle between the tickets' parents.",
+            "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR4/ticket.md",
+            "target_id": "01ARZ3NDEKTSV4RRFFQ69G5FR5"
+          }
+        ],
+        "project": null,
+        "readiness": {
+          "reasons": [
+            {
+              "code": "open_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR5"
+              ]
+            },
+            {
+              "code": "dependency_cycle",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR4",
+                "01ARZ3NDEKTSV4RRFFQ69G5FR5"
+              ]
+            }
+          ],
+          "state": "blocked"
+        },
+        "slug": null,
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "E",
+        "type": "task",
+        "unknown_metadata": {}
+      },
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:13:50Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FR2",
+            "state": "open"
+          },
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FCZ",
+            "state": "unresolved"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR3",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": null,
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR3/ticket.md",
+        "problems": [],
+        "project": null,
+        "readiness": {
+          "reasons": [
+            {
+              "code": "open_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR2"
+              ]
+            },
+            {
+              "code": "unresolved_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FCZ"
+              ]
+            }
+          ],
+          "state": "blocked"
+        },
+        "slug": null,
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "D",
+        "type": "task",
+        "unknown_metadata": {}
+      },
+      {
+        "body": null,
+        "change_source": "git_commit",
+        "changed_at": "2023-11-14T22:13:40Z",
+        "closure": {
+          "closed_at": null,
+          "closed_by": null,
+          "state": "open"
+        },
+        "context": {
+          "branch": "main",
+          "head_oid": "<head-oid>",
+          "kind": "primary",
+          "worktree": "<repository>"
+        },
+        "deps": [
+          {
+            "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+            "state": "open"
+          }
+        ],
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FR2",
+        "index": {
+          "refreshed_at": "<refreshed-at>",
+          "state": "current"
+        },
+        "kind": "ticket",
+        "observation": null,
+        "parent": {
+          "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+          "state": "open"
+        },
+        "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR2/ticket.md",
+        "problems": [],
+        "project": null,
+        "readiness": {
+          "reasons": [
+            {
+              "code": "open_dependency",
+              "complete": true,
+              "ids": [
+                "01ARZ3NDEKTSV4RRFFQ69G5FR1"
+              ]
+            }
+          ],
+          "state": "blocked"
+        },
+        "slug": "mh-vh-k9x2b",
+        "source": null,
+        "status": "open",
+        "team": null,
+        "title": "C",
+        "type": "task",
+        "unknown_metadata": {}
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

@@ -31,6 +31,10 @@
     glib
     gtk3
     gh
+    sprite
+    codex
+    pi-coding-agent
+    inputs.nixpkgs-unstable.legacyPackages.${pkgs.stdenv.system}.claude-code
   ];
 
   # https://devenv.sh/languages/
