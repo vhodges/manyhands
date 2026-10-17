@@ -1,6 +1,6 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
-## Current: Task 8 Reviewed And Final-Gate Verified — Controller Checkpoint Next
+## Current: Tasks 0–8 Reviewed, Verified And Committed — Owner Review Next
 
 **2026-10-17 UTC: DONE at the local implementation/review/verification gate.**
 Controller reports whole-branch **SPEC PASS**, then the same final QUALITY reviewer
@@ -26,24 +26,26 @@ quality cases are durable in the ledger's **Task 8 Final Post-Review Full Gate**
 section. The source fingerprint matched before/after the run; only evidence edits
 followed. Both lockfile SHA-256 values match before/after.
 
-Fresh main remains **89d04f901636229392a311241f8e777f0a00962b**; unchanged HEAD
-**504cb44aa7f8e1eebd5996666851ebe34c47f78d**. Read-only HEAD/main merge-tree
-passes with tree **9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e**. **This does not
-prove the uncommitted final file tree; controller must check final-HEAD merge-tree
-after its checkpoint.** No staging, temporary commit/index or ref updates were
-used to manufacture a WIP integration proof.
+The controller committed the final reviewed/verified implementation as
+**62e8e207aa31b72ec87e27dac8699378d0d7c70f** (`62e8e20`). A subsequent fresh
+`git fetch origin main` still observed
+**89d04f901636229392a311241f8e777f0a00962b**. On the committed final implementation,
+`git merge-tree --write-tree HEAD origin/main` passed with tree
+**7077b29a643f785f8577f351dbc90318d218c4ec**, and main ancestry passed. Status
+was clean. The following checkpoint records only this evidence/status update;
+it changes no verified source, tests or workflow.
 
-**Next: controller final checkpoint, post-checkpoint merge-tree, owner review and
-separately authorized native/outward process.** Four-target manual native execution
+**Next: owner review and separately authorized native/outward process.**
+Four-target manual native execution
 remains pending authorization. Earlier real Wayland launch/surface smoke remains
 valid for the unchanged GUI; required CLI smoke was rerun. No native dispatch,
 push, PR, merge, closure or cleanup is authorized/performed here.
 
-All **17 pending paths** are listed exactly in the ledger and worker return:
-14 tracked modifications and three untracked canonical comments, nothing staged.
+All 17 final implementation/evidence paths are committed in `62e8e20`.
 Comments `01M5227Z00N4Q6S8V0X2Z4B6EK` (historical first gate) and
 `01M5237Z00N4Q6S8V0X2Z4B6EM` (review-fix handoff) are preserved; latest comment
-`01M5247Z00N4Q6S8V0X2Z4B6EN` records final reviews/fresh gate. Approved T0/T2/T3/
+`01M5247Z00N4Q6S8V0X2Z4B6EN` records final reviews/fresh gate; comment
+`01M5257Z00N4Q6S8V0X2Z4B6EP` records the committed integration proof. Approved T0/T2/T3/
 T4/T6/T7 bounds remain intact. Published ticket-ref reconciliation is still due
 before future authorized push; no force push implied. Main .superpowers/ untouched.
 

@@ -1036,7 +1036,9 @@ and affected-target counts retain the late focused-test qualification above.
 Task 7 was checkpointed as `504cb44`. Task 8 resolves the carried lints, passes
 independent final spec/whole-branch quality reviews as controller-reported, and
 passes the fresh **3,054** full local gate including all five final quality
-regressions. Task 8 is complete at that local gate; controller checkpoint and
-post-checkpoint integration proof remain. Ticket stays open for owner review,
-native authorization/execution and later lifecycle gates. No outstanding final
-independent review redispatch; all changes remain uncommitted for the controller.
+regressions. Task 8 is complete at that local gate. The controller committed the
+final implementation as `62e8e20`, freshly fetched unchanged main `89d04f9`, and
+verified the committed final tree with `git merge-tree --write-tree HEAD
+origin/main` (tree `7077b29a643f785f8577f351dbc90318d218c4ec`) and main ancestry.
+Ticket stays open for owner review, native authorization/execution and later
+lifecycle gates. No outstanding final independent review or implementation work.

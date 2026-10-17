@@ -4928,3 +4928,28 @@ tests/ssh_transport/synchronization.rs
 .manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5237Z00N4Q6S8V0X2Z4B6EM.md
 .manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5247Z00N4Q6S8V0X2Z4B6EN.md
 ```
+
+## Controller Final Checkpoint And Committed Integration Proof — 2026-10-17
+
+- Committed every reviewed, final-gate-verified implementation/evidence path as
+  `62e8e207aa31b72ec87e27dac8699378d0d7c70f`
+  (`fix: finalize promotion publication authority and verification`).
+- Fresh `git fetch origin main` still observed
+  `89d04f901636229392a311241f8e777f0a00962b`.
+- **Committed final implementation proof:** `git merge-tree --write-tree HEAD
+  origin/main` exited 0 with tree
+  `7077b29a643f785f8577f351dbc90318d218c4ec`;
+  `git merge-base --is-ancestor origin/main HEAD` exited 0. This supersedes the
+  historical HEAD-only proof that excluded Task 8 WIP. `git status --porcelain`
+  was empty after the checkpoint.
+- Controller inspected the retained final full-run output: all 1,000 library,
+  1,496 standard integration, 547 SSH and 11 doctest passes, including the 74
+  promotion SSH cases; no failed result. The pre-existing opt-in ignored
+  characterization remains explicitly qualified. No redundant Cargo run.
+- This final documentation/comment checkpoint changes no tested Rust source,
+  tests, lockfile, manifest or workflow. All Tasks 0–8 are complete at the local
+  implementation/review/verification gate. Ticket remains **OPEN for owner
+  review**. Native execution is pending separate authorization; no push, PR,
+  workflow dispatch, merge, closure or worktree cleanup occurred.
+- The published ticket ref remains divergent from its planning-time rebase.
+  Any future authorized push must reconcile it without an unapproved force push.
