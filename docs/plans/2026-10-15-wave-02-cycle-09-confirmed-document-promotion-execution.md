@@ -10,6 +10,29 @@ id: "01M500Q0ZEMW43YTJBVHFBH3X6"
 
 # Confirmed Managed-Document Promotion Execution Ledger
 
+## Owner-Approved Closure And Merge Boundary — 2026-10-17
+
+- Owner instructed: finish the Cycle and merge into main; run the full workflow
+  on main once merged. This authorizes the final pre-merge closure checkpoint,
+  normal publication/main merge, and one post-merge full Build dispatch. It
+  supersedes the earlier hold on dispatching the final full run.
+- Fresh fetch observed main `89d04f901636229392a311241f8e777f0a00962b` and
+  local/remote ticket head `6dc4ca3d95600eb451949d863a7612db32e0d892`.
+  Main is an ancestor of the ticket branch; `git merge-tree` and whole-branch
+  whitespace check pass. No open PR exists for this branch. Main has only the
+  pre-existing untracked `.superpowers/`, which will be preserved.
+- Prior independent whole-branch spec and quality approvals, plus reviewed native
+  corrections, satisfy the review prerequisite for closure. The latest Windows
+  focused run is green; the preceding full run passed Linux x86_64/aarch64 and
+  macOS, but not the then-unfixed Windows regression. The owner accepts doing
+  the final full matrix **after merge**. No final full pass is claimed yet.
+- CLI is still the headless skeleton and has no ticket-close/comment operation;
+  canonical filesystem updates are therefore used. Ticket closes at
+  `2026-10-17T16:24:16Z` by `Vince Hodges <vince@imbas.ca>` in this pre-merge commit.
+  No source/test/manifest/workflow changes or redundant local test runs occur.
+- Worktree and ticket branch are retained. No deletion or force push is authorized
+  or needed. The merge and Build run receipts will be reported after execution.
+
 ## Latest Native Verification Summary — 2026-10-17
 
 Owner requested investigation, failure-only native iteration, then restoration of

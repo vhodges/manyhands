@@ -10,6 +10,16 @@ id: "01M500Q0X3RV5K69RCS1KERCM1"
 
 # Wave 02 Cycle 09: Confirmed Managed-Document Promotion
 
+## Closure Approval — 2026-10-17
+
+The owner approved finishing this Cycle and merging its reviewed implementation
+into main. The ticket is closed in the final pre-merge checkpoint, after the
+independent implementation and native-correction reviews. The owner explicitly
+deferred final full native verification to **main after merge**. The restored
+four-platform workflow is ready; this approval does not turn the previous
+partial/focused native evidence into a final full pass. The execution ledger
+and latest ticket comments record the exact runs and remaining post-merge check.
+
 ## Purpose And Authority
 
 Add the headless, confirmed promotion of a managed document. The promotion

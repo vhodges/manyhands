@@ -1,5 +1,15 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
+## Closure And Main Merge Authorized — 2026-10-17
+
+Owner approved finishing Cycle 09 and merging it into main, then running the
+full restored Build workflow on main. This supersedes the earlier dispatch hold.
+Ticket closure is recorded in the final pre-merge checkpoint with owner identity
+and UTC timestamp. Independent reviews are approved; native-correction focused
+runs are green. Final full-native verification remains a **post-merge** check,
+not a passing pre-merge claim. Preserve the ticket branch/worktree and unrelated
+main-checkout `.superpowers/`; cleanup was not requested.
+
 ## Current Native Status — Full Workflow Restored; Final Dispatch Held
 
 **2026-10-17 16:19 UTC:** Native corrections are reviewed and pushed. The final
