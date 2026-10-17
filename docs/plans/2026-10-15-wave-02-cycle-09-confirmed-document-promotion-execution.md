@@ -4975,3 +4975,241 @@ tests/ssh_transport/synchronization.rs
   implementation tested by that run remains unchanged. No second run is authorized
   or dispatched here. Ticket remains open; PR, merge, closure and worktree cleanup
   have not been authorized or performed.
+
+## Native Failure Checkpoint — 2026-10-17
+
+**Status: two corrections ready for controller review/native verification;
+macOS initiating failure still needs the focused native diagnostic run.**
+
+### Authority, Base And Native Evidence
+
+- Work remains exclusively in ticket worktree
+  `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`,
+  branch `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH`, HEAD `a5a2e90`.
+  Its only controller change since published `923cac8` is the temporary
+  three-platform/exact-22-test workflow narrowing. The restoration baseline is
+  `923cac8:.github/workflows/build.yml`.
+- Controller already fetched unchanged main `89d04f9`, aborted its plain rebase
+  that tried to flatten approved merge history, and completed
+  `git rebase --rebase-merges origin/main` without changing `923cac8`.
+  That completed preflight was retained; no second rebase was performed here.
+- Owner authorized investigation/correction and focused publication followed by
+  restoration/full verification. Controller owns review, commits, pushes and
+  dispatches. This pass performed none of those and used no subagents.
+- Initial native run **39023714430**, implementation SHA **5161f1d**: Linux
+  x86_64 passed; Linux aarch64 failed one mutation replay case; macOS aarch64
+  failed one F11 SSH case; Windows x86_64 failed 20 unit cases. These are actual
+  failures, superseding the preceding dispatch-only/pending receipt.
+- Source log:
+  `/home/vhodges/.local/share/opencode/tool-output/tool_149eb917e001RXpK15aiSUDN7L`.
+  Read ranges: 13412–13538 (Windows), 4988–5001 (ARM), 9117–9121 (macOS).
+  No native result after the corrections is available yet.
+
+### Windows: Full Snapshot Of An Owned Mandatory-Locked File
+
+All 20 native panics are `OsError 33` at filesystem snapshot reads: 17 in
+`cleanup_tests.rs:59`, one in `integrate_tests.rs:72`, two in
+`observe_tests.rs:1095`. Source tracing identifies the held common-directory
+lease, `.git/manyhands-operation.lock`: `coordination::repository_lease` locks
+it exclusively; `acquire` creates without truncation and writes no bytes.
+Each failing snapshot opens a second handle while that lease is alive.
+Windows mandatory locking rejects that read even within the same process.
+Earlier snapshot patterns remove that exact coordination path, but these
+assertions can preserve stronger coverage without removing any entry.
+
+The shared **test-only** `coordination::snapshot_file_hash` recognizes only
+`root/.git/manyhands-operation.lock`, proves it is a regular zero-length file
+using `symlink_metadata`, and records its empty-content digest. Existence remains
+part of every snapshot map; nonempty/nonregular files fail. All other paths
+still require successful full reads. No arbitrary errors, `.git`, registry,
+index, refs, user files or namesake lock files are excluded. Lease lifetime and
+preview/no-acquisition assertions remain intact. Production locking is unchanged.
+
+Portable regression
+`repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease`
+was RED with the old read-only helper (unexpected nonempty coordination content
+was not rejected), then GREEN. It also proves index/ref/config/registry/user
+and nested namesake bytes change their digests, missing coordination files fail,
+and snapshotting leaves the lease held. Native Windows verification remains
+required; Linux does not emulate mandatory locking.
+
+### Linux ARM: Lost Request Commit During Duplicate-Owned Discovery
+
+Native failure was not a permissible null/no-op: `discovery_pending` returned
+`write=unchanged`, `checkpoint=unchanged`, `commit_oid=null` while the same
+request's duplicate had committed and owned discovery. The original assertion
+requiring the authoritative commit stays unchanged.
+
+The deterministic channel-barrier regression is included inside the existing
+exact selected two-process case, before its original two-process exercise.
+It pauses the original call after acceptance, lets a duplicate commit and pause
+at the existing observation hook, then lets the original enter the domain.
+`save_ticket_with_effective_config` correctly protects the active index owner
+by returning `IndexPending/NoChange` for this call. The first-call mapper
+incorrectly treated its empty domain claim as proof the entire request made
+no commit. The regression reproduced the native null-versus-commit failure
+locally before the correction (0 passed, 1 failed).
+
+`mutation/bind/save.rs::run` now handles this unclaimed pending-discovery result
+with the same journal and intended-content/range evidence used by re-entry.
+It never substitutes HEAD or loosens ownership guards; unreadable evidence
+remains unconfirmed. The test also verifies one commit, duplicate/replay OID
+agreement, resume recovery, and no remaining pending journal row. Eight exact
+affected/ownership-guard cases passed locally after the correction.
+
+### macOS: Initiating Failure Unresolved; Diagnostic Deadlock Corrected
+
+The saved native output contains only the 100-second isolated-child/watchdog
+failure. Adjacent ordinary-refresh and takeover F11 cases passed. The exact
+active-child case passes locally. A temporary Unix symlink-root probe also
+passed with the expected owner epochs; that probe was removed, not used as
+evidence of a macOS fix. Production promotion preflight canonicalizes the root,
+and the root-scoped F11/shared-index fences have not been weakened.
+
+Source inspection did establish an independent test-harness deadlock: after a
+worker fails before invoking its hook, that hook's receiver stays alive in the
+service. Cleanup's zero-capacity `send` then waits forever for a receiver that
+will never execute. Hook-entry sends can likewise strand a late worker after
+the receiving side has timed out. The local regression holds a receiver alive
+without entering the hook and proves cleanup must return before it receives;
+with the original rendezvous channel it failed at its explicit assertion
+(isolated case: 0 passed, 1 failed; privacy-safe line observation 101).
+
+Queued entry/release signals now avoid those unbounded sends. Existing bounded
+hook waits, outer watchdog, privacy scan, actual F11 child exit, index-epoch,
+foreign-root isolation and publication assertions remain in force. All three
+affected F11 cases passed locally, including the cleanup regression. This fixes
+the diagnostic deadlock, **not a proven cause of the original macOS worker
+failure**. The next focused native run is needed before further production edits.
+
+Numeric diagnostics use existing `ssh_harness::observation` and its captured
+output privacy checks; no raw result, endpoint, path, OID or fixture data is
+printed. Prefix **2110** identifies these checkpoints:
+
+| Checkpoint | Meaning / trailing value |
+| --- | --- |
+| 0 | Fixture ready; root already canonical (0/1) |
+| 1 | Initial promotion interruption established |
+| 2 / 3 | Older / foreign owner entered persist hook |
+| 4 | Compound worker returned; fixed result category |
+| 5 / 6 | Controller received older / foreign hook entry |
+| 7 | Both owner-row captures succeeded (0/1) |
+| 8 | Actual F11 subprocess exited as expected |
+| 9 | Completion/fence capture succeeded (0/1) |
+| 10 / 11 | Older / foreign release sent |
+
+Checkpoint 4 categories: 0 complete cleanup, 1 complete envelope with cleanup
+pending, 2 index pending; 10 repository error, 11 transport, 12 blocked,
+13 external change, 14 reconfirmation, 15 primary advanced, 16 identity,
+17 context synchronization, 18 busy, 19 poll yielding, 20 interrupted,
+21 operation mismatch, 22 recovery required. Existing **2100** still records
+compound flag and before/fenced/final owner epochs (locally **1/2/3**).
+
+### Commands And Observed Local Results
+
+All Rust commands used Devenv from this ticket worktree. No full library/suite,
+Clippy, desktop, dependency or configuration gate was run for this native-failure
+pass, per the affected-tests-only rule. Final focused results: **21 unit + 8
+mutation replay + 3 SSH cases passed**, zero ignored in these selections.
+
+Windows: first ran the new coordination regression alone with
+`devenv shell -- cargo test --locked --lib repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease -- --exact`
+(RED). After correction ran the following exact selection (GREEN, **21 passed,
+980 filtered out**); repeated after the save correction and additional lock-held
+assertions with the same final count:
+
+```sh
+devenv shell -- cargo test --locked --lib -- \
+  repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease \
+  repository::cleanup::tests::cleanup_branch_deletion_checks_oid_and_every_checkout \
+  repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing_commondir_registration \
+  repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing_gitdir_registration \
+  repository::cleanup::tests::cleanup_branch_guard_requires_complete_admin_evidence \
+  repository::cleanup::tests::cleanup_foreign_git_link_cannot_authorize_prune \
+  repository::cleanup::tests::cleanup_foreign_git_link_cannot_hide_registered_checkout \
+  repository::cleanup::tests::cleanup_hidden_index_assume_unchanged_preserves_edit_and_index \
+  repository::cleanup::tests::cleanup_hidden_index_skip_worktree_preserves_edit_and_index \
+  repository::cleanup::tests::cleanup_ignored_and_locked_are_preserved \
+  repository::cleanup::tests::cleanup_partial_and_mixed_worktrees_require_recovery_without_more_removal \
+  repository::cleanup::tests::cleanup_precheck_clean_and_dirty_cases_preserve_full_git_image \
+  repository::cleanup::tests::cleanup_submodule_embedded_git_data_is_not_proved_safe_to_remove \
+  repository::cleanup::tests::cleanup_submodule_hidden_dirty_files_are_preserved_recursively \
+  repository::cleanup::tests::cleanup_submodule_ignored_files_are_preserved_recursively \
+  repository::cleanup::tests::cleanup_submodule_unknown_or_advanced_state_is_not_safe_to_remove \
+  repository::cleanup::tests::cleanup_tracking_guards_missing_expectation_zero_and_foreign_locks \
+  repository::cleanup::tests::cleanup_tracking_ref_refusals_preserve_git_and_sql \
+  repository::promotion::integrate::tests::persistence_seam_holds_one_lease_and_creates_no_commit_before_integrating_evidence \
+  repository::promotion::observe::tests::prepared_generated_blob_is_bound_without_odb_or_other_writes \
+  repository::promotion::observe::tests::preview_is_read_only_offline_and_does_not_take_repository_lease --exact
+```
+
+ARM deterministic RED:
+`devenv shell -- cargo test --locked --test mutation_replay reenter::two_processes_submitting_the_same_new_request_make_one_commit -- --exact`.
+GREEN (**8 passed, 300 filtered out**):
+
+```sh
+devenv shell -- cargo test --locked --test mutation_replay -- \
+  reenter::two_processes_submitting_the_same_new_request_make_one_commit \
+  reenter::a_second_call_that_read_its_evidence_before_the_first_committed_reports_that_commit \
+  reenter::a_second_call_whose_save_is_refused_after_the_first_committed_reports_that_commit \
+  reenter::a_second_call_that_runs_before_the_first_reaches_the_domain_commits_and_finishes \
+  reenter::a_save_that_changed_nothing_does_not_take_a_later_commit_of_the_same_content \
+  reenter::identical_content_from_another_request_is_already_applied_and_not_this_request_s_commit \
+  reenter::a_request_that_never_ran_does_not_take_another_request_s_identical_commit \
+  reenter::a_retry_that_cannot_read_git_changes_nothing_and_claims_nothing --exact
+```
+
+macOS investigation used
+`devenv shell -- cargo test --locked --test document_promotion quality2_f11_preserves_active_child_handoff -- --exact`
+for the unchanged local case (1 passed), temporary alias probe (1 passed), and
+cleanup regression with original rendezvous channel (RED, 1 failed). After the
+channel correction and diagnostics:
+`devenv shell -- cargo test --locked --test document_promotion quality2_f11 --`
+selected exactly the three named F11 cases and reported **3 SSH cases passed**.
+
+`devenv shell -- cargo fmt --check` initially identified formatting only; after
+applying its changes with `apply_patch`, the final check passed.
+`git diff --check` passed. `git diff --exit-code -- .github/workflows/build.yml`
+passed: workflow remains exactly the controller's temporary narrowing.
+
+### Review / Native Next Step
+
+Controller can review these uncommitted corrections and publish/dispatch the
+existing focused workflow under the recorded authorization. It already selects
+the deterministic ARM regression and macOS cleanup regression via their existing
+test names. The separate coordination-helper regression runs locally and will
+be included by the restored full library selection; the focused Windows matrix
+still selects exactly the original 20 failures. Inspect the macOS numeric
+checkpoints if it fails; do not declare native fixed from these Linux passes.
+Only after focused native verification is green should the controller restore
+the full workflow from `923cac8` in its own commit and run full native coverage.
+Ticket remains OPEN; no closure or outward actions occurred in this pass.
+
+### Quality Recheck P2 — Canonical Snapshot Fixture Root
+
+Specification review passed; quality review identified a portable fixture-path
+defect in the new held-lease snapshot regression. `tempfile::tempdir()` retained
+an aliased TMPDIR spelling while `repo.commondir()` canonicalized it. The helper's
+deliberately exact path comparison therefore missed the lease file, and the
+nonempty-content rejection assertion failed at line 249. This also applies to
+macOS `/var` versus `/private/var` spellings.
+
+Reviewer-provided RED: the exact test with
+`TMPDIR=/proc/self/root/tmp/opencode` reported **0 passed, 1 failed**; the
+canonical `/tmp/opencode` control reported **1 passed**. Source inspection
+confirmed that mismatch. The fixture now uses
+`tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap())`, matching
+the existing cleanup fixture. The helper's exact-path, empty-file and
+regular-file requirements are unchanged.
+
+Fresh verification after the one-line fixture correction:
+
+```sh
+devenv shell -- env TMPDIR=/proc/self/root/tmp/opencode cargo test --locked --lib repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease -- --exact
+devenv shell -- env TMPDIR=/tmp/opencode cargo test --locked --lib repository::coordination::tests::held_lease_snapshot_checks_all_protected_files_and_empty_lease -- --exact
+```
+
+Both commands passed: **1 passed, 0 failed, 0 ignored, 1000 filtered out** each.
+P2 correction is ready for the same quality recheck. This is fixture portability
+evidence, not native-platform verification; the preceding native gates remain.
+No workflow changes or commits were made.

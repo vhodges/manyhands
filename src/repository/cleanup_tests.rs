@@ -56,7 +56,7 @@ fn files(root: &Path) -> BTreeMap<PathBuf, Option<[u8; 32]>> {
             } else {
                 out.insert(
                     path.strip_prefix(root).unwrap().into(),
-                    Some(*blake3::hash(&fs::read(path).unwrap()).as_bytes()),
+                    Some(coordination::snapshot_file_hash(root, &path)),
                 );
             }
         }

@@ -80,10 +80,60 @@ pub(super) fn refresh_f11(compound: bool) -> Result<(), FixtureError> {
 pub(super) fn refresh_takeover() -> Result<(), FixtureError> {
     refresh_f11_inner(false, true)
 }
+
+fn release_channel() -> (std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>) {
+    std::sync::mpsc::channel()
+}
+
+// A worker can return before invoking its service-owned hook. Its receiver
+// remains alive in the service, so cleanup must not wait for that receiver.
+fn release_before_hook_is_nonblocking() -> Result<(), FixtureError> {
+    let (release, resume) = release_channel();
+    let (done, completed) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        release.send(()).unwrap();
+        done.send(()).unwrap();
+    });
+    let sent = completed.recv_timeout(std::time::Duration::from_secs(1));
+    // Drain/join even on RED, rather than making this regression hang itself.
+    fixed(resume.recv_timeout(std::time::Duration::from_secs(1)))?;
+    fixed(worker.join())?;
+    assert!(sent.is_ok(), "cleanup waited for a hook that has not run");
+    Ok(())
+}
+
+// Fixed categories only: never print result Debug, paths, OIDs or private data.
+fn promotion_category(result: &Result<DocumentPromotionResult, DocumentPromotionError>) -> u128 {
+    match result {
+        Ok(DocumentPromotionResult::Complete(o)) if o.cleanup() == PromotionCleanup::Complete => 0,
+        Ok(DocumentPromotionResult::Complete(_)) => 1,
+        Ok(DocumentPromotionResult::IndexPending(_)) => 2,
+        Err(DocumentPromotionError::Repository(_)) => 10,
+        Err(DocumentPromotionError::Transport(_)) => 11,
+        Err(DocumentPromotionError::Blocked(_)) => 12,
+        Err(DocumentPromotionError::ExternalChange) => 13,
+        Err(DocumentPromotionError::ReconfirmationRequired) => 14,
+        Err(DocumentPromotionError::PrimaryAdvanced) => 15,
+        Err(DocumentPromotionError::IdentityRequired { .. }) => 16,
+        Err(DocumentPromotionError::ContextSynchronization(_)) => 17,
+        Err(DocumentPromotionError::Busy) => 18,
+        Err(DocumentPromotionError::PollYielding) => 19,
+        Err(DocumentPromotionError::Interrupted) => 20,
+        Err(DocumentPromotionError::OperationMismatch) => 21,
+        Err(DocumentPromotionError::RecoveryRequired) => 22,
+    }
+}
+
 fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError> {
     use std::sync::mpsc;
     use std::time::Duration;
     let p = Pair::new()?;
+    release_before_hook_is_nonblocking()?;
+    ssh_harness::observation(&[
+        2110,
+        0,
+        (p.a.root == fixed(p.a.root.canonicalize())?) as u128,
+    ]);
     p.save(&p.a)?;
     p.promote()?;
     poll(&p, &p.a)?;
@@ -102,6 +152,7 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
             FailurePoint::AfterPublication
         },
     )?;
+    ssh_harness::observation(&[2110, 1]);
     let older = fixed(RepositoryService::open_at(&p.a.data))?;
     // The foreign root deliberately shares A's registry: an unscoped fence
     // would invalidate it too, even though its own filesystem is independent.
@@ -118,17 +169,19 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
     }))?;
     let ordinary_id = OperationId::new();
     let foreign_id = OperationId::new();
-    let (observed, held) = mpsc::sync_channel(0);
-    let (release, resume) = mpsc::sync_channel(0);
+    let (observed, held) = mpsc::channel();
+    let (release, resume) = release_channel();
     older.set_refresh_persist_hook_for_testing(move || {
+        ssh_harness::observation(&[2110, 2]);
         observed.send(()).unwrap();
         resume.recv_timeout(Duration::from_secs(30)).unwrap();
     });
-    let (b_observed, b_held) = mpsc::sync_channel(0);
-    let (b_release, b_resume) = mpsc::sync_channel(0);
+    let (b_observed, b_held) = mpsc::channel();
+    let (b_release, b_resume) = release_channel();
     foreign
         .service
         .set_refresh_persist_hook_for_testing(move || {
+            ssh_harness::observation(&[2110, 3]);
             b_observed.send(()).unwrap();
             b_resume.recv_timeout(Duration::from_secs(30)).unwrap();
         });
@@ -136,7 +189,9 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
     std::thread::scope(|scope| -> Result<(), FixtureError> {
         let worker=scope.spawn(|| -> Result<bool,FixtureError> {
             if compound {
-                let r=fixed(p.execute(&older,request.clone()))?;
+                let result=p.execute(&older,request.clone());
+                ssh_harness::observation(&[2110, 4, promotion_category(&result)]);
+                let r=fixed(result)?;
                 Ok(matches!(r,DocumentPromotionResult::Complete(ref o) if o.cleanup()==PromotionCleanup::Complete))
             } else {
                 Ok(matches!(fixed(older.refresh_repository(RefreshRepositoryRequest{root:p.a.root.clone(),operation_id:ordinary_id}))?,RefreshOutcome::Refreshed{..}))
@@ -152,7 +207,9 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
         });
         let captures = (|| -> Result<(OwnerRow, OwnerRow), FixtureError> {
             fixed(held.recv_timeout(Duration::from_secs(30)))?;
+            ssh_harness::observation(&[2110, 5]);
             fixed(b_held.recv_timeout(Duration::from_secs(30)))?;
+            ssh_harness::observation(&[2110, 6]);
             let id = if compound {
                 let child: String = fixed(p.a.db()?.query_row(
                     "SELECT primary_sync_id FROM document_promotions WHERE operation_id=?1",
@@ -165,9 +222,11 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
             };
             Ok((indexing_row(&p.a, id)?, indexing_row(&foreign, foreign_id)?))
         })();
+        ssh_harness::observation(&[2110, 7, captures.is_ok() as u128]);
         let completed = (|| -> Result<(OwnerRow, OwnerRow, i64), FixtureError> {
             let (a, b) = captures.as_ref().map_err(|_| FixtureError)?;
             exits::launch(&p, &request, 10)?; // Actual F11 process exit after SQL completion.
+            ssh_harness::observation(&[2110, 8]);
             assert_eq!(step(&p.a, request.operation_id)?, "complete");
             let captured=(owner_row(&p.a,a.0)?,owner_row(&foreign,b.0)?,fixed(p.a.db()?.query_row("SELECT refresh_required FROM repositories WHERE root_path=(SELECT root_path FROM operation_records WHERE id=?1)",[a.0],|r|r.get(0)))?);
             if takeover {
@@ -184,9 +243,12 @@ fn refresh_f11_inner(compound: bool, takeover: bool) -> Result<(), FixtureError>
             }
             Ok(captured)
         })();
+        ssh_harness::observation(&[2110, 9, completed.is_ok() as u128]);
         // Always release/join both genuine owners before examining assertions.
         let _ = release.send(());
+        ssh_harness::observation(&[2110, 10]);
         let _ = b_release.send(());
+        ssh_harness::observation(&[2110, 11]);
         let old = fixed(worker.join())?;
         let other = fixed(b_worker.join())?;
         let (before, before_b) = captures?;

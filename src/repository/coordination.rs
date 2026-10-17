@@ -117,6 +117,25 @@ pub(super) fn leases_are_free(data_directory: &Path, root: &Path) -> bool {
 /// directory.
 const REPOSITORY_LOCK_FILE: &str = "manyhands-operation.lock";
 
+/// Full-content snapshot for repository fixtures, including the empty lease file.
+#[cfg(test)]
+pub(super) fn snapshot_file_hash(root: &Path, path: &Path) -> [u8; 32] {
+    if path == root.join(".git").join(REPOSITORY_LOCK_FILE) {
+        // Windows mandatory byte locks forbid a second handle's read even in
+        // this process. This exact coordination file is never written to. Prove
+        // its entire content is empty using metadata instead; keep its entry in
+        // the snapshot so removal is detected too. Never exempt a namesake file.
+        let metadata = std::fs::symlink_metadata(path).unwrap();
+        assert!(
+            metadata.is_file(),
+            "repository lease must be a regular file"
+        );
+        assert_eq!(metadata.len(), 0, "repository lease must remain empty");
+        return *blake3::hash(b"").as_bytes();
+    }
+    *blake3::hash(&std::fs::read(path).unwrap()).as_bytes()
+}
+
 fn bootstrap_lease_name(root: &Path) -> String {
     format!(
         "manyhands-bootstrap-{}.lock",
@@ -196,6 +215,41 @@ fn acquire(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn held_lease_snapshot_checks_all_protected_files_and_empty_lease() {
+        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let repo = Repository::init(root.path()).unwrap();
+        let lease_path = repo.commondir().join(REPOSITORY_LOCK_FILE);
+        let lease = repository_lease(&repo, root.path(), RepositoryOperation::Read).unwrap();
+        assert!(!leases_are_free(data.path(), root.path()));
+        assert_eq!(
+            snapshot_file_hash(root.path(), &lease_path),
+            *blake3::hash(b"").as_bytes()
+        );
+        assert!(!leases_are_free(data.path(), root.path()));
+        for relative in [
+            ".git/index",
+            ".git/refs/heads/protected",
+            ".git/config",
+            "manyhands.sqlite3",
+            "ordinary",
+            "nested/manyhands-operation.lock",
+        ] {
+            let path = root.path().join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"before").unwrap();
+            let before = snapshot_file_hash(root.path(), &path);
+            std::fs::write(&path, b"after").unwrap();
+            assert_ne!(snapshot_file_hash(root.path(), &path), before, "{relative}");
+        }
+        drop(lease);
+        std::fs::write(&lease_path, b"unexpected protected contents").unwrap();
+        assert!(std::panic::catch_unwind(|| snapshot_file_hash(root.path(), &lease_path)).is_err());
+        std::fs::remove_file(&lease_path).unwrap();
+        assert!(std::panic::catch_unwind(|| snapshot_file_hash(root.path(), &lease_path)).is_err());
+    }
 
     fn files(directory: &Path) -> Vec<std::ffi::OsString> {
         let mut names: Vec<_> = std::fs::read_dir(directory)

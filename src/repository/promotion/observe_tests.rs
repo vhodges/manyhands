@@ -1092,7 +1092,7 @@ fn files(root: &Path) -> BTreeMap<PathBuf, [u8; 32]> {
             } else {
                 out.insert(
                     entry.path().strip_prefix(base).unwrap().into(),
-                    *blake3::hash(&fs::read(entry.path()).unwrap()).as_bytes(),
+                    coordination::snapshot_file_hash(base, &entry.path()),
                 );
             }
         }
