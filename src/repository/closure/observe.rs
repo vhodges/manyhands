@@ -113,24 +113,36 @@ pub(in super::super) fn closed_ticket_bytes(
     Ok(bytes.into_bytes())
 }
 
-/// Every parsed field, the body and every unknown key equal, except the
-/// relationship keys `deps` and `parent`, whose canonical form may differ.
+/// Every parsed field, the body and every unknown key equal. The
+/// relationship keys may only take their canonical form (R-T0-2): `deps`
+/// compares as a sorted set without repeats (an empty or null `deps` is
+/// none), and `parent` compares with null as absent.
 fn preserved(original: &Ticket, normalized: &Ticket) -> bool {
-    const NORMALIZED: [&str; 2] = ["deps", "parent"];
+    use serde_yaml::Value;
+    const RELATIONSHIPS: [&str; 2] = ["deps", "parent"];
     let others = |ticket: &Ticket| {
         ticket
             .unknown
             .iter()
-            .filter(|(key, _)| !key.as_str().is_some_and(|key| NORMALIZED.contains(&key)))
+            .filter(|(key, _)| !key.as_str().is_some_and(|key| RELATIONSHIPS.contains(&key)))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>()
     };
+    let deps = |ticket: &Ticket| -> BTreeSet<String> {
+        match ticket.unknown.get("deps") {
+            None | Some(Value::Null) => BTreeSet::new(),
+            Some(Value::Sequence(entries)) => entries.iter().map(|e| format!("{e:?}")).collect(),
+            Some(other) => BTreeSet::from([format!("{other:?}")]),
+        }
+    };
+    let parent = |ticket: &Ticket| match ticket.unknown.get("parent") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.clone()),
+    };
     let mut before = others(original);
     let mut after = others(normalized);
-    let order = |a: &(serde_yaml::Value, serde_yaml::Value),
-                 b: &(serde_yaml::Value, serde_yaml::Value)| {
-        format!("{:?}", a.0).cmp(&format!("{:?}", b.0))
-    };
+    let order =
+        |a: &(Value, Value), b: &(Value, Value)| format!("{:?}", a.0).cmp(&format!("{:?}", b.0));
     before.sort_by(order);
     after.sort_by(order);
     original.id == normalized.id
@@ -143,6 +155,8 @@ fn preserved(original: &Ticket, normalized: &Ticket) -> bool {
         && original.closed_by == normalized.closed_by
         && original.body == normalized.body
         && before == after
+        && deps(original) == deps(normalized)
+        && parent(original) == parent(normalized)
 }
 
 /// The observation every closure stage consumes: preview, the post-child
@@ -166,7 +180,8 @@ pub(in super::super) struct ClosureObservation {
     /// contained in the base.
     pub(in super::super) needs_context_child: bool,
     pub(in super::super) cleanup: PlannedCleanup,
-    /// The selected identity, when one is available. Required for `Record`.
+    /// The selected identity of a `Record` closure; `None` for `Existing`,
+    /// whose merge signer is resolved at execution.
     pub(in super::super) identity: Option<CommittingIdentity>,
     pub(in super::super) expectation: ClosureExpectation,
     pub(in super::super) context_branch: String,
@@ -789,22 +804,33 @@ fn observe_git(
         }
     }
 
-    // C2: identity, read-only. Effective wins; else a configuration-bound
+    // C2: identity, read-only, and only for a `Record` closure (it needs
+    // `closed_by`); an `Existing` closure resolves its merge signer at
+    // execution, so no selection or selection error applies to it here.
+    // Effective wins; else a configuration-bound
     // confirmation; else the expected configuration for `IdentityRequired`.
-    let selection =
-        sync::select_committing_identity(repository, confirmation, &SynchronizationTarget::Primary);
+    let selection = if matches!(effect, Some(Effect::Record)) {
+        Some(sync::select_committing_identity(
+            repository,
+            confirmation,
+            &SynchronizationTarget::Primary,
+        ))
+    } else {
+        None
+    };
     let mut identity_configuration = None;
     let identity = match selection {
-        Ok(identity) => Some(identity),
-        Err(SynchronizationError::IdentityRequired {
+        None => None,
+        Some(Ok(identity)) => Some(identity),
+        Some(Err(SynchronizationError::IdentityRequired {
             expected_configuration,
             ..
-        }) => {
+        })) => {
             identity_configuration = Some(expected_configuration);
             None
         }
         // A confirmation for another configuration is no confirmation.
-        Err(SynchronizationError::ExternalChange) => {
+        Some(Err(SynchronizationError::ExternalChange)) => {
             match sync::select_committing_identity(
                 repository,
                 None,
@@ -818,7 +844,7 @@ fn observe_git(
             }
             None
         }
-        Err(_) => return Err(shared::unavailable(root)),
+        Some(Err(_)) => return Err(shared::unavailable(root)),
     };
     let selected = identity.as_ref().map(|identity| match identity {
         CommittingIdentity::Effective(identity) | CommittingIdentity::Confirmed(identity) => {

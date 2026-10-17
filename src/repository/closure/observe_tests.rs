@@ -673,8 +673,24 @@ fn history_unknown() {
 }
 #[test]
 fn already_closed() {
+    // C4: no context at all (worktree and branch gone) and the ticket closed
+    // on the primary.
     let f = Fixture::new(false);
     f.close_primary();
+    f.repo
+        .find_worktree(ID)
+        .unwrap()
+        .prune(Some(
+            git2::WorktreePruneOptions::new()
+                .valid(true)
+                .working_tree(true),
+        ))
+        .unwrap();
+    f.repo
+        .find_reference(&format!("refs/heads/manyhands/ticket/{ID}"))
+        .unwrap()
+        .delete()
+        .unwrap();
     f.blocked(&[ClosureBlocker::AlreadyClosed]);
 }
 #[test]
@@ -1421,4 +1437,213 @@ fn closure_text(bytes: &[u8]) -> (String, String) {
         } => (closed_at, closed_by),
         _ => panic!("not closed"),
     }
+}
+
+// --- Fix round 1 ---
+
+/// D5 does not apply to a contained context: no context child runs, so a
+/// deleted (or unknown) remote context is cleanup-only, never a blocker.
+#[test]
+fn contained_closed_with_deleted_remote_is_cleanup_only() {
+    let f = Fixture::new(true);
+    f.history("observed_published");
+    checkout(&f.repo, f.context_oid());
+    let closed = f.close_primary();
+    f.tracking("main", closed);
+    let p = f.ready();
+    assert_eq!(p.integration(), PlannedIntegration::AlreadyContained);
+    assert!(!p.cleanup().remote_branch);
+    assert_eq!(p.tracking_context(), None);
+}
+#[test]
+fn contained_closed_with_unknown_remote_history_is_cleanup_only() {
+    let f = Fixture::new(true);
+    f.history("history_unknown");
+    f.db()
+        .execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    checkout(&f.repo, f.context_oid());
+    let closed = f.close_primary();
+    f.tracking("main", closed);
+    let p = f.ready();
+    assert_eq!(p.integration(), PlannedIntegration::AlreadyContained);
+    assert!(!p.cleanup().remote_branch);
+}
+#[test]
+fn contained_open_with_deleted_remote_records_without_child() {
+    let f = Fixture::new(true);
+    f.history("observed_published");
+    checkout(&f.repo, f.context_oid());
+    f.tracking("main", f.context_oid());
+    let p = f.ready();
+    assert_eq!(p.integration(), PlannedIntegration::MergeCommit);
+    assert_eq!(
+        p.closure(),
+        &PlannedClosure::Record {
+            closed_by: FIXTURE_BY.into()
+        }
+    );
+    assert!(!p.cleanup().remote_branch);
+    assert!(!f.observation(at(1_700_000_000)).needs_context_child);
+}
+
+#[test]
+fn preserved_allows_only_canonical_relationship_forms() {
+    let base = parse_ticket(hand_written("\n").as_bytes());
+    let with = |deps: Option<serde_yaml::Value>, parent: Option<serde_yaml::Value>| {
+        let mut t = base.clone();
+        if let Some(deps) = deps {
+            t.unknown.insert("deps".into(), deps);
+        }
+        if let Some(parent) = parent {
+            t.unknown.insert("parent".into(), parent);
+        }
+        t
+    };
+    let seq =
+        |ids: &[&str]| serde_yaml::Value::Sequence(ids.iter().map(|id| (*id).into()).collect());
+    // Canonical forms: reordered, repeated, empty or null deps; null parent.
+    assert!(preserved(
+        &with(Some(seq(&[OTHER, DEP, DEP])), Some(serde_yaml::Value::Null)),
+        &with(Some(seq(&[DEP, OTHER])), None)
+    ));
+    assert!(preserved(&with(Some(seq(&[])), None), &base));
+    assert!(preserved(&with(Some(serde_yaml::Value::Null), None), &base));
+    // A lost dependency is refused.
+    assert!(!preserved(
+        &with(Some(seq(&[OTHER, DEP])), None),
+        &with(Some(seq(&[DEP])), None)
+    ));
+    assert!(!preserved(&with(Some(seq(&[DEP])), None), &base));
+    // A changed or dropped non-null parent is refused.
+    assert!(!preserved(
+        &with(None, Some(DEP.into())),
+        &with(None, Some(OTHER.into()))
+    ));
+    assert!(!preserved(&with(None, Some(DEP.into())), &base));
+}
+
+/// A fixed, hand-built observation and its digest. The wire bytes below are
+/// written out by hand from the design's encoding ("Observation, Change Set
+/// And Expectation"), independently of `expectation`; the pinned hex was
+/// frozen from the first run of this test (Task 3 fix round 1) and must
+/// never change.
+#[test]
+fn closure_digest_golden_vector() {
+    let oid = |digit: char| Oid::from_str(&digit.to_string().repeat(40)).unwrap();
+    let observation = ClosureObservation {
+        item_id: id(),
+        ticket_path: PathBuf::from(ticket()),
+        context_oid: oid('c'),
+        base: oid('b'),
+        remote: None,
+        changes: vec![
+            ChangeEvidence {
+                change: crate::repository::PromotionPathChange {
+                    path: PathBuf::from(ticket()),
+                    change: PathChange::Modified,
+                },
+                entry: PromotionChangeEntry {
+                    oid: Some(oid('1')),
+                    mode: 0o100755,
+                },
+            },
+            ChangeEvidence {
+                change: crate::repository::PromotionPathChange {
+                    path: PathBuf::from("gone.txt"),
+                    change: PathChange::Deleted,
+                },
+                entry: PromotionChangeEntry { oid: None, mode: 0 },
+            },
+        ],
+        closure: PlannedClosure::Existing {
+            closed_at: "2023-11-14T22:13:20Z".into(),
+            closed_by: CLOSER.into(),
+        },
+        integration: PlannedIntegration::MergeCommit,
+        needs_context_child: false,
+        cleanup: PlannedCleanup {
+            remote_branch: false,
+            worktree: true,
+            local_branch: true,
+        },
+        identity: None,
+        expectation: ClosureExpectation::from_bytes([0; 32]),
+        context_branch: format!("manyhands/ticket/{ID}"),
+        primary_branch: "main".into(),
+        primary_oid: oid('a'),
+        tracking_primary: None,
+        tracking_context: None,
+    };
+    fn field(wire: &mut Vec<u8>, bytes: &[u8]) {
+        wire.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+        wire.extend_from_slice(bytes);
+    }
+    let mut wire = b"manyhands closure v1".to_vec();
+    field(&mut wire, ID.as_bytes());
+    field(&mut wire, ticket().as_bytes());
+    field(&mut wire, format!("manyhands/ticket/{ID}").as_bytes());
+    field(&mut wire, b"main");
+    wire.push(0); // no remote
+    wire.push(0); // merge commit
+    wire.extend_from_slice(&2u64.to_be_bytes());
+    field(&mut wire, ticket().as_bytes());
+    wire.push(1); // modified
+    wire.push(1);
+    wire.extend_from_slice(oid('1').as_bytes());
+    wire.extend_from_slice(&0o100755u32.to_be_bytes());
+    field(&mut wire, b"gone.txt");
+    wire.push(2); // deleted
+    wire.push(0);
+    wire.extend_from_slice(&0u32.to_be_bytes());
+    wire.push(1); // existing
+    field(&mut wire, CLOSER.as_bytes());
+    field(&mut wire, b"2023-11-14T22:13:20Z");
+    wire.extend_from_slice(&[0, 1, 1]); // remote branch, worktree, local branch
+    wire.extend_from_slice(oid('a').as_bytes()); // no remote: primary, context
+    wire.extend_from_slice(oid('c').as_bytes());
+    let digest = expectation(&observation).to_bytes();
+    assert_eq!(digest, *blake3::hash(&wire).as_bytes());
+    let hex = digest
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    assert_eq!(hex, GOLDEN);
+}
+const GOLDEN: &str = "a585a50f6038f601a962c5ca2051657a80030a17a572fed3b415cbb35f03590c";
+
+/// Identity selection applies only to a `Record` closure: an `Existing`
+/// closure previews even when the identity configuration is unreadable as
+/// an identity (a stale confirmation for another configuration).
+#[test]
+fn existing_closure_ignores_identity_selection() {
+    let f = Fixture::new(false);
+    f.close_context();
+    f.missing_identity();
+    let stale = ConfirmedCommitIdentity {
+        confirmation_id: OperationId::new(),
+        identity: CommitIdentity {
+            name: String::new(),
+            email: String::new(),
+        },
+        expected_configuration: ExpectedConfiguration::for_testing(),
+    };
+    match f.preview_with(Some(stale)) {
+        TicketClosurePreflight::Ready(p) => {
+            assert!(matches!(p.closure(), PlannedClosure::Existing { .. }))
+        }
+        other => panic!("expected ready: {other:?}"),
+    }
+    // With an effective identity present, an `Existing` closure still
+    // selects none: no selection runs for it at all.
+    let f = Fixture::new(false);
+    f.close_context();
+    let o = match prepare_observation(&f.service, &f.request(None))
+        .unwrap()
+        .observed
+    {
+        Ok(o) => o,
+        Err(r) => panic!("{:?}", r.blockers),
+    };
+    assert!(o.identity.is_none());
 }

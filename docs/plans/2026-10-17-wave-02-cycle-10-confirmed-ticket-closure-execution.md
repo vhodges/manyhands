@@ -661,3 +661,26 @@ verification. fmt is clean, and Clippy with `-D warnings` is clean.
 `cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
 --locked -- -D warnings` is clean (it builds every integration target, so
 the source-included `production` wrappers compile).
+
+### Task 3 fix round 1
+
+The review changes are listed by item.
+
+- **D5 contained exception.** Three tests cover it:
+  `contained_closed_with_deleted_remote_is_cleanup_only`,
+  `contained_closed_with_unknown_remote_history_is_cleanup_only` and
+  `contained_open_with_deleted_remote_records_without_child`. Mutation red:
+  without `!contained` all three fail; with the condition narrowed to
+  `integration != AlreadyContained`, the contained-open test fails.
+- **`preserved`.** It now compares `deps` as a set without repeats (null or
+  empty means none) and `parent` with null treated as absent. A lost
+  dependency, or a changed or dropped non-null parent, is refused.
+- **Golden vector.** `closure_digest_golden_vector` pins
+  `a585a50f6038f601a962c5ca2051657a80030a17a572fed3b415cbb35f03590c`. The
+  test builds the wire bytes by hand from the design's encoding.
+- **Identity selection.** It runs only for a `Record` effect.
+  `ClosureObservation.identity` is `None` for `Existing`.
+- **`already_closed`.** The test is now the C4 case: no context at all and
+  the ticket closed on the primary.
+- **Gate.** `--lib closure::` 73, `--lib closure` 77, `--lib promotion` 197.
+  fmt and Clippy are clean.
