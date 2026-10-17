@@ -1,3 +1,4 @@
+use super::lifecycle::LifecycleKind;
 use super::*;
 use crate::{
     canonical,
@@ -48,7 +49,7 @@ pub(super) fn preview(
 /// Filesystem discovery facts are gathered only outside the repository lease.
 /// Their process-only guard binds the selected checkout/namespace and actual Git
 /// inputs; revalidation never calls filesystem discovery or enumerates worktrees.
-pub(super) struct PreparedObservation {
+pub(in super::super) struct PreparedObservation {
     pub(super) preflight: DocumentPromotionPreflight,
     pub(super) configuration: canonical::RepositoryConfig,
     pub(super) repository_id: i64,
@@ -58,6 +59,7 @@ pub(super) struct PreparedObservation {
     guard: [u8; 32],
 }
 struct DiscoveryFacts {
+    kind: LifecycleKind,
     not_document: bool,
     document_path: Option<PathBuf>,
 }
@@ -74,7 +76,13 @@ impl PreparedObservation {
         )
         .map_err(|_| changed())?;
         if fresh.commondir().canonicalize().ok() != repository.commondir().canonicalize().ok()
-            || observation_guard(&fresh, &self.root, &self.configuration, &self.item)? != self.guard
+            || observation_guard(
+                self.facts.kind,
+                &fresh,
+                &self.root,
+                &self.configuration,
+                &self.item,
+            )? != self.guard
         {
             return Err(changed());
         }
@@ -106,6 +114,18 @@ pub(super) fn prepare(
     service: &RepositoryService,
     request: PreviewDocumentPromotionRequest,
 ) -> Result<PreparedObservation, RepositoryError> {
+    prepare_for(LifecycleKind::DocumentPromotion, service, request)
+}
+pub(super) fn prepare_for(
+    kind: LifecycleKind,
+    service: &RepositoryService,
+    request: PreviewDocumentPromotionRequest,
+) -> Result<PreparedObservation, RepositoryError> {
+    if kind != LifecycleKind::DocumentPromotion {
+        // The discovery facts and result checks below are document-only until
+        // the closure observation (Task 3).
+        return Err(state::recovery_required());
+    }
     let operation = RepositoryOperation::Read;
     service.require_index_available(operation, Some(&request.root))?;
     let (repository, root) = canonical_repository_root(&request.root, operation)?;
@@ -123,13 +143,14 @@ pub(super) fn prepare(
     // A read-only SQLite transaction provides one coherent history/conflict view.
     // No repository lease, reservation, refresh, migration or transport is used.
     let (repository_id, snapshot, pending) = read_view(service, &root)?;
-    let before = observation_guard(&repository, &root, &config, &request.item_id)?;
+    let before = observation_guard(kind, &repository, &root, &config, &request.item_id)?;
     let discovered = discovery::observe_root(&repository, &root);
     let active = discovered
         .active_contexts
         .iter()
         .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
     let facts = DiscoveryFacts {
+        kind,
         not_document: active.is_some_and(|a| {
             a.items
                 .iter()
@@ -141,17 +162,16 @@ pub(super) fn prepare(
                 .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
         document_path: active
             .filter(|a| {
-                a.context.branch.as_deref()
-                    == Some(format!("manyhands/document/{}", request.item_id).as_str())
+                a.context.branch.as_deref() == Some(kind.context_branch(&request.item_id).as_str())
             })
             .and_then(|a| {
                 a.items
                     .iter()
-                    .find(|i| i.id == request.item_id && i.kind == AuthoringKind::Document)
+                    .find(|i| i.id == request.item_id && i.kind == kind.authoring())
             })
             .map(|i| i.path.clone()),
     };
-    if before != observation_guard(&repository, &root, &config, &request.item_id)? {
+    if before != observation_guard(kind, &repository, &root, &config, &request.item_id)? {
         return Err(changed());
     }
     let preflight = observe_git(
@@ -220,6 +240,7 @@ fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
 /// cannot hide behind cached discovery. Metadata of known canonical files also
 /// catches edits masked by index flags without reading/scanning their contents.
 fn observation_guard(
+    kind: LifecycleKind,
     repository: &git2::Repository,
     root: &Path,
     config: &canonical::RepositoryConfig,
@@ -358,8 +379,8 @@ fn observation_guard(
         admin.join("HEAD"),
         admin.join("gitdir"),
         admin.join("commondir"),
-        root.join("docs"),
-        context.join("docs"),
+        root.join(kind.guarded_directory()),
+        context.join(kind.guarded_directory()),
     ] {
         metadata(&mut hash, &path, true)?;
     }
@@ -368,11 +389,7 @@ fn observation_guard(
         repository,
         &format!("refs/heads/{}", config.primary_branch),
     )?;
-    ref_stamp(
-        &mut hash,
-        repository,
-        &format!("refs/heads/manyhands/document/{item}"),
-    )?;
+    ref_stamp(&mut hash, repository, &kind.context_ref(item))?;
     for path in [root, &context] {
         let linked = git2::Repository::open_ext(
             path,
@@ -526,11 +543,12 @@ fn observe_git(
         blockers: BTreeSet::new(),
         preview: None,
     };
+    let kind = facts.kind;
     let blockers = &mut observation.blockers;
-    let context_branch = format!("manyhands/document/{item}");
+    let context_branch = kind.context_branch(item);
     let context_path = root.join(".manyhands/worktrees").join(item.to_string());
     let target = SynchronizationTarget::Context {
-        kind: AuthoringKind::Document,
+        kind: kind.authoring(),
         item_id: item.clone(),
     };
     let not_document = facts.not_document;
@@ -598,7 +616,7 @@ fn observe_git(
         tracking_primary = reference_oid(repository, plan.primary().tracking_ref(), root)?;
         tracking_context = reference_oid(
             repository,
-            plan.context(AuthoringKind::Document, item).tracking_ref(),
+            plan.context(kind.authoring(), item).tracking_ref(),
             root,
         )?;
         if tracking_primary.is_none() {
@@ -669,7 +687,7 @@ fn observe_git(
         && integration != Some(PlannedIntegration::AlreadyContained)
         && !not_document
     {
-        match snapshot.fetch_publication_evidence_for(AuthoringKind::Document, item) {
+        match snapshot.fetch_publication_evidence_for(kind.authoring(), item) {
             RemotePublicationEvidence::ObservedPublished => {
                 blockers.insert(PromotionBlocker::RemoteContextDeleted);
             }

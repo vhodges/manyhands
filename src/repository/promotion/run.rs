@@ -8,10 +8,41 @@ use crate::repository::{
     transport::*,
     *,
 };
+use lifecycle::{DocumentPromotionLifecycle, Lifecycle, LifecycleKind};
 use record::{
     ChildRole, ChildState, CleanupCategory as Clean, IntegrationKind, PromotionRecord,
     PromotionStep as Step, PublicationCategory as Pub, Refusal,
 };
+
+/// The runner reaches storage, observation and integration only through
+/// `Lifecycle`; its body still reads the promotion record's fields, steps and
+/// error variants, which these bindings name.
+pub(super) trait PromotionShaped:
+    Lifecycle<
+        Record = PromotionRecord,
+        Error = DocumentPromotionError,
+        Preview = DocumentPromotionPreview,
+        Expectation = PromotionExpectation,
+        Preflight = DocumentPromotionPreflight,
+        PreviewRequest = PreviewDocumentPromotionRequest,
+        Observation = observe::PreparedObservation,
+        Refusal = Refusal,
+    >
+{
+}
+impl<T> PromotionShaped for T where
+    T: Lifecycle<
+            Record = PromotionRecord,
+            Error = DocumentPromotionError,
+            Preview = DocumentPromotionPreview,
+            Expectation = PromotionExpectation,
+            Preflight = DocumentPromotionPreflight,
+            PreviewRequest = PreviewDocumentPromotionRequest,
+            Observation = observe::PreparedObservation,
+            Refusal = Refusal,
+        >
+{
+}
 
 // The production adapter calls the existing children and exact-delete transport.
 // Tests inject only those external calls; all parent storage/Git/cleanup remains real.
@@ -41,10 +72,14 @@ pub(super) fn promote<P: SessionCredentialProvider>(
     request: PromoteDocumentRequest,
     session: &mut SessionCredentials<P>,
 ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-    promote_with_io(service, request, &mut Direct(session))
+    promote_with_io(
+        service,
+        request,
+        &mut Direct(session, DocumentPromotionLifecycle::KIND),
+    )
 }
 
-struct Direct<'a, P>(&'a mut SessionCredentials<P>);
+struct Direct<'a, P>(&'a mut SessionCredentials<P>, LifecycleKind);
 impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
     fn synchronize(
         &mut self,
@@ -99,7 +134,7 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                     .delete_exact(
                         plan,
                         &SynchronizationTarget::Context {
-                            kind: AuthoringKind::Document,
+                            kind: self.1.authoring(),
                             item_id: item.clone(),
                         },
                         expected,
@@ -127,7 +162,7 @@ impl<P: SessionCredentialProvider> PromotionIo for Direct<'_, P> {
                     remote.fetch_exact(
                         plan,
                         &SynchronizationTarget::Context {
-                            kind: AuthoringKind::Document,
+                            kind: self.1.authoring(),
                             item_id: item.clone(),
                         },
                     )
@@ -146,16 +181,16 @@ fn mapped(error: RepositoryError) -> DocumentPromotionError {
         _ => DocumentPromotionError::Repository(error),
     }
 }
-fn load(
+fn load<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     op: OperationId,
 ) -> Result<PromotionRecord, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
-        record::read_record(tx, id, op)?.ok_or_else(state::recovery_required)
+        L::read_record(tx, id, op)?.ok_or_else(state::recovery_required)
     })
 }
-fn save(
+fn save<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
@@ -164,10 +199,10 @@ fn save(
         let mut updated = r.clone();
         // Cancellation is owned by the requesting thread, never overwritten by
         // the executor's earlier snapshot of the parent.
-        updated.cancel_requested = record::read_record(tx, id, r.operation_id)?
+        updated.cancel_requested = L::read_record(tx, id, r.operation_id)?
             .ok_or_else(state::recovery_required)?
             .cancel_requested;
-        record::save_record(tx, id, &updated)
+        L::save_record(tx, id, &updated)
     })
 }
 fn boundary(
@@ -179,12 +214,12 @@ fn boundary(
     super::run_tests::checkpoint(service, root, point);
     service.check_failure(point, RepositoryOperation::RepositorySnapshot, root)
 }
-fn preview(
+fn preview<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     item: &ItemId,
 ) -> Result<DocumentPromotionPreflight, RepositoryError> {
-    observe::preview(
+    L::preview(
         service,
         PreviewDocumentPromotionRequest {
             root: root.into(),
@@ -199,7 +234,7 @@ fn refusal_error(refusal: &Refusal) -> DocumentPromotionError {
         Refusal::ReconfirmationRequired => DocumentPromotionError::ReconfirmationRequired,
     }
 }
-fn abandon(
+fn abandon<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &mut PromotionRecord,
@@ -208,17 +243,17 @@ fn abandon(
     let error = refusal_error(&refusal);
     r.step = Step::Abandoned;
     r.refusal = Some(refusal);
-    match save(service, root, r) {
+    match save::<L>(service, root, r) {
         Ok(()) => error,
         Err(e) => mapped(e),
     }
 }
-fn cancelled(
+fn cancelled<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
 ) -> Result<bool, RepositoryError> {
-    Ok(load(service, root, r.operation_id)?.cancel_requested)
+    Ok(load::<L>(service, root, r.operation_id)?.cancel_requested)
 }
 
 pub(super) fn promote_with_io(
@@ -226,7 +261,15 @@ pub(super) fn promote_with_io(
     request: PromoteDocumentRequest,
     io: &mut impl PromotionIo,
 ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-    let result = promote_inner(service, request.clone(), io);
+    run_with_io(&DocumentPromotionLifecycle, service, request, io)
+}
+fn run_with_io<L: PromotionShaped>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: PromoteDocumentRequest,
+    io: &mut impl PromotionIo,
+) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+    let result = promote_inner(lifecycle, service, request.clone(), io);
     let Err(error) = result else {
         return result;
     };
@@ -238,7 +281,7 @@ pub(super) fn promote_with_io(
     else {
         return Err(error);
     };
-    let Ok(mut r) = load(service, &root, request.operation_id) else {
+    let Ok(mut r) = load::<L>(service, &root, request.operation_id) else {
         return Err(error);
     };
     if r.item_id != request.item_id
@@ -248,7 +291,7 @@ pub(super) fn promote_with_io(
         return Err(error);
     }
     if r.step == Step::Complete || r.step == Step::Superseded {
-        return Ok(refresh(service, &root, &r, r.step == Step::Complete));
+        return Ok(refresh::<L>(service, &root, &r, r.step == Step::Complete));
     }
     if r.step == Step::Integrating {
         let state = recorded_primary(&root, &r)
@@ -272,22 +315,22 @@ pub(super) fn promote_with_io(
                         integrate::IntegrationState::RecoveryRequired
                     }
                 } else {
-                    integrate::reconcile_integration(&repo, r.base_oid.unwrap(), &context)
+                    L::reconcile_integration(&repo, r.base_oid.unwrap(), &context)
                 }
             })
             .unwrap_or(integrate::IntegrationState::RecoveryRequired);
         match state {
-            integrate::IntegrationState::NotIntegrated if integrate::primary_clean(&root) => {
+            integrate::IntegrationState::NotIntegrated if L::primary_clean(&root) => {
                 return Err(error);
             }
             integrate::IntegrationState::Integrated { oid } if Some(oid) == r.integration_oid => {
                 r.step = Step::Integrated;
-                let _ = save(service, &root, &r);
+                let _ = save::<L>(service, &root, &r);
             }
             _ => (),
         }
     }
-    Ok(recovery(service, &root, &mut r))
+    Ok(recovery::<L>(service, &root, &mut r))
 }
 fn recorded_primary(root: &Path, r: &PromotionRecord) -> Result<String, RepositoryError> {
     let repo = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
@@ -306,7 +349,8 @@ fn recorded_primary(root: &Path, r: &PromotionRecord) -> Result<String, Reposito
         .map_err(|_| state::recovery_required())?
         .primary_branch)
 }
-fn promote_inner(
+fn promote_inner<L: PromotionShaped>(
+    lifecycle: &L,
     service: &RepositoryService,
     mut request: PromoteDocumentRequest,
     io: &mut impl PromotionIo,
@@ -315,12 +359,12 @@ fn promote_inner(
         canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
     request.root = root.clone();
     let prior = state::with_transaction(service, &root, |tx, id| {
-        record::read_record(tx, id, request.operation_id)
+        L::read_record(tx, id, request.operation_id)
     })
     .map_err(mapped)?;
     if let Some(prior) = &prior {
         let mut validated = state::with_transaction(service, &root, |tx, id| {
-            record::begin_record(
+            L::begin_record(
                 tx,
                 id,
                 request.operation_id,
@@ -334,7 +378,7 @@ fn promote_inner(
             return Err(refusal_error(refusal));
         }
         if validated.step == Step::Complete {
-            return Ok(refresh(service, &root, &validated, true));
+            return Ok(refresh::<L>(service, &root, &validated, true));
         }
         if validated.step == Step::Superseded {
             return Err(DocumentPromotionError::OperationMismatch);
@@ -347,7 +391,7 @@ fn promote_inner(
             Ok(ConfigurationInspection::Valid(_))
         ) && validated.integration_oid.is_some()
         {
-            return Ok(recovery(service, &root, &mut validated));
+            return Ok(recovery::<L>(service, &root, &mut validated));
         }
     }
     let ConfigurationInspection::Valid(mut config) = read_configuration(&root)? else {
@@ -357,7 +401,7 @@ fn promote_inner(
     let predecessor = if prior.is_none() {
         Some(
             state::with_transaction(service, &root, |tx, id| {
-                record::replacement_guard(tx, id, &request.item_id)
+                L::replacement_guard(tx, id, &request.item_id)
             })
             .map_err(mapped)?,
         )
@@ -365,7 +409,7 @@ fn promote_inner(
         None
     };
     let refusal = if prior.is_none() {
-        let observation = observe::prepare(
+        let observation = L::prepare(
             service,
             PreviewDocumentPromotionRequest {
                 root: root.clone(),
@@ -400,9 +444,9 @@ fn promote_inner(
         None
     };
     let (mut r, existing) = state::with_transaction(service, &root, |tx, id| {
-        let existing = record::read_record(tx, id, request.operation_id)?.is_some();
+        let existing = L::read_record(tx, id, request.operation_id)?.is_some();
         let predecessor_changed = match &predecessor {
-            Some(expected) => record::replacement_guard(tx, id, &request.item_id)? != *expected,
+            Some(expected) => L::replacement_guard(tx, id, &request.item_id)? != *expected,
             None => false,
         };
         let refusal = if predecessor_changed {
@@ -411,7 +455,7 @@ fn promote_inner(
             refusal.clone()
         };
         let r = if let Some(refusal) = &refusal {
-            record::refuse_record(
+            L::refuse_record(
                 tx,
                 id,
                 request.operation_id,
@@ -421,7 +465,7 @@ fn promote_inner(
                 refusal,
             )?
         } else {
-            record::begin_record(
+            L::begin_record(
                 tx,
                 id,
                 request.operation_id,
@@ -441,13 +485,13 @@ fn promote_inner(
         return Err(DocumentPromotionError::OperationMismatch);
     }
     if r.step == Step::Complete {
-        return Ok(refresh(service, &root, &r, true));
+        return Ok(refresh::<L>(service, &root, &r, true));
     }
     // A second call explicitly continues an inter-step cancellation. Child
     // ownership/cancel acknowledgement is reconciled separately below.
     if existing && r.cancel_requested {
         state::with_transaction(service, &root, |tx, id| {
-            record::clear_cancellation(tx, id, r.operation_id)
+            L::clear_cancellation(tx, id, r.operation_id)
         })
         .map_err(mapped)?;
         r.cancel_requested = false;
@@ -458,7 +502,9 @@ fn promote_inner(
     let bound_primary = if r.base_oid.is_some() {
         match recorded_primary(&root, &r) {
             Ok(primary) => primary,
-            Err(_) if r.integration_oid.is_some() => return Ok(recovery(service, &root, &mut r)),
+            Err(_) if r.integration_oid.is_some() => {
+                return Ok(recovery::<L>(service, &root, &mut r));
+            }
             Err(e) => return Err(mapped(e)),
         }
     } else {
@@ -480,30 +526,30 @@ fn promote_inner(
                 integrate::IntegrationState::RecoveryRequired
             }
         } else {
-            integrate::reconcile_integration(&repo, base, &context)
+            L::reconcile_integration(&repo, base, &context)
         };
         match state {
             integrate::IntegrationState::Integrated { oid } => {
                 if r.integration_oid.is_some_and(|stored| stored != oid) {
                     drop(_lease);
-                    return Ok(recovery(service, &root, &mut r));
+                    return Ok(recovery::<L>(service, &root, &mut r));
                 }
                 r.integration_oid = Some(oid);
                 r.step = Step::Integrated;
-                if save(service, &root, &r).is_err() {
+                if save::<L>(service, &root, &r).is_err() {
                     drop(_lease);
-                    return Ok(recovery(service, &root, &mut r));
+                    return Ok(recovery::<L>(service, &root, &mut r));
                 }
             }
             integrate::IntegrationState::NotIntegrated => (),
             integrate::IntegrationState::RecoveryRequired => {
                 drop(_lease);
-                return Ok(recovery(service, &root, &mut r));
+                return Ok(recovery::<L>(service, &root, &mut r));
             }
         }
     }
     if r.integration_oid.is_some() && r.step != Step::Integrating {
-        return Ok(finish_integrated(
+        return Ok(finish_integrated::<L>(
             service,
             &request,
             &bound_primary,
@@ -517,26 +563,26 @@ fn promote_inner(
     if !existing {
         boundary(service, &root, FailurePoint::AfterConfirmed)?;
     }
-    if cancelled(service, &root, &r)? {
+    if cancelled::<L>(service, &root, &r)? {
         return Err(DocumentPromotionError::Interrupted);
     }
     if r.step == Step::Confirmed {
-        let cleanup_only = matches!(preview(service,&root,&r.item_id),Ok(DocumentPromotionPreflight::Ready(ref p)) if p.integration()==PlannedIntegration::AlreadyContained && p.tracking_context().is_none());
+        let cleanup_only = matches!(preview::<L>(service,&root,&r.item_id),Ok(DocumentPromotionPreflight::Ready(ref p)) if p.integration()==PlannedIntegration::AlreadyContained && p.tracking_context().is_none());
         if r.remote_name.is_some()
             && !cleanup_only
-            && let Err(error) = child(service, &request, &mut r, ChildRole::Context, io)
+            && let Err(error) = child::<L>(service, &request, &mut r, ChildRole::Context, io)
         {
-            if cancelled(service, &root, &r)? {
+            if cancelled::<L>(service, &root, &r)? {
                 return Err(DocumentPromotionError::Interrupted);
             }
             return Err(DocumentPromotionError::ContextSynchronization(Box::new(
                 error,
             )));
         }
-        let p = match preview(service, &root, &r.item_id)? {
+        let p = match preview::<L>(service, &root, &r.item_id)? {
             DocumentPromotionPreflight::Ready(p) if p.expectation() == r.expectation => p,
             _ => {
-                return Err(abandon(
+                return Err(abandon::<L>(
                     service,
                     &root,
                     &mut r,
@@ -547,16 +593,16 @@ fn promote_inner(
         r.context_oid = Some(p.context_oid());
         r.remote_context_oid = p.tracking_context();
         r.step = Step::ContextSynchronized;
-        save(service, &root, &r)?;
+        save::<L>(service, &root, &r)?;
         boundary(service, &root, FailurePoint::AfterContextSync)?;
     }
-    if cancelled(service, &root, &r)? {
+    if cancelled::<L>(service, &root, &r)? {
         return Err(DocumentPromotionError::Interrupted);
     }
-    let p = match preview(service, &root, &r.item_id)? {
+    let p = match preview::<L>(service, &root, &r.item_id)? {
         DocumentPromotionPreflight::Ready(p) => p,
         _ => {
-            return Err(abandon(
+            return Err(abandon::<L>(
                 service,
                 &root,
                 &mut r,
@@ -570,7 +616,7 @@ fn promote_inner(
     input.context.oid = r
         .context_oid
         .ok_or(DocumentPromotionError::RecoveryRequired)?;
-    let prepared = match integrate::prepare_integration(
+    let prepared = match lifecycle.prepare_integration(
         service,
         &root,
         &input,
@@ -579,7 +625,7 @@ fn promote_inner(
         Ok(p) => p,
         Err(DocumentPromotionError::PrimaryAdvanced) if r.step == Step::ContextSynchronized => {
             state::with_transaction(service, &root, |tx, id| {
-                record::reset_context_after_primary_advance(tx, id, r.operation_id)
+                L::reset_context_after_primary_advance(tx, id, r.operation_id)
             })
             .map_err(mapped)?;
             return Err(DocumentPromotionError::PrimaryAdvanced);
@@ -589,7 +635,7 @@ fn promote_inner(
             | DocumentPromotionError::ReconfirmationRequired
             | DocumentPromotionError::ExternalChange,
         ) if r.step != Step::Integrating => {
-            return Err(abandon(
+            return Err(abandon::<L>(
                 service,
                 &root,
                 &mut r,
@@ -601,7 +647,7 @@ fn promote_inner(
     let evidence = prepared.evidence();
     if r.step == Step::Integrating && r.base_oid != Some(evidence.base) {
         drop(prepared);
-        return Ok(recovery(service, &root, &mut r));
+        return Ok(recovery::<L>(service, &root, &mut r));
     }
     r.base_oid = Some(evidence.base);
     r.integration_kind = Some(match evidence.kind {
@@ -609,31 +655,31 @@ fn promote_inner(
         PlannedIntegration::AlreadyContained => IntegrationKind::AlreadyContained,
     });
     r.step = Step::Integrating;
-    save(service, &root, &r)?;
+    save::<L>(service, &root, &r)?;
     let candidate = if let Some(oid) = r.integration_oid {
         prepared.resume_candidate(oid)?
     } else {
         prepared.write_commit()?
     };
     r.integration_oid = Some(candidate.oid());
-    save(service, &root, &r)?;
+    save::<L>(service, &root, &r)?;
     boundary(service, &root, FailurePoint::BeforeIntegrationRef)?;
-    if cancelled(service, &root, &r)? {
+    if cancelled::<L>(service, &root, &r)? {
         return Err(DocumentPromotionError::Interrupted);
     }
     let integrated = candidate.apply()?;
     if integrated == integrate::Integrated::RecoveryRequired {
-        return Ok(recovery(service, &root, &mut r));
+        return Ok(recovery::<L>(service, &root, &mut r));
     }
     // F4 may exit after the ref and before SQL. No post-effect error escapes.
     if boundary(service, &root, FailurePoint::AfterIntegrationRef).is_err() {
-        return Ok(recovery(service, &root, &mut r));
+        return Ok(recovery::<L>(service, &root, &mut r));
     }
     r.step = Step::Integrated;
-    if save(service, &root, &r).is_err() {
-        return Ok(recovery(service, &root, &mut r));
+    if save::<L>(service, &root, &r).is_err() {
+        return Ok(recovery::<L>(service, &root, &mut r));
     }
-    Ok(finish_integrated(
+    Ok(finish_integrated::<L>(
         service,
         &request,
         &bound_primary,
@@ -654,14 +700,15 @@ fn integration_context(
             .ok_or(DocumentPromotionError::RecoveryRequired)?,
     })
 }
-struct CancellationObserver<'a> {
+struct CancellationObserver<'a, L> {
+    lifecycle: std::marker::PhantomData<L>,
     service: &'a RepositoryService,
     root: &'a Path,
     op: OperationId,
 }
-impl SynchronizationObserver for CancellationObserver<'_> {
+impl<L: PromotionShaped> SynchronizationObserver for CancellationObserver<'_, L> {
     fn safe_point(&mut self, _: RemoteOperationSafePoint) -> SafePointRequest {
-        match load(self.service, self.root, self.op) {
+        match load::<L>(self.service, self.root, self.op) {
             Ok(r) if r.cancel_requested => SafePointRequest::Cancel,
             Ok(_) => SafePointRequest::Continue,
             Err(_) => SafePointRequest::Stop,
@@ -674,7 +721,7 @@ fn child_id(r: &PromotionRecord, role: ChildRole) -> Option<OperationId> {
         ChildRole::Primary => r.primary_sync_id,
     }
 }
-fn child(
+fn child<L: PromotionShaped>(
     service: &RepositoryService,
     request: &PromoteDocumentRequest,
     r: &mut PromotionRecord,
@@ -682,12 +729,13 @@ fn child(
     io: &mut impl PromotionIo,
 ) -> Result<SynchronizationOutcome, SynchronizationError> {
     let root = &request.root;
-    let observed =
-        state::with_transaction(service, root, |tx, _| record::child_state(tx, r, role))?;
+    let observed = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))?;
     let mut restart = false;
     let mut replace = child_id(r, role).is_none();
     match observed {
-        ChildState::Complete(stored) => return stored_child_outcome(&stored, role, &r.item_id),
+        ChildState::Complete(stored) => {
+            return stored_child_outcome(L::KIND, &stored, role, &r.item_id);
+        }
         ChildState::Retained(_) => restart = true,
         // Busy/yielding insert no child row. A bound but unrun attempt can be
         // retired safely too; its replacement is persisted before execution.
@@ -720,27 +768,27 @@ fn child(
                     let ack = SynchronizeRemoteRequest {
                         root: root.clone(),
                         operation_id: stored.operation_id,
-                        target: synchronization_target(role, &r.item_id),
+                        target: synchronization_target(L::KIND, role, &r.item_id),
                         approval: request.approval.clone(),
                         confirmed_identity: request.confirmed_identity.clone(),
                         restart: true,
                     };
                     let mut observer = CancellationObserver {
+                        lifecycle: std::marker::PhantomData::<L>,
                         service,
                         root,
                         op: r.operation_id,
                     };
-                    let execution = record::child_execution(r, role)?;
+                    let execution = L::child_execution(r, role)?;
                     let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
                 }
                 // A cancellation acknowledgement may itself return RecoveryRequired;
                 // durable ownership/terminal state, never that error, decides.
-                let retired = state::with_transaction(service, root, |tx, _| {
-                    record::child_state(tx, r, role)
-                })?;
+                let retired =
+                    state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))?;
                 match retired {
                     ChildState::Complete(stored) => {
-                        return stored_child_outcome(&stored, role, &r.item_id);
+                        return stored_child_outcome(L::KIND, &stored, role, &r.item_id);
                     }
                     ChildState::Unowned(stored)
                         if matches!(
@@ -760,22 +808,23 @@ fn child(
     }
     if replace {
         *r = state::with_transaction(service, root, |tx, id| {
-            record::next_attempt(tx, id, r.operation_id, role)
+            L::next_attempt(tx, id, r.operation_id, role)
         })?;
         restart = false;
     }
     let mut observer = CancellationObserver {
+        lifecycle: std::marker::PhantomData::<L>,
         service,
         root,
         op: r.operation_id,
     };
-    let execution = record::child_execution(r, role)?;
+    let execution = L::child_execution(r, role)?;
     let result = io.synchronize(
         service,
         SynchronizeRemoteRequest {
             root: root.clone(),
             operation_id: child_id(r, role).ok_or(SynchronizationError::RecoveryRequired)?,
-            target: synchronization_target(role, &r.item_id),
+            target: synchronization_target(L::KIND, role, &r.item_id),
             approval: request.approval.clone(),
             confirmed_identity: request.confirmed_identity.clone(),
             restart,
@@ -785,10 +834,10 @@ fn child(
     );
     // Durable completion wins over both a lost outer return and a concurrent
     // cancellation. Cancellation can stop unfinished work, not undo authority.
-    match state::with_transaction(service, root, |tx, _| record::child_state(tx, r, role))? {
-        ChildState::Complete(stored) => stored_child_outcome(&stored, role, &r.item_id),
+    match state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))? {
+        ChildState::Complete(stored) => stored_child_outcome(L::KIND, &stored, role, &r.item_id),
         _ => {
-            if result.is_err() && cancelled(service, root, r)? {
+            if result.is_err() && cancelled::<L>(service, root, r)? {
                 return Err(SynchronizationError::Interrupted);
             }
             match result {
@@ -799,21 +848,26 @@ fn child(
         }
     }
 }
-fn synchronization_target(role: ChildRole, item: &ItemId) -> SynchronizationTarget {
+fn synchronization_target(
+    kind: LifecycleKind,
+    role: ChildRole,
+    item: &ItemId,
+) -> SynchronizationTarget {
     match role {
         ChildRole::Primary => SynchronizationTarget::Primary,
         ChildRole::Context => SynchronizationTarget::Context {
-            kind: AuthoringKind::Document,
+            kind: kind.authoring(),
             item_id: item.clone(),
         },
     }
 }
 fn stored_child_outcome(
+    kind: LifecycleKind,
     stored: &state::StoredRemoteOperation,
     role: ChildRole,
     item: &ItemId,
 ) -> Result<SynchronizationOutcome, SynchronizationError> {
-    let target = synchronization_target(role, item);
+    let target = synchronization_target(kind, role, item);
     match stored
         .authority
         .ok_or(SynchronizationError::RecoveryRequired)?
@@ -866,7 +920,7 @@ fn remember_publication(
 }
 /// Read one coherent authority view without taking SQLite's writer reservation.
 /// Failure/absence is never evidence for a publication OID or completion kind.
-fn primary_authority(
+fn primary_authority<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
@@ -893,15 +947,13 @@ fn primary_authority(
     if id != r.repository_id {
         return Err(state::recovery_required());
     }
-    Ok(
-        match record::child_state(&transaction, r, ChildRole::Primary)? {
-            ChildState::Complete(child) => child.authority,
-            _ => None,
-        },
-    )
+    Ok(match L::child_state(&transaction, r, ChildRole::Primary)? {
+        ChildState::Complete(child) => child.authority,
+        _ => None,
+    })
 }
 
-fn finish_integrated(
+fn finish_integrated<L: PromotionShaped>(
     service: &RepositoryService,
     request: &PromoteDocumentRequest,
     primary: &str,
@@ -909,23 +961,23 @@ fn finish_integrated(
     io: &mut impl PromotionIo,
 ) -> DocumentPromotionResult {
     let mut known = None;
-    if let Err(category) = finish_steps(service, request, primary, r, io, &mut known) {
+    if let Err(category) = finish_steps::<L>(service, request, primary, r, io, &mut known) {
         // A concurrent same-ID executor may have completed while this child's
         // index handoff was outside the lease. Stored completion outranks this
         // executor's now-obsolete unfinished-step snapshot.
-        if let Ok(stored) = load(service, &request.root, r.operation_id)
+        if let Ok(stored) = load::<L>(service, &request.root, r.operation_id)
             && stored.step == Step::Complete
             && stored.item_id == r.item_id
             && stored.expectation == r.expectation
         {
-            return refresh_with_publication(service, &request.root, &stored, true, known);
+            return refresh_with_publication::<L>(service, &request.root, &stored, true, known);
         }
         r.cleanup = Some(category);
-        let _ = save(service, &request.root, r);
+        let _ = save::<L>(service, &request.root, r);
     }
-    refresh_with_publication(service, &request.root, r, false, known)
+    refresh_with_publication::<L>(service, &request.root, r, false, known)
 }
-fn finish_steps(
+fn finish_steps<L: PromotionShaped>(
     service: &RepositoryService,
     request: &PromoteDocumentRequest,
     primary: &str,
@@ -940,10 +992,10 @@ fn finish_steps(
     // before configuration/cancellation can classify publication as unfinished.
     // This probe never mints, reserves, restarts or invokes a child/transport.
     if matches!(r.step, Step::Integrated | Step::PublicationPending) && r.remote_name.is_some() {
-        match primary_authority(service, root, r) {
+        match primary_authority::<L>(service, root, r) {
             Ok(Some(authority)) => {
                 remember_publication(r, known, authority)?;
-                save(service, root, r).map_err(recovery)?;
+                save::<L>(service, root, r).map_err(recovery)?;
                 boundary(service, root, FailurePoint::AfterPublication).map_err(recovery)?;
             }
             Ok(None) => (),
@@ -952,7 +1004,7 @@ fn finish_steps(
                 // not cleanup recovery; never start a replacement or cleanup.
                 r.publication = Some(Pub::RecoveryRequired);
                 r.step = Step::PublicationPending;
-                save(service, root, r).map_err(recovery)?;
+                save::<L>(service, root, r).map_err(recovery)?;
                 return Err(Clean::AwaitingPublication);
             }
         }
@@ -963,7 +1015,7 @@ fn finish_steps(
     if config.primary_branch != primary || config.publication_remote != r.remote_name {
         return Err(Clean::RecoveryRequired);
     }
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         if matches!(r.step, Step::Integrated | Step::PublicationPending) {
             r.publication = Some(Pub::Cancelled);
             r.step = Step::PublicationPending;
@@ -976,7 +1028,7 @@ fn finish_steps(
             r.publication = Some(Pub::NoPublicationRemote);
             r.cleanup = None;
         } else {
-            match child(service, request, r, ChildRole::Primary, io) {
+            match child::<L>(service, request, r, ChildRole::Primary, io) {
                 Ok(SynchronizationOutcome::Published { oid, .. }) => {
                     remember_publication(
                         r,
@@ -1001,20 +1053,20 @@ fn finish_steps(
                 }
             }
         }
-        save(service, root, r).map_err(recovery)?;
+        save::<L>(service, root, r).map_err(recovery)?;
         if r.remote_name.is_some() && r.step == Step::PublicationPending {
             return Err(Clean::AwaitingPublication);
         }
         boundary(service, root, FailurePoint::AfterPublication).map_err(recovery)?;
     }
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     require_configuration(root, primary, r.remote_name.as_deref())?;
     let oid = r.context_oid.ok_or(Clean::RecoveryRequired)?;
     if matches!(r.step, Step::Published | Step::PublicationPending) {
         let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
-        match cleanup.precheck_context(AuthoringKind::Document, &r.item_id, oid) {
+        match cleanup.precheck_context(L::KIND.authoring(), &r.item_id, oid) {
             Precheck::Ok => (),
             Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
             _ => return Err(Clean::ContextChanged),
@@ -1050,8 +1102,8 @@ fn finish_steps(
         .map_err(recovery)?;
         let target = RemoteOperationTarget::for_context(
             plan,
-            RemoteOperationAction::Promote,
-            AuthoringKind::Document,
+            L::KIND.action(),
+            L::KIND.authoring(),
             r.item_id.clone(),
         )
         .map_err(|_| Clean::RecoveryRequired)?;
@@ -1061,7 +1113,7 @@ fn finish_steps(
         .map_err(recovery)?;
         owner = Some(
             match if exists {
-                service.restart_remote_promotion(root, r.operation_id, &target)
+                service.restart_remote_lifecycle(L::KIND, root, r.operation_id, &target)
             } else {
                 service.reserve_remote_operation(root, r.operation_id, &target)
             }
@@ -1084,7 +1136,7 @@ fn finish_steps(
     {
         if needs_owner {
             boundary(service, root, FailurePoint::BeforeRemoteDeletion).map_err(recovery)?;
-            if cancelled(service, root, r).map_err(recovery)? {
+            if cancelled::<L>(service, root, r).map_err(recovery)? {
                 return Err(Clean::Cancelled);
             }
             validate_cleanup_owner(
@@ -1097,7 +1149,7 @@ fn finish_steps(
             )?;
             {
                 let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
-                match cleanup.precheck_context(AuthoringKind::Document, &r.item_id, oid) {
+                match cleanup.precheck_context(L::KIND.authoring(), &r.item_id, oid) {
                     Precheck::Ok => (),
                     Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
                     _ => return Err(Clean::ContextChanged),
@@ -1108,7 +1160,7 @@ fn finish_steps(
             // evidence for guarded local retirement, but guard the remote delete
             // with the child's durable publication authority.
             let published_context = state::with_transaction(service, root, |tx, _| {
-                match record::child_state(tx, r, ChildRole::Context)? {
+                match L::child_state(tx, r, ChildRole::Context)? {
                     ChildState::Complete(child) => child
                         .authority
                         .map(|authority| authority.oid())
@@ -1146,7 +1198,7 @@ fn finish_steps(
         }
         r.step = Step::RemoteDeleted;
         r.cleanup = None;
-        save(service, root, r).map_err(recovery)?;
+        save::<L>(service, root, r).map_err(recovery)?;
         boundary(service, root, FailurePoint::AfterRemoteDeletion).map_err(recovery)?;
     } else if let Some(owner) = &owner {
         // Restart from a local cleanup step needs no network. Re-establish the
@@ -1158,7 +1210,7 @@ fn finish_steps(
             RemoteOperationSafePoint::AfterAdvertisement,
         )?;
     }
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
@@ -1174,17 +1226,17 @@ fn finish_steps(
         r.step,
         Step::PublicationPending | Step::RemoteDeleted | Step::Published
     ) {
-        match cleanup.precheck_context(AuthoringKind::Document, &r.item_id, oid) {
+        match cleanup.precheck_context(L::KIND.authoring(), &r.item_id, oid) {
             Precheck::Ok => (),
             Precheck::IgnoredFiles => return Err(Clean::IgnoredFiles),
             _ => return Err(Clean::ContextChanged),
         }
         r.step = Step::WorktreeRemoving;
-        save(service, root, r).map_err(recovery)?;
+        save::<L>(service, root, r).map_err(recovery)?;
     }
     if r.step == Step::WorktreeRemoving {
         boundary(service, root, FailurePoint::DuringWorktreeRemoval).map_err(recovery)?;
-        if cancelled(service, root, r).map_err(recovery)? {
+        if cancelled::<L>(service, root, r).map_err(recovery)? {
             return Err(Clean::Cancelled);
         }
         validate_cleanup_owner(
@@ -1195,7 +1247,7 @@ fn finish_steps(
             configuration.as_ref(),
             primary,
         )?;
-        match cleanup.remove_context_worktree(AuthoringKind::Document, &r.item_id, oid) {
+        match cleanup.remove_context_worktree(L::KIND.authoring(), &r.item_id, oid) {
             WorktreeRemoval::Removed => {
                 #[cfg(test)]
                 super::run_tests::local_effect(service, root, "worktree_remove");
@@ -1206,14 +1258,14 @@ fn finish_steps(
         }
         r.step = Step::WorktreeRemoved;
         r.cleanup = None;
-        save(service, root, r).map_err(recovery)?;
+        save::<L>(service, root, r).map_err(recovery)?;
     }
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     if r.step == Step::WorktreeRemoved {
         boundary(service, root, FailurePoint::BeforeBranchDeletion).map_err(recovery)?;
-        if cancelled(service, root, r).map_err(recovery)? {
+        if cancelled::<L>(service, root, r).map_err(recovery)? {
             return Err(Clean::Cancelled);
         }
         validate_cleanup_owner(
@@ -1224,7 +1276,7 @@ fn finish_steps(
             configuration.as_ref(),
             primary,
         )?;
-        match cleanup.delete_context_branch(AuthoringKind::Document, &r.item_id, oid) {
+        match cleanup.delete_context_branch(L::KIND.authoring(), &r.item_id, oid) {
             BranchDeletion::Deleted => {
                 #[cfg(test)]
                 super::run_tests::local_effect(service, root, "branch_delete");
@@ -1233,9 +1285,9 @@ fn finish_steps(
             BranchDeletion::Changed => return Err(Clean::ContextChanged),
         }
         r.step = Step::BranchDeleted;
-        save(service, root, r).map_err(recovery)?;
+        save::<L>(service, root, r).map_err(recovery)?;
     }
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     if r.step != Step::BranchDeleted {
@@ -1252,11 +1304,11 @@ fn finish_steps(
         primary,
     )?;
     boundary(service, root, FailurePoint::BeforeCompletion).map_err(recovery)?;
-    if cancelled(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, root, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     cleanup
-        .require_local_cleanup_absent(AuthoringKind::Document, &r.item_id)
+        .require_local_cleanup_absent(L::KIND.authoring(), &r.item_id)
         .map_err(|error| match error {
             TrackingDeletion::Changed => Clean::ContextChanged,
             TrackingDeletion::RecoveryRequired => Clean::RecoveryRequired,
@@ -1268,14 +1320,14 @@ fn finish_steps(
     let mut expected_tracking = r.remote_context_oid;
     if let Some(plan) = &plan {
         let published = state::with_transaction(service, root, |tx, _| {
-            Ok(match record::child_state(tx, r, ChildRole::Context)? {
+            Ok(match L::child_state(tx, r, ChildRole::Context)? {
                 ChildState::Complete(child) => child.authority.map(|a| a.oid()),
                 _ => None,
             })
         })
         .map_err(recovery)?;
         let repo = git2::Repository::open(root).map_err(|_| Clean::RecoveryRequired)?;
-        let target = plan.context(AuthoringKind::Document, &r.item_id);
+        let target = plan.context(L::KIND.authoring(), &r.item_id);
         match repo.find_reference(target.tracking_ref()) {
             Ok(reference) if published.is_some() && reference.target() == published => {
                 expected_tracking = published
@@ -1288,7 +1340,7 @@ fn finish_steps(
     let evidence = cleanup
         .delete_tracking_ref(
             plan.as_ref(),
-            AuthoringKind::Document,
+            L::KIND.authoring(),
             &r.item_id,
             expected_tracking,
             r.operation_id,
@@ -1302,9 +1354,9 @@ fn finish_steps(
         // Reappearance after the Git tracking effect is also a refusal, with
         // SQL history/retirement/parent/owner unchanged by transaction rollback.
         cleanup
-            .require_local_cleanup_absent(AuthoringKind::Document, &r.item_id)
+            .require_local_cleanup_absent(L::KIND.authoring(), &r.item_id)
             .map_err(|_| state::recovery_required())?;
-        record::complete_record(tx, service, id, r.operation_id, &evidence, owner.as_ref())
+        L::complete_record(tx, service, id, r.operation_id, &evidence, owner.as_ref())
     });
     #[cfg(test)]
     let completed = super::run_tests::completion_returned(service, root, completed);
@@ -1314,7 +1366,7 @@ fn finish_steps(
     // before returning recovery, retaining the Git absence guard throughout.
     if completed.is_err()
         && !state::with_transaction(service, root, |tx, id| {
-            record::reconcile_completion(tx, id, r.operation_id)
+            L::reconcile_completion(tx, id, r.operation_id)
         })
         .unwrap_or(false)
     {
@@ -1410,31 +1462,31 @@ fn deletion_error(error: &SynchronizationError) -> Clean {
         Clean::RecoveryRequired
     }
 }
-fn recovery(
+fn recovery<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &mut PromotionRecord,
 ) -> DocumentPromotionResult {
     r.cleanup = Some(Clean::RecoveryRequired);
-    let _ = save(service, root, r);
-    refresh(service, root, r, false)
+    let _ = save::<L>(service, root, r);
+    refresh::<L>(service, root, r, false)
 }
-fn refresh(
+fn refresh<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
     replay: bool,
 ) -> DocumentPromotionResult {
-    refresh_with_publication(service, root, r, replay, None)
+    refresh_with_publication::<L>(service, root, r, replay, None)
 }
-fn refresh_with_publication(
+fn refresh_with_publication<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
     replay: bool,
     known: Option<KnownPublication>,
 ) -> DocumentPromotionResult {
-    let outcome = make_outcome(service, root, r, known);
+    let outcome = make_outcome::<L>(service, root, r, known);
     if replay
         && service
             .repository_snapshot(root)
@@ -1463,7 +1515,7 @@ fn refresh_with_publication(
         DocumentPromotionResult::IndexPending(IndexPending::new(outcome))
     }
 }
-fn make_outcome(
+fn make_outcome<L: PromotionShaped>(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
@@ -1481,9 +1533,9 @@ fn make_outcome(
         } else {
             #[cfg(test)]
             let authority = super::run_tests::outcome_authority_read(root)
-                .and_then(|()| primary_authority(service, root, r));
+                .and_then(|()| primary_authority::<L>(service, root, r));
             #[cfg(not(test))]
-            let authority = primary_authority(service, root, r);
+            let authority = primary_authority::<L>(service, root, r);
             authority
         };
     let publication = match authority {

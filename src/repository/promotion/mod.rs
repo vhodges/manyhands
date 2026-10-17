@@ -14,6 +14,7 @@ use std::{
 
 #[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
 pub(super) mod integrate;
+pub(super) mod lifecycle;
 pub(super) mod observe;
 pub(super) mod record;
 mod run;

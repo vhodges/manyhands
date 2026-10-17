@@ -69,7 +69,7 @@ Recorded from the owner's 2026-10-17 approval:
 | `integrate::primary_clean` | 280 |
 | `integrate::prepare_integration` | 573 |
 
-Fifteen `record::` functions over 24 call sites (the design says "about 20"),
+Twelve distinct `record::` functions over 23 call sites (the design says "about 20"),
 two `observe::` and three `integrate::` functions. Types used:
 `record::ChildExecution` (the `PromotionIo` trait, lines 24 and 54),
 `integrate::{IntegrationRequest, Integrated, IntegrationContext,
@@ -258,3 +258,121 @@ the existing unit test `transport_delete_scope_is_exact_document_context_only`,
 which is not among the four named edits. Task 1 waits for the ruling. Open
 point for the same ruling: characterization 1's relationship normalization
 edge.
+
+### Rulings after Task 0
+
+- **R-T0-1, named edit 5.** Owner approved named edit 5 (2026-10-17). Task 5
+  adds a ticket-context Delete arm to `transport/remote.rs` `exact_mappings`,
+  with the same exact `:<context ref>` shape.
+  `transport_delete_scope_is_exact_document_context_only` keeps all its
+  document and malformed refusals; only its ticket assertion flips to
+  accepted, and it gains refusals for a kind mismatch and a bad ticket ID.
+  Task 1 does not change `remote.rs`.
+- **R-T0-2.** The post-closure validity check compares after canonical
+  normalization; normalized `deps` order or a dropped `parent: null` is not
+  `TicketInvalidAfterClosure`.
+- **R-T0-3.** Task 4 reconciliation accepts the ticket path staged in the
+  index as well as in the worktree after a stop between checkout and ref
+  update.
+- **R-T0-4.** The C12 `LocalOperationPending` check finds a pending row's
+  ticket by parsing `operation_records.target`.
+
+## Task 1 — Lifecycle Seam (2026-10-17)
+
+### Step 1: call map and document-only sites
+
+**Runner calls → `Lifecycle` methods.** Every call below now goes through the
+runner's type parameter `L` (`L::method(..)`, or `lifecycle.method(..)` for
+the two methods taking `&self`). `DocumentPromotionLifecycle` forwards each
+one to the unchanged promotion function, with the same arguments.
+
+| Base call in `run.rs` (sites) | Trait method |
+| --- | --- |
+| `record::read_record` (4) | `Lifecycle::read_record` |
+| `record::save_record` (1) | `Lifecycle::save_record` |
+| `record::begin_record` (2) | `Lifecycle::begin_record` |
+| `record::replacement_guard` (2) | `Lifecycle::replacement_guard` |
+| `record::refuse_record` (1) | `Lifecycle::refuse_record` |
+| `record::clear_cancellation` (1) | `Lifecycle::clear_cancellation` |
+| `record::reset_context_after_primary_advance` (1) | `Lifecycle::reset_context_after_primary_advance` |
+| `record::child_state` (6) | `Lifecycle::child_state` |
+| `record::child_execution` (2) | `Lifecycle::child_execution` |
+| `record::next_attempt` (1) | `Lifecycle::next_attempt` |
+| `record::complete_record` (1) | `Lifecycle::complete_record` |
+| `record::reconcile_completion` (1) | `Lifecycle::reconcile_completion` |
+| `observe::preview` (1) | `Lifecycle::preview` |
+| `observe::prepare` (1) | `Lifecycle::prepare` |
+| `integrate::reconcile_integration` (2) | `Lifecycle::reconcile_integration` (default: `integrate::reconcile_integration_for(Self::KIND, ..)`) |
+| `integrate::primary_clean` (1) | `Lifecycle::primary_clean` (default) |
+| `integrate::prepare_integration` (1) | `Lifecycle::prepare_integration(&self, ..)` → `integrate::prepare_integration_for(self, ..)` |
+| (new) | `Lifecycle::pre_integration(&self, &mut LeasedIntegration)`; promotion returns `Ok(PreIntegration::None)` |
+
+Associated types: the brief's `Record`, `Error`, `Preview`, `Expectation`,
+plus `Preflight`, `PreviewRequest`, `Observation`, `Refusal` and
+`ReplacementGuard`, which today's argument and return types of the calls
+above need (`DocumentPromotionPreflight`, `PreviewDocumentPromotionRequest`,
+`observe::PreparedObservation`, `record::Refusal`,
+`record::ReplacementGuard`).
+
+**Document-only sites and their Task 1 treatment.**
+
+| Site | Replacement | Task |
+| --- | --- | --- |
+| `run.rs` 13 `AuthoringKind::Document` literals | `L::KIND.authoring()` (two in the `Direct` delete adapter use the kind it carries) | 1 |
+| `run.rs:1053` `RemoteOperationAction::Promote` | `L::KIND.action()` | 1 |
+| `run.rs` `restart_remote_promotion` call | `restart_remote_lifecycle(L::KIND, ..)` | 1 |
+| `run.rs` `synchronization_target`, `stored_child_outcome` | take a `LifecycleKind` | 1 |
+| `integrate.rs` context ref | `L::KIND.context_ref(item)` | 1 |
+| `integrate.rs` subject `Promote document <ULID>` (commit, resume check, reconciliation) | `kind.merge_subject(item)`; `reconcile_integration_for(kind, ..)` searches for it; `reconcile_integration` stays as a promotion wrapper | 1 |
+| `observe.rs:150` item lookup by `Document`, `:145` branch name | `kind.authoring()`, `kind.context_branch(item)` | 1 |
+| `observe.rs` `observation_guard` `root/docs`, `context/docs` and the document ref | `kind.guarded_directory()` (`docs` / `.manyhands/tickets`), `kind.context_ref(item)` | 1 |
+| `observe.rs:533`, `:601`, `:672` target, tracking ref, publication evidence | `kind.authoring()` | 1 |
+| `observe.rs` `DiscoveryFacts.not_document`, `result_document_path`, `NotADocument` | unchanged; `prepare_for(TicketClosure, ..)` returns `recovery_required` | 3 |
+| `reservation.rs` `finish_promotion` | `finish_parent(kind, ..)`: today's check and SQL for `DocumentPromotion` (action from `kind.action()`); `TicketClosure` returns `recovery_required` | 1 (Close arm: 5) |
+| `reservation.rs` `restart_remote_promotion` | wrapper over `restart_remote_lifecycle(kind, ..)`; `TicketClosure` returns `recovery_required` | 1 (Close arm: 5) |
+| `reservation.rs` `reserve_promotion_child`, `restart_promotion_child`, `restart_synchronization_guarded` (child fence) | `ChildExecution` carries its parent's `LifecycleKind`; `validate` and `validate_request` return `recovery_required` for `TicketClosure`; the context target kind is `kind.authoring()` | 1 (ticket admission: 5) |
+| `sync.rs` child fence calls (`validate_request`, `validate`) | unchanged source; the kind travels inside `ChildExecution` | 1 |
+| `reservation.rs` `acknowledge` hold-the-slot and cancel arms (`Promote` only) | unchanged | 5 |
+| `promotion/record.rs:455` collision SQL `action!='promote' OR kind!='document'`, `validate_remote_identity`, `existing_record`, `mint_attempt`, ID cross-checks | unchanged: promotion's own SQL; the closure table and cross-table queries come with the closure record | 2 |
+| `cleanup.rs` `RetirementEvidence::matches_promotion` | unchanged | 5 |
+| `transport/remote.rs:776` `exact_mappings` Delete arm and its unit test | unchanged (R-T0-1) | 5 |
+| `read/status.rs` promotion parent listing | unchanged | 2 |
+| `recovery.rs` local-ID cross-checks (via `validate_local_identity`) | unchanged | 2 |
+| `discovery.rs:1732` migrate, `state.rs:5337` audit | unchanged | 2 |
+
+The runner's generic bound is `run::PromotionShaped`, which pins the
+associated types to the promotion types because the runner body still reads
+`PromotionRecord` fields, `PromotionStep` values and
+`DocumentPromotionError` variants. Task 6 must lift those (see the Task 1
+report's concerns).
+
+### Steps 2–5: tests and gate
+
+- **Red.** `devenv shell -- cargo test --locked --lib promotion::lifecycle`
+  with only the test file failed to compile (11 errors: `LifecycleKind`,
+  `DocumentPromotionLifecycle`, `LeasedIntegration`, `PreIntegration`
+  unresolved).
+- **Green.** The same command passed 3 tests:
+  `document_kind_matches_legacy_constants`, `ticket_kind_constants` and
+  `document_promotion_has_no_pre_integration_effect`.
+- **Gate.** No existing test file changed. Every Task 0 baseline count is
+  unchanged:
+
+| Args | Task 0 | Task 1 | Wall time |
+| --- | --- | --- | --- |
+| `--lib promotion` | 193 | 196 (193 + 3 new lifecycle tests) | 220 s |
+| `--lib cleanup` | 42 | 42 | 31 s |
+| `--lib remote::reservation` | 45 | 45 | 17 s |
+| `--lib read::status` | 10 | 10 | 1 s |
+| `--lib recovery` | 46 | 46 | 10 s |
+| `--test document_promotion` | 74 SSH | 74 SSH | 829 s |
+| `--test remote_synchronization` | 63 SSH | 63 SSH | 729 s |
+| `--test remote_merge_recovery` | 25 SSH | 25 SSH | 247 s |
+| `--test remote_polling` | 84 SSH | 84 SSH | 202 s |
+| `--test comment_publication` | 41 SSH | 41 SSH | 218 s |
+| `--test remote_reservation` | 13 | 13 | 5 s |
+| `--test read_status` | 23 | 23 | 5 s |
+| `--test mutation_remote` | 88 SSH | 88 SSH | 870 s |
+
+  `cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
+  --locked -- -D warnings` is clean.

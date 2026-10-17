@@ -12,6 +12,7 @@ use super::{
 };
 use crate::repository::{
     OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+    promotion::lifecycle::LifecycleKind,
 };
 
 #[cfg(test)]
@@ -776,14 +777,19 @@ fn finish(
 
 /// SQL-only finalization. Retirement and parent completion belong to this same
 /// caller-owned transaction; promotion never updates automatic poll policy.
-pub(in super::super) fn finish_promotion(
+pub(in super::super) fn finish_parent(
+    kind: LifecycleKind,
     service: &RepositoryService,
     tx: &Transaction<'_>,
     id: i64,
     owner: &RemoteReservation,
 ) -> Result<(), RepositoryError> {
+    if kind != LifecycleKind::DocumentPromotion {
+        // The Close arm joins ticket_closures from Task 5.
+        return Err(state::recovery_required());
+    }
     let record = owned(service, tx, id, owner)?;
-    if record.target.action() != RemoteOperationAction::Promote
+    if record.target.action() != kind.action()
         || record.priority != RemoteOperationPriority::Manual
         || record.completed_step != Some(RemoteOperationSafePoint::AfterAdvertisement)
     {
@@ -839,6 +845,19 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.restart_remote_lifecycle(LifecycleKind::DocumentPromotion, root, operation_id, target)
+    }
+    pub(in super::super) fn restart_remote_lifecycle(
+        &self,
+        kind: LifecycleKind,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        if kind != LifecycleKind::DocumentPromotion {
+            // The Close arm reads ticket_closures from Task 5.
+            return Err(state::recovery_required());
+        }
         state::with_transaction(self, root, |tx, id| {
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
@@ -850,7 +869,7 @@ impl RepositoryService {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if record.target != *target
-                || target.action() != RemoteOperationAction::Promote
+                || target.action() != kind.action()
                 || record.priority != RemoteOperationPriority::Manual
             {
                 return Err(mismatch());

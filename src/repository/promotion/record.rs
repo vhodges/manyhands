@@ -1,5 +1,6 @@
 //! Parent storage only: no transport, Git effect, prompt or lease acquisition.
 #![allow(dead_code)] // The approved Task 6 runner composes these transaction-scoped seams.
+use super::lifecycle::LifecycleKind;
 use super::{PromotionBlocker, PromotionExpectation};
 use crate::{
     canonical::ItemId,
@@ -657,6 +658,7 @@ pub(in super::super) enum ChildRole {
 /// to an ordinary synchronization when another executor replaces its attempt.
 #[derive(Clone)]
 pub(in super::super) struct ChildExecution {
+    kind: LifecycleKind,
     repository_id: i64,
     parent: OperationId,
     item: ItemId,
@@ -677,6 +679,7 @@ pub(in super::super) fn child_execution(
         return Err(mismatch());
     }
     Ok(ChildExecution {
+        kind: LifecycleKind::DocumentPromotion,
         repository_id: r.repository_id,
         parent: r.operation_id,
         item: r.item_id.clone(),
@@ -691,15 +694,16 @@ impl ChildExecution {
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,
     ) -> Result<(), RepositoryError> {
+        if self.kind != LifecycleKind::DocumentPromotion {
+            // A ticket context child is admitted for a closure parent in Task 5.
+            return Err(state::recovery_required());
+        }
         let matches = match (&self.role, &request.target) {
             (ChildRole::Primary, crate::repository::SynchronizationTarget::Primary) => true,
             (
                 ChildRole::Context,
-                crate::repository::SynchronizationTarget::Context {
-                    kind: AuthoringKind::Document,
-                    item_id,
-                },
-            ) => item_id == &self.item,
+                crate::repository::SynchronizationTarget::Context { kind, item_id },
+            ) => *kind == self.kind.authoring() && item_id == &self.item,
             _ => false,
         };
         if request.operation_id != self.child || !matches {
@@ -715,6 +719,10 @@ impl ChildExecution {
     ) -> Result<(), RepositoryError> {
         if id != self.repository_id || op != self.child {
             return Err(mismatch());
+        }
+        if self.kind != LifecycleKind::DocumentPromotion {
+            // Only the promotion parent table is read below until Task 5.
+            return Err(state::recovery_required());
         }
         let parent = read_record(db, id, self.parent)?.ok_or_else(mismatch)?;
         let (attempt, child, allowed) = match self.role {
@@ -1029,7 +1037,7 @@ pub(in super::super) fn complete_record(
     .map_err(|_| state::recovery_required())?;
     tx.execute("UPDATE document_promotions SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
     if let Some(owner) = owner {
-        reservation::finish_promotion(service, tx, id, owner)?;
+        reservation::finish_parent(LifecycleKind::DocumentPromotion, service, tx, id, owner)?;
     }
     Ok(())
 }

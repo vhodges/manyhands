@@ -1,16 +1,19 @@
+use super::lifecycle::{
+    DocumentPromotionLifecycle, LeasedIntegration, Lifecycle, LifecycleKind, PreIntegration,
+};
 use super::*;
 use crate::repository::*;
 use crate::repository::{bridges::identity::LocalConfigEdit, remote::sync};
 
 #[derive(Clone)]
-pub(super) struct IntegrationContext {
+pub(in super::super) struct IntegrationContext {
     pub(super) item_id: ItemId,
     pub(super) primary_branch: String,
     pub(super) oid: Oid,
 }
 
 #[derive(Clone)]
-pub(super) struct IntegrationRequest {
+pub(in super::super) struct IntegrationRequest {
     pub(super) expected: PromotionExpectation,
     pub(super) context: IntegrationContext,
     pub(super) primary_oid: Oid,
@@ -44,7 +47,7 @@ pub(super) enum Integrated {
     RecoveryRequired,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum IntegrationState {
+pub(in super::super) enum IntegrationState {
     Integrated { oid: Oid },
     NotIntegrated,
     RecoveryRequired,
@@ -58,7 +61,8 @@ enum IntegrationTree {
 /// Owns the single integration lease. The runner persists `evidence()` as
 /// integrating BEFORE consuming this value with `write_commit`. No registry
 /// guard/transaction escapes observation or is held across a caller checkpoint.
-pub(super) struct PreparedIntegration {
+pub(in super::super) struct PreparedIntegration {
+    kind: LifecycleKind,
     repository: git2::Repository,
     root: PathBuf,
     evidence: IntegrationEvidence,
@@ -90,8 +94,22 @@ pub(super) fn prepare_integration(
     record: &IntegrationRequest,
     identity: Option<&ConfirmedCommitIdentity>,
 ) -> Result<PreparedIntegration, DocumentPromotionError> {
+    DocumentPromotionLifecycle.prepare_integration(service, root, record, identity)
+}
+pub(super) fn prepare_integration_for<L: Lifecycle<Error = DocumentPromotionError>>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    root: &Path,
+    record: &IntegrationRequest,
+    identity: Option<&ConfirmedCommitIdentity>,
+) -> Result<PreparedIntegration, DocumentPromotionError> {
+    if L::KIND != LifecycleKind::DocumentPromotion {
+        // The observation below is the document observation until Task 3.
+        return Err(unavailable());
+    }
     let (repository, root) = canonical_repository_root(root, RepositoryOperation::Read)?;
-    let observation = observe::prepare(
+    let observation = observe::prepare_for(
+        L::KIND,
         service,
         PreviewDocumentPromotionRequest {
             root: root.clone(),
@@ -100,7 +118,7 @@ pub(super) fn prepare_integration(
     )?;
     let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
-    let context_ref = format!("refs/heads/manyhands/document/{}", record.context.item_id);
+    let context_ref = L::KIND.context_ref(&record.context.item_id);
     if repository.refname_to_id(&primary_ref).ok() != Some(record.primary_oid)
         || repository.refname_to_id(&context_ref).ok() != Some(record.context.oid)
     {
@@ -140,6 +158,16 @@ pub(super) fn prepare_integration(
         .tracking_primary()
         .filter(|_| record.publication_remote.is_some())
         .unwrap_or(preview.primary_oid());
+    match lifecycle.pre_integration(&mut LeasedIntegration {
+        repository: &repository,
+        root: &root,
+        context: &record.context,
+        base,
+    })? {
+        PreIntegration::None => (),
+        // No lifecycle writes a checkpoint before Task 4 consumes one here.
+        PreIntegration::Checkpoint { .. } => return Err(unavailable()),
+    }
     let evidence = IntegrationEvidence {
         base,
         context: record.context.clone(),
@@ -179,6 +207,7 @@ pub(super) fn prepare_integration(
         Some(git2::Signature::now(&identity.name, &identity.email).map_err(|_| unavailable())?)
     };
     Ok(PreparedIntegration {
+        kind: L::KIND,
         repository,
         root,
         evidence,
@@ -216,7 +245,7 @@ impl PreparedIntegration {
                         None,
                         signature,
                         signature,
-                        &format!("Promote document {}", self.evidence.context.item_id),
+                        &self.kind.merge_subject(&self.evidence.context.item_id),
                         &tree,
                         &[&base, &context],
                     )
@@ -246,7 +275,9 @@ impl PreparedIntegration {
                     && commit.parent_id(1).ok() == Some(self.evidence.context.oid)
                     && commit.summary()
                         == Some(
-                            format!("Promote document {}", self.evidence.context.item_id).as_str(),
+                            self.kind
+                                .merge_subject(&self.evidence.context.item_id)
+                                .as_str(),
                         )
                     && commit.tree_id() == import_tree(&self.repository, tree)?
             }
@@ -280,7 +311,8 @@ impl IntegrationCandidate {
         ) {
             // Even an error from the ref transaction can follow an effect. Git,
             // not the operation error, determines the integration result.
-            return match reconcile_integration(
+            return match reconcile_integration_for(
+                prepared.kind,
                 &prepared.repository,
                 prepared.evidence.base,
                 &prepared.evidence.context,
@@ -311,11 +343,21 @@ pub(super) fn reconcile_integration(
     base: Oid,
     context: &IntegrationContext,
 ) -> IntegrationState {
+    DocumentPromotionLifecycle::reconcile_integration(repository, base, context)
+}
+/// First-parent search for the lifecycle's merge subject with parents
+/// `[base, context]`; the subject is the reconciliation key.
+pub(super) fn reconcile_integration_for(
+    kind: LifecycleKind,
+    repository: &git2::Repository,
+    base: Oid,
+    context: &IntegrationContext,
+) -> IntegrationState {
     let result = || -> Option<IntegrationState> {
         let tip = repository
             .refname_to_id(&format!("refs/heads/{}", context.primary_branch))
             .ok()?;
-        let subject = format!("Promote document {}", context.item_id);
+        let subject = kind.merge_subject(&context.item_id);
         let mut current = tip;
         while current != base {
             let commit = repository.find_commit(current).ok()?;
