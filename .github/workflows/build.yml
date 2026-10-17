@@ -15,48 +15,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Temporary Cycle 09 failure-only matrix. Restore from 923cac8
-          # after the focused native run passes, then run the full matrix.
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            os: linux
+            executable-suffix: ""
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             os: linux
             executable-suffix: ""
-            test-target: --test=mutation_replay
-            tests:
-              - reenter::two_processes_submitting_the_same_new_request_make_one_commit
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
             os: windows
             executable-suffix: .exe
-            test-target: --lib
-            tests:
-              - repository::cleanup::tests::cleanup_branch_deletion_checks_oid_and_every_checkout
-              - repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing_commondir_registration
-              - repository::cleanup::tests::cleanup_branch_guard_keeps_checkout_with_missing_gitdir_registration
-              - repository::cleanup::tests::cleanup_branch_guard_requires_complete_admin_evidence
-              - repository::cleanup::tests::cleanup_foreign_git_link_cannot_authorize_prune
-              - repository::cleanup::tests::cleanup_foreign_git_link_cannot_hide_registered_checkout
-              - repository::cleanup::tests::cleanup_hidden_index_assume_unchanged_preserves_edit_and_index
-              - repository::cleanup::tests::cleanup_hidden_index_skip_worktree_preserves_edit_and_index
-              - repository::cleanup::tests::cleanup_ignored_and_locked_are_preserved
-              - repository::cleanup::tests::cleanup_partial_and_mixed_worktrees_require_recovery_without_more_removal
-              - repository::cleanup::tests::cleanup_precheck_clean_and_dirty_cases_preserve_full_git_image
-              - repository::cleanup::tests::cleanup_submodule_embedded_git_data_is_not_proved_safe_to_remove
-              - repository::cleanup::tests::cleanup_submodule_hidden_dirty_files_are_preserved_recursively
-              - repository::cleanup::tests::cleanup_submodule_ignored_files_are_preserved_recursively
-              - repository::cleanup::tests::cleanup_submodule_unknown_or_advanced_state_is_not_safe_to_remove
-              - repository::cleanup::tests::cleanup_tracking_guards_missing_expectation_zero_and_foreign_locks
-              - repository::cleanup::tests::cleanup_tracking_ref_refusals_preserve_git_and_sql
-              - repository::promotion::integrate::tests::persistence_seam_holds_one_lease_and_creates_no_commit_before_integrating_evidence
-              - repository::promotion::observe::tests::prepared_generated_blob_is_bound_without_odb_or_other_writes
-              - repository::promotion::observe::tests::preview_is_read_only_offline_and_does_not_take_repository_lease
           - runner: macos-14
             target: aarch64-apple-darwin
             os: macos
             executable-suffix: ""
-            test-target: --test=document_promotion
-            tests:
-              - quality2_f11_preserves_active_child_handoff
     steps:
       - uses: actions/checkout@v4
 
@@ -136,14 +110,8 @@ jobs:
             throw "Missing release binaries: $($missing -join ', ')"
           }
 
-      - name: Test failing Cycle 09 native cases
-        shell: pwsh
-        env:
-          NATIVE_TEST_FILTERS: ${{ toJSON(matrix.tests) }}
-        run: |
-          $filters = @(ConvertFrom-Json $env:NATIVE_TEST_FILTERS)
-          & cargo test --locked --no-fail-fast --target '${{ matrix.target }}' '${{ matrix.test-target }}' -- @filters --exact
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test headless credential and platform contracts
+        run: cargo test --locked --no-fail-fast --target ${{ matrix.target }} --lib --test shared_key_registry --test key_storage --test session_credentials --test key_material --test ssh_fixture --test ssh_transport --test remote_observation --test remote_synchronization --test remote_merge_recovery --test comment_publication --test remote_polling --test remote_reservation --test recovery_foundation_gate --test repository_enablement --test local_authoring --test discovery_rebuild --test read_boundary --test read_contract --test read_relationships --test read_repository --test read_credentials --test read_items --test read_comments --test read_status --test canonical_foundation --test mutation_relationships --test mutation_replay --test mutation_contract --test mutation_confirmation --test mutation_remote --test journal_rejection --test mutation_bridges --test document_promotion
 
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
