@@ -930,19 +930,34 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
   record native execution as pending.
 - [x] Obtain Task 7 SPEC PASS and QUALITY FINAL APPROVE, no remaining findings,
   covering the complete uncommitted change including the last resume correction.
-- [ ] Controller checkpoint commit (for example `test: prove confirmed document promotion over
-  SSH`) and add a ticket comment.
+- [x] Controller checkpoint commit (`504cb44`, reviewed Tasks 0–7; supplied and
+  independently verified at Task 8 entry; worker made no commit) and ticket
+  checkpoint comments recorded.
 
   Approval/progress/review-ready comments and evidence are recorded. Task 7 is
-  reviewed complete at the local gate; this remaining checkpoint is controller-
-  owned and is not performed by the worker. Task 8 follows the checkpoint.
+   reviewed complete at the local gate and checkpointed by the controller.
+   Task 8's fresh local verification follows below.
 
 ## Task 8: Full Verification, Code Review And Approval Handoff
 
-- [ ] Fix the 22 carried Clippy findings recorded by the earlier targeted probe;
+**2026-10-17 UTC: Task 8 local implementation/review/verification COMPLETE;
+ready for controller checkpoint.** Controller reports whole-branch SPEC PASS and
+same-reviewer final QUALITY APPROVE, no findings, after two IMPORTANT authority/
+retry-cancel corrections and five regressions. Required final gates on that
+corrected tree now pass **3,054 tests/cases**, zero failed, one existing ignored
+opt-in performance characterization: 1,000 library + 1,496 standard integration +
+547 SSH + 11 doctests. All five new quality regressions pass in this full run;
+prior 3,049 full gate is historical. One new closure-call lint was mechanically
+refactored first, preserving the reviewed behavior/test hook. Exact fresh commands,
+fingerprint, counts, unchanged lockfile hashes and all 18 acceptance rows plus new
+named evidence are in the ledger's final post-review section. Prior active-display
+desktop surface smoke is retained; no GUI change. HEAD remains `504cb44`, Task 8
+WIP is unstaged/uncommitted. Ticket OPEN awaiting owner review/native authorization.
+
+- [x] Fix the 22 carried Clippy findings recorded by the earlier targeted probe;
   they are required Task 8 work, not waived baseline warnings. Establish the
   full `-D warnings` gate below after the controller's Task 7 checkpoint.
-- [ ] Run and record the full gate, with counts and lockfile hashes:
+- [x] Run and record the full gate, with counts and lockfile hashes:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -953,16 +968,25 @@ from `tests/remote_merge_recovery.rs`, and the public API only.
   git diff --check
   ```
 
-- [ ] `git merge-tree` against current `origin/main` to confirm the branch
-  still integrates.
-- [ ] Map every row of the Cycle's acceptance table to the named passing tests
+- [x] Fetch current main and verify HEAD-only `git merge-tree` proof. Main remains
+  `89d04f9`, HEAD `504cb44`; tree `9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e`.
+  Explicitly excludes uncommitted final edits; no WIP integration proof claimed.
+- [x] Map every row of the Cycle's acceptance table to the named passing tests
   in the ledger. A row without a test is not met.
-- [ ] Request an independent whole-branch review. Resolve or record each
-  finding.
-- [ ] Record native results, or state them as pending authorization. Local
+- [x] Independent final whole-branch spec/quality reviews cover all
+  `origin/main..HEAD` plus uncommitted Task 8 changes. Controller reports SPEC PASS,
+  initial QUALITY two IMPORTANT findings, then same-reviewer final APPROVE with
+  no findings after the five-regression correction. No redispatch by this worker.
+- [x] Record native results, or state them as pending authorization. Local
   Linux results and workflow wiring are not native proof.
-- [ ] Update the Cycle's evidence section, the ledger and the ticket. Add the
+- [x] Update the Cycle's evidence section, the ledger and the ticket. Add the
   review-ready comment. Keep the ticket open.
+- [ ] **Controller final checkpoint** of the reviewed/verified complete WIP.
+- [ ] **Controller post-checkpoint final-HEAD merge-tree proof**, including the
+  newly committed final file tree. Current HEAD-only proof is not a substitute.
+
+### Later Separately Authorized Lifecycle Gates
+
 - [ ] Reconcile the rebased branch with the published ticket ref before any
   authorized push. No force push without explicit authorization bound to the
   observed remote SHA.
@@ -1009,7 +1033,10 @@ The controller committed it as c0e9726. Task 7 is now reviewed complete at the
 local gate: controller-reported SPEC PASS and QUALITY FINAL APPROVE, no findings,
 including the final invalidated-handoff resume correction. Its 74 SSH journeys
 and affected-target counts retain the late focused-test qualification above.
-Controller checkpoint is next, then Task 8, including fixes for all 22 carried
-Clippy findings. Full/native gates and Cycle completion remain pending. This
-coordination pass changes no source and reruns no tests. No current Task 7 owner
-question or review remains pending.
+Task 7 was checkpointed as `504cb44`. Task 8 resolves the carried lints, passes
+independent final spec/whole-branch quality reviews as controller-reported, and
+passes the fresh **3,054** full local gate including all five final quality
+regressions. Task 8 is complete at that local gate; controller checkpoint and
+post-checkpoint integration proof remain. Ticket stays open for owner review,
+native authorization/execution and later lifecycle gates. No outstanding final
+independent review redispatch; all changes remain uncommitted for the controller.

@@ -449,13 +449,11 @@ pub(in super::super) fn retains_promotion_child(
     for ordinal in 0..=1 {
         if let Some(step) =
             state::integration_step_in_window(db, record.id, window.number, ordinal)?
-        {
-            if step.phase != state::IntegrationStepPhase::Applied
+            && (step.phase != state::IntegrationStepPhase::Applied
                 || state::integration_has_resolution_attempt(db, record, &step)?
-                    && !state::integration_resolution_released(db, record, &step)?
-            {
-                return Ok(true);
-            }
+                    && !state::integration_resolution_released(db, record, &step)?)
+        {
+            return Ok(true);
         }
     }
     Ok(false)

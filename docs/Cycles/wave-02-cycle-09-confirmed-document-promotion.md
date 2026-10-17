@@ -460,6 +460,86 @@ These rulings are recorded in the design with their reasons:
 
 ## Acceptance And Exit Evidence
 
+### Task 8 Post-Review Final Gate — Verified / Ready For Controller Checkpoint
+
+**2026-10-17 UTC: local implementation, independent final reviews and fresh
+final-tree verification complete.** Controller reports whole-branch **SPEC PASS**
+and same-reviewer final **QUALITY APPROVE, no findings**, after the two IMPORTANT
+publication-authority/retry-cancellation corrections and five new regressions.
+No review was redispatched or inferred by this verification worker.
+
+Required exact Devenv check/fmt/Clippy/full-test/CLI gates all pass on the corrected
+tree. Full suite ran once this pass: **3,054 passed / 0 failed** = **1,000 library +
+1,496 standard integration + 547 SSH + 11 doctests**. One existing opt-in read
+performance characterization remains ignored. All five `quality3_` regressions
+passed within this full gate; promotion coverage is now 193 tests. The prior
+3,049-pass full run below is historical pre-correction evidence.
+
+The correction preserves exact child-bound publication kind/OID through live and
+replay outcomes; unavailable authority reports explicit recovery pending instead
+of inventing the integration OID. Existing durable primary completion is persisted
+before outer retry cancellation, with no child IO. A new Clippy closure-call lint
+was narrowly refactored before the full gate, with no semantic change or suppression.
+All 18 acceptance rows' named tests were revalidated; the ledger adds the five
+quality regressions to publication/retry/outcome obligations.
+
+Verified source/test/toolchain/workflow diff fingerprint:
+`2549bc99929448e16b837045fcbc2e40127ce09a` (exact command/scope in ledger).
+Lockfile SHA-256 values match before/after. Fresh main remains
+`89d04f901636229392a311241f8e777f0a00962b`; merge-tree at current HEAD
+`504cb44aa7f8e1eebd5996666851ebe34c47f78d` passes, tree
+`9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e`. **This HEAD-only proof excludes
+uncommitted edits; controller must run final-HEAD merge-tree after checkpoint.**
+
+**Ticket OPEN, awaiting owner review and applicable native/outward authorization.**
+Task 8 changes remain unstaged/uncommitted, ready for controller checkpoint.
+Native execution remains pending authorization on the four-target manual workflow.
+Prior active-display desktop surface smoke is retained; domain-only corrections
+do not change the GUI. No commit/push/PR/CI/merge/closure/cleanup occurred.
+
+### Historical Task 8 Full Verification Before Whole-Branch Quality Corrections
+
+**READY for independent final spec and whole-branch quality review; approval
+pending. Ticket remains open.** Tasks 0–7 are reviewed/committed at
+`504cb44aa7f8e1eebd5996666851ebe34c47f78d`; Task 8 is uncommitted for the
+controller. The saved full verification was explicitly authorized for this task.
+
+- Required Devenv check, fmt check, all-target/all-feature Clippy with warnings
+  denied, full all-feature tests and no-argument CLI smoke all pass. Final full
+  run: **3,049 passed / 0 failed** = 995 library + 1,496 standard integration +
+  547 real-SSH cases + 11 doctests. One pre-existing opt-in read performance
+  characterization remains ignored; no failure was ignored or test disabled.
+- The **74 promotion / 63 synchronization / 25 merge recovery / 84 polling /
+  41 comment publication** cases now all have fresh full-gate evidence, including
+  the final Task 7 resume correction. SSH transport also passes all **122** cases.
+- Resolved the carried Clippy findings with narrow refactors (fresh all-target
+  probe exposed 28 total). Full testing also exposed one stale legacy migration
+  assertion and two stale SSH Push-evidence assertions. Focused RED/GREEN and
+  final full GREEN are recorded; recovery rollback/unknown-history and actual
+  server/local preservation checks remain. No behavior/policy weakening.
+- `Cargo.lock` and `devenv.lock` SHA-256 values match start/end. Fetch still sees
+  `origin/main` at `89d04f901636229392a311241f8e777f0a00962b`; read-only
+  `git merge-tree --write-tree HEAD origin/main` succeeds with tree
+  `9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e`. No mid-task rebase.
+- Active-display desktop smoke reached actual Wayland toplevel creation,
+  configure/ack, buffer attach and surface commit; bounded termination was
+  intentional (status 124). Human visual/button interaction is not claimed.
+- **Native CI pending authorization** on the actual four-target manual workflow;
+  wiring includes `document_promotion`. Linux success is not Windows/macOS proof.
+
+The execution ledger's **Task 8** section records exact commands, unsuccessful
+runs and corrections, final per-target counts/hashes, desktop/native limits and
+**every acceptance row mapped to named tests from the final full run**. Approved
+ownership-first retry, mode/type digest, local identity persistence, Git-first/
+SQL-atomic completion, operator-repair lock exception, retained-only R1 and the
+accepted discovery-title exception remain qualified there and in this contract.
+Final review must cover **all `origin/main..HEAD` plus uncommitted Task 8 edits**,
+not just the last checkpoint. Controller dispatches those independent reviews
+after the worker returns, then owns the checkpoint commit. No final approval or
+Cycle closure is inferred from passing tests.
+
+### Historical Task 7 Evidence (Superseded By The Fresh Task 8 Run Above)
+
 **Task 7 delivered and reviewed complete at the local gate — 2026-10-17 UTC:**
 The controller reports **SPEC PASS and QUALITY FINAL APPROVE, no remaining
 findings**, covering the complete uncommitted Task 7 change against exact base

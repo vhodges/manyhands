@@ -522,15 +522,16 @@ fn promote_inner(
     }
     if r.step == Step::Confirmed {
         let cleanup_only = matches!(preview(service,&root,&r.item_id),Ok(DocumentPromotionPreflight::Ready(ref p)) if p.integration()==PlannedIntegration::AlreadyContained && p.tracking_context().is_none());
-        if r.remote_name.is_some() && !cleanup_only {
-            if let Err(error) = child(service, &request, &mut r, ChildRole::Context, io) {
-                if cancelled(service, &root, &r)? {
-                    return Err(DocumentPromotionError::Interrupted);
-                }
-                return Err(DocumentPromotionError::ContextSynchronization(Box::new(
-                    error,
-                )));
+        if r.remote_name.is_some()
+            && !cleanup_only
+            && let Err(error) = child(service, &request, &mut r, ChildRole::Context, io)
+        {
+            if cancelled(service, &root, &r)? {
+                return Err(DocumentPromotionError::Interrupted);
             }
+            return Err(DocumentPromotionError::ContextSynchronization(Box::new(
+                error,
+            )));
         }
         let p = match preview(service, &root, &r.item_id)? {
             DocumentPromotionPreflight::Ready(p) if p.expectation() == r.expectation => p,
@@ -838,6 +839,68 @@ fn publication_error(error: &SynchronizationError) -> Pub {
     }
 }
 
+/// Exact publication evidence already returned by this frame's child, bound to
+/// its child ID. It is not a new journal/claim and cannot be reused for a peer's
+/// replacement attempt. Authority is immutable once stored by synchronization.
+#[derive(Clone, Copy)]
+struct KnownPublication {
+    child: OperationId,
+    authority: state::SynchronizationAuthority,
+}
+fn remember_publication(
+    r: &mut PromotionRecord,
+    known: &mut Option<KnownPublication>,
+    authority: state::SynchronizationAuthority,
+) -> Result<(), Clean> {
+    *known = Some(KnownPublication {
+        child: r.primary_sync_id.ok_or(Clean::RecoveryRequired)?,
+        authority,
+    });
+    r.publication = Some(match authority {
+        state::SynchronizationAuthority::Published(_) => Pub::Published,
+        state::SynchronizationAuthority::AlreadyCurrent(_) => Pub::AlreadyCurrent,
+    });
+    r.step = Step::Published;
+    r.cleanup = None;
+    Ok(())
+}
+/// Read one coherent authority view without taking SQLite's writer reservation.
+/// Failure/absence is never evidence for a publication OID or completion kind.
+fn primary_authority(
+    service: &RepositoryService,
+    root: &Path,
+    r: &PromotionRecord,
+) -> Result<Option<state::SynchronizationAuthority>, RepositoryError> {
+    if r.primary_sync_id.is_none() {
+        return Ok(None);
+    }
+    let operation = RepositoryOperation::RepositorySnapshot;
+    service.require_index_available(operation, Some(root))?;
+    let _guard = cache_read_guard(&service.registry_path, root, operation)?;
+    let mut connection = open_registry_read_only(&service.registry_path)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|_| state::recovery_required())?;
+    let id = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [registry_root_key(root, operation)?],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|_| state::recovery_required())?
+        .ok_or_else(state::recovery_required)?;
+    if id != r.repository_id {
+        return Err(state::recovery_required());
+    }
+    Ok(
+        match record::child_state(&transaction, r, ChildRole::Primary)? {
+            ChildState::Complete(child) => child.authority,
+            _ => None,
+        },
+    )
+}
+
 fn finish_integrated(
     service: &RepositoryService,
     request: &PromoteDocumentRequest,
@@ -845,7 +908,8 @@ fn finish_integrated(
     r: &mut PromotionRecord,
     io: &mut impl PromotionIo,
 ) -> DocumentPromotionResult {
-    if let Err(category) = finish_steps(service, request, primary, r, io) {
+    let mut known = None;
+    if let Err(category) = finish_steps(service, request, primary, r, io, &mut known) {
         // A concurrent same-ID executor may have completed while this child's
         // index handoff was outside the lease. Stored completion outranks this
         // executor's now-obsolete unfinished-step snapshot.
@@ -854,12 +918,12 @@ fn finish_integrated(
             && stored.item_id == r.item_id
             && stored.expectation == r.expectation
         {
-            return refresh(service, &request.root, &stored, true);
+            return refresh_with_publication(service, &request.root, &stored, true, known);
         }
         r.cleanup = Some(category);
         let _ = save(service, &request.root, r);
     }
-    refresh(service, &request.root, r, false)
+    refresh_with_publication(service, &request.root, r, false, known)
 }
 fn finish_steps(
     service: &RepositoryService,
@@ -867,9 +931,32 @@ fn finish_steps(
     primary: &str,
     r: &mut PromotionRecord,
     io: &mut impl PromotionIo,
+    known: &mut Option<KnownPublication>,
 ) -> Result<(), Clean> {
     let root = &request.root;
     let recovery = |_| Clean::RecoveryRequired;
+    // A prior executor may have durably completed this exact primary child but
+    // stopped before acknowledging it in the parent. Consume that authority
+    // before configuration/cancellation can classify publication as unfinished.
+    // This probe never mints, reserves, restarts or invokes a child/transport.
+    if matches!(r.step, Step::Integrated | Step::PublicationPending) && r.remote_name.is_some() {
+        match primary_authority(service, root, r) {
+            Ok(Some(authority)) => {
+                remember_publication(r, known, authority)?;
+                save(service, root, r).map_err(recovery)?;
+                boundary(service, root, FailurePoint::AfterPublication).map_err(recovery)?;
+            }
+            Ok(None) => (),
+            Err(_) => {
+                // Uncertain child ownership/authority is publication recovery,
+                // not cleanup recovery; never start a replacement or cleanup.
+                r.publication = Some(Pub::RecoveryRequired);
+                r.step = Step::PublicationPending;
+                save(service, root, r).map_err(recovery)?;
+                return Err(Clean::AwaitingPublication);
+            }
+        }
+    }
     let ConfigurationInspection::Valid(config) = read_configuration(root).map_err(recovery)? else {
         return Err(Clean::RecoveryRequired);
     };
@@ -890,15 +977,19 @@ fn finish_steps(
             r.cleanup = None;
         } else {
             match child(service, request, r, ChildRole::Primary, io) {
-                Ok(SynchronizationOutcome::Published { .. }) => {
-                    r.publication = Some(Pub::Published);
-                    r.step = Step::Published;
-                    r.cleanup = None;
+                Ok(SynchronizationOutcome::Published { oid, .. }) => {
+                    remember_publication(
+                        r,
+                        known,
+                        state::SynchronizationAuthority::Published(oid),
+                    )?;
                 }
-                Ok(SynchronizationOutcome::AlreadyCurrent { .. }) => {
-                    r.publication = Some(Pub::AlreadyCurrent);
-                    r.step = Step::Published;
-                    r.cleanup = None;
+                Ok(SynchronizationOutcome::AlreadyCurrent { oid, .. }) => {
+                    remember_publication(
+                        r,
+                        known,
+                        state::SynchronizationAuthority::AlreadyCurrent(oid),
+                    )?;
                 }
                 Ok(_) => {
                     r.publication = Some(Pub::RecoveryRequired);
@@ -988,7 +1079,9 @@ fn finish_steps(
         )?;
         configuration = Some(frozen);
     }
-    if matches!(r.step, Step::Published | Step::PublicationPending) && plan.is_some() {
+    if matches!(r.step, Step::Published | Step::PublicationPending)
+        && let Some(plan) = plan.as_ref()
+    {
         if needs_owner {
             boundary(service, root, FailurePoint::BeforeRemoteDeletion).map_err(recovery)?;
             if cancelled(service, root, r).map_err(recovery)? {
@@ -998,7 +1091,7 @@ fn finish_steps(
                 service,
                 root,
                 owner.as_ref(),
-                plan.as_ref(),
+                Some(plan),
                 configuration.as_ref(),
                 primary,
             )?;
@@ -1032,7 +1125,7 @@ fn finish_steps(
                         direction: SshDirection::Delete,
                         approval: request.approval.clone(),
                     },
-                    plan.as_ref().unwrap(),
+                    plan,
                     owner.as_ref().unwrap(),
                     configuration.as_ref().unwrap(),
                     published_context,
@@ -1264,13 +1357,12 @@ fn validate_cleanup_owner(
         })
         .map_err(|_| Clean::RecoveryRequired)?;
     }
-    if let (Some(plan), Some(configuration)) = (plan, configuration) {
-        if !service
+    if let (Some(plan), Some(configuration)) = (plan, configuration)
+        && !service
             .synchronization_configuration_matches(root, plan, configuration)
             .unwrap_or(false)
-        {
-            return Err(Clean::RecoveryRequired);
-        }
+    {
+        return Err(Clean::RecoveryRequired);
     }
     Ok(())
 }
@@ -1333,7 +1425,16 @@ fn refresh(
     r: &PromotionRecord,
     replay: bool,
 ) -> DocumentPromotionResult {
-    let outcome = make_outcome(service, root, r);
+    refresh_with_publication(service, root, r, replay, None)
+}
+fn refresh_with_publication(
+    service: &RepositoryService,
+    root: &Path,
+    r: &PromotionRecord,
+    replay: bool,
+    known: Option<KnownPublication>,
+) -> DocumentPromotionResult {
+    let outcome = make_outcome(service, root, r, known);
     if replay
         && service
             .repository_snapshot(root)
@@ -1366,40 +1467,59 @@ fn make_outcome(
     service: &RepositoryService,
     root: &Path,
     r: &PromotionRecord,
+    known: Option<KnownPublication>,
 ) -> DocumentPromotionOutcome {
     let oid = r
         .integration_oid
         .or(r.base_oid)
         .expect("post-integration evidence");
-    let publication_oid = state::with_transaction(service, root, |tx, _| {
-        Ok(match record::child_state(tx, r, ChildRole::Primary)? {
-            ChildState::Complete(s) => s.authority.map(|a| a.oid()),
-            _ => None,
-        })
-    })
-    .ok()
-    .flatten()
-    .unwrap_or(oid);
-    let publication = match r.publication {
-        Some(Pub::Published) => PromotionPublication::Published {
-            oid: publication_oid,
+    let authority =
+        if let Some(known) = known.filter(|known| r.primary_sync_id == Some(known.child)) {
+            Ok(Some(known.authority))
+        } else if r.primary_sync_id.is_none() {
+            Ok(None)
+        } else {
+            #[cfg(test)]
+            let authority = super::run_tests::outcome_authority_read(root)
+                .and_then(|()| primary_authority(service, root, r));
+            #[cfg(not(test))]
+            let authority = primary_authority(service, root, r);
+            authority
+        };
+    let publication = match authority {
+        Ok(Some(state::SynchronizationAuthority::Published(oid))) => {
+            PromotionPublication::Published { oid }
+        }
+        Ok(Some(state::SynchronizationAuthority::AlreadyCurrent(oid))) => {
+            PromotionPublication::AlreadyCurrent { oid }
+        }
+        Err(_) => PromotionPublication::Pending {
+            reason: PromotionPublicationPending::Synchronization(
+                PromotionSynchronizationCategory::RecoveryRequired,
+            ),
         },
-        Some(Pub::AlreadyCurrent) => PromotionPublication::AlreadyCurrent {
-            oid: publication_oid,
-        },
-        category => PromotionPublication::Pending {
-            reason: match category {
-                Some(Pub::NoPublicationRemote) => PromotionPublicationPending::NoPublicationRemote,
-                Some(Pub::Cancelled) => PromotionPublicationPending::Cancelled,
-                category => PromotionPublicationPending::Synchronization(match category {
-                    Some(Pub::Conflict) => PromotionSynchronizationCategory::Conflict,
-                    Some(Pub::Rejected) => PromotionSynchronizationCategory::Rejected,
-                    Some(Pub::Transport) => PromotionSynchronizationCategory::Transport,
-                    Some(Pub::Identity) => PromotionSynchronizationCategory::Identity,
-                    Some(Pub::Busy) => PromotionSynchronizationCategory::Busy,
-                    Some(Pub::Yielding) => PromotionSynchronizationCategory::Yielding,
-                    _ => PromotionSynchronizationCategory::RecoveryRequired,
-                }),
+        Ok(None) => match r.publication {
+            Some(Pub::Published | Pub::AlreadyCurrent) => PromotionPublication::Pending {
+                reason: PromotionPublicationPending::Synchronization(
+                    PromotionSynchronizationCategory::RecoveryRequired,
+                ),
+            },
+            category => PromotionPublication::Pending {
+                reason: match category {
+                    Some(Pub::NoPublicationRemote) => {
+                        PromotionPublicationPending::NoPublicationRemote
+                    }
+                    Some(Pub::Cancelled) => PromotionPublicationPending::Cancelled,
+                    category => PromotionPublicationPending::Synchronization(match category {
+                        Some(Pub::Conflict) => PromotionSynchronizationCategory::Conflict,
+                        Some(Pub::Rejected) => PromotionSynchronizationCategory::Rejected,
+                        Some(Pub::Transport) => PromotionSynchronizationCategory::Transport,
+                        Some(Pub::Identity) => PromotionSynchronizationCategory::Identity,
+                        Some(Pub::Busy) => PromotionSynchronizationCategory::Busy,
+                        Some(Pub::Yielding) => PromotionSynchronizationCategory::Yielding,
+                        _ => PromotionSynchronizationCategory::RecoveryRequired,
+                    }),
+                },
             },
         },
     };

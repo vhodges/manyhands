@@ -183,13 +183,13 @@ fn read_view(
 ) -> Result<(i64, RemoteSnapshot, bool), RepositoryError> {
     let operation = RepositoryOperation::Read;
     let (id, snapshot, pending) = {
-        let _guard = cache_read_guard(&service.registry_path, &root, operation)?;
+        let _guard = cache_read_guard(&service.registry_path, root, operation)?;
         let mut connection = open_registry_read_only(&service.registry_path)?;
         let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
         let id = transaction
             .query_row(
                 "SELECT id FROM repositories WHERE root_path=?1",
-                [registry_root_key(&root, operation)?],
+                [registry_root_key(root, operation)?],
                 |row| row.get::<_, i64>(0),
             )
             .optional()
@@ -733,7 +733,7 @@ fn result_document_path(
     repository: &git2::Repository,
     tree: &git2::Tree<'_>,
     item: &ItemId,
-) -> Result<Option<PathBuf>, SynchronizationError> {
+) -> Result<Option<PathBuf>, ()> {
     let mut forbidden = false;
     tree.walk(git2::TreeWalkMode::PreOrder, |parent, entry| {
         let mut path = parent.as_bytes().to_vec();
@@ -743,11 +743,11 @@ fn result_document_path(
         }
         git2::TreeWalkResult::Ok
     })
-    .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    .map_err(|_| ())?;
     if forbidden {
         return Ok(None);
     }
-    let snapshot = RepositoryService::canonical_tree_sources(repository, tree)?;
+    let snapshot = RepositoryService::canonical_tree_sources(repository, tree).map_err(|_| ())?;
     let sources = snapshot
         .sources
         .iter()

@@ -1348,7 +1348,7 @@ impl RepositoryService {
             let connection = open_registry(&self.registry_path, &mut |_| {})
                 .map_err(|e| e.for_operation(operation, &root))?;
             let key = registry_root_key(&root, operation)?;
-            recovery::reclaim_invalidated_indexing(&connection, owner, &key)
+            recovery::reclaim_invalidated_indexing(&connection, owner, key)
                 .map_err(|e| e.for_operation(operation, &root))?
         };
         let Some(fresh) = reclaimed else {
@@ -9171,12 +9171,13 @@ fn validate_context_tree(
     context: &ItemContext,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
-    let inspect = || -> Result<CanonicalContext, SynchronizationError> {
+    let inspect = || -> Result<CanonicalContext, ()> {
         let tree = repository
             .head()
             .and_then(|h| h.peel_to_tree())
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let snapshot = RepositoryService::canonical_tree_sources(repository, &tree)?;
+            .map_err(|_| ())?;
+        let snapshot =
+            RepositoryService::canonical_tree_sources(repository, &tree).map_err(|_| ())?;
         let sources = snapshot
             .sources
             .iter()

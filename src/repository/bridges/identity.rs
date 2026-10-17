@@ -585,7 +585,7 @@ impl LocalConfigEdit {
             while let Some(entry) = entries.next() {
                 let entry = entry?;
                 fields.push_back((
-                    (entry.name_bytes().to_vec(), value(&entry)),
+                    (entry.name_bytes().to_vec(), value(entry)),
                     entry.include_depth(),
                 ));
             }
@@ -641,7 +641,7 @@ impl LocalConfigEdit {
                 && (entry.level() as i32) > ConfigLevel::Local as i32
                 && (entry.level() as i32) >= priority[index]
             {
-                result[index] = value(&entry);
+                result[index] = value(entry);
                 priority[index] = entry.level() as i32;
             }
         }

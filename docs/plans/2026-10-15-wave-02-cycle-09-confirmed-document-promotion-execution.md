@@ -4326,3 +4326,605 @@ status confirms exactly the 31 paths above. HEAD matches the exact review base.
 Both tracked-diff witnesses and all five untracked SSH-file hashes match their
 pre-edit values, confirming source/tests/wiring unchanged in this pass. These
 are Git/document checks only, not Rust/test/full/native gate reruns.
+
+## Historical Task 8 — Pre-Quality-Correction Full Verification (2026-10-17 UTC)
+
+**Superseded as final-tree evidence by the post-review final gate below.** The
+3,049-pass run and pending-review status in this section describe the earlier
+tree; the subsequent five-regression correction changed source. Retain the
+commands/failure history, full acceptance mapping and desktop evidence as history.
+
+**Local verification complete; READY for the controller's independent final spec
+and whole-branch quality reviews. Those reviews and final approval are pending.**
+Tasks 0–7 were reviewed and committed before this worker started. Task 7 checkpoint
+and unchanged worker HEAD: **504cb44aa7f8e1eebd5996666851ebe34c47f78d**. All Task 8
+changes are unstaged/uncommitted. Ticket remains **open**. The owner explicitly
+authorized the saved full run now, and assigned checkpointing only to the controller
+after independent reviews. No subagents, commit, push, PR, native dispatch, merge,
+closure or worktree cleanup occurred.
+
+### Boundary, Integration And Lockfile Evidence
+
+- Read this worktree's `AGENTS.md`, approved Cycle/design/plan/history and relevant
+  verification/debugging skills. Initial `git status --short --branch` was clean
+  on exact branch `manyhands/ticket/01K7F6H9J2N4Q6S8V0X2Z4B6DH`. All edits and
+  commands were in `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01K7F6H9J2N4Q6S8V0X2Z4B6DH`.
+- Reused the controller's completed boundary rebase. As explicitly requested,
+  **`git fetch origin main`** ran without another rebase/merge/checkout; current
+  **origin/main = 89d04f901636229392a311241f8e777f0a00962b**, unchanged from the
+  controller's last fetch. No new main compatibility delta exists.
+- **`git merge-tree --write-tree HEAD origin/main`**, twice, exit 0, tree
+  **9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e**. This proves committed-branch
+  integration at the actual SHAs above; it does not pretend to include uncommitted
+  edits. The Task 8 diff is based on that HEAD, and final review must include it.
+  No index or checkout mutation. Main checkout and its `.superpowers/` untouched.
+- **`sha256sum Cargo.lock devenv.lock`** at start and after all Rust runs/smokes:
+
+  | File | Start SHA-256 = end SHA-256 |
+  | --- | --- |
+  | `Cargo.lock` | `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8` |
+  | `devenv.lock` | `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e` |
+
+  No dependencies, toolchain/global configuration, developer keys or GPUI
+  dependencies changed. No sleeps or lint suppressions added.
+
+### Carried Lints And Full-Run Failures Resolved
+
+The earlier **22** diagnostics were an incomplete targeted probe, not a waiver.
+Fresh `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+failed (exit 101) with **23 library / 28 total diagnostics**: 17 large-error,
+five needless-borrow, four collapsible-if, one unnecessary-unwrap and one test
+type-complexity diagnostic. Root causes and narrow refactors:
+
+- Box only `DocumentPromotionError::Transport`'s large payload; preserve its
+  typed transport error and redacted Display/Debug. Update the existing privacy
+  test's construction. This is the new domain API's payload representation;
+  existing synchronization/transport error APIs are unchanged.
+- In three private inspections whose callers already discarded all error detail,
+  use `Result<_, ()>` instead of constructing/carrying large synchronization
+  errors. Preserve success/invalid-document distinction and fail-closed results.
+- Remove five redundant borrows, collapse four short-circuit nested conditions,
+  bind the optional cleanup plan with `if let`, and name the existing test image
+  tuple. No new lint-only tests, blanket `allow`, or behavior change.
+
+Four executions of the **exact full test command** were needed; each repeat had
+a concrete unsuccessful prior run or changed test tree, never a passing unchanged
+tree. All used Devenv and the unchanged 100-second per-SSH-case watchdog:
+
+1. **Outer shell timeout at 1,800,000ms**, not a passing gate. Compilation took
+   5m45s; library **995/0** (540.26s), canonical **62/0**, discovery **78/0**,
+   comment publication **41 SSH passes** completed. Promotion was progressing
+   through `exit_f2_context_synchronized` with no assertion failure when the outer
+   tool killed the run. Process inspection confirmed no remaining test process.
+   The complete suite is much longer than the new promotion target. Subsequent
+   outer allowance was 10,800,000ms; no per-case/harness timeout was increased.
+2. **Exit 101:** reached recovery foundation, **50 passed / 1 failed** in
+   `failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly`.
+   A focused RED with a table-name assertion confirmed the sole mismatch was
+   `registry_migrations`. Cycle 9 now commits this shared table/its three markers
+   in the earlier registry-schema transaction (`discovery.rs`), before the
+   independent recovery transaction fails on the deliberately NULL legacy time.
+   The test now retains all three recovery-table absence checks, exact legacy
+   columns/two operation/two context rows, redaction, repair/retry/idempotence
+   checks, and asserts **exactly the three committed Cycle 9 markers**, thereby
+   proving neither failed recovery marker leaked. No production migration change.
+   Focused GREEN: **1 passed / 0 failed / 50 filtered**, 0.12s.
+3. **Exit 101:** recovery now **51/0**; all later targets executed through SSH
+   transport, which reported **120 passed / 2 failed**. Each failed deterministically
+   at a snapshot-evidence equality assertion, not its watchdog:
+   `synchronization_distinct_push_context_deleted` (old line 1072) and
+   `synchronization_context_absence_boundaries` (old line 675). Focused RED
+   reproduced both. Their old `NeverPublished` assertions predated Task 7's
+   reviewed direction-qualified Push-history projection (`attach_verified_publications`
+   and separate Fetch-only planning). Updated only these three assertions via
+   a shared assertion helper: public/item evidence **ObservedPublished**, while
+   advertised/tracking OIDs remain **None** and Fetch state **HistoryUnknown**.
+   Preserved actual server absence, no-overwrite/unchanged local-image, reopen,
+   `RemoteContextDeleted` and unknown-history refusal controls. Each focused
+   GREEN passed **1 SSH case**. No new policy or production correction.
+4. **Final full gate: exit 0**, **3,049 passes / 0 failures**, detailed below.
+   One existing opt-in read performance characterization is ignored by its
+   pre-existing annotation; no failure was ignored and no test disabled.
+
+Captured full outputs (local harness evidence, not committed artifacts) are
+`tool_147c27eac001qdhUATrCRqCLRj` (outer timeout),
+`tool_147da1e91001odwV3ifYWng43o` (migration RED),
+`tool_148069e06001Y8X3uCAkUz0u03` (SSH assertion RED), and
+**`tool_1484c204d001O5WsMcEt1cKaB1`** (final GREEN), under
+`/home/vhodges/.local/share/opencode/tool-output/`. Counts below are read from
+this worker's final full output, including the late Task 7 corrections, not
+inferred from earlier worker reports.
+
+### Exact Commands And Final Results
+
+| Exact command | Executions / actual result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | Twice during refactoring; exit 0. |
+| `devenv shell -- cargo check --all-features --locked` | Twice, both exit 0; final 0.35s after all Rust edits. |
+| `devenv shell -- cargo fmt --check` | Three times, all exit 0; final after all Rust edits. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Initial RED above, then three GREEN runs (38.10s, 1.12s, final 3.31s); final exit 0, no warnings. Later repeats follow test corrections. |
+| `devenv shell -- cargo test --all-features --locked` | Four runs as above; final exit 0, no failed target, through all 35 integration targets and doctests. Final library 434.00s. |
+| `devenv shell -- cargo test --all-features --locked --test recovery_foundation_gate failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly -- --exact` | Focused RED **0/1/50 filtered**, then GREEN **1/0/50 filtered**. |
+| `devenv shell -- cargo test --all-features --locked --test ssh_transport synchronization_distinct_push_context_deleted -- --exact` | Focused RED **0 passed / 1 failed**, then GREEN **1 SSH pass**. |
+| `devenv shell -- cargo test --all-features --locked --test ssh_transport synchronization_context_absence_boundaries -- --exact` | Focused RED **0 passed / 1 failed**, then GREEN **1 SSH pass**. |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit 0, no application output and no window. Actual CLI remains a transport-initialization skeleton, with no no-argument help/error grammar and no comment command. |
+| `git diff --check` | Exit 0 after source/test changes and after final documentation/comment edits. One intermediate documentation-only trailing space was detected and removed before final success. |
+
+Final standard harness counts (all **zero failed**, zero filtered):
+
+| Target | Passed | Ignored |
+| --- | ---: | ---: |
+| library | 995 | 0 |
+| desktop binary / CLI binary | 0 / 0 | 0 |
+| canonical_foundation | 62 | 0 |
+| discovery_rebuild | 78 | 0 |
+| editor_feasibility | 9 | 0 |
+| journal_rejection | 26 | 0 |
+| key_material | 39 | 0 |
+| key_storage | 2 | 0 |
+| local_authoring | 140 | 0 |
+| mutation_bridges | 129 | 0 |
+| mutation_confirmation | 154 | 0 |
+| mutation_contract | 43 | 0 |
+| mutation_relationships | 27 | 0 |
+| mutation_replay | 308 | 0 |
+| read_boundary | 20 | 0 |
+| read_characterization | 0 | 1 (pre-existing opt-in performance characterization) |
+| read_comments | 22 | 0 |
+| read_contract | 71 | 0 |
+| read_credentials | 25 | 0 |
+| read_items | 76 | 0 |
+| read_relationships | 17 | 0 |
+| read_repository | 33 | 0 |
+| read_status | 23 | 0 |
+| recovery_foundation_gate | 51 | 0 |
+| remote_reservation | 13 | 0 |
+| repository_enablement | 78 | 0 |
+| session_credentials | 11 | 0 |
+| shared_key_registry | 39 | 0 |
+| doctests (compile-fail privacy/API contracts) | 11 | 0 |
+
+Final custom SSH harness counts, all **zero failed** (not libtest counts):
+
+| Target | SSH cases passed |
+| --- | ---: |
+| comment_publication | 41 |
+| document_promotion | 74 |
+| mutation_remote | 88 |
+| remote_merge_recovery | 25 |
+| remote_observation | 15 |
+| remote_polling | 84 |
+| remote_synchronization | 63 |
+| ssh_fixture | 35 |
+| ssh_transport | 122 |
+| **SSH total** | **547** |
+
+Totals: **995 library + 1,496 standard integration + 547 SSH + 11 doctests =
+3,049 passes**, zero failures, one existing ignored characterization.
+
+### Desktop Smoke And Native Limitations
+
+Environment inspection found `DISPLAY=:1`, `WAYLAND_DISPLAY=wayland-1`,
+`XDG_RUNTIME_DIR=/run/user/1000`; the Wayland socket was present and
+`timeout 10s xprop -root _NET_SUPPORTING_WM_CHECK` returned a window ID (exit 0).
+An attempted Python inspection was unavailable (`python3: command not found`);
+shell/socket/X inspection supplied the evidence instead, without installing tools.
+
+- `timeout --signal=TERM 180s devenv shell -- cargo run --locked --features desktop --bin manyhands`
+  compiled in 1m22s, reached `Running target/debug/manyhands`, and emitted no
+  application startup error. The smoke was bounded, not left running.
+- To substantiate actual window/surface creation rather than only a running
+  process: `timeout --signal=TERM 10s env WAYLAND_DEBUG=client devenv shell -- cargo run --locked --features desktop --bin manyhands`;
+  capture via `desktop_smoke_status=$?; declare -p desktop_smoke_status` reported
+  **124**, expected deliberate timeout termination. Protocol evidence shows
+  `xdg_surface.get_toplevel`, configure/ack, non-null `wl_surface.attach(wl_buffer)`
+  and `wl_surface.commit`, with no startup panic/error. Captured in
+  `tool_14891a89200127mCFuppfBB2WU`. **Desktop launch/surface smoke passed**;
+  no human visual/button-interaction assertion is made. Only owned smoke processes
+  were terminated; process inventory checked afterward.
+- **Native CI remains pending authorization**, never dispatched. Task 7 wired
+  `--test document_promotion` into the existing manual-only Build workflow.
+  The actual current matrix has **four** targets: Linux x86_64/aarch64,
+  Windows x86_64, macOS aarch64. The AGENTS five-target wording is historical;
+  Windows aarch64 was owner-dropped in Cycle 08. Local Linux evidence does not
+  establish native Windows open-handle/prune or other native path/permission
+  behavior. The Unix-only image case is not claimed on Windows.
+
+### Every Cycle Acceptance Row → Named Passing Tests
+
+All names below passed in **this worker's final full gate**. `O::` abbreviates
+`repository::promotion::observe::tests::`, `I::` =
+`repository::promotion::integrate::tests::`, `R::` =
+`repository::promotion::run_tests::`; unprefixed names are cases in
+`tests/document_promotion.rs` unless a target is explicitly given. Row numbers
+follow the Cycle acceptance table in order; none relies only on a task label.
+
+| # / Acceptance | Named fresh passing evidence |
+| --- | --- |
+| 1. Offline read-only preflight, all blockers, exact/stable bound digest | `O::preview_is_read_only_offline_and_does_not_take_repository_lease`, `O::multiple_blockers_have_fixed_order`, `O::change_set_includes_all_paths_and_moves_without_rename_detection`, `O::digest_is_stable_and_debug_is_redacted`, `O::digest_binds_each_field_change_blob_and_cleanup_member`, `O::digest_binds_every_change_entry`, `O::t2_1_added_executable_bit_changes_digest`, `O::t2_1_added_regular_to_symlink_changes_digest`, `O::t2_1_modified_executable_bit_changes_digest`, `O::t2_1_modified_regular_to_symlink_changes_digest`, `O::t2_1_deletion_encoding_has_zero_big_endian_u32_mode`; `blocker_dirty_primary`, `blocker_dirty_context`, `blocker_context_behind_fetched` count transport and snapshots. |
+| 2. Digest/blocker/new-context refusal, D6 invariance | `R::changed_digest_is_durably_abandoned_and_new_id_succeeds`, `R::new_blocker_is_stored_and_replayed_before_any_child`, `new_context_content_reconfirms`, `primary_only_advance_preserves_consent`, `O::remote_digest_excludes_moving_oids`. New context content can finish its deliberate child synchronization; refusal is before **promotion integration**, not a claim of zero prior child effects. |
+| 3. Poll advance cannot drop primary commits | `poll_f2_primary_advanced_retry_integrates_once`, `I::poll_advance_requires_resynchronization_without_writing_objects_or_any_git_bytes`, `R::advance_after_f2_resets_context_attempt_and_integrates_once`. |
+| 4. Complete remote lifecycle/history/ordered merge | `happy_comment_history_and_collaborator_poll`, `first_publication_deletes_verified_context_oid`, `later_publication_deletes_verified_not_stale_tracking_oid`, `I::remote_merge_has_exact_subject_parent_order_and_context_tree_from_behind_primary`. |
+| 5. Local-only then later primary publication | `local_only_then_primary_publication`, `R::local_full_lifecycle_and_exact_replay`, `R::runner_local_divergence_preserves_prepared_primary_tree_and_complete_discovery`. |
+| 6. Contained/no new merge/cache-loss cleanup | `contained_and_fresh_second_promotion`, `f7_cache_loss_new_confirmed_cleanup_earns_retirement`, `R::cache_loss_contained_context_cleans_without_another_merge_or_child`, `O::contained_absent_tracking_context_is_cleanup_only`, `I::contained_records_base_without_identity_commit_or_primary_update`. |
+| 7. Fresh edit/R1 retained-only/registry loss/new earned retirement | `contained_and_fresh_second_promotion`, `retained_r1_unknown_history_and_consumption`, `cache_loss_fresh_edit_remains_unknown_across_reopen`, `f7_cache_loss_new_confirmed_cleanup_earns_retirement`, `r1_verified_push_consumes_before_authority`, `r1_new_ambiguous_push_is_not_old_retired_history`, `quality2_r1_distinct_reconcile_verified`, `quality2_r1_distinct_prepare_already_current`, `quality2_r1_distinct_settlement_verified`, `quality2_late_classification_keeps_new_retirement`. R1 requires retained validated retirement with no masking state; cache loss/absence/old merge does not reconstruct permission. |
+| 8. Dirty/conflicted/ahead/wrong-primary blockers | `blocker_dirty_primary`, `blocker_conflicted_primary`, `blocker_primary_ahead`, `blocker_primary_not_checked_out`; `O::primary_diverged_from_remote`. |
+| 9. D3/D4/D5 refusal | `O::local_integration_conflict`, `R::execution_only_local_conflict_abandons_without_primary_effect`, `new_context_content_reconfirms`, `blocker_remote_deleted`, `O::remote_history_unknown`, `O::present_tracking_context_overrides_unknown_history`. D4 qualification is the same as row 2. |
+| 10. Context conflict, actual resolution then once-only promotion | `real_context_conflict_public_resolution`, `R::genuine_context_conflict_resolves_canonical_and_external_and_reuses_owned_resolution`; existing `remote_merge_recovery::code_conflict_false_repairs_then_external_repair`. |
+| 11. Failed primary publication preserves cleanup; retry unfinished | `primary_rejection_retry_only_unfinished`, `offline_after_integration_is_publication_pending`, `offline_before_context_is_preintegration_error`, `R::publication_rejection_is_pending_and_retry_only_publishes_and_cleans`. Same endpoint/key restored for identical requests. |
+| 12. Cleanup edits/untracked/ignored/locked/moved, delete failures/races, supersession | `preserve_edited_context_then_supersede`, `preserve_untracked_then_supersede`, `preserve_ignored_then_supersede`, `preserve_locked_then_supersede`, `delete_rejection_retry_preserves_local_state`, `delete_context_race_preserves_peer_and_tracking`, `R::cleanup_precheck_preserves_dirty_untracked_moved_and_ignored_before_remote_delete`. A rejected/changed remote delete preserves **all local state and the observed server state**, not the already-published primary's old value. |
+| 13. Ownership-first interrupted/cancelled children never strand | `cancelled_context_attempt_replaced_once`, `cancelled_primary_attempt_replaced_once`, `interrupted_retained_context_keeps_child_id`, `interrupted_retained_primary_keeps_child_id`, `R::ownership_first_attempt_matrix_both_children_has_no_permanent_strand`, `R::actual_primary_identity_required_keeps_original_child_for_confirmed_continuation`, `R::genuine_primary_owned_resolution_stays_pending_on_recovery_then_publishes_same_child`. Retained/uncertain ownership never implies a new attempt. |
+| 14. F1–F12, inside-F10/F11, SQL rollback/uncertain commit/no duplicate effects | `exit_f1_confirmed`, `exit_f2_context_synchronized`, `exit_f3_before_integration_ref`, `exit_f4_after_integration_ref`, `exit_f5_after_publication`, `exit_f6_before_remote_deletion`, `exit_f7_after_remote_deletion`, `exit_f8_worktree_removing`, `exit_f9_before_branch_deletion`, `exit_f10_before_completion`, `exit_f11_after_completion`, `exit_f12_before_refresh`, `exit_inside_f10_git_sql_split_operator_repair`, `exit_after_sql_commit_replay_preserves_lock`, `completion_statement_rollback_preserves_history`, `completion_commit_rollback_preserves_history`, `completion_unknown_commit_result_reconciles`, `R::lost_completion_commit_result_reopens_actual_complete_authority`. **T6-1 qualification retained:** ambiguous backend lock first preserves history/reservation/retirement/effect counters and returns pending recovery plus refresh; only quiesced verified operator repair permits the identical retry. No unqualified automatic-resume claim. |
+| 15. Automatic poll yields; no rematerialization during/after cleanup | `automatic_poll_advertisement_yields_to_promotion`, `poll_between_publication_and_f6`, `poll_busy_at_f6`, `poll_busy_at_f7`, `poll_busy_at_f8`, `poll_busy_at_f9`, `poll_busy_at_f10`, `happy_comment_history_and_collaborator_poll` (promoter and collaborator dispositions). |
+| 16. Every post-integration Ok refreshes or IndexPending | `R::partial_refresh_failure_preserves_outcome_and_later_refresh_shows_integrated_primary`, `R::refresh_failure_keeps_identical_authoritative_outcome_and_replay_repairs_index`, `quality2_f11_fences_older_refresh`, `quality2_f11_preserves_active_child_handoff`, `quality2_f11_does_not_adopt_reclaimed_owner`, `exit_f12_before_refresh`; `mutation_replay::resume::a_resume_finishes_an_invalidated_authoritative_hand_off_after_executor_loss`, `resume::an_invalidated_authoritative_hand_off_needs_no_original_request_record`, `resume::an_invalidated_state_without_an_authoritative_step_still_needs_the_original_request`, `resume::a_resume_does_not_take_up_promotion_through_an_invalidated_local_hand_off` (all four in mutation_replay target). The resume fixtures model durable fence/reopen; real F11 cases prove fence creation. |
+| 17. Content-free workflow/diagnostics; accepted discovery-title exception only | `privacy_metadata_checkpointed`, `privacy_metadata_pinned_wal`, `privacy_rejected_nonindexed_title_input`, `capture_privacy_controls_fail_closed`, `happy_comment_history_and_collaborator_poll`, `R::fixed_error_and_request_formatting_never_includes_content_paths_or_endpoints`, `repository::promotion::record::tests::privacy_column_inventory_for_both_new_tables`. Includes actual promoted public comment, bilateral live DB/sidecar/backup positive and actual-row rollback negative controls. Only accepted `discovered_items.title` metadata/copies allow titles; rejected titles, bodies/comments/endpoints/credentials/key material remain excluded from raw stores/output. |
+| 18. Required Devenv gates; honest native evidence | Exact final command/results/counts/hashes above: check/fmt/clippy/test/CLI and bounded active-display desktop smoke. Four-target manual workflow includes promotion target. **Native execution pending authorization**, not a passing native exit gate. |
+
+### Final Review Boundary / Remaining Gates
+
+The controller must independently review **the entire `origin/main..HEAD` branch
+plus all uncommitted Task 8 changes**, not `HEAD~1`. Use actual base
+`89d04f901636229392a311241f8e777f0a00962b` and tip
+`504cb44aa7f8e1eebd5996666851ebe34c47f78d`, then include the working diff.
+Task-specific spec/quality approvals for Tasks 0–7 stand; this worker does not
+grant whole-branch/final approval. Review the boxed new transport payload and the
+three stale-assertion corrections as part of the full change. All approved
+T0/T2/T3/T4/T6/T7 rulings remain intact.
+
+Task 8 file boundary: eight lint-refactor files (`src/repository.rs`,
+`src/repository/bridges/identity.rs`, `src/repository/promotion/{integrate,mod,observe,run,run_tests}.rs`,
+`src/repository/remote/reservation.rs`), two existing regression files
+(`tests/recovery_foundation_gate.rs`, `tests/ssh_transport/synchronization.rs`),
+Cycle/ledger/plan/handoff and canonical review-ready comment. No new test case
+was added. Final review, controller checkpoint, separately authorized native CI,
+published-ref reconciliation and any later outward/closure actions remain gated.
+
+Final return checks: `git diff --check` and `git diff --cached --exit-code` pass;
+nothing staged. `git diff --exit-code -- Cargo.toml Cargo.lock devenv.nix
+devenv.lock .github/workflows/build.yml
+.manyhands/tickets/01K7F6H9J2N4Q6S8V0X2Z4B6DH/ticket.md` exits 0 (including the
+unchanged open ticket). End lockfile hashes/HEAD/main match those recorded above.
+`ps -C manyhands -o pid,ppid,etimes,comm` lists no remaining desktop smoke process.
+Final status is exactly **14 modified tracked paths + the one new canonical
+comment**, all within this ticket worktree. Only documentation changed after
+the final passing full Rust gate; no redundant Rust rerun for bookkeeping.
+
+## Final Whole-Branch Quality2 — Publication Evidence And Retry Cancellation (2026-10-17 UTC)
+
+**Both supplied IMPORTANT findings verified, reproduced before production edits,
+and corrected. Return to the same quality reviewer before the controller's final
+gate rerun. No whole-branch approval or new full-gate result is inferred.** Exact
+entry/review base and unchanged HEAD:
+`504cb44aa7f8e1eebd5996666851ebe34c47f78d` (Task 7 committed).
+
+### Entry And Task 8 WIP Preservation
+
+The worktree was intentionally dirty on entry: fourteen tracked Task 8 source/
+legacy-test/documentation paths plus canonical comment `01M5227Z00N4Q6S8V0X2Z4B6EK`.
+Inspected the actual working diff, including run.rs's lint folds/concurrent-complete
+handoff and run_tests.rs's boxed transport payload/type alias/lint refactor. Layered
+this fix onto those files; no reset, checkout, stash, rebase or replacement from HEAD.
+The existing Task 8 lint work, two legacy regression files and documentation are
+preserved. The previous 3,049-test full gate above remains **prior evidence before
+this correction**, not a claimed final gate for the changed source.
+
+All unrelated WIP was byte-hashed before and after the source/test edits and
+formatting; hashes match exactly:
+
+| Preserved WIP path | Git blob witness |
+| --- | --- |
+| `docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md` | `cc889dcdb34b1793e3fd65c0be3646ad9955fa01` |
+| `docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md` | `ff434b98e1bcf12e2f5db753c7579deb42eaa18f` |
+| `docs/plans/2026-10-15-wave-02-cycle-09-handoff.md` | `d6acc5c9d024cd89267c59514230f36604facae9` |
+| `src/repository.rs` | `0bf8c442de0f9c5787e40f2e2b1c284ee94fdfa2` |
+| `src/repository/bridges/identity.rs` | `b082b22daf6e6faee8a5b50846eed34c4018ab6f` |
+| `src/repository/promotion/integrate.rs` | `2aa242e7689c9b2cd59da377bd598bb2f061a794` |
+| `src/repository/promotion/mod.rs` | `fcaeab05c7db2cb571c88a6d10b79a4052d4e825` |
+| `src/repository/promotion/observe.rs` | `450a61009fb7e9916b541c7e7be19946ac169032` |
+| `src/repository/remote/reservation.rs` | `dc9637dc4267a3e9932f7fb7222927023d6d11ae` |
+| `tests/recovery_foundation_gate.rs` | `6bba8f665a3144b0ed13c01a68573153632f5614` |
+| `tests/ssh_transport/synchronization.rs` | `3a81aeb5e3cc6732fb66632bd0245228e28d82b6` |
+| `.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5227Z00N4Q6S8V0X2Z4B6EK.md` | `118f7d14a3b94f6f6ac59955ba2e02f739521c82` |
+
+This ledger is append-only for this pass. Existing run.rs/run_tests.rs WIP remains
+in the combined working diff; only the focused authority/cancellation changes and
+new tests are layered onto it. No dependency/schema/configuration or other source
+path was edited.
+
+### Finding 1 — Never Substitute Integration M For Publication P
+
+Verified make_outcome discarded primary authority read errors via
+`.ok().flatten().unwrap_or(integration_oid)`. The read used an immediate SQLite
+writer transaction, so even a writer lock could turn actual later publication P
+into a falsely exact Published/AlreadyCurrent claim for integration M.
+
+Correction:
+
+- Carry the exact primary child authority already known by this execution frame
+  through finish/refresh/outcome construction. The process-only witness includes
+  the child ID, so it is not reused for a peer's different bound attempt.
+- Existing durable primary authority is read in a coherent **read-only/deferred**
+  registry transaction, with registered-root/repository-ID checks and existing
+  typed child identity/authority validation, not an immediate writer reservation.
+- make_outcome derives publication **kind and OID** from actual authority, never
+  from integration. If a frame lacks known authority and lookup fails or cannot
+  corroborate a recorded publication, return Ok with explicit synchronization
+  RecoveryRequired publication pending. No error or invented OID. Durable complete
+  cleanup is not undone, and no parent/child authority row is rewritten to guess.
+- Complete-ID replay remains effect-free and accurate: an unavailable read can
+  explicitly report recovery pending; a later identical replay reads the original
+  P and restores the exact stored outcome without another child/publication/delete.
+
+The existing completion/cancel/lost-return fixture creates a real later primary
+tip P distinct from integration M and stores actual child authority. Two new
+complete-replay tests fail the **actual outcome authority lookup boundary** through
+a one-shot test-only read-unavailable seam (which must execute), for both completion
+kinds. Before the fix both report M. Afterward they report only exact known P or
+explicit recovery pending, keep the complete record, and replay the exact P outcome
+when the read recovers, with identical child ID/effect counts. A live-frame control
+for both kinds proves exact known P is carried without a redundant outcome lookup.
+The seam models the unavailable query itself, not an invented completed result.
+
+### Finding 2 — Consume Existing Completion Before The Outer Cancel Gate
+
+Verified finish_steps's outer cancellation check ran before child(), so a retry
+could persist publication pending Cancelled without inspecting a primary which
+had already completed durably before executor loss. The earlier inside-child
+lost-return/cancel tests did not cover this retry-entry interval.
+
+Before configuration/cancellation classifies publication as unfinished, an
+Integrated/PublicationPending parent now probes **existing** primary authority.
+If present, it records Published/AlreadyCurrent and the frame's exact witness,
+persists the Published parent step, then cancellation stops cleanup with Cancelled.
+This probe does not call the child IO, mint an attempt, reserve/restart or start
+transport. Known absence follows existing cancellation/no-execution semantics.
+Unreadable ownership/authority remains publication synchronization RecoveryRequired
+with cleanup AwaitingPublication, not an assumed completion or cancellation.
+
+Two deterministic retry-window regressions cover both kinds, each from **both
+Integrated and PublicationPending**. A disposable fixture executor unwinds after
+the actual primary row is durably complete but before the parent can acknowledge
+it. Raw assertions prove this intermediate parent/child state and P != M. The
+real cancellation API sets an initial stop; a fixture SQL trigger posts a second
+cancellation immediately after the identical retry's initial clear, before
+finish_steps. This matches a concurrent cancellation in that interval (all child
+rows are completed/inactive). The tests assert exact kind/P, Published parent step,
+cleanup Cancelled, preserved local context/child ID and no repeated child call;
+after the stop is removed, identical retry completes cleanup without republication.
+They also assert durable parent progress so render-time correction alone cannot
+hide a still-wrong stored publication category.
+
+### Exact Targeted RED / GREEN
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality3_` | Initial behavioral RED **0 passed/5 failed/995 filtered**, 2.01s, warning-free: replay/live lookup faults fabricate M instead of P, and both retry windows report publication pending Cancelled. No production fix preceded this run. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality3_` | After evidence correction alone, **3 passed/2 failed/995 filtered**, 2.86s: exact-OID tests pass, retry-window tests still fail the durable Published-step assertion. Confirms the second finding is not merely hidden by outcome rendering. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality3_` | After both findings corrected, **5 passed/0 failed/995 filtered**, 3.97s. Each completion kind and both pending-parent starting steps execute. |
+| `devenv shell -- cargo test --locked --lib promotion` | First broadened run **192 passed/1 failed/807 filtered**, 198.35s. Existing uncertain-ownership regression exposed an early-probe error mapped to cleanup RecoveryRequired rather than approved AwaitingPublication. No test/expectation was weakened. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::uncertain_child_ownership` | Focused reproduction **0/1/999**, 1.53s. Corrected early-probe read failure to publication RecoveryRequired + cleanup AwaitingPublication, without replacement/transport; focused GREEN **1/0/999**, 1.80s. |
+| `devenv shell -- cargo test --locked --lib promotion::run_tests::quality3_` | After that compatibility correction, **5/0/995**, 4.11s. |
+| `devenv shell -- cargo fmt` / `devenv shell -- cargo fmt --check` | Two focused-correction formatting/check runs each, exit 0; unrelated WIP hashes still match. No blanket lint allow or lint rollback. |
+| `devenv shell -- cargo test --locked --lib promotion` | Final **193 passed/0 failed/807 filtered**, **200.36s**, warning-free. Prior concurrency fence, inside-child authority priority, context/no-execution cancellation, lease-free, mode/type, SQL/T6-1 and other promotion tests retained. |
+
+Only focused and promotion selectors ran. No check/Clippy/full-suite/Task 7 SSH/
+native workflow or CLI smoke was rerun. The fixture unwind panics are intentional
+and caught to model executor loss after durable completion, not waived failures.
+
+### Exact Correction Scope / Review Return
+
+Changed by this correction worker only:
+
+1. `src/repository/promotion/run.rs` — exact child-bound publication witness,
+   read-only authority reader, no OID fallback, existing-authority-first retry gate;
+   existing Task 8 lint folds and concurrent complete-record handoff retained.
+2. `src/repository/promotion/run_tests.rs` — five new meaningful read-failure/live-
+   witness/retry-window tests and their local hooks/fixtures; existing Task 8 boxed
+   transport test, ModeImage alias and barrier lint refactor retained.
+3. This execution ledger — appended this correction record; Task 8 evidence above
+   preserved, including its prior 3,049-test full gate.
+4. New canonical comment `01M5237Z00N4Q6S8V0X2Z4B6EM` — quality recheck handoff.
+
+No persisted field, schema or migration was added; existing publication evidence
+is used. All other Task 8 WIP paths remain byte-identical to entry, verified by
+the table above. Full current pending inventory is the original fourteen modified
+tracked paths plus the original Task 8 comment and this new response comment.
+**Same quality recheck next, then controller-directed final gate rerun.** No
+policy change, subagent, staging, commit, push, PR, CI, merge, closure or worktree
+cleanup. Exact base/current HEAD remains 504cb44 above; ticket stays open.
+
+Final correction checks: `git diff --check` and `git diff --cached --exit-code`
+exit 0; nothing staged. Status is the original fourteen modified tracked paths
+plus the preserved Task 8 comment and this new response comment. All twelve
+unrelated-WIP blob witnesses were rechecked after formatting/documentation and
+still match entry exactly. Source is unchanged since the final 193-test GREEN;
+only the ledger append/comment followed. No broad gate or commit was performed.
+
+## Task 8 Final Post-Review Full Gate — Verified / Ready For Controller Checkpoint
+
+**2026-10-17 UTC: final local gate COMPLETE.** The controller reports whole-branch
+**SPEC PASS** and the **same final QUALITY reviewer APPROVE, no findings** after
+the two IMPORTANT authority/cancellation findings were corrected and all five
+new regressions passed. The preceding correction handoff/comment's pending-recheck
+language is historical and superseded by this controller-reported approval.
+No new review was dispatched by this worker; no approval is inferred from tests.
+The reviewed scope is the entire `origin/main..HEAD` plus the uncommitted Task 8
+work and quality corrections, not `HEAD~1`. Owner review, native authorization/
+execution and later outward actions remain gated; ticket stays **OPEN**.
+
+### Final-Tree Boundary And One New Lint
+
+This pass resumed the intentionally dirty exact ticket worktree/branch at
+**504cb44aa7f8e1eebd5996666851ebe34c47f78d**. Re-read worktree AGENTS, correction
+ledger and comment `01M5237Z00N4Q6S8V0X2Z4B6EM`. Preserved all existing WIP.
+Only source edit by this verification pass: remove an immediately invoked closure
+in `promotion/run.rs::make_outcome` after the initial all-target/all-feature Clippy
+probe reported **one `redundant_closure_call` diagnostic**, exit 101. Explicit
+`cfg(test)` read-hook chaining and `cfg(not(test))` direct authority read preserve
+the reviewed behavior and fault seam. No suppression, product behavior change,
+new test, dependency, schema or global configuration edit. The already-approved
+exact-child-bound authority, read-only recovery-pending fallback and completion-
+before-outer-cancel corrections remain intact. Full testing followed this narrow
+lint fix; no additional focused or broad test runs were needed in this pass.
+
+### Exact Fresh Commands And Results
+
+Every Cargo command used Devenv in the specified ticket worktree. Required final
+gates below ran after the lint fix. **Full suite ran exactly once in this pass**,
+with a 10,800,000ms outer tool allowance, unchanged per-case watchdog, no pipeline,
+filter, failure bypass or target omission. It completed normally with exit 0.
+
+| Exact command | Actual result |
+| --- | --- |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Initial probe exit 101, one new closure-call lint; after narrow refactor, required final gate exit 0, warning-free, 19.04s. |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0, 5.16s. |
+| `devenv shell -- cargo fmt --check` | Exit 0; no formatter rewrite needed. |
+| `devenv shell -- cargo test --all-features --locked` | **Exit 0; 3,054 passed / 0 failed**. Compile 1m38s; library 1,000 passed in 564.39s. All 35 integration targets and doctests completed. One existing ignored opt-in read performance characterization; no disabled/waived failure. |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit 0; build 11.33s; no application output/window, as expected for the existing skeleton. |
+| `git diff --check` | Exit 0 after source edit and final evidence edits. |
+
+Full output: `/home/vhodges/.local/share/opencode/tool-output/tool_148be2566001dEBnpP9rvo3yYa`.
+These are fresh results observed by this worker, not the prior 3,049-run or the
+correction implementer's targeted 193-test report. The full run independently
+executes the **193 promotion tests**, including the five named quality cases below.
+
+| Final standard target | Passed | Ignored |
+| --- | ---: | ---: |
+| library | **1,000** | 0 |
+| desktop binary / CLI binary | 0 / 0 | 0 |
+| canonical_foundation | 62 | 0 |
+| discovery_rebuild | 78 | 0 |
+| editor_feasibility | 9 | 0 |
+| journal_rejection | 26 | 0 |
+| key_material | 39 | 0 |
+| key_storage | 2 | 0 |
+| local_authoring | 140 | 0 |
+| mutation_bridges | 129 | 0 |
+| mutation_confirmation | 154 | 0 |
+| mutation_contract | 43 | 0 |
+| mutation_relationships | 27 | 0 |
+| mutation_replay | 308 | 0 |
+| read_boundary | 20 | 0 |
+| read_characterization | 0 | 1 (existing opt-in characterization) |
+| read_comments | 22 | 0 |
+| read_contract | 71 | 0 |
+| read_credentials | 25 | 0 |
+| read_items | 76 | 0 |
+| read_relationships | 17 | 0 |
+| read_repository | 33 | 0 |
+| read_status | 23 | 0 |
+| recovery_foundation_gate | 51 | 0 |
+| remote_reservation | 13 | 0 |
+| repository_enablement | 78 | 0 |
+| session_credentials | 11 | 0 |
+| shared_key_registry | 39 | 0 |
+| doctests | 11 | 0 |
+
+| Final SSH target | Passed |
+| --- | ---: |
+| comment_publication | 41 |
+| document_promotion | 74 |
+| mutation_remote | 88 |
+| remote_merge_recovery | 25 |
+| remote_observation | 15 |
+| remote_polling | 84 |
+| remote_synchronization | 63 |
+| ssh_fixture | 35 |
+| ssh_transport | 122 |
+| **SSH total** | **547** |
+
+All targets have **zero failures**. Total: **1,000 library + 1,496 standard
+integration + 547 SSH + 11 doctests = 3,054 passes**.
+
+### Acceptance Mapping And Review Findings — Final Run
+
+The **18-row named-test acceptance mapping in the historical Task 8 section is
+retained and revalidated by this final full run**: those named tests all passed
+on the corrected tree. Its native row still explicitly records pending native
+execution, not platform success. All approved T0/T2/T3/T4/T6/T7 qualifications
+remain unchanged (ownership-first, mode/type digest, RFC identity persistence,
+Git-first/SQL-atomic finalization, verified operator-repair backend-lock exception,
+retained-only unknown-history R1 and accepted discovery-title exception).
+
+Add these fresh named regressions to acceptance **rows 11, 13, 16** (accurate
+publication, once-only retry/cancel priority and refresh/outcome evidence):
+
+| Named test, prefix `repository::promotion::run_tests::` | Final observed proof |
+| --- | --- |
+| `quality3_published_replay_read_failure_never_uses_integration_oid` | PASS; completed replay with unavailable outcome read reports explicit recovery pending, never substitutes integration M for exact Published P; identical later replay recovers P without effects. |
+| `quality3_current_replay_read_failure_never_uses_integration_oid` | PASS; same guarantee for actual AlreadyCurrent authority, including exact kind/OID. |
+| `quality3_live_known_authority_does_not_depend_on_a_second_outcome_lookup` | PASS; both actual completion kinds carry the child-bound known P through live refresh/render without redundant outcome lookup. |
+| `quality3_retry_window_cancel_preserves_published_authority` | PASS; durable primary Published completion acknowledged/persisted before concurrent outer retry cancellation, cleanup pending Cancelled, no child IO/republication, both starting parent steps. |
+| `quality3_retry_window_cancel_preserves_current_authority` | PASS; same durable-step/once-only guarantee for AlreadyCurrent completion. |
+
+The existing uncertain-ownership regression also passed in this full run,
+preserving publication RecoveryRequired + cleanup AwaitingPublication. The
+reviewer's two IMPORTANT findings are controller-reported **resolved/approved**;
+the five regressions plus the original lifecycle/concurrency tests now have a
+fresh complete-gate result. No pending independent-review redispatch remains.
+
+### Fingerprint, Lockfiles And Integration Proof Boundary
+
+Before the full run and again after it/CLI, this exact read-only command returned
+the same Git blob witness of the complete verification-scope diff:
+
+```sh
+git diff --binary origin/main -- src tests Cargo.toml Cargo.lock devenv.nix devenv.lock .github | git hash-object --stdin
+```
+
+**`2549bc99929448e16b837045fcbc2e40127ce09a`**. Scope includes full tracked
+source/tests/manifests/toolchain/workflow relative to actual main, including
+uncommitted lint and authority/cancel corrections. It excludes evolving evidence
+documents/comments. This is a **diff fingerprint, not a committed Git tree OID**.
+No source/test changes followed the full gate; final edits are evidence only.
+
+`sha256sum Cargo.lock devenv.lock` before/after the full gate, unchanged:
+
+| File | Start = end SHA-256 |
+| --- | --- |
+| `Cargo.lock` | `8a20e8ba089f63bddfa9b87a08d5d4308404b4c2440c050453654e422a9549f8` |
+| `devenv.lock` | `d4a78b8259525e7dcf66814477b0f96282e6570c9a21ebc84eda7d7fb8950d6e` |
+
+Fresh **`git fetch origin main`** still observes
+**89d04f901636229392a311241f8e777f0a00962b**; no new main delta. No mid-task
+rebase/merge/stage/checkout. **`git merge-tree --write-tree HEAD origin/main`**
+again exits 0, tree **9fa0a194c03bd43640b82b9bf0bfa59f67a18d7e**; HEAD stays
+**504cb44aa7f8e1eebd5996666851ebe34c47f78d**. **This proves HEAD only and does
+not include uncommitted final edits. Post-checkpoint final-HEAD merge-tree proof
+is explicitly pending for the controller.** No temporary commit/index/ref was
+created to overstate that proof. Main is an ancestor of the unchanged HEAD;
+the controller will verify the final committed descendant at checkpoint.
+
+### Completion / Remaining Gates / Exact Pending Paths
+
+Local implementation/final verification and independent final reviews are
+complete. Ready for the controller's final checkpoint; after committing, run
+the final-HEAD integration proof. Ticket stays **OPEN awaiting owner review**
+and applicable native/outward authorization. Native four-target manual execution
+remains pending, not dispatched. Prior actual Wayland surface smoke is retained:
+the changes are domain-only, with no GUI change requiring a repeat. This pass
+ran only the required CLI smoke. No dependency/global config/developer key/GPUI
+change, sleep, subagent, staging, commit, push, PR, CI, merge, closure or cleanup.
+
+All pending paths, relative to the ticket worktree (**14 tracked modifications,
+three untracked canonical comments; nothing staged**):
+
+```text
+docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md
+docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-execution.md
+docs/plans/2026-10-15-wave-02-cycle-09-confirmed-document-promotion-implementation.md
+docs/plans/2026-10-15-wave-02-cycle-09-handoff.md
+src/repository.rs
+src/repository/bridges/identity.rs
+src/repository/promotion/integrate.rs
+src/repository/promotion/mod.rs
+src/repository/promotion/observe.rs
+src/repository/promotion/run.rs
+src/repository/promotion/run_tests.rs
+src/repository/remote/reservation.rs
+tests/recovery_foundation_gate.rs
+tests/ssh_transport/synchronization.rs
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5227Z00N4Q6S8V0X2Z4B6EK.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5237Z00N4Q6S8V0X2Z4B6EM.md
+.manyhands/comments/01K7F6H9J2N4Q6S8V0X2Z4B6DH/01M5247Z00N4Q6S8V0X2Z4B6EN.md
+```

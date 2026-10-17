@@ -26,7 +26,7 @@ mod run_tests;
 /// is carried by the internal pending state, never by this error.
 pub enum DocumentPromotionError {
     Repository(RepositoryError),
-    Transport(SshTransportError),
+    Transport(Box<SshTransportError>),
     Blocked(Vec<PromotionBlocker>),
     ExternalChange,
     ReconfirmationRequired,

@@ -432,16 +432,11 @@ fn checkout_preflight(root: &Path, tree: &IntegrationTree) -> Result<(), Documen
     Ok(())
 }
 pub(super) fn primary_clean(root: &Path) -> bool {
-    let check = || -> Result<(), SynchronizationError> {
-        let repository =
-            git2::Repository::open(root).map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let odb = repository
-            .odb()
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let _memory = odb
-            .add_new_mempack_backend(1000)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        sync::require_clean_target(&repository, &SynchronizationTarget::Primary)
+    let check = || -> Result<(), ()> {
+        let repository = git2::Repository::open(root).map_err(|_| ())?;
+        let odb = repository.odb().map_err(|_| ())?;
+        let _memory = odb.add_new_mempack_backend(1000).map_err(|_| ())?;
+        sync::require_clean_target(&repository, &SynchronizationTarget::Primary).map_err(|_| ())
     };
     check().is_ok()
 }

@@ -15,6 +15,14 @@ pub(super) fn checkpoint(service: &RepositoryService, root: &std::path::Path, po
     });
 }
 type TrackingHook = Box<dyn FnOnce(&RepositoryService)>;
+type OutcomeReadHook = Box<dyn FnOnce() -> Result<(), RepositoryError>>;
+thread_local! { static OUTCOME_READ_HOOKS:RefCell<BTreeMap<PathBuf,OutcomeReadHook>>=RefCell::new(BTreeMap::new()); }
+pub(super) fn outcome_authority_read(root: &std::path::Path) -> Result<(), RepositoryError> {
+    match OUTCOME_READ_HOOKS.with(|h| h.borrow_mut().remove(root)) {
+        Some(hook) => hook(),
+        None => Ok(()),
+    }
+}
 thread_local! { static PREPARED_OBSERVATION_HOOKS: RefCell<BTreeMap<PathBuf,TrackingHook>> = RefCell::new(BTreeMap::new()); }
 pub(super) fn observation_prepared(service: &RepositoryService, root: &std::path::Path) {
     if let Some(hook) = PREPARED_OBSERVATION_HOOKS.with(|h| h.borrow_mut().remove(root)) {
@@ -69,6 +77,7 @@ impl Drop for Fixture {
         discovery::clear_scan_hook(self.root.path());
         discovery::clear_scan_hook(&self.root.path().join(".manyhands/worktrees").join(ITEM));
         PREPARED_OBSERVATION_HOOKS.with(|h| h.borrow_mut().remove(self.root.path()));
+        OUTCOME_READ_HOOKS.with(|h| h.borrow_mut().remove(self.root.path()));
     }
 }
 fn write(repo: &git2::Repository, path: &str, bytes: impl AsRef<[u8]>) {
@@ -1088,14 +1097,14 @@ fn fixed_error_and_request_formatting_never_includes_content_paths_or_endpoints(
     let f = Fixture::new();
     let req = f.request();
     let errors = [
-        DocumentPromotionError::Transport(SshTransportError {
+        DocumentPromotionError::Transport(Box::new(SshTransportError {
             root: "/private/path/sentinel".into(),
             remote_name: "private-endpoint-sentinel".into(),
             direction: SshDirection::Push,
             selected_key_id: None,
             authority: None,
             kind: SshTransportErrorKind::TransportUnavailable,
-        }),
+        })),
         DocumentPromotionError::ContextSynchronization(Box::new(SynchronizationError::Repository(
             RepositoryError::new(
                 RepositoryOperation::Read,
@@ -3602,7 +3611,9 @@ fn spec5_context_entry_mode(f: &Fixture, mode: u32) -> (Oid, Vec<u8>) {
     }
     (oid, source)
 }
-fn spec5_mode_image(f: &Fixture) -> (Oid, Vec<u8>, Option<(bool, bool, Vec<u8>)>) {
+type ModeImage = (Oid, Vec<u8>, Option<(bool, bool, Vec<u8>)>);
+
+fn spec5_mode_image(f: &Fixture) -> ModeImage {
     let linked = git2::Repository::open(f.context.workdir().unwrap()).unwrap();
     let path = linked.workdir().unwrap().join(DOC);
     let payload = fs::symlink_metadata(&path).ok().map(|m| {
@@ -3721,22 +3732,20 @@ impl run::PromotionIo for Quality1BarrierIo {
         o: &mut dyn SynchronizationObserver,
         execution: &record::ChildExecution,
     ) -> Result<SynchronizationResult, SynchronizationError> {
-        if (req.target == SynchronizationTarget::Primary) == self.inner.role_primary {
-            if let (Some(ready), Some(release)) = (self.ready.take(), self.release.take()) {
-                let id = req.operation_id;
-                let pause = move || {
-                    ready.send(id).unwrap();
-                    release
-                        .recv_timeout(std::time::Duration::from_secs(120))
-                        .unwrap();
-                };
-                if self.at_reservation {
-                    crate::repository::remote::reservation::set_promotion_reservation_hook(
-                        id, pause,
-                    );
-                } else {
-                    pause();
-                }
+        if (req.target == SynchronizationTarget::Primary) == self.inner.role_primary
+            && let (Some(ready), Some(release)) = (self.ready.take(), self.release.take())
+        {
+            let id = req.operation_id;
+            let pause = move || {
+                ready.send(id).unwrap();
+                release
+                    .recv_timeout(std::time::Duration::from_secs(120))
+                    .unwrap();
+            };
+            if self.at_reservation {
+                crate::repository::remote::reservation::set_promotion_reservation_hook(id, pause);
+            } else {
+                pause();
             }
         }
         self.inner.synchronize(s, req, o, execution)
@@ -4387,6 +4396,288 @@ fn quality2_context_published_completion_precedes_lost_return_and_parent_cancel(
 #[test]
 fn quality2_context_current_completion_precedes_lost_return_and_parent_cancel() {
     quality2_completion_before_cancel(false, true);
+}
+
+fn quality3_fail_outcome_read(f: &Fixture) -> Rc<std::cell::Cell<bool>> {
+    let fired = Rc::new(std::cell::Cell::new(false));
+    let observed = fired.clone();
+    OUTCOME_READ_HOOKS.with(|h| {
+        h.borrow_mut().insert(
+            f.root.path().into(),
+            Box::new(move || {
+                observed.set(true);
+                Err(state::recovery_required())
+            }),
+        )
+    });
+    fired
+}
+fn quality3_unavailable_replay_authority(already_current: bool) {
+    let f = Fixture::new();
+    f.remote();
+    let req = f.request();
+    let mut io = Quality2LostReturnCancelIo {
+        inner: FakeIo {
+            already_current,
+            ..Default::default()
+        },
+        parent: req.operation_id,
+        primary: true,
+        completed: None,
+    };
+    f.run_io(req.clone(), &mut io).unwrap();
+    let (child, published) = io.completed.unwrap();
+    let integration = f.stored(req.operation_id).integration_oid.unwrap();
+    assert_ne!(published, integration);
+    let complete = outcome(f.run_io(req.clone(), &mut io).unwrap());
+    assert_eq!(complete.cleanup(), PromotionCleanup::Complete);
+    let counts = effect_counts(&f);
+    let calls = io.inner.calls.borrow().children.len();
+    let fired = quality3_fail_outcome_read(&f);
+    let unavailable = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+    assert!(
+        fired.get(),
+        "actual outcome-time authority lookup must fail in this case"
+    );
+    match unavailable.publication() {
+        PromotionPublication::Published { oid } => {
+            assert!(!already_current);
+            assert_eq!(
+                oid, published,
+                "integration OID is not a substitute for unavailable publication evidence"
+            );
+        }
+        PromotionPublication::AlreadyCurrent { oid } => {
+            assert!(already_current);
+            assert_eq!(
+                oid, published,
+                "integration OID is not a substitute for unavailable publication evidence"
+            );
+        }
+        PromotionPublication::Pending {
+            reason:
+                PromotionPublicationPending::Synchronization(
+                    PromotionSynchronizationCategory::RecoveryRequired,
+                ),
+        } => (),
+        _ => panic!(
+            "unavailable publication authority must be exact known authority or explicit recovery pending"
+        ),
+    }
+    assert_eq!(
+        f.stored(req.operation_id).step,
+        record::PromotionStep::Complete
+    );
+    assert_eq!(outcome(f.run_io(req.clone(), &mut io).unwrap()), complete);
+    assert_eq!(f.stored(req.operation_id).primary_sync_id, Some(child));
+    assert_eq!(io.inner.calls.borrow().children.len(), calls);
+    assert_eq!(effect_counts(&f), counts);
+}
+#[test]
+fn quality3_published_replay_read_failure_never_uses_integration_oid() {
+    quality3_unavailable_replay_authority(false);
+}
+#[test]
+fn quality3_current_replay_read_failure_never_uses_integration_oid() {
+    quality3_unavailable_replay_authority(true);
+}
+#[test]
+fn quality3_live_known_authority_does_not_depend_on_a_second_outcome_lookup() {
+    for already_current in [false, true] {
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        let fired = quality3_fail_outcome_read(&f);
+        let mut io = Quality2LostReturnCancelIo {
+            inner: FakeIo {
+                already_current,
+                ..Default::default()
+            },
+            parent: req.operation_id,
+            primary: true,
+            completed: None,
+        };
+        let result = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+        let (child, oid) = io.completed.unwrap();
+        assert_ne!(f.stored(req.operation_id).integration_oid, Some(oid));
+        assert_eq!(
+            result.publication(),
+            if already_current {
+                PromotionPublication::AlreadyCurrent { oid }
+            } else {
+                PromotionPublication::Published { oid }
+            }
+        );
+        assert_eq!(
+            result.cleanup(),
+            PromotionCleanup::Pending {
+                reason: PromotionCleanupPending::Cancelled
+            }
+        );
+        assert!(
+            !fired.get(),
+            "carry already known immutable child authority instead of requiring a redundant query"
+        );
+        OUTCOME_READ_HOOKS.with(|h| h.borrow_mut().remove(f.root.path()));
+        let calls = io.inner.calls.borrow().children.len();
+        outcome(f.run_io(req.clone(), &mut io).unwrap());
+        assert_eq!(f.stored(req.operation_id).primary_sync_id, Some(child));
+        assert_eq!(io.inner.calls.borrow().children.len(), calls);
+    }
+}
+struct Quality3LostExecutorIo {
+    inner: FakeIo,
+    completed: Option<(OperationId, Oid)>,
+}
+impl run::PromotionIo for Quality3LostExecutorIo {
+    fn synchronize(
+        &mut self,
+        s: &RepositoryService,
+        req: SynchronizeRemoteRequest,
+        o: &mut dyn SynchronizationObserver,
+        e: &record::ChildExecution,
+    ) -> Result<SynchronizationResult, SynchronizationError> {
+        let primary = req.target == SynchronizationTarget::Primary;
+        let id = req.operation_id;
+        if primary && self.completed.is_none() {
+            let repo = git2::Repository::open(&req.root).unwrap();
+            write(&repo, "ordinary.txt", "later primary publication tip\n");
+            commit(&repo);
+        }
+        let result = self.inner.synchronize(s, req, o, e)?;
+        if primary && self.completed.is_none() {
+            let oid = match &result {
+                SynchronizationResult::Complete(
+                    SynchronizationOutcome::Published { oid, .. }
+                    | SynchronizationOutcome::AlreadyCurrent { oid, .. },
+                ) => *oid,
+                _ => panic!("fixture requires durable primary completion"),
+            };
+            self.completed = Some((id, oid));
+            panic!("disposable fixture executor lost after durable child completion");
+        }
+        Ok(result)
+    }
+    fn delete(
+        &mut self,
+        s: &RepositoryService,
+        req: VerifySshTransportRequest,
+        plan: &RemoteRefPlan,
+        owner: &RemoteReservation,
+        c: &ObservationConfiguration,
+        oid: Oid,
+        item: &ItemId,
+    ) -> Result<DeleteObservation, SynchronizationError> {
+        self.inner.delete(s, req, plan, owner, c, oid, item)
+    }
+}
+fn quality3_retry_cancel_after_completion(already_current: bool) {
+    for publication_pending in [false, true] {
+        let f = Fixture::new();
+        f.remote();
+        let req = f.request();
+        if publication_pending {
+            let mut first = FakeIo {
+                failure: Some((true, SynchronizationError::PushRejected)),
+                ..Default::default()
+            };
+            f.run_io(req.clone(), &mut first).unwrap();
+        }
+        let mut io = Quality3LostExecutorIo {
+            inner: FakeIo {
+                already_current,
+                ..Default::default()
+            },
+            completed: None,
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || f.run_io(req.clone(), &mut io)
+            ))
+            .is_err()
+        );
+        let (child, oid) = io
+            .completed
+            .expect("lost executor must leave actual durable authority");
+        let parent = f.stored(req.operation_id);
+        assert_eq!(
+            parent.step,
+            if publication_pending {
+                record::PromotionStep::PublicationPending
+            } else {
+                record::PromotionStep::Integrated
+            }
+        );
+        assert_ne!(parent.integration_oid, Some(oid));
+        state::with_transaction(&f.service, f.root.path(), |tx, id| {
+            let child = state::read_operation(tx, id, child)?.unwrap();
+            assert_eq!(child.authority.unwrap().oid(), oid);
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            f.service
+                .cancel_document_promotion(f.root.path(), req.operation_id)
+                .unwrap()
+        );
+        // This trigger deterministically posts a second cancellation after the
+        // identical retry clears its first stop, before finish_steps can run.
+        // Completed child rows are inactive, so a real cancellation in this
+        // interval changes only this parent flag as well.
+        f.db().execute_batch(&format!("CREATE TRIGGER quality3_recancel AFTER UPDATE OF cancel_requested ON document_promotions WHEN NEW.operation_id='{}' AND OLD.cancel_requested=1 AND NEW.cancel_requested=0 BEGIN UPDATE document_promotions SET cancel_requested=1 WHERE operation_id=NEW.operation_id; END;",req.operation_id)).unwrap();
+        let calls = io.inner.calls.borrow().children.len();
+        let result = authoritative(f.run_io(req.clone(), &mut io).unwrap());
+        assert!(
+            f.stored(req.operation_id).cancel_requested,
+            "retry-window cancellation must be observed"
+        );
+        assert_eq!(
+            result.publication(),
+            if already_current {
+                PromotionPublication::AlreadyCurrent { oid }
+            } else {
+                PromotionPublication::Published { oid }
+            }
+        );
+        assert_eq!(
+            result.cleanup(),
+            PromotionCleanup::Pending {
+                reason: PromotionCleanupPending::Cancelled
+            }
+        );
+        assert_eq!(
+            f.stored(req.operation_id).step,
+            record::PromotionStep::Published
+        );
+        assert_eq!(f.stored(req.operation_id).primary_sync_id, Some(child));
+        assert_eq!(io.inner.calls.borrow().children.len(), calls);
+        assert_eq!(io.inner.calls.borrow().deletes, 0);
+        assert!(f.context.workdir().unwrap().exists());
+        f.db()
+            .execute_batch("DROP TRIGGER quality3_recancel")
+            .unwrap();
+        let result = outcome(f.run_io(req.clone(), &mut io).unwrap());
+        assert_eq!(
+            result.publication(),
+            if already_current {
+                PromotionPublication::AlreadyCurrent { oid }
+            } else {
+                PromotionPublication::Published { oid }
+            }
+        );
+        assert_eq!(result.cleanup(), PromotionCleanup::Complete);
+        assert_eq!(f.stored(req.operation_id).primary_sync_id, Some(child));
+        assert_eq!(io.inner.calls.borrow().children.len(), calls);
+        assert_eq!(promotion_commits(&f.repo), 1);
+    }
+}
+#[test]
+fn quality3_retry_window_cancel_preserves_published_authority() {
+    quality3_retry_cancel_after_completion(false);
+}
+#[test]
+fn quality3_retry_window_cancel_preserves_current_authority() {
+    quality3_retry_cancel_after_completion(true);
 }
 #[test]
 fn execution_only_local_conflict_abandons_without_primary_effect() {

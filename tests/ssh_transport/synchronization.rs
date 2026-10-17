@@ -629,6 +629,32 @@ fn gitdir_encoding() -> Result<(), FixtureError> {
     }
     Ok(())
 }
+fn verified_push_without_fetch(
+    service: &RepositoryService,
+    root: &Path,
+) -> Result<(), FixtureError> {
+    let snapshot = fixed(service.remote_snapshot(root))?;
+    let item = fixed(ITEM.parse())?;
+    // Cycle 09 reports qualified Push history in the public evidence projection,
+    // without inventing a Fetch-present observation or tracking OID.
+    assert_eq!(
+        snapshot.publication_evidence_for(AuthoringKind::Ticket, &item),
+        RemotePublicationEvidence::ObservedPublished
+    );
+    let context = snapshot
+        .contexts()
+        .iter()
+        .find(|context| context.item_id() == Some(&item))
+        .ok_or(FixtureError)?;
+    assert_eq!(
+        context.publication_evidence(),
+        RemotePublicationEvidence::ObservedPublished
+    );
+    assert_eq!(context.advertised_oid(), None);
+    assert_eq!(context.tracking_oid(), None);
+    assert_eq!(context.state(), RemoteContextState::HistoryUnknown);
+    Ok(())
+}
 fn context_absence_boundaries() -> Result<(), FixtureError> {
     // Fresh complete absence ignores stale tracking and permits first publication.
     let (case, context) = context_fixture()?;
@@ -672,11 +698,7 @@ fn context_absence_boundaries() -> Result<(), FixtureError> {
     ));
     assert_eq!(target_state(&case.root, &context.worktree)?, before);
     assert!(server.find_reference(CONTEXT_REF).is_err());
-    assert_eq!(
-        fixed(case.service.remote_snapshot(&case.root))?
-            .publication_evidence_for(AuthoringKind::Ticket, &fixed(ITEM.parse())?),
-        RemotePublicationEvidence::NeverPublished
-    ); // Push evidence must not manufacture a Fetch-present observation.
+    verified_push_without_fetch(&case.service, &case.root)?;
     // Cache history loss cannot manufacture first-publication evidence.
     let (unknown, context) = context_fixture()?;
     fixed(database(&unknown)?.execute_batch("UPDATE remote_polling_state SET history_unknown=1"))?;
@@ -1069,11 +1091,7 @@ fn distinct_push_context_deleted() -> Result<(), FixtureError> {
     let fetch = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
     assert!(fetch.find_reference(CONTEXT_REF).is_err());
     assert!(server.find_reference(CONTEXT_REF).is_ok());
-    assert_eq!(
-        fixed(case.service.remote_snapshot(&case.root))?
-            .publication_evidence_for(AuthoringKind::Ticket, &fixed(ITEM.parse())?),
-        RemotePublicationEvidence::NeverPublished
-    );
+    verified_push_without_fetch(&case.service, &case.root)?;
     fixed(fixed(server.find_reference(CONTEXT_REF))?.delete())?;
     // Recreated service + new ID must retain terminal direction-qualified proof.
     let reopened = fixed(RepositoryService::open_at(
@@ -1089,11 +1107,7 @@ fn distinct_push_context_deleted() -> Result<(), FixtureError> {
     assert_eq!(target_state(&case.root, &context.worktree)?, before);
     assert!(server.find_reference(CONTEXT_REF).is_err());
     assert!(fetch.find_reference(CONTEXT_REF).is_err());
-    assert_eq!(
-        fixed(reopened.remote_snapshot(&case.root))?
-            .publication_evidence_for(AuthoringKind::Ticket, &fixed(ITEM.parse())?),
-        RemotePublicationEvidence::NeverPublished
-    );
+    verified_push_without_fetch(&reopened, &case.root)?;
     Ok(())
 }
 fn push_history_generation_fencing() -> Result<(), FixtureError> {
