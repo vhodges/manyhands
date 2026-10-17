@@ -340,11 +340,8 @@ above need (`DocumentPromotionPreflight`, `PreviewDocumentPromotionRequest`,
 | `recovery.rs` local-ID cross-checks (via `validate_local_identity`) | unchanged | 2 |
 | `discovery.rs:1732` migrate, `state.rs:5337` audit | unchanged | 2 |
 
-The runner's generic bound is `run::PromotionShaped`, which pins the
-associated types to the promotion types because the runner body still reads
-`PromotionRecord` fields, `PromotionStep` values and
-`DocumentPromotionError` variants. Task 6 must lift those (see the Task 1
-report's concerns).
+At the first Task 1 commit the runner's bound `run::PromotionShaped` pinned
+the associated types to the promotion types. Fix round 1 below removes it.
 
 ### Steps 2–5: tests and gate
 
@@ -376,3 +373,77 @@ report's concerns).
 
   `cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
   --locked -- -D warnings` is clean.
+
+### Fix round 1: one generic runner (C3, R-T1-2)
+
+Ruling: the owner chose C3, one generic runner. `run::PromotionShaped` is
+deleted. The runner is bounded on `L: Lifecycle` only. Its body no longer
+names `PromotionRecord`, `PromotionStep` or `DocumentPromotionError`; only the
+public `promote` and `promote_with_io` wrappers do.
+
+- **`LifecycleRecord`** (implemented for `PromotionRecord`). Getters for
+  `repository_id`, `operation_id`, `item_id`, `expectation`, `remote_name`,
+  `context_sync_id` and `primary_sync_id`. Getters and setters for `step`,
+  `base_oid`, `context_oid`, `integration_oid`, `integration_kind`,
+  `remote_context_oid`, `publication`, `cleanup`, `cancel_requested` and
+  `refusal`.
+- **`ParentStep`**, the shared step view: the 13 steps the runner branches
+  on, mapped one to one to `PromotionStep`. Closure's `closing` stays behind
+  `pre_integration`.
+- **`LifecycleError`** (implemented for `DocumentPromotionError`).
+  - Constructors: `busy`, `operation_mismatch`, `recovery_required`,
+    `interrupted`, `primary_advanced`, `context_synchronization`, and
+    `From<RepositoryError>`.
+  - Inspectors: `is_primary_advanced` and `is_consent_refusal`
+    (`Blocked`/`ReconfirmationRequired`/`ExternalChange`).
+- **`LifecycleRefusal`** (`external_change`, `reconfirmation_required`) and
+  **`LifecyclePreview`** (`expectation`, `context_oid`, `tracking_context`,
+  `integration`).
+- **`Lifecycle` additions:**
+  - observation: `preview_request`, `configuration`, `revalidate`, and
+    `ready`, which turns a preflight into a ready preview or its `Blocked`
+    refusal;
+  - `refusal_error`, moved from `run.rs`;
+  - integration: `integration_request`, `write_commit`, `resume_candidate`
+    and `apply`;
+  - outcome: `outcome`, `complete` and `index_pending`;
+  - associated types `IntegrationRequest`, `Outcome` and `Output`.
+- **`LifecycleRequest<E>`** is the runner's request.
+  `promote_with_io` destructures `PromoteDocumentRequest` into it field for
+  field.
+- **R-T1-2.** `LeasedIntegration<'a, R>` gains `operation_id` and
+  `record: Option<&R>`. The runner passes `Some(&r)` through
+  `Lifecycle::prepare_integration`. Both are `None` only for the direct
+  `integrate::prepare_integration` path used by unit tests.
+
+**Fix round 1 tests and gate.**
+
+- **Red.** `promotion_steps_map_to_the_shared_step_view` failed to compile
+  before `ParentStep` and `LifecycleRecord` existed (16 errors).
+- **Green.** `--lib promotion::lifecycle` passes 4 tests.
+- **Policy.** Under the owner's 2026-10-17 test-policy change, the gate is
+  the targets relevant to this change. The full suite runs once, after the
+  last task.
+
+| Args | Task 0 | Fix round 1 |
+| --- | --- | --- |
+| `--lib promotion` | 193 | 197 (193 + 4 lifecycle tests) |
+| `--lib cleanup` | 42 | 42 |
+| `--lib remote::reservation` | 45 | 45 |
+| `--lib recovery` | 46 | 46 |
+| `--test document_promotion` | 74 SSH | 74 SSH |
+
+The sequential runner was already under way when the policy changed, so
+these targets also ran:
+
+| Args | Task 0 | Fix round 1 |
+| --- | --- | --- |
+| `--lib read::status` | 10 | 10 |
+| `--test remote_reservation` | 13 | 13 |
+| `--test read_status` | 23 | 23 |
+| `--test remote_synchronization` | 63 SSH | 63 SSH |
+| `--test remote_merge_recovery` | 25 SSH | 25 SSH |
+| `--test remote_polling` | 84 SSH | 84 SSH |
+
+`comment_publication` and `mutation_remote` were deferred to the final
+verification. fmt is clean, and Clippy with `-D warnings` is clean.

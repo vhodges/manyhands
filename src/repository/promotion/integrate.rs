@@ -1,5 +1,6 @@
 use super::lifecycle::{
-    DocumentPromotionLifecycle, LeasedIntegration, Lifecycle, LifecycleKind, PreIntegration,
+    DocumentPromotionLifecycle, LeasedIntegration, Lifecycle, LifecycleKind, LifecycleRecord,
+    PreIntegration,
 };
 use super::*;
 use crate::repository::*;
@@ -41,7 +42,7 @@ pub(super) struct IntegrationEvidence {
     pub(super) kind: PlannedIntegration,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Integrated {
+pub(in super::super) enum Integrated {
     Merged { oid: Oid },
     AlreadyContained { oid: Oid },
     RecoveryRequired,
@@ -73,7 +74,7 @@ pub(in super::super) struct PreparedIntegration {
 
 /// F3 boundary: a candidate object exists, but primary is still at old_primary.
 /// Consuming this applies exactly one guarded old-local-primary -> merge update.
-pub(super) struct IntegrationCandidate {
+pub(in super::super) struct IntegrationCandidate {
     prepared: PreparedIntegration,
     oid: Oid,
 }
@@ -94,14 +95,17 @@ pub(super) fn prepare_integration(
     record: &IntegrationRequest,
     identity: Option<&ConfirmedCommitIdentity>,
 ) -> Result<PreparedIntegration, DocumentPromotionError> {
-    DocumentPromotionLifecycle.prepare_integration(service, root, record, identity)
+    DocumentPromotionLifecycle.prepare_integration(service, root, record, identity, None)
 }
-pub(super) fn prepare_integration_for<L: Lifecycle<Error = DocumentPromotionError>>(
+pub(super) fn prepare_integration_for<
+    L: Lifecycle<Error = DocumentPromotionError, IntegrationRequest = IntegrationRequest>,
+>(
     lifecycle: &L,
     service: &RepositoryService,
     root: &Path,
     record: &IntegrationRequest,
     identity: Option<&ConfirmedCommitIdentity>,
+    parent: Option<&L::Record>,
 ) -> Result<PreparedIntegration, DocumentPromotionError> {
     if L::KIND != LifecycleKind::DocumentPromotion {
         // The observation below is the document observation until Task 3.
@@ -163,6 +167,8 @@ pub(super) fn prepare_integration_for<L: Lifecycle<Error = DocumentPromotionErro
         root: &root,
         context: &record.context,
         base,
+        operation_id: parent.map(LifecycleRecord::operation_id),
+        record: parent,
     })? {
         PreIntegration::None => (),
         // No lifecycle writes a checkpoint before Task 4 consumes one here.
