@@ -27,6 +27,7 @@ use crate::canonical;
 
 mod bridges;
 mod cleanup;
+mod closure;
 mod comment_publication;
 mod coordination;
 pub use comment_publication::*;

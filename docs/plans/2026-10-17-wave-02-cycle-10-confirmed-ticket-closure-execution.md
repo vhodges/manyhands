@@ -447,3 +447,99 @@ these targets also ran:
 
 `comment_publication` and `mutation_remote` were deferred to the final
 verification. fmt is clean, and Clippy with `-D warnings` is clean.
+
+## Task 2 — `ticket_closures` Record And Cross-Checks (2026-10-17)
+
+### What landed
+
+- **`closure/mod.rs`**: `ClosureBlocker` (the design's 21 variants, in
+  design order) and `ClosureExpectation` (32 bytes, redacted `Debug`).
+- **`closure/record.rs`**: the `ticket_closures` table, its
+  `ticket_closures_unfinished` index and marker `cycle_10_ticket_closures`,
+  migrated all or nothing inside the registry-schema transaction
+  (`discovery.rs`) and audited at startup (`remote/state.rs`
+  `audit_registry`). `ClosureStep` adds `closing`; `ClosureKind` is
+  `record`/`existing`. `ClosureRecord` carries promotion's fields plus
+  `closure_kind`, `closed_at` (RFC 3339, `Z`, whole seconds) and
+  `closure_oid`; `merged_context()` is `closure_oid.or(context_oid)`. Record
+  functions mirror promotion's, with their own SQL, plus `begin_closing` and
+  `replace_unmoved_closure`. `CLOSURE_BLOCKERS` fixes the 21-bit refusal
+  mask (`CHECK` 1..2097151).
+- **R-T1-5.** `ClosureRecord` implements `LifecycleRecord`; `ParentStep` has
+  no closure variant. `closing` reads as `ContextSynchronized`; writing that
+  view back keeps `closing`; `save_record` accepts only `integrating` and
+  `abandoned` from `closing` (promotion's pattern: the save refuses).
+  `Lifecycle` itself is not implemented for closure (Task 6).
+- **R-P2.** `closing → abandoned` is permitted at the record layer;
+  `closing → superseded` is not, and a `closing` or `integrating` row is
+  never superseded whatever its cleanup category (new ID is `Busy`).
+- **Cross-checks naming both parent tables.**
+  - `promotion/record.rs`: the begin-record collision query, `mint_attempt`
+    and the audit's local-collision query name `ticket_closures`;
+    `validate_remote_identity` checks promotion bindings and then closure
+    bindings (`closure::record::validate_remote_identity`), so every
+    reservation site in `reservation.rs` covers both tables unchanged.
+  - `closure/record.rs`: the symmetric queries name `document_promotions`;
+    its remote collision admits only `action='close' AND kind='ticket'`.
+  - `recovery.rs`: both local-journal entry points call promotion's and
+    closure's `validate_local_identity`.
+  - `read/status.rs`: closure parents list as `action: close` with the
+    stored step (including `closing`) as state and completed step; their
+    `Close` reservation is hidden.
+- **Lint.** The module-wide `too_many_arguments` allow is gone from
+  `promotion/lifecycle.rs` (nothing there needed it). Item-level allows with
+  a reason: `closure::record::{refuse_record, insert_record}` and
+  `ChildExecution::new`.
+- **Small promotion-side changes.** The category `parse` and
+  `CleanupCategory::supersedable` are visible to the repository module;
+  `ChildExecution` stores its parent's digest as bytes and gains `new` for
+  the closure parent (its fence still refuses `TicketClosure` until Task 5).
+
+### Decisions for later tasks
+
+- `closure_kind` is `Option`: a refusal recorded at insertion (for example
+  `Blocked([NotATicket])`) has no observed closure effect. Every other step
+  requires it (schema and read validation). `begin_record` takes
+  `ClosureKind`; `refuse_record` takes `Option<ClosureKind>`. Task 6 must
+  supply them through the `Lifecycle` begin/refuse calls.
+- `remote_context_oid` is not required at `context_synchronized` with a
+  remote. Promotion records the fetched tracking context, which can be
+  absent (Cycle 09 design: "possibly absent"), and the deletion-reservation
+  rule depends on that absence. The invariant enforced is promotion's: only
+  with a remote.
+- `integration_kind` stays required from `integrating` on, as for promotion
+  (the shared runner sets it with the base before that save); the design's
+  table lists it from `integrated`.
+- `complete_record` fails closed until Task 5 adds the kind-checked
+  `RetirementEvidence::matches`; `finish_parent(TicketClosure, ..)` still
+  refuses.
+- `begin_closing` refuses a sub-second `closed_at` and stores another
+  offset as the same instant in UTC.
+
+### Tests
+
+- **Red.** `devenv shell -- cargo test --locked --lib closure::record` with
+  only the tests: 243 compile errors (record types and functions missing).
+  `--test read_status status_lists_closure_parent_and_hides_its_reservation`
+  failed: `no such table: ticket_closures`.
+- **Green.** 15 tests in `closure/record_tests.rs`: the brief's 13, plus
+  `closure_step_round_trips_through_parent_view` (R-T1-5) and
+  `service_start_audits_closure_rows_and_schema`.
+- **Existing tests.** Only named edit 3 (marker list in
+  `tests/recovery_foundation_gate.rs`), the new table in the
+  `tests/repository_enablement.rs` inventory, and the new
+  `tests/read_status.rs` case.
+
+| Args | Before | Task 2 | Wall time |
+| --- | --- | --- | --- |
+| `--lib closure::record` | — | 15 | 7 s |
+| `--lib promotion` | 197 | 197 | 228 s |
+| `--lib read::status` | 10 | 10 | 1 s |
+| `--lib recovery` | 46 | 46 | 13 s |
+| `--test read_status` | 23 | 24 (+1) | 4 s |
+| `--test repository_enablement` | — | 78 | 22 s |
+| `--test recovery_foundation_gate` | — | 51 | 14 s |
+| `--test document_promotion` | 74 SSH | 74 SSH | 1012 s (concurrent with the other targets) |
+
+`cargo fmt --check` is clean. `cargo clippy --all-targets --all-features
+--locked -- -D warnings` is clean.

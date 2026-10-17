@@ -3,7 +3,6 @@
 //! through these traits. Document promotion is the only implementation at
 //! Cycle 10 Task 1; its methods forward to the promotion module's existing
 //! functions and fields.
-#![allow(clippy::too_many_arguments)]
 use super::{
     DocumentPromotionError, DocumentPromotionOutcome, DocumentPromotionPreflight,
     DocumentPromotionPreview, DocumentPromotionResult, PlannedIntegration,

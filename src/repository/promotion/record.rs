@@ -24,7 +24,7 @@ macro_rules! categories {
         pub(in super::super) enum $name { $($variant),+ }
         impl $name {
             pub(in super::super) fn name(self)-> &'static str { match self { $(Self::$variant=>$text),+ } }
-            fn parse(text: &str)->Result<Self,RepositoryError> { match text { $($text=>Ok(Self::$variant),)+ _=>Err(state::recovery_required()) } }
+            pub(in super::super) fn parse(text: &str)->Result<Self,RepositoryError> { match text { $($text=>Ok(Self::$variant),)+ _=>Err(state::recovery_required()) } }
         }
     }
 }
@@ -72,7 +72,7 @@ categories!(CleanupCategory {
     RecoveryRequired=>"recovery_required", Cancelled=>"cancelled"
 });
 impl CleanupCategory {
-    fn supersedable(self) -> bool {
+    pub(in super::super) fn supersedable(self) -> bool {
         matches!(
             self,
             Self::ContextChanged | Self::IgnoredFiles | Self::RemoteContextChanged
@@ -453,7 +453,7 @@ fn existing_record(
     expectation: PromotionExpectation,
 ) -> Result<Option<PromotionRecord>, RepositoryError> {
     let existing = read_record(tx, id, op)?;
-    let collision:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1) OR EXISTS(SELECT 1 FROM document_promotions WHERE (operation_id=?1 AND repository_id!=?2) OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND (repository_id!=?2 OR action!='promote' OR kind!='document' OR item_id!=?3))",params![op.to_string(),id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+    let collision:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1) OR EXISTS(SELECT 1 FROM document_promotions WHERE (operation_id=?1 AND repository_id!=?2) OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND (repository_id!=?2 OR action!='promote' OR kind!='document' OR item_id!=?3))",params![op.to_string(),id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if collision {
         return Err(mismatch());
     }
@@ -662,7 +662,7 @@ pub(in super::super) struct ChildExecution {
     repository_id: i64,
     parent: OperationId,
     item: ItemId,
-    expectation: PromotionExpectation,
+    expectation: [u8; 32],
     role: ChildRole,
     attempt: u32,
     child: OperationId,
@@ -683,13 +683,37 @@ pub(in super::super) fn child_execution(
         repository_id: r.repository_id,
         parent: r.operation_id,
         item: r.item_id.clone(),
-        expectation: r.expectation,
+        expectation: r.expectation.to_bytes(),
         role,
         attempt,
         child: child.ok_or_else(mismatch)?,
     })
 }
 impl ChildExecution {
+    /// The attempt identity another lifecycle's parent record issues; the
+    /// expectation is that parent's digest bytes.
+    #[allow(clippy::too_many_arguments)] // One field each, and no public builder.
+    pub(in super::super) fn new(
+        kind: LifecycleKind,
+        repository_id: i64,
+        parent: OperationId,
+        item: ItemId,
+        expectation: [u8; 32],
+        role: ChildRole,
+        attempt: u32,
+        child: OperationId,
+    ) -> Self {
+        Self {
+            kind,
+            repository_id,
+            parent,
+            item,
+            expectation,
+            role,
+            attempt,
+            child,
+        }
+    }
     pub(in super::super) fn validate_request(
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,
@@ -741,7 +765,7 @@ impl ChildExecution {
             ),
         };
         if parent.item_id != self.item
-            || parent.expectation != self.expectation
+            || parent.expectation.to_bytes() != self.expectation
             || attempt != self.attempt
             || child != Some(self.child)
         {
@@ -839,7 +863,7 @@ fn mint_attempt(
         .checked_add(1)
         .ok_or_else(state::recovery_required)?;
     let child = OperationId::new();
-    let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",[child.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+    let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",[child.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if used {
         return Err(state::recovery_required());
     }
@@ -867,8 +891,19 @@ pub(in super::super) fn reset_context_after_primary_advance(
     tx.execute("UPDATE document_promotions SET step='confirmed',context_oid=NULL,remote_context_oid=NULL,base_oid=NULL,integration_kind=NULL,cleanup_category=NULL WHERE operation_id=?1",[op.to_string()]).map_err(|_|state::recovery_required())?;
     mint_attempt(tx, &r, ChildRole::Context)
 }
-/// Checks both parent and child identities in the same transaction as reservation.
+/// Checks both parent and child identities in the same transaction as
+/// reservation, across both parent tables: promotion's and closure's.
 pub(in super::super) fn validate_remote_identity(
+    db: &Connection,
+    id: i64,
+    op: OperationId,
+    target: &RemoteOperationTarget,
+    priority: RemoteOperationPriority,
+) -> Result<(), RepositoryError> {
+    validate_promotion_remote_identity(db, id, op, target, priority)?;
+    crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
+}
+fn validate_promotion_remote_identity(
     db: &Connection,
     id: i64,
     op: OperationId,
@@ -960,7 +995,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         .map_err(|_| state::recovery_required())?;
     for id in ids {
         for r in records(db, id)? {
-            let local:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid IN (?1,?2,?3) OR synchronization_ulid IN (?1,?2,?3)) OR EXISTS(SELECT 1 FROM document_promotions p WHERE p.operation_id!=?1 AND (p.operation_id IN (?2,?3) OR p.context_sync_id IN (?1,?2,?3) OR p.primary_sync_id IN (?1,?2,?3)))",params![r.operation_id.to_string(),r.context_sync_id.map(|v|v.to_string()),r.primary_sync_id.map(|v|v.to_string())],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+            let local:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid IN (?1,?2,?3) OR synchronization_ulid IN (?1,?2,?3)) OR EXISTS(SELECT 1 FROM document_promotions p WHERE p.operation_id!=?1 AND (p.operation_id IN (?2,?3) OR p.context_sync_id IN (?1,?2,?3) OR p.primary_sync_id IN (?1,?2,?3))) OR EXISTS(SELECT 1 FROM ticket_closures c WHERE c.operation_id IN (?1,?2,?3) OR c.context_sync_id IN (?1,?2,?3) OR c.primary_sync_id IN (?1,?2,?3))",params![r.operation_id.to_string(),r.context_sync_id.map(|v|v.to_string()),r.primary_sync_id.map(|v|v.to_string())],|r|r.get(0)).map_err(|_|state::recovery_required())?;
             if local {
                 return Err(state::recovery_required());
             }

@@ -1145,6 +1145,7 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
             "cycle_09_context_publication_evidence",
             "cycle_09_document_promotions",
             "cycle_09_retired_contexts",
+            "cycle_10_ticket_closures",
         ]
     );
     let legacy_columns = connection
