@@ -1,5 +1,32 @@
 # Wave 02 Cycle 09: Fresh-Session Handoff
 
+## Current Native Status — Full Workflow Restored; Final Dispatch Held
+
+**2026-10-17 16:19 UTC:** Native corrections are reviewed and pushed. The final
+Windows-only verification passed. Owner then selected **Restore without
+dispatch**: the full four-platform matrix and complete configured test list are
+restored and pushed as `6181930`, byte-for-byte equal to the pre-narrowing workflow
+at `923cac8`. **Do not dispatch the final full run without new authorization.**
+
+| Run | Scope / result |
+| --- | --- |
+| [39023714430](https://github.com/vhodges/manyhands/actions/runs/39023714430) | Initial full run: Linux x86_64 passed; Windows 20 snapshot cases, Linux ARM one concurrent-save case, macOS one F11 case failed. |
+| [39036192892](https://github.com/vhodges/manyhands/actions/runs/39036192892) | Focused original failures at `35d4ef7`: all three affected platforms passed, 20 Windows + one ARM + one macOS case. |
+| [39036630383](https://github.com/vhodges/manyhands/actions/runs/39036630383) | Restored full run at `310d5ee`: both Linux targets and macOS passed. Windows 956 unit tests passed; only the newly added lease-snapshot regression failed. Windows integration targets passed. |
+| [39048549766](https://github.com/vhodges/manyhands/actions/runs/39048549766) | Windows-only regression at `213c04b`: success after the fixture-path spelling correction. |
+
+Corrections preserve exact snapshot/lease assertions, recover concurrent save
+commit evidence conservatively, and avoid deadlocking the F11 fixture's cleanup
+when an expected hook is not reached. The original macOS initiating cause was not
+reproduced; both subsequent native runs of that case passed, including the full
+run. Windows' last correction changes only the regression fixture, not production
+locking. Independent spec/quality reviews accepted these changes; only affected
+local tests ran through Devenv.
+
+Ticket remains open. Final full-native green for the latest code is **not yet
+established**. Earlier publication/native-pending descriptions below are history;
+the table and owner dispatch hold above are current.
+
 ## Publication Update — Native Build Dispatched 2026-10-17
 
 The owner authorized pushing this branch and one Build dispatch, then explicitly

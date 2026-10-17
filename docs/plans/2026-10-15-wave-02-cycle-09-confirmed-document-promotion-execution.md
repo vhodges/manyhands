@@ -10,6 +10,54 @@ id: "01M500Q0ZEMW43YTJBVHFBH3X6"
 
 # Confirmed Managed-Document Promotion Execution Ledger
 
+## Latest Native Verification Summary — 2026-10-17
+
+Owner requested investigation, failure-only native iteration, then restoration of
+all platforms/tests. Existing subagent implementation and independent reviews
+continued; local verification stayed targeted to the failing cases.
+
+- **Preflight:** fetched unchanged main `89d04f9` and ticket `923cac8`. A plain
+  rebase tried to flatten the published history-reconciliation merge and stopped
+  on its equivalent original ticket checkpoint. Controller aborted that attempt
+  without resolving/overwriting content, then used `git rebase --rebase-merges
+  origin/main`. It succeeded with the exact original HEAD `923cac8`, clean
+  status and main ancestry. No remote history was rewritten.
+- **Isolation:** `a5a2e90` changed only CI, selecting the exact 22 failures on
+  Windows x86_64, Linux aarch64 and macOS aarch64. `35d4ef7` separately committed
+  reviewed snapshot, concurrent-save evidence and fixture-cleanup corrections.
+- **Focused run [39036192892](https://github.com/vhodges/manyhands/actions/runs/39036192892):
+  SUCCESS.** Actual logs confirm 20 Windows unit passes, one ARM mutation pass,
+  and one macOS F11 SSH pass. Saved log:
+  `/home/vhodges/.local/share/opencode/tool-output/tool_14a0aea25001msF0CyISx65OTF`.
+  The numeric macOS checkpoints reached both hooks, F11 exit and worker release.
+- **First restoration:** `310d5ee` restored the workflow byte-for-byte to
+  `923cac8` in its own commit, then full run
+  [39036630383](https://github.com/vhodges/manyhands/actions/runs/39036630383)
+  completed. Linux x86_64 (1h21m18s), Linux aarch64 (1h29m2s) and macOS aarch64
+  (1h9m43s) passed. Windows (2h39m9s) had 956 passing unit tests and one failed
+  newly added lease-snapshot regression; integration targets passed. Failure log:
+  `/home/vhodges/.local/share/opencode/tool-output/tool_14a9ea018001jo7b5Ck8dMhmUv`.
+- **Remaining Windows correction:** `bcafcb0` separately narrowed CI to that
+  exact regression; `213c04b` corrected only its root/path spelling. Rust's
+  canonical Windows verbatim prefix differs from libgit2's exported spelling.
+  The test now derives snapshots from one canonical root and separately proves
+  filesystem identity with the actual held lease. The exact helper and production
+  locking are unchanged. Independent review approved; normal and aliased-TMPDIR
+  local exact runs each passed.
+- Owner expressly authorized the Windows-only dispatch, withholding the next
+  full dispatch until asked. Run
+  [39048549766](https://github.com/vhodges/manyhands/actions/runs/39048549766)
+  at `213c04b91a1cec68f1cd0226732132b7cfa4af48` **succeeded** in 3m25s.
+- On being asked after focused green, owner selected **Restore without dispatch**.
+  `618193082ef8c47492c775cff7b7d204bbd5ac78` restores all four platforms and the
+  entire prior test command in a separate workflow-only commit. Normal push
+  succeeded; `git diff --exit-code 923cac8 -- .github/workflows/build.yml` passed.
+  **No final full dispatch was performed.** Fresh authorization is required.
+- This record/handoff/comment update is documentation-only. No new test run,
+  source change, merge to main, ticket closure or worktree cleanup. Do not combine
+  the last Windows focused result with the preceding three-platform full passes
+  into a claim of one green final full run. Ticket remains OPEN.
+
 ## Planning Preflight — 2026-10-15
 
 - **Worktree.** Reused the registered ticket worktree
