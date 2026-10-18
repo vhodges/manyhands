@@ -5,11 +5,12 @@ use super::*;
 use crate::{
     canonical::ItemId,
     repository::{
-        AuthoringKind, AuthoringTarget, ContextIntent, ContextProvisionOutcome,
+        AuthoringKind, AuthoringTarget, ContextIntent, ContextProvisionOutcome, DocumentDraft,
         EnableRepositoryRequest, ExpectedPathObservation, FailurePoint, LocalCheckpoint,
         OperationId, REGISTRY_FILE, ReadError, RelationshipWrite, RepairItemRequest,
-        RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService, SaveOutcome,
-        SaveTicketRequest, SubmitCommentRequest, TicketDraft, TicketWriteOptions,
+        RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+        SaveDocumentRequest, SaveOutcome, SaveTicketRequest, SubmitCommentRequest, TicketDraft,
+        TicketWriteOptions,
     },
     results::ResultCode,
 };
@@ -256,11 +257,16 @@ fn save_refused_when_context_copy_closed() {
     write(&context, &ticket_path(ID), source(ID, CLOSURE));
     let closed = commit(&context);
     let branches = f.branches();
+    let operation_id = OperationId::new();
 
     assert_eq!(
-        kind(f.save(ContextIntent::Edit)),
+        kind(
+            f.service
+                .save_ticket(f.request(ID, ContextIntent::Edit, operation_id))
+        ),
         RepositoryErrorKind::TicketClosed
     );
+    assert_eq!(f.row(operation_id), rejected());
     assert_eq!(context.head().unwrap().target(), Some(closed));
     assert_eq!(f.branches(), branches);
     assert_eq!(
@@ -348,9 +354,41 @@ fn new_comment_on_closed_ticket_refused() {
     assert_eq!(f.row(operation_id), rejected());
 }
 
+/// What the call sites' guard answers for a new row of `ID` with `intent`.
+fn guard_for(f: &Fixture, intent: ContextIntent) -> Result<(), RepositoryError> {
+    let record = super::super::recovery::RecoveryRecord {
+        id: 0,
+        is_new: true,
+        is_pending: false,
+        completed_step: None,
+    };
+    super::super::refuse_closed_ticket(
+        &f.repo,
+        f.root.path(),
+        RepositoryOperation::SaveTicket,
+        &f.target(ID, intent, OperationId::new()),
+        record,
+    )
+}
+
 #[test]
 fn create_unaffected() {
     let f = Fixture::new(CLOSURE);
+    // The guard asks only an edit: a creation of the closed ID is not
+    // refused by it, while an edit is.
+    guard_for(&f, ContextIntent::Create).unwrap();
+    assert_eq!(
+        guard_for(&f, ContextIntent::Edit).unwrap_err().kind,
+        RepositoryErrorKind::TicketClosed
+    );
+    // A creation of the closed ID meets the creation rules, not the guard.
+    assert_ne!(
+        kind(
+            f.service
+                .save_ticket(f.request(ID, ContextIntent::Create, OperationId::new()))
+        ),
+        RepositoryErrorKind::TicketClosed
+    );
     let created = f
         .service
         .save_ticket(f.request(OTHER, ContextIntent::Create, OperationId::new()))
@@ -365,6 +403,8 @@ fn repair_of_closed_ticket_still_allowed() {
     let broken = source(ID, CLOSURE).replace("type: task\n", "");
     let f = Fixture::with_ticket(&broken);
     let corrected = source(ID, CLOSURE);
+    // The guard does not ask a repair of the closed ticket.
+    guard_for(&f, ContextIntent::Repair).unwrap();
 
     let repaired = f
         .service
@@ -447,11 +487,16 @@ fn dirty_draft_cannot_hide_closure() {
     // The worktree file drops the closure; the branch tip keeps it.
     let draft = source(ID, "").replace("Original body.", "Draft body.");
     write(&context, &ticket_path(ID), &draft);
+    let operation_id = OperationId::new();
 
     assert_eq!(
-        kind(f.save(ContextIntent::Edit)),
+        kind(
+            f.service
+                .save_ticket(f.request(ID, ContextIntent::Edit, operation_id))
+        ),
         RepositoryErrorKind::TicketClosed
     );
+    assert_eq!(f.row(operation_id), rejected());
     assert_eq!(read(&context, &ticket_path(ID)), draft.into_bytes());
 }
 
@@ -502,4 +547,36 @@ fn guard_reads_branch_tips_only() {
             .kind,
         RepositoryErrorKind::TicketClosed
     );
+}
+
+/// A document save given a closed ticket's target is refused as before,
+/// and now before any context is provisioned.
+#[test]
+fn save_document_with_ticket_target_provisions_nothing() {
+    let f = Fixture::new(CLOSURE);
+    let branches = f.branches();
+    let operation_id = OperationId::new();
+
+    let error = f
+        .service
+        .save_document(SaveDocumentRequest {
+            target: f.target(ID, ContextIntent::Edit, operation_id),
+            source_path: None,
+            destination_path: PathBuf::from("docs/note.md"),
+            draft: DocumentDraft {
+                title: "Note".into(),
+                body: "Body.\n".into(),
+            },
+            expected_source: None,
+            expected_destination: ExpectedPathObservation::Missing,
+        })
+        .err()
+        .expect("the save was made");
+
+    assert_eq!(error.kind, RepositoryErrorKind::MissingAuthoringTarget);
+    assert_eq!(error.operation, RepositoryOperation::SaveDocument);
+    assert_eq!(f.branches(), branches, "no branch is made");
+    assert!(!f.worktree(ID).exists(), "no worktree is made");
+    f.assert_primary_clean();
+    assert_eq!(f.row(operation_id), rejected());
 }

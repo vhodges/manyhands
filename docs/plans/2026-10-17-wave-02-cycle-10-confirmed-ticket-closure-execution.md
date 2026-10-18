@@ -1301,3 +1301,33 @@ Base `54494bf`.
 
 `cargo check --tests --all-features --locked` passes (the production
 wrappers compile). fmt and Clippy (`-D warnings`) are clean.
+
+### Task 7 fix round 1 (review M1–M4)
+
+- **M1.** `save_document_with_effective_config` now refuses a non-Document
+  target right after `begin_lifecycle` and before `prepare_context_unlocked`.
+  The kind (`MissingAuthoringTarget`) and the message are unchanged, the row
+  ends `rejected`, and no ticket context is provisioned. The later,
+  now-unreachable check is removed. New test
+  `save_document_with_ticket_target_provisions_nothing`. Against the old
+  ordering it fails with "no branch is made". No existing test pinned the
+  old ordering.
+- **M2.** The guard now rewraps `tree_ticket` errors with its own message,
+  "the closed-ticket guard could not read the ticket from Git". The kind is
+  kept. Promotion's wording is untouched. There was no neutral helper to
+  reuse.
+- **M3.** `create_unaffected` and `repair_of_closed_ticket_still_allowed`
+  now ask `refuse_closed_ticket` directly with a closed ID and a Create or
+  Repair intent. `create_unaffected` also checks an Edit control, and that
+  a Create of the closed ID fails with something other than `TicketClosed`.
+  Mutation check: with the Edit-only filter removed, both tests fail with
+  `TicketClosed`. The filter was restored.
+- **M4.** `save_refused_when_context_copy_closed` and
+  `dirty_draft_cannot_hide_closure` now assert that the row ends `rejected`.
+  Named edit 1 compares `(name, OID)` pairs instead of names alone.
+- **Gate.**
+  - `--lib ticket_guard`: 13 (+1).
+  - `--lib closure`: 169.
+  - `--test local_authoring`: 140.
+  - `--test mutation_contract`: 43.
+  - fmt and Clippy (`-D warnings`) are clean.

@@ -3967,7 +3967,13 @@ fn ticket_edit_preserves_unknown_closure_and_exact_body() {
         .repository
         .branches(None)
         .unwrap()
-        .map(|branch| branch.unwrap().0.name().unwrap().unwrap().to_owned())
+        .map(|branch| {
+            let (branch, _) = branch.unwrap();
+            (
+                branch.name().unwrap().unwrap().to_owned(),
+                branch.get().target(),
+            )
+        })
         .collect::<Vec<_>>();
     let worktrees = registered_worktrees(&fixture.repository);
 
@@ -3992,7 +3998,13 @@ fn ticket_edit_preserves_unknown_closure_and_exact_body() {
             .repository
             .branches(None)
             .unwrap()
-            .map(|branch| branch.unwrap().0.name().unwrap().unwrap().to_owned())
+            .map(|branch| {
+                let (branch, _) = branch.unwrap();
+                (
+                    branch.name().unwrap().unwrap().to_owned(),
+                    branch.get().target(),
+                )
+            })
             .collect::<Vec<_>>(),
         branches
     );

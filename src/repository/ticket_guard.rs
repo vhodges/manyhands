@@ -32,7 +32,17 @@ pub(super) fn require_ticket_open(
         .map_err(|error| {
             RepositoryError::git(RepositoryOperation::Read, Some(root.into()), error)
         })?;
-        let Some(ticket) = observe::tree_ticket(repo, tip.tree_id(), &path, root)? else {
+        // The reader's own error text is the closure observation's; the
+        // guard keeps its kind and says what it was doing.
+        let ticket = observe::tree_ticket(repo, tip.tree_id(), &path, root).map_err(|error| {
+            RepositoryError::new(
+                RepositoryOperation::Read,
+                Some(root.into()),
+                error.kind,
+                "the closed-ticket guard could not read the ticket from Git",
+            )
+        })?;
+        let Some(ticket) = ticket else {
             continue;
         };
         if !matches!(observe::file_closure(&ticket.bytes), FileClosure::Open) {

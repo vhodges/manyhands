@@ -2019,6 +2019,17 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Before any context is provisioned: a document save never makes
+        // another kind's context, a closed ticket's among them (C5).
+        if !matches!(request.target.kind, AuthoringKind::Document) {
+            let error = authoring_error(
+                operation,
+                &root,
+                RepositoryErrorKind::MissingAuthoringTarget,
+                "document saves require a document target",
+            );
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -2038,14 +2049,6 @@ impl RepositoryService {
             };
             // A whole editing context is reusable by any later operation.
             effects.undone();
-            if !matches!(context.kind, AuthoringKind::Document) {
-                return Err(authoring_error(
-                    operation,
-                    &context.root,
-                    RepositoryErrorKind::MissingAuthoringTarget,
-                    "document saves require a document target",
-                ));
-            }
             self.reject_pending_synchronization_merge(&context, operation)?;
             let repository = Repository::open(&context.worktree).map_err(|error| {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
