@@ -194,13 +194,16 @@ pub struct TicketClosureOutcome {
 }
 
 pub enum TicketClosureError {             // nothing reached the primary
-    Repository(RepositoryError), Transport(SshTransportError),
+    Repository(RepositoryError), Transport(Box<SshTransportError>),
     Blocked(Vec<ClosureBlocker>), ExternalChange, ReconfirmationRequired,
     PrimaryAdvanced, ContextSynchronization(Box<SynchronizationError>),
     IdentityRequired { expected_configuration: ExpectedConfiguration },
     Busy, PollYielding, Interrupted, OperationMismatch, RecoveryRequired,
 }
 ```
+
+**Amended 2026-10-18 (final review M-2).** `Transport` boxes its
+`SshTransportError`, as the code does, to keep the error type small.
 
 `PromotionIntegration`, `PromotionPublication`, `PromotionCleanup` and
 `PromotionPathChange` are reused; their names are already public. `Debug`
@@ -304,6 +307,19 @@ The closure observation is the promotion observation with these changes:
    canonically, re-parse, and require every parsed field and the body to equal
    the original apart from the two closure fields. Failure is
    `TicketInvalidAfterClosure`. No `.manyhands/worktrees/` entry may appear.
+
+   **Amended 2026-10-18 (final review I-1).** For a `Record` closure the
+   preview also builds the closed ticket Blob, the checkpoint tree and
+   commit, and the checkpoint's merge into the base, through the same
+   function step 5 runs, in the observation's memory-backed handle (nothing
+   reaches the repository ODB). The closure fields sit next to `status`, so
+   a primary-side edit there conflicts with the checkpoint even when the
+   pre-closure merge is clean. A conflict is `IntegrationConflict`; a merged
+   result without exactly the planned closure is `TicketInvalidAfterClosure`.
+   The preview time stands in for `closed_at` and the selected identity (or
+   a fixed stand-in before one is selected) for `closed_by`: each is one
+   line, so whether the merge conflicts never depends on their values. The
+   digest is unchanged. Step 5's refusal stays as the safety net.
 7. **Identity (C2).** Run the extracted `select_committing_identity` with the
    request's confirmation. For `Record`, no complete effective identity and no
    matching confirmation is `IdentityRequired`, with the expected
@@ -357,6 +373,11 @@ until step 6:
    the ticket.
 4. Identity: if confirmed, persist to repository-local config through the
    lease-held `LocalConfigEdit` with `would_persist_identity` (T3-1/Q3-1).
+
+   **Amended 2026-10-18 (final review M-3, M-4).** The selected identity is
+   compared with the consented `closed_by` before anything is persisted, and
+   again after; a difference is `ExternalChange` (C2), and the refusal
+   leaves configuration untouched.
 5. Build every object in the repository ODB, unreferenced (`Record` only):
    - `closed_at`: the record's stored value, or now in whole UTC seconds;
    - the closed ticket Blob from `closed_ticket_bytes` (C10), mode preserved;
@@ -425,7 +446,7 @@ commit and stores the tip in `adopted_context_oid` (see Records).
 
 | Observed | Resume |
 | --- | --- |
-| `closing`; context ref at `context_oid`; worktree clean | Nothing written. Re-run steps 1–5 (a refusal abandons), reusing `closed_at` and, if the stored commit object still exists and still matches, `closure_oid`; otherwise rebuild it and replace `closure_oid` in the record |
+| `closing`; context ref at `context_oid`; ticket path unchanged in index and worktree (amended 2026-10-18, final review M-1: other entries do not matter here; revalidation reports them as `ContextDirty`) | Nothing written. Re-run steps 1–5 (a refusal abandons), reusing `closed_at` and, if the stored commit object still exists and still matches, `closure_oid`; otherwise rebuild it and replace `closure_oid` in the record |
 | `closing`; ref at `context_oid`; worktree differs only at the ticket path, whose bytes equal the stored checkpoint's Blob | The checkout of step 6 ran; finish the guarded ref update |
 | `closing`; ref at `closure_oid` or an adoptable descendant | Checkpoint exists: the C9 path |
 | `integrating` | Promotion's first-parent search for `Integrate closed ticket <ULID>` with parents `[recorded base, recorded merged context]`: present → integrated; absent and local primary ≤ base → integrate again (C9 rules); otherwise `Ok` with publication or cleanup pending `recovery_required` |
@@ -689,6 +710,11 @@ or deleted without a guard, but an operator must act.
   classed `EligibleCanonical`, every in-product resolution fails
   `ValidationFailed`, and the publication stays pending
   `synchronization(conflict)`.
+- **The C5 guard reads the local primary (final review M-5).** Amended
+  2026-10-18. In a collaborator's clone the guard refuses writes to a
+  closed ticket only after that clone's poll fast-forwards its primary to
+  the closure; until then it admits them, and their later publication meets
+  Cycle 06's closure-preserving conflict.
 
 ## Alternatives And Rulings
 

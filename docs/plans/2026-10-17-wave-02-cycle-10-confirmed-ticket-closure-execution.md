@@ -1699,3 +1699,44 @@ After fix round 1 (`7e57cce`), the same check exits 0 with tree
 - **R-T8-1 alternative.** Classify a ticket conflict whose sides carry
   different closures as `ExternalResolutionRequired` (Cycle 06 merge/sync
   code).
+- **Final review recommendation 5.** A local (no-remote) "synchronize
+  context with primary" operation, so a user has an in-product way out of
+  every checkpoint-merge refusal.
+
+## Final Review Fix Round (2026-10-18)
+
+The whole-branch review found one Important issue and six Minor ones.
+Rulings R-F-1 and R-F-2 decided each; all are fixed in code or the design.
+
+- **I-1 (R-F-1).** The preview now builds the `Record` closure's checkpoint
+  and merges it into the base in the observation's memory-backed handle.
+  It uses `build_closure`, the function execution's `prepare_closure` now
+  wraps. A conflict is `IntegrationConflict`, an invalid merged closure is
+  `TicketInvalidAfterClosure`. `sync::prepare_clean_merge_in` was extracted
+  from `prepare_clean_merge` (unchanged behaviour) so the merge can read a
+  checkpoint that lives only in memory. The digest is unchanged; existing
+  digest tests and `preview_is_read_only` pass unedited. Execution's
+  refusal stays as the safety net.
+- **M-1.** `reconcile_closing` reports `NothingWritten` whenever the ticket
+  path is unchanged in the index and the worktree; revalidation reports
+  any other entry as `ContextDirty`.
+- **M-2.** The design's `Transport` variant is amended to
+  `Transport(Box<SshTransportError>)`.
+- **M-3.** A live identity that differs from the consented `closed_by` at
+  the hook is `ExternalChange`, as C2 says.
+- **M-4.** The identity is compared with `closed_by` before
+  `promotion_identity` persists a confirmed identity (a read-only
+  `select_committing_identity` in closure code), and again after. No
+  promotion code changed, so no Known Limitation is needed.
+- **M-5, M-6.** Known Limitations gains the C5 guard's local-primary scope.
+  I-1, M-1 and M-4 are fixed, so they are not listed.
+
+Tests added: `checkpoint_merge_conflict_blocks_at_preview`,
+`contained_open_checkpoint_merge_conflict_blocks_at_preview`,
+`reconcile_unchanged_ticket_with_stray_file_is_nothing_written`,
+`changed_identity_at_the_hook_is_external_change`,
+`mismatched_confirmed_identity_persists_nothing`. Each was red before its
+fix. `no_remote_conflicting_merge_refuses_before_any_ref_moves` (this
+Cycle) now hands the hook an observation that missed the moved base,
+because the preview itself blocks the case; its execution assertion is
+unchanged.
