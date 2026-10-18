@@ -421,6 +421,34 @@ fn integration_conflict() {
     commit(&f.repo);
     f.blocked(&[ClosureBlocker::IntegrationConflict]);
 }
+/// Final review I-1: the pre-closure merge is clean, but the closure fields
+/// land next to the primary's `status` edit, so the checkpoint merge the
+/// execution runs conflicts. The preview names it, and writes nothing.
+#[test]
+fn checkpoint_merge_conflict_blocks_at_preview() {
+    let f = Fixture::new(false);
+    let source = String::from_utf8(read(&f.repo, &ticket()))
+        .unwrap()
+        .replace("status: open", "status: doing");
+    write(&f.repo, &ticket(), source);
+    commit(&f.repo);
+    let before = files(f.root.path());
+    f.blocked(&[ClosureBlocker::IntegrationConflict]);
+    assert_eq!(files(f.root.path()), before, "no file, index or object");
+}
+/// Final review I-1, the contained-and-open row: merged by hand without
+/// closure fields, then the primary edits `status`.
+#[test]
+fn contained_open_checkpoint_merge_conflict_blocks_at_preview() {
+    let f = Fixture::new(false);
+    checkout(&f.repo, f.context_oid());
+    let source = String::from_utf8(read(&f.repo, &ticket()))
+        .unwrap()
+        .replace("status: open", "status: doing");
+    write(&f.repo, &ticket(), source);
+    commit(&f.repo);
+    f.blocked(&[ClosureBlocker::IntegrationConflict]);
+}
 #[test]
 fn remote_context_deleted() {
     let f = Fixture::new(true);

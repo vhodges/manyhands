@@ -5,6 +5,7 @@
 use super::{
     ClosureBlocker, ClosureExpectation, PlannedClosure, PreviewTicketClosureRequest,
     TicketClosurePreflight, TicketClosurePreview,
+    checkpoint::{ClosureBuild, ClosureTarget, MergeHandle, build_closure},
 };
 use crate::{
     canonical::{self, CanonicalItem, ItemId, Ticket},
@@ -867,6 +868,40 @@ fn observe_git(
                         || closed_ticket_bytes(&result_bytes, at, closed_by).is_err()
                     {
                         blockers.insert(TicketInvalidAfterClosure);
+                    } else if let (Some(base), Some(context)) = (base, context_oid) {
+                        // Final review I-1: the checkpoint and its merge into
+                        // the base, exactly as execution builds them, in the
+                        // memory-backed `worker`. The closure fields can sit
+                        // next to a primary-side edit the pre-closure merge
+                        // never sees. `at` stands in for `closed_at`: each
+                        // field is one line whatever its value, so whether a
+                        // hunk conflicts never depends on it.
+                        let stand_in = CommitIdentity {
+                            name: "Manyhands".into(),
+                            email: "closure@invalid".into(),
+                        };
+                        let identity = match &identity {
+                            Some(
+                                CommittingIdentity::Effective(identity)
+                                | CommittingIdentity::Confirmed(identity),
+                            ) => identity,
+                            None => &stand_in,
+                        };
+                        let target = ClosureTarget {
+                            item,
+                            path: &path,
+                            context,
+                            base,
+                        };
+                        match build_closure(&worker, MergeHandle::Memory, target, at, identity)? {
+                            ClosureBuild::Built(_) => {}
+                            ClosureBuild::Conflict => {
+                                blockers.insert(IntegrationConflict);
+                            }
+                            ClosureBuild::Invalid => {
+                                blockers.insert(TicketInvalidAfterClosure);
+                            }
+                        }
                     }
                 }
                 // The result must carry exactly the planned closure.

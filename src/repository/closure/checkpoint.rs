@@ -16,7 +16,8 @@ use crate::{
     canonical::{self, CanonicalItem, ItemId},
     repository::{
         CommitIdentity, ConfirmedCommitIdentity, FailurePoint, PlannedIntegration, RepositoryError,
-        RepositoryOperation, RepositoryService, mark_document_refresh_required,
+        RepositoryOperation, RepositoryService, SynchronizationTarget,
+        mark_document_refresh_required,
         promotion::{
             integrate,
             lifecycle::{LeasedIntegration, LifecycleError, LifecycleKind, PreIntegration},
@@ -86,59 +87,114 @@ pub(in super::super) fn prepare_closure(
     closed_at: OffsetDateTime,
     identity: &CommitIdentity,
 ) -> Result<PreparedClosure, ClosureStop> {
-    let failed = |_| ClosureStop::Repository(unavailable(repo));
+    let target = ClosureTarget {
+        item: &observation.item_id,
+        path: &observation.ticket_path,
+        context: observation.context_oid,
+        base: observation.base,
+    };
+    match build_closure(repo, MergeHandle::Stored, target, closed_at, identity) {
+        Ok(ClosureBuild::Built(prepared)) => Ok(prepared),
+        Ok(ClosureBuild::Invalid | ClosureBuild::Conflict) => Err(ClosureStop::Refused),
+        Err(error) => Err(ClosureStop::Repository(error)),
+    }
+}
+
+/// What a `Record` closure is built from.
+#[derive(Clone, Copy)]
+pub(in super::super) struct ClosureTarget<'a> {
+    pub item: &'a ItemId,
+    pub path: &'a Path,
+    pub context: Oid,
+    pub base: Oid,
+}
+
+/// Where the checkpoint merge runs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum MergeHandle {
+    /// `repo` writes the repository ODB (execution): the merge is prepared
+    /// on a separately opened memory-backed handle and its new objects
+    /// imported.
+    Stored,
+    /// `repo` itself has a high-priority memory ODB (the preview): the
+    /// checkpoint lives only there, so the merge runs on `repo`.
+    Memory,
+}
+
+/// What building a `Record` closure gives (C10).
+pub(in super::super) enum ClosureBuild {
+    Built(PreparedClosure),
+    /// The closed ticket, its checkpoint or the merged result's closure is
+    /// not as consented.
+    Invalid,
+    /// The base and the checkpoint conflict.
+    Conflict,
+}
+
+/// The closed ticket Blob, the checkpoint tree and commit, and the result
+/// of merging it into the base: the one function preview and execution
+/// both run (C10, final review I-1).
+pub(in super::super) fn build_closure(
+    repo: &git2::Repository,
+    handle: MergeHandle,
+    target: ClosureTarget<'_>,
+    closed_at: OffsetDateTime,
+    identity: &CommitIdentity,
+) -> Result<ClosureBuild, RepositoryError> {
+    use ClosureBuild::{Conflict, Invalid};
+    let failed = |_| unavailable(repo);
     let closed_at = whole_utc_seconds(closed_at);
     let closed_by = closed_by_text(identity);
-    let path = &observation.ticket_path;
-    let context = repo.find_commit(observation.context_oid).map_err(failed)?;
+    let path = target.path;
+    let context = repo.find_commit(target.context).map_err(failed)?;
     let context_tree = context.tree().map_err(failed)?;
-    let entry = context_tree
-        .get_path(path)
-        .map_err(|_| ClosureStop::Refused)?;
+    let Ok(entry) = context_tree.get_path(path) else {
+        return Ok(Invalid);
+    };
     let mode = match (entry.kind(), entry.filemode()) {
         (Some(git2::ObjectType::Blob), 0o100644) => git2::FileMode::Blob,
         (Some(git2::ObjectType::Blob), 0o100755) => git2::FileMode::BlobExecutable,
-        _ => return Err(ClosureStop::Refused),
+        _ => return Ok(Invalid),
     };
     let original = repo.find_blob(entry.id()).map_err(failed)?;
-    let closed = closed_ticket_bytes(original.content(), closed_at, &closed_by)
-        .map_err(|_| ClosureStop::Refused)?;
+    let Ok(closed) = closed_ticket_bytes(original.content(), closed_at, &closed_by) else {
+        return Ok(Invalid);
+    };
     let ticket_blob = repo.blob(&closed).map_err(failed)?;
     let mut update = git2::build::TreeUpdateBuilder::new();
     update.upsert(path, ticket_blob, mode);
     let tree = update.create_updated(repo, &context_tree).map_err(failed)?;
     let tree = repo.find_tree(tree).map_err(failed)?;
     let when = git2::Time::new(closed_at.unix_timestamp(), 0);
-    let signature = git2::Signature::new(&identity.name, &identity.email, &when)
-        .map_err(|_| ClosureStop::Refused)?;
+    let Ok(signature) = git2::Signature::new(&identity.name, &identity.email, &when) else {
+        return Ok(Invalid);
+    };
     let checkpoint_commit = repo
         .commit(
             None,
             &signature,
             &signature,
-            &checkpoint_subject(&observation.item_id),
+            &checkpoint_subject(target.item),
             &tree,
             &[&context],
         )
         .map_err(failed)?;
-    let result_tree = match post_checkpoint_result(repo, observation.base, checkpoint_commit)
-        .map_err(ClosureStop::Repository)?
-    {
-        Ok(tree) => tree,
-        Err(()) => return Err(ClosureStop::Refused),
+    let Ok(result_tree) = post_checkpoint_result_on(repo, handle, target.base, checkpoint_commit)?
+    else {
+        return Ok(Conflict);
     };
     // The result must carry exactly this closure on a canonical entry.
     if tree_closure(repo, result_tree, path)
         != Some((closed_at, closed_by.clone(), entry.filemode()))
     {
-        return Err(ClosureStop::Refused);
+        return Ok(Invalid);
     }
-    Ok(PreparedClosure {
+    Ok(ClosureBuild::Built(PreparedClosure {
         closed_at,
         ticket_blob,
         checkpoint_commit,
         result_tree,
-    })
+    }))
 }
 
 /// The closure a tree's ticket carries, with its mode, if it parses as a
@@ -198,6 +254,16 @@ pub(in super::super) fn post_checkpoint_result(
     base: Oid,
     tip: Oid,
 ) -> Result<Result<Oid, ()>, RepositoryError> {
+    post_checkpoint_result_on(repo, MergeHandle::Stored, base, tip)
+}
+
+/// `post_checkpoint_result` with the merge run where `handle` says.
+fn post_checkpoint_result_on(
+    repo: &git2::Repository,
+    handle: MergeHandle,
+    base: Oid,
+    tip: Oid,
+) -> Result<Result<Oid, ()>, RepositoryError> {
     let base_in_tip = base == tip
         || repo
             .graph_descendant_of(tip, base)
@@ -208,7 +274,11 @@ pub(in super::super) fn post_checkpoint_result(
             .map_err(|_| unavailable(repo))?
             .tree_id()));
     }
-    match sync::prepare_clean_merge(repo.path(), base, tip).map_err(|_| unavailable(repo))? {
+    let preparation = match handle {
+        MergeHandle::Stored => sync::prepare_clean_merge(repo.path(), base, tip),
+        MergeHandle::Memory => sync::prepare_clean_merge_in(repo, repo.path(), base, tip),
+    };
+    match preparation.map_err(|_| unavailable(repo))? {
         sync::MergePreparation::Clean(prepared) => Ok(Ok(sync::import_prepared_tree(
             repo, &prepared,
         )
@@ -300,7 +370,8 @@ fn guarded_context_move(
 /// What a `closing` record left in the context, read under the lease.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum ClosingState {
-    /// The ref is at `context_oid` and the worktree is clean.
+    /// The ref is at `context_oid` and the ticket path is unchanged in the
+    /// index and the worktree; other entries are revalidation's to report.
     NothingWritten,
     /// The ref is at `context_oid` and only the ticket path differs, in the
     /// worktree and possibly the index (R-T0-3), holding exactly the stored
@@ -345,7 +416,14 @@ pub(in super::super) fn reconcile_closing(
         let statuses = context_repo
             .statuses(Some(&mut options))
             .map_err(|_| unavailable(context_repo))?;
-        if statuses.is_empty() {
+        // An unchanged ticket path, in the index and the worktree, proves
+        // the checkout never ran, whatever else the worktree holds; the
+        // revalidation then reports any other entry as `ContextDirty`
+        // (final review M-1).
+        let ticket_changed = statuses
+            .iter()
+            .any(|entry| entry.path_bytes() == path.as_os_str().as_encoded_bytes());
+        if !ticket_changed {
             return Ok(ClosingState::NothingWritten);
         }
         let Some(blob) = context_repo
@@ -544,9 +622,20 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
         return Err(E::busy());
     }
     // Step 4: persist a confirmed identity before any commit (T3-1, Q3-1).
+    // A live identity other than the consented `closed_by` is
+    // `ExternalChange` (C2, final review M-3). It is read first without
+    // persisting anything (M-4), and re-checked after the persisting call,
+    // which reads configuration afresh. A selection error is left to that
+    // call, which reports it as promotion does.
+    if let Ok(sync::CommittingIdentity::Effective(live) | sync::CommittingIdentity::Confirmed(live)) =
+        sync::select_committing_identity(repo, confirmation, &SynchronizationTarget::Primary)
+        && closed_by_text(&live) != *closed_by
+    {
+        return Err(E::external_change());
+    }
     let identity = integrate::promotion_identity::<E>(service, repo, root, confirmation)?;
     if closed_by_text(&identity) != *closed_by {
-        return Err(E::reconfirmation_required());
+        return Err(E::external_change());
     }
     // Step 5: the stored `closed_at` on a rebuild, so the same commit results.
     let closed_at = r.closed_at.unwrap_or_else(now_whole_utc_seconds);

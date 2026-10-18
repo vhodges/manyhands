@@ -196,6 +196,16 @@ impl Fixture {
         confirmation: Option<&ConfirmedCommitIdentity>,
     ) -> Result<PreIntegration, DocumentPromotionError> {
         let observation = self.observation_with(confirmation.cloned());
+        self.hook_observed(service, &observation, r, confirmation)
+    }
+    /// The hook with a given observation, as revalidation hands it over.
+    fn hook_observed(
+        &self,
+        service: &RepositoryService,
+        observation: &ClosureObservation,
+        r: &ClosureRecord,
+        confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<PreIntegration, DocumentPromotionError> {
         let _lease =
             repository_lease(&self.repo, self.root.path(), RepositoryOperation::Read).unwrap();
         let context = self.integration_context(r.context_oid.unwrap());
@@ -206,7 +216,7 @@ impl Fixture {
             base: observation.base,
             record: Some(r),
         };
-        pre_integration(service, &observation, confirmation, &mut stage)
+        pre_integration(service, observation, confirmation, &mut stage)
     }
     fn hook(&self, r: &ClosureRecord) -> Result<PreIntegration, DocumentPromotionError> {
         self.hook_with(&self.service, r, None)
@@ -449,18 +459,21 @@ fn prepare_builds_nothing_referenced() {
 #[test]
 fn no_remote_conflicting_merge_refuses_before_any_ref_moves() {
     let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let mut observation = f.observation();
     // The primary edits the line the closure fields are inserted next to.
+    // The preview now reports that as `IntegrationConflict` (final review
+    // I-1); execution's refusal stays the safety net for an observation
+    // that did not see it, here one handed over with the moved base.
     f.advance_primary(|s| s.replace("status: open", "status: doing"));
-    // The pre-closure merge is clean, so the observation is ready.
-    let observation = f.observation();
+    observation.base = f.primary();
     assert_eq!(observation.integration, PlannedIntegration::MergeCommit);
     assert!(matches!(
         prepare_closure(&f.repo, &observation, at(1_700_000_000), &closer()),
         Err(ClosureStop::Refused)
     ));
-    let r = f.record(ClosureKind::Record);
     let before = image(f.root.path(), &f.repo);
-    let result = f.hook(&r);
+    let result = f.hook_observed(&f.service, &observation, &r, None);
     assert!(
         matches!(result, Err(DocumentPromotionError::ReconfirmationRequired)),
         "{result:?}"
@@ -496,6 +509,24 @@ fn move_context_leaves_worktree_clean_at_checkpoint() {
 fn reconcile_ref_at_context_and_clean_is_nothing_written() {
     let f = Fixture::new(false);
     let (r, _) = f.closing(at(1_700_000_000));
+    assert_eq!(
+        reconcile_closing(&f.context, &r).unwrap(),
+        ClosingState::NothingWritten
+    );
+}
+
+/// Final review M-1: an unchanged ticket path proves the checkout never ran,
+/// whatever else the worktree holds; revalidation reports the stray file as
+/// `ContextDirty`.
+#[test]
+fn reconcile_unchanged_ticket_with_stray_file_is_nothing_written() {
+    let f = Fixture::new(false);
+    let (r, _) = f.closing(at(1_700_000_000));
+    write(&f.context, "stray.txt", "stray\n");
+    assert_eq!(
+        f.statuses(),
+        vec![("stray.txt".into(), git2::Status::WT_NEW)]
+    );
     assert_eq!(
         reconcile_closing(&f.context, &r).unwrap(),
         ClosingState::NothingWritten
@@ -1092,6 +1123,61 @@ fn confirmed_identity_overridden_by_include_writes_no_checkpoint() {
     assert_eq!(fs::read(&config).unwrap(), config_before);
     assert!(!f.repo.path().join("config.lock").exists());
     assert_eq!(f.context_oid(), context);
+    assert_eq!(f.reload(&r), r);
+}
+
+/// Final review M-3 (design C2): a live identity that differs from the
+/// consented `closed_by` when the hook runs is `ExternalChange`, and nothing
+/// is written.
+#[test]
+fn changed_identity_at_the_hook_is_external_change() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let observation = f.observation();
+    f.repo
+        .config()
+        .unwrap()
+        .set_str("user.email", "changed@example.invalid")
+        .unwrap();
+    let context = f.context_oid();
+    let before = image(f.root.path(), &f.repo);
+    let result = f.hook_observed(&f.service, &observation, &r, None);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::ExternalChange)),
+        "{result:?}"
+    );
+    assert_eq!(image(f.root.path(), &f.repo), before);
+    assert_eq!(f.context_oid(), context);
+    assert_eq!(f.reload(&r), r);
+}
+
+/// Final review M-4: a confirmed identity other than the consented
+/// `closed_by` is refused before it is persisted to local configuration.
+#[test]
+fn mismatched_confirmed_identity_persists_nothing() {
+    let f = Fixture::new(false);
+    f.missing_identity();
+    let confirmation = f.confirmation();
+    let r = f.confirmed_record(&confirmation);
+    let observation = f.observation_with(Some(confirmation.clone()));
+    let other = ConfirmedCommitIdentity {
+        identity: CommitIdentity {
+            name: "Other Closer".into(),
+            email: "other-closer@example.invalid".into(),
+        },
+        ..confirmation
+    };
+    let config = f.repo.path().join("config");
+    let config_before = fs::read(&config).unwrap();
+    let before = image(f.root.path(), &f.repo);
+    let result = f.hook_observed(&f.service, &observation, &r, Some(&other));
+    assert!(
+        matches!(result, Err(DocumentPromotionError::ExternalChange)),
+        "{result:?}"
+    );
+    assert_eq!(fs::read(&config).unwrap(), config_before);
+    assert!(!f.repo.path().join("config.lock").exists());
+    assert_eq!(image(f.root.path(), &f.repo), before);
     assert_eq!(f.reload(&r), r);
 }
 
