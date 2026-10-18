@@ -484,12 +484,15 @@ fn acknowledge(
     record: &state::StoredRemoteOperation,
     point: RemoteOperationSafePoint,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
-    if record.target.action() == RemoteOperationAction::Promote
-        && (record.cancel_requested || record.yield_requested)
+    if matches!(
+        record.target.action(),
+        RemoteOperationAction::Promote | RemoteOperationAction::Close
+    ) && (record.cancel_requested || record.yield_requested)
     {
-        // After F6 this slot excludes polls until completion or explicit
-        // supersession. A recoverable stop must not release it or write poll
-        // bookkeeping; the parent records the cancellation between whole steps.
+        // After F6 a promotion or closure slot excludes polls until
+        // completion or explicit supersession. A recoverable stop must not
+        // release it or write poll bookkeeping; the parent records the
+        // cancellation between whole steps.
         tx.execute("UPDATE remote_operation_records SET phase='reserved',outcome=NULL,completed_step=?2,cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,point_name(point),now()]).map_err(|_|state::recovery_required())?;
         return Ok(if record.cancel_requested {
             RemoteSafePointOutcome::Cancelled
@@ -784,10 +787,6 @@ pub(in super::super) fn finish_parent(
     id: i64,
     owner: &RemoteReservation,
 ) -> Result<(), RepositoryError> {
-    if kind != LifecycleKind::DocumentPromotion {
-        // The Close arm joins ticket_closures from Task 5.
-        return Err(state::recovery_required());
-    }
     let record = owned(service, tx, id, owner)?;
     if record.target.action() != kind.action()
         || record.priority != RemoteOperationPriority::Manual
@@ -795,7 +794,14 @@ pub(in super::super) fn finish_parent(
     {
         return Err(state::recovery_required());
     }
-    let complete:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+    // The parent is complete and its own kind's context is retired at the
+    // merged context: promotion's `context_oid`; a closure's adopted
+    // synchronization, else its checkpoint, else its synchronized context.
+    let complete: bool = match kind {
+        LifecycleKind::DocumentPromotion => tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
+        LifecycleKind::TicketClosure => tx.query_row("SELECT EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket' AND r.operation_id=c.operation_id AND r.retired_oid=coalesce(c.adopted_context_oid,c.closure_oid,c.context_oid) WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
+    }
+    .map_err(|_| state::recovery_required())?;
     if !complete {
         return Err(state::recovery_required());
     }
@@ -854,10 +860,6 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
-        if kind != LifecycleKind::DocumentPromotion {
-            // The Close arm reads ticket_closures from Task 5.
-            return Err(state::recovery_required());
-        }
         state::with_transaction(self, root, |tx, id| {
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
@@ -874,14 +876,28 @@ impl RepositoryService {
             {
                 return Err(mismatch());
             }
-            if let Some(parent) =
-                crate::repository::promotion::record::read_record(tx, id, operation_id)?
-                && matches!(
-                    parent.step,
-                    crate::repository::promotion::record::PromotionStep::Abandoned
-                        | crate::repository::promotion::record::PromotionStep::Superseded
-                )
-            {
+            // A refused or replaced parent of this kind never restarts its slot.
+            let ended = match kind {
+                LifecycleKind::DocumentPromotion => {
+                    use crate::repository::promotion::record::{self as promotion, PromotionStep};
+                    promotion::read_record(tx, id, operation_id)?.is_some_and(|parent| {
+                        matches!(
+                            parent.step,
+                            PromotionStep::Abandoned | PromotionStep::Superseded
+                        )
+                    })
+                }
+                LifecycleKind::TicketClosure => {
+                    use crate::repository::closure::record::{self as closure, ClosureStep};
+                    closure::read_record(tx, id, operation_id)?.is_some_and(|parent| {
+                        matches!(
+                            parent.step,
+                            ClosureStep::Abandoned | ClosureStep::Superseded
+                        )
+                    })
+                }
+            };
+            if ended {
                 return Err(state::recovery_required());
             }
             if record.phase == RemoteOperationPhase::Completed {

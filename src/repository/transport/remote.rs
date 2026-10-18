@@ -787,20 +787,12 @@ fn exact_mappings(
         (SshDirection::Push, SynchronizationTarget::Context { kind, item_id }) => {
             vec![plan.context_push_refspec(*kind, item_id)]
         }
-        (
-            SshDirection::Delete,
-            SynchronizationTarget::Context {
-                kind: crate::repository::AuthoringKind::Document,
-                item_id,
-            },
-        ) => {
-            vec![format!(
-                ":{}",
-                plan.context(crate::repository::AuthoringKind::Document, item_id)
-                    .remote_ref()
-            )]
+        // One exact delete of the target's own context ref, for a document
+        // or a ticket context (named edit 5); never the primary or a pattern.
+        (SshDirection::Delete, SynchronizationTarget::Context { kind, item_id }) => {
+            vec![format!(":{}", plan.context(*kind, item_id).remote_ref())]
         }
-        (SshDirection::Delete, _) => Vec::new(),
+        (SshDirection::Delete, SynchronizationTarget::Primary) => Vec::new(),
     }
 }
 
@@ -906,7 +898,7 @@ mod tests {
     use super::*;
     use std::str::FromStr;
     #[test]
-    fn transport_delete_scope_is_exact_document_context_only() {
+    fn transport_delete_scope_is_exact_context_only() {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let target = SynchronizationTarget::Context {
             kind: crate::repository::AuthoringKind::Document,
@@ -967,12 +959,40 @@ mod tests {
             kind: crate::repository::AuthoringKind::Ticket,
             item_id: crate::canonical::ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAX").unwrap(),
         };
-        assert!(!mappings_match_scope(
+        // Named edit 5 (owner, 2026-10-17): a ticket context delete is the
+        // same exact `:<context remote ref>` shape as a document's.
+        assert!(mappings_match_scope(
             &plan,
             &ticket,
             SshDirection::Delete,
             &[":refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAX"]
         ));
+        // The kind must match the target: neither kind's ref deletes the other.
+        assert!(!mappings_match_scope(
+            &plan,
+            &ticket,
+            SshDirection::Delete,
+            &[mapping]
+        ));
+        assert!(!mappings_match_scope(
+            &plan,
+            &target,
+            SshDirection::Delete,
+            &[":refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAX"]
+        ));
+        // A ticket ref with a bad or another ticket ID is refused.
+        for invalid in [
+            ":refs/heads/manyhands/ticket/bad",
+            ":refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            ":refs/heads/manyhands/ticket/*",
+        ] {
+            assert!(!mappings_match_scope(
+                &plan,
+                &ticket,
+                SshDirection::Delete,
+                &[invalid]
+            ));
+        }
     }
     fn tracking_commit(repository: &git2::Repository, message: &str) -> git2::Oid {
         let tree = repository.treebuilder(None).unwrap().write().unwrap();

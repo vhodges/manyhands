@@ -1158,8 +1158,8 @@ pub(in super::super) fn complete_record(
 ) -> Result<(), RepositoryError> {
     let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     if r.step != ClosureStep::BranchDeleted
-        || !retirement_matches(
-            evidence,
+        || !evidence.matches(
+            AuthoringKind::Ticket,
             op,
             &r.item_id,
             r.merged_context().ok_or_else(state::recovery_required)?,
@@ -1204,17 +1204,6 @@ pub(in super::super) fn complete_record(
     }
     Ok(())
 }
-/// The ticket retirement proof. `RetirementEvidence` binds documents only
-/// until Task 5 adds its kind-checked `matches`; until then a closure never
-/// completes (fail closed).
-fn retirement_matches(
-    _evidence: &RetirementEvidence<'_>,
-    _operation: OperationId,
-    _item: &ItemId,
-    _merged_context: Oid,
-) -> bool {
-    false
-}
 /// Inspect actual committed parent state after an uncertain commit result.
 pub(in super::super) fn reconcile_completion(
     db: &Transaction<'_>,
@@ -1239,10 +1228,12 @@ pub(in super::super) fn reconcile_completion(
     }
     Ok(true)
 }
+/// The design's cleanup row: with a remote, the remote context branch is
+/// deleted unless no context child ran (a contained closure) and no
+/// tracking context was observed. A contained `record` closure integrates
+/// as a merge, so promotion's `already_contained` test cannot decide it.
 fn deletion_reservation_required(r: &ClosureRecord) -> bool {
-    r.remote_name.is_some()
-        && !(r.integration_kind == Some(IntegrationKind::AlreadyContained)
-            && r.remote_context_oid.is_none())
+    r.remote_name.is_some() && !(r.context_attempt == 0 && r.remote_context_oid.is_none())
 }
 pub(in super::super) fn request_cancellation(
     tx: &Transaction<'_>,
@@ -1345,6 +1336,17 @@ impl LifecycleRecord for ClosureRecord {
     }
     fn set_remote_context_oid(&mut self, oid: Option<Oid>) {
         self.remote_context_oid = oid;
+    }
+    /// R-T3-3: a contained closure runs no context child (`published` is
+    /// `None`: the child's state is absent), so the delete is guarded by the
+    /// pre-checkpoint tracking OID its observation recorded, never by an
+    /// absent publication. A child that ran guards it with its verified
+    /// publication (T7-1).
+    fn remote_delete_guard(&self, published: Option<Oid>) -> Option<Oid> {
+        published.or(self.remote_context_oid)
+    }
+    fn remote_deletion_required(&self) -> bool {
+        deletion_reservation_required(self)
     }
     fn publication(&self) -> Option<PublicationCategory> {
         self.publication

@@ -134,6 +134,22 @@ pub(in super::super) trait LifecycleRecord: Clone {
     fn set_integration_kind(&mut self, kind: Option<IntegrationKind>);
     fn remote_context_oid(&self) -> Option<Oid>;
     fn set_remote_context_oid(&mut self, oid: Option<Oid>);
+    /// The OID the guarded remote context delete expects, given the context
+    /// child's verified publication (`None`: no context child ran, its child
+    /// state is absent; any other unpublished state is refused by the runner).
+    /// Promotion always runs a child before a delete, so the default is that
+    /// publication (T7-1); a lifecycle that may skip the child overrides it.
+    fn remote_delete_guard(&self, published: Option<Oid>) -> Option<Oid> {
+        published
+    }
+    /// Cleanup deletes the remote context branch under the parent's own
+    /// reservation. Promotion's Cycle 09 rule: with a remote, unless the
+    /// context was already contained and no tracking context was observed.
+    fn remote_deletion_required(&self) -> bool {
+        self.remote_name().is_some()
+            && !(self.integration_kind() == Some(IntegrationKind::AlreadyContained)
+                && self.remote_context_oid().is_none())
+    }
     fn publication(&self) -> Option<PublicationCategory>;
     fn set_publication(&mut self, category: Option<PublicationCategory>);
     fn cleanup(&self) -> Option<CleanupCategory>;

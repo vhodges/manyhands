@@ -870,3 +870,113 @@ The review changes are listed by item.
     lost its copies and gained an import.
 - **Gate.** fmt and Clippy are clean. `--lib closure` passes 118,
   `--lib promotion` 197, `remote_reservation` 13 and `document_promotion` 74.
+
+## Task 5 — Reservation `Close` Arms, Retirement And Completion (2026-10-18)
+
+### What landed
+
+- **`remote/reservation.rs`.**
+  - `acknowledge`: a `Close` slot is held on cancel or yield like a
+    `Promote` slot (phase `reserved`, no poll bookkeeping).
+  - `finish_parent(TicketClosure, ..)` joins `ticket_closures` with
+    `retired_contexts` on `kind='ticket'` and
+    `retired_oid = coalesce(adopted_context_oid, closure_oid, context_oid)`
+    (the merged context), at `step='complete'`. The promotion SQL is
+    unchanged.
+  - `restart_remote_lifecycle(TicketClosure, ..)` refuses an abandoned or
+    superseded closure parent, as promotion does with its own table.
+    `restart_remote_promotion` stays as the wrapper.
+- **`promotion/record.rs` `ChildExecution`.** `validate_request` admits a
+  context target of the parent's own kind only: ticket for a closure parent,
+  document for a promotion parent. `validate` reads the parent from its own
+  table through a private `ParentBinding` (context child only at
+  `confirmed`, primary child only at `integrated`/`publication_pending`, for
+  both kinds).
+- **`cleanup.rs`.** `RetirementEvidence::matches(kind, operation, item, oid)`
+  replaces `matches_promotion`. Promotion passes `Document`; closure
+  `complete_record` passes `Ticket` with its merged context. The fail-closed
+  `retirement_matches` placeholder is gone.
+- **`transport/remote.rs` (named edit 5).** The `exact_mappings` Delete arm
+  is generic over the context kind: one exact `:<context remote ref>` for a
+  document or a ticket target; none for the primary.
+- **`promotion/run.rs`.**
+  - The cleanup `oid` (precheck, worktree removal, branch deletion,
+    retirement evidence) is `merged_context()`; for promotion that is
+    `context_oid`.
+  - The remote-delete guard comes from `LifecycleRecord::remote_delete_guard
+    (published)`. The runner passes the context child's verified publication,
+    or `None` when the child is absent. The default returns that publication,
+    so promotion is unchanged (absent still means `RecoveryRequired`). The
+    closure override is `published.or(remote_context_oid)` (R-T3-3).
+  - `needs_owner` comes from `LifecycleRecord::remote_deletion_required()`.
+    The default is promotion's Cycle 09 rule. The closure override, which is
+    also closure's `deletion_reservation_required`, is: remote, unless no
+    context attempt was minted and no tracking context was recorded.
+
+### Decision to review: closure's remote deletion rule
+
+Promotion's rule ("already contained and no tracking context means no
+delete") cannot decide a closure. A contained `record` closure integrates as
+a merge, runs no context child, and may have no remote branch. Under the
+promotion rule it would reserve and attempt a delete that has no guard, then
+stop at `RecoveryRequired` for good. The design's cleanup row is
+`remote_branch = remote && !(contained && tracking none)`. The record does
+not store `contained`, so "no context attempt minted" stands in for it.
+`needs_context_child` is false exactly when there is no remote or the context
+is contained. Edge: after `PrimaryAdvanced` resets a closure (attempt > 0) and
+the next observation finds the context contained with no tracking, a delete
+is still required, and it stops at `RecoveryRequired` because there is no
+guard. It never deletes without a guard. Task 6 decides whether that path is
+reachable.
+
+### Task 0 and Task 1 document-only rows closed
+
+| Site | Closed by |
+| --- | --- |
+| `transport/remote.rs` `exact_mappings` Delete arm and its unit test | Generic Delete arm. Test renamed `transport_delete_scope_is_exact_context_only`: document and malformed refusals kept, ticket assertion flipped, kind-mismatch (both directions) and bad/other ticket-ID refusals added |
+| `reservation.rs` `restart_promotion_child`, `restart_synchronization_guarded` (`validate_remote_identity` through `ChildExecution`) | `validate_remote_identity` already covers both parent tables (Task 2); `ChildExecution::validate` now reads a closure parent. Tested by `child_fence_accepts_ticket_target_only_for_closure_parent` (reserve and restart) |
+| `reservation.rs` `reserve_promotion_child` ticket admission | Same fence; both child-fence tests |
+| `run.rs` ~1053 `RemoteOperationAction::Promote` in the cleanup reservation target | Already `L::KIND.action()` since Task 1 (verified at `abb5edb`); nothing left |
+| `reservation.rs` `acknowledge` hold-the-slot and cancel arms | `Close` arm; `close_reservation_holds_slot_like_promote`, `close_cancel_flags_parent_and_reservation` |
+| `reservation.rs` `finish_parent`, `restart_remote_lifecycle` `TicketClosure` placeholders | Replaced; `finish_close_*`, `close_restart_fences_owner_epoch` |
+| `promotion/record.rs` `ChildExecution` `TicketClosure` placeholders | Replaced; both child-fence tests |
+| `cleanup.rs` `matches_promotion` | `matches(kind, ..)`; `retirement_evidence_checks_kind` |
+| `closure/record.rs` `retirement_matches` placeholder | Replaced by `matches(Ticket, ..)` |
+
+### Tests
+
+- **Red, existing API.** Seven new tests failed at runtime:
+  - `close_reservation_holds_slot_like_promote`: phase `interrupted`;
+  - `close_restart_fences_owner_epoch`: `RecoveryRequired`;
+  - `close_cancel_flags_parent_and_reservation`: slot released;
+  - `finish_close_requires_complete_closure_and_ticket_retirement_at_merged_context`:
+    `(false, "advertising")`;
+  - `child_fence_accepts_ticket_target_only_for_closure_parent`:
+    `RecoveryRequired`;
+  - `child_fence_refuses_document_target_for_closure_parent`:
+    `RecoveryRequired` where `OperationMismatch` was expected;
+  - the flipped transport assertion.
+
+  `finish_close_refuses_document_retirement_row` passed, because every
+  closure finish was refused at the base.
+- **Red, new API.** 12 compile errors (E0599) for `matches` and
+  `remote_delete_guard`, then 4+ for `remote_deletion_required`.
+- **Green.** The 8 brief tests plus
+  `remote_delete_guard_uses_tracking_without_a_context_child_else_its_publication`,
+  `remote_deletion_required_unless_contained_without_tracking` (closure),
+  `promotion_remote_delete_is_guarded_by_the_context_child_publication` and
+  `promotion_remote_deletion_rule_is_unchanged` (promotion).
+
+| Args | Before | Task 5 |
+| --- | --- | --- |
+| `--lib remote::reservation` | 45 | 52 (+7) |
+| `--lib cleanup` | 42 (44 by name filter after Task 3) | 45 (+1) |
+| `--lib promotion` | 197 | 199 (+2 lifecycle) |
+| `--lib closure` | 121 | 126 (+2 record, +3 reservation tests whose names contain "closure") |
+| `--lib transport` | 38 | 38 (one test edited, named edit 5) |
+| `--test remote_reservation` | 13 | 13 |
+| `--test remote_polling` | 84 SSH | 84 SSH |
+| `--test document_promotion` | 74 SSH | 74 SSH |
+
+fmt is clean. `cargo clippy --all-targets --all-features --locked -- -D
+warnings` is clean.

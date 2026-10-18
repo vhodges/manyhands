@@ -1172,3 +1172,85 @@ fn adopted_context_invariants() {
     // The startup audit reads the column through the same validation.
     audit(&db).unwrap();
 }
+
+/// R-T3-3. Without a context child (a contained closure; the runner passes
+/// `None` only for an absent child) the remote context delete is guarded by
+/// the pre-checkpoint tracking OID the observation recorded, never by an
+/// absent publication; with a child that ran, by its verified publication
+/// (T7-1), never by the tracking evidence.
+#[test]
+fn remote_delete_guard_uses_tracking_without_a_context_child_else_its_publication() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let tracking = oid('1');
+    let published = oid('5');
+    let mut contained = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(ITEM),
+        digest(7),
+        Some("origin"),
+        ClosureKind::Record,
+    )
+    .unwrap();
+    contained.remote_context_oid = Some(tracking);
+    assert_eq!(contained.context_sync_id, None);
+    assert_eq!(contained.remote_delete_guard(None), Some(tracking));
+    // No child and no tracking context: no guard, so no delete is attempted.
+    contained.remote_context_oid = None;
+    assert_eq!(contained.remote_delete_guard(None), None);
+
+    let mut with_child = next_attempt(&tx, 1, contained.operation_id, ChildRole::Context).unwrap();
+    with_child.remote_context_oid = Some(tracking);
+    assert!(with_child.context_sync_id.is_some());
+    // The child's publication guards, not the differing tracking evidence.
+    assert_eq!(
+        with_child.remote_delete_guard(Some(published)),
+        Some(published)
+    );
+    // A minted attempt that never ran (absent, e.g. skipped after a primary
+    // advance made the context contained) falls back to the tracking OID.
+    assert_eq!(with_child.remote_delete_guard(None), Some(tracking));
+}
+
+/// The design's cleanup row: a remote context branch is deleted (and the
+/// close reservation required) unless no context child ran and no tracking
+/// context was observed. A contained `record` closure integrates as a merge,
+/// so promotion's `already_contained` rule does not decide it.
+#[test]
+fn remote_deletion_required_unless_contained_without_tracking() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let mut r = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(ITEM),
+        digest(7),
+        Some("origin"),
+        ClosureKind::Record,
+    )
+    .unwrap();
+    r.integration_kind = Some(IntegrationKind::Merged);
+    // Contained, no child, no tracking context: nothing to delete remotely.
+    assert!(!r.remote_deletion_required());
+    r.remote_context_oid = Some(oid('1'));
+    assert!(r.remote_deletion_required());
+    r.remote_context_oid = None;
+    let mut child = next_attempt(&tx, 1, r.operation_id, ChildRole::Context).unwrap();
+    child.integration_kind = Some(IntegrationKind::Merged);
+    assert!(child.remote_deletion_required());
+    let mut local = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(OTHER),
+        digest(7),
+        None,
+        ClosureKind::Record,
+    )
+    .unwrap();
+    local.integration_kind = Some(IntegrationKind::Merged);
+    assert!(!local.remote_deletion_required());
+}

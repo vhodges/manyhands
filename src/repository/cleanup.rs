@@ -61,13 +61,16 @@ pub(super) struct RetirementEvidence<'a> {
 impl RetirementEvidence<'_> {
     /// Bind the private Git proof to the parent being completed, without giving
     /// callers a way to manufacture or detach that proof from its lease/lock.
-    pub(super) fn matches_promotion(
+    /// The kind is checked too: a document proof never retires a ticket, nor
+    /// the reverse.
+    pub(super) fn matches(
         &self,
+        kind: AuthoringKind,
         operation: OperationId,
         item: &ItemId,
         oid: Oid,
     ) -> bool {
-        self.kind == AuthoringKind::Document
+        self.kind == kind
             && self.operation_id == operation
             && &self.item_id == item
             && self.retired_oid == oid

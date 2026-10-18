@@ -718,10 +718,8 @@ impl ChildExecution {
         &self,
         request: &crate::repository::SynchronizeRemoteRequest,
     ) -> Result<(), RepositoryError> {
-        if self.kind != LifecycleKind::DocumentPromotion {
-            // A ticket context child is admitted for a closure parent in Task 5.
-            return Err(state::recovery_required());
-        }
+        // The context target's kind is the parent's: a document context for
+        // a promotion parent, a ticket context for a closure parent.
         let matches = match (&self.role, &request.target) {
             (ChildRole::Primary, crate::repository::SynchronizationTarget::Primary) => true,
             (
@@ -744,28 +742,21 @@ impl ChildExecution {
         if id != self.repository_id || op != self.child {
             return Err(mismatch());
         }
-        if self.kind != LifecycleKind::DocumentPromotion {
-            // Only the promotion parent table is read below until Task 5.
-            return Err(state::recovery_required());
-        }
-        let parent = read_record(db, id, self.parent)?.ok_or_else(mismatch)?;
+        let parent = ParentBinding::read(db, id, self.kind, self.parent)?;
         let (attempt, child, allowed) = match self.role {
             ChildRole::Context => (
                 parent.context_attempt,
                 parent.context_sync_id,
-                parent.step == PromotionStep::Confirmed,
+                parent.context_allowed,
             ),
             ChildRole::Primary => (
                 parent.primary_attempt,
                 parent.primary_sync_id,
-                matches!(
-                    parent.step,
-                    PromotionStep::Integrated | PromotionStep::PublicationPending
-                ),
+                parent.primary_allowed,
             ),
         };
         if parent.item_id != self.item
-            || parent.expectation.to_bytes() != self.expectation
+            || parent.expectation != self.expectation
             || attempt != self.attempt
             || child != Some(self.child)
         {
@@ -781,6 +772,66 @@ impl ChildExecution {
             return Err(mismatch());
         }
         Ok(())
+    }
+}
+/// The parent facts the child fence compares, read from the parent's own
+/// table: a context child only from `confirmed`, a primary child only from
+/// `integrated` or `publication_pending`, for either parent kind.
+struct ParentBinding {
+    item_id: ItemId,
+    expectation: [u8; 32],
+    context_attempt: u32,
+    context_sync_id: Option<OperationId>,
+    context_allowed: bool,
+    primary_attempt: u32,
+    primary_sync_id: Option<OperationId>,
+    primary_allowed: bool,
+    cancel_requested: bool,
+}
+impl ParentBinding {
+    fn read(
+        db: &Connection,
+        id: i64,
+        kind: LifecycleKind,
+        parent: OperationId,
+    ) -> Result<Self, RepositoryError> {
+        Ok(match kind {
+            LifecycleKind::DocumentPromotion => {
+                let p = read_record(db, id, parent)?.ok_or_else(mismatch)?;
+                Self {
+                    expectation: p.expectation.to_bytes(),
+                    context_attempt: p.context_attempt,
+                    context_sync_id: p.context_sync_id,
+                    context_allowed: p.step == PromotionStep::Confirmed,
+                    primary_attempt: p.primary_attempt,
+                    primary_sync_id: p.primary_sync_id,
+                    primary_allowed: matches!(
+                        p.step,
+                        PromotionStep::Integrated | PromotionStep::PublicationPending
+                    ),
+                    cancel_requested: p.cancel_requested,
+                    item_id: p.item_id,
+                }
+            }
+            LifecycleKind::TicketClosure => {
+                use crate::repository::closure::record::{self as closure, ClosureStep};
+                let c = closure::read_record(db, id, parent)?.ok_or_else(mismatch)?;
+                Self {
+                    expectation: c.expectation.to_bytes(),
+                    context_attempt: c.context_attempt,
+                    context_sync_id: c.context_sync_id,
+                    context_allowed: c.step == ClosureStep::Confirmed,
+                    primary_attempt: c.primary_attempt,
+                    primary_sync_id: c.primary_sync_id,
+                    primary_allowed: matches!(
+                        c.step,
+                        ClosureStep::Integrated | ClosureStep::PublicationPending
+                    ),
+                    cancel_requested: c.cancel_requested,
+                    item_id: c.item_id,
+                }
+            }
+        })
     }
 }
 /// Authoritative completion is consumed first. Retained includes clean candidates,
@@ -1030,7 +1081,8 @@ pub(in super::super) fn complete_record(
 ) -> Result<(), RepositoryError> {
     let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
     if r.step != PromotionStep::BranchDeleted
-        || !evidence.matches_promotion(
+        || !evidence.matches(
+            AuthoringKind::Document,
             op,
             &r.item_id,
             r.context_oid.ok_or_else(state::recovery_required)?,

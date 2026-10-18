@@ -134,3 +134,56 @@ fn promotion_steps_map_to_the_shared_step_view() {
         assert_eq!(r.step, step, "{name}");
     }
 }
+
+#[test]
+fn promotion_remote_delete_is_guarded_by_the_context_child_publication() {
+    use crate::repository::{PromotionExpectation, promotion::record};
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    crate::repository::discovery::migrate_registry(&mut db).unwrap();
+    db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,'/fixture',123,'accessible',0)", []).unwrap();
+    let tx = db.transaction().unwrap();
+    let mut r = record::begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(),
+        PromotionExpectation::from_bytes([7; 32]),
+        Some("origin"),
+    )
+    .unwrap();
+    let tracking = Oid::from_str(&"1".repeat(40)).unwrap();
+    let published = Oid::from_str(&"2".repeat(40)).unwrap();
+    r.remote_context_oid = Some(tracking);
+    // Promotion is unchanged: always the child's verified publication, and
+    // no guard without one, whatever tracking evidence the record holds.
+    assert_eq!(r.remote_delete_guard(Some(published)), Some(published));
+    assert_eq!(r.remote_delete_guard(None), None);
+}
+
+#[test]
+fn promotion_remote_deletion_rule_is_unchanged() {
+    use crate::repository::{PromotionExpectation, promotion::record};
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    crate::repository::discovery::migrate_registry(&mut db).unwrap();
+    db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,'/fixture',123,'accessible',0)", []).unwrap();
+    let tx = db.transaction().unwrap();
+    let mut r = record::begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(),
+        PromotionExpectation::from_bytes([7; 32]),
+        Some("origin"),
+    )
+    .unwrap();
+    // Cycle 09: every remote promotion deletes, except an already-contained
+    // one with no tracking context.
+    r.integration_kind = Some(IntegrationKind::Merged);
+    assert!(r.remote_deletion_required());
+    r.integration_kind = Some(IntegrationKind::AlreadyContained);
+    assert!(!r.remote_deletion_required());
+    r.remote_context_oid = Some(Oid::from_str(&"1".repeat(40)).unwrap());
+    assert!(r.remote_deletion_required());
+    r.remote_name = None;
+    assert!(!r.remote_deletion_required());
+}

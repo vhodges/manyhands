@@ -1069,7 +1069,10 @@ fn finish_steps<L: Lifecycle>(
         return Err(Clean::Cancelled);
     }
     require_configuration(root, primary, r.remote_name())?;
-    let oid = r.context_oid().ok_or(Clean::RecoveryRequired)?;
+    // The merged context: what integration merged and the context branch now
+    // holds. For promotion it is `context_oid`; for a closure, the checkpoint
+    // (or an adopted synchronization over it) once written.
+    let oid = r.merged_context().ok_or(Clean::RecoveryRequired)?;
     if matches!(r.step(), Step::Published | Step::PublicationPending) {
         let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
         match cleanup.precheck_context(L::KIND.authoring(), r.item_id(), oid) {
@@ -1083,9 +1086,7 @@ fn finish_steps<L: Lifecycle>(
         .map(|name| RemoteRefPlan::from_configuration(name, primary))
         .transpose()
         .map_err(|_| Clean::RecoveryRequired)?;
-    let needs_owner = plan.is_some()
-        && !(r.integration_kind() == Some(IntegrationKind::AlreadyContained)
-            && r.remote_context_oid().is_none());
+    let needs_owner = plan.is_some() && r.remote_deletion_required();
     let mut owner = None;
     let mut configuration = None;
     if needs_owner {
@@ -1163,17 +1164,22 @@ fn finish_steps<L: Lifecycle>(
             // T(C) is the fetched, pre-push observation, not necessarily the
             // context tip the child verified as published. Keep that tracking
             // evidence for guarded local retirement, but guard the remote delete
-            // with the child's durable publication authority.
-            let published_context = state::with_transaction(service, root, |tx, _| {
+            // with the child's durable publication authority. A lifecycle that
+            // ran no context child chooses its own guard (R-T3-3).
+            let published = state::with_transaction(service, root, |tx, _| {
                 match L::child_state(tx, r, ChildRole::Context)? {
                     ChildState::Complete(child) => child
                         .authority
-                        .map(|authority| authority.oid())
+                        .map(|authority| Some(authority.oid()))
                         .ok_or_else(state::recovery_required),
+                    ChildState::Absent => Ok(None),
                     _ => Err(state::recovery_required()),
                 }
             })
             .map_err(recovery)?;
+            let published_context = r
+                .remote_delete_guard(published)
+                .ok_or(Clean::RecoveryRequired)?;
             let observed = io
                 .delete(
                     service,
