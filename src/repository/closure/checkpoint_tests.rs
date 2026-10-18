@@ -1455,3 +1455,116 @@ fn closed_base_with_uncontained_context_refuses_before_any_write() {
     assert_eq!(image(f.root.path(), &f.repo).0, before.0);
     assert_eq!(f.reload(&r), r);
 }
+
+// --- Fix round 2: an adopted context through `integrating` ---
+
+impl Fixture {
+    /// A checkpoint stopped after its ref moved, a deliberate synchronization
+    /// over it on the context, and the C9 resume that adopted it while
+    /// `closing`. Returns the adopted record, the checkpoint, the advanced
+    /// base and the adopted merge.
+    fn adopted(&self, r: &ClosureRecord) -> (ClosureRecord, Oid, Oid, Oid) {
+        let stored = self.stopped_at(FailurePoint::AfterClosureCheckpoint, r);
+        let checkpoint = stored.closure_oid.unwrap();
+        let (advanced, merge) = self.synchronize_context(checkpoint);
+        self.resume(&stored).unwrap().unwrap();
+        let adopted = self.reload(r);
+        assert_eq!(adopted.step, ClosureStep::Closing);
+        assert_eq!(adopted.adopted_context_oid, Some(merge));
+        (adopted, checkpoint, advanced, merge)
+    }
+    fn adopt(
+        &self,
+        r: &ClosureRecord,
+        base: Oid,
+        adopted: Option<Oid>,
+    ) -> Result<(), RepositoryError> {
+        state::with_transaction(&self.service, self.root.path(), |tx, rid| {
+            record::adopt_written_closure(tx, rid, r.operation_id, &self.repo, base, adopted)
+        })
+    }
+}
+
+#[test]
+fn integrating_resume_merges_the_adopted_context() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let (adopted, checkpoint, advanced, merge) = f.adopted(&r);
+    // The runner records `integrating` with the adopted context in place.
+    let integrating = f.to_integrating(&adopted);
+    assert_eq!(integrating.step, ClosureStep::Integrating);
+    assert_eq!(integrating.adopted_context_oid, Some(merge));
+    assert_eq!(integrating.merged_context(), Some(merge));
+    // The next resume goes through the `integrating` arm: the recorded base
+    // and the merged context, never the checkpoint alone.
+    let resumed = f.resume(&integrating).unwrap().unwrap();
+    let PreIntegration::Checkpoint {
+        base,
+        merged_context,
+        ref signer,
+        ..
+    } = resumed
+    else {
+        panic!("expected a checkpoint")
+    };
+    assert_eq!((base, merged_context), (advanced, merge));
+    assert_eq!(signer.email, "fixture@example.invalid");
+    let integrated = f.integrate(resumed);
+    assert_eq!(
+        f.repo
+            .find_commit(integrated)
+            .unwrap()
+            .parent_ids()
+            .collect::<Vec<_>>(),
+        vec![advanced, merge]
+    );
+    // The record's crash-reconciliation key is the same pair.
+    let stored = f.reload(&r);
+    assert_eq!(stored, integrating);
+    assert_eq!(stored.closure_oid, Some(checkpoint));
+    assert_eq!(
+        (stored.base_oid, stored.merged_context()),
+        (Some(advanced), Some(merge))
+    );
+}
+
+#[test]
+fn adopt_at_integrating_accepts_only_the_recorded_values() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let (adopted, checkpoint, advanced, merge) = f.adopted(&r);
+    let integrating = f.to_integrating(&adopted);
+    // The recorded values: accepted, nothing written.
+    f.adopt(&integrating, advanced, Some(merge)).unwrap();
+    assert_eq!(f.reload(&r), integrating);
+    // A different tip (even one over the checkpoint), the checkpoint itself,
+    // or a different base: refused, and the record is unchanged.
+    let other = tree_commit(&f.repo, merge, "other.txt", b"other\n", 0o100644);
+    for (base, tip) in [
+        (advanced, Some(other)),
+        (advanced, None),
+        (advanced, Some(checkpoint)),
+        (f.base, Some(merge)),
+    ] {
+        assert!(f.adopt(&integrating, base, tip).is_err(), "{base} {tip:?}");
+        assert_eq!(f.reload(&r), integrating);
+    }
+}
+
+#[test]
+fn closing_context_returned_to_the_checkpoint_clears_the_adoption() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let (adopted, checkpoint, advanced, _) = f.adopted(&r);
+    // The context ref goes back to the checkpoint while still `closing`.
+    checkout(&f.context, checkpoint);
+    assert_eq!(f.context_oid(), checkpoint);
+    let (base, merged, _) = checkpoint_of(f.resume(&adopted).unwrap().unwrap());
+    assert_eq!((base, merged), (advanced, checkpoint));
+    let cleared = f.reload(&r);
+    assert_eq!(cleared.step, ClosureStep::Closing);
+    assert_eq!(cleared.adopted_context_oid, None);
+    assert_eq!(cleared.closure_oid, Some(checkpoint));
+    assert_eq!(cleared.merged_context(), Some(checkpoint));
+    assert_eq!(cleared.base_oid, Some(advanced));
+}
