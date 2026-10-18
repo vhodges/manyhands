@@ -79,6 +79,17 @@ inherited Cycle 09 decisions **(D1)–(D7)**.
      gains `cycle_10_ticket_closures` (Task 2).
   4. The column-scoped privacy scanner moves from `tests/document_promotion.rs`
      `scan_rows` to `tests/support/` unchanged in behavior (Task 8).
+  5. `src/repository/transport/remote.rs`
+     `transport_delete_scope_is_exact_document_context_only` (renamed
+     `transport_delete_scope_is_exact_context_only`): its ticket assertion
+     flips, and it gains kind-mismatch and bad-ID refusals (Task 5).
+     **Owner-approved 2026-10-17** (recorded in the execution ledger; added
+     here at Task 9).
+  6. `tests/ssh_transport/exact.rs` `exact_delete_scope_and_policy`: the
+     `ConfigurationInvalid` refusal loop covers the primary only, because a
+     ticket context is in delete scope since edit 5. A new case,
+     `exact_ticket_context_delete_is_in_scope`, proves the ticket delete
+     (Task 9). **Owner-approved 2026-10-18.**
   Any other needed semantic edit to an existing test stops for review.
 - Tests use counters, holds and barriers, never sleeps; never touch developer
   keys, global Git configuration or real application data.

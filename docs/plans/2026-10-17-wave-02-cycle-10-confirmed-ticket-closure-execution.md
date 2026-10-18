@@ -1481,3 +1481,221 @@ file.
   - `--test ticket_closure`: 72 SSH cases passed; the slowest took 20.2 s.
   - `document_promotion` was not rerun, because no support file changed.
   - fmt and Clippy (`-D warnings`) are clean.
+
+## Task 9 — Full Verification, Documents And Handoff (2026-10-18)
+
+Base `984ddcb`. **Status: verified, awaiting final review.** The full suite
+had one deterministic failure in a pre-existing test, `ssh_transport`
+`exact_delete_scope_and_policy`. The owner approved named edit 6 for it
+(2026-10-18). Fix round 1 (`7e57cce`) made that edit and added a ticket
+delete case, and `ssh_transport` then passed in full.
+
+### Base
+
+`git fetch origin`: `origin/main` is still `3765524`, and the branch contains
+it. No merge was needed.
+
+### Commands
+
+Each ran once through `devenv shell`, in the background, with output in the
+Task 9 scratch logs.
+
+| Command | Result | Wall time |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | exit 0 | 7 s |
+| `cargo fmt --check` | exit 0 | 10 s |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | exit 0, no warnings (reused the fresh Task 8 build) | under 1 s |
+| `cargo test --all-features --locked` | exit 1: one SSH case failed in `ssh_transport`; cargo then stopped, so `ticket_closure` and the doctests did not run | 4,653 s |
+| `cargo test --all-features --locked --test ticket_closure` | exit 0, 72 SSH cases (run separately to complete the suite) | 748 s |
+| `cargo test --all-features --locked --doc` | exit 0, 11 passed | 2 s |
+| `cargo run --locked --bin manyhands-cli` | exit 0, no output, no window | 17 s |
+| Fix round 1: `cargo test --locked --all-features --test ssh_transport` | exit 0, 123 SSH cases | 224 s |
+| Fix round 1: `cargo fmt --check` | exit 0 | — |
+| Fix round 1: `cargo clippy --all-targets --all-features --locked -- -D warnings` | exit 0, no warnings (fresh check of the changed test) | 15 s |
+
+The desktop smoke was not run: the change is domain-only.
+
+### Counts
+
+| Target | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| library | 1,189 | 0 | 0 |
+| desktop binary / CLI binary | 0 / 0 | 0 | 0 |
+| canonical_foundation | 62 | 0 | 0 |
+| discovery_rebuild | 78 | 0 | 0 |
+| editor_feasibility | 9 | 0 | 0 |
+| journal_rejection | 26 | 0 | 0 |
+| key_material | 39 | 0 | 0 |
+| key_storage | 2 | 0 | 0 |
+| local_authoring | 140 | 0 | 0 |
+| mutation_bridges | 129 | 0 | 0 |
+| mutation_confirmation | 154 | 0 | 0 |
+| mutation_contract | 43 | 0 | 0 |
+| mutation_relationships | 27 | 0 | 0 |
+| mutation_replay | 308 | 0 | 0 |
+| read_boundary | 20 | 0 | 0 |
+| read_characterization | 0 | 0 | 1 (existing opt-in characterization) |
+| read_comments | 22 | 0 | 0 |
+| read_contract | 71 | 0 | 0 |
+| read_credentials | 25 | 0 | 0 |
+| read_items | 76 | 0 | 0 |
+| read_relationships | 17 | 0 | 0 |
+| read_repository | 33 | 0 | 0 |
+| read_status | 24 | 0 | 0 |
+| recovery_foundation_gate | 51 | 0 | 0 |
+| remote_reservation | 13 | 0 | 0 |
+| repository_enablement | 78 | 0 | 0 |
+| session_credentials | 11 | 0 | 0 |
+| shared_key_registry | 39 | 0 | 0 |
+| doctests | 11 | 0 | 0 |
+
+| SSH target | Cases passed | Failed |
+| --- | ---: | ---: |
+| comment_publication | 41 | 0 |
+| document_promotion | 74 | 0 |
+| mutation_remote | 88 | 0 |
+| remote_merge_recovery | 25 | 0 |
+| remote_observation | 15 | 0 |
+| remote_polling | 84 | 0 |
+| remote_synchronization | 63 | 0 |
+| ssh_fixture | 35 | 0 |
+| ssh_transport | 123 (fix round 1; first run 121 passed, 1 failed) | 0 |
+| ticket_closure | 72 | 0 |
+| **SSH total** | **620** | **0** |
+
+Totals after fix round 1: 1,189 library + 1,497 standard integration + 620
+SSH + 11 doctests = **3,317 passed, 0 failed**, 1 ignored. The first full run
+had 3,315 passed and 1 failed. Wall time: 5,403 s (about 90 min) for the
+first test runs, 5,437 s for every command, then 224 s for the
+`ssh_transport` rerun.
+
+### The failure and fix round 1
+
+- **Case.** `tests/ssh_transport/exact.rs` `exact_delete_scope_and_policy`.
+  It fails the same way alone (`--test ssh_transport
+  exact_delete_scope_and_policy -- --exact`, 0 passed, 1 failed), so it is
+  not a flake. The observation is line 140: `delete_exact(..).unwrap_err()`
+  returned `Ok` for the ticket context target.
+- **Cause.** The case expects every non-document delete to be refused
+  `ConfigurationInvalid` before any helper runs. Its loop covers the primary
+  and `context()`, which is a **ticket** context. Named edit 5 (owner,
+  2026-10-17; Task 5, `6bc0bef`) made a ticket-context delete one exact
+  `:<context remote ref>`, as for a document. Task 5 updated the unit test
+  `transport_delete_scope_is_exact_context_only`, but this SSH case asserts
+  the same old scope. Task 5's targeted runs did not include
+  `ssh_transport`.
+- **Production is right.** Closure's guarded remote delete needs this
+  mapping, and `ticket_closure` proves it over SSH.
+- **Named edit 6** (owner-approved 2026-10-18, added to the plan's list with
+  edit 5). The refusal loop in `exact_delete_scope_and_policy` now covers
+  the primary only. The helper-invocations, URL-redaction and document
+  `SelectionChanged` checks are unchanged.
+- **New case `exact_ticket_context_delete_is_in_scope`.**
+  - A delete of `refs/heads/manyhands/ticket/<ULID>` with a stale guard
+    observes `Changed` and sends no update.
+  - With the current guard it is `Deleted`, with exactly one accepted
+    receive update for that ref.
+  - `main` and an unrelated ref are untouched.
+  - No URL, password or email appears in either observation.
+  - Mutation check: with the old document-only Delete arm restored, the case
+    fails. The arm was then put back, and no production code changed.
+- **Gate.** `--test ssh_transport`: 123 SSH cases passed (122 + 1 new).
+  fmt and Clippy (`-D warnings`) are clean. The rest of the suite was not
+  rerun: only this test file changed.
+
+### Documents
+
+- **Design** (`2026-10-17-…-design.md`), each with a dated "Amended
+  2026-10-18 (Cycle 10 execution, R-…)" note:
+  - "Before a checkpoint exists" step 3: from `closing`, an advanced primary
+    is `ReconfirmationRequired` and abandons (R-T4-3, R-T8-2(a)).
+  - "After a checkpoint exists": the deliberate synchronization is a local
+    merge of the primary into the context; a remote context sync is `Busy`
+    from `closing` on; resume adopts the tip (R-T6-1, R-T4-1).
+  - Records: `adopted_context_oid` column; merged context is
+    adopted, else closure, else context; `integration_kind` from
+    `integrating`; `closure_kind` null only on a first-write refusal;
+    `remote_context_oid` may be absent with a remote when no tracking ref
+    was seen (R-T9-1: the amendment follows the code); what the schema
+    `CHECK`s enforce versus the record layer and audit (R-T2-1, R-T2-2,
+    R-T2-3, R-T5-3, R-T4-1).
+  - Polling And Concurrency: what the true race shows the user (R-T8-1); a
+    clone's own closure does not advance its tracking primary, so its preview
+    reads `AlreadyClosed` only after a poll (R-T8-2(b)); a kept context's
+    copy is what the read returns, and may be open in a collaborator's clone
+    (R-T6-6).
+  - New **Known Limitations** section: R-T6B-2, R-T6B-1, R-T8-1.
+- **Implementation plan:** named edits 5 and 6 added to the named-edit list.
+- **Cycle 09 design and handoff:** a correction note where each says Cycle 10
+  reuses cleanup "unchanged", pointing at Cycle 10 Tasks 1 and 5.
+- **`docs/research/wave-03-api-audit.md`:** a Cycle 10 domain update (the
+  three operations delivered headless; the domain guard; F2 binding, expiry,
+  schema values, `NotResumable` and the ready-ticket report remain C5/D5);
+  the `ticket close` row; the save-guard notes in the `E-ticket` and
+  `ticket save` rows and the authoring finding.
+
+### Every Cycle acceptance row → named passing tests
+
+Every name below passed in this Task 9 run (the full suite, the separate
+`ticket_closure` run, or the fix round 1 `ssh_transport` run), checked by
+name against the logs. Prefixes: `O::` =
+`repository::closure::observe::tests::`, `C::` =
+`repository::closure::checkpoint::tests::`, `Rec::` =
+`repository::closure::record::tests::`, `R::` =
+`repository::closure::run_tests::`, `L::` =
+`repository::promotion::lifecycle::tests::`, `G::` =
+`repository::ticket_guard::tests::`, `Res::` =
+`repository::remote::reservation::tests::`. Unprefixed names are
+`tests/ticket_closure.rs` SSH cases.
+
+| # / Acceptance | Named passing evidence |
+| --- | --- |
+| 1. Generalization leaves promotion, SSH, sync, merge, poll, reservation and comment-publication tests green and unedited | Every pre-existing target above passes, `ssh_transport` after named edit 6 (fix round 1, 123 cases, including `exact_delete_scope_and_policy` and the new `exact_ticket_context_delete_is_in_scope`). `L::document_kind_matches_legacy_constants`, `L::document_promotion_has_no_pre_integration_effect`, `L::promotion_steps_map_to_the_shared_step_view`, `L::promotion_remote_delete_is_guarded_by_the_context_child_publication`, `L::promotion_remote_deletion_rule_is_unchanged`; `document_promotion` 74, `remote_synchronization` 63, `remote_merge_recovery` 25, `remote_polling` 84, `remote_reservation` 13, `comment_publication` 41. Edits to pre-existing tests: named edits 1–5; the plan's `repository_enablement` inventory entry (Task 2); visibility plus one behavior-neutral `FakeIo` fixture edit in `promotion/run_tests.rs` (Task 6A); named edit 6 (Task 9). |
+| 2. Preflight: every blocker, exact preview, no network/lease/write; digest stable and binds each fact incl. `closed_by` | `O::every_blocker_is_reported_in_fixed_order`, `O::every_blocker_has_a_distinct_fixed_position`, `O::identity_required_only_when_nothing_else_blocks`, `O::preview_is_read_only`, `O::preview_lists_whole_branch_changes`, `O::digest_is_stable_and_debug_is_redacted`, `O::digest_binds_each_fact`, `O::digest_mode_only_changes_are_bound`, `O::remote_digest_excludes_moving_oids`, `O::digest_is_independent_of_time_of_day`, `O::closure_digest_golden_vector`, `O::closed_by_text_is_name_and_angled_email`; the 21 SSH `blocker_*` cases count transport and snapshot state. |
+| 3. Different digest, changed identity, new blocker or new context content refuses before change and ends the record | `R::pre_checkpoint_refusals_abandon_with_nothing_written_replay_and_a_new_id_works`, `R::a_changed_or_missing_identity_since_the_preview_is_external_change`, `R::completed_id_replays_the_stored_outcome_and_refuses_another_item_or_digest`, `R::collaborator_change_after_closing_recorded_abandons_with_nothing_written`, `Rec::abandoned_refusal_replays`; `changed_remote_context_reconfirms`, `primary_only_advance_preserves_consent`, every `blocker_*` case at execution. |
+| 4. With a remote: one checkpoint, one merge `[published primary, context]`, publication, remote/worktree/branch removed; remote context never held the checkpoint; discoverable closed with `status` unchanged | `happy_collaborator_poll_and_context_never_held`, `closed_ticket_discoverable_from_both_clones`, `C::checkpoint_commit_has_exact_subject_parent_and_single_path`, `C::hook_writes_closing_then_moves_the_context_and_marks_refresh`, `R::a_child_publication_guards_the_delete_and_the_checkpoint_is_retired`, `R::a_completed_closure_reads_closed_from_the_primary_only`, `read_status` `status_lists_closure_parent_and_hides_its_reservation`. |
+| 5. Without a remote: local checkpoint and merge, cleanup complete, publication pending; later publication | `local_only_then_primary_publication`, `R::no_remote_closure_records_merges_and_cleans_with_the_status_kept`. |
+| 6. Existing fields reused; contained-and-closed cleanup only, incl. cache loss with the remote gone; contained-and-open without a context child | `existing_closure_fields_merge_without_checkpoint`, `contained_closed_collaborator_cleanup_only`, `contained_closed_cleanup_after_cache_loss_remote_gone`, `contained_open_closes_without_context_child`, `C::existing_closure_writes_no_checkpoint`, `C::contained_open_closes_with_in_memory_merge`, `O::context_with_closure_fields_previews_existing`, `O::table_contained_base_closed_is_already_contained_existing`, `O::table_contained_open_open_records_merge_commit_without_child`, `O::contained_closed_with_deleted_remote_is_cleanup_only`, `O::contained_closed_with_unknown_remote_history_is_cleanup_only`. |
+| 7. Each blocker (dirty, conflicted, D2, D3, D4, D5, pending local operation, pending comment publication, already closed, reopened, missing context, missing identity) refuses with no change | `blocker_primary_dirty`, `blocker_primary_conflicted`, `blocker_primary_ahead_of_remote`, `blocker_integration_conflict`, `changed_remote_context_reconfirms` (D4), `blocker_remote_context_deleted`, `blocker_history_unknown`, `blocker_local_operation_pending`, `blocker_comment_publication_pending`, `pending_comment_publication_blocks_then_closes`, `blocker_already_closed`, `blocker_primary_reopened`, `blocker_context_missing`, `blocker_identity_required`; `O::pending_local_operation_blocks`, `O::pending_comment_publication_blocks`. |
+| 8. A poll advancing `T(P)` never drops primary commits or strands a checkpoint | `poll_advances_primary_mid_closure_retry_once`, `seam_closing_recorded_advanced_primary_abandons`, `C::remote_primary_advance_from_context_synchronized_is_primary_advanced`, `C::remote_primary_advance_from_closing_is_reconfirmation_required`, `R::a_poll_while_closing_updates_tracking_but_never_moves_the_context`. |
+| 9. After a written checkpoint: same-ID retry finishes once, `closed_by` from the checkpoint after a config change; a new ID is `Busy` | `exit_seam_closing_recorded`, `exit_seam_during_checkpoint_checkout`, `exit_seam_after_closure_checkpoint`, `seam_during_checkout_advanced_primary_merges`, `seam_during_checkout_conflicting_primary_recovers`, `seam_after_checkpoint_advanced_primary_merges`, `seam_after_checkpoint_conflicting_primary_recovers`, `R::checkpoint_seams_finish_once_with_the_same_id_and_a_new_id_is_busy`, `R::changed_email_after_the_checkpoint_finishes_with_the_checkpoint_authority`, `C::checkpoint_authority_reads_commit_not_config`, `Rec::closing_row_makes_new_id_busy`, `R::never_abandons_after_the_checkout`, `R::never_abandons_after_the_checkpoint`, `R::never_abandons_with_an_adopted_descendant`. |
+| 10. Concurrent closure: sequential stops before writing; true race preserves both closures, later clone pending with external recovery | `sequential_second_closure_stops_before_writing`, `true_race_distinct_identities_needs_external_recovery` (asserts the R-T8-1 behavior), `C::closed_base_with_uncontained_context_refuses_before_any_write`. |
+| 11. Publication failure defers cleanup; publication then deletion failure is partial; retry only unfinished | `primary_rejection_retry_cleans_up_only`, `deletion_rejection_retry_deletes_only`, `offline_before_integration_identical_retry`, `offline_after_integration_identical_retry`. |
+| 12. Dirty, untracked, ignored or moved context, rejected or changed remote context keep all state; supersession and retry | `preserve_dirty_context_after_integration`, `preserve_untracked_context_after_integration`, `preserve_ignored_context_after_integration`, `preserve_moved_context_after_integration`, `remote_context_race_at_deletion_preserves_peer`, `deletion_rejection_retry_deletes_only`, `Rec::supersession_only_from_context_changed_ignored_remote_changed`. |
+| 13. F1–F12, the three checkpoint seams and the F10/F11 split seams reconcile with no duplicate effect; T6-1 locks | `exit_f1_confirmed` … `exit_f12_before_refresh` (12 cases), `exit_seam_closing_recorded`, `exit_seam_during_checkpoint_checkout`, `exit_seam_after_closure_checkpoint`, `exit_inside_f10_git_sql_split_operator_repair`, `exit_after_sql_commit_replay_preserves_lock`, `R::process_exit_at_every_boundary_reopens_without_repeated_effects`, `R::adopted_context_survives_the_f10_and_f11_seams`, `C::failure_points_stop_at_the_design_positions`, `Res::finish_close_requires_complete_closure_and_ticket_retirement_at_merged_context`. |
+| 14. An automatic poll yields; polls during and after neither rematerialize nor report the context deleted in the closing clone | `automatic_poll_advertisement_yields_to_closure`, `happy_collaborator_poll_and_context_never_held`, `R::a_poll_cannot_run_while_the_closure_holds_its_close_slot`, `R::a_poll_never_rebuilds_the_context_while_closure_cleanup_is_unfinished`, `R::a_poll_while_closing_updates_tracking_but_never_moves_the_context`, `Res::close_reservation_holds_slot_like_promote`. |
+| 15. Domain refuses save, relationship, slug, `prepare_context` and comment writes to a closed ticket before provisioning; closure, repair, other tickets not refused | `G::save_edit_of_closed_ticket_is_refused_before_provisioning`, `G::relationship_and_slug_saves_refused`, `G::prepare_context_edit_of_closed_ticket_refused`, `G::new_comment_on_closed_ticket_refused`, `G::save_refused_when_context_copy_closed`, `G::dirty_draft_cannot_hide_closure`, `G::repair_of_closed_ticket_still_allowed`, `G::writes_to_other_tickets_that_depend_on_closed_ticket_allowed`, `G::resumed_row_not_refused`, `G::create_unaffected`, `G::refused_error_maps_to_ticket_closed_result_code`; `local_authoring` `ticket_edit_preserves_unknown_closure_and_exact_body` (named edit 1); `guard_spares_own_checkpoint_and_refuses_later_writes`. |
+| 16. Every `Ok` after integration refreshes or reports `IndexPending` | `R::every_ok_after_integration_refreshes_or_is_index_pending`, `C::hook_writes_closing_then_moves_the_context_and_marks_refresh`, `exit_f12_before_refresh`. |
+| 17. Rows, diagnostics and outputs free of `closed_by`, titles, bodies, endpoints, secrets | `privacy_closed_by_checkpointed`, `privacy_closed_by_pinned_wal`, `capture_privacy_controls_fail_closed` (with the five child-only output controls), `Rec::no_closed_by_column_or_value`, `O::digest_is_stable_and_debug_is_redacted`; `document_promotion` privacy cases through the moved scanner (named edit 4). |
+| 18. Required Devenv checks pass; the new target is wired into the native workflow | check, fmt, Clippy, the CLI smoke and every test target pass (3,317 passed, 0 failed after fix round 1). `.github/workflows/build.yml` runs `--test ticket_closure`; native CI runs after merge and was not dispatched. |
+
+### Merge check
+
+After a fresh `git fetch origin` (`origin/main` still `3765524`),
+`git merge-tree --write-tree HEAD origin/main` exits 0 with tree
+`c1c79abef736086ffa050af5a86b5a8bc9b2df50`, the same as `HEAD^{tree}` at
+`984ddcb`: the branch already contains main, and there are no conflicts.
+After fix round 1 (`7e57cce`), the same check exits 0 with tree
+`06fa8966f1ebab7bf2f2c511ffcc3534e8376ca0`, again equal to `HEAD^{tree}`.
+
+### Remaining gates
+
+- The controller runs the independent whole-branch spec and quality reviews
+  over `origin/main..HEAD`.
+- Owner confirmation of the R-T6-1 and R-T8-1 design amendments.
+- Push, pull request, merge, ticket closure and cleanup each need their own
+  authorization. Native CI is dispatched on main after merge, with the
+  owner's approval.
+
+### Follow-ups (no code in this Cycle)
+
+- **R-T6B-3.** `ChildExecution` mismatch errors use promotion's wording for
+  closure parents.
+- **Task 7.** `save_ticket` with a document target still provisions a
+  document context before refusing. This is pre-existing.
+- **Task 6B Minor 3.** The `terminal` and busy-supersede logic is duplicated
+  between the promotion and closure record modules.
+- **Task 8 nit.** The raw-store negative control covers the email only.
+- **R-T8-1 alternative.** Classify a ticket conflict whose sides carry
+  different closures as `ExternalResolutionRequired` (Cycle 06 merge/sync
+  code).

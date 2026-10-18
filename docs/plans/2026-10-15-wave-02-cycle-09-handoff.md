@@ -760,6 +760,13 @@ the same way comment publication binds its child synchronization.
   updates `docs/research/wave-03-api-audit.md` to say so.
 - **Cycle 10 (ticket closure)** reuses `src/repository/cleanup.rs` and
   `retired_contexts` unchanged.
+  **Correction 2026-10-18 (Cycle 10):** not unchanged. Cycle 10 Task 1
+  made the runner generic over a lifecycle seam, and Task 5 generalized
+  `RetirementEvidence::matches_promotion` to a kind-checked `matches`, added
+  the `Close` reservation arms and made the `exact_mappings` Delete arm
+  generic. See the
+  [Cycle 10 execution ledger](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-execution.md),
+  Tasks 1 and 5. `retired_contexts` is reused with `kind='ticket'`.
 - **Collaborators' clones.** A collaborator's clone keeps its local context
   after promotion, and its poll reports it `remotely_deleted`. Explicitly
   discarding that context is later work.

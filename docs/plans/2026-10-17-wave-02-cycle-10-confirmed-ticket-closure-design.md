@@ -346,6 +346,15 @@ until step 6:
 3. With a remote and a context that is not contained, require `base ≤
    context`; otherwise `PrimaryAdvanced` exactly as promotion (step back to
    `confirmed`, next context attempt, nothing written).
+
+   **Amended 2026-10-18 (Cycle 10 execution, R-T4-3, R-T8-2(a)).** That
+   `PrimaryAdvanced` path applies from `context_synchronized` only. On a
+   same-ID resume of a record left at `closing` with nothing written (a stop
+   at `ClosureAfterClosingRecorded`), an advanced primary is a refusal from
+   `closing`: `ReconfirmationRequired`, and the record is abandoned. This is
+   the first row of the reconciliation table below ("a refusal abandons").
+   The built checkpoint stays unreferenced, and a new confirmation closes
+   the ticket.
 4. Identity: if confirmed, persist to repository-local config through the
    lease-held `LocalConfigEdit` with `would_persist_identity` (T3-1/Q3-1).
 5. Build every object in the repository ODB, unreferenced (`Record` only):
@@ -404,6 +413,14 @@ checkpoint is the consented effect. Same-ID retry:
    collaborator content into the merge without a re-preview (C9 cost).
 6. Merges as step 7 above.
 
+**Amended 2026-10-18 (Cycle 10 execution, R-T6-1, R-T4-1).** With a remote,
+the "deliberate synchronization" of steps 2 and 5 is a local merge of the
+primary into the ticket context. A remote ticket-context synchronization is
+refused `Busy` while a closure is at `closing` or later, because the remote
+context branch must never receive the checkpoint (C1). The same-ID resume
+then adopts the merged tip: the record keeps `closure_oid` as the checkpoint
+commit and stores the tip in `adopted_context_oid` (see Records).
+
 ### Reconciliation of `closing` and `integrating`
 
 | Observed | Resume |
@@ -441,24 +458,60 @@ startup audit. Columns are those of `document_promotions` plus:
 | `closure_kind` | `record` or `existing`, set at insert from the observation |
 | `closed_at` | RFC 3339 UTC, whole seconds; set with `closing`; null for `existing` |
 | `closure_oid` | The checkpoint commit; set with `closing`; replaced only while the ref has not moved |
+| `adopted_context_oid` | A descendant of `closure_oid` carrying the same closure, adopted by a same-ID resume; set or cleared only at `closing` (at `integrating` only the recorded value is accepted), immutable after `integrated` |
 | `refusal_blockers` | 32-bit mask, `CHECK` 1..(2^21−1) |
 
 `context_oid` keeps promotion's meaning: the synchronized pre-closure context,
 set at `context_synchronized` and immutable afterwards. The **merged context**
-is `closure_oid` when set, else `context_oid`; cleanup precheck, branch
-deletion guard, `RetirementEvidence` and the finisher join use it. R1 holds
-with `retired_oid` = merged context because it descends from the published
-OID.
+is `adopted_context_oid` when set, else `closure_oid` when set, else
+`context_oid`; cleanup precheck, branch deletion guard, `RetirementEvidence`
+and the finisher join use it. R1 holds with `retired_oid` = merged context
+because it descends from the published OID.
 
 Step invariants (non-null columns from that step on):
 
 | Step | Required |
 | --- | --- |
 | `confirmed` | identity columns, `expectation`, `closure_kind` |
-| `context_synchronized` | + `context_oid` (and `remote_context_oid` with a remote) |
+| `context_synchronized` | + `context_oid` (and `remote_context_oid` with a remote, when a tracking ref was seen) |
 | `closing` | + `base_oid`, `closed_at`, `closure_oid` |
-| `integrating` | + `base_oid` (all kinds) |
-| `integrated` onward | + `integration_oid`, `integration_kind` |
+| `integrating` | + `base_oid`, `integration_kind` (all kinds) |
+| `integrated` onward | + `integration_oid` |
+
+**Amended 2026-10-18 (Cycle 10 execution, R-T2-3, R-T2-1, R-T2-2, R-T9-1,
+R-T5-3, R-T4-1).**
+
+- `integration_kind` is required from `integrating`, not only from
+  `integrated`: the runner sets it in the same save that records
+  `integrating`.
+- `closure_kind` may be null only on a row refused at its first write
+  (`abandoned`, no observation).
+- `remote_context_oid` exists only with a remote, and only the save that
+  records `context_synchronized` may set it (R-T5-3). With a remote it may
+  still be absent, because the fetched tracking context can be absent, as in
+  promotion; the `context_synchronized` row above means "with a remote, when
+  observed".
+- `adopted_context_oid` was added to the unreleased
+  `cycle_10_ticket_closures` migration for the C9 adoption.
+- **Where the invariants are enforced.** The record layer validates every
+  row it decodes or saves, and the startup audit decodes every stored row,
+  so both enforce the whole table above. The schema `CHECK` constraints
+  enforce a subset:
+  - value formats: IDs, 40-hex non-zero OIDs, step and category names,
+    the `closed_at` shape, and the blocker mask range;
+  - attempt and child-ID pairing;
+  - `abandoned` exactly when a refusal category is set, and a mask exactly
+    when that category is `blocked`;
+  - `closure_kind` non-null except on `abandoned`;
+  - `closed_at` and `closure_oid` both or neither, and only for `record`;
+  - `adopted_context_oid` only with a different `closure_oid`, for
+    `record`;
+  - `closing` requires `record`, `closed_at`, `base_oid` and `context_oid`.
+
+  The schema does not check the per-step requirements of `base_oid`,
+  `context_oid`, `integration_kind` or `integration_oid` at other steps,
+  nor that `remote_context_oid` is absent without a remote. The record
+  layer and the audit do.
 
 The runner passes through `context_synchronized` even without a remote, as
 promotion does. `closed_by` is never stored (Privacy). One unfinished row per
@@ -551,9 +604,35 @@ Cycle 09's polling rules apply unchanged. Closure-specific:
   its later promotions and closures block with `PrimaryAheadOfRemote`.
   Accepted as a rare MVP limit. The test uses two distinct identities (with
   one identity in one second the two Blobs are identical and merge cleanly).
+
+  **Amended 2026-10-18 (Cycle 10 execution, R-T8-1).** "The existing
+  external-resolution guidance" above is, exactly, what the user sees:
+  - the later clone's publication stays pending
+    `synchronization(conflict)`;
+  - the conflicted ticket path is classed `EligibleCanonical`;
+  - every in-product resolution, with either side, fails `ValidationFailed`
+    and writes nothing, because resolution validation keeps each side's
+    closure;
+  - repair is external.
+
+  No new classification was added in this Cycle (see Known Limitations).
+- **A clone's own closure and its tracking primary.** A clone's closure
+  publishes the primary without advancing that clone's tracking primary
+  (Cycle 09 behavior). Until the clone polls, its preview of the closed
+  ticket reports `PrimaryAheadOfRemote`, with `ContextMissing` in place of
+  `AlreadyClosed`: its base is still the stale tracking primary, where the
+  ticket is open. After the poll it reports `AlreadyClosed`. *Amended 2026-10-18 (Cycle 10 execution, R-T8-2(b)).*
 - **Collaborator's open context of a closed ticket.** Its poll reports the
   context `remotely_deleted` and keeps it (Cycle 08). The C5 guard refuses new
   writes there once its primary is closed. Discarding it is later work.
+
+  **Amended 2026-10-18 (Cycle 10 execution, R-T6-6).** While a ticket's
+  context is kept, the read API returns the active context's copy (the
+  existing read rule), not the primary's. In a collaborator's clone that copy
+  may still be open: the listing shows one copy, context `Active`, status
+  `open`, closure `Open`. The guard still refuses writes, because the
+  primary copy is closed. "Listed from the primary only" (Cycle contract
+  item 10) holds after cleanup, in the closing clone.
 
 ## Privacy
 
@@ -587,6 +666,29 @@ As Cycle 09, plus:
 | Exit between checkout and ref update | `closing`; worktree holds the closed Blob, ref at `context_oid` | Finish the guarded ref update |
 | Exit after the checkpoint, before the merge | `closing`; context reads closed | C9 path: merge without re-consent; conflict → `RecoveryRequired` |
 | True concurrent closure | Later clone publication pending conflict | External repair (C11) |
+
+## Known Limitations
+
+Added 2026-10-18 (Cycle 10 execution). Each is fail-closed: nothing is lost
+or deleted without a guard, but an operator must act.
+
+- **Re-push at `branch_deleted` (R-T6B-2).** If a collaborator re-pushes the
+  ticket context branch while this clone's closure is at `branch_deleted`,
+  the closure stops `RecoveryRequired`, because the tracking ref changed.
+  The ticket is already closed on the primary. An operator clears the
+  record. The poll does not rebuild the context (it is fenced while the
+  closure's cleanup is unfinished).
+- **Minted but unreserved context attempt (R-T6B-1).** A context attempt is
+  minted but never reserved. The primary then absorbs a context whose net
+  change was already empty, while the ticket stays open. The digest is
+  unchanged, so the same ID reaches cleanup with no remote delete guard and
+  stops `RecoveryRequired`. A reserved context child that failed already
+  stops the same way.
+- **True race (R-T8-1, C11).** The later clone's conflict needs external
+  repair, as described under Polling And Concurrency: the ticket path is
+  classed `EligibleCanonical`, every in-product resolution fails
+  `ValidationFailed`, and the publication stays pending
+  `synchronization(conflict)`.
 
 ## Alternatives And Rulings
 
