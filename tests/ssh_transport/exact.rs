@@ -14,6 +14,10 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
     ("exact_delete_race", delete_race),
     ("exact_delete_lost_status", delete_lost_status),
     ("exact_delete_scope_and_policy", delete_scope_and_policy),
+    (
+        "exact_ticket_context_delete_is_in_scope",
+        ticket_context_delete_is_in_scope,
+    ),
     ("exact_delete_distinct_endpoint", delete_distinct_endpoint),
     (
         "exact_delete_post_send_observation",
@@ -134,13 +138,18 @@ fn delete_scope_and_policy() -> Result<(), FixtureError> {
         case.service
             .with_authenticated_remote(request, &mut session, |remote| {
                 let before = case.fixture.helper_invocations();
-                for target in [SynchronizationTarget::Primary, context()] {
-                    let error = remote
-                        .delete_exact(&plan(), &target, case.fixture.commit_id())
-                        .unwrap_err();
-                    assert_eq!(error.kind, SshTransportErrorKind::ConfigurationInvalid);
-                    assert!(!format!("{error:?} {error}").contains(&case.fixture.url()));
-                }
+                // Named edit 6 (owner, 2026-10-18): only the primary is out of
+                // delete scope; a ticket context is in scope since named edit 5
+                // (see `exact_ticket_context_delete_is_in_scope`).
+                let error = remote
+                    .delete_exact(
+                        &plan(),
+                        &SynchronizationTarget::Primary,
+                        case.fixture.commit_id(),
+                    )
+                    .unwrap_err();
+                assert_eq!(error.kind, SshTransportErrorKind::ConfigurationInvalid);
+                assert!(!format!("{error:?} {error}").contains(&case.fixture.url()));
                 assert_eq!(case.fixture.helper_invocations(), before);
                 case.service.clear_shared_key_selection().unwrap();
                 let error = remote
@@ -152,6 +161,58 @@ fn delete_scope_and_policy() -> Result<(), FixtureError> {
                 Ok(())
             }),
     )?;
+    Ok(())
+}
+/// A ticket context delete is one exact `:<ticket context ref>` push under
+/// its expected-OID guard: a stale guard sends no update, the current guard
+/// deletes exactly that ref with one receive update, and nothing else moves.
+fn ticket_context_delete_is_in_scope() -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let reference = ObservationRef::RemoteTicket;
+    assert_eq!(reference.name(), target_ref());
+    case.fixture.set_observation_ref(reference, true)?;
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    let original = case.fixture.commit_id();
+    let competing = root_commit(&server, "refs/heads/competing")?;
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Delete;
+    let stale = fixed(case.service.with_authenticated_remote(
+        request.clone(),
+        &mut session,
+        |remote| remote.delete_exact(&plan(), &context(), competing),
+    ))?;
+    assert_eq!(stale, DeleteObservation::Changed(original));
+    case.fixture.wait_for_helper_audits()?;
+    assert!(case.fixture.receive_updates().is_empty());
+    assert_eq!(fixed(server.refname_to_id(target_ref()))?, original);
+    let observation = fixed(case.service.with_authenticated_remote(
+        request,
+        &mut session,
+        |remote| remote.delete_exact(&plan(), &context(), original),
+    ))?;
+    assert_eq!(observation, DeleteObservation::Deleted);
+    for rendered in [format!("{stale:?}"), format!("{observation:?}")] {
+        for sentinel in [&case.fixture.url(), PASSWORD, "fixture@example.invalid"] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+    case.fixture.wait_for_helper_audits()?;
+    assert_eq!(
+        case.fixture.receive_updates(),
+        [ReceiveUpdate {
+            reference: target_ref().into(),
+            old_oid: original,
+            new_oid: git2::Oid::zero(),
+            accepted: true,
+        }]
+    );
+    assert!(server.find_reference(target_ref()).is_err());
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, original);
+    assert_eq!(
+        fixed(server.refname_to_id("refs/heads/competing"))?,
+        competing
+    );
     Ok(())
 }
 fn delete_distinct_endpoint() -> Result<(), FixtureError> {
