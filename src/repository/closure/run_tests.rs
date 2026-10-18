@@ -501,6 +501,37 @@ fn a_changed_or_missing_identity_since_the_preview_is_external_change() {
     }
 }
 
+/// R-F-4: once the record exists, a live identity that changed before the
+/// integration reaches the client as `ReconfirmationRequired` and abandons
+/// the record with that refusal, whatever variant the hook itself returns
+/// (the shared runner maps every pre-integration consent refusal so).
+#[test]
+fn a_changed_identity_after_the_record_exists_abandons_as_reconfirmation_required() {
+    let f = Fixture::new();
+    let req = f.request();
+    let root = f.root().to_owned();
+    f.hook(move |_, point| {
+        if point == FailurePoint::AfterContextSync {
+            git2::Repository::open(&root)
+                .unwrap()
+                .config()
+                .unwrap()
+                .set_str("user.email", "changed@example.invalid")
+                .unwrap();
+        }
+    });
+    let result = f.close(&f.service, req.clone());
+    assert!(
+        matches!(result, Err(TicketClosureError::ReconfirmationRequired)),
+        "{result:?}"
+    );
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(r.refusal, Some(record::Refusal::ReconfirmationRequired));
+    assert_eq!(r.closure_oid, None);
+    assert_eq!(f.commits_in_odb(&close_subject()), 0);
+}
+
 /// R-T2-1: a new record carries the observed closure effect; only a refusal
 /// recorded before any observation has none.
 #[test]

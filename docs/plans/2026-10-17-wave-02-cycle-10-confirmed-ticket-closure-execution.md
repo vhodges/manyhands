@@ -1723,7 +1723,10 @@ Rulings R-F-1 and R-F-2 decided each; all are fixed in code or the design.
 - **M-2.** The design's `Transport` variant is amended to
   `Transport(Box<SshTransportError>)`.
 - **M-3.** A live identity that differs from the consented `closed_by` at
-  the hook is `ExternalChange`, as C2 says.
+  the hook returns `ExternalChange` from the hook. Corrected in fix round 2
+  (R-F-4): the shared runner abandons every consent refusal before
+  `integrating` as `ReconfirmationRequired`, so that is what `close_ticket`
+  returns and the record stores; the runner is unchanged.
 - **M-4.** The identity is compared with `closed_by` before
   `promotion_identity` persists a confirmed identity (a read-only
   `select_committing_identity` in closure code), and again after. No
@@ -1740,3 +1743,24 @@ fix. `no_remote_conflicting_merge_refuses_before_any_ref_moves` (this
 Cycle) now hands the hook an observation that missed the moved base,
 because the preview itself blocks the case; its execution assertion is
 unchanged.
+
+### Fix round 2 (2026-10-18, re-review N-1, N-2)
+
+- **N-1 (R-F-3).** The preview's checkpoint build and merge now run only
+  where execution merges the checkpoint against the observed context: no
+  publication remote, or a contained context. With a remote and a context
+  that is not contained, the context child merges the base in first, so a
+  primary-side `status` edit there no longer blocks a closure that
+  executes. The design's I-1 amendment is scoped to match. Tests:
+  `remote_uncontained_status_edit_stays_ready` (lib, red before the fix
+  with `Blocked([IntegrationConflict])`) and the SSH journey
+  `remote_status_edit_after_merge_base_closes`, which previews `Ready`,
+  closes, and publishes a merge whose ticket keeps `status: doing`, the
+  context body and the closure. The SSH journey failed with the scope
+  check disabled.
+- **N-2 (R-F-4).** No runner change. The design's identity notes and the
+  M-3 line above now say that a changed live identity, once the record
+  exists, reaches the client as `ReconfirmationRequired` and abandons the
+  record with that refusal. The runner test
+  `a_changed_identity_after_the_record_exists_abandons_as_reconfirmation_required`
+  pins it.

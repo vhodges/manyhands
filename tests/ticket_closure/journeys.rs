@@ -19,6 +19,10 @@ pub(super) const CASES: &[ssh_harness::Case] = &[
         contained_open,
     ),
     ("context_conflict_resolve_same_id_closes_once", conflict),
+    (
+        "remote_status_edit_after_merge_base_closes",
+        remote_status_edit,
+    ),
     ("poll_advances_primary_mid_closure_retry_once", poll_advance),
     ("primary_only_advance_preserves_consent", || {
         changed_context(true)
@@ -1429,5 +1433,53 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
     assert_eq!(step(&p.a, request.operation_id)?, "abandoned");
     assert_eq!(p.server.accepted_sockets(), connections);
     assert_eq!(all_images(&p)?, before);
+    p.privacy()
+}
+
+/// Re-review N-1 (R-F-3): with a remote, the primary edits `status` after
+/// the context's merge base. The closure fields would sit next to that edit,
+/// but the context child merges the base into the context first, so the
+/// checkpoint contains the base and no checkpoint merge runs: the preview is
+/// `Ready` and the closure completes with both edits.
+fn remote_status_edit() -> Result<(), FixtureError> {
+    let p = Pair::new()?;
+    let edited = p.edit(&p.a, BODY)?;
+    let repo = p.a.repo()?;
+    let source = fixed(String::from_utf8(fixed(std::fs::read(
+        p.a.root.join(TICKET_PATH),
+    ))?))?;
+    assert!(source.contains("status: open"));
+    let doing = source.replace("status: open", "status: doing");
+    let status = commit_files(&repo, &[(TICKET_PATH, doing.as_bytes())])?;
+    fixed(p.sync_target(&p.a, SynchronizationTarget::Primary))?;
+    assert_eq!(server_oid(&p, MAIN)?, status);
+    poll(&p, &p.a)?;
+    assert_eq!(oid(&p.a, TRACKING_MAIN)?, status);
+    let preview = p.preview(&p.a)?;
+    assert_eq!(preview.integration(), PlannedIntegration::MergeCommit);
+    assert!(matches!(preview.closure(), PlannedClosure::Record { .. }));
+    let outcome = p.close(&p.a)?;
+    let checkpoint = checkpoint_of(&outcome)?;
+    let merged = merged(&outcome)?;
+    assert_eq!(
+        outcome.publication(),
+        PromotionPublication::Published { oid: merged }
+    );
+    assert_eq!(outcome.cleanup(), PromotionCleanup::Complete);
+    // The checkpoint sits on the synchronized context, which holds both
+    // the context's edit and the primary's `status` edit.
+    let synchronized = fixed(fixed(repo.find_commit(checkpoint))?.parent_id(0))?;
+    assert_ne!(synchronized, edited);
+    assert!(fixed(repo.graph_descendant_of(synchronized, status))?);
+    assert!(fixed(repo.graph_descendant_of(synchronized, edited))?);
+    let ticket = ticket_at(&p.a, merged)?;
+    assert_eq!(ticket.status, "doing");
+    assert_eq!(ticket.body, BODY);
+    assert_eq!(ticket.closed_by.as_deref(), Some(p.a.closed_by().as_str()));
+    assert!(ticket.closed_at.is_some());
+    assert_eq!(server_oid(&p, MAIN)?, merged);
+    assert_eq!(commits(&p.a, &close_subject())?, 1);
+    assert_eq!(commits(&p.a, &merge_subject())?, 1);
+    cleaned(&p, &p.a)?;
     p.privacy()
 }

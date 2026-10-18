@@ -868,7 +868,9 @@ fn observe_git(
                         || closed_ticket_bytes(&result_bytes, at, closed_by).is_err()
                     {
                         blockers.insert(TicketInvalidAfterClosure);
-                    } else if let (Some(base), Some(context)) = (base, context_oid) {
+                    } else if let (Some(base), Some(context)) = (base, context_oid)
+                        && (config.publication_remote.is_none() || contained)
+                    {
                         // Final review I-1: the checkpoint and its merge into
                         // the base, exactly as execution builds them, in the
                         // memory-backed `worker`. The closure fields can sit
@@ -876,6 +878,11 @@ fn observe_git(
                         // never sees. `at` stands in for `closed_at`: each
                         // field is one line whatever its value, so whether a
                         // hunk conflicts never depends on it.
+                        // Only where execution merges the checkpoint against
+                        // this context (R-F-3): with a remote and a context
+                        // that is not contained, the context child merges
+                        // the base in first, and the checkpoint then
+                        // contains the base, so no checkpoint merge runs.
                         let stand_in = CommitIdentity {
                             name: "Manyhands".into(),
                             email: "closure@invalid".into(),

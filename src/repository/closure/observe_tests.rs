@@ -449,6 +449,23 @@ fn contained_open_checkpoint_merge_conflict_blocks_at_preview() {
     commit(&f.repo);
     f.blocked(&[ClosureBlocker::IntegrationConflict]);
 }
+/// Re-review N-1 (R-F-3): with a remote and a context that is not
+/// contained, the context child merges the base into the context first, so
+/// execution never merges the checkpoint against this context. The same
+/// `status` edit that blocks without a remote must not block here.
+#[test]
+fn remote_uncontained_status_edit_stays_ready() {
+    let f = Fixture::new(true);
+    let source = String::from_utf8(read(&f.repo, &ticket()))
+        .unwrap()
+        .replace("status: open", "status: doing");
+    write(&f.repo, &ticket(), source);
+    let advanced = commit(&f.repo);
+    f.tracking("main", advanced);
+    let p = f.ready();
+    assert_eq!(p.integration(), PlannedIntegration::MergeCommit);
+    assert!(f.observation(at(1_700_000_000)).needs_context_child);
+}
 #[test]
 fn remote_context_deleted() {
     let f = Fixture::new(true);

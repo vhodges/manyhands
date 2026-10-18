@@ -218,7 +218,11 @@ shows IDs, OIDs and categories only, never `closed_by`.
 
 **Identity errors at execution.** `close_ticket` never returns
 `Blocked([IdentityRequired])` for a missing merge signer. A `Record` closure
-whose effective identity changed since preview is `ExternalChange` (C2). An
+whose effective identity changed since preview is `ExternalChange` (C2).
+*Corrected 2026-10-18 (R-F-4):* that holds when the change is found before
+the record exists; once the record exists (at revalidation or in the hook)
+the client sees `ReconfirmationRequired` and the record is abandoned with
+that refusal. An
 `Existing` closure that needs a merge signer and has none returns the
 retryable `IdentityRequired { expected_configuration }` without ending the
 record, as promotion does. A cleanup-only closure needs no identity.
@@ -308,8 +312,10 @@ The closure observation is the promotion observation with these changes:
    the original apart from the two closure fields. Failure is
    `TicketInvalidAfterClosure`. No `.manyhands/worktrees/` entry may appear.
 
-   **Amended 2026-10-18 (final review I-1).** For a `Record` closure the
-   preview also builds the closed ticket Blob, the checkpoint tree and
+   **Amended 2026-10-18 (final review I-1; scoped by R-F-3).** For a
+   `Record` closure that execution merges against the observed context
+   (no publication remote, or a context the base contains), the preview
+   also builds the closed ticket Blob, the checkpoint tree and
    commit, and the checkpoint's merge into the base, through the same
    function step 5 runs, in the observation's memory-backed handle (nothing
    reaches the repository ODB). The closure fields sit next to `status`, so
@@ -319,7 +325,11 @@ The closure observation is the promotion observation with these changes:
    The preview time stands in for `closed_at` and the selected identity (or
    a fixed stand-in before one is selected) for `closed_by`: each is one
    line, so whether the merge conflicts never depends on their values. The
-   digest is unchanged. Step 5's refusal stays as the safety net.
+   digest is unchanged. Step 5's refusal stays as the safety net. With a
+   remote and a context that is not contained, the preview does not build
+   the checkpoint: the context child merges the base into the context first
+   (step 3 requires `base ≤ context`), so step 5 builds the checkpoint on a
+   context that contains the base and no checkpoint merge runs.
 7. **Identity (C2).** Run the extracted `select_committing_identity` with the
    request's confirmation. For `Record`, no complete effective identity and no
    matching confirmation is `IdentityRequired`, with the expected
@@ -376,8 +386,12 @@ until step 6:
 
    **Amended 2026-10-18 (final review M-3, M-4).** The selected identity is
    compared with the consented `closed_by` before anything is persisted, and
-   again after; a difference is `ExternalChange` (C2), and the refusal
-   leaves configuration untouched.
+   again after; a difference refuses, and the refusal leaves configuration
+   untouched. Corrected 2026-10-18 (R-F-4): the hook's own variant is
+   `ExternalChange`, but the shared runner maps every consent refusal
+   before `integrating` to an abandon, so `close_ticket` returns
+   `ReconfirmationRequired` and the record stores that refusal. The runner
+   is not changed (it is shared with promotion).
 5. Build every object in the repository ODB, unreferenced (`Record` only):
    - `closed_at`: the record's stored value, or now in whole UTC seconds;
    - the closed ticket Blob from `closed_ticket_bytes` (C10), mode preserved;
