@@ -1331,3 +1331,94 @@ wrappers compile). fmt and Clippy (`-D warnings`) are clean.
   - `--test local_authoring`: 140.
   - `--test mutation_contract`: 43.
   - fmt and Clippy (`-D warnings`) are clean.
+
+## Task 8 — Prove Closure Over Real SSH (2026-10-18)
+
+Base `2670708`.
+
+### What landed
+
+- **`tests/ticket_closure.rs`** and `tests/ticket_closure/{journeys,
+  checkpoint, exits, races, privacy}.rs`. The target mirrors
+  `document_promotion`: its own `main`, `ssh_harness::initialize`, the
+  `--closure-exit` child (`exits::maybe_child`),
+  `run_with_short_output_privacy`, and `#[path]` support includes. Two clones
+  with distinct identities (A and B) share one owned SSH server. The ticket
+  is seeded open on the primary, and A's product edit makes its context. The
+  ticket ID is the fixture's `ObservationRef::RemoteTicket`, so the
+  fixture's receive race reaches its context.
+- **72 SSH cases**, plus 5 child-only output controls:
+  - 23 journeys;
+  - 21 blockers, one for each `ClosureBlocker`;
+  - 6 checkpoint seams;
+  - 2 races;
+  - 17 exits;
+  - 3 privacy cases.
+- **`Cargo.toml`** has `[[test]] ticket_closure` with `harness = false`.
+  **`.github/workflows/build.yml`** appends `--test ticket_closure`. The
+  workflow was not dispatched.
+- **Named edit 4.** The column-scoped scanner moved to
+  `tests/support/privacy_rows.rs` as `scan_rows`/`scan_workflow_rows` with a
+  `RowPolicy`, which names the workflow tables, the required table and the
+  `(discovered_items column, exact value)` exemptions.
+  `tests/document_promotion.rs` now calls it with its old table list, its
+  old required table (`document_promotions`) and its one exemption
+  (`title`, `TITLE`). The policy keeps the per-probe check inside an exempt
+  cell. Closure adds `ticket_closures` to its workflow tables, and exempts
+  `title` and both clones' `closed_by`, each in its own column only.
+- **No production change.** No case exposed a bug.
+
+### First run (red) and fixes
+
+A per-case timed run had 7 failures out of 72. Each was a test-side mistake
+about existing behaviour, fixed in the test without weakening an assertion:
+
+- `contained_open`, `blocker_already_closed`, `blocker_primary_reopened` and
+  `preserve_moved` previewed straight after the clone's own primary
+  publication. They saw `PrimaryAheadOfRemote` (and `ContextMissing` in
+  place of `AlreadyClosed`). The cause: a publication does not advance
+  `T(P)`, the same as in Cycle 09. Each case now runs an ordinary poll first.
+- `blocker_remote_context_deleted` published the context only once, so no
+  tracking ref existed to prune. It now synchronizes twice, as Cycle 09
+  does.
+- `pending_comment_publication` retried the failed comment child without
+  `restart`. That is `RecoveryRequired` under the comment publication
+  contract (Cycle 08 `interrupted_restart`). The retry now uses a reopened
+  service with `restart: true`.
+- `true_race` expected `ExternalResolutionRequired`. The product instead
+  marks the conflicted ticket `EligibleCanonical`. Resolving it with either
+  side's closure returns `ValidationFailed` (Cycle 06 validation keeps every
+  side's closure), and nothing is written. The case asserts exactly that.
+
+### Outcomes asserted against rulings
+
+- **Exit at `ClosureAfterClosingRecorded`, then an advanced or conflicting
+  published primary:** the same ID abandons with `ReconfirmationRequired`
+  (R-T4-3). The checkpoint stays unreferenced. A new confirmation closes
+  once; after a conflicting advance, that follows a manual context
+  synchronization and its resolution.
+- **Exit at `ClosureDuringCheckpointCheckout` or `AfterClosureCheckpoint`:**
+  - An advanced primary merges in memory with the checkpoint's own
+    `closed_at`. No context child runs.
+  - A conflicting primary is `RecoveryRequired` with the record unchanged.
+    The user then synchronizes the context by hand (R-T6-1), and the same ID
+    merges `[T(P), adopted]` with no context push.
+- **Sequential second closure:** B's context child merges A's closed primary
+  and pushes it. B stops with `ReconfirmationRequired` before writing, and
+  its next preview is `[AlreadyClosed]`. A's guarded delete then reports
+  `RemoteContextChanged`.
+- **True race:** the hold is both clones stopping at F2, released A then B.
+  B's publication is pending a conflict and its cleanup awaits publication.
+  Both closures stay in history, and a later closure in B is blocked by
+  `PrimaryAheadOfRemote`.
+
+### Tests
+
+| Args | Result |
+| --- | --- |
+| `--test ticket_closure` | 72 SSH cases passed (new) |
+| `--test document_promotion` | 74 SSH cases passed (edit 4) |
+
+The slowest case took 19.6 s; every case is under 20 s. fmt and Clippy
+(`-D warnings`) are clean. No production code changed, so the brief's other
+affected targets and `--lib closure` were not rerun (owner testing policy).

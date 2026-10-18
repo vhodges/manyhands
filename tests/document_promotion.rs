@@ -4,6 +4,8 @@
 pub use manyhands::*;
 #[path = "document_promotion/journeys.rs"]
 mod journeys;
+#[path = "support/privacy_rows.rs"]
+mod privacy_rows;
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/ssh_harness.rs"]
@@ -876,51 +878,25 @@ fn cache_loss_fresh_edit() -> Result<(), FixtureError> {
     p.privacy()
 }
 
+/// The column-scoped title exception, now in `tests/support/privacy_rows.rs`
+/// (Cycle 10 named edit 4): the same tables, required table and exemption.
+const ROW_POLICY: privacy_rows::RowPolicy<'static> = privacy_rows::RowPolicy {
+    workflow: &[
+        "document_promotions",
+        "retired_contexts",
+        "operation_records",
+        "comment_publication_bindings",
+    ],
+    required: "document_promotions",
+    exempt: &[("title", TITLE.as_bytes())],
+};
 fn scan_workflow_rows(db: &rusqlite::Connection, probes: &[Vec<u8>]) -> Result<(), FixtureError> {
-    scan_rows(db, probes, false)
+    privacy_rows::scan_workflow_rows(db, probes, &ROW_POLICY)
 }
-/// The raw accepted-title exception is column-scoped in live/backup row scans,
-/// never a blanket permission for other tables or other discovery columns.
 fn scan_rows(
     db: &rusqlite::Connection,
     probes: &[Vec<u8>],
     include_cache: bool,
 ) -> Result<(), FixtureError> {
-    ssh_privacy::clean(b"", probes)?;
-    let sql = if include_cache {
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-    } else {
-        "SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'remote_%' OR name IN ('document_promotions','retired_contexts','operation_records','comment_publication_bindings')) ORDER BY name"
-    };
-    let mut names = fixed(db.prepare(sql))?;
-    let tables = fixed(
-        fixed(names.query_map([], |r| r.get::<_, String>(0)))?.collect::<Result<Vec<_>, _>>(),
-    )?;
-    assert!(tables.iter().any(|n| n == "document_promotions"));
-    for table in tables {
-        let mut q = fixed(db.prepare(&format!("SELECT * FROM {table}")))?;
-        let cols = q.column_count();
-        let title_column = if include_cache && table == "discovered_items" {
-            (0..cols).find(|col| q.column_name(*col).ok() == Some("title"))
-        } else {
-            None
-        };
-        let mut rows = fixed(q.query([]))?;
-        while let Some(row) = fixed(rows.next())? {
-            for col in 0..cols {
-                if let rusqlite::types::ValueRef::Text(bytes)
-                | rusqlite::types::ValueRef::Blob(bytes) = fixed(row.get_ref(col))?
-                {
-                    if title_column == Some(col) && bytes == TITLE.as_bytes() {
-                        for probe in probes.iter().filter(|p| p.as_slice() != TITLE.as_bytes()) {
-                            ssh_privacy::clean(bytes, std::slice::from_ref(probe))?;
-                        }
-                    } else {
-                        ssh_privacy::clean(bytes, probes)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    privacy_rows::scan_rows(db, probes, include_cache, &ROW_POLICY)
 }
