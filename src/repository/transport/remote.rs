@@ -961,6 +961,21 @@ mod tests {
         };
         // Named edit 5 (owner, 2026-10-17): a ticket context delete is the
         // same exact `:<context remote ref>` shape as a document's.
+        assert_eq!(
+            exact_mappings(&plan, &ticket, SshDirection::Delete),
+            [":refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAX"]
+        );
+        for invalid in [
+            "",
+            "+:refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAX",
+        ] {
+            assert!(!mappings_match_scope(
+                &plan,
+                &ticket,
+                SshDirection::Delete,
+                &[invalid]
+            ));
+        }
         assert!(mappings_match_scope(
             &plan,
             &ticket,

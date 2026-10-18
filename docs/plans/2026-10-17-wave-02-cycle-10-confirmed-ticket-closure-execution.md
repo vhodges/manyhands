@@ -1122,3 +1122,84 @@ warnings` is clean.
 | `--test remote_polling` | 84 SSH |
 
 fmt and Clippy (`-D warnings`) are clean.
+
+### Task 6B (consolidation, R-T2-4, R-T5-2, R-T5-3, R-T6-5, poll materialization)
+
+Base `96ed63d`. Two commits: the refactor `1c15078`, then the fixes.
+
+- **R-T2-4 hoist.** `src/repository/promotion/lifecycle_record.rs` now holds
+  the table-agnostic parent logic, next to the `lifecycle.rs` seam:
+  - the `categories!` macro;
+  - row decoding (`Row`) and the refusal mask (generic `Refusal<B>` over a
+    `Blocker` order, with one `LifecycleRefusal` impl);
+  - `mismatch`/`busy` by kind, with each kind's message unchanged;
+  - `existing_record`, `unfinished_record`, `replacement_guard`, `supersede`;
+  - `ChildRole`, `ChildExecution`, `ChildState`, `child_state`,
+    `next_attempt`, `mint_attempt` and the reset body;
+  - the remote and local identity checks, `audit`, `complete_record`,
+    `reconcile_completion` and the two cancellation functions.
+
+  A `ParentRecord` trait (kind, decode, schema check, attempt counters)
+  extends `LifecycleRecord`. Both record modules keep their public function
+  names as one-line forwarders, so no caller or test changed.
+- **Stays per kind.** The schema, migration and marker; the step enum and its
+  `permits` graph; `validate` (the step invariants differ: closure has
+  `closing`, `closure_kind`, `closed_at`, the checkpoint and the adopted
+  context); `insert_record` and `save_record` (different columns and checks);
+  the supersession rule (closure never supersedes `closing`/`integrating`);
+  the reset's step test (closure's `closing` reads as `context_synchronized`
+  in the shared view, so the shared step cannot decide it); the deletion and
+  guard rules; closure's checkpoint writes and fences.
+- **Task 5 duplication.** One `ParentFacts::read(kind)` replaces both
+  `ParentBinding` constructors and the reservation restart's `ended` check.
+  One `child_allowed(ParentStep, role)` serves the fence and `next_attempt`.
+- **R-T6-5.** `LeasedIntegration::operation_id` had no reader. It is removed
+  with its two production initializers and its three this-Cycle test
+  initializers (`lifecycle_tests.rs`, `checkpoint_tests.rs`).
+- **Nit.** The `FakeIo` primary arm uses `plan.primary().remote_ref()`.
+- **R-T5-2.** The closure guard falls back to the tracking OID only with
+  `context_attempt == 0`. A minted attempt that never reserved has no guard,
+  so cleanup stops `RecoveryRequired` before any delete. This Cycle's unit
+  assertion that pinned the old fallback is flipped.
+- **R-T5-3.** Closure `save_record` refuses `remote_context_oid` None→Some
+  except at `confirmed → context_synchronized`.
+- **Poll materialization.** This was reachable. A closure that deletes no
+  remote branch (no context attempt, no tracking context) holds no close
+  slot. Stopped at `branch_deleted`, its worktree and branch are gone but not
+  retired. A collaborator's push then let a poll rebuild both (red:
+  `Materialized`). `materialize_context_unlocked` now refuses
+  `BlockedByLocalState` for a ticket while `written_closure_unfinished`.
+  With a remote delete the closure holds its slot from cleanup to
+  completion, so a poll is `Busy`; a test pins that. At `worktree_removed`
+  the branch is still present, so materialization already refuses.
+- **Tests (+6 in closure; reservation +2, cleanup +1 of those).**
+  - `a_minted_context_attempt_that_never_reserved_has_no_delete_guard`
+  - `remote_context_oid_is_set_only_with_context_synchronized`
+  - `a_poll_never_rebuilds_the_context_while_closure_cleanup_is_unfinished`
+  - `a_poll_cannot_run_while_the_closure_holds_its_close_slot`
+  - `child_fence_admits_closure_primary_only_while_integrated_or_publication_pending`
+  - `child_fence_refuses_unreserved_closure_children_after_cancellation`
+  - In `transport_delete_scope_is_exact_context_only` (named edit 5): the
+    ticket `exact_mappings` equality and the `""` and `+:` refusals.
+- **Red.** These failed before the fixes: the R-T5-2 runner test (cleanup
+  `Complete`, delete guarded by tracking), the flipped unit assertion, the
+  R-T5-3 test (save accepted) and the materialization test
+  (`Materialized`). The slot, fence and transport tests pin existing
+  behaviour and passed on first run.
+
+| Args | Before | Refactor | Task 6B |
+| --- | --- | --- | --- |
+| `--lib closure` | 162 | 162 | 168 (+6) |
+| `--lib promotion` | 199 | 199 | 199 |
+| `--lib remote::reservation` | 52 | 52 | 54 (+2) |
+| `--lib cleanup` | 46 | 46 | 47 (+1, a new test named "…cleanup…") |
+| `--lib recovery` | 50 | 50 | 50 |
+| `--lib transport` | 38 | 38 | 38 (one test extended) |
+| `--lib remote::poll` | 79 | 79 | 79 |
+| `--test document_promotion` | 74 SSH | 74 SSH | 74 SSH |
+| `--test remote_reservation` | 13 | 13 | 13 |
+| `--test remote_polling` | 84 SSH | not run | 84 SSH |
+
+`--lib recovery` was 46 at Tasks 0-2; four closure tests named "…recovery…"
+from Tasks 4 and 6A make it 50 at the base. fmt and Clippy (`-D warnings`)
+are clean.

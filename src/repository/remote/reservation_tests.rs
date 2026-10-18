@@ -4200,3 +4200,211 @@ fn child_fence_refuses_document_target_for_closure_parent() {
         0
     );
 }
+
+/// Walks a closure parent through its checkpoint to `integrated`, then mints
+/// its primary attempt (Task 5 minor 5).
+fn close_primary_child(
+    service: &RepositoryService,
+    root: &Path,
+) -> (
+    crate::repository::closure::record::ClosureRecord,
+    crate::repository::promotion::record::ChildExecution,
+) {
+    use crate::repository::{
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::{ChildRole, IntegrationKind},
+    };
+    let parent = close_parent(service, root);
+    let parent = state::with_transaction(service, root, |tx, id| {
+        let op = parent.operation_id;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.context_oid = Some(close_oid('1'));
+        r.step = ClosureStep::ContextSynchronized;
+        closure::save_record(tx, id, &r)?;
+        closure::begin_closing(
+            tx,
+            id,
+            op,
+            close_oid('2'),
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            close_oid('3'),
+        )?;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.integration_kind = Some(IntegrationKind::Merged);
+        r.step = ClosureStep::Integrating;
+        closure::save_record(tx, id, &r)?;
+        r.integration_oid = Some(close_oid('4'));
+        r.step = ClosureStep::Integrated;
+        closure::save_record(tx, id, &r)?;
+        closure::next_attempt(tx, id, op, ChildRole::Primary)
+    })
+    .unwrap();
+    let execution = closure::child_execution(&parent, ChildRole::Primary).unwrap();
+    (parent, execution)
+}
+/// Moves the closure parent to `step` and returns whether the fence admits
+/// its primary child with no reservation yet.
+fn close_primary_fence_at(
+    service: &RepositoryService,
+    root: &Path,
+    parent: &crate::repository::closure::record::ClosureRecord,
+    execution: &crate::repository::promotion::record::ChildExecution,
+    step: crate::repository::closure::record::ClosureStep,
+) -> Result<(), RepositoryErrorKind> {
+    use crate::repository::{
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::PublicationCategory,
+    };
+    state::with_transaction(service, root, |tx, id| {
+        let mut r = closure::read_record(tx, id, parent.operation_id)?.unwrap();
+        if r.step != step {
+            r.publication = Some(if step == ClosureStep::PublicationPending {
+                PublicationCategory::Transport
+            } else {
+                PublicationCategory::Published
+            });
+            r.step = step;
+            closure::save_record(tx, id, &r)?;
+        }
+        Ok(execution.validate(tx, id, parent.primary_sync_id.unwrap()))
+    })
+    .unwrap()
+    .map_err(|e| e.kind)
+}
+
+/// Task 5 minor 5: a closure parent admits its primary child only from
+/// `integrated` or `publication_pending`, as a promotion parent does.
+#[test]
+fn child_fence_admits_closure_primary_only_while_integrated_or_publication_pending() {
+    use crate::repository::closure::record::ClosureStep;
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    let child = parent.primary_sync_id.unwrap();
+    execution
+        .validate_request(&crate::repository::SynchronizeRemoteRequest {
+            root: root.path().into(),
+            operation_id: child,
+            target: crate::repository::SynchronizationTarget::Primary,
+            approval: None,
+            confirmed_identity: None,
+            restart: false,
+        })
+        .unwrap();
+    // A context target is never the primary child's.
+    assert_eq!(
+        execution
+            .validate_request(&context_request(
+                root.path(),
+                child,
+                crate::repository::AuthoringKind::Ticket
+            ))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    for step in [ClosureStep::Integrated, ClosureStep::PublicationPending] {
+        assert_eq!(
+            close_primary_fence_at(&service, root.path(), &parent, &execution, step),
+            Ok(()),
+            "{step:?}"
+        );
+    }
+    for step in [
+        ClosureStep::Published,
+        ClosureStep::RemoteDeleted,
+        ClosureStep::WorktreeRemoving,
+        ClosureStep::WorktreeRemoved,
+        ClosureStep::BranchDeleted,
+    ] {
+        assert_eq!(
+            close_primary_fence_at(&service, root.path(), &parent, &execution, step),
+            Err(RepositoryErrorKind::OperationMismatch),
+            "{step:?}"
+        );
+    }
+    // Refused through the reservation fence as well: no row is written.
+    assert_eq!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &RemoteOperationTarget::for_primary_synchronization(&plan()),
+                &execution,
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| state::read_operation(
+            tx, id, child
+        ))
+        .unwrap()
+        .is_none()
+    );
+}
+
+/// A closure context attempt before it reserved is refused once the
+/// parent's cancellation is requested, and so is its primary attempt.
+#[test]
+fn child_fence_refuses_unreserved_closure_children_after_cancellation() {
+    use crate::repository::closure::record::{self as closure, ClosureStep};
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_child(&service, root.path());
+    let child = parent.context_sync_id.unwrap();
+    let validate = |execution: &crate::repository::promotion::record::ChildExecution,
+                    child: OperationId| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(execution.validate(tx, id, child).map_err(|e| e.kind))
+        })
+        .unwrap()
+    };
+    assert_eq!(validate(&execution, child), Ok(()));
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::request_cancellation(tx, id, parent.operation_id)
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        validate(&execution, child),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    assert!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &context_sync_target(crate::repository::AuthoringKind::Ticket),
+                &execution,
+            )
+            .is_err()
+    );
+    // The primary role reads the same flag.
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    let child = parent.primary_sync_id.unwrap();
+    assert_eq!(
+        close_primary_fence_at(
+            &service,
+            root.path(),
+            &parent,
+            &execution,
+            ClosureStep::Integrated
+        ),
+        Ok(())
+    );
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::request_cancellation(tx, id, parent.operation_id)
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        state::with_transaction(&service, root.path(), |tx, id| Ok(execution
+            .validate(tx, id, child)
+            .map_err(|e| e.kind)))
+        .unwrap(),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+}

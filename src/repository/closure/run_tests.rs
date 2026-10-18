@@ -1363,6 +1363,45 @@ fn without_a_child_or_tracking_context_nothing_is_reserved_or_deleted() {
     f.assert_cleaned();
 }
 
+/// R-T5-2: only a closure that minted no context attempt falls back to the
+/// tracking OID, the same proxy as the required-delete rule. A minted
+/// attempt that never reserved (its child state is absent) has no guard:
+/// cleanup stops `RecoveryRequired` before any delete, and the remote and
+/// local context are kept.
+#[test]
+fn a_minted_context_attempt_that_never_reserved_has_no_delete_guard() {
+    let f = contained(true);
+    let req = f.request();
+    let mut io = GuardIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterConfirmed),
+        req.clone(),
+        &mut io,
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Confirmed);
+    let minted = state::with_transaction(&f.service, f.root(), |tx, rid| {
+        record::next_attempt(tx, rid, req.operation_id, record::ChildRole::Context)
+    })
+    .unwrap();
+    assert_eq!(minted.context_attempt, 1);
+    let result = authoritative(f.run_io(&f.reopened(), req.clone(), &mut io).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::RecoveryRequired
+        }
+    );
+    // The contained context ran no child; the minted one never reserved.
+    assert_eq!(io.child_targets(), [SynchronizationTarget::Primary]);
+    assert!(io.guards.borrow().is_empty(), "no tracking fallback");
+    assert_eq!(io.inner.calls.borrow().deletes, 0);
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.context_attempt, 1);
+    assert_eq!(r.step, ClosureStep::Published);
+    assert!(f.root().join(".manyhands/worktrees").join(ID).exists());
+    assert!(f.repo.find_reference(&tracking_context_ref()).is_ok());
+}
+
 /// (e) After a `PrimaryAdvanced` reset, a collaborator merges the context
 /// into the primary and no tracking context is left: the cleanup set the
 /// consent binds changes (`remote_branch` no longer planned), so the same ID
@@ -1609,6 +1648,103 @@ fn a_poll_while_closing_updates_tracking_but_never_moves_the_context() {
     assert_eq!(f.context_oid(), pushed);
     outcome(f.run_io(&f.service, f.request(), &mut io).unwrap());
     assert!(f.primary_ticket().closed_at.is_some());
+}
+
+/// Poll materialization (6B), the remote-deletion case: from the start of
+/// cleanup the closure holds its close slot until completion, and a stop
+/// keeps it, so no poll runs (`Busy`) while the context is half removed.
+#[test]
+fn a_poll_cannot_run_while_the_closure_holds_its_close_slot() {
+    use crate::repository::{
+        RemoteOperationPriority, remote::reservation::RemotePollReservationOutcome,
+    };
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::BeforeCompletion),
+        req.clone(),
+        &mut io,
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::BranchDeleted);
+    assert_eq!(close_reservations(&f, req.operation_id), 1);
+    let plan = f.configure_endpoints();
+    assert!(matches!(
+        f.reopened()
+            .reserve_remote_poll(
+                f.root(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan),
+                RemoteOperationPriority::Poll,
+            )
+            .unwrap(),
+        RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Busy)
+    ));
+    outcome(f.run_io(&f.reopened(), req, &mut io).unwrap());
+    f.assert_cleaned();
+}
+
+/// Poll materialization (6B), the reachable case: a closure that deletes
+/// no remote branch (contained, no tracking context) holds no slot. Stopped
+/// at `branch_deleted`, its worktree and branch are gone but not retired. A
+/// collaborator then pushes the ticket context branch; the poll must not
+/// rebuild the context, as R-T6-4 fences the fast-forward.
+#[test]
+fn a_poll_never_rebuilds_the_context_while_closure_cleanup_is_unfinished() {
+    let f = contained(false);
+    let req = f.request();
+    let mut io = GuardIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::BeforeCompletion),
+        req.clone(),
+        &mut io,
+    );
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.step, ClosureStep::BranchDeleted);
+    assert_eq!(close_reservations(&f, req.operation_id), 0);
+    f.assert_cleaned();
+    // The collaborator's push reaches tracking.
+    let pushed = r.merged_context().unwrap();
+    f.repo
+        .reference(&tracking_context_ref(), pushed, true, "fixture")
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let remote_ref = plan
+        .context(AuthoringKind::Ticket, &id())
+        .remote_ref()
+        .to_owned();
+    let main = f.repo.refname_to_id("refs/remotes/origin/main").unwrap();
+    let report = poll(
+        &f,
+        vec![("refs/heads/main".to_owned(), main), (remote_ref, pushed)],
+    );
+    let target = report
+        .targets()
+        .iter()
+        .find(|t| t.item_id() == Some(&id()))
+        .expect("the ticket context is a poll target");
+    assert_eq!(
+        target.disposition(),
+        crate::repository::PollDisposition::BlockedByLocalState
+    );
+    f.assert_cleaned();
+    assert!(f.repo.find_worktree(ID).is_err());
+    // The same ID re-checks under the lease. The tracking context it would
+    // retire has changed, so its guarded tracking delete fails closed: it
+    // stays at `branch_deleted`, recovery required, and recreates nothing.
+    let result = authoritative(f.run_io(&f.reopened(), req.clone(), &mut io).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::RecoveryRequired
+        }
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::BranchDeleted);
+    assert_eq!(
+        f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        pushed
+    );
+    f.assert_cleaned();
 }
 
 /// Obligation 9, restart: a manual context synchronization interrupted

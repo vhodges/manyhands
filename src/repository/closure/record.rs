@@ -547,6 +547,10 @@ pub(in super::super) fn save_record(
         || old.integration_oid.is_some() && old.integration_oid != r.integration_oid
         || old.integration_kind.is_some() && old.integration_kind != r.integration_kind
         || old.remote_context_oid.is_some() && old.remote_context_oid != r.remote_context_oid
+        // R-T5-3: the tracking OID is observed with the synchronization only.
+        || old.remote_context_oid.is_none()
+            && r.remote_context_oid.is_some()
+            && (old.step, r.step) != (ClosureStep::Confirmed, ClosureStep::ContextSynchronized)
     {
         return Err(state::recovery_required());
     }
@@ -863,13 +867,18 @@ impl LifecycleRecord for ClosureRecord {
     fn set_remote_context_oid(&mut self, oid: Option<Oid>) {
         self.remote_context_oid = oid;
     }
-    /// R-T3-3: a contained closure runs no context child (`published` is
-    /// `None`: the child's state is absent), so the delete is guarded by the
-    /// pre-checkpoint tracking OID its observation recorded, never by an
-    /// absent publication. A child that ran guards it with its verified
-    /// publication (T7-1).
+    /// R-T3-3: a contained closure runs no context child, so the delete is
+    /// guarded by the pre-checkpoint tracking OID its observation recorded,
+    /// never by an absent publication. A child that ran guards it with its
+    /// verified publication (T7-1). R-T5-2: "no child ran" is no context
+    /// attempt, the proxy the required-delete rule uses; a minted attempt
+    /// that never reserved has no guard, and cleanup stops.
     fn remote_delete_guard(&self, published: Option<Oid>) -> Option<Oid> {
-        published.or(self.remote_context_oid)
+        if self.context_attempt == 0 {
+            published.or(self.remote_context_oid)
+        } else {
+            published
+        }
     }
     fn remote_deletion_required(&self) -> bool {
         deletion_reservation_required(self)

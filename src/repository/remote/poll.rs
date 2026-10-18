@@ -315,6 +315,23 @@ impl RepositoryService {
         {
             return Err(SynchronizationError::ExternalChange);
         }
+        // As R-T6-4 for the fast-forward: from `closing` until retirement a
+        // closure owns its ticket context. At `branch_deleted` the worktree
+        // and branch are gone but not retired, and completion proves them
+        // absent; a poll never rebuilds them. A closure that deletes the
+        // remote branch holds its slot through cleanup, so this is the
+        // closure without a remote delete (no attempt, no tracking context).
+        if request.kind == crate::repository::AuthoringKind::Ticket
+            && state::with_transaction(self, root, |tx, id| {
+                crate::repository::closure::record::written_closure_unfinished(
+                    tx,
+                    id,
+                    &request.item_id,
+                )
+            })?
+        {
+            return Ok(refused(PollDisposition::BlockedByLocalState));
+        }
 
         // Observe Git/filesystem presence first, then consult durable ownership.
         let observed =

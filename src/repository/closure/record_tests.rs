@@ -1209,9 +1209,70 @@ fn remote_delete_guard_uses_tracking_without_a_context_child_else_its_publicatio
         with_child.remote_delete_guard(Some(published)),
         Some(published)
     );
-    // A minted attempt that never ran (absent, e.g. skipped after a primary
-    // advance made the context contained) falls back to the tracking OID.
-    assert_eq!(with_child.remote_delete_guard(None), Some(tracking));
+    // R-T5-2: a minted attempt that never ran (absent, e.g. skipped after a
+    // primary advance made the context contained) has no guard; only a
+    // closure with no context attempt falls back to the tracking OID.
+    assert_eq!(with_child.remote_delete_guard(None), None);
+}
+
+/// R-T5-3: `remote_context_oid` is the tracking OID observed when the
+/// context is synchronized. It is set only with `confirmed →
+/// context_synchronized`; no later save may add one.
+#[test]
+fn remote_context_oid_is_set_only_with_context_synchronized() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let begin_remote = |item_text: &str, kind| {
+        begin_record(
+            &tx,
+            1,
+            OperationId::new(),
+            &item(item_text),
+            digest(7),
+            Some("origin"),
+            kind,
+        )
+        .unwrap()
+    };
+    // Allowed: with the synchronization itself.
+    let mut r = begin_remote(ITEM, ClosureKind::Record);
+    r.remote_context_oid = Some(oid('1'));
+    synchronize(&tx, &mut r);
+    assert_eq!(read(&tx, r.operation_id).remote_context_oid, Some(oid('1')));
+    // Refused: at `confirmed` without the synchronization.
+    let mut early = begin_remote(OTHER, ClosureKind::Record);
+    early.remote_context_oid = Some(oid('1'));
+    assert_eq!(
+        kind_of(save_record(&tx, 1, &early)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    // Refused: after it, at every later step, when none was observed.
+    early.remote_context_oid = None;
+    close(&tx, &mut early);
+    assert_eq!(early.remote_context_oid, None);
+    let mut later = early.clone();
+    later.remote_context_oid = Some(oid('1'));
+    assert_eq!(
+        kind_of(save_record(&tx, 1, &later)),
+        RepositoryErrorKind::RecoveryRequired
+    );
+    integrate(&tx, &mut early);
+    for step in [ClosureStep::Integrated, ClosureStep::PublicationPending] {
+        let mut later = early.clone();
+        later.step = step;
+        later.publication = Some(PublicationCategory::Transport);
+        later.remote_context_oid = Some(oid('1'));
+        assert_eq!(
+            kind_of(save_record(&tx, 1, &later)),
+            RepositoryErrorKind::RecoveryRequired,
+            "{step:?}"
+        );
+    }
+    // The same save without it is accepted.
+    early.step = ClosureStep::PublicationPending;
+    early.publication = Some(PublicationCategory::Transport);
+    save_record(&tx, 1, &early).unwrap();
+    assert_eq!(read(&tx, early.operation_id).remote_context_oid, None);
 }
 
 /// The design's cleanup row: a remote context branch is deleted (and the
