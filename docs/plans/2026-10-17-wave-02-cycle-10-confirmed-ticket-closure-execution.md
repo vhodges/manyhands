@@ -684,3 +684,155 @@ The review changes are listed by item.
   the ticket closed on the primary.
 - **Gate.** `--lib closure::` 73, `--lib closure` 77, `--lib promotion` 197.
   fmt and Clippy are clean.
+
+## Task 4 — Closure Checkpoint, Integration And The Post-Checkpoint Path (2026-10-18)
+
+### What landed
+
+- **`closure/checkpoint.rs`** (new). `prepare_closure` builds the closed
+  ticket Blob through the one shared `closed_ticket_bytes` (R-P1, C10) with
+  the mode kept, the checkpoint tree and the commit `Close ticket <ULID>`
+  (parent `context_oid`, the identity as author and committer at
+  `closed_at`), and the result tree. Nothing is referenced. Because the
+  commit time is `closed_at`, the same inputs always build the same commit,
+  so a resume from `closing` reuses `closure_oid`. `whole_utc_seconds` and
+  `now_whole_utc_seconds` normalize `closed_at` (C6). The other pieces are
+  `post_checkpoint_result` (the tip tree when `base ≤ tip`, else the
+  in-memory clean merge, `Err(())` on conflict),
+  `move_context_to_checkpoint[_with]` (`sync::fast_forward` order),
+  `reconcile_closing`/`ClosingState`, and `checkpoint_authority`, which
+  reads `closed_by` and the signer from the checkpoint commit and never
+  from configuration (C9).
+- **The hook.** `pre_integration` runs "before a checkpoint exists", steps
+  2–6, under the lease after revalidation (step 1). Step 3 refuses with
+  `PrimaryAdvanced`, or with `ReconfirmationRequired` from `closing`.
+  Step 4 persists the identity through `integrate::promotion_identity`
+  (`LocalConfigEdit` and `would_persist_identity`, now shared). Step 5
+  writes `begin_closing`, or `replace_unmoved_closure` on a rebuild, and
+  then hits `[ClosureAfterClosingRecorded]`. Step 6 does the checkout,
+  `[ClosureDuringCheckpointCheckout]`, the guarded ref update, marks
+  refresh required and hits `[AfterClosureCheckpoint]`. It returns
+  `Checkpoint { base, merged_context, result_tree, signer }`. `Existing` and
+  `AlreadyContained` return `None` and write nothing (steps 4, 7 and 8 go
+  through the shared integration).
+- **`resume_written`** runs "after a checkpoint exists" (C9) under the lease
+  and before any consent check. For `closing` it calls `reconcile_closing`:
+  `NothingWritten` returns `None` (revalidation, then the hook rebuilds with
+  the stored `closed_at`), `CheckoutDone` finishes the guarded ref update,
+  `CheckpointWritten` resumes, and `Unrecognized` is `RecoveryRequired`.
+  For `integrating` with a checkpoint it resumes. The authority comes from
+  the commit. The base is the tracking primary with a remote, where a local
+  primary ahead of it is `RecoveryRequired` (D2), else the local primary.
+  The merge is in memory even with a remote. A conflict is
+  `RecoveryRequired` with the record unchanged.
+- **`integrate.rs` (R-T1-6).** `prepare_integration_for<L: Lifecycle>` is
+  generic over expectation and error. `IntegrationRequest<E =
+  PromotionExpectation>`, and the helpers (`unavailable`, `sync_error`,
+  `ancestor`, `checkout_preflight`, `promotion_identity`, …) take an
+  `E: LifecycleError`. It revalidates through
+  `L::prepare/revalidate/ready`. A `Blocked` refusal that names the
+  integration conflict is still `ReconfirmationRequired`
+  (`LifecycleRefusal::integration_conflict`). The new
+  `prepare_checkpoint_integration` merges `[base, merged context]` with the
+  hook's tree and signer, and `checkout_preflight` still runs.
+  `write_commit`, `resume_candidate` and `apply` keep their promotion
+  signatures as wrappers over the generic `_for` forms. The
+  "not document → unavailable" guard is gone.
+- **Seam (`lifecycle.rs`).** `PreIntegration::Checkpoint` now carries
+  `base`, `merged_context`, `result_tree` and `signer`. Its `Debug` shows
+  OIDs only, and it is no longer `Copy`. `LifecycleRecord` gains
+  `merged_context` and `effect_written`. `LifecycleError` gains
+  `external_change`, `reconfirmation_required` and `identity_required`.
+  `LifecyclePreview` gains `primary_branch`, `publication_remote`,
+  `primary_oid` and `tracking_primary`. The associated type
+  `IntegrationRequest` is replaced by `IntegrationRequest<Self::Expectation>`.
+  Two hook methods with promotion-neutral defaults were added:
+  `pre_integration_with` (service, revalidated preview and confirmation,
+  defaulting to `pre_integration`) and `resume_written` (defaulting to
+  `None`). New `LeasedIntegration` fields would have needed an edit to the
+  Task 1 test literal.
+- **Runner (`run.rs`, R-T1-4).** `integration_context`, used by
+  integration and by crash reconciliation from `integrating`, now uses
+  `merged_context()`. A record with `effect_written()` builds its request
+  from the record and the current local primary (`written_request`) and is
+  never re-previewed or abandoned before the lease. When the prepared
+  integration is `checkpointed()`, the runner reloads the record before the
+  `integrating` save.
+- **Record (`closure/record.rs`).** `adopt_written_closure` sets `base_oid`
+  and the merged context while `closing`, for the C9 base and an adoptable
+  descendant. The trait accessors were added, and
+  `Refusal::integration_conflict`.
+- **`remote/sync.rs`.** `fast_forward_with` adds a `between` callback after
+  the checkout and before the ref update, and `fast_forward` calls it with
+  a no-op.
+- **`src/repository.rs`.** `FailurePoint::{ClosureAfterClosingRecorded,
+  ClosureDuringCheckpointCheckout, AfterClosureCheckpoint}`.
+
+### Why promotion is unaffected
+
+`DocumentPromotionLifecycle` never returns `Checkpoint`. Its
+`resume_written` is the `None` default, and `pre_integration_with` is the
+default that calls its `pre_integration` (`None`). `effect_written` is always
+`false`, so the runner still previews, abandons and builds the request
+exactly as before (the `context_oid` check keeps its place after the
+preview). `merged_context` returns `context_oid`. `checkpointed` is always
+`false`, so no reload happens. The generic revalidation calls the same
+`observe::prepare` and `revalidate`, and maps refusals and errors to the same
+`DocumentPromotionError` variants.
+
+### Decisions to review
+
+- **C9 base and adoptable descendant vs the record.** C9 step 3 takes the
+  current base, and step 2 may adopt a descendant tip. Integration and
+  reconciliation key on `[recorded base, recorded merged context]`, but at
+  Task 2 `base_oid` was fixed at `closing` and `closure_oid` was "the
+  checkpoint". `adopt_written_closure` now updates both while `closing`, so
+  `closure_oid` can name a synchronization merge over the checkpoint.
+  `checkpoint_authority` then walks first parents back to
+  `Close ticket <ULID>`.
+- **Refusal from `closing` with nothing moved.** A primary advance with a
+  remote abandons (`ReconfirmationRequired`), because `closing` cannot
+  step back to `confirmed`. Without a remote the digest already changes.
+- **A refresh-mark failure after the ref moved** is returned as an error.
+  The record stays at `closing` with the ref moved, and the same ID takes
+  the C9 path.
+- **Fixtures.** The ticket fixture in `checkpoint_tests.rs` is new, using
+  public APIs. Closure observation's fixture is private to its test module,
+  and the promotion fixtures build a document. The Q3-1 include case is a
+  new test with the integrate test's include shape. No existing test was
+  edited.
+- **For Task 5.** The cleanup precheck in `run.rs` still reads
+  `context_oid`, so it must move to `merged_context()`. `checkpoint.rs`
+  carries a module `dead_code` allow until Task 6 wires the hook.
+
+### Tests
+
+- **Red first.** The tests were written against a module shell, and
+  `--lib closure::checkpoint --no-run` failed with 65 compile errors, all
+  missing Task 4 items.
+- **New tests: 31 in `closure/checkpoint_tests.rs`.**
+  - Review Focus 1–3: `closed_ticket_bytes_preserves_hand_written_fields`
+    (this repository's ticket shape), `closed_ticket_bytes_crlf`,
+    `checkpoint_preserves_executable_mode` and `closed_at_is_whole_utc_seconds`.
+  - The checkpoint: exact subject, parent and single path; nothing
+    referenced by prepare; a conflicting merge refused before any ref moves;
+    the context moved clean.
+  - Each `reconcile_closing` row. `CheckoutDone` is tested both from a real
+    stop between checkout and ref update (index and worktree) and from the
+    worktree only.
+  - Authority from the commit, not configuration; the in-memory merge and
+    its conflict; the hook end to end through the shared integration.
+  - The three failure points, each leaving its reconciliation row.
+  - Resume from `NothingWritten`, `CheckoutDone` and `CheckpointWritten`, and
+    the C9 conflict, which keeps the record.
+  - The contained-open in-memory merge, and `Existing` writing nothing.
+  - The confirmed identity persisted before the checkpoint, the Q3-1
+    include override writing nothing, and `adopt_written_closure` only
+    while `closing`.
+- **Gate (one source state).**
+  - fmt and Clippy (`--all-targets --all-features -D warnings`) are clean.
+  - `--lib closure`: 108 (77 + 31).
+  - `--lib promotion`: 197, unchanged.
+  - `--test remote_reservation`: 13.
+  - `--test document_promotion`: 74 SSH cases, unchanged.
+  - `git merge-tree` against `origin/main` (3765524) is clean.

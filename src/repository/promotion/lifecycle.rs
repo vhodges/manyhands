@@ -16,9 +16,10 @@ use super::{
 use crate::{
     canonical::{ItemId, RepositoryConfig},
     repository::{
-        AuthoringKind, ConfirmedCommitIdentity, IndexPending, OperationId, RemoteOperationAction,
-        RepositoryError, RepositoryService, SynchronizationError, cleanup::RetirementEvidence,
-        remote::reservation::RemoteReservation, transport::HostApproval,
+        AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
+        IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
+        SynchronizationError, cleanup::RetirementEvidence, remote::reservation::RemoteReservation,
+        transport::HostApproval,
     },
 };
 use git2::Oid;
@@ -120,6 +121,13 @@ pub(in super::super) trait LifecycleRecord: Clone {
     fn set_base_oid(&mut self, oid: Option<Oid>);
     fn context_oid(&self) -> Option<Oid>;
     fn set_context_oid(&mut self, oid: Option<Oid>);
+    /// The context commit integration merges and crash reconciliation
+    /// searches for: a written checkpoint when one exists, else `context_oid`.
+    fn merged_context(&self) -> Option<Oid>;
+    /// The consented effect may already be written (closure `closing` or
+    /// later with a checkpoint): consent is then not re-previewed by the
+    /// runner, and the lifecycle's `resume_written` decides under the lease.
+    fn effect_written(&self) -> bool;
     fn integration_oid(&self) -> Option<Oid>;
     fn set_integration_oid(&mut self, oid: Option<Oid>);
     fn integration_kind(&self) -> Option<IntegrationKind>;
@@ -144,6 +152,9 @@ pub(in super::super) trait LifecycleError: From<RepositoryError> {
     fn interrupted() -> Self;
     fn primary_advanced() -> Self;
     fn context_synchronization(error: Box<SynchronizationError>) -> Self;
+    fn external_change() -> Self;
+    fn reconfirmation_required() -> Self;
+    fn identity_required(expected_configuration: ExpectedConfiguration) -> Self;
     fn is_primary_advanced(&self) -> bool;
     /// `Blocked`, `ReconfirmationRequired` or `ExternalChange`: a refusal of
     /// the consented effect, abandoned before integration.
@@ -154,6 +165,9 @@ pub(in super::super) trait LifecycleError: From<RepositoryError> {
 pub(in super::super) trait LifecycleRefusal: Clone {
     fn external_change() -> Self;
     fn reconfirmation_required() -> Self;
+    /// A `Blocked` refusal naming the integration conflict blocker: under the
+    /// integration lease it is `ReconfirmationRequired`, not `Blocked`.
+    fn integration_conflict(&self) -> bool;
 }
 
 /// The preview facts the runner reads.
@@ -163,6 +177,10 @@ pub(in super::super) trait LifecyclePreview {
     fn context_oid(&self) -> Oid;
     fn tracking_context(&self) -> Option<Oid>;
     fn integration(&self) -> PlannedIntegration;
+    fn primary_branch(&self) -> &str;
+    fn publication_remote(&self) -> Option<&str>;
+    fn primary_oid(&self) -> Oid;
+    fn tracking_primary(&self) -> Option<Oid>;
 }
 
 /// The hook's input: what the integration stage holds under its lease. The
@@ -179,12 +197,68 @@ pub(in super::super) struct LeasedIntegration<'a, R> {
 }
 
 /// The hook's output. `Checkpoint` names the context commit to merge in place
-/// of the observed context tip.
-#[allow(dead_code)] // Checkpoint is returned by the closure hook (Task 4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// of the observed context tip, with what the hook prepared under the lease:
+/// the integration base, the result tree (already in the ODB), and the merge
+/// signer, which after a checkpoint is the checkpoint's own author (C9).
+#[derive(Clone)]
 pub(in super::super) enum PreIntegration {
     None,
-    Checkpoint { merged_context: Oid },
+    Checkpoint {
+        base: Oid,
+        merged_context: Oid,
+        result_tree: Oid,
+        signer: CommitIdentity,
+    },
+}
+impl PartialEq for PreIntegration {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::None, Self::None) => true,
+            (
+                Self::Checkpoint {
+                    base,
+                    merged_context,
+                    result_tree,
+                    signer,
+                },
+                Self::Checkpoint {
+                    base: b,
+                    merged_context: m,
+                    result_tree: t,
+                    signer: s,
+                },
+            ) => {
+                (
+                    base,
+                    merged_context,
+                    result_tree,
+                    &signer.name,
+                    &signer.email,
+                ) == (b, m, t, &s.name, &s.email)
+            }
+            _ => false,
+        }
+    }
+}
+impl Eq for PreIntegration {}
+/// OIDs only: the signer is personal data.
+impl std::fmt::Debug for PreIntegration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Checkpoint {
+                base,
+                merged_context,
+                result_tree,
+                ..
+            } => f
+                .debug_struct("Checkpoint")
+                .field("base", base)
+                .field("merged_context", merged_context)
+                .field("result_tree", result_tree)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// One method per record, observation and integration function the runner
@@ -200,7 +274,6 @@ pub(in super::super) trait Lifecycle {
     type Observation;
     type Refusal: LifecycleRefusal;
     type ReplacementGuard: PartialEq;
-    type IntegrationRequest;
     type Outcome;
     type Output;
     const KIND: LifecycleKind;
@@ -310,12 +383,12 @@ pub(in super::super) trait Lifecycle {
         preview: &Self::Preview,
         expected: Self::Expectation,
         context: Oid,
-    ) -> Self::IntegrationRequest;
+    ) -> integrate::IntegrationRequest<Self::Expectation>;
     fn prepare_integration(
         &self,
         service: &RepositoryService,
         root: &Path,
-        request: &Self::IntegrationRequest,
+        request: &integrate::IntegrationRequest<Self::Expectation>,
         identity: Option<&ConfirmedCommitIdentity>,
         parent: Option<&Self::Record>,
     ) -> Result<integrate::PreparedIntegration, Self::Error>;
@@ -335,6 +408,32 @@ pub(in super::super) trait Lifecycle {
         &self,
         stage: &mut LeasedIntegration<'_, Self::Record>,
     ) -> Result<PreIntegration, Self::Error>;
+    /// The hook as the integration calls it: `pre_integration` with what a
+    /// lifecycle that writes inside the lease also needs, the service (its
+    /// record and failure points), the revalidated preview and the request's
+    /// identity confirmation.
+    fn pre_integration_with(
+        &self,
+        service: &RepositoryService,
+        preview: &Self::Preview,
+        identity: Option<&ConfirmedCommitIdentity>,
+        stage: &mut LeasedIntegration<'_, Self::Record>,
+    ) -> Result<PreIntegration, Self::Error> {
+        let _ = (service, preview, identity);
+        self.pre_integration(stage)
+    }
+    /// Under the integration lease and before any consent check: an effect
+    /// the lifecycle already wrote (closure C9) is resumed, never re-consented.
+    /// `Some` is integrated as is; `None` continues with revalidation. The
+    /// stage's `base` is the local primary as read under the lease.
+    fn resume_written(
+        &self,
+        service: &RepositoryService,
+        stage: &mut LeasedIntegration<'_, Self::Record>,
+    ) -> Result<Option<PreIntegration>, Self::Error> {
+        let _ = (service, stage);
+        Ok(None)
+    }
 
     // Outcome.
     fn outcome(
@@ -428,6 +527,13 @@ impl LifecycleRecord for PromotionRecord {
     fn set_context_oid(&mut self, oid: Option<Oid>) {
         self.context_oid = oid;
     }
+    /// Promotion writes nothing before integration: the synchronized context.
+    fn merged_context(&self) -> Option<Oid> {
+        self.context_oid
+    }
+    fn effect_written(&self) -> bool {
+        false
+    }
     fn integration_oid(&self) -> Option<Oid> {
         self.integration_oid
     }
@@ -491,6 +597,17 @@ impl LifecycleError for DocumentPromotionError {
     fn context_synchronization(error: Box<SynchronizationError>) -> Self {
         Self::ContextSynchronization(error)
     }
+    fn external_change() -> Self {
+        Self::ExternalChange
+    }
+    fn reconfirmation_required() -> Self {
+        Self::ReconfirmationRequired
+    }
+    fn identity_required(expected_configuration: ExpectedConfiguration) -> Self {
+        Self::IdentityRequired {
+            expected_configuration,
+        }
+    }
     fn is_primary_advanced(&self) -> bool {
         matches!(self, Self::PrimaryAdvanced)
     }
@@ -509,6 +626,9 @@ impl LifecycleRefusal for record::Refusal {
     fn reconfirmation_required() -> Self {
         Self::ReconfirmationRequired
     }
+    fn integration_conflict(&self) -> bool {
+        matches!(self, Self::Blocked(b) if b.contains(&super::PromotionBlocker::IntegrationConflict))
+    }
 }
 
 impl LifecyclePreview for DocumentPromotionPreview {
@@ -525,6 +645,18 @@ impl LifecyclePreview for DocumentPromotionPreview {
     fn integration(&self) -> PlannedIntegration {
         self.integration
     }
+    fn primary_branch(&self) -> &str {
+        DocumentPromotionPreview::primary_branch(self)
+    }
+    fn publication_remote(&self) -> Option<&str> {
+        DocumentPromotionPreview::publication_remote(self)
+    }
+    fn primary_oid(&self) -> Oid {
+        DocumentPromotionPreview::primary_oid(self)
+    }
+    fn tracking_primary(&self) -> Option<Oid> {
+        DocumentPromotionPreview::tracking_primary(self)
+    }
 }
 
 pub(in super::super) struct DocumentPromotionLifecycle;
@@ -539,7 +671,6 @@ impl Lifecycle for DocumentPromotionLifecycle {
     type Observation = observe::PreparedObservation;
     type Refusal = record::Refusal;
     type ReplacementGuard = record::ReplacementGuard;
-    type IntegrationRequest = integrate::IntegrationRequest;
     type Outcome = DocumentPromotionOutcome;
     type Output = DocumentPromotionResult;
     const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;
@@ -686,7 +817,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         preview: &DocumentPromotionPreview,
         expected: PromotionExpectation,
         context: Oid,
-    ) -> integrate::IntegrationRequest {
+    ) -> integrate::IntegrationRequest<PromotionExpectation> {
         let mut input = integrate::IntegrationRequest::from_preview(preview);
         input.expected = expected;
         input.context.oid = context;
@@ -696,7 +827,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         &self,
         service: &RepositoryService,
         root: &Path,
-        request: &integrate::IntegrationRequest,
+        request: &integrate::IntegrationRequest<PromotionExpectation>,
         identity: Option<&ConfirmedCommitIdentity>,
         parent: Option<&PromotionRecord>,
     ) -> Result<integrate::PreparedIntegration, DocumentPromotionError> {
@@ -705,18 +836,18 @@ impl Lifecycle for DocumentPromotionLifecycle {
     fn write_commit(
         prepared: integrate::PreparedIntegration,
     ) -> Result<integrate::IntegrationCandidate, DocumentPromotionError> {
-        prepared.write_commit()
+        prepared.write_commit_for()
     }
     fn resume_candidate(
         prepared: integrate::PreparedIntegration,
         oid: Oid,
     ) -> Result<integrate::IntegrationCandidate, DocumentPromotionError> {
-        prepared.resume_candidate(oid)
+        prepared.resume_candidate_for(oid)
     }
     fn apply(
         candidate: integrate::IntegrationCandidate,
     ) -> Result<integrate::Integrated, DocumentPromotionError> {
-        candidate.apply()
+        candidate.apply_for()
     }
     fn pre_integration(
         &self,

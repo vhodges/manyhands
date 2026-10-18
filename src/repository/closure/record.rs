@@ -200,6 +200,9 @@ impl LifecycleRefusal for Refusal {
     fn reconfirmation_required() -> Self {
         Self::ReconfirmationRequired
     }
+    fn integration_conflict(&self) -> bool {
+        matches!(self, Self::Blocked(b) if b.contains(&ClosureBlocker::IntegrationConflict))
+    }
 }
 
 /// The promotion record's fields and types, with closure's own step,
@@ -828,6 +831,26 @@ pub(in super::super) fn replace_unmoved_closure(
     Ok(())
 }
 
+/// The C9 resume of a written checkpoint, while `closing`: the base the merge
+/// uses now (the current tracking or local primary) and the merged context
+/// (the checkpoint, or an adoptable descendant of it). `closed_at` is kept.
+/// The caller has proved, under the lease, that the context ref has moved to
+/// `merged`.
+pub(in super::super) fn adopt_written_closure(
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    operation: OperationId,
+    base: Oid,
+    merged: Oid,
+) -> Result<(), RepositoryError> {
+    let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
+    if r.step != ClosureStep::Closing || base.is_zero() || merged.is_zero() {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE ticket_closures SET base_oid=?2,closure_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),merged.to_string(),now()]).map_err(|_|state::recovery_required())?;
+    Ok(())
+}
+
 pub(in super::super) fn child_execution(
     r: &ClosureRecord,
     role: ChildRole,
@@ -1251,6 +1274,14 @@ impl LifecycleRecord for ClosureRecord {
     }
     fn set_context_oid(&mut self, oid: Option<Oid>) {
         self.context_oid = oid;
+    }
+    fn merged_context(&self) -> Option<Oid> {
+        ClosureRecord::merged_context(self)
+    }
+    /// A checkpoint is recorded from `closing` on: whether its ref moved is
+    /// decided under the lease by the closure's `resume_written`.
+    fn effect_written(&self) -> bool {
+        self.closure_oid.is_some()
     }
     fn integration_oid(&self) -> Option<Oid> {
         self.integration_oid

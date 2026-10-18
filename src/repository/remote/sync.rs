@@ -7688,6 +7688,18 @@ pub(in super::super) fn fast_forward(
     old: git2::Oid,
     new: git2::Oid,
 ) -> Result<(), SynchronizationError> {
+    fast_forward_with(repository, branch, old, new, || Ok(()))
+}
+/// `fast_forward` with `between` run after the safe checkout and before the
+/// guarded ref update; its error stops there, the checkout done and the ref
+/// unmoved (the closure checkpoint's failure point).
+pub(in super::super) fn fast_forward_with(
+    repository: &git2::Repository,
+    branch: &str,
+    old: git2::Oid,
+    new: git2::Oid,
+    between: impl FnOnce() -> Result<(), RepositoryError>,
+) -> Result<(), SynchronizationError> {
     let commit = repository
         .find_commit(new)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -7717,6 +7729,7 @@ pub(in super::super) fn fast_forward(
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
     #[cfg(test)]
     super::observation_tests::checkpoint(RemoteOperationSafePoint::BeforeLocalMutation);
+    between().map_err(SynchronizationError::Repository)?;
     if repository.refname_to_id(branch).ok() != Some(old)
         || repository
             .find_reference("HEAD")

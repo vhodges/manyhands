@@ -577,20 +577,27 @@ fn promote_inner<L: Lifecycle>(
     if cancelled::<L>(service, &root, &r)? {
         return Err(L::Error::interrupted());
     }
-    let p = match L::ready(preview::<L>(service, &root, r.item_id())?) {
-        Ok(p) => p,
-        _ => {
-            return Err(abandon::<L>(
-                service,
-                &root,
-                &mut r,
-                L::Refusal::reconfirmation_required(),
-            ));
-        }
+    let input = if r.effect_written() {
+        // A written effect is never re-previewed or abandoned here: the
+        // lifecycle reconciles it under the integration lease (C9).
+        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
+        written_request::<L>(&root, &r, &bound_primary, context)?
+    } else {
+        let p = match L::ready(preview::<L>(service, &root, r.item_id())?) {
+            Ok(p) => p,
+            _ => {
+                return Err(abandon::<L>(
+                    service,
+                    &root,
+                    &mut r,
+                    L::Refusal::reconfirmation_required(),
+                ));
+            }
+        };
+        // The exact synchronized context, not a later edit, is integrated.
+        let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
+        L::integration_request(&p, r.expectation(), context)
     };
-    // The exact synchronized context, not a later edit, is integrated.
-    let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
-    let input = L::integration_request(&p, r.expectation(), context);
     let prepared = match lifecycle.prepare_integration(
         service,
         &root,
@@ -616,6 +623,11 @@ fn promote_inner<L: Lifecycle>(
         }
         Err(e) => return Err(e),
     };
+    if prepared.checkpointed() {
+        // The hook recorded `closing` (and its base) under this lease: the
+        // snapshot taken before it is stale and would overwrite it (R-T1-4).
+        r = load::<L>(service, &root, r.operation_id())?;
+    }
     let evidence = prepared.evidence();
     if r.step() == Step::Integrating && r.base_oid() != Some(evidence.base) {
         drop(prepared);
@@ -660,6 +672,28 @@ fn promote_inner<L: Lifecycle>(
     ))
 }
 
+/// The integration request of a record whose effect may be written: bound to
+/// the record and the local primary as it is now, with no preview.
+fn written_request<L: Lifecycle>(
+    root: &Path,
+    r: &L::Record,
+    primary: &str,
+    context: Oid,
+) -> Result<integrate::IntegrationRequest<L::Expectation>, L::Error> {
+    let (repo, _) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+    Ok(integrate::IntegrationRequest {
+        expected: r.expectation(),
+        context: integrate::IntegrationContext {
+            item_id: r.item_id().clone(),
+            primary_branch: primary.into(),
+            oid: context,
+        },
+        primary_oid: repo
+            .refname_to_id(&format!("refs/heads/{primary}"))
+            .map_err(|_| L::Error::recovery_required())?,
+        publication_remote: r.remote_name().map(str::to_owned),
+    })
+}
 fn integration_context<R: LifecycleRecord, E: LifecycleError>(
     r: &R,
     primary: &str,
@@ -667,7 +701,8 @@ fn integration_context<R: LifecycleRecord, E: LifecycleError>(
     Ok(integrate::IntegrationContext {
         item_id: r.item_id().clone(),
         primary_branch: primary.into(),
-        oid: r.context_oid().ok_or_else(E::recovery_required)?,
+        // The merged context: a written checkpoint when one exists (R-T1-4).
+        oid: r.merged_context().ok_or_else(E::recovery_required)?,
     })
 }
 struct CancellationObserver<'a, L> {

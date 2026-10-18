@@ -855,6 +855,16 @@ pub enum FailurePoint {
     /// Inside F10/F11: SQL completion committed, before its result is consumed
     /// and before the backend ref lock is released (lost commit-result seam).
     PromotionAfterCompletionCommit,
+    /// Ticket closure, inside the integration lease: the `closing` step and
+    /// its unreferenced checkpoint commit are recorded, and the context is
+    /// untouched.
+    ClosureAfterClosingRecorded,
+    /// Ticket closure: the checkpoint is checked out in the context worktree
+    /// and the context ref has not moved.
+    ClosureDuringCheckpointCheckout,
+    /// Ticket closure: the context ref is at the checkpoint and nothing has
+    /// reached the primary.
+    AfterClosureCheckpoint,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,

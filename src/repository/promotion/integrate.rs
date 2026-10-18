@@ -1,6 +1,6 @@
 use super::lifecycle::{
-    DocumentPromotionLifecycle, LeasedIntegration, Lifecycle, LifecycleKind, LifecycleRecord,
-    PreIntegration,
+    DocumentPromotionLifecycle, LeasedIntegration, Lifecycle, LifecycleError, LifecycleKind,
+    LifecyclePreview, LifecycleRecord, LifecycleRefusal, PreIntegration,
 };
 use super::*;
 use crate::repository::*;
@@ -8,17 +8,19 @@ use crate::repository::{bridges::identity::LocalConfigEdit, remote::sync};
 
 #[derive(Clone)]
 pub(in super::super) struct IntegrationContext {
-    pub(super) item_id: ItemId,
-    pub(super) primary_branch: String,
-    pub(super) oid: Oid,
+    pub(in super::super) item_id: ItemId,
+    pub(in super::super) primary_branch: String,
+    pub(in super::super) oid: Oid,
 }
 
+/// What integration is bound to: the recorded consent, the exact
+/// synchronized context, and the primary and remote it was consented on.
 #[derive(Clone)]
-pub(in super::super) struct IntegrationRequest {
-    pub(super) expected: PromotionExpectation,
-    pub(super) context: IntegrationContext,
-    pub(super) primary_oid: Oid,
-    pub(super) publication_remote: Option<String>,
+pub(in super::super) struct IntegrationRequest<E = PromotionExpectation> {
+    pub(in super::super) expected: E,
+    pub(in super::super) context: IntegrationContext,
+    pub(in super::super) primary_oid: Oid,
+    pub(in super::super) publication_remote: Option<String>,
 }
 impl IntegrationRequest {
     pub(super) fn from_preview(preview: &DocumentPromotionPreview) -> Self {
@@ -55,6 +57,8 @@ pub(in super::super) enum IntegrationState {
 }
 enum IntegrationTree {
     Contained,
+    /// A tree already in the repository ODB: the context's own tree, or the
+    /// result a lifecycle hook prepared.
     Context(Oid),
     Prepared(sync::PreparedMerge),
 }
@@ -69,6 +73,9 @@ pub(in super::super) struct PreparedIntegration {
     evidence: IntegrationEvidence,
     tree: IntegrationTree,
     signature: Option<git2::Signature<'static>>,
+    /// The lifecycle hook wrote under this lease (a closure checkpoint): the
+    /// runner's record snapshot is stale.
+    checkpointed: bool,
     _lease: coordination::RepositoryLease,
 }
 
@@ -97,55 +104,73 @@ pub(super) fn prepare_integration(
 ) -> Result<PreparedIntegration, DocumentPromotionError> {
     DocumentPromotionLifecycle.prepare_integration(service, root, record, identity, None)
 }
-pub(super) fn prepare_integration_for<
-    L: Lifecycle<Error = DocumentPromotionError, IntegrationRequest = IntegrationRequest>,
->(
+/// The one integration path for every lifecycle (C3): observation prepared
+/// outside the lease, then, under it, a written effect resumed (C9) or the
+/// observation revalidated, the hook, and the result tree and signer.
+pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
     lifecycle: &L,
     service: &RepositoryService,
     root: &Path,
-    record: &IntegrationRequest,
+    record: &IntegrationRequest<L::Expectation>,
     identity: Option<&ConfirmedCommitIdentity>,
     parent: Option<&L::Record>,
-) -> Result<PreparedIntegration, DocumentPromotionError> {
-    if L::KIND != LifecycleKind::DocumentPromotion {
-        // The observation below is the document observation until Task 3.
-        return Err(unavailable());
-    }
+) -> Result<PreparedIntegration, L::Error> {
     let (repository, root) = canonical_repository_root(root, RepositoryOperation::Read)?;
-    let observation = observe::prepare_for(
-        L::KIND,
+    let observation = L::prepare(
         service,
-        PreviewDocumentPromotionRequest {
-            root: root.clone(),
-            item_id: record.context.item_id.clone(),
-        },
+        L::preview_request(root.clone(), record.context.item_id.clone()),
     )?;
     let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
     let context_ref = L::KIND.context_ref(&record.context.item_id);
+    if let Some(parent) = parent
+        && let Ok(old_primary) = repository.refname_to_id(&primary_ref)
+        && let Some(checkpoint) = lifecycle.resume_written(
+            service,
+            &mut LeasedIntegration {
+                repository: &repository,
+                root: &root,
+                context: &record.context,
+                base: old_primary,
+                operation_id: Some(parent.operation_id()),
+                record: Some(parent),
+            },
+        )?
+    {
+        // Consent is not re-checked: the written checkpoint is the consented
+        // effect (C9). Only the primary's own safety checks remain.
+        return prepare_checkpoint_integration(
+            L::KIND,
+            repository,
+            root,
+            lease,
+            record.context.clone(),
+            old_primary,
+            checkpoint,
+        );
+    }
     if repository.refname_to_id(&primary_ref).ok() != Some(record.primary_oid)
         || repository.refname_to_id(&context_ref).ok() != Some(record.context.oid)
     {
-        return Err(DocumentPromotionError::ExternalChange);
+        return Err(L::Error::external_change());
     }
     // Revalidate prepared discovery facts against current bounded Git/checkout/
     // configuration checks. Canonical result validation reads Git trees only.
-    let preview = match observation.revalidate(service, &repository).map_err(|e| {
+    let preflight = L::revalidate(&observation, service, &repository).map_err(|e| {
         if e.kind == RepositoryErrorKind::ExternalChange {
-            DocumentPromotionError::ExternalChange
+            L::Error::external_change()
         } else {
             e.into()
         }
-    })? {
-        DocumentPromotionPreflight::Ready(preview) => preview,
-        DocumentPromotionPreflight::Blocked { blockers } => {
-            return Err(
-                if blockers.contains(&PromotionBlocker::IntegrationConflict) {
-                    DocumentPromotionError::ReconfirmationRequired
-                } else {
-                    DocumentPromotionError::Blocked(blockers)
-                },
-            );
+    })?;
+    let preview = match L::ready(preflight) {
+        Ok(preview) => preview,
+        Err(refusal) => {
+            return Err(if refusal.integration_conflict() {
+                L::Error::reconfirmation_required()
+            } else {
+                L::refusal_error(&refusal)
+            });
         }
     };
     if preview.primary_branch() != record.context.primary_branch
@@ -153,26 +178,43 @@ pub(super) fn prepare_integration_for<
         || preview.primary_oid() != record.primary_oid
         || preview.context_oid() != record.context.oid
     {
-        return Err(DocumentPromotionError::ExternalChange);
+        return Err(L::Error::external_change());
     }
     if preview.expectation() != record.expected {
-        return Err(DocumentPromotionError::ReconfirmationRequired);
+        return Err(L::Error::reconfirmation_required());
     }
     let base = preview
         .tracking_primary()
         .filter(|_| record.publication_remote.is_some())
         .unwrap_or(preview.primary_oid());
-    match lifecycle.pre_integration(&mut LeasedIntegration {
-        repository: &repository,
-        root: &root,
-        context: &record.context,
-        base,
-        operation_id: parent.map(LifecycleRecord::operation_id),
-        record: parent,
-    })? {
+    match lifecycle.pre_integration_with(
+        service,
+        &preview,
+        identity,
+        &mut LeasedIntegration {
+            repository: &repository,
+            root: &root,
+            context: &record.context,
+            base,
+            operation_id: parent.map(LifecycleRecord::operation_id),
+            record: parent,
+        },
+    )? {
         PreIntegration::None => (),
-        // No lifecycle writes a checkpoint before Task 4 consumes one here.
-        PreIntegration::Checkpoint { .. } => return Err(unavailable()),
+        checkpoint @ PreIntegration::Checkpoint { base: written, .. } => {
+            if written != base {
+                return Err(unavailable());
+            }
+            return prepare_checkpoint_integration(
+                L::KIND,
+                repository,
+                root,
+                lease,
+                record.context.clone(),
+                preview.primary_oid(),
+                checkpoint,
+            );
+        }
     }
     let evidence = IntegrationEvidence {
         base,
@@ -183,22 +225,24 @@ pub(super) fn prepare_integration_for<
     let tree = if preview.integration() == PlannedIntegration::AlreadyContained {
         IntegrationTree::Contained
     } else {
-        let base_in_context = ancestor(&repository, base, record.context.oid)?;
+        let base_in_context = ancestor::<L::Error>(&repository, base, record.context.oid)?;
         if record.publication_remote.is_some() && !base_in_context {
-            return Err(DocumentPromotionError::PrimaryAdvanced);
+            return Err(L::Error::primary_advanced());
         }
         if base_in_context {
             IntegrationTree::Context(
                 repository
                     .find_commit(record.context.oid)
-                    .map_err(|_| unavailable())?
+                    .map_err(|_| unavailable::<L::Error>())?
                     .tree_id(),
             )
         } else {
-            match sync::prepare_clean_merge(&root, base, record.context.oid).map_err(sync_error)? {
+            match sync::prepare_clean_merge(&root, base, record.context.oid)
+                .map_err(sync_error::<L::Error>)?
+            {
                 sync::MergePreparation::Clean(prepared) => IntegrationTree::Prepared(prepared),
                 sync::MergePreparation::Conflict => {
-                    return Err(DocumentPromotionError::ReconfirmationRequired);
+                    return Err(L::Error::reconfirmation_required());
                 }
             }
         }
@@ -208,9 +252,12 @@ pub(super) fn prepare_integration_for<
     } else {
         // Check ignored-path collisions through a memory ODB before creating
         // any object. The guarded safe checkout remains the final authority.
-        checkout_preflight(&root, &tree)?;
-        let identity = promotion_identity(service, &repository, &root, identity)?;
-        Some(git2::Signature::now(&identity.name, &identity.email).map_err(|_| unavailable())?)
+        checkout_preflight::<L::Error>(&root, &tree)?;
+        let identity = promotion_identity::<L::Error>(service, &repository, &root, identity)?;
+        Some(
+            git2::Signature::now(&identity.name, &identity.email)
+                .map_err(|_| unavailable::<L::Error>())?,
+        )
     };
     Ok(PreparedIntegration {
         kind: L::KIND,
@@ -219,6 +266,51 @@ pub(super) fn prepare_integration_for<
         evidence,
         tree,
         signature,
+        checkpointed: false,
+        _lease: lease,
+    })
+}
+/// Integration of a lifecycle hook's checkpoint under the lease already
+/// held: the merge of `[base, merged context]` with the hook's result tree
+/// and signer. `old_primary` is the local primary the guarded update moves.
+pub(in super::super) fn prepare_checkpoint_integration<E: LifecycleError>(
+    kind: LifecycleKind,
+    repository: git2::Repository,
+    root: PathBuf,
+    lease: coordination::RepositoryLease,
+    context: IntegrationContext,
+    old_primary: Oid,
+    checkpoint: PreIntegration,
+) -> Result<PreparedIntegration, E> {
+    let PreIntegration::Checkpoint {
+        base,
+        merged_context,
+        result_tree,
+        signer,
+    } = checkpoint
+    else {
+        return Err(unavailable::<E>());
+    };
+    let tree = IntegrationTree::Context(result_tree);
+    checkout_preflight::<E>(&root, &tree)?;
+    let signature =
+        git2::Signature::now(&signer.name, &signer.email).map_err(|_| unavailable::<E>())?;
+    Ok(PreparedIntegration {
+        kind,
+        repository,
+        root,
+        evidence: IntegrationEvidence {
+            base,
+            context: IntegrationContext {
+                oid: merged_context,
+                ..context
+            },
+            old_primary,
+            kind: PlannedIntegration::MergeCommit,
+        },
+        tree,
+        signature: Some(signature),
+        checkpointed: true,
         _lease: lease,
     })
 }
@@ -226,22 +318,31 @@ impl PreparedIntegration {
     pub(super) fn evidence(&self) -> &IntegrationEvidence {
         &self.evidence
     }
+    /// The hook wrote under this lease: reload the record before saving.
+    pub(super) fn checkpointed(&self) -> bool {
+        self.checkpointed
+    }
     pub(super) fn write_commit(self) -> Result<IntegrationCandidate, DocumentPromotionError> {
+        self.write_commit_for()
+    }
+    pub(in super::super) fn write_commit_for<E: LifecycleError>(
+        self,
+    ) -> Result<IntegrationCandidate, E> {
         let oid = match &self.tree {
             IntegrationTree::Contained => self.evidence.base,
             tree => {
                 let tree = self
                     .repository
-                    .find_tree(import_tree(&self.repository, tree)?)
-                    .map_err(|_| unavailable())?;
+                    .find_tree(import_tree::<E>(&self.repository, tree)?)
+                    .map_err(|_| unavailable::<E>())?;
                 let base = self
                     .repository
                     .find_commit(self.evidence.base)
-                    .map_err(|_| unavailable())?;
+                    .map_err(|_| unavailable::<E>())?;
                 let context = self
                     .repository
                     .find_commit(self.evidence.context.oid)
-                    .map_err(|_| unavailable())?;
+                    .map_err(|_| unavailable::<E>())?;
                 let signature = self
                     .signature
                     .as_ref()
@@ -255,7 +356,7 @@ impl PreparedIntegration {
                         &tree,
                         &[&base, &context],
                     )
-                    .map_err(|_| unavailable())?
+                    .map_err(|_| unavailable::<E>())?
             }
         };
         Ok(IntegrationCandidate {
@@ -269,13 +370,19 @@ impl PreparedIntegration {
         self,
         oid: Oid,
     ) -> Result<IntegrationCandidate, DocumentPromotionError> {
+        self.resume_candidate_for(oid)
+    }
+    pub(in super::super) fn resume_candidate_for<E: LifecycleError>(
+        self,
+        oid: Oid,
+    ) -> Result<IntegrationCandidate, E> {
         let valid = match &self.tree {
             IntegrationTree::Contained => oid == self.evidence.base,
             tree => {
                 let commit = self
                     .repository
                     .find_commit(oid)
-                    .map_err(|_| unavailable())?;
+                    .map_err(|_| unavailable::<E>())?;
                 commit.parent_count() == 2
                     && commit.parent_id(0).ok() == Some(self.evidence.base)
                     && commit.parent_id(1).ok() == Some(self.evidence.context.oid)
@@ -285,11 +392,11 @@ impl PreparedIntegration {
                                 .merge_subject(&self.evidence.context.item_id)
                                 .as_str(),
                         )
-                    && commit.tree_id() == import_tree(&self.repository, tree)?
+                    && commit.tree_id() == import_tree::<E>(&self.repository, tree)?
             }
         };
         if !valid {
-            return Err(unavailable());
+            return Err(unavailable::<E>());
         }
         Ok(IntegrationCandidate {
             prepared: self,
@@ -302,6 +409,9 @@ impl IntegrationCandidate {
         self.oid
     }
     pub(super) fn apply(self) -> Result<Integrated, DocumentPromotionError> {
+        self.apply_for()
+    }
+    pub(in super::super) fn apply_for<E: LifecycleError>(self) -> Result<Integrated, E> {
         let prepared = self.prepared;
         if matches!(prepared.tree, IntegrationTree::Contained) {
             return Ok(Integrated::AlreadyContained {
@@ -390,67 +500,65 @@ pub(super) fn reconcile_integration_for(
     result().unwrap_or(IntegrationState::RecoveryRequired)
 }
 
-fn unavailable() -> DocumentPromotionError {
-    DocumentPromotionError::Repository(RepositoryError::new(
+fn unavailable<E: LifecycleError>() -> E {
+    E::from(RepositoryError::new(
         RepositoryOperation::RepositorySnapshot,
         None,
         RepositoryErrorKind::RecoveryRequired,
         "promotion integration unavailable",
     ))
 }
-fn sync_error(error: SynchronizationError) -> DocumentPromotionError {
+fn sync_error<E: LifecycleError>(error: SynchronizationError) -> E {
     match error {
         SynchronizationError::Repository(error) => repository_error(error),
-        SynchronizationError::ExternalChange => DocumentPromotionError::ExternalChange,
+        SynchronizationError::ExternalChange => E::external_change(),
         SynchronizationError::IdentityRequired {
             expected_configuration,
             ..
-        } => DocumentPromotionError::IdentityRequired {
-            expected_configuration,
-        },
+        } => E::identity_required(expected_configuration),
         _ => unavailable(),
     }
 }
-fn repository_error(error: RepositoryError) -> DocumentPromotionError {
+fn repository_error<E: LifecycleError>(error: RepositoryError) -> E {
     if error.kind == RepositoryErrorKind::ExternalChange {
-        DocumentPromotionError::ExternalChange
+        E::external_change()
     } else {
         error.into()
     }
 }
-fn ancestor(
+fn ancestor<E: LifecycleError>(
     repository: &git2::Repository,
     older: Oid,
     newer: Oid,
-) -> Result<bool, DocumentPromotionError> {
+) -> Result<bool, E> {
     if older == newer {
         return Ok(true);
     }
     repository
         .graph_descendant_of(newer, older)
-        .map_err(|_| unavailable())
+        .map_err(|_| unavailable::<E>())
 }
-fn import_tree(
+fn import_tree<E: LifecycleError>(
     repository: &git2::Repository,
     tree: &IntegrationTree,
-) -> Result<Oid, DocumentPromotionError> {
+) -> Result<Oid, E> {
     match tree {
         IntegrationTree::Context(oid) => Ok(*oid),
         IntegrationTree::Prepared(prepared) => {
-            sync::import_prepared_tree(repository, prepared).map_err(sync_error)
+            sync::import_prepared_tree(repository, prepared).map_err(sync_error::<E>)
         }
         IntegrationTree::Contained => unreachable!("contained needs no import"),
     }
 }
-fn checkout_preflight(root: &Path, tree: &IntegrationTree) -> Result<(), DocumentPromotionError> {
-    let worker = git2::Repository::open(root).map_err(|_| unavailable())?;
-    let odb = worker.odb().map_err(|_| unavailable())?;
+fn checkout_preflight<E: LifecycleError>(root: &Path, tree: &IntegrationTree) -> Result<(), E> {
+    let worker = git2::Repository::open(root).map_err(|_| unavailable::<E>())?;
+    let odb = worker.odb().map_err(|_| unavailable::<E>())?;
     let _memory = odb
         .add_new_mempack_backend(1000)
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable::<E>())?;
     let tree = worker
-        .find_tree(import_tree(&worker, tree)?)
-        .map_err(|_| unavailable())?;
+        .find_tree(import_tree::<E>(&worker, tree)?)
+        .map_err(|_| unavailable::<E>())?;
     // git2 0.20's dry_run selects CHECKOUT_NONE, not libgit2's DRY_RUN:
     // NONE skips the conflict action for ignored files. Inspect ignored paths
     // explicitly instead. Primary cleanliness already excludes other collisions.
@@ -461,19 +569,19 @@ fn checkout_preflight(root: &Path, tree: &IntegrationTree) -> Result<(), Documen
         .recurse_ignored_dirs(true);
     let statuses = worker
         .statuses(Some(&mut options))
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable::<E>())?;
     for entry in statuses
         .iter()
         .filter(|entry| entry.status().contains(git2::Status::IGNORED))
     {
-        let path = entry.path().ok_or_else(unavailable)?;
+        let path = entry.path().ok_or_else(unavailable::<E>)?;
         // A new file can also replace an ancestor of an ignored file. This
         // catches directory/file and symlink collisions without following them.
         for path in Path::new(path.trim_end_matches('/')).ancestors() {
             if let Ok(entry) = tree.get_path(path)
                 && entry.kind() != Some(git2::ObjectType::Tree)
             {
-                return Err(unavailable());
+                return Err(unavailable::<E>());
             }
         }
     }
@@ -488,22 +596,26 @@ pub(super) fn primary_clean(root: &Path) -> bool {
     };
     check().is_ok()
 }
-fn promotion_identity(
+/// The committing identity under the lease: effective wins; else the
+/// configuration-bound confirmation, persisted to repository-local config
+/// before any commit (T3-1), include-aware (Q3-1). Closure reuses it.
+pub(in super::super) fn promotion_identity<E: LifecycleError>(
     service: &RepositoryService,
     repository: &git2::Repository,
     root: &Path,
     confirmation: Option<&ConfirmedCommitIdentity>,
-) -> Result<CommitIdentity, DocumentPromotionError> {
+) -> Result<CommitIdentity, E> {
     let target = SynchronizationTarget::Primary;
     if let sync::CommittingIdentity::Effective(identity) =
-        sync::select_committing_identity(repository, confirmation, &target).map_err(sync_error)?
+        sync::select_committing_identity(repository, confirmation, &target)
+            .map_err(sync_error::<E>)?
     {
         return Ok(identity);
     }
-    let mut edit = LocalConfigEdit::begin(repository, root).map_err(repository_error)?;
+    let mut edit = LocalConfigEdit::begin(repository, root).map_err(repository_error::<E>)?;
     let select = || {
-        let fresh = git2::Repository::open(root).map_err(|_| unavailable())?;
-        sync::select_committing_identity(&fresh, confirmation, &target).map_err(sync_error)
+        let fresh = git2::Repository::open(root).map_err(|_| unavailable::<E>())?;
+        sync::select_committing_identity(&fresh, confirmation, &target).map_err(sync_error::<E>)
     };
     let identity = match select()? {
         sync::CommittingIdentity::Effective(identity) => return Ok(identity),
@@ -511,26 +623,26 @@ fn promotion_identity(
     };
     edit.config()
         .set_str("user.name", &identity.name)
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable::<E>())?;
     service
         .identity_name_checkpoint(root)
-        .map_err(repository_error)?;
+        .map_err(repository_error::<E>)?;
     edit.config()
         .set_str("user.email", &identity.email)
-        .map_err(|_| unavailable())?;
+        .map_err(|_| unavailable::<E>())?;
     // Recheck effective identity and exact consent while holding both locks,
     // immediately before installing. No bridge-specific identity policy is used.
     if let sync::CommittingIdentity::Effective(identity) = select()? {
         return Ok(identity);
     }
-    let fresh = git2::Repository::open(root).map_err(|_| unavailable())?;
+    let fresh = git2::Repository::open(root).map_err(|_| unavailable::<E>())?;
     if !edit
         .would_persist_identity(&fresh, &identity.name, &identity.email)
-        .map_err(repository_error)?
+        .map_err(repository_error::<E>)?
     {
-        return Err(unavailable());
+        return Err(unavailable::<E>());
     }
-    edit.install().map_err(repository_error)?;
+    edit.install().map_err(repository_error::<E>)?;
     Ok(identity)
 }
 

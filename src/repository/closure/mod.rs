@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub(super) mod checkpoint;
 pub(super) mod observe;
 pub(super) mod record;
 
