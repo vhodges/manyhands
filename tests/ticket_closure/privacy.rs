@@ -92,6 +92,19 @@ fn workflow_control(
     );
     assert!(privacy_rows::scan_rows(&transaction, &cache, true, &policy).is_err());
     fixed(transaction.rollback())?;
+    // The bare email outside its exempt `closed_by` cell is a leak too.
+    scan_identity_parts(db, &exempt)?;
+    let transaction = fixed(db.unchecked_transaction())?;
+    assert_eq!(
+        fixed(transaction.execute(
+            "UPDATE discovered_items SET title=?1 WHERE closed_by=?2",
+            [EMAIL, closed_by],
+        ))?,
+        1
+    );
+    assert!(scan_identity_parts(&transaction, &exempt).is_err());
+    fixed(transaction.rollback())?;
+    scan_identity_parts(db, &exempt)?;
     privacy_rows::scan_workflow_rows(db, &p.probes, &policy)?;
     privacy_rows::scan_rows(db, &cache, true, &policy)
 }
@@ -201,6 +214,15 @@ fn closed_by_policy(pinned: bool) -> Result<(), FixtureError> {
         negative += 1;
     }
     assert_eq!(negative, 4);
+    // The raw-store part scan fails on a bare email outside a `closed_by`
+    // value, and accepts the same email inside one.
+    let exempt = p.exempt();
+    let control = p.a.data.join("raw-control");
+    fixed(std::fs::write(&control, format!("x{EMAIL}x")))?;
+    assert!(scan_store_identity_parts(&p.a.data, &exempt).is_err());
+    fixed(std::fs::write(&control, format!("x{by}x")))?;
+    scan_store_identity_parts(&p.a.data, &exempt)?;
+    fixed(std::fs::remove_file(&control))?;
     assert!(p.diagnostics(&by).is_err());
     assert!(p.diagnostics(NAME).is_err());
     assert!(p.diagnostics(EMAIL).is_err());

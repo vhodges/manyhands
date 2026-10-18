@@ -1422,3 +1422,62 @@ about existing behaviour, fixed in the test without weakening an assertion:
 The slowest case took 19.6 s; every case is under 20 s. fmt and Clippy
 (`-D warnings`) are clean. No production code changed, so the brief's other
 affected targets and `--lib closure` were not rerun (owner testing policy).
+
+### Fix round 1 (review Important 2, Minors 1–5; R-T8-1, R-T8-2)
+
+Only Cycle 10 test files changed: no production code, and no shared support
+file.
+
+- **Important 2.** The true race now asserts what the product does
+  (R-T8-1):
+  - the conflicted ticket, the path whose two sides carry the two
+    closures, is `EligibleCanonical`;
+  - every in-product resolution, with either side, returns
+    `ValidationFailed` and writes nothing;
+  - after those attempts, the same ID is still pending
+    `synchronization(conflict)` with its cleanup unchanged, and both
+    closures are still in history.
+
+  A comment cites R-T8-1, so a later move to `ExternalResolutionRequired`
+  must change the test deliberately.
+- **Minor 1.** `blocker_not_a_ticket` now polls after the fixture's own
+  primary publication, which removes the spurious `PrimaryAheadOfRemote`.
+  Every blocker case asserts its exact blocker vector, at preview and at
+  execution:
+  - `blocker_conflict_pending` is
+    `[ContextConflicted, ConflictPending, ContextBehindRemote]`;
+  - `blocker_local_operation_pending` is
+    `[ContextDirty, LocalOperationPending]`;
+  - every other mode is its one blocker.
+- **Minor 2.** In `contained_closed_collaborator_cleanup_only`, after B's
+  poll, B's kept open context is checked:
+  - a `save_ticket` there is refused `TicketClosed`, with B's image and its
+    context ref unchanged;
+  - B's listing is pinned (R-T6-6): one copy, context `Active`,
+    status `open`, closure `Open`.
+- **Minor 3.** A closure-local scan, `scan_identity_parts`, checks every
+  cell of every table, live and backup, against the bare names and emails.
+  Inside an exempt cell (exactly its own `discovered_items` column and
+  value), it skips only the parts that are substrings of that value.
+
+  The raw-store scan (`scan_store_identity_parts`) accepts a part only
+  where the bytes around it continue an exempt `closed_by` value. The first
+  run showed why: freed SQLite cells keep truncated `closed_by` fragments.
+
+  New negative controls:
+  - an email in `discovered_items.title` (transactional, rolled back);
+  - a bare email written to a raw file.
+
+  `tests/support/privacy_rows.rs` is unchanged, so `document_promotion` is
+  untouched.
+- **Minor 4.** The true race's doc comment explains why the F2 stops are
+  equivalent to a barrier: the `context_synchronized` resume makes no
+  network call before its lease, so B reads its stale T(P).
+- **Minor 5.** `step(..)` is asserted after the weakly checked stops:
+  - `context_synchronized` in `poll_advance`;
+  - `published` in `deletion_race`, `preservation` and `sequential`;
+  - `integrating` in `offline` after integration.
+- **Gate.**
+  - `--test ticket_closure`: 72 SSH cases passed; the slowest took 20.2 s.
+  - `document_promotion` was not rerun, because no support file changed.
+  - fmt and Clippy (`-D warnings`) are clean.

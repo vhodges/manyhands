@@ -400,6 +400,7 @@ impl Pair {
             privacy_rows::scan_workflow_rows(&db, &self.probes, &policy)?;
             privacy_rows::scan_workflow_rows(&db, &paths, &policy)?;
             privacy_rows::scan_rows(&db, &cache_probes, true, &policy)?;
+            scan_identity_parts(&db, &exempt)?;
             let backup = side.data.join("v");
             if backup.exists() {
                 fixed(std::fs::remove_file(&backup))?;
@@ -409,7 +410,9 @@ impl Pair {
             privacy_rows::scan_workflow_rows(&backup_db, &self.probes, &policy)?;
             privacy_rows::scan_workflow_rows(&backup_db, &paths, &policy)?;
             privacy_rows::scan_rows(&backup_db, &cache_probes, true, &policy)?;
+            scan_identity_parts(&backup_db, &exempt)?;
             ssh_privacy::scan(&side.data, &store_probes)?;
+            scan_store_identity_parts(&side.data, &exempt)?;
         }
         Ok(())
     }
@@ -917,28 +920,109 @@ fn commit_removal(repo: &git2::Repository, path: &str) -> Result<git2::Oid, Fixt
         &[&parent],
     ))
 }
-/// A fixed number per synchronization error variant, for observations.
-fn sync_category(error: &SynchronizationError) -> u128 {
-    match error {
-        SynchronizationError::Repository(_) => 1,
-        SynchronizationError::Transport(_) => 2,
-        SynchronizationError::Busy => 3,
-        SynchronizationError::PollYielding => 4,
-        SynchronizationError::Interrupted => 5,
-        SynchronizationError::TargetNotMaterialized => 6,
-        SynchronizationError::WorktreeNotClean { .. } => 7,
-        SynchronizationError::WorktreeConflicted { .. } => 8,
-        SynchronizationError::PrimaryMissing => 9,
-        SynchronizationError::RemoteContextDeleted => 10,
-        SynchronizationError::HistoryUnknown => 11,
-        SynchronizationError::ConflictPending { .. } => 12,
-        SynchronizationError::IdentityRequired { .. } => 13,
-        SynchronizationError::ExternalResolutionRequired { .. } => 14,
-        SynchronizationError::MergeRequired { .. } => 15,
-        SynchronizationError::PushRejected => 16,
-        SynchronizationError::ExternalChange => 17,
-        SynchronizationError::RecoveryRequired => 18,
-        #[allow(unreachable_patterns)]
-        _ => 99,
+/// The bare name and email of each clone. The shared scan omits them,
+/// because an exempt `closed_by` cell contains them as substrings.
+fn identity_parts() -> Vec<Vec<u8>> {
+    [NAME, EMAIL, PEER_NAME, PEER_EMAIL]
+        .iter()
+        .map(|part| part.as_bytes().to_vec())
+        .collect()
+}
+/// Every cell of every table against the bare name and email. Inside an
+/// exempt cell (exactly its own `discovered_items` column and value) only
+/// the parts that are substrings of that value are skipped.
+fn scan_identity_parts(
+    db: &rusqlite::Connection,
+    exempt: &[(&'static str, Vec<u8>)],
+) -> Result<(), FixtureError> {
+    let parts = identity_parts();
+    let mut names = fixed(db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    ))?;
+    let tables = fixed(
+        fixed(names.query_map([], |r| r.get::<_, String>(0)))?.collect::<Result<Vec<_>, _>>(),
+    )?;
+    assert!(tables.iter().any(|n| n == "discovered_items"));
+    for table in tables {
+        let mut q = fixed(db.prepare(&format!("SELECT * FROM {table}")))?;
+        let cols = q.column_count();
+        let columns: Vec<String> = (0..cols)
+            .map(|c| q.column_name(c).map(str::to_owned))
+            .collect::<Result<_, _>>()
+            .map_err(|_| FixtureError)?;
+        let mut rows = fixed(q.query([]))?;
+        while let Some(row) = fixed(rows.next())? {
+            for (col, column) in columns.iter().enumerate() {
+                if let rusqlite::types::ValueRef::Text(bytes)
+                | rusqlite::types::ValueRef::Blob(bytes) = fixed(row.get_ref(col))?
+                {
+                    let value = exempt
+                        .iter()
+                        .find(|(name, value)| {
+                            table == "discovered_items"
+                                && name == column
+                                && bytes == value.as_slice()
+                        })
+                        .map(|(_, value)| value.as_slice());
+                    for part in &parts {
+                        if value
+                            .is_some_and(|v| v.windows(part.len()).any(|w| w == part.as_slice()))
+                        {
+                            continue;
+                        }
+                        ssh_privacy::clean(bytes, std::slice::from_ref(part))?;
+                    }
+                }
+            }
+        }
     }
+    Ok(())
+}
+/// The raw store against the bare name and email. An occurrence is accepted
+/// only inside a copy, or a page fragment, of an exempt `closed_by` value:
+/// the bytes around it must continue that value on at least one side (the
+/// " <" or ">" that joins name and email). A part on its own fails.
+fn scan_store_identity_parts(
+    root: &Path,
+    exempt: &[(&'static str, Vec<u8>)],
+) -> Result<(), FixtureError> {
+    fn inside_value(bytes: &[u8], at: usize, part: &[u8], value: &[u8]) -> bool {
+        (0..value.len().saturating_sub(part.len()) + 1)
+            .filter(|k| value[*k..].starts_with(part))
+            .any(|k| {
+                let before = (1..=k.min(at))
+                    .take_while(|n| bytes[at - n] == value[k - n])
+                    .count();
+                let after_value = &value[k + part.len()..];
+                let after_bytes = &bytes[at + part.len()..];
+                let after = after_value
+                    .iter()
+                    .zip(after_bytes)
+                    .take_while(|(v, b)| v == b)
+                    .count();
+                before + after >= 2
+            })
+    }
+    let parts = identity_parts();
+    for entry in fixed(std::fs::read_dir(root))? {
+        let path = fixed(entry)?.path();
+        let meta = fixed(std::fs::symlink_metadata(&path))?;
+        if meta.is_dir() {
+            scan_store_identity_parts(&path, exempt)?;
+        } else if meta.is_file() {
+            let bytes = fixed(std::fs::read(&path))?;
+            for part in &parts {
+                for at in 0..bytes.len().saturating_sub(part.len()) + 1 {
+                    if bytes[at..].starts_with(part)
+                        && !exempt.iter().any(|(column, value)| {
+                            *column == "closed_by" && inside_value(&bytes, at, part, value)
+                        })
+                    {
+                        return Err(FixtureError);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }

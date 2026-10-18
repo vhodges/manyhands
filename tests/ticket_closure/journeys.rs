@@ -345,6 +345,54 @@ fn contained_closed(cache_loss: bool) -> Result<(), FixtureError> {
         Some(PollDisposition::RemotelyDeleted)
     );
     assert!(p.b.worktree().exists());
+    // The collaborator's kept context is still open while its primary is
+    // closed. C5 refuses a new write there (the primary-tip arm) and nothing
+    // changes; the listing reads the kept context's open copy (R-T6-6).
+    let image_before = image(&p.b.root)?;
+    let context = oid(&p.b, CONTEXT)?;
+    let bytes = fixed(std::fs::read(p.b.worktree().join(TICKET_PATH)))?;
+    let refused = p.b.service.save_ticket(SaveTicketRequest {
+        target: p.b.target(ContextIntent::Edit),
+        draft: draft("refused collaborator edit\n"),
+        expected_path: ExpectedPathObservation::from_bytes(&bytes),
+    });
+    assert!(matches!(refused, Err(ref e) if e.kind == RepositoryErrorKind::TicketClosed));
+    assert_eq!(image(&p.b.root)?, image_before);
+    assert_eq!(oid(&p.b, CONTEXT)?, context);
+    let repository = fixed(p.b.service.resolve_repository(&p.b.root))?;
+    let listed = fixed(
+        p.b.service
+            .list_tickets(&repository, &TicketFilter::default()),
+    )?;
+    let copies: Vec<_> = listed
+        .items
+        .iter()
+        .filter(|i| i.id.as_deref() == Some(TICKET))
+        .collect();
+    assert_eq!(copies.len(), 1);
+    ssh_harness::observation(&[
+        920,
+        match copies[0].context.kind {
+            ItemContextKind::Primary => 0,
+            ItemContextKind::Unverified => 1,
+            ItemContextKind::Active => 2,
+        },
+        match copies[0].closure.as_ref().map(|c| c.state) {
+            None => 0,
+            Some(ClosureState::Open) => 1,
+            Some(ClosureState::Closed) => 2,
+        },
+    ]);
+    assert_eq!(copies[0].context.kind, ItemContextKind::Active);
+    assert_eq!(copies[0].status.as_deref(), Some("open"));
+    assert_eq!(
+        copies[0].closure,
+        Some(ClosureDto {
+            state: ClosureState::Open,
+            closed_at: None,
+            closed_by: None,
+        })
+    );
     assert_eq!(oid(&p.b, MAIN)?, primary);
     let preview = p.preview(&p.b)?;
     assert_eq!(preview.integration(), PlannedIntegration::AlreadyContained);
@@ -465,6 +513,7 @@ fn poll_advance() -> Result<(), FixtureError> {
     let request = p.request(&p.a)?;
     let base = oid(&p.a, MAIN)?;
     stopped(&p, &p.a, &request, FailurePoint::AfterContextSync)?;
+    assert_eq!(step(&p.a, request.operation_id)?, "context_synchronized");
     let (old_child, _) = context_child(&p.a, request.operation_id)?;
     commit_files(&p.b.repo()?, &[("poll-primary", b"published peer\n")])?;
     fixed(p.sync_target(&p.b, SynchronizationTarget::Primary))?;
@@ -673,6 +722,7 @@ fn deletion_race() -> Result<(), FixtureError> {
     remote_world::push_peer(&b, &p.server, "refs/heads/fixture-peer")?;
     let request = p.request(&p.a)?;
     stopped(&p, &p.a, &request, FailurePoint::AfterPublication)?;
+    assert_eq!(step(&p.a, request.operation_id)?, "published");
     p.server
         .race_context_update(ssh_remote::ObservationRef::RemoteTicket, old, peer)?;
     let before = image(&p.a.worktree())?;
@@ -709,6 +759,7 @@ fn offline(integrated: bool) -> Result<(), FixtureError> {
     let request = p.request(&p.a)?;
     if integrated {
         stopped(&p, &p.a, &request, FailurePoint::AfterIntegrationRef)?;
+        assert_eq!(step(&p.a, request.operation_id)?, "integrating");
     }
     let primary = oid(&p.a, MAIN)?;
     let local_context = oid(&p.a, CONTEXT)?;
@@ -779,6 +830,7 @@ fn preservation(mode: usize) -> Result<(), FixtureError> {
     p.edit(&p.a, BODY)?;
     let request = p.request(&p.a)?;
     stopped(&p, &p.a, &request, FailurePoint::AfterPublication)?;
+    assert_eq!(step(&p.a, request.operation_id)?, "published");
     let remote = server_oid(&p, CONTEXT)?;
     let ticket = p.a.worktree().join(TICKET_PATH);
     let closed = fixed(std::fs::read(&ticket))?;
@@ -1161,6 +1213,8 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
             ))?;
             commit_files(&repo, &[("docs/a.md", document.as_bytes())])?;
             fixed(p.sync_target(&p.a, SynchronizationTarget::Primary))?;
+            // Publication does not advance T(P): an ordinary poll observes it.
+            poll(&p, &p.a)?;
             request = zero_request(&p, &p.a, DOC.parse().unwrap());
             ClosureBlocker::NotATicket
         }
@@ -1335,7 +1389,21 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
     for b in &blockers {
         ssh_harness::observation(&[800, *b as u128]);
     }
-    assert!(blockers.contains(&expected));
+    // The exact set: the two modes whose fixture really adds a second fact
+    // report it; every other mode reports its one blocker only.
+    let exact = match mode {
+        5 => vec![
+            ClosureBlocker::ContextConflicted,
+            ClosureBlocker::ConflictPending,
+            ClosureBlocker::ContextBehindRemote,
+        ],
+        6 => vec![
+            ClosureBlocker::ContextDirty,
+            ClosureBlocker::LocalOperationPending,
+        ],
+        _ => vec![expected],
+    };
+    assert_eq!(blockers, exact);
     let sorted = {
         let mut sorted = blockers.clone();
         sorted.sort();
@@ -1355,7 +1423,7 @@ fn blocker(mode: usize) -> Result<(), FixtureError> {
         assert!(identity_configuration.is_none());
         assert!(matches!(
             p.execute(&p.a.service, request.clone()),
-            Err(TicketClosureError::Blocked(ref b)) if b.contains(&expected)
+            Err(TicketClosureError::Blocked(ref b)) if *b == exact
         ));
     }
     assert_eq!(step(&p.a, request.operation_id)?, "abandoned");

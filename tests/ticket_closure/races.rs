@@ -27,6 +27,7 @@ fn sequential() -> Result<(), FixtureError> {
     // A's closure publishes its primary and keeps the remote context branch.
     let a_request = p.request(&p.a)?;
     stopped(&p, &p.a, &a_request, FailurePoint::AfterPublication)?;
+    assert_eq!(step(&p.a, a_request.operation_id)?, "published");
     let closed = server_oid(&p, MAIN)?;
     assert_eq!(server_oid(&p, CONTEXT)?, edited);
     // B's context child merges A's closed primary into B's context and
@@ -75,7 +76,9 @@ fn sequential() -> Result<(), FixtureError> {
 
 /// Both clones are held after their context children (each stops at F2),
 /// so both pass the base-closed check before either publishes; then A, and
-/// after it B, are released.
+/// after it B, are released. This is equivalent to a barrier: the
+/// `context_synchronized` resume makes no network call before its lease, so
+/// B's base-closed check reads B's stale T(P), exactly as in a concurrent run.
 fn true_race() -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let edited = p.edit(&p.a, BODY)?;
@@ -147,11 +150,11 @@ fn true_race() -> Result<(), FixtureError> {
         };
         if holds(&sides.local, &p.b.closed_by()) && holds(&sides.incoming, &p.a.closed_by()) {
             closures += 1;
+            // R-T8-1: today the product offers this conflict as canonical
+            // and refuses every resolution below. A move to
+            // `ExternalResolutionRequired` must change this line on purpose.
+            assert_eq!(path.eligibility, ConflictEligibility::EligibleCanonical);
         }
-        ssh_harness::observation(&[
-            901,
-            u128::from(path.eligibility == ConflictEligibility::ExternalResolutionRequired),
-        ]);
     }
     assert_eq!(closures, 1);
     let main_image = image(&p.b.root)?;
@@ -179,18 +182,7 @@ fn true_race() -> Result<(), FixtureError> {
                     None,
                 ));
         p.diagnostics(&format!("{resolution:?}"))?;
-        ssh_harness::observation(&[
-            902,
-            u128::from(incoming),
-            match &resolution {
-                Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }) => 0,
-                Ok(ResolveSynchronizationOutcome::IdentityRequired) => 1,
-                Ok(ResolveSynchronizationOutcome::StaleObservation) => 2,
-                Ok(ResolveSynchronizationOutcome::ValidationFailed) => 3,
-                Ok(ResolveSynchronizationOutcome::RecoveryRequired) => 4,
-                Err(e) => 100 + sync_category(e),
-            },
-        ]);
+        // R-T8-1: Cycle 06 validation keeps every side's closure.
         assert!(matches!(
             resolution,
             Ok(ResolveSynchronizationOutcome::ValidationFailed)
@@ -199,10 +191,29 @@ fn true_race() -> Result<(), FixtureError> {
     }
     assert_eq!(oid(&p.b, MAIN)?, b_merge);
     assert_eq!(server_oid(&p, MAIN)?, a_merge);
-    // The same ID stays pending; a later closure in B is blocked by B's
-    // diverged primary.
+    // After the refused resolutions the same ID stays pending a conflict,
+    // with both closures still in history; a later closure in B is blocked
+    // by B's diverged primary.
     let again = p.run(&p.b, &b_request)?;
-    assert_eq!(again.publication(), b.publication());
+    assert_eq!(
+        again.publication(),
+        PromotionPublication::Pending {
+            reason: PromotionPublicationPending::Synchronization(
+                PromotionSynchronizationCategory::Conflict
+            )
+        }
+    );
+    assert_eq!(again.cleanup(), b.cleanup());
+    assert_eq!(ticket_at(&p.b, a_merge)?.closed_by, Some(p.a.closed_by()));
+    assert_eq!(
+        ticket_at(&p.b, oid(&p.b, MAIN)?)?.closed_by,
+        Some(p.b.closed_by())
+    );
+    assert_eq!(
+        reachable(&p.b, oid(&p.b, MAIN)?, &close_subject())?.len(),
+        1
+    );
+    assert_eq!(reachable(&p.b, a_merge, &close_subject())?.len(), 1);
     assert_eq!(server_oid(&p, MAIN)?, a_merge);
     let other: canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAY".parse().unwrap();
     fixed(p.b.service.save_ticket(SaveTicketRequest {
