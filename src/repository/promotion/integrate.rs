@@ -124,7 +124,8 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);
     let context_ref = L::KIND.context_ref(&record.context.item_id);
     if let Some(parent) = parent
-        && let Ok(old_primary) = repository.refname_to_id(&primary_ref)
+        && let Some(old_primary) =
+            written_primary::<L::Error>(&repository, &primary_ref, parent.effect_written())?
         && let Some(checkpoint) = lifecycle.resume_written(
             service,
             &mut LeasedIntegration {
@@ -269,6 +270,21 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
         checkpointed: false,
         _lease: lease,
     })
+}
+/// The local primary under the lease, for `resume_written`. Unreadable, it is
+/// `None` for a record with nothing written (revalidation reports the change),
+/// but `RecoveryRequired` once an effect may be written: a written checkpoint
+/// must never fall through to an abandonable consent refusal.
+pub(in super::super) fn written_primary<E: LifecycleError>(
+    repository: &git2::Repository,
+    primary_ref: &str,
+    written: bool,
+) -> Result<Option<Oid>, E> {
+    match repository.refname_to_id(primary_ref) {
+        Ok(oid) => Ok(Some(oid)),
+        Err(_) if written => Err(E::recovery_required()),
+        Err(_) => Ok(None),
+    }
 }
 /// Integration of a lifecycle hook's checkpoint under the lease already
 /// held: the merge of `[base, merged context]` with the hook's result tree

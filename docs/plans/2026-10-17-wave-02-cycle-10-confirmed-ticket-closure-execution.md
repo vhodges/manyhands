@@ -836,3 +836,37 @@ preview). `merged_context` returns `context_oid`. `checkpointed` is always
   - `--test remote_reservation`: 13.
   - `--test document_promotion`: 74 SSH cases, unchanged.
   - `git merge-tree` against `origin/main` (3765524) is clean.
+
+### Task 4 fix round 1
+
+The review changes are listed by item.
+
+- **R-T4-1 (ruling).** `closure_oid` stays the checkpoint commit.
+  - The new nullable `adopted_context_oid` (unreleased migration) holds a
+    deliberate synchronization adopted by the C9 resume. It descends from
+    `closure_oid`, checked in Git at write time; the schema and `validate`
+    check the rest. It is set only while `closing`, is fixed from
+    `integrating` on, and never exists for `existing`.
+  - `merged_context()` is `adopted.or(closure).or(context)`.
+  - `checkpoint_authority(repo, item, closure_oid)` reads the checkpoint
+    directly: subject `Close ticket <ULID>`, one parent, no walk.
+- **Resume guards.**
+  - The `integrating` resume refuses a primary that moved past the recorded
+    base under the new lease (`RecoveryRequired`).
+  - A written-effect record whose primary is unreadable is
+    `RecoveryRequired` (`integrate::written_primary`), never an abandonable
+    refusal.
+  - The `CheckpointWritten` resume also marks refresh required.
+- **Checkpoint checks.**
+  - `CheckoutDone` is decided from Git's status, the index entry and a
+    filtered tree-to-workdir diff, with no raw bytes; a `core.autocrlf` case
+    was added.
+  - Step 2 (base closed, context not contained) is now checked explicitly in
+    the hook.
+- **Tests.**
+  - Remote-fixture tests cover step 3 from both steps, the D2 base, and the
+    in-memory merge with a remote.
+  - Shared fixtures moved to `closure/test_support.rs`; `observe_tests.rs`
+    lost its copies and gained an import.
+- **Gate.** fmt and Clippy are clean. `--lib closure` passes 118,
+  `--lib promotion` 197, `remote_reservation` 13 and `document_promotion` 74.

@@ -177,6 +177,19 @@ fn commit_closure_text(
     ))
 }
 
+/// Whether a commit's ticket names either closure key, as the observation
+/// reads the primary: a malformed closure is never open.
+fn commit_names_closure(repo: &git2::Repository, commit: Oid, path: &Path) -> bool {
+    let names = || -> Option<bool> {
+        let tree = repo.find_commit(commit).ok()?.tree().ok()?;
+        let entry = tree.get_path(path).ok()?;
+        let blob = repo.find_blob(entry.id()).ok()?;
+        let values = canonical::front_matter(std::str::from_utf8(blob.content()).ok()?)?;
+        Some(values.get("closed_at").is_some() || values.get("closed_by").is_some())
+    };
+    names().unwrap_or(false)
+}
+
 /// The tree a merge of `tip` into `base` has: the tip's own tree when
 /// `base ≤ tip`, otherwise the clean in-memory merge, even with a remote
 /// (C9). `Err(())` is a conflict. Only the merge's new objects are written.
@@ -311,24 +324,35 @@ pub(in super::super) fn reconcile_closing(
         if !only_ticket {
             return Ok(ClosingState::Unrecognized);
         }
-        let worktree = context_repo
-            .workdir()
-            .map(|dir| std::fs::read(dir.join(&path)));
-        let expected = context_repo
-            .find_blob(blob)
-            .map_err(|_| unavailable(context_repo))?;
-        let worktree_matches = matches!(worktree, Some(Ok(bytes)) if bytes == expected.content());
-        let index_matches = context_repo
+        // Git decides, with its filters: never a raw byte comparison.
+        let status = statuses
+            .get(0)
+            .map(|e| e.status())
+            .unwrap_or(git2::Status::CURRENT);
+        let staged = context_repo
             .index()
             .ok()
             .and_then(|index| index.get_path(&path, 0))
-            .is_some_and(|entry| {
-                entry.id == blob
-                    || !statuses
-                        .iter()
-                        .any(|e| e.status().contains(git2::Status::INDEX_MODIFIED))
-            });
-        return Ok(if worktree_matches && index_matches {
+            .map(|entry| entry.id);
+        let matches = if status.contains(git2::Status::INDEX_MODIFIED) {
+            // The checkout staged the Blob and the worktree equals the index.
+            staged == Some(blob) && !status.contains(git2::Status::WT_MODIFIED)
+        } else {
+            // The worktree alone changed: it must equal the checkpoint's tree.
+            let checkpoint_tree = context_repo
+                .find_commit(closure)
+                .and_then(|c| c.tree())
+                .map_err(|_| unavailable(context_repo))?;
+            let mut options = git2::DiffOptions::new();
+            options.pathspec(&path).disable_pathspec_match(true);
+            context_repo
+                .diff_tree_to_workdir(Some(&checkpoint_tree), Some(&mut options))
+                .map_err(|_| unavailable(context_repo))?
+                .deltas()
+                .len()
+                == 0
+        };
+        return Ok(if matches {
             ClosingState::CheckoutDone
         } else {
             ClosingState::Unrecognized
@@ -360,55 +384,43 @@ pub(in super::super) struct CheckpointAuthority {
     pub signature: CommitIdentity,
 }
 
-/// Read from the checkpoint commit `Close ticket <ULID>`, never from current
-/// configuration. `closure` is the checkpoint or a descendant of it whose
-/// first-parent chain reaches it (a deliberate synchronization keeps the
-/// context side first).
+/// Read from the record's checkpoint commit itself, never from current
+/// configuration: its subject is `Close ticket <item>`, it has exactly one
+/// parent whose ticket is open, its own ticket is closed, and `closed_by`
+/// names its author.
 pub(in super::super) fn checkpoint_authority(
     repo: &git2::Repository,
+    item: &ItemId,
     closure: Oid,
 ) -> Result<CheckpointAuthority, RepositoryError> {
     let failed = || unavailable(repo);
-    let mut current = closure;
-    // A bounded first-parent walk: synchronizations add a few commits.
-    for _ in 0..4096 {
-        let commit = repo.find_commit(current).map_err(|_| failed())?;
-        if let Some(item) = commit
-            .summary()
-            .and_then(|s| s.strip_prefix("Close ticket "))
-            .and_then(|s| s.parse::<ItemId>().ok())
-            && commit.parent_count() == 1
-        {
-            let path = ticket_path(&item);
-            let parent = commit.parent_id(0).map_err(|_| failed())?;
-            let (Some((_, closed_by)), None) = (
-                commit_closure_text(repo, current, &path),
-                commit_closure_text(repo, parent, &path),
-            ) else {
-                return Err(failed());
-            };
-            let author = commit.author();
-            let (Some(name), Some(email)) = (author.name(), author.email()) else {
-                return Err(failed());
-            };
-            let signature = CommitIdentity {
-                name: name.to_owned(),
-                email: email.to_owned(),
-            };
-            if closed_by_text(&signature) != closed_by {
-                return Err(failed());
-            }
-            return Ok(CheckpointAuthority {
-                closed_by,
-                signature,
-            });
-        }
-        if commit.parent_count() == 0 {
-            break;
-        }
-        current = commit.parent_id(0).map_err(|_| failed())?;
+    let commit = repo.find_commit(closure).map_err(|_| failed())?;
+    if commit.summary() != Some(checkpoint_subject(item).as_str()) || commit.parent_count() != 1 {
+        return Err(failed());
     }
-    Err(failed())
+    let path = ticket_path(item);
+    let parent = commit.parent_id(0).map_err(|_| failed())?;
+    let (Some((_, closed_by)), None) = (
+        commit_closure_text(repo, closure, &path),
+        commit_closure_text(repo, parent, &path),
+    ) else {
+        return Err(failed());
+    };
+    let author = commit.author();
+    let (Some(name), Some(email)) = (author.name(), author.email()) else {
+        return Err(failed());
+    };
+    let signature = CommitIdentity {
+        name: name.to_owned(),
+        email: email.to_owned(),
+    };
+    if closed_by_text(&signature) != closed_by {
+        return Err(failed());
+    }
+    Ok(CheckpointAuthority {
+        closed_by,
+        signature,
+    })
 }
 
 fn boundary(
@@ -461,6 +473,11 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
     let ancestor =
         |older: Oid, newer: Oid| shared::ancestor(repo, older, newer, root).map_err(E::from);
     let contained = ancestor(context, base)?;
+    // Step 2: never merge further work into a ticket the base closed; the
+    // next preview reports `AlreadyClosed`.
+    if !contained && commit_names_closure(repo, base, &observation.ticket_path) {
+        return Err(E::reconfirmation_required());
+    }
     // Step 3: with a remote, a context that is not contained must hold the
     // base. A `closing` record cannot step back to `confirmed`: it abandons.
     if observation.remote.is_some() && !contained && !ancestor(base, context)? {
@@ -550,7 +567,12 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
                     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
                     closure
                 }
-                ClosingState::CheckpointWritten { tip } => tip,
+                ClosingState::CheckpointWritten { tip } => {
+                    // The ref moved before this call (or after a synchronization):
+                    // the mark is idempotent and may not have been made.
+                    context_moved(service, root)?;
+                    tip
+                }
                 ClosingState::Unrecognized => return Err(E::recovery_required()),
             };
             (
@@ -558,17 +580,36 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
                 current_base::<E>(repo, r, &stage.context.primary_branch)?,
             )
         }
-        ClosureStep::Integrating => (closure, r.base_oid.ok_or_else(E::recovery_required)?),
+        ClosureStep::Integrating => {
+            let base = r.base_oid.ok_or_else(E::recovery_required)?;
+            // The primary as read under this lease must not have moved past the
+            // recorded base since the runner recorded `integrating`.
+            let old_primary = stage.base;
+            if old_primary != base
+                && !repo
+                    .graph_descendant_of(base, old_primary)
+                    .map_err(|_| E::recovery_required())?
+            {
+                return Err(E::recovery_required());
+            }
+            (r.merged_context().ok_or_else(E::recovery_required)?, base)
+        }
         _ => return Ok(None),
     };
-    let authority = checkpoint_authority(repo, tip).map_err(|_| E::recovery_required())?;
+    // The authority is always the checkpoint commit itself, never an adopted
+    // synchronization over it.
+    let authority =
+        checkpoint_authority(repo, &r.item_id, closure).map_err(|_| E::recovery_required())?;
     let Ok(result_tree) = post_checkpoint_result(repo, base, tip)? else {
         return Err(E::recovery_required());
     };
-    if r.step == ClosureStep::Closing && (r.base_oid != Some(base) || tip != closure) {
+    let adopted = (tip != closure).then_some(tip);
+    if r.step == ClosureStep::Closing
+        && (r.base_oid != Some(base) || r.adopted_context_oid != adopted)
+    {
         let operation = r.operation_id;
         state::with_transaction(service, root, |tx, id| {
-            record::adopt_written_closure(tx, id, operation, base, tip)
+            record::adopt_written_closure(tx, id, operation, repo, base, adopted)
         })?;
     }
     Ok(Some(PreIntegration::Checkpoint {

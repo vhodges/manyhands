@@ -15,6 +15,8 @@ use std::{
 pub(super) mod checkpoint;
 pub(super) mod observe;
 pub(super) mod record;
+#[cfg(test)]
+mod test_support;
 
 /// Declaration order is the stable order of preflight blockers and the bit
 /// order of the stored refusal mask.

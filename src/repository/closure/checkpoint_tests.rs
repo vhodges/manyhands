@@ -1,22 +1,20 @@
+use super::super::test_support::{
+    self as support, ID, at, checkout, commit, id, parse_ticket, read, repository_ticket, ticket,
+    write,
+};
 use super::*;
-use crate::{
-    canonical::{self, CanonicalItem, Ticket},
-    repository::{
-        AddRemoteRequest, AuthoringKind, AuthoringTarget, ContextIntent, EnableRepositoryRequest,
-        ExpectedPathObservation, OperationId, PreviewTicketClosureRequest, REGISTRY_FILE,
-        RepositoryErrorKind, RepositoryOperation, SaveTicketRequest, SetPublicationRemoteRequest,
-        TicketDraft,
-        closure::{
-            observe::{closed_ticket_bytes, prepare_observation},
-            record::{self, ClosureKind, ClosureStep},
-        },
-        coordination::repository_lease,
-        promotion::{
-            DocumentPromotionError, integrate,
-            lifecycle::{LeasedIntegration, PreIntegration},
-        },
-        remote::state,
+use crate::repository::{
+    OperationId, PreviewTicketClosureRequest, RepositoryErrorKind, RepositoryOperation,
+    closure::{
+        observe::{closed_ticket_bytes, prepare_observation},
+        record::{self, ClosureKind, ClosureStep},
     },
+    coordination::repository_lease,
+    promotion::{
+        DocumentPromotionError, integrate,
+        lifecycle::{LeasedIntegration, PreIntegration},
+    },
+    remote::state,
 };
 use std::{
     collections::BTreeMap,
@@ -24,18 +22,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const CLOSER: &str = "Closer Sentinel <closer-sentinel@example.invalid>";
 
-fn id() -> ItemId {
-    ID.parse().unwrap()
-}
-fn ticket() -> String {
-    format!(".manyhands/tickets/{ID}/ticket.md")
-}
-fn at(seconds: i64) -> OffsetDateTime {
-    OffsetDateTime::from_unix_timestamp(seconds).unwrap()
-}
 fn closer() -> CommitIdentity {
     CommitIdentity {
         name: "Closer Sentinel".into(),
@@ -44,43 +32,6 @@ fn closer() -> CommitIdentity {
 }
 fn context_ref() -> String {
     format!("refs/heads/manyhands/ticket/{ID}")
-}
-
-fn commit(repo: &git2::Repository) -> Oid {
-    let mut index = repo.index().unwrap();
-    index
-        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
-        .unwrap();
-    index.update_all(["*"], None).unwrap();
-    index.write().unwrap();
-    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
-    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
-    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
-    repo.commit(
-        Some("HEAD"),
-        &sig,
-        &sig,
-        "fixture",
-        &tree,
-        &parent.iter().collect::<Vec<_>>(),
-    )
-    .unwrap()
-}
-fn write(repo: &git2::Repository, path: &str, bytes: impl AsRef<[u8]>) {
-    let path = repo.workdir().unwrap().join(path);
-    fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, bytes).unwrap();
-}
-fn read(repo: &git2::Repository, path: &str) -> Vec<u8> {
-    fs::read(repo.workdir().unwrap().join(path)).unwrap()
-}
-fn reset(repo: &git2::Repository, oid: Oid) {
-    repo.reset(
-        &repo.find_object(oid, None).unwrap(),
-        git2::ResetType::Hard,
-        None,
-    )
-    .unwrap();
 }
 fn tree_entry(repo: &git2::Repository, tree: Oid, path: &str) -> (Vec<u8>, i32) {
     let tree = repo.find_tree(tree).unwrap();
@@ -93,36 +44,9 @@ fn tree_entry(repo: &git2::Repository, tree: Oid, path: &str) -> (Vec<u8>, i32) 
 fn commit_entry(repo: &git2::Repository, commit: Oid, path: &str) -> (Vec<u8>, i32) {
     tree_entry(repo, repo.find_commit(commit).unwrap().tree_id(), path)
 }
-fn parse_ticket(bytes: &[u8]) -> Ticket {
-    match canonical::parse_item(Path::new(&ticket()), std::str::from_utf8(bytes).unwrap()).unwrap()
-    {
-        CanonicalItem::Ticket(t) => t,
-        other => panic!("not a ticket: {other:?}"),
-    }
-}
 /// A detached commit over `parent` replacing one path's bytes and mode.
 fn tree_commit(repo: &git2::Repository, parent: Oid, path: &str, bytes: &[u8], mode: u32) -> Oid {
-    let parent = repo.find_commit(parent).unwrap();
-    let mut builder = git2::build::TreeUpdateBuilder::new();
-    let mode = if mode == 0o100755 {
-        git2::FileMode::BlobExecutable
-    } else {
-        git2::FileMode::Blob
-    };
-    builder.upsert(path, repo.blob(bytes).unwrap(), mode);
-    let tree = builder
-        .create_updated(repo, &parent.tree().unwrap())
-        .unwrap();
-    let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
-    repo.commit(
-        None,
-        &sig,
-        &sig,
-        "fixture detached",
-        &repo.find_tree(tree).unwrap(),
-        &[&parent],
-    )
-    .unwrap()
+    support::tree_commit(repo, parent, &[(path, Some((bytes, mode)))])
 }
 /// Every ref, and every file under the root including `.git`, hashed.
 fn image(
@@ -160,110 +84,20 @@ fn image(
     (refs, files)
 }
 
-struct Fixture {
-    root: tempfile::TempDir,
-    data: tempfile::TempDir,
-    service: RepositoryService,
-    repo: git2::Repository,
-    context: git2::Repository,
-    base: Oid,
+/// The shared closure fixture, with this module's own helpers.
+struct Fixture(support::Fixture);
+impl std::ops::Deref for Fixture {
+    type Target = support::Fixture;
+    fn deref(&self) -> &support::Fixture {
+        &self.0
+    }
 }
 
 impl Fixture {
     /// An enabled repository with a ticket context whose body differs from
     /// the primary's open ticket.
     fn new(remote: bool) -> Self {
-        let root = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
-        let data = tempfile::tempdir().unwrap();
-        let repo = git2::Repository::init(root.path()).unwrap();
-        let mut config = repo.config().unwrap();
-        config.set_bool("core.autocrlf", false).unwrap();
-        config.set_str("user.name", "Fixture").unwrap();
-        config
-            .set_str("user.email", "fixture@example.invalid")
-            .unwrap();
-        repo.set_head("refs/heads/main").unwrap();
-        write(&repo, "ordinary.txt", "original\n");
-        commit(&repo);
-        let service = RepositoryService::open_at(data.path()).unwrap();
-        service
-            .enable(EnableRepositoryRequest {
-                root: root.path().into(),
-                primary_branch: "main".into(),
-                identity: None,
-                operation_id: OperationId::new(),
-            })
-            .unwrap();
-        commit(&repo);
-        if remote {
-            service
-                .add_remote(AddRemoteRequest {
-                    root: root.path().into(),
-                    name: "origin".into(),
-                    url: "ssh://fixture@127.0.0.1:1/repository".into(),
-                    operation_id: OperationId::new(),
-                })
-                .unwrap();
-            service
-                .set_publication_remote(SetPublicationRemoteRequest {
-                    root: root.path().into(),
-                    name: Some("origin".into()),
-                    operation_id: OperationId::new(),
-                })
-                .unwrap();
-        }
-        service
-            .save_ticket(SaveTicketRequest {
-                target: AuthoringTarget {
-                    root: root.path().into(),
-                    kind: AuthoringKind::Ticket,
-                    item_id: id(),
-                    intent: ContextIntent::Create,
-                    operation_id: OperationId::new(),
-                },
-                draft: TicketDraft {
-                    title: "Ticket".into(),
-                    ticket_type: "task".into(),
-                    status: "open".into(),
-                    project: None,
-                    team: None,
-                    body: "original body\n".into(),
-                },
-                expected_path: ExpectedPathObservation::Missing,
-            })
-            .unwrap();
-        let context =
-            git2::Repository::open(root.path().join(".manyhands/worktrees").join(ID)).unwrap();
-        reset(&repo, context.head().unwrap().target().unwrap());
-        let base = repo.head().unwrap().target().unwrap();
-        let source = String::from_utf8(read(&context, &ticket()))
-            .unwrap()
-            .replace("original body", "context body");
-        write(&context, &ticket(), source);
-        commit(&context);
-        let f = Self {
-            root,
-            data,
-            service,
-            repo,
-            context,
-            base,
-        };
-        if remote {
-            f.db()
-                .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-                .unwrap();
-            f.tracking(base);
-        }
-        f
-    }
-    fn db(&self) -> rusqlite::Connection {
-        rusqlite::Connection::open(self.data.path().join(REGISTRY_FILE)).unwrap()
-    }
-    fn tracking(&self, oid: Oid) {
-        self.repo
-            .reference("refs/remotes/origin/main", oid, true, "fixture")
-            .unwrap();
+        Self(support::Fixture::new(remote))
     }
     fn context_oid(&self) -> Oid {
         self.repo.refname_to_id(&context_ref()).unwrap()
@@ -443,33 +277,6 @@ fn checkpoint_of(result: PreIntegration) -> (Oid, Oid, Oid) {
 
 // --- Review Focus 1–3 (R-P1: the one shared `closed_ticket_bytes`) ---
 
-/// This repository's own ticket shape: `manyhands_*` keys first, quoted
-/// scalars, the unknown `wave`/`cycle` keys and a Markdown body.
-fn repository_ticket(line_end: &str) -> String {
-    [
-        "---",
-        "manyhands_managed: true",
-        "manyhands_kind: ticket",
-        &format!("id: \"{ID}\""),
-        "title: \"Wave 02 Cycle 10: Confirmed Ticket Closure\"",
-        "type: \"cycle\"",
-        "status: \"open\"",
-        "project: \"manyhands\"",
-        "team: \"core\"",
-        "wave: \"02\"",
-        "cycle: \"10\"",
-        "---",
-        "",
-        "Close a ticket with its required closure metadata.",
-        "",
-        "## Planning",
-        "",
-        "- [x] Create the implementation plan.",
-        "",
-    ]
-    .join(line_end)
-}
-
 fn assert_only_closure_added(source: &str, closed: &[u8]) {
     let original = parse_ticket(source.as_bytes());
     let after = parse_ticket(closed);
@@ -530,7 +337,7 @@ fn checkpoint_preserves_executable_mode() {
     let f = Fixture::new(false);
     let bytes = read(&f.context, &ticket());
     let executable = tree_commit(&f.context, f.context_oid(), &ticket(), &bytes, 0o100755);
-    reset(&f.context, executable);
+    checkout(&f.context, executable);
     assert_eq!(f.context_oid(), executable);
     let prepared =
         prepare_closure(&f.repo, &f.observation(), at(1_700_000_000), &closer()).unwrap();
@@ -812,7 +619,7 @@ fn reconcile_adoptable_descendant_is_checkpoint_written() {
         .context
         .commit(None, &sig, &sig, "synchronize", &tree, &[&local, &incoming])
         .unwrap();
-    reset(&f.context, merge);
+    checkout(&f.context, merge);
     assert_eq!(
         reconcile_closing(&f.context, &r).unwrap(),
         ClosingState::CheckpointWritten { tip: merge }
@@ -843,7 +650,7 @@ fn reconcile_descendant_with_different_closure_is_unrecognized() {
         &other,
         0o100644,
     );
-    reset(&f.context, changed);
+    checkout(&f.context, changed);
     assert_eq!(
         reconcile_closing(&f.context, &r).unwrap(),
         ClosingState::Unrecognized
@@ -874,12 +681,14 @@ fn checkpoint_authority_reads_commit_not_config() {
     config
         .set_str("user.email", "changed@example.invalid")
         .unwrap();
-    let authority = checkpoint_authority(&f.repo, prepared.checkpoint_commit).unwrap();
+    let authority = checkpoint_authority(&f.repo, &id(), prepared.checkpoint_commit).unwrap();
     assert_eq!(authority.closed_by, CLOSER);
     assert_eq!(authority.signature.name, "Closer Sentinel");
     assert_eq!(authority.signature.email, "closer-sentinel@example.invalid");
-    // Not a checkpoint: refused.
-    assert!(checkpoint_authority(&f.repo, f.base).is_err());
+    // Not a checkpoint, or another ticket's: refused.
+    assert!(checkpoint_authority(&f.repo, &id(), f.base).is_err());
+    let other: ItemId = "01BX5ZZKBKACTAV9WEVGEMMVRZ".parse().unwrap();
+    assert!(checkpoint_authority(&f.repo, &other, prepared.checkpoint_commit).is_err());
 }
 
 #[test]
@@ -1120,7 +929,7 @@ fn contained_open_closes_with_in_memory_merge() {
     let f = Fixture::new(false);
     // The context was merged by hand without closure fields, then the
     // primary moved on.
-    reset(&f.repo, f.context_oid());
+    checkout(&f.repo, f.context_oid());
     write(&f.repo, "primary.txt", "primary\n");
     let base = commit(&f.repo);
     let observation = f.observation();
@@ -1252,7 +1061,9 @@ fn confirmed_identity_persisted_before_checkpoint() {
         Some("closer-sentinel@example.invalid")
     );
     assert_eq!(
-        checkpoint_authority(&f.repo, merged).unwrap().closed_by,
+        checkpoint_authority(&f.repo, &id(), merged)
+            .unwrap()
+            .closed_by,
         CLOSER
     );
 }
@@ -1272,23 +1083,30 @@ fn confirmed_identity_overridden_by_include_writes_no_checkpoint() {
     let r = f.confirmed_record(&confirmation);
     let context = f.context_oid();
     let before = image(f.root.path(), &f.repo);
+    let config_before = fs::read(&config).unwrap();
     let result = f.hook_with(&f.service, &r, Some(&confirmation));
-    assert!(result.is_err(), "{result:?}");
+    // `would_persist_identity` refuses: the integration's recovery category.
+    assert!(
+        matches!(&result, Err(DocumentPromotionError::Repository(e)) if e.kind == RepositoryErrorKind::RecoveryRequired),
+        "{result:?}"
+    );
     assert_eq!(image(f.root.path(), &f.repo), before);
+    assert_eq!(fs::read(&config).unwrap(), config_before);
+    assert!(!f.repo.path().join("config.lock").exists());
     assert_eq!(f.context_oid(), context);
-    assert_eq!(f.reload(&r).step, ClosureStep::ContextSynchronized);
+    assert_eq!(f.reload(&r), r);
 }
 
 #[test]
 fn adopt_written_closure_only_while_closing() {
     let f = Fixture::new(false);
     let r = f.record(ClosureKind::Record);
-    let adopt = |base: Oid, merged: Oid| {
+    let adopt = |base: Oid, adopted: Option<Oid>| {
         state::with_transaction(&f.service, f.root.path(), |tx, rid| {
-            record::adopt_written_closure(tx, rid, r.operation_id, base, merged)
+            record::adopt_written_closure(tx, rid, r.operation_id, &f.repo, base, adopted)
         })
     };
-    assert!(adopt(f.base, f.context_oid()).is_err());
+    assert!(adopt(f.base, None).is_err());
     let (closing, _) = (f.reload(&r), ());
     assert_eq!(closing.step, ClosureStep::ContextSynchronized);
     let failing = RepositoryService::open_at_with_failure_point_for_testing(
@@ -1300,9 +1118,340 @@ fn adopt_written_closure_only_while_closing() {
     let stored = f.reload(&r);
     write(&f.repo, "primary.txt", "primary\n");
     let advanced = commit(&f.repo);
-    adopt(advanced, stored.closure_oid.unwrap()).unwrap();
+    // Neither the checkpoint itself nor a commit outside it can be adopted.
+    assert!(adopt(advanced, stored.closure_oid).is_err());
+    assert!(adopt(advanced, Some(advanced)).is_err());
+    let descendant = tree_commit(
+        &f.repo,
+        stored.closure_oid.unwrap(),
+        "other.txt",
+        b"other\n",
+        0o100644,
+    );
+    adopt(advanced, Some(descendant)).unwrap();
     let adopted = f.reload(&r);
     assert_eq!(adopted.base_oid, Some(advanced));
+    assert_eq!(adopted.closure_oid, stored.closure_oid);
+    assert_eq!(adopted.adopted_context_oid, Some(descendant));
+    assert_eq!(adopted.merged_context(), Some(descendant));
     assert_eq!(adopted.closed_at, stored.closed_at);
     assert_eq!(adopted.step, ClosureStep::Closing);
+    // An ordinary save cannot change it.
+    let mut sneaked = adopted.clone();
+    sneaked.adopted_context_oid = None;
+    assert!(
+        state::with_transaction(&f.service, f.root.path(), |tx, rid| record::save_record(
+            tx, rid, &sneaked
+        ))
+        .is_err()
+    );
+}
+
+// --- Fix round 1 ---
+
+impl Fixture {
+    /// A remote fixture whose ticket context is also tracked as published.
+    fn remote() -> Self {
+        let f = Self::new(true);
+        f.tracking(&format!("manyhands/ticket/{ID}"), f.context_oid());
+        f
+    }
+    /// The hook stopped at `point`; the stored record.
+    fn stopped_at(&self, point: FailurePoint, r: &ClosureRecord) -> ClosureRecord {
+        let failing =
+            RepositoryService::open_at_with_failure_point_for_testing(self.data.path(), point)
+                .unwrap();
+        assert!(self.hook_with(&failing, r, None).is_err());
+        self.reload(r)
+    }
+    /// A deliberate synchronization over the checkpoint at the context tip:
+    /// a primary advance merged in, the context side first. Returns the
+    /// advanced primary and the merge.
+    fn synchronize_context(&self, tip: Oid) -> (Oid, Oid) {
+        write(&self.repo, "primary.txt", "primary\n");
+        let advanced = commit(&self.repo);
+        let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let local = self.context.find_commit(tip).unwrap();
+        let incoming = self.context.find_commit(advanced).unwrap();
+        let mut index = self.context.merge_commits(&local, &incoming, None).unwrap();
+        let tree = self
+            .context
+            .find_tree(index.write_tree_to(&self.context).unwrap())
+            .unwrap();
+        let merge = self
+            .context
+            .commit(None, &sig, &sig, "synchronize", &tree, &[&local, &incoming])
+            .unwrap();
+        checkout(&self.context, merge);
+        (advanced, merge)
+    }
+    /// A commit over the tracking primary, as a poll would bring it.
+    fn advance_tracking(&self) -> Oid {
+        let tracking = self.repo.refname_to_id("refs/remotes/origin/main").unwrap();
+        let advanced = tree_commit(&self.repo, tracking, "remote.txt", b"remote\n", 0o100644);
+        self.tracking("main", advanced);
+        advanced
+    }
+    /// The record moved to `integrating` as the runner records it.
+    fn to_integrating(&self, r: &ClosureRecord) -> ClosureRecord {
+        let mut r = r.clone();
+        r.integration_kind = Some(crate::repository::promotion::record::IntegrationKind::Merged);
+        r.step = ClosureStep::Integrating;
+        state::with_transaction(&self.service, self.root.path(), |tx, rid| {
+            record::save_record(tx, rid, &r)
+        })
+        .unwrap();
+        self.reload(&r)
+    }
+    fn refresh_required(&self) -> bool {
+        self.db()
+            .query_row("SELECT refresh_required FROM repositories", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+    /// The hook over a given (possibly stale) observation and base.
+    fn hook_at(
+        &self,
+        r: &ClosureRecord,
+        observation: &ClosureObservation,
+        base: Oid,
+    ) -> Result<PreIntegration, DocumentPromotionError> {
+        let _lease =
+            repository_lease(&self.repo, self.root.path(), RepositoryOperation::Read).unwrap();
+        let context = self.integration_context(r.context_oid.unwrap());
+        let mut stage = LeasedIntegration {
+            repository: &self.repo,
+            root: self.root.path(),
+            context: &context,
+            base,
+            operation_id: Some(r.operation_id),
+            record: Some(r),
+        };
+        pre_integration(&self.service, observation, None, &mut stage)
+    }
+}
+
+#[test]
+fn adopted_synchronization_is_integrated_and_the_checkpoint_kept() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let stored = f.stopped_at(FailurePoint::AfterClosureCheckpoint, &r);
+    let checkpoint = stored.closure_oid.unwrap();
+    let (advanced, merge) = f.synchronize_context(checkpoint);
+    assert_eq!(f.context_oid(), merge);
+    f.db()
+        .execute("UPDATE repositories SET refresh_required=0", [])
+        .unwrap();
+    let first = f.resume(&stored).unwrap().unwrap();
+    // The context ref has moved: refresh is required again (idempotent).
+    assert!(f.refresh_required());
+    let adopted = f.reload(&r);
+    assert_eq!(adopted.closure_oid, Some(checkpoint));
+    assert_eq!(adopted.adopted_context_oid, Some(merge));
+    assert_eq!(adopted.merged_context(), Some(merge));
+    assert_eq!(adopted.base_oid, Some(advanced));
+    // A second resume after adoption reports the same merge and changes
+    // nothing.
+    let second = f.resume(&adopted).unwrap().unwrap();
+    assert_eq!(second, first);
+    assert_eq!(f.reload(&r), adopted);
+    let PreIntegration::Checkpoint {
+        base,
+        merged_context,
+        ref signer,
+        ..
+    } = second
+    else {
+        panic!("expected a checkpoint")
+    };
+    assert_eq!((base, merged_context), (advanced, merge));
+    // The signer is the checkpoint's author; the merge is no checkpoint.
+    let author = f
+        .repo
+        .find_commit(checkpoint)
+        .unwrap()
+        .author()
+        .email()
+        .map(str::to_owned);
+    assert_eq!(Some(signer.email.clone()), author);
+    assert!(checkpoint_authority(&f.repo, &id(), merge).is_err());
+    let integrated = f.integrate(second);
+    assert_eq!(
+        f.repo
+            .find_commit(integrated)
+            .unwrap()
+            .parent_ids()
+            .collect::<Vec<_>>(),
+        vec![advanced, merge]
+    );
+    assert_eq!(f.reload(&r).closure_oid, Some(checkpoint));
+}
+
+#[test]
+fn integrating_resume_refuses_a_primary_moved_since_the_record() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let stored = f.stopped_at(FailurePoint::AfterClosureCheckpoint, &r);
+    let integrating = f.to_integrating(&stored);
+    // The primary at the recorded base: resumed with the recorded base.
+    let (base, merged, _) = checkpoint_of(f.resume(&integrating).unwrap().unwrap());
+    assert_eq!(
+        (Some(base), Some(merged)),
+        (integrating.base_oid, integrating.closure_oid)
+    );
+    // The primary advances between the runner's lease and this one.
+    write(&f.repo, "primary.txt", "primary\n");
+    commit(&f.repo);
+    let result = f.resume(&integrating);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::RecoveryRequired)),
+        "{result:?}"
+    );
+    assert_eq!(f.reload(&r), integrating);
+}
+
+#[test]
+fn remote_primary_advance_from_context_synchronized_is_primary_advanced() {
+    let f = Fixture::remote();
+    let r = f.record(ClosureKind::Record);
+    f.advance_tracking();
+    let before = image(f.root.path(), &f.repo);
+    let result = f.hook(&r);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::PrimaryAdvanced)),
+        "{result:?}"
+    );
+    assert_eq!(image(f.root.path(), &f.repo).0, before.0);
+    assert_eq!(f.reload(&r), r);
+}
+
+#[test]
+fn remote_primary_advance_from_closing_is_reconfirmation_required() {
+    let f = Fixture::remote();
+    let r = f.record(ClosureKind::Record);
+    let stored = f.stopped_at(FailurePoint::ClosureAfterClosingRecorded, &r);
+    assert_eq!(f.resume(&stored).unwrap(), None);
+    f.advance_tracking();
+    let result = f.hook(&stored);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::ReconfirmationRequired)),
+        "{result:?}"
+    );
+    assert_eq!(f.context_oid(), stored.context_oid.unwrap());
+    assert_eq!(f.reload(&r), stored);
+}
+
+#[test]
+fn remote_resume_merges_over_the_tracking_base_in_memory() {
+    let f = Fixture::remote();
+    let r = f.record(ClosureKind::Record);
+    let stored = f.stopped_at(FailurePoint::AfterClosureCheckpoint, &r);
+    let tracking = f.advance_tracking();
+    let local = f.primary();
+    let before = image(f.root.path(), &f.repo).0;
+    let (base, merged, tree) = checkpoint_of(f.resume(&stored).unwrap().unwrap());
+    assert_eq!(base, tracking);
+    assert_eq!(Some(merged), stored.closure_oid);
+    // The in-memory merge holds the remote's change and the closure, and no
+    // ref moved, the context branch on the remote included.
+    assert_eq!(tree_entry(&f.repo, tree, "remote.txt").0, b"remote\n");
+    assert!(
+        parse_ticket(&tree_entry(&f.repo, tree, &ticket()).0)
+            .closed_at
+            .is_some()
+    );
+    let mut after = image(f.root.path(), &f.repo).0;
+    assert_eq!(after.remove("refs/remotes/origin/main"), Some(tracking));
+    let mut expected = before;
+    expected.remove("refs/remotes/origin/main");
+    assert_eq!(after, expected);
+    assert_eq!(f.primary(), local);
+    assert_eq!(f.reload(&r).base_oid, Some(tracking));
+}
+
+#[test]
+fn remote_resume_with_local_primary_ahead_is_recovery_required() {
+    let f = Fixture::remote();
+    let r = f.record(ClosureKind::Record);
+    let stored = f.stopped_at(FailurePoint::AfterClosureCheckpoint, &r);
+    write(&f.repo, "local.txt", "local\n");
+    commit(&f.repo);
+    let result = f.resume(&stored);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::RecoveryRequired)),
+        "{result:?}"
+    );
+    assert_eq!(f.reload(&r), stored);
+}
+
+#[test]
+fn written_effect_with_unreadable_primary_is_recovery_required() {
+    let f = Fixture::new(false);
+    let missing = "refs/heads/missing";
+    let read =
+        |written| integrate::written_primary::<DocumentPromotionError>(&f.repo, missing, written);
+    // Nothing written: the ordinary path reports the change itself.
+    assert!(matches!(read(false), Ok(None)));
+    // A written checkpoint is never left to an abandonable refusal.
+    assert!(matches!(
+        read(true),
+        Err(DocumentPromotionError::RecoveryRequired)
+    ));
+    assert_eq!(
+        integrate::written_primary::<DocumentPromotionError>(&f.repo, "refs/heads/main", true)
+            .unwrap(),
+        Some(f.base)
+    );
+}
+
+#[test]
+fn reconcile_checkout_done_under_line_ending_filters() {
+    // The decision reads Git's status and index, never raw bytes: with
+    // `core.autocrlf` the checked-out file differs from the Blob bytes.
+    let f = Fixture::new(false);
+    let (r, prepared) = f.closing(at(1_700_000_000));
+    f.repo
+        .config()
+        .unwrap()
+        .set_bool("core.autocrlf", true)
+        .unwrap();
+    let context = git2::Repository::open(f.context.workdir().unwrap()).unwrap();
+    assert!(
+        move_context_to_checkpoint_with(
+            &context,
+            &id(),
+            r.context_oid.unwrap(),
+            prepared.checkpoint_commit,
+            || Err(state::recovery_required()),
+        )
+        .is_err()
+    );
+    assert_ne!(
+        read(&context, &ticket()),
+        f.repo.find_blob(prepared.ticket_blob).unwrap().content()
+    );
+    assert_eq!(
+        reconcile_closing(&context, &r).unwrap(),
+        ClosingState::CheckoutDone
+    );
+}
+
+#[test]
+fn closed_base_with_uncontained_context_refuses_before_any_write() {
+    let f = Fixture::new(false);
+    let r = f.record(ClosureKind::Record);
+    let observation = f.observation();
+    // Another closure reaches the primary after the observation.
+    let closed = closed_ticket_bytes(&read(&f.repo, &ticket()), at(1_700_000_000), CLOSER).unwrap();
+    write(&f.repo, &ticket(), closed);
+    let base = commit(&f.repo);
+    let before = image(f.root.path(), &f.repo);
+    let result = f.hook_at(&r, &observation, base);
+    assert!(
+        matches!(result, Err(DocumentPromotionError::ReconfirmationRequired)),
+        "{result:?}"
+    );
+    assert_eq!(image(f.root.path(), &f.repo).0, before.0);
+    assert_eq!(f.reload(&r), r);
 }

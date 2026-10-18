@@ -236,12 +236,19 @@ pub(in super::super) struct ClosureRecord {
     pub closed_at: Option<OffsetDateTime>,
     /// The checkpoint commit; set with `closing`.
     pub closure_oid: Option<Oid>,
+    /// A deliberate synchronization over the checkpoint that the C9 resume
+    /// adopted as the merged context: a descendant of `closure_oid`, set
+    /// only while `closing` and fixed from `integrating` on.
+    pub adopted_context_oid: Option<Oid>,
 }
 impl ClosureRecord {
-    /// The context commit integration merges: the checkpoint when one was
-    /// written, else the synchronized pre-closure context.
+    /// The context commit integration merges: an adopted synchronization
+    /// over the checkpoint, else the checkpoint when one was written, else
+    /// the synchronized pre-closure context.
     pub(in super::super) fn merged_context(&self) -> Option<Oid> {
-        self.closure_oid.or(self.context_oid)
+        self.adopted_context_oid
+            .or(self.closure_oid)
+            .or(self.context_oid)
     }
 }
 impl std::fmt::Debug for ClosureRecord {
@@ -254,6 +261,7 @@ impl std::fmt::Debug for ClosureRecord {
             .field("context_attempt", &self.context_attempt)
             .field("primary_attempt", &self.primary_attempt)
             .field("closure_oid", &self.closure_oid)
+            .field("adopted_context_oid", &self.adopted_context_oid)
             .field("integration_oid", &self.integration_oid)
             .field("publication", &self.publication)
             .field("cleanup", &self.cleanup)
@@ -287,6 +295,7 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
     closure_kind TEXT CHECK(closure_kind IN ('record','existing')),
     closed_at TEXT CHECK(closed_at IS NULL OR (typeof(closed_at)='text' AND length(closed_at)=20 AND closed_at GLOB '[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-6][0-9]Z')),
     closure_oid TEXT CHECK(length(closure_oid)=40 AND closure_oid NOT GLOB '*[^0-9a-f]*' AND closure_oid!='0000000000000000000000000000000000000000'),
+    adopted_context_oid TEXT CHECK(length(adopted_context_oid)=40 AND adopted_context_oid NOT GLOB '*[^0-9a-f]*' AND adopted_context_oid!='0000000000000000000000000000000000000000'),
     CHECK((context_attempt=0)=(context_sync_id IS NULL)),
     CHECK((primary_attempt=0)=(primary_sync_id IS NULL)),
     CHECK(context_sync_id IS NULL OR context_sync_id!=operation_id),
@@ -296,6 +305,7 @@ const SCHEMA:&str="CREATE TABLE ticket_closures (
     CHECK(closure_kind IS NOT NULL OR step='abandoned'),
     CHECK((closed_at IS NULL)=(closure_oid IS NULL)),
     CHECK(closed_at IS NULL OR closure_kind IS 'record'),
+    CHECK(adopted_context_oid IS NULL OR (closure_oid IS NOT NULL AND adopted_context_oid!=closure_oid AND closure_kind IS 'record')),
     CHECK(step!='closing' OR (closure_kind IS 'record' AND closed_at IS NOT NULL AND base_oid IS NOT NULL AND context_oid IS NOT NULL))
 )";
 const INDEX: &str = "CREATE UNIQUE INDEX ticket_closures_unfinished ON ticket_closures(repository_id,item_id) WHERE step NOT IN ('complete','abandoned','superseded')";
@@ -456,6 +466,7 @@ fn decode(row: &rusqlite::Row<'_>) -> Result<ClosureRecord, RepositoryError> {
             .transpose()?,
         closed_at: opt("closed_at")?.map(|s| parse_closed_at(&s)).transpose()?,
         closure_oid: oid("closure_oid")?,
+        adopted_context_oid: oid("adopted_context_oid")?,
     };
     validate(&r)?;
     Ok(r)
@@ -481,6 +492,7 @@ fn validate(r: &ClosureRecord) -> Result<(), RepositoryError> {
             r.integration_oid,
             r.remote_context_oid,
             r.closure_oid,
+            r.adopted_context_oid,
         ]
         .into_iter()
         .flatten()
@@ -500,6 +512,13 @@ fn validate(r: &ClosureRecord) -> Result<(), RepositoryError> {
         || r.step.integrating_or_later() && r.step != Integrating && r.integration_oid.is_none()
         // closed_at and closure_oid are written together, for record only,
         // and never before closing.
+        // An adopted context descends from a record closure's checkpoint
+        // (ancestry is checked when it is written) and exists from closing on.
+        || r.adopted_context_oid.is_some()
+            && (r.closure_oid.is_none()
+                || r.adopted_context_oid == r.closure_oid
+                || !record
+                || matches!(r.step, Confirmed | ContextSynchronized))
         || r.closed_at.is_some() != r.closure_oid.is_some()
         || r.closed_at.is_some() && !record
         || r.closed_at.is_some() && matches!(r.step, Confirmed | ContextSynchronized)
@@ -772,6 +791,7 @@ pub(in super::super) fn save_record(
         || r.cancel_requested != old.cancel_requested
         || old.closed_at != r.closed_at
         || old.closure_oid != r.closure_oid
+        || old.adopted_context_oid != r.adopted_context_oid
         || old.base_oid.is_some() && old.base_oid != r.base_oid
         || old.context_oid.is_some() && old.context_oid != r.context_oid
         || old.integration_oid.is_some() && old.integration_oid != r.integration_oid
@@ -831,23 +851,48 @@ pub(in super::super) fn replace_unmoved_closure(
     Ok(())
 }
 
-/// The C9 resume of a written checkpoint, while `closing`: the base the merge
-/// uses now (the current tracking or local primary) and the merged context
-/// (the checkpoint, or an adoptable descendant of it). `closed_at` is kept.
-/// The caller has proved, under the lease, that the context ref has moved to
-/// `merged`.
+/// The C9 resume of a written checkpoint. While `closing`: the base the
+/// merge uses now (the current tracking or local primary) and, when the
+/// context tip is a deliberate synchronization over the checkpoint, that tip
+/// as the adopted context (`None`: the checkpoint itself). It must descend
+/// from `closure_oid`, checked here in Git. `closure_oid` and `closed_at`
+/// never change. From `integrating` both are fixed: only the recorded values
+/// are accepted, and nothing is written.
 pub(in super::super) fn adopt_written_closure(
     tx: &Transaction<'_>,
     repository_id: i64,
     operation: OperationId,
+    repository: &git2::Repository,
     base: Oid,
-    merged: Oid,
+    adopted: Option<Oid>,
 ) -> Result<(), RepositoryError> {
     let r = read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
-    if r.step != ClosureStep::Closing || base.is_zero() || merged.is_zero() {
+    let Some(closure) = r.closure_oid else {
+        return Err(state::recovery_required());
+    };
+    if base.is_zero() || r.closure_kind != Some(ClosureKind::Record) {
         return Err(state::recovery_required());
     }
-    tx.execute("UPDATE ticket_closures SET base_oid=?2,closure_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),merged.to_string(),now()]).map_err(|_|state::recovery_required())?;
+    match r.step {
+        ClosureStep::Closing => {}
+        ClosureStep::Integrating
+            if r.base_oid == Some(base) && r.adopted_context_oid == adopted =>
+        {
+            return Ok(());
+        }
+        _ => return Err(state::recovery_required()),
+    }
+    if let Some(adopted) = adopted
+        && (adopted.is_zero()
+            || adopted == closure
+            || !repository
+                .graph_descendant_of(adopted, closure)
+                .unwrap_or(false))
+    {
+        return Err(state::recovery_required());
+    }
+    tx.execute("UPDATE ticket_closures SET base_oid=?2,adopted_context_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),adopted.map(|o|o.to_string()),now()]).map_err(|_|state::recovery_required())?;
+    read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     Ok(())
 }
 

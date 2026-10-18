@@ -862,6 +862,7 @@ fn no_closed_by_column_or_value() {
             "closure_kind",
             "closed_at",
             "closure_oid",
+            "adopted_context_oid",
         ]
     );
     let tx = db.transaction().unwrap();
@@ -1096,4 +1097,78 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
     })
     .unwrap();
     (data, root, service)
+}
+
+#[test]
+fn adopted_context_invariants() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let mut r = begin(&tx, OperationId::new(), ClosureKind::Record);
+    // Never before closing: there is no checkpoint to descend from.
+    synchronize(&tx, &mut r);
+    assert!(rejected(
+        &tx,
+        r.operation_id,
+        "adopted_context_oid='5555555555555555555555555555555555555555'"
+    ));
+    close(&tx, &mut r);
+    // While closing: a commit other than the checkpoint (Git ancestry is
+    // checked by `adopt_written_closure`, which holds the repository).
+    let adopted = "adopted_context_oid='5555555555555555555555555555555555555555'";
+    assert!(!rejected(&tx, r.operation_id, adopted));
+    for wrong in [
+        "adopted_context_oid='3333333333333333333333333333333333333333'",
+        "adopted_context_oid='0000000000000000000000000000000000000000'",
+        "adopted_context_oid='not an oid'",
+    ] {
+        assert!(rejected(&tx, r.operation_id, wrong), "{wrong}");
+    }
+    tx.execute(
+        &format!("UPDATE ticket_closures SET {adopted} WHERE operation_id=?1"),
+        [r.operation_id.to_string()],
+    )
+    .unwrap();
+    let stored = read(&tx, r.operation_id);
+    assert_eq!(stored.adopted_context_oid, Some(oid('5')));
+    assert_eq!(stored.closure_oid, Some(oid('3')));
+    // The merged context prefers the adopted synchronization.
+    assert_eq!(stored.merged_context(), Some(oid('5')));
+    // Without the checkpoint it cannot stand.
+    assert!(rejected(
+        &tx,
+        r.operation_id,
+        "closed_at=NULL,closure_oid=NULL"
+    ));
+    // An ordinary save never sets, changes or clears it, at any step.
+    for changed in [None, Some(oid('6'))] {
+        let mut sneaked = stored.clone();
+        sneaked.adopted_context_oid = changed;
+        assert!(save_record(&tx, 1, &sneaked).is_err(), "{changed:?}");
+    }
+    let mut r = stored;
+    integrate(&tx, &mut r);
+    let mut sneaked = read(&tx, r.operation_id);
+    sneaked.adopted_context_oid = None;
+    assert!(save_record(&tx, 1, &sneaked).is_err());
+    assert_eq!(
+        read(&tx, r.operation_id).adopted_context_oid,
+        Some(oid('5'))
+    );
+    // Never for an `existing` closure, which has no checkpoint.
+    let mut e = begin_record(
+        &tx,
+        1,
+        OperationId::new(),
+        &item(OTHER),
+        digest(7),
+        None,
+        ClosureKind::Existing,
+    )
+    .unwrap();
+    synchronize(&tx, &mut e);
+    integrate(&tx, &mut e);
+    assert!(rejected(&tx, e.operation_id, adopted));
+    tx.commit().unwrap();
+    // The startup audit reads the column through the same validation.
+    audit(&db).unwrap();
 }
