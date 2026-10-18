@@ -10,6 +10,23 @@ id: "01M55JWY66M5BCCAWCGEQX9N9V"
 
 # Confirmed Ticket Closure Execution Ledger
 
+## Owner-Approved Closure And Merge — 2026-10-18
+
+- **What the owner authorized.** Close the ticket, merge into main, push to
+  origin, and dispatch the native Build run on main without waiting for it.
+  This authorization covers this closure checkpoint, a local merge into
+  `main`, pushing `main`, and one Build dispatch.
+- **Branch state.** The final local gate on `35d4d39` passed 3,325 tests
+  (2,704 harness tests and 621 SSH cases), with 0 failed and 1 ignored.
+  fmt and Clippy are clean. `origin/main` is `3765524`, and
+  `git merge-tree` is clean.
+- **Closure method.** The CLI is still a skeleton, so the canonical
+  filesystem is used. The ticket closes at `2026-10-18T14:59:28Z`, by
+  `Vince Hodges <vince@imbas.ca>`. The follow-ups below are copied onto the
+  ticket.
+- **Still open.** The R-T6-1, R-T8-1 and R-F-4 design amendments still need
+  owner confirmation. The worktree and the ticket branch are kept.
+
 This ledger records the execution of the
 [implementation plan](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-implementation.md)
 for the [design](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-design.md)

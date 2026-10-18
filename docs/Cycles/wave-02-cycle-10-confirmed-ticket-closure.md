@@ -10,6 +10,14 @@ id: "01M55D12294HNYXC4R42PC02VR"
 
 # Wave 02 Cycle 10: Confirmed Ticket Closure
 
+## Closure Approval — 2026-10-18
+
+The owner approved closing this Cycle and merging its reviewed implementation
+into main. The ticket is closed in the final pre-merge checkpoint. One full
+native Build run is dispatched on main after the merge, and its result is not
+claimed here. Owner confirmation of the R-T6-1, R-T8-1 and R-F-4 design
+amendments is still outstanding. The follow-ups are listed on the ticket.
+
 ## Status
 
 **Approved by the owner on 2026-10-17.** The owner answered planning questions
