@@ -15,8 +15,9 @@ id: "01M55D12294HNYXC4R42PC02VR"
 The owner approved closing this Cycle and merging its reviewed implementation
 into main. The ticket is closed in the final pre-merge checkpoint. One full
 native Build run is dispatched on main after the merge, and its result is not
-claimed here. Owner confirmation of the R-T6-1, R-T8-1 and R-F-4 design
-amendments is still outstanding. The follow-ups are listed on the ticket.
+claimed here. The owner confirmed the R-T6-1, R-T8-1 and R-F-4 design
+amendments on 2026-10-18. The follow-ups are listed on the ticket and filed as
+the "2.10 follow up" ticket.
 
 ## Status
 

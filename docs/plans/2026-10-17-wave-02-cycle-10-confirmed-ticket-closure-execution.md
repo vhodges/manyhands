@@ -24,8 +24,10 @@ id: "01M55JWY66M5BCCAWCGEQX9N9V"
   filesystem is used. The ticket closes at `2026-10-18T14:59:28Z`, by
   `Vince Hodges <vince@imbas.ca>`. The follow-ups below are copied onto the
   ticket.
-- **Still open.** The R-T6-1, R-T8-1 and R-F-4 design amendments still need
-  owner confirmation. The worktree and the ticket branch are kept.
+- **Amendments confirmed.** The owner confirmed the R-T6-1, R-T8-1 and
+  R-F-4 design amendments on 2026-10-18, after the merge. In the same message
+  the owner asked for a "2.10 follow up" ticket and for the Cycle's local
+  branch, remote branch and worktree to be removed.
 
 This ledger records the execution of the
 [implementation plan](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-implementation.md)
