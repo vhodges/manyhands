@@ -1360,3 +1360,25 @@ fn cleanup_foreign_git_link_cannot_hide_registered_checkout() {
     );
     assert_eq!(files(f.root.path()), before);
 }
+
+#[test]
+fn retirement_evidence_checks_kind() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        let other_kind = match kind {
+            AuthoringKind::Document => AuthoringKind::Ticket,
+            AuthoringKind::Ticket => AuthoringKind::Document,
+        };
+        let f = Fixture::new(kind);
+        let c = f.cleanup();
+        let op = OperationId::new();
+        let id: ItemId = ID.parse().unwrap();
+        let evidence = c
+            .delete_tracking_ref(None, kind, &id, None, op, f.oid)
+            .unwrap();
+        assert!(evidence.matches(kind, op, &id, f.oid));
+        assert!(!evidence.matches(other_kind, op, &id, f.oid));
+        assert!(!evidence.matches(kind, OperationId::new(), &id, f.oid));
+        assert!(!evidence.matches(kind, op, &OTHER.parse().unwrap(), f.oid));
+        assert!(!evidence.matches(kind, op, &id, f.repo.head().unwrap().target().unwrap()));
+    }
+}

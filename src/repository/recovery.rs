@@ -681,7 +681,15 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    // Both parent journals: promotion and closure IDs are never local ones.
     super::promotion::record::validate_local_identity(
+        &transaction,
+        root_path,
+        action,
+        &requested,
+        target,
+    )?;
+    super::closure::record::validate_local_identity(
         &transaction,
         root_path,
         action,
@@ -1402,6 +1410,13 @@ pub(super) fn require_refresh_can_begin(
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
     super::promotion::record::validate_local_identity(
+        connection,
+        root_path,
+        refresh,
+        &operation_id.to_string(),
+        "",
+    )?;
+    super::closure::record::validate_local_identity(
         connection,
         root_path,
         refresh,

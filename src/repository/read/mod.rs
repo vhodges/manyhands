@@ -282,6 +282,9 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         | RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotRegistered,
         RepositoryErrorKind::IndexUnavailable => ResultCode::IndexUnavailable,
         RepositoryErrorKind::RepositoryBusy => ResultCode::Busy,
+        // The closed-ticket guard (C5). No read writes, but the code is
+        // the same wherever the kind is met.
+        RepositoryErrorKind::TicketClosed => ResultCode::TicketClosed,
         // A backend failure. Its text stays in the source.
         RepositoryErrorKind::Io | RepositoryErrorKind::Sqlite | RepositoryErrorKind::Git => {
             ResultCode::InternalError

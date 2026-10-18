@@ -622,6 +622,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "retired_contexts",
             "shared_ssh_keys",
             "ssh_host_pins",
+            "ticket_closures",
         ]
     );
     assert_eq!(

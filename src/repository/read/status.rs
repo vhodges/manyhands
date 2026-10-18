@@ -403,6 +403,54 @@ fn promotion_operations(
         .collect()
 }
 
+/// Ticket closure parents, as promotion parents: the stored step, including
+/// `closing`, is both state and completed step, and no boundary resume is
+/// offered.
+fn closure_operations(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: Option<&str>,
+) -> Result<Vec<StoredOperation>, ReadError> {
+    if !recovery::has_table(connection, "ticket_closures")? {
+        return Ok(Vec::new());
+    }
+    let records = match id {
+        Some(id) => crate::repository::closure::record::read_record(
+            connection,
+            repo.registration_id(),
+            OperationId::parse(id).map_err(|_| invalid_stored_data())?,
+        )
+        .map_err(|_| invalid_stored_data())?
+        .into_iter()
+        .collect(),
+        None => crate::repository::closure::record::records(connection, repo.registration_id())
+            .map_err(|_| invalid_stored_data())?,
+    };
+    records
+        .into_iter()
+        .filter(|r| id.is_some() || !r.step.terminal())
+        .map(|r| {
+            Ok(StoredOperation {
+                listed: !r.step.terminal(),
+                dto: OperationDto {
+                    operation_id: Some(r.operation_id.to_string()),
+                    family: OperationFamily::Remote,
+                    owner: OperationOwner::Repository,
+                    action: OperationAction::Close,
+                    state: r.step.name().to_owned(),
+                    completed_step: Some(r.step.name().to_owned()),
+                    next_action: None,
+                    item_id: Some(r.item_id.to_string()),
+                    key_id: None,
+                    worktree: None,
+                    updated_at: Some(stored_time(r.updated_at)?),
+                    failure_code: None,
+                },
+            })
+        })
+        .collect()
+}
+
 /// The registration's remote operations: the one with this ID, whatever
 /// its phase, or the ones the list includes. A SQLite failure keeps its
 /// meaning; a row the remote store's own checks reject is invalid.
@@ -423,17 +471,25 @@ fn remote_operations(
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
     let has_promotions = recovery::has_table(connection, "document_promotions")?;
+    let has_closures = recovery::has_table(connection, "ticket_closures")?;
     let mut operations = Vec::new();
     for record in remote_records(connection, repo, id)? {
-        // The parent's stored step is authoritative for promotion status;
-        // do not show the held reservation as a duplicate operation.
-        if has_promotions
-            && connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1)",
-                [record.operation_id.to_string()],
-                |r| r.get::<_, bool>(0),
-            )?
-        {
+        // The parent's stored step is authoritative for promotion and
+        // closure status; do not show the held reservation as a duplicate
+        // operation.
+        let parent = |exists: bool, sql: &str| -> Result<bool, ReadError> {
+            Ok(exists
+                && connection.query_row(sql, [record.operation_id.to_string()], |r| {
+                    r.get::<_, bool>(0)
+                })?)
+        };
+        if parent(
+            has_promotions,
+            "SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1)",
+        )? || parent(
+            has_closures,
+            "SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1)",
+        )? {
             continue;
         }
         let operation = remote_operation(connection, &record)?;
@@ -706,6 +762,7 @@ impl RepositoryService {
                 .into_iter()
                 .chain(remote_operations(connection, repo, None)?)
                 .chain(promotion_operations(connection, repo, None)?)
+                .chain(closure_operations(connection, repo, None)?)
                 .chain(key_material_operations(connection, None)?)
                 .map(|operation| operation.dto)
                 .collect();
@@ -751,6 +808,7 @@ impl RepositoryService {
                 .into_iter()
                 .chain(remote_operations(connection, repo, Some(&text))?)
                 .chain(promotion_operations(connection, repo, Some(&text))?)
+                .chain(closure_operations(connection, repo, Some(&text))?)
                 .chain(key_material_operations(connection, Some(&text))?)
                 .min_by_key(|operation| (!operation.listed, family_rank(operation.dto.family)))
                 .map(|operation| operation.dto)

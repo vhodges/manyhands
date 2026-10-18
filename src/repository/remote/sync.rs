@@ -729,6 +729,22 @@ pub(in super::super) fn prepare_clean_merge(
     let _mempack = odb
         .add_new_mempack_backend(1000)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    prepare_clean_merge_in(&worker, path, local, incoming)
+}
+
+/// `prepare_clean_merge` on a caller's handle that already has a
+/// high-priority memory ODB, so `incoming` may itself live only in memory
+/// (the closure preview's unreferenced checkpoint). `path` opens the stored
+/// repository that tells stored objects from generated ones.
+pub(in super::super) fn prepare_clean_merge_in(
+    worker: &git2::Repository,
+    path: &Path,
+    local: git2::Oid,
+    incoming: git2::Oid,
+) -> Result<MergePreparation, SynchronizationError> {
+    let odb = worker
+        .odb()
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
     let local = worker
         .find_commit(local)
         .map_err(|_| SynchronizationError::RecoveryRequired)?;

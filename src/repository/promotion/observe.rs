@@ -1,3 +1,4 @@
+use super::lifecycle::LifecycleKind;
 use super::*;
 use crate::{
     canonical,
@@ -29,7 +30,7 @@ impl PromotionObservation {
     }
 }
 
-fn unavailable(root: &Path) -> RepositoryError {
+pub(in super::super) fn unavailable(root: &Path) -> RepositoryError {
     RepositoryError::new(
         RepositoryOperation::Read,
         Some(root.into()),
@@ -48,16 +49,15 @@ pub(super) fn preview(
 /// Filesystem discovery facts are gathered only outside the repository lease.
 /// Their process-only guard binds the selected checkout/namespace and actual Git
 /// inputs; revalidation never calls filesystem discovery or enumerates worktrees.
-pub(super) struct PreparedObservation {
+pub(in super::super) struct PreparedObservation {
     pub(super) preflight: DocumentPromotionPreflight,
     pub(super) configuration: canonical::RepositoryConfig,
     pub(super) repository_id: i64,
-    root: PathBuf,
-    item: ItemId,
+    seal: ObservationSeal,
     facts: DiscoveryFacts,
-    guard: [u8; 32],
 }
 struct DiscoveryFacts {
+    kind: LifecycleKind,
     not_document: bool,
     document_path: Option<PathBuf>,
 }
@@ -67,26 +67,16 @@ impl PreparedObservation {
         service: &RepositoryService,
         repository: &git2::Repository,
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
-        let fresh = git2::Repository::open_ext(
-            &self.root,
-            git2::RepositoryOpenFlags::NO_SEARCH,
-            &[] as &[&std::ffi::OsStr],
-        )
-        .map_err(|_| changed())?;
-        if fresh.commondir().canonicalize().ok() != repository.commondir().canonicalize().ok()
-            || observation_guard(&fresh, &self.root, &self.configuration, &self.item)? != self.guard
-        {
-            return Err(changed());
-        }
-        let (id, snapshot, pending) = read_view(service, &self.root)?;
+        let fresh = self.seal.reopen(repository, &self.configuration)?;
+        let (id, snapshot, pending) = read_view(service, &self.seal.root)?;
         if id != self.repository_id {
             return Err(changed());
         }
         Ok(observe_git(
             &fresh,
-            &self.root,
+            &self.seal.root,
             &self.configuration,
-            &self.item,
+            &self.seal.item,
             &snapshot,
             pending,
             &self.facts,
@@ -94,7 +84,7 @@ impl PreparedObservation {
         .into_preflight())
     }
 }
-fn changed() -> RepositoryError {
+pub(in super::super) fn changed() -> RepositoryError {
     RepositoryError::new(
         RepositoryOperation::Read,
         None,
@@ -102,13 +92,83 @@ fn changed() -> RepositoryError {
         "promotion observation changed",
     )
 }
-pub(super) fn prepare(
+
+/// The process-only binding between unleased discovery and a later
+/// revalidation: the lifecycle kind, the canonical root, the item and the
+/// observation guard taken before discovery (shared by both lifecycles).
+pub(in super::super) struct ObservationSeal {
+    kind: LifecycleKind,
+    root: PathBuf,
+    item: ItemId,
+    guard: [u8; 32],
+}
+impl ObservationSeal {
+    /// Runs `discover` (filesystem discovery, outside any lease) between two
+    /// equal observation guards.
+    pub(in super::super) fn discover<F>(
+        kind: LifecycleKind,
+        repository: &git2::Repository,
+        root: &Path,
+        config: &canonical::RepositoryConfig,
+        item: &ItemId,
+        discover: impl FnOnce() -> F,
+    ) -> Result<(F, Self), RepositoryError> {
+        let before = observation_guard(kind, repository, root, config, item)?;
+        let facts = discover();
+        if before != observation_guard(kind, repository, root, config, item)? {
+            return Err(changed());
+        }
+        Ok((
+            facts,
+            Self {
+                kind,
+                root: root.to_owned(),
+                item: item.clone(),
+                guard: before,
+            },
+        ))
+    }
+    #[allow(dead_code)] // Read by the closure revalidation (Task 6 caller).
+    pub(in super::super) fn root(&self) -> &Path {
+        &self.root
+    }
+    #[allow(dead_code)] // Read by the closure revalidation (Task 6 caller).
+    pub(in super::super) fn item(&self) -> &ItemId {
+        &self.item
+    }
+    /// A fresh handle on the same checkout, refused unless its common
+    /// directory and the observation guard are unchanged.
+    pub(in super::super) fn reopen(
+        &self,
+        repository: &git2::Repository,
+        configuration: &canonical::RepositoryConfig,
+    ) -> Result<git2::Repository, RepositoryError> {
+        let fresh = git2::Repository::open_ext(
+            &self.root,
+            git2::RepositoryOpenFlags::NO_SEARCH,
+            &[] as &[&std::ffi::OsStr],
+        )
+        .map_err(|_| changed())?;
+        if fresh.commondir().canonicalize().ok() != repository.commondir().canonicalize().ok()
+            || observation_guard(self.kind, &fresh, &self.root, configuration, &self.item)?
+                != self.guard
+        {
+            return Err(changed());
+        }
+        Ok(fresh)
+    }
+}
+
+/// The canonical repository and its valid configuration, opened for an
+/// unleased observation.
+pub(in super::super) fn open_observation(
+    kind: LifecycleKind,
     service: &RepositoryService,
-    request: PreviewDocumentPromotionRequest,
-) -> Result<PreparedObservation, RepositoryError> {
+    root: &Path,
+) -> Result<(git2::Repository, PathBuf, canonical::RepositoryConfig), RepositoryError> {
     let operation = RepositoryOperation::Read;
-    service.require_index_available(operation, Some(&request.root))?;
-    let (repository, root) = canonical_repository_root(&request.root, operation)?;
+    service.require_index_available(operation, Some(root))?;
+    let (repository, root) = canonical_repository_root(root, operation)?;
     let config = match read_configuration_for(&root, operation)? {
         ConfigurationInspection::Valid(config) => config,
         _ => {
@@ -116,44 +176,71 @@ pub(super) fn prepare(
                 operation,
                 Some(root),
                 RepositoryErrorKind::InvalidConfiguration,
-                "promotion requires a valid repository configuration",
+                match kind {
+                    LifecycleKind::DocumentPromotion => {
+                        "promotion requires a valid repository configuration"
+                    }
+                    LifecycleKind::TicketClosure => {
+                        "closure requires a valid repository configuration"
+                    }
+                },
             ));
         }
     };
+    Ok((repository, root, config))
+}
+
+pub(super) fn prepare(
+    service: &RepositoryService,
+    request: PreviewDocumentPromotionRequest,
+) -> Result<PreparedObservation, RepositoryError> {
+    prepare_for(LifecycleKind::DocumentPromotion, service, request)
+}
+pub(super) fn prepare_for(
+    kind: LifecycleKind,
+    service: &RepositoryService,
+    request: PreviewDocumentPromotionRequest,
+) -> Result<PreparedObservation, RepositoryError> {
+    if kind != LifecycleKind::DocumentPromotion {
+        // The discovery facts and result checks below are document-only; the
+        // closure observation has its own (`closure::observe`).
+        return Err(state::recovery_required());
+    }
+    let (repository, root, config) = open_observation(kind, service, &request.root)?;
     // A read-only SQLite transaction provides one coherent history/conflict view.
     // No repository lease, reservation, refresh, migration or transport is used.
     let (repository_id, snapshot, pending) = read_view(service, &root)?;
-    let before = observation_guard(&repository, &root, &config, &request.item_id)?;
-    let discovered = discovery::observe_root(&repository, &root);
-    let active = discovered
-        .active_contexts
-        .iter()
-        .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
-    let facts = DiscoveryFacts {
-        not_document: active.is_some_and(|a| {
-            a.items
+    let (facts, seal) =
+        ObservationSeal::discover(kind, &repository, &root, &config, &request.item_id, || {
+            let discovered = discovery::observe_root(&repository, &root);
+            let active = discovered
+                .active_contexts
                 .iter()
-                .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)
-        }) || (active.is_none()
-            && discovered
-                .items
-                .iter()
-                .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
-        document_path: active
-            .filter(|a| {
-                a.context.branch.as_deref()
-                    == Some(format!("manyhands/document/{}", request.item_id).as_str())
-            })
-            .and_then(|a| {
-                a.items
-                    .iter()
-                    .find(|i| i.id == request.item_id && i.kind == AuthoringKind::Document)
-            })
-            .map(|i| i.path.clone()),
-    };
-    if before != observation_guard(&repository, &root, &config, &request.item_id)? {
-        return Err(changed());
-    }
+                .find(|a| a.context.item_id.as_ref() == Some(&request.item_id));
+            DiscoveryFacts {
+                kind,
+                not_document: active.is_some_and(|a| {
+                    a.items
+                        .iter()
+                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)
+                }) || (active.is_none()
+                    && discovered
+                        .items
+                        .iter()
+                        .any(|i| i.id == request.item_id && i.kind == AuthoringKind::Ticket)),
+                document_path: active
+                    .filter(|a| {
+                        a.context.branch.as_deref()
+                            == Some(kind.context_branch(&request.item_id).as_str())
+                    })
+                    .and_then(|a| {
+                        a.items
+                            .iter()
+                            .find(|i| i.id == request.item_id && i.kind == kind.authoring())
+                    })
+                    .map(|i| i.path.clone()),
+            }
+        })?;
     let preflight = observe_git(
         &repository,
         &root,
@@ -168,10 +255,8 @@ pub(super) fn prepare(
         preflight,
         configuration: config,
         repository_id,
-        root: root.clone(),
-        item: request.item_id,
+        seal,
         facts,
-        guard: before,
     };
     #[cfg(test)]
     super::run_tests::observation_prepared(service, &root);
@@ -181,8 +266,18 @@ fn read_view(
     service: &RepositoryService,
     root: &Path,
 ) -> Result<(i64, RemoteSnapshot, bool), RepositoryError> {
+    read_view_with(service, root, |_, _| Ok(()))
+        .map(|(id, snapshot, pending, ())| (id, snapshot, pending))
+}
+/// One read-only SQLite transaction: the registration, the remote snapshot,
+/// the pending-conflict flag and whatever else `extra` reads in the same view.
+pub(in super::super) fn read_view_with<T>(
+    service: &RepositoryService,
+    root: &Path,
+    extra: impl FnOnce(&rusqlite::Transaction<'_>, i64) -> Result<T, RepositoryError>,
+) -> Result<(i64, RemoteSnapshot, bool, T), RepositoryError> {
     let operation = RepositoryOperation::Read;
-    let (id, snapshot, pending) = {
+    let (id, snapshot, pending, extra) = {
         let _guard = cache_read_guard(&service.registry_path, root, operation)?;
         let mut connection = open_registry_read_only(&service.registry_path)?;
         let transaction = connection.transaction().map_err(RepositoryError::sqlite)?;
@@ -202,15 +297,13 @@ fn read_view(
                     "promotion requires a registered repository",
                 )
             })?;
-        (
-            id,
-            state::read_snapshot(&transaction, id)?,
-            state::has_pending_conflict(&transaction, id)?,
-        )
+        let snapshot = state::read_snapshot(&transaction, id)?;
+        let pending = state::has_pending_conflict(&transaction, id)?;
+        let extra = extra(&transaction, id)?;
+        (id, snapshot, pending, extra)
     };
-    Ok((id, snapshot, pending))
+    Ok((id, snapshot, pending, extra))
 }
-
 fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(&(bytes.len() as u64).to_be_bytes());
     hash.update(bytes);
@@ -220,6 +313,7 @@ fn guard_field(hash: &mut blake3::Hasher, bytes: &[u8]) {
 /// cannot hide behind cached discovery. Metadata of known canonical files also
 /// catches edits masked by index flags without reading/scanning their contents.
 fn observation_guard(
+    kind: LifecycleKind,
     repository: &git2::Repository,
     root: &Path,
     config: &canonical::RepositoryConfig,
@@ -358,8 +452,8 @@ fn observation_guard(
         admin.join("HEAD"),
         admin.join("gitdir"),
         admin.join("commondir"),
-        root.join("docs"),
-        context.join("docs"),
+        root.join(kind.guarded_directory()),
+        context.join(kind.guarded_directory()),
     ] {
         metadata(&mut hash, &path, true)?;
     }
@@ -368,11 +462,7 @@ fn observation_guard(
         repository,
         &format!("refs/heads/{}", config.primary_branch),
     )?;
-    ref_stamp(
-        &mut hash,
-        repository,
-        &format!("refs/heads/manyhands/document/{item}"),
-    )?;
+    ref_stamp(&mut hash, repository, &kind.context_ref(item))?;
     for path in [root, &context] {
         let linked = git2::Repository::open_ext(
             path,
@@ -450,7 +540,7 @@ fn observation_guard(
     Ok(*hash.finalize().as_bytes())
 }
 
-fn ancestor(
+pub(in super::super) fn ancestor(
     repository: &git2::Repository,
     older: Oid,
     newer: Oid,
@@ -464,7 +554,7 @@ fn ancestor(
         .map_err(|_| unavailable(root))
 }
 
-fn reference_oid(
+pub(in super::super) fn reference_oid(
     repository: &git2::Repository,
     name: &str,
     root: &Path,
@@ -479,12 +569,18 @@ fn reference_oid(
     }
 }
 
-fn cleanliness(
+/// A materialized target's worktree state, as `require_clean_target` reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum Cleanliness {
+    Clean,
+    Dirty,
+    Conflicted,
+}
+pub(in super::super) fn target_cleanliness(
     linked: &git2::Repository,
     target: &SynchronizationTarget,
     root: &Path,
-    blockers: &mut BTreeSet<PromotionBlocker>,
-) -> Result<(), RepositoryError> {
+) -> Result<Cleanliness, RepositoryError> {
     // require_clean_target verifies the index tree. Keep even its tree cache
     // writes in memory, including when the observed index is not canonical.
     let odb = linked.odb().map_err(|_| unavailable(root))?;
@@ -492,22 +588,204 @@ fn cleanliness(
         .add_new_mempack_backend(1000)
         .map_err(|_| unavailable(root))?;
     match sync::require_clean_target(linked, target) {
-        Ok(()) => {}
-        Err(SynchronizationError::WorktreeNotClean { .. }) => {
-            blockers.insert(match target {
-                SynchronizationTarget::Primary => PromotionBlocker::PrimaryDirty,
-                _ => PromotionBlocker::ContextDirty,
-            });
-        }
-        Err(SynchronizationError::WorktreeConflicted { .. }) => {
-            blockers.insert(match target {
-                SynchronizationTarget::Primary => PromotionBlocker::PrimaryConflicted,
-                _ => PromotionBlocker::ContextConflicted,
-            });
-        }
-        Err(_) => return Err(unavailable(root)),
+        Ok(()) => Ok(Cleanliness::Clean),
+        Err(SynchronizationError::WorktreeNotClean { .. }) => Ok(Cleanliness::Dirty),
+        Err(SynchronizationError::WorktreeConflicted { .. }) => Ok(Cleanliness::Conflicted),
+        Err(_) => Err(unavailable(root)),
     }
-    Ok(())
+}
+
+/// The item's authoring context as Git sees it, without discovery.
+pub(in super::super) enum ContextPresence {
+    /// No worktree registered at the canonical path.
+    Missing,
+    /// A worktree exists but is not the materialized context.
+    Nonconforming,
+    /// The materialized context; `oid` is absent when its branch vanished
+    /// between materialization and the read, and `cleanliness` is only read
+    /// when `oid` is present.
+    Materialized {
+        oid: Option<Oid>,
+        cleanliness: Cleanliness,
+    },
+}
+pub(in super::super) fn context_presence(
+    kind: LifecycleKind,
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+) -> Result<ContextPresence, RepositoryError> {
+    let target = SynchronizationTarget::Context {
+        kind: kind.authoring(),
+        item_id: item.clone(),
+    };
+    match sync::materialized_target(root, &config.primary_branch, &target) {
+        Ok(linked) => {
+            let oid = reference_oid(repository, &kind.context_ref(item), root)?;
+            let cleanliness = match oid {
+                Some(_) => target_cleanliness(&linked, &target, root)?,
+                None => Cleanliness::Clean,
+            };
+            Ok(ContextPresence::Materialized { oid, cleanliness })
+        }
+        Err(_) => Ok(
+            if !root
+                .join(".manyhands/worktrees")
+                .join(item.to_string())
+                .exists()
+                || repository.find_worktree(&item.to_string()).is_err()
+            {
+                ContextPresence::Missing
+            } else {
+                ContextPresence::Nonconforming
+            },
+        ),
+    }
+}
+
+/// The local primary branch tip and its checkout.
+pub(in super::super) enum PrimaryPresence {
+    Missing,
+    NotCheckedOut(Oid),
+    CheckedOut(Oid, Cleanliness),
+}
+impl PrimaryPresence {
+    pub(in super::super) fn oid(&self) -> Option<Oid> {
+        match self {
+            Self::Missing => None,
+            Self::NotCheckedOut(oid) | Self::CheckedOut(oid, _) => Some(*oid),
+        }
+    }
+}
+pub(in super::super) fn primary_presence(
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+) -> Result<PrimaryPresence, RepositoryError> {
+    let Some(oid) = reference_oid(
+        repository,
+        &format!("refs/heads/{}", config.primary_branch),
+        root,
+    )?
+    else {
+        return Ok(PrimaryPresence::Missing);
+    };
+    Ok(
+        match sync::materialized_target(
+            root,
+            &config.primary_branch,
+            &SynchronizationTarget::Primary,
+        ) {
+            Ok(linked) => PrimaryPresence::CheckedOut(
+                oid,
+                target_cleanliness(&linked, &SynchronizationTarget::Primary, root)?,
+            ),
+            Err(_) => PrimaryPresence::NotCheckedOut(oid),
+        },
+    )
+}
+
+/// D2: the remote-tracking facts both lifecycles bind.
+pub(in super::super) struct RemoteFacts {
+    pub(in super::super) tracking_primary: Option<Oid>,
+    pub(in super::super) tracking_context: Option<Oid>,
+    /// The local primary has commits the tracking primary lacks.
+    pub(in super::super) primary_ahead: bool,
+    /// The context lacks commits the tracking context has.
+    pub(in super::super) context_behind: bool,
+}
+/// `None` without a publication remote.
+pub(in super::super) fn remote_facts(
+    kind: LifecycleKind,
+    repository: &git2::Repository,
+    root: &Path,
+    config: &canonical::RepositoryConfig,
+    item: &ItemId,
+    primary_oid: Option<Oid>,
+    context_oid: Option<Oid>,
+) -> Result<Option<RemoteFacts>, RepositoryError> {
+    let Some(remote) = &config.publication_remote else {
+        return Ok(None);
+    };
+    let plan = RemoteRefPlan::from_configuration(remote, &config.primary_branch)
+        .map_err(|_| unavailable(root))?;
+    let tracking_primary = reference_oid(repository, plan.primary().tracking_ref(), root)?;
+    let tracking_context = reference_oid(
+        repository,
+        plan.context(kind.authoring(), item).tracking_ref(),
+        root,
+    )?;
+    let primary_ahead = match (primary_oid, tracking_primary) {
+        (Some(primary), Some(tracking)) => !ancestor(repository, primary, tracking, root)?,
+        _ => false,
+    };
+    let context_behind = match (context_oid, tracking_context) {
+        (Some(context), Some(tracking)) => !ancestor(repository, tracking, context, root)?,
+        _ => false,
+    };
+    Ok(Some(RemoteFacts {
+        tracking_primary,
+        tracking_context,
+        primary_ahead,
+        context_behind,
+    }))
+}
+
+/// D5: whether an absent tracking context was once published.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum RemoteContextHistory {
+    NeverPublished,
+    Deleted,
+    Unknown,
+}
+pub(in super::super) fn remote_context_history(
+    snapshot: &RemoteSnapshot,
+    kind: LifecycleKind,
+    item: &ItemId,
+) -> RemoteContextHistory {
+    match snapshot.fetch_publication_evidence_for(kind.authoring(), item) {
+        RemotePublicationEvidence::ObservedPublished => RemoteContextHistory::Deleted,
+        RemotePublicationEvidence::HistoryUnknown => RemoteContextHistory::Unknown,
+        RemotePublicationEvidence::NeverPublished => RemoteContextHistory::NeverPublished,
+    }
+}
+
+/// The integration result tree, built in `worker`'s memory-backed ODB.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum PlannedResult {
+    /// The context is contained in the base: the base tree.
+    Contained(Oid),
+    /// A merge commit is needed; its tree.
+    Merge(Oid),
+    /// The in-memory merge conflicts.
+    Conflict,
+}
+pub(in super::super) fn planned_result(
+    repository: &git2::Repository,
+    worker: &git2::Repository,
+    root: &Path,
+    base: Oid,
+    context: Oid,
+) -> Result<PlannedResult, RepositoryError> {
+    let tree = |oid: Oid| {
+        worker
+            .find_commit(oid)
+            .map(|c| c.tree_id())
+            .map_err(|_| unavailable(root))
+    };
+    if ancestor(repository, context, base, root)? {
+        return Ok(PlannedResult::Contained(tree(base)?));
+    }
+    if ancestor(repository, base, context, root)? {
+        return Ok(PlannedResult::Merge(tree(context)?));
+    }
+    match sync::prepare_clean_merge(root, base, context).map_err(|_| unavailable(root))? {
+        sync::MergePreparation::Clean(prepared) => Ok(PlannedResult::Merge(
+            sync::import_prepared_tree(worker, &prepared).map_err(|_| unavailable(root))?,
+        )),
+        sync::MergePreparation::Conflict => Ok(PlannedResult::Conflict),
+    }
 }
 
 /// Observe actual Git afresh. The caller supplies a coherently read remote
@@ -526,92 +804,86 @@ fn observe_git(
         blockers: BTreeSet::new(),
         preview: None,
     };
+    let kind = facts.kind;
     let blockers = &mut observation.blockers;
-    let context_branch = format!("manyhands/document/{item}");
-    let context_path = root.join(".manyhands/worktrees").join(item.to_string());
-    let target = SynchronizationTarget::Context {
-        kind: AuthoringKind::Document,
-        item_id: item.clone(),
-    };
+    let context_branch = kind.context_branch(item);
     let not_document = facts.not_document;
     let mut context_oid = None;
     let mut context_document_path = None;
     if not_document {
         blockers.insert(PromotionBlocker::NotADocument);
     } else {
-        match sync::materialized_target(root, &config.primary_branch, &target) {
-            Ok(linked) => {
-                context_oid =
-                    reference_oid(repository, &format!("refs/heads/{context_branch}"), root)?;
+        match context_presence(kind, repository, root, config, item)? {
+            ContextPresence::Materialized { oid, cleanliness } => {
+                context_oid = oid;
                 if context_oid.is_none() {
                     // The branch can disappear between materialization and this
                     // unleased read; an incomplete observation is never ready.
                     blockers.insert(PromotionBlocker::ContextMissing);
                 } else {
-                    cleanliness(&linked, &target, root, blockers)?;
+                    match cleanliness {
+                        Cleanliness::Clean => {}
+                        Cleanliness::Dirty => {
+                            blockers.insert(PromotionBlocker::ContextDirty);
+                        }
+                        Cleanliness::Conflicted => {
+                            blockers.insert(PromotionBlocker::ContextConflicted);
+                        }
+                    }
                 }
                 context_document_path = facts.document_path.clone();
                 if context_document_path.is_none() {
                     blockers.insert(PromotionBlocker::ContextNonconforming);
                 }
             }
-            Err(_) => {
-                blockers.insert(
-                    if !context_path.exists()
-                        || repository.find_worktree(&item.to_string()).is_err()
-                    {
-                        PromotionBlocker::ContextMissing
-                    } else {
-                        PromotionBlocker::ContextNonconforming
-                    },
-                );
+            ContextPresence::Missing => {
+                blockers.insert(PromotionBlocker::ContextMissing);
+            }
+            ContextPresence::Nonconforming => {
+                blockers.insert(PromotionBlocker::ContextNonconforming);
             }
         }
     }
     if pending {
         blockers.insert(PromotionBlocker::ConflictPending);
     }
-    let primary_oid = reference_oid(
-        repository,
-        &format!("refs/heads/{}", config.primary_branch),
-        root,
-    )?;
-    if primary_oid.is_none() {
-        blockers.insert(PromotionBlocker::PrimaryMissing);
-    } else {
-        match sync::materialized_target(
-            root,
-            &config.primary_branch,
-            &SynchronizationTarget::Primary,
-        ) {
-            Ok(linked) => cleanliness(&linked, &SynchronizationTarget::Primary, root, blockers)?,
-            Err(_) => {
-                blockers.insert(PromotionBlocker::PrimaryNotCheckedOut);
-            }
+    let primary = primary_presence(repository, root, config)?;
+    let primary_oid = primary.oid();
+    match primary {
+        PrimaryPresence::Missing => {
+            blockers.insert(PromotionBlocker::PrimaryMissing);
+        }
+        PrimaryPresence::NotCheckedOut(_) => {
+            blockers.insert(PromotionBlocker::PrimaryNotCheckedOut);
+        }
+        PrimaryPresence::CheckedOut(_, Cleanliness::Clean) => {}
+        PrimaryPresence::CheckedOut(_, Cleanliness::Dirty) => {
+            blockers.insert(PromotionBlocker::PrimaryDirty);
+        }
+        PrimaryPresence::CheckedOut(_, Cleanliness::Conflicted) => {
+            blockers.insert(PromotionBlocker::PrimaryConflicted);
         }
     }
     let mut tracking_primary = None;
     let mut tracking_context = None;
-    if let Some(remote) = &config.publication_remote {
-        let plan = RemoteRefPlan::from_configuration(remote, &config.primary_branch)
-            .map_err(|_| unavailable(root))?;
-        tracking_primary = reference_oid(repository, plan.primary().tracking_ref(), root)?;
-        tracking_context = reference_oid(
-            repository,
-            plan.context(AuthoringKind::Document, item).tracking_ref(),
-            root,
-        )?;
+    if let Some(remote) = remote_facts(
+        kind,
+        repository,
+        root,
+        config,
+        item,
+        primary_oid,
+        context_oid,
+    )? {
+        tracking_primary = remote.tracking_primary;
+        tracking_context = remote.tracking_context;
         if tracking_primary.is_none() {
             blockers.insert(PromotionBlocker::PrimaryMissing);
         }
-        if let (Some(primary), Some(tracking)) = (primary_oid, tracking_primary)
-            && !ancestor(repository, primary, tracking, root)?
-        {
+        if remote.primary_ahead {
             blockers.insert(PromotionBlocker::PrimaryAheadOfRemote);
         }
-        if let (Some(context), Some(tracking)) = (context_oid, tracking_context)
-            && !ancestor(repository, tracking, context, root)?
-        {
+        if remote.context_behind {
             blockers.insert(PromotionBlocker::ContextBehindRemote);
         }
     }
@@ -630,37 +902,18 @@ fn observe_git(
         .add_new_mempack_backend(1000)
         .map_err(|_| unavailable(root))?;
     if let (Some(base), Some(context), Some(_)) = (base, context_oid, &context_document_path) {
-        if ancestor(repository, context, base, root)? {
-            integration = Some(PlannedIntegration::AlreadyContained);
-            result = Some(
-                worker
-                    .find_commit(base)
-                    .map_err(|_| unavailable(root))?
-                    .tree_id(),
-            );
-        } else {
-            integration = Some(PlannedIntegration::MergeCommit);
-            if ancestor(repository, base, context, root)? {
-                result = Some(
-                    worker
-                        .find_commit(context)
-                        .map_err(|_| unavailable(root))?
-                        .tree_id(),
-                );
-            } else {
-                match sync::prepare_clean_merge(root, base, context)
-                    .map_err(|_| unavailable(root))?
-                {
-                    sync::MergePreparation::Clean(prepared) => {
-                        result = Some(
-                            sync::import_prepared_tree(&worker, &prepared)
-                                .map_err(|_| unavailable(root))?,
-                        )
-                    }
-                    sync::MergePreparation::Conflict => {
-                        blockers.insert(PromotionBlocker::IntegrationConflict);
-                    }
-                }
+        match planned_result(repository, &worker, root, base, context)? {
+            PlannedResult::Contained(tree) => {
+                integration = Some(PlannedIntegration::AlreadyContained);
+                result = Some(tree);
+            }
+            PlannedResult::Merge(tree) => {
+                integration = Some(PlannedIntegration::MergeCommit);
+                result = Some(tree);
+            }
+            PlannedResult::Conflict => {
+                integration = Some(PlannedIntegration::MergeCommit);
+                blockers.insert(PromotionBlocker::IntegrationConflict);
             }
         }
     }
@@ -669,14 +922,14 @@ fn observe_git(
         && integration != Some(PlannedIntegration::AlreadyContained)
         && !not_document
     {
-        match snapshot.fetch_publication_evidence_for(AuthoringKind::Document, item) {
-            RemotePublicationEvidence::ObservedPublished => {
+        match remote_context_history(snapshot, kind, item) {
+            RemoteContextHistory::Deleted => {
                 blockers.insert(PromotionBlocker::RemoteContextDeleted);
             }
-            RemotePublicationEvidence::HistoryUnknown => {
+            RemoteContextHistory::Unknown => {
                 blockers.insert(PromotionBlocker::HistoryUnknown);
             }
-            RemotePublicationEvidence::NeverPublished => {}
+            RemoteContextHistory::NeverPublished => {}
         }
     }
     if let (Some(base), Some(result_oid)) = (base, result) {
@@ -786,11 +1039,34 @@ fn result_document_path(
 }
 
 /// Result-tree evidence retained only for consent encoding, not the public DTO.
-#[derive(Clone, Copy)]
-struct PromotionChangeEntry {
-    oid: Option<Oid>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) struct PromotionChangeEntry {
+    pub(in super::super) oid: Option<Oid>,
     /// Git entry mode including type bits; zero means no resulting entry.
-    mode: u32,
+    pub(in super::super) mode: u32,
+}
+
+/// One change-set entry with the result-tree evidence the digest binds
+/// (T2-1), shared by both lifecycles.
+#[derive(Clone, PartialEq, Eq)]
+pub(in super::super) struct ChangeEvidence {
+    pub(in super::super) change: PromotionPathChange,
+    pub(in super::super) entry: PromotionChangeEntry,
+}
+
+/// The change set from `base` to `result`, sorted by path, with evidence.
+pub(in super::super) fn change_evidence(
+    repository: &git2::Repository,
+    base: &git2::Tree<'_>,
+    result: &git2::Tree<'_>,
+    root: &Path,
+) -> Result<Vec<ChangeEvidence>, RepositoryError> {
+    let (changes, entries) = changes(repository, base, result, root)?;
+    Ok(changes
+        .into_iter()
+        .zip(entries)
+        .map(|(change, entry)| ChangeEvidence { change, entry })
+        .collect())
 }
 
 fn changes(
@@ -854,66 +1130,106 @@ fn changes(
     Ok((changes, new_entries))
 }
 
-fn expectation(
-    preview: &DocumentPromotionPreview,
-    new_entries: &[PromotionChangeEntry],
-) -> PromotionExpectation {
-    fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
+/// The digest encodings both lifecycles share: u64 big-endian lengths and
+/// counts, single-byte tags, and fixed-width OIDs and modes.
+pub(in super::super) mod digest {
+    use super::*;
+
+    pub(in super::super::super) fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
         hash.update(&(bytes.len() as u64).to_be_bytes());
         hash.update(bytes);
     }
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"manyhands promotion v1");
-    field(&mut hash, preview.item_id.to_string().as_bytes());
-    field(
-        &mut hash,
-        preview.document_path.as_os_str().as_encoded_bytes(),
-    );
-    field(&mut hash, preview.context_branch.as_bytes());
-    field(&mut hash, preview.primary_branch.as_bytes());
-    match &preview.publication_remote {
-        Some(remote) => {
-            hash.update(&[1]);
-            field(&mut hash, remote.as_bytes());
-        }
-        None => {
-            hash.update(&[0]);
-        }
-    }
-    hash.update(&[match preview.integration {
-        PlannedIntegration::MergeCommit => 0,
-        PlannedIntegration::AlreadyContained => 1,
-    }]);
-    hash.update(&(preview.changes.len() as u64).to_be_bytes());
-    assert_eq!(preview.changes.len(), new_entries.len());
-    for (change, entry) in preview.changes.iter().zip(new_entries) {
-        field(&mut hash, change.path.as_os_str().as_encoded_bytes());
-        hash.update(&[match change.change {
-            PathChange::Added => 0,
-            PathChange::Modified => 1,
-            PathChange::Deleted => 2,
-        }]);
-        match entry.oid {
-            Some(oid) => {
+    pub(in super::super::super) fn remote(hash: &mut blake3::Hasher, remote: Option<&str>) {
+        match remote {
+            Some(remote) => {
                 hash.update(&[1]);
-                hash.update(oid.as_bytes());
+                field(hash, remote.as_bytes());
             }
             None => {
                 hash.update(&[0]);
             }
         }
-        // T2-1: fixed-width big-endian resulting Git mode, or zero for Deleted.
-        hash.update(&entry.mode.to_be_bytes());
     }
-    hash.update(&[
-        u8::from(preview.cleanup.remote_branch),
-        u8::from(preview.cleanup.worktree),
-        u8::from(preview.cleanup.local_branch),
-    ]);
-    if preview.publication_remote.is_none() {
-        hash.update(preview.primary_oid.as_bytes());
-        hash.update(preview.context_oid.as_bytes());
+    pub(in super::super::super) fn integration(
+        hash: &mut blake3::Hasher,
+        integration: PlannedIntegration,
+    ) {
+        hash.update(&[match integration {
+            PlannedIntegration::MergeCommit => 0,
+            PlannedIntegration::AlreadyContained => 1,
+        }]);
     }
+    pub(in super::super::super) fn changes(
+        hash: &mut blake3::Hasher,
+        changes: &[PromotionPathChange],
+        new_entries: &[PromotionChangeEntry],
+    ) {
+        hash.update(&(changes.len() as u64).to_be_bytes());
+        assert_eq!(changes.len(), new_entries.len());
+        for (change, entry) in changes.iter().zip(new_entries) {
+            field(hash, change.path.as_os_str().as_encoded_bytes());
+            hash.update(&[match change.change {
+                PathChange::Added => 0,
+                PathChange::Modified => 1,
+                PathChange::Deleted => 2,
+            }]);
+            match entry.oid {
+                Some(oid) => {
+                    hash.update(&[1]);
+                    hash.update(oid.as_bytes());
+                }
+                None => {
+                    hash.update(&[0]);
+                }
+            }
+            // T2-1: fixed-width big-endian resulting Git mode, or zero for Deleted.
+            hash.update(&entry.mode.to_be_bytes());
+        }
+    }
+    pub(in super::super::super) fn cleanup(hash: &mut blake3::Hasher, cleanup: PlannedCleanup) {
+        hash.update(&[
+            u8::from(cleanup.remote_branch),
+            u8::from(cleanup.worktree),
+            u8::from(cleanup.local_branch),
+        ]);
+    }
+    /// D6: moving OIDs are bound only without a publication remote.
+    pub(in super::super::super) fn local_oids(
+        hash: &mut blake3::Hasher,
+        remote: Option<&str>,
+        primary: Oid,
+        context: Oid,
+    ) {
+        if remote.is_none() {
+            hash.update(primary.as_bytes());
+            hash.update(context.as_bytes());
+        }
+    }
+}
+
+fn expectation(
+    preview: &DocumentPromotionPreview,
+    new_entries: &[PromotionChangeEntry],
+) -> PromotionExpectation {
+    let mut hash = blake3::Hasher::new();
+    hash.update(b"manyhands promotion v1");
+    digest::field(&mut hash, preview.item_id.to_string().as_bytes());
+    digest::field(
+        &mut hash,
+        preview.document_path.as_os_str().as_encoded_bytes(),
+    );
+    digest::field(&mut hash, preview.context_branch.as_bytes());
+    digest::field(&mut hash, preview.primary_branch.as_bytes());
+    digest::remote(&mut hash, preview.publication_remote.as_deref());
+    digest::integration(&mut hash, preview.integration);
+    digest::changes(&mut hash, &preview.changes, new_entries);
+    digest::cleanup(&mut hash, preview.cleanup);
+    digest::local_oids(
+        &mut hash,
+        preview.publication_remote.as_deref(),
+        preview.primary_oid,
+        preview.context_oid,
+    );
     PromotionExpectation::from_bytes(*hash.finalize().as_bytes())
 }
 

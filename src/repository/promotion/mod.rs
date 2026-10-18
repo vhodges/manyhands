@@ -14,13 +14,15 @@ use std::{
 
 #[allow(dead_code)] // Internal integration stages are composed by the later lifecycle runner.
 pub(super) mod integrate;
+pub(super) mod lifecycle;
+pub(super) mod lifecycle_record;
 pub(super) mod observe;
 pub(super) mod record;
-mod run;
+pub(super) mod run;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]
-mod run_tests;
+pub(super) mod run_tests;
 
 /// A refusal before promotion has changed the primary. Integration uncertainty
 /// is carried by the internal pending state, never by this error.
@@ -239,8 +241,8 @@ pub enum PathChange {
 }
 #[derive(Clone, PartialEq, Eq)]
 pub struct PromotionPathChange {
-    path: PathBuf,
-    change: PathChange,
+    pub(super) path: PathBuf,
+    pub(super) change: PathChange,
 }
 impl PromotionPathChange {
     pub fn path(&self) -> &Path {

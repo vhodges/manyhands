@@ -12,6 +12,7 @@ use super::{
 };
 use crate::repository::{
     OperationId, RepositoryError, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+    promotion::lifecycle::LifecycleKind,
 };
 
 #[cfg(test)]
@@ -303,6 +304,23 @@ fn publication_intent(
     })
 }
 
+/// C1, C9: from `closing` until retirement a ticket context may hold its
+/// closure checkpoint, which a synchronization of that context would push to
+/// the remote context branch. Such a reservation or restart is `Busy`.
+fn closure_holds_context(
+    tx: &Transaction<'_>,
+    id: i64,
+    target: &RemoteOperationTarget,
+) -> Result<bool, RepositoryError> {
+    match target.item() {
+        Some((crate::repository::AuthoringKind::Ticket, item))
+            if target.action() == RemoteOperationAction::SynchronizeContext =>
+        {
+            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+        }
+        _ => Ok(false),
+    }
+}
 fn is_sync(target: &RemoteOperationTarget) -> bool {
     matches!(
         target.action(),
@@ -483,12 +501,15 @@ fn acknowledge(
     record: &state::StoredRemoteOperation,
     point: RemoteOperationSafePoint,
 ) -> Result<RemoteSafePointOutcome, RepositoryError> {
-    if record.target.action() == RemoteOperationAction::Promote
-        && (record.cancel_requested || record.yield_requested)
+    if matches!(
+        record.target.action(),
+        RemoteOperationAction::Promote | RemoteOperationAction::Close
+    ) && (record.cancel_requested || record.yield_requested)
     {
-        // After F6 this slot excludes polls until completion or explicit
-        // supersession. A recoverable stop must not release it or write poll
-        // bookkeeping; the parent records the cancellation between whole steps.
+        // After F6 a promotion or closure slot excludes polls until
+        // completion or explicit supersession. A recoverable stop must not
+        // release it or write poll bookkeeping; the parent records the
+        // cancellation between whole steps.
         tx.execute("UPDATE remote_operation_records SET phase='reserved',outcome=NULL,completed_step=?2,cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?3) WHERE id=?1",params![record.id,point_name(point),now()]).map_err(|_|state::recovery_required())?;
         return Ok(if record.cancel_requested {
             RemoteSafePointOutcome::Cancelled
@@ -776,20 +797,28 @@ fn finish(
 
 /// SQL-only finalization. Retirement and parent completion belong to this same
 /// caller-owned transaction; promotion never updates automatic poll policy.
-pub(in super::super) fn finish_promotion(
+pub(in super::super) fn finish_parent(
+    kind: LifecycleKind,
     service: &RepositoryService,
     tx: &Transaction<'_>,
     id: i64,
     owner: &RemoteReservation,
 ) -> Result<(), RepositoryError> {
     let record = owned(service, tx, id, owner)?;
-    if record.target.action() != RemoteOperationAction::Promote
+    if record.target.action() != kind.action()
         || record.priority != RemoteOperationPriority::Manual
         || record.completed_step != Some(RemoteOperationSafePoint::AfterAdvertisement)
     {
         return Err(state::recovery_required());
     }
-    let complete:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
+    // The parent is complete and its own kind's context is retired at the
+    // merged context: promotion's `context_oid`; a closure's adopted
+    // synchronization, else its checkpoint, else its synchronized context.
+    let complete: bool = match kind {
+        LifecycleKind::DocumentPromotion => tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions p JOIN retired_contexts r ON r.repository_id=p.repository_id AND r.item_id=p.item_id AND r.kind='document' AND r.operation_id=p.operation_id AND r.retired_oid=p.context_oid WHERE p.repository_id=?1 AND p.operation_id=?2 AND p.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
+        LifecycleKind::TicketClosure => tx.query_row("SELECT EXISTS(SELECT 1 FROM ticket_closures c JOIN retired_contexts r ON r.repository_id=c.repository_id AND r.item_id=c.item_id AND r.kind='ticket' AND r.operation_id=c.operation_id AND r.retired_oid=coalesce(c.adopted_context_oid,c.closure_oid,c.context_oid) WHERE c.repository_id=?1 AND c.operation_id=?2 AND c.step='complete')",params![id,owner.operation_id.to_string()],|r|r.get(0)),
+    }
+    .map_err(|_| state::recovery_required())?;
     if !complete {
         return Err(state::recovery_required());
     }
@@ -839,6 +868,15 @@ impl RepositoryService {
         operation_id: OperationId,
         target: &RemoteOperationTarget,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
+        self.restart_remote_lifecycle(LifecycleKind::DocumentPromotion, root, operation_id, target)
+    }
+    pub(in super::super) fn restart_remote_lifecycle(
+        &self,
+        kind: LifecycleKind,
+        root: &Path,
+        operation_id: OperationId,
+        target: &RemoteOperationTarget,
+    ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             crate::repository::promotion::record::validate_remote_identity(
                 tx,
@@ -850,18 +888,19 @@ impl RepositoryService {
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if record.target != *target
-                || target.action() != RemoteOperationAction::Promote
+                || target.action() != kind.action()
                 || record.priority != RemoteOperationPriority::Manual
             {
                 return Err(mismatch());
             }
-            if let Some(parent) =
-                crate::repository::promotion::record::read_record(tx, id, operation_id)?
-                && matches!(
-                    parent.step,
-                    crate::repository::promotion::record::PromotionStep::Abandoned
-                        | crate::repository::promotion::record::PromotionStep::Superseded
-                )
+            // A refused or replaced parent of this kind never restarts its slot.
+            if crate::repository::promotion::lifecycle_record::ParentFacts::read(
+                tx,
+                kind,
+                id,
+                operation_id,
+            )?
+            .is_some_and(|parent| parent.ended())
             {
                 return Err(state::recovery_required());
             }
@@ -1105,6 +1144,11 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            if closure_holds_context(tx, repository_id, target)? {
+                return Ok(RemotePollReservationOutcome::Reservation(
+                    RemoteReservationOutcome::Busy,
+                ));
+            }
             if poll_kind == Some(state::PollKind::Update)
                 && state::has_pending_conflict(tx, repository_id)?
             {
@@ -2382,6 +2426,9 @@ impl RepositoryService {
             }
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            if closure_holds_context(tx, id, target)? {
+                return Ok(RemoteReservationOutcome::Busy);
             }
             let foreign_conflict: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND operation.id!=?2 AND step.phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",

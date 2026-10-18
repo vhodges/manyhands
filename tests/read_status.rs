@@ -1303,6 +1303,82 @@ fn a_remote_operation_about_an_item_names_it() {
 }
 
 #[test]
+fn status_lists_closure_parent_and_hides_its_reservation() {
+    let (fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let id = OperationId::new();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::Close,
+        AuthoringKind::Ticket,
+        items::item_id(TICKET_A),
+    )
+    .unwrap();
+    reserved(
+        service
+            .reserve_remote_operation(&fixture.root, id, &target)
+            .unwrap(),
+    );
+    // The closure parent's own journal, at its checkpoint step.
+    items::index(data)
+        .execute(
+            "INSERT INTO ticket_closures (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                context_oid, base_oid, updated_at, closure_kind, closed_at, closure_oid
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', 'closing',
+                      '1111111111111111111111111111111111111111',
+                      '2222222222222222222222222222222222222222', ?3, 'record', ?4,
+                      '3333333333333333333333333333333333333333'
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                TICKET_A,
+                operations::STORED_AT,
+                STORED_AT_TEXT
+            ],
+        )
+        .unwrap();
+
+    let list = service.list_operations(&repo).unwrap();
+    let [operation] = &list.items[..] else {
+        panic!("{list:?}");
+    };
+    assert_eq!(operation.operation_id, Some(id.to_string()));
+    assert_eq!(operation.family, OperationFamily::Remote);
+    assert_eq!(operation.owner, OperationOwner::Repository);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.state, "closing");
+    assert_eq!(operation.completed_step.as_deref(), Some("closing"));
+    assert_eq!(operation.next_action, None);
+    assert_eq!(operation.item_id.as_deref(), Some(TICKET_A));
+    assert_eq!(operation.failure_code, None);
+    assert_eq!(&service.show_operation(&repo, id).unwrap(), operation);
+    let json = serde_json::to_string(&list).unwrap();
+    assert!(!json.contains("3333333333") && !json.contains("closure_kind"));
+
+    // A finished closure is shown by its ID and no longer listed.
+    items::index(data)
+        .execute(
+            "UPDATE ticket_closures SET step='abandoned', refusal_category='external_change'",
+            [],
+        )
+        .unwrap();
+    items::index(data)
+        .execute(
+            "UPDATE remote_operation_records SET phase='cancelled', outcome='cancelled'",
+            [],
+        )
+        .unwrap();
+    assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    let shown = service.show_operation(&repo, id).unwrap();
+    assert_eq!(shown.action, OperationAction::Close);
+    assert_eq!(shown.state, "abandoned");
+    assert_git_transport_uninitialized();
+}
+
+#[test]
 fn a_synchronization_and_its_index_refresh_share_an_id_and_are_both_listed() {
     let (_fixture, enabled, repo) = enabled();
     let (service, data) = (&enabled.service, enabled.data_directory.path());

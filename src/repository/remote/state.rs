@@ -5335,6 +5335,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
         .map_err(|_| recovery_required())?;
     validate_merge_evidence_schema(&transaction)?;
     crate::repository::promotion::record::audit(&transaction)?;
+    crate::repository::closure::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
     validate_schema_object(

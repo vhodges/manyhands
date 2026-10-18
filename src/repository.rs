@@ -27,6 +27,12 @@ use crate::canonical;
 
 mod bridges;
 mod cleanup;
+mod closure;
+pub use closure::{
+    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
+    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
+    TicketClosurePreview, TicketClosureResult,
+};
 mod comment_publication;
 mod coordination;
 pub use comment_publication::*;
@@ -44,6 +50,7 @@ mod promotion;
 mod read;
 mod recovery;
 mod remote;
+mod ticket_guard;
 pub mod transport;
 
 pub use bridges::abandon::{
@@ -230,6 +237,33 @@ fn refuse_repair_intent(
         ContextIntent::Create | ContextIntent::Edit => Ok(()),
         ContextIntent::Repair => Err(repair_intent_error(operation, root)),
     }
+}
+
+/// The closed-ticket guard (C5) of an edit of a ticket, asked under the
+/// lease once the call's row is begun. Only a new row is refused: a
+/// resumed row predates any closure, since closure blocks while one
+/// exists (C12). A creation, a repair and a write to another kind are not
+/// asked. A configuration that is not valid is left for the call to
+/// report.
+fn refuse_closed_ticket(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+    target: &AuthoringTarget,
+    record: RecoveryRecord,
+) -> Result<(), RepositoryError> {
+    if !record.is_new
+        || !matches!(target.kind, AuthoringKind::Ticket)
+        || !matches!(target.intent, ContextIntent::Edit)
+    {
+        return Ok(());
+    }
+    let ConfigurationInspection::Valid(configuration) = read_configuration_for(root, operation)?
+    else {
+        return Ok(());
+    };
+    ticket_guard::require_ticket_open(repository, &configuration.primary_branch, &target.item_id)
+        .map_err(|error| error.for_operation(operation, root))
 }
 
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
@@ -850,6 +884,16 @@ pub enum FailurePoint {
     /// Inside F10/F11: SQL completion committed, before its result is consumed
     /// and before the backend ref lock is released (lost commit-result seam).
     PromotionAfterCompletionCommit,
+    /// Ticket closure, inside the integration lease: the `closing` step and
+    /// its unreferenced checkpoint commit are recorded, and the context is
+    /// untouched.
+    ClosureAfterClosingRecorded,
+    /// Ticket closure: the checkpoint is checked out in the context worktree
+    /// and the context ref has not moved.
+    ClosureDuringCheckpointCheckout,
+    /// Ticket closure: the context ref is at the checkpoint and nothing has
+    /// reached the primary.
+    AfterClosureCheckpoint,
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
@@ -1038,6 +1082,9 @@ pub enum RepositoryErrorKind {
     /// The corrected source of a repair is not a conforming item of its
     /// path, or changes a ticket's closure fields.
     InvalidItemSource,
+    /// A new write to a ticket that its primary or context branch tip
+    /// holds with closure fields (C5).
+    TicketClosed,
     RollbackIncomplete,
     Io,
     Sqlite,
@@ -1694,6 +1741,9 @@ impl RepositoryService {
             &authoring_context_target(&target),
         )?;
         let effects = CallEffects::default();
+        if let Err(error) = refuse_closed_ticket(&repository, &root, operation, &target, record) {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -1969,6 +2019,17 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Before any context is provisioned: a document save never makes
+        // another kind's context, a closed ticket's among them (C5).
+        if !matches!(request.target.kind, AuthoringKind::Document) {
+            let error = authoring_error(
+                operation,
+                &root,
+                RepositoryErrorKind::MissingAuthoringTarget,
+                "document saves require a document target",
+            );
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -1988,14 +2049,6 @@ impl RepositoryService {
             };
             // A whole editing context is reusable by any later operation.
             effects.undone();
-            if !matches!(context.kind, AuthoringKind::Document) {
-                return Err(authoring_error(
-                    operation,
-                    &context.root,
-                    RepositoryErrorKind::MissingAuthoringTarget,
-                    "document saves require a document target",
-                ));
-            }
             self.reject_pending_synchronization_merge(&context, operation)?;
             let repository = Repository::open(&context.worktree).map_err(|error| {
                 RepositoryError::git(operation, Some(context.root.clone()), error)
@@ -2390,6 +2443,12 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Every ticket save, relationship and short-code write comes here.
+        if let Err(error) =
+            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
+        {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -2722,6 +2781,13 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Before the publication binding is recorded: a refusal leaves
+        // nothing for the row to owe.
+        if let Err(error) =
+            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
+        {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let mut known_checkpoint = None;
         let mut retained_binding = None;
         let result = (|| {

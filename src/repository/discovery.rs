@@ -1730,6 +1730,7 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
     super::promotion::record::migrate(&transaction)?;
+    super::closure::record::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
     migrate_item_read_schema(connection)?;
     super::recovery::migrate_operation_records(connection)?;

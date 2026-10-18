@@ -315,6 +315,23 @@ impl RepositoryService {
         {
             return Err(SynchronizationError::ExternalChange);
         }
+        // As R-T6-4 for the fast-forward: from `closing` until retirement a
+        // closure owns its ticket context. At `branch_deleted` the worktree
+        // and branch are gone but not retired, and completion proves them
+        // absent; a poll never rebuilds them. A closure that deletes the
+        // remote branch holds its slot through cleanup, so this is the
+        // closure without a remote delete (no attempt, no tracking context).
+        if request.kind == crate::repository::AuthoringKind::Ticket
+            && state::with_transaction(self, root, |tx, id| {
+                crate::repository::closure::record::written_closure_unfinished(
+                    tx,
+                    id,
+                    &request.item_id,
+                )
+            })?
+        {
+            return Ok(refused(PollDisposition::BlockedByLocalState));
+        }
 
         // Observe Git/filesystem presence first, then consult durable ownership.
         let observed =
@@ -569,6 +586,20 @@ impl RepositoryService {
                 return Err(SynchronizationError::ExternalChange);
             }
             LocalPollClassification::FastForward { .. } => {}
+        }
+        // R-T6-4: from `closing` until retirement the closure reconciles a
+        // ticket context's ref against its own record; a poll never moves
+        // it. Tracking is already updated, so the closure's re-check sees
+        // the remote change. The target is left as not reached.
+        if let SynchronizationTarget::Context {
+            kind: crate::repository::AuthoringKind::Ticket,
+            item_id,
+        } = &update.target
+            && state::with_transaction(self, root, |tx, id| {
+                crate::repository::closure::record::written_closure_unfinished(tx, id, item_id)
+            })?
+        {
+            return Ok(PollDisposition::NotReached);
         }
         let Ok(linked) = poll_materialized_target(root, plan.primary_branch(), &update.target)
         else {

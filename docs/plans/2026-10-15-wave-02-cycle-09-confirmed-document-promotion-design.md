@@ -688,6 +688,16 @@ absence, contents or cache loss as completion proof.
 The cleanup functions take a kind and an item ID. Cycle 10 reuses them
 unchanged.
 
+**Correction 2026-10-18 (Cycle 10).** Cycle 10 did not reuse the cleanup path
+unchanged. Several sites around it were document-only. Cycle 10
+[Task 1](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-execution.md#task-1--lifecycle-seam-2026-10-17)
+made the runner generic over a lifecycle seam. Cycle 10
+[Task 5](2026-10-17-wave-02-cycle-10-confirmed-ticket-closure-execution.md#task-5--reservation-close-arms-retirement-and-completion-2026-10-18)
+generalized `RetirementEvidence::matches_promotion` to a kind-checked
+`matches`, added the `Close` reservation, finish and restart arms, and made
+the `exact_mappings` Delete arm generic over the context kind. Promotion
+behavior was kept, under a behavior-preservation gate.
+
 ## Reconciliation On Retry
 
 The row says where to look, and Git decides.

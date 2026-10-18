@@ -84,6 +84,10 @@ name = "document_promotion"
 harness = false
 
 [[test]]
+name = "ticket_closure"
+harness = false
+
+[[test]]
 name = "editor_feasibility"
 path = "tests/editor_feasibility.rs"
 required-features = ["editor-probe"]
