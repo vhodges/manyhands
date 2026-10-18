@@ -1368,6 +1368,11 @@ fn without_a_child_or_tracking_context_nothing_is_reserved_or_deleted() {
 /// attempt that never reserved (its child state is absent) has no guard:
 /// cleanup stops `RecoveryRequired` before any delete, and the remote and
 /// local context are kept.
+///
+/// The test mints the attempt while the context is already contained, an
+/// order the runner never uses. Production reaches the same row when the
+/// attempt is minted first and the primary then absorbs a context whose net
+/// change was already empty, so the consent digest stays equal.
 #[test]
 fn a_minted_context_attempt_that_never_reserved_has_no_delete_guard() {
     let f = contained(true);
