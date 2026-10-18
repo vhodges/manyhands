@@ -177,6 +177,21 @@ work can proceed while native access is arranged:
 | D6 | 08 | One-shot polling and materialization. |
 | G1 | Complete Wave 02 integration gate | Integrated journeys on the final revision. |
 
+C4, C5 and D5 also need the Cycle 10 follow-up ticket "2.10 follow up:
+closure recovery gaps before C4, C5 and D5" (`01M57SKVF6TQ3QM6AXJ35JGGSY`)
+merged to main first (added 2026-10-18). Under track rule 5 those Cycles cannot
+work around its gaps in their front ends:
+
+- C4 and D5 would otherwise offer an in-product resolution for a race in which
+  two clones close the same ticket differently, and that resolution always
+  fails.
+- C5 and D5 would otherwise leave a manual Git merge as the only way out of a
+  refused closure checkpoint merge.
+- C5 and D5 users would see promotion wording in closure error messages.
+
+The other Cycle 10 cleanup ticket ("2.10 follow up",
+`01M57SBA7MKR9BZR7PYECSJ05G`) does not gate any Wave 03 Cycle.
+
 Items 3–6 are readiness activities with the deadlines above, not a hidden Cycle 00
 or an instruction to implement a prototype during this planning request.
 Any executable feasibility probe needs its own bounded scope and authorization.
