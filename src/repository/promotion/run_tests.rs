@@ -341,7 +341,7 @@ impl run::PromotionIo for FakeIo {
         }
         let repo = git2::Repository::open(&req.root).unwrap();
         let reference = match &req.target {
-            SynchronizationTarget::Primary => "refs/heads/main".into(),
+            SynchronizationTarget::Primary => plan.primary().remote_ref().to_owned(),
             SynchronizationTarget::Context { kind, item_id } => {
                 plan.context(*kind, item_id).remote_ref().to_owned()
             }

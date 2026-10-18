@@ -204,7 +204,6 @@ impl Fixture {
             root: self.root.path(),
             context: &context,
             base: observation.base,
-            operation_id: Some(r.operation_id),
             record: Some(r),
         };
         pre_integration(service, &observation, confirmation, &mut stage)
@@ -222,7 +221,6 @@ impl Fixture {
             root: self.root.path(),
             context: &context,
             base: self.primary(),
-            operation_id: Some(r.operation_id),
             record: Some(r),
         };
         resume_written(&self.service, &mut stage)
@@ -1225,7 +1223,6 @@ impl Fixture {
             root: self.root.path(),
             context: &context,
             base,
-            operation_id: Some(r.operation_id),
             record: Some(r),
         };
         pre_integration(&self.service, observation, None, &mut stage)

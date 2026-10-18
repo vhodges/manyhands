@@ -894,27 +894,14 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             // A refused or replaced parent of this kind never restarts its slot.
-            let ended = match kind {
-                LifecycleKind::DocumentPromotion => {
-                    use crate::repository::promotion::record::{self as promotion, PromotionStep};
-                    promotion::read_record(tx, id, operation_id)?.is_some_and(|parent| {
-                        matches!(
-                            parent.step,
-                            PromotionStep::Abandoned | PromotionStep::Superseded
-                        )
-                    })
-                }
-                LifecycleKind::TicketClosure => {
-                    use crate::repository::closure::record::{self as closure, ClosureStep};
-                    closure::read_record(tx, id, operation_id)?.is_some_and(|parent| {
-                        matches!(
-                            parent.step,
-                            ClosureStep::Abandoned | ClosureStep::Superseded
-                        )
-                    })
-                }
-            };
-            if ended {
+            if crate::repository::promotion::lifecycle_record::ParentFacts::read(
+                tx,
+                kind,
+                id,
+                operation_id,
+            )?
+            .is_some_and(|parent| parent.ended())
+            {
                 return Err(state::recovery_required());
             }
             if record.phase == RemoteOperationPhase::Completed {

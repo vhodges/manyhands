@@ -54,7 +54,6 @@ fn document_promotion_has_no_pre_integration_effect() {
         root: root.path(),
         context: &context,
         base: Oid::from_str("2222222222222222222222222222222222222222").unwrap(),
-        operation_id: None,
         record: None::<&record::PromotionRecord>,
     };
     assert_eq!(

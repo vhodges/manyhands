@@ -1,42 +1,32 @@
 //! Ticket closure parent storage only: no transport, Git effect, prompt or
 //! lease acquisition. The record holds IDs, ref names, OIDs, timestamps
 //! (`closed_at` included), fixed step names and fixed categories; never
-//! `closed_by`, a title, a body, an endpoint or a secret.
+//! `closed_by`, a title, a body, an endpoint or a secret. The table-agnostic
+//! parent logic is `promotion::lifecycle_record`'s, shared with promotion.
 use super::{ClosureBlocker, ClosureExpectation};
 use crate::{
     canonical::ItemId,
     repository::{
-        AuthoringKind, OperationId, RemoteOperationAction, RemoteOperationPhase,
-        RemoteOperationPriority, RemoteOperationTarget, RepositoryError, RepositoryErrorKind,
-        RepositoryOperation, RepositoryService,
-        cleanup::{self, RetirementEvidence},
+        OperationId, RemoteOperationPriority, RemoteOperationTarget, RepositoryError,
+        RepositoryService,
+        cleanup::RetirementEvidence,
         promotion::{
-            lifecycle::{LifecycleKind, LifecycleRecord, LifecycleRefusal, ParentStep},
-            record::{
-                self as promotion, ChildExecution, ChildRole, ChildState, CleanupCategory,
-                IntegrationKind, PublicationCategory,
-            },
+            lifecycle::{LifecycleKind, LifecycleRecord, ParentStep},
+            lifecycle_record::{self as parent, Blocker, ParentRecord, categories},
+            record::{CleanupCategory, IntegrationKind, PublicationCategory},
         },
-        remote::{
-            reservation::{self, RemoteReservation},
-            state,
-        },
+        remote::{reservation::RemoteReservation, state},
     },
 };
 use git2::Oid;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, Transaction, params};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-macro_rules! categories {
-    ($name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
-        #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-        pub(in super::super) enum $name { $($variant),+ }
-        impl $name {
-            pub(in super::super) fn name(self)-> &'static str { match self { $(Self::$variant=>$text),+ } }
-            fn parse(text: &str)->Result<Self,RepositoryError> { match text { $($text=>Ok(Self::$variant),)+ _=>Err(state::recovery_required()) } }
-        }
-    }
-}
+pub(in super::super) use crate::repository::promotion::lifecycle_record::{
+    ChildExecution, ChildRole, ChildState,
+};
+
+const KIND: LifecycleKind = LifecycleKind::TicketClosure;
 categories!(ClosureStep {
     Confirmed=>"confirmed", ContextSynchronized=>"context_synchronized", Closing=>"closing",
     Integrating=>"integrating", Integrated=>"integrated", Published=>"published",
@@ -138,12 +128,7 @@ impl From<ParentStep> for ClosureStep {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in super::super) enum Refusal {
-    Blocked(Vec<ClosureBlocker>),
-    ExternalChange,
-    ReconfirmationRequired,
-}
+pub(in super::super) type Refusal = parent::Refusal<ClosureBlocker>;
 /// The design's blocker order; bit `i` of the stored mask is entry `i`.
 pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
     ClosureBlocker::NotATicket,
@@ -168,40 +153,9 @@ pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
     ClosureBlocker::TicketInvalidAfterClosure,
     ClosureBlocker::IdentityRequired,
 ];
-const MASK_LIMIT: u32 = (1 << CLOSURE_BLOCKERS.len()) - 1;
-impl Refusal {
-    fn encoded(&self) -> Result<(&'static str, Option<u32>), RepositoryError> {
-        Ok(match self {
-            Self::ExternalChange => ("external_change", None),
-            Self::ReconfirmationRequired => ("reconfirmation_required", None),
-            Self::Blocked(blockers) => {
-                if blockers.is_empty() || !blockers.windows(2).all(|p| p[0] < p[1]) {
-                    return Err(state::recovery_required());
-                }
-                (
-                    "blocked",
-                    Some(blockers.iter().fold(0, |mask, b| {
-                        mask | 1
-                            << CLOSURE_BLOCKERS
-                                .iter()
-                                .position(|v| v == b)
-                                .expect("exhaustive blockers")
-                    })),
-                )
-            }
-        })
-    }
-}
-impl LifecycleRefusal for Refusal {
-    fn external_change() -> Self {
-        Self::ExternalChange
-    }
-    fn reconfirmation_required() -> Self {
-        Self::ReconfirmationRequired
-    }
-    fn integration_conflict(&self) -> bool {
-        matches!(self, Self::Blocked(b) if b.contains(&ClosureBlocker::IntegrationConflict))
-    }
+impl Blocker for ClosureBlocker {
+    const ORDER: &'static [Self] = &CLOSURE_BLOCKERS;
+    const INTEGRATION_CONFLICT: Self = ClosureBlocker::IntegrationConflict;
 }
 
 /// The promotion record's fields and types, with closure's own step,
@@ -336,32 +290,6 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
     state::validate_schema_object(db, "TABLE", "ticket_closures", SCHEMA)?;
     state::validate_schema_object(db, "INDEX", "ticket_closures_unfinished", INDEX)
 }
-fn mismatch() -> RepositoryError {
-    RepositoryError::new(
-        RepositoryOperation::RepositorySnapshot,
-        None,
-        RepositoryErrorKind::OperationMismatch,
-        "the closure ID is bound to another operation",
-    )
-}
-fn busy() -> RepositoryError {
-    RepositoryError::new(
-        RepositoryOperation::RepositorySnapshot,
-        None,
-        RepositoryErrorKind::RepositoryBusy,
-        "another closure of the ticket is unfinished",
-    )
-}
-fn now() -> i64 {
-    OffsetDateTime::now_utc().unix_timestamp().max(0)
-}
-fn operation(text: String) -> Result<OperationId, RepositoryError> {
-    let id = OperationId::parse(&text).map_err(|_| state::recovery_required())?;
-    if id.to_string() != text {
-        return Err(state::recovery_required());
-    }
-    Ok(id)
-}
 /// `closed_at` exactly as stored: RFC 3339, UTC `Z`, whole seconds.
 fn closed_at_text(at: OffsetDateTime) -> Result<String, RepositoryError> {
     let at = at.to_offset(UtcOffset::UTC);
@@ -378,94 +306,32 @@ fn parse_closed_at(text: &str) -> Result<OffsetDateTime, RepositoryError> {
     Ok(at)
 }
 fn decode(row: &rusqlite::Row<'_>) -> Result<ClosureRecord, RepositoryError> {
-    let text = |n| {
-        row.get::<_, String>(n)
-            .map_err(|_| state::recovery_required())
-    };
-    let opt = |n| {
-        row.get::<_, Option<String>>(n)
-            .map_err(|_| state::recovery_required())
-    };
-    let number = |n| row.get::<_, i64>(n).map_err(|_| state::recovery_required());
-    let oid = |n| -> Result<Option<Oid>, RepositoryError> {
-        opt(n)?
-            .map(|s| {
-                let o = Oid::from_str(&s).map_err(|_| state::recovery_required())?;
-                if o.is_zero() || o.to_string() != s {
-                    return Err(state::recovery_required());
-                }
-                Ok(o)
-            })
-            .transpose()
-    };
-    let item = text("item_id")?;
-    let item_id: ItemId = item.parse().map_err(|_| state::recovery_required())?;
-    if item_id.to_string() != item {
-        return Err(state::recovery_required());
-    }
-    let mask: Option<u32> = row
-        .get("refusal_blockers")
-        .map_err(|_| state::recovery_required())?;
-    let refusal = match (opt("refusal_category")?.as_deref(), mask) {
-        (None, None) => None,
-        (Some("external_change"), None) => Some(Refusal::ExternalChange),
-        (Some("reconfirmation_required"), None) => Some(Refusal::ReconfirmationRequired),
-        (Some("blocked"), Some(mask)) if mask > 0 && mask <= MASK_LIMIT => Some(Refusal::Blocked(
-            CLOSURE_BLOCKERS
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| mask & (1 << i) != 0)
-                .map(|(_, b)| *b)
-                .collect(),
-        )),
-        _ => return Err(state::recovery_required()),
-    };
-    let bytes: Vec<u8> = row
-        .get("expectation")
-        .map_err(|_| state::recovery_required())?;
+    let row = parent::Row(row);
     let r = ClosureRecord {
-        repository_id: number("repository_id")?,
-        operation_id: operation(text("operation_id")?)?,
-        item_id,
-        expectation: ClosureExpectation::from_bytes(
-            bytes.try_into().map_err(|_| state::recovery_required())?,
-        ),
-        remote_name: opt("remote_name")?,
-        step: ClosureStep::parse(&text("step")?)?,
-        context_attempt: number("context_attempt")?
-            .try_into()
-            .map_err(|_| state::recovery_required())?,
-        context_sync_id: opt("context_sync_id")?.map(operation).transpose()?,
-        primary_attempt: number("primary_attempt")?
-            .try_into()
-            .map_err(|_| state::recovery_required())?,
-        primary_sync_id: opt("primary_sync_id")?.map(operation).transpose()?,
-        base_oid: oid("base_oid")?,
-        context_oid: oid("context_oid")?,
-        integration_oid: oid("integration_oid")?,
-        integration_kind: opt("integration_kind")?
-            .map(|s| IntegrationKind::parse(&s))
-            .transpose()?,
-        remote_context_oid: oid("remote_context_oid")?,
-        publication: opt("publication_category")?
-            .map(|s| PublicationCategory::parse(&s))
-            .transpose()?,
-        cleanup: opt("cleanup_category")?
-            .map(|s| CleanupCategory::parse(&s))
-            .transpose()?,
-        cancel_requested: match number("cancel_requested")? {
-            0 => false,
-            1 => true,
-            _ => return Err(state::recovery_required()),
-        },
-        updated_at: number("updated_at")?,
-        refusal,
-        closure_kind: opt("closure_kind")?
-            .map(|s| ClosureKind::parse(&s))
-            .transpose()?,
-        closed_at: opt("closed_at")?.map(|s| parse_closed_at(&s)).transpose()?,
-        closure_oid: oid("closure_oid")?,
-        adopted_context_oid: oid("adopted_context_oid")?,
+        repository_id: row.number("repository_id")?,
+        operation_id: row.operation("operation_id")?,
+        item_id: row.item()?,
+        expectation: ClosureExpectation::from_bytes(row.expectation()?),
+        remote_name: row.opt("remote_name")?,
+        step: ClosureStep::parse(&row.text("step")?)?,
+        context_attempt: row.attempt("context_attempt")?,
+        context_sync_id: row.sync_id("context_sync_id")?,
+        primary_attempt: row.attempt("primary_attempt")?,
+        primary_sync_id: row.sync_id("primary_sync_id")?,
+        base_oid: row.oid("base_oid")?,
+        context_oid: row.oid("context_oid")?,
+        integration_oid: row.oid("integration_oid")?,
+        integration_kind: row.category("integration_kind", IntegrationKind::parse)?,
+        remote_context_oid: row.oid("remote_context_oid")?,
+        publication: row.category("publication_category", PublicationCategory::parse)?,
+        cleanup: row.category("cleanup_category", CleanupCategory::parse)?,
+        cancel_requested: row.flag("cancel_requested")?,
+        updated_at: row.number("updated_at")?,
+        refusal: row.refusal()?,
+        closure_kind: row.category("closure_kind", ClosureKind::parse)?,
+        closed_at: row.category("closed_at", parse_closed_at)?,
+        closure_oid: row.oid("closure_oid")?,
+        adopted_context_oid: row.oid("adopted_context_oid")?,
     };
     validate(&r)?;
     Ok(r)
@@ -555,87 +421,13 @@ pub(in super::super) fn read_record(
     id: i64,
     op: OperationId,
 ) -> Result<Option<ClosureRecord>, RepositoryError> {
-    db.query_row(
-        "SELECT * FROM ticket_closures WHERE repository_id=?1 AND operation_id=?2",
-        params![id, op.to_string()],
-        |r| Ok(decode(r)),
-    )
-    .optional()
-    .map_err(|_| state::recovery_required())?
-    .transpose()
+    parent::read_record(db, id, op)
 }
 pub(in super::super) fn records(
     db: &Connection,
     id: i64,
 ) -> Result<Vec<ClosureRecord>, RepositoryError> {
-    db.prepare("SELECT * FROM ticket_closures WHERE repository_id=?1 ORDER BY operation_id")
-        .and_then(|mut q| {
-            q.query_map([id], |r| Ok(decode(r)))?
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(|_| state::recovery_required())?
-        .into_iter()
-        .collect()
-}
-/// Remote identity across both parent tables: a reservation under any
-/// parent or child ID must be exactly that binding's.
-fn remote_identity(
-    db: &Connection,
-    id: i64,
-    op: OperationId,
-    target: &RemoteOperationTarget,
-    priority: RemoteOperationPriority,
-) -> Result<(), RepositoryError> {
-    promotion::validate_remote_identity(db, id, op, target, priority)
-}
-fn existing_record(
-    tx: &Transaction<'_>,
-    id: i64,
-    op: OperationId,
-    item: &ItemId,
-    expectation: ClosureExpectation,
-) -> Result<Option<ClosureRecord>, RepositoryError> {
-    let existing = read_record(tx, id, op)?;
-    let collision:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1) OR EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM ticket_closures WHERE (operation_id=?1 AND repository_id!=?2) OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND (repository_id!=?2 OR action!='close' OR kind!='ticket' OR item_id!=?3))",params![op.to_string(),id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
-    if collision {
-        return Err(mismatch());
-    }
-    if let Some(r) = existing {
-        if &r.item_id != item || r.expectation != expectation {
-            return Err(mismatch());
-        }
-        if let Some(reservation) = state::read_operation(tx, id, op)? {
-            remote_identity(tx, id, op, &reservation.target, reservation.priority)?;
-        }
-        return Ok(Some(r));
-    }
-    // A foreign close row is not proof of a parent, even if its item matches.
-    if tx
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)",
-            [op.to_string()],
-            |r| r.get::<_, bool>(0),
-        )
-        .map_err(|_| state::recovery_required())?
-    {
-        return Err(mismatch());
-    }
-    Ok(None)
-}
-fn unfinished_record(
-    tx: &Transaction<'_>,
-    id: i64,
-    item: &ItemId,
-) -> Result<Option<ClosureRecord>, RepositoryError> {
-    tx
-        .query_row(
-            "SELECT * FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",
-            params![id, item.to_string()],
-            |r| Ok(decode(r)),
-        )
-        .optional()
-        .map_err(|_| state::recovery_required())?
-        .transpose()
+    parent::records(db, id)
 }
 /// Only a cleanup stop after integration may be superseded. A written
 /// closure checkpoint (`closing`, `integrating`) never is: only its own ID
@@ -644,41 +436,13 @@ fn supersedable(old: &ClosureRecord) -> bool {
     !matches!(old.step, ClosureStep::Closing | ClosureStep::Integrating)
         && old.cleanup.is_some_and(CleanupCategory::supersedable)
 }
-/// Process-only fence for the exact predecessor observed before unleased
-/// discovery. A different parent or owner cannot be silently superseded.
-#[derive(PartialEq, Eq)]
-pub(in super::super) struct ReplacementGuard {
-    repository_id: i64,
-    parent: Option<ClosureRecord>,
-    owner: Option<(OperationId, i64, i64, RemoteOperationPhase, bool, bool, i64)>,
-}
+pub(in super::super) type ReplacementGuard = parent::ReplacementGuard<ClosureRecord>;
 pub(in super::super) fn replacement_guard(
     tx: &Transaction<'_>,
     id: i64,
     item: &ItemId,
 ) -> Result<ReplacementGuard, RepositoryError> {
-    let parent = unfinished_record(tx, id, item)?;
-    let owner = parent
-        .as_ref()
-        .map(|parent| state::read_operation(tx, id, parent.operation_id))
-        .transpose()?
-        .flatten()
-        .map(|r| {
-            (
-                r.operation_id,
-                r.generation,
-                r.owner_epoch,
-                r.phase,
-                r.cancel_requested,
-                r.yield_requested,
-                r.updated_at,
-            )
-        });
-    Ok(ReplacementGuard {
-        repository_id: id,
-        parent,
-        owner,
-    })
+    parent::replacement_guard(tx, id, item)
 }
 /// Caller has validated new consent before this atomic supersession/insert.
 /// `kind` is the observed closure effect, fixed for the record's life.
@@ -691,24 +455,14 @@ pub(in super::super) fn begin_record(
     remote: Option<&str>,
     kind: ClosureKind,
 ) -> Result<ClosureRecord, RepositoryError> {
-    if let Some(existing) = existing_record(tx, id, op, item, expectation)? {
+    if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
     }
-    if let Some(old) = unfinished_record(tx, id, item)? {
+    if let Some(old) = parent::unfinished_record::<ClosureRecord>(tx, id, item)? {
         if !supersedable(&old) {
-            return Err(busy());
+            return Err(parent::busy(KIND));
         }
-        if let Some(remote) = state::read_operation(tx, id, old.operation_id)? {
-            remote_identity(tx, id, old.operation_id, &remote.target, remote.priority)?;
-            let epoch = remote
-                .owner_epoch
-                .checked_add(1)
-                .ok_or_else(state::recovery_required)?;
-            // Supersession is terminal for this owner. Release only its close
-            // slot, atomically with replacing the parent, never a child's slot.
-            tx.execute("UPDATE remote_operation_records SET phase='cancelled',outcome='cancelled',owner_epoch=?2,cancel_requested=0,yield_requested=0,updated_at=max(updated_at,?3) WHERE id=?1",params![remote.id,epoch,now()]).map_err(|_|state::recovery_required())?;
-        }
-        tx.execute("UPDATE ticket_closures SET step='superseded',updated_at=max(updated_at,?2) WHERE operation_id=?1",params![old.operation_id.to_string(),now()]).map_err(|_|state::recovery_required())?;
+        parent::supersede(tx, id, &old)?;
     }
     insert_record(tx, id, op, item, expectation, remote, Some(kind), None)
 }
@@ -726,11 +480,13 @@ pub(in super::super) fn refuse_record(
     kind: Option<ClosureKind>,
     refusal: &Refusal,
 ) -> Result<ClosureRecord, RepositoryError> {
-    if let Some(existing) = existing_record(tx, id, op, item, expectation)? {
+    if let Some(existing) = parent::existing_record(tx, id, op, item, expectation)? {
         return Ok(existing);
     }
-    if unfinished_record(tx, id, item)?.is_some_and(|old| !supersedable(&old)) {
-        return Err(busy());
+    if parent::unfinished_record::<ClosureRecord>(tx, id, item)?
+        .is_some_and(|old| !supersedable(&old))
+    {
+        return Err(parent::busy(KIND));
     }
     insert_record(tx, id, op, item, expectation, remote, kind, Some(refusal))
 }
@@ -749,18 +505,13 @@ fn insert_record(
         crate::repository::RemoteRefPlan::from_configuration(remote, "main")
             .map_err(|_| state::recovery_required())?;
     }
-    let (category, blockers) = refusal
-        .map(Refusal::encoded)
-        .transpose()?
-        .map_or((None, None), |(category, blockers)| {
-            (Some(category), blockers)
-        });
+    let (category, blockers) = Refusal::encoded_columns(refusal)?;
     let step = if refusal.is_some() {
         "abandoned"
     } else {
         "confirmed"
     };
-    tx.execute("INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers,closure_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,now(),category,blockers,kind.map(ClosureKind::name)]).map_err(|_|state::recovery_required())?;
+    tx.execute("INSERT INTO ticket_closures(repository_id,operation_id,item_id,expectation,remote_name,step,updated_at,refusal_category,refusal_blockers,closure_kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",params![id,op.to_string(),item.to_string(),expectation.to_bytes().as_slice(),remote,step,parent::now(),category,blockers,kind.map(ClosureKind::name)]).map_err(|_|state::recovery_required())?;
     read_record(tx, id, op)?.ok_or_else(state::recovery_required)
 }
 /// Saves every runner-owned field. The closure effect (`closure_kind`,
@@ -782,7 +533,7 @@ pub(in super::super) fn save_record(
         || old.primary_sync_id != r.primary_sync_id
         || old.closure_kind != r.closure_kind
     {
-        return Err(mismatch());
+        return Err(parent::mismatch(KIND));
     }
     if !old
         .step
@@ -800,13 +551,8 @@ pub(in super::super) fn save_record(
         return Err(state::recovery_required());
     }
     validate(r)?;
-    let (refusal, mask) = r
-        .refusal
-        .as_ref()
-        .map(Refusal::encoded)
-        .transpose()?
-        .map_or((None, None), |(c, m)| (Some(c), m));
-    tx.execute("UPDATE ticket_closures SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12) WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,now()]).map_err(|_|state::recovery_required())?;
+    let (refusal, mask) = Refusal::encoded_columns(r.refusal.as_ref())?;
+    tx.execute("UPDATE ticket_closures SET step=?2,base_oid=?3,context_oid=?4,integration_oid=?5,integration_kind=?6,remote_context_oid=?7,publication_category=?8,cleanup_category=?9,refusal_category=?10,refusal_blockers=?11,updated_at=max(updated_at,?12) WHERE operation_id=?1",params![r.operation_id.to_string(),r.step.name(),r.base_oid.map(|o|o.to_string()),r.context_oid.map(|o|o.to_string()),r.integration_oid.map(|o|o.to_string()),r.integration_kind.map(IntegrationKind::name),r.remote_context_oid.map(|o|o.to_string()),r.publication.map(PublicationCategory::name),r.cleanup.map(CleanupCategory::name),refusal,mask,parent::now()]).map_err(|_|state::recovery_required())?;
     Ok(())
 }
 /// `context_synchronized → closing` for a `record` closure, in one SQL write
@@ -830,7 +576,7 @@ pub(in super::super) fn begin_closing(
         return Err(state::recovery_required());
     }
     let closed_at = closed_at_text(closed_at)?;
-    tx.execute("UPDATE ticket_closures SET step='closing',base_oid=?2,closed_at=?3,closure_oid=?4,updated_at=max(updated_at,?5) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),closed_at,closure.to_string(),now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET step='closing',base_oid=?2,closed_at=?3,closure_oid=?4,updated_at=max(updated_at,?5) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),closed_at,closure.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
     read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     Ok(())
 }
@@ -846,7 +592,7 @@ pub(in super::super) fn replace_unmoved_closure(
     if r.step != ClosureStep::Closing || closure.is_zero() {
         return Err(state::recovery_required());
     }
-    tx.execute("UPDATE ticket_closures SET closure_oid=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),closure.to_string(),now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET closure_oid=?2,updated_at=max(updated_at,?3) WHERE operation_id=?1",params![operation.to_string(),closure.to_string(),parent::now()]).map_err(|_|state::recovery_required())?;
     Ok(())
 }
 
@@ -890,7 +636,7 @@ pub(in super::super) fn adopt_written_closure(
     {
         return Err(state::recovery_required());
     }
-    tx.execute("UPDATE ticket_closures SET base_oid=?2,adopted_context_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),adopted.map(|o|o.to_string()),now()]).map_err(|_|state::recovery_required())?;
+    tx.execute("UPDATE ticket_closures SET base_oid=?2,adopted_context_oid=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1",params![operation.to_string(),base.to_string(),adopted.map(|o|o.to_string()),parent::now()]).map_err(|_|state::recovery_required())?;
     read_record(tx, repository_id, operation)?.ok_or_else(state::recovery_required)?;
     Ok(())
 }
@@ -899,54 +645,14 @@ pub(in super::super) fn child_execution(
     r: &ClosureRecord,
     role: ChildRole,
 ) -> Result<ChildExecution, RepositoryError> {
-    let (attempt, child) = match role {
-        ChildRole::Context => (r.context_attempt, r.context_sync_id),
-        ChildRole::Primary => (r.primary_attempt, r.primary_sync_id),
-    };
-    if attempt == 0 || r.remote_name.is_none() {
-        return Err(mismatch());
-    }
-    Ok(ChildExecution::new(
-        LifecycleKind::TicketClosure,
-        r.repository_id,
-        r.operation_id,
-        r.item_id.clone(),
-        r.expectation.to_bytes(),
-        role,
-        attempt,
-        child.ok_or_else(mismatch)?,
-    ))
+    parent::child_execution(r, role)
 }
-/// Authoritative completion is consumed first. Retained includes clean
-/// candidates, installed conflicts and unreleased owned resolutions.
 pub(in super::super) fn child_state(
     db: &Connection,
     r: &ClosureRecord,
     role: ChildRole,
 ) -> Result<ChildState, RepositoryError> {
-    let child = match role {
-        ChildRole::Context => r.context_sync_id,
-        ChildRole::Primary => r.primary_sync_id,
-    };
-    let Some(child) = child else {
-        return Ok(ChildState::Absent);
-    };
-    let foreign:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",params![child.to_string(),r.repository_id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
-    if foreign {
-        return Err(state::recovery_required());
-    }
-    let Some(record) = state::read_operation(db, r.repository_id, child)? else {
-        return Ok(ChildState::Absent);
-    };
-    remote_identity(db, r.repository_id, child, &record.target, record.priority)?;
-    if record.authority.is_some() {
-        return Ok(ChildState::Complete(record));
-    }
-    if reservation::retains_promotion_child(db, &record)? {
-        Ok(ChildState::Retained(record))
-    } else {
-        Ok(ChildState::Unowned(record))
-    }
+    parent::child_state(db, r, role)
 }
 pub(in super::super) fn next_attempt(
     tx: &Transaction<'_>,
@@ -954,49 +660,7 @@ pub(in super::super) fn next_attempt(
     op: OperationId,
     role: ChildRole,
 ) -> Result<ClosureRecord, RepositoryError> {
-    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    let allowed = match role {
-        ChildRole::Context => r.step == ClosureStep::Confirmed,
-        ChildRole::Primary => matches!(
-            r.step,
-            ClosureStep::Integrated | ClosureStep::PublicationPending
-        ),
-    };
-    if !allowed {
-        return Err(state::recovery_required());
-    }
-    match child_state(tx, &r, role)? {
-        ChildState::Absent => (),
-        ChildState::Unowned(child)
-            if matches!(
-                child.phase,
-                RemoteOperationPhase::Cancelled
-                    | RemoteOperationPhase::Interrupted
-                    | RemoteOperationPhase::Failed
-            ) => {}
-        _ => return Err(state::recovery_required()),
-    }
-    mint_attempt(tx, &r, role)
-}
-fn mint_attempt(
-    tx: &Transaction<'_>,
-    r: &ClosureRecord,
-    role: ChildRole,
-) -> Result<ClosureRecord, RepositoryError> {
-    let (attempt, column, count) = match role {
-        ChildRole::Context => (r.context_attempt, "context_sync_id", "context_attempt"),
-        ChildRole::Primary => (r.primary_attempt, "primary_sync_id", "primary_attempt"),
-    };
-    let attempt = attempt
-        .checked_add(1)
-        .ok_or_else(state::recovery_required)?;
-    let child = OperationId::new();
-    let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",[child.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
-    if used {
-        return Err(state::recovery_required());
-    }
-    tx.execute(&format!("UPDATE ticket_closures SET {column}=?2,{count}=?3,updated_at=max(updated_at,?4) WHERE operation_id=?1"),params![r.operation_id.to_string(),child.to_string(),attempt,now()]).map_err(|_|state::recovery_required())?;
-    read_record(tx, r.repository_id, r.operation_id)?.ok_or_else(state::recovery_required)
+    parent::next_attempt(tx, id, op, role)
 }
 /// The sole back-transition: a fresh observation proved primary advancement
 /// before `closing` (design step 3). Nothing has been written; a completed
@@ -1006,18 +670,9 @@ pub(in super::super) fn reset_context_after_primary_advance(
     id: i64,
     op: OperationId,
 ) -> Result<ClosureRecord, RepositoryError> {
-    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if r.step != ClosureStep::ContextSynchronized
-        || r.remote_name.is_none()
-        || matches!(
-            child_state(tx, &r, ChildRole::Context)?,
-            ChildState::Retained(_) | ChildState::Unowned(_)
-        )
-    {
-        return Err(state::recovery_required());
-    }
-    tx.execute("UPDATE ticket_closures SET step='confirmed',context_oid=NULL,remote_context_oid=NULL,base_oid=NULL,integration_kind=NULL,cleanup_category=NULL WHERE operation_id=?1",[op.to_string()]).map_err(|_|state::recovery_required())?;
-    mint_attempt(tx, &r, ChildRole::Context)
+    parent::reset_context_after_primary_advance(tx, id, op, |r: &ClosureRecord| {
+        r.step == ClosureStep::ContextSynchronized
+    })
 }
 /// Checks closure parent and child bindings only; callers reach both parent
 /// tables through `promotion::record::validate_remote_identity`.
@@ -1033,27 +688,7 @@ pub(in super::super) fn validate_remote_identity(
     {
         return Ok(());
     }
-    let bindings=db.prepare("SELECT * FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1").and_then(|mut q|q.query_map([op.to_string()],|row|Ok(decode(row)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|state::recovery_required())?;
-    for r in bindings {
-        let r = r?;
-        let expected = if r.operation_id == op {
-            RemoteOperationAction::Close
-        } else if r.context_sync_id == Some(op) {
-            RemoteOperationAction::SynchronizeContext
-        } else {
-            RemoteOperationAction::SynchronizePrimary
-        };
-        if r.repository_id != id
-            || priority != RemoteOperationPriority::Manual
-            || target.action() != expected
-            || Some(target.remote_name()) != r.remote_name.as_deref()
-            || expected != RemoteOperationAction::SynchronizePrimary
-                && target.item() != Some((AuthoringKind::Ticket, &r.item_id))
-        {
-            return Err(mismatch());
-        }
-    }
-    Ok(())
+    parent::remote_identity_of::<ClosureRecord>(db, id, op, target, priority)
 }
 /// The local journal may never begin under a closure parent ID, and under a
 /// child ID only as that child's exact authoritative refresh hand-off.
@@ -1064,87 +699,11 @@ pub(in super::super) fn validate_local_identity(
     op: &str,
     target: &str,
 ) -> Result<(), RepositoryError> {
-    if !crate::repository::recovery::has_table(db, "ticket_closures")
-        .map_err(|_| state::recovery_required())?
-    {
-        return Ok(());
-    }
-    let parent: bool = db
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1)",
-            [op],
-            |r| r.get(0),
-        )
-        .map_err(|_| state::recovery_required())?;
-    if parent {
-        return Err(mismatch());
-    }
-    let child:Option<i64>=db.query_row("SELECT repository_id FROM ticket_closures WHERE context_sync_id=?1 OR primary_sync_id=?1",[op],|r|r.get(0)).optional().map_err(|_|state::recovery_required())?;
-    if let Some(id) = child {
-        let registered: String = db
-            .query_row(
-                "SELECT root_path FROM repositories WHERE id=?1",
-                [id],
-                |r| r.get(0),
-            )
-            .map_err(|_| state::recovery_required())?;
-        let record = state::read_operation(db, id, operation(op.to_owned())?)?;
-        if let Some(record) = &record {
-            remote_identity(db, id, record.operation_id, &record.target, record.priority)?;
-        }
-        if action != "refresh"
-            || !target.is_empty()
-            || registered != root
-            || record.as_ref().is_none_or(|r| r.authority.is_none())
-        {
-            return Err(mismatch());
-        }
-    }
-    Ok(())
+    parent::validate_local_identity(KIND, db, root, action, op, target)
 }
 pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
-    validate_schema(db)?;
-    if db
-        .prepare("PRAGMA foreign_key_check(ticket_closures)")
-        .and_then(|mut q| q.exists([]))
-        .map_err(|_| state::recovery_required())?
-    {
-        return Err(state::recovery_required());
-    }
-    let ids = db
-        .prepare("SELECT DISTINCT repository_id FROM ticket_closures")
-        .and_then(|mut q| {
-            q.query_map([], |r| r.get::<_, i64>(0))?
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .map_err(|_| state::recovery_required())?;
-    for id in ids {
-        for r in records(db, id)? {
-            let local:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid IN (?1,?2,?3) OR synchronization_ulid IN (?1,?2,?3)) OR EXISTS(SELECT 1 FROM ticket_closures c WHERE c.operation_id!=?1 AND (c.operation_id IN (?2,?3) OR c.context_sync_id IN (?1,?2,?3) OR c.primary_sync_id IN (?1,?2,?3))) OR EXISTS(SELECT 1 FROM document_promotions p WHERE p.operation_id IN (?1,?2,?3) OR p.context_sync_id IN (?1,?2,?3) OR p.primary_sync_id IN (?1,?2,?3))",params![r.operation_id.to_string(),r.context_sync_id.map(|v|v.to_string()),r.primary_sync_id.map(|v|v.to_string())],|r|r.get(0)).map_err(|_|state::recovery_required())?;
-            if local {
-                return Err(state::recovery_required());
-            }
-            let foreign:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id!=?2)",params![r.operation_id.to_string(),id],|row|row.get(0)).map_err(|_|state::recovery_required())?;
-            if foreign {
-                return Err(state::recovery_required());
-            }
-            if let Some(remote) = state::read_operation(db, id, r.operation_id)? {
-                remote_identity(db, id, r.operation_id, &remote.target, remote.priority)
-                    .map_err(|_| state::recovery_required())?;
-            }
-            for role in [ChildRole::Context, ChildRole::Primary] {
-                child_state(db, &r, role).map_err(|_| state::recovery_required())?;
-            }
-            let local_children=db.prepare("SELECT root_path,action,coalesce(target,''),operation_ulid FROM operation_records WHERE operation_ulid IN (?1,?2)").and_then(|mut q|q.query_map(params![r.context_sync_id.map(|v|v.to_string()),r.primary_sync_id.map(|v|v.to_string())],|row|Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|state::recovery_required())?;
-            for (root, action, target, child) in local_children {
-                validate_local_identity(db, &root, &action, &child, &target)
-                    .map_err(|_| state::recovery_required())?;
-            }
-        }
-    }
-    Ok(())
+    parent::audit::<ClosureRecord>(db)
 }
-
 /// Completion retires the merged context: the checkpoint when written,
 /// else the synchronized context.
 pub(in super::super) fn complete_record(
@@ -1155,53 +714,7 @@ pub(in super::super) fn complete_record(
     evidence: &RetirementEvidence<'_>,
     owner: Option<&RemoteReservation>,
 ) -> Result<(), RepositoryError> {
-    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if r.step != ClosureStep::BranchDeleted
-        || !evidence.matches(
-            AuthoringKind::Ticket,
-            op,
-            &r.item_id,
-            r.merged_context().ok_or_else(state::recovery_required)?,
-        )
-        || owner.is_some() && r.remote_name.is_none()
-        || deletion_reservation_required(&r) && owner.is_none()
-    {
-        return Err(state::recovery_required());
-    }
-    let configured: Option<String> = tx
-        .query_row(
-            "SELECT remote_name FROM remote_polling_state WHERE repository_id=?1",
-            [id],
-            |row| row.get(0),
-        )
-        .map_err(|_| state::recovery_required())?;
-    if configured != r.remote_name {
-        return Err(state::recovery_required());
-    }
-    if state::read_operation(tx, id, op)?.is_some() != owner.is_some() {
-        return Err(state::recovery_required());
-    }
-    if let Some(owner) = owner {
-        if owner.operation_id() != op {
-            return Err(mismatch());
-        }
-        let remote = reservation::owned(service, tx, id, owner)?;
-        remote_identity(tx, id, op, &remote.target, remote.priority)?;
-    }
-    cleanup::retire_context(tx, id, evidence)?;
-    crate::repository::recovery::invalidate_index_observations(tx, id)?;
-    // Completion may be followed immediately by process exit. Its index-only
-    // hand-off must be durable in this same transaction.
-    tx.execute(
-        "UPDATE repositories SET refresh_required=1 WHERE id=?1",
-        [id],
-    )
-    .map_err(|_| state::recovery_required())?;
-    tx.execute("UPDATE ticket_closures SET step='complete',cleanup_category=NULL,cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
-    if let Some(owner) = owner {
-        reservation::finish_parent(LifecycleKind::TicketClosure, service, tx, id, owner)?;
-    }
-    Ok(())
+    parent::complete_record::<ClosureRecord>(tx, service, id, op, evidence, owner)
 }
 /// Inspect actual committed parent state after an uncertain commit result.
 pub(in super::super) fn reconcile_completion(
@@ -1209,23 +722,7 @@ pub(in super::super) fn reconcile_completion(
     id: i64,
     op: OperationId,
 ) -> Result<bool, RepositoryError> {
-    let r = read_record(db, id, op)?.ok_or_else(state::recovery_required)?;
-    if r.step != ClosureStep::Complete {
-        return Ok(false);
-    }
-    let remote = state::read_operation(db, id, op)?;
-    if let Some(remote) = remote {
-        if r.remote_name.is_none() {
-            return Err(state::recovery_required());
-        }
-        remote_identity(db, id, op, &remote.target, remote.priority)?;
-        if remote.phase != RemoteOperationPhase::Completed {
-            return Err(state::recovery_required());
-        }
-    } else if deletion_reservation_required(&r) {
-        return Err(state::recovery_required());
-    }
-    Ok(true)
+    parent::reconcile_completion::<ClosureRecord>(db, id, op)
 }
 /// The design's cleanup row: with a remote, the remote context branch is
 /// deleted unless no context child ran (a contained closure) and no
@@ -1263,27 +760,33 @@ pub(in super::super) fn request_cancellation(
     id: i64,
     op: OperationId,
 ) -> Result<bool, RepositoryError> {
-    let Some(r) = read_record(tx, id, op)? else {
-        return Ok(false);
-    };
-    if r.step.terminal() {
-        return Ok(false);
-    }
-    tx.execute("UPDATE ticket_closures SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
-    tx.execute("UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?5) WHERE repository_id=?1 AND operation_ulid IN (?2,?3,?4) AND phase NOT IN ('completed','interrupted','cancelled','failed')",params![id,op.to_string(),r.context_sync_id.map(|v|v.to_string()),r.primary_sync_id.map(|v|v.to_string()),now()]).map_err(|_|state::recovery_required())?;
-    Ok(true)
+    parent::request_cancellation::<ClosureRecord>(tx, id, op)
 }
 pub(in super::super) fn clear_cancellation(
     tx: &Transaction<'_>,
     id: i64,
     op: OperationId,
 ) -> Result<(), RepositoryError> {
-    let r = read_record(tx, id, op)?.ok_or_else(state::recovery_required)?;
-    if r.step.terminal() {
-        return Err(state::recovery_required());
+    parent::clear_cancellation::<ClosureRecord>(tx, id, op)
+}
+
+impl ParentRecord for ClosureRecord {
+    const KIND: LifecycleKind = KIND;
+    fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
+        decode(row)
     }
-    tx.execute("UPDATE ticket_closures SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE operation_id=?1",params![op.to_string(),now()]).map_err(|_|state::recovery_required())?;
-    Ok(())
+    fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
+        validate_schema(db)
+    }
+    fn context_attempt(&self) -> u32 {
+        self.context_attempt
+    }
+    fn primary_attempt(&self) -> u32 {
+        self.primary_attempt
+    }
+    fn expectation_bytes(&self) -> [u8; 32] {
+        self.expectation.to_bytes()
+    }
 }
 
 impl LifecycleRecord for ClosureRecord {

@@ -213,8 +213,6 @@ pub(in super::super) struct LeasedIntegration<'a, R> {
     pub(in super::super) root: &'a Path,
     pub(in super::super) context: &'a integrate::IntegrationContext,
     pub(in super::super) base: Oid,
-    #[allow(dead_code)] // Bound for every hook; the closure hooks read the record's own ID.
-    pub(in super::super) operation_id: Option<OperationId>,
     pub(in super::super) record: Option<&'a R>,
 }
 
@@ -651,18 +649,6 @@ impl LifecycleError for DocumentPromotionError {
             self,
             Self::Blocked(_) | Self::ReconfirmationRequired | Self::ExternalChange
         )
-    }
-}
-
-impl LifecycleRefusal for record::Refusal {
-    fn external_change() -> Self {
-        Self::ExternalChange
-    }
-    fn reconfirmation_required() -> Self {
-        Self::ReconfirmationRequired
-    }
-    fn integration_conflict(&self) -> bool {
-        matches!(self, Self::Blocked(b) if b.contains(&super::PromotionBlocker::IntegrationConflict))
     }
 }
 

@@ -133,7 +133,6 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
                 root: &root,
                 context: &record.context,
                 base: old_primary,
-                operation_id: Some(parent.operation_id()),
                 record: Some(parent),
             },
         )?
@@ -197,7 +196,6 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
             root: &root,
             context: &record.context,
             base,
-            operation_id: parent.map(LifecycleRecord::operation_id),
             record: parent,
         },
     )? {
