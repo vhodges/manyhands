@@ -3963,23 +3963,47 @@ fn ticket_edit_preserves_unknown_closure_and_exact_body() {
     );
     let enabled = support::enabled_repository(&fixture);
     clean_configuration_index(&fixture);
+    let branches = fixture
+        .repository
+        .branches(None)
+        .unwrap()
+        .map(|branch| branch.unwrap().0.name().unwrap().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let worktrees = registered_worktrees(&fixture.repository);
 
-    let (context, _) = saved_checkpoint(
-        enabled
-            .service
-            .save_ticket(ticket_request(
-                &fixture.root,
-                ContextIntent::Edit,
-                "Edited",
-                "Exact body\n",
-            ))
-            .unwrap(),
+    // A closed ticket is not edited (C5): the save is refused, and its
+    // closure fields, unknown key and exact body stay as they are.
+    let error = ticket_error(enabled.service.save_ticket(ticket_request(
+        &fixture.root,
+        ContextIntent::Edit,
+        "Edited",
+        "Exact body\n",
+    )));
+    assert_eq!(error.kind, RepositoryErrorKind::TicketClosed);
+    let kept = fs::read_to_string(fixture.root.join(ticket_relative_path())).unwrap();
+    assert_eq!(kept, source);
+    assert!(kept.contains("future_key: retained"));
+    assert!(kept.contains("closed_at: 2026-10-02T12:34:56Z"));
+    assert!(kept.contains("closed_by: Manyhands Test <manyhands-test@example.invalid>"));
+    assert!(kept.ends_with("Exact body\n"));
+    // Nothing is provisioned.
+    assert_eq!(
+        fixture
+            .repository
+            .branches(None)
+            .unwrap()
+            .map(|branch| branch.unwrap().0.name().unwrap().unwrap().to_owned())
+            .collect::<Vec<_>>(),
+        branches
     );
-    let edited = fs::read_to_string(ticket_path(&context)).unwrap();
-    assert!(edited.contains("future_key: retained"));
-    assert!(edited.contains("closed_at: 2026-10-02T12:34:56Z"));
-    assert!(edited.contains("closed_by: Manyhands Test <manyhands-test@example.invalid>"));
-    assert!(edited.ends_with("Exact body\n"));
+    assert_eq!(registered_worktrees(&fixture.repository), worktrees);
+    assert!(
+        !fixture
+            .root
+            .join(".manyhands/worktrees")
+            .join(support::ticket_id().to_string())
+            .exists()
+    );
 }
 
 #[test]

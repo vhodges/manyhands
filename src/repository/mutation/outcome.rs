@@ -71,6 +71,9 @@ pub(crate) fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         RepositoryErrorKind::NotRepairable => ResultCode::NotRepairable,
         RepositoryErrorKind::AmbiguousIdentity => ResultCode::IdentityAmbiguous,
         RepositoryErrorKind::InvalidItemSource => ResultCode::InvalidInput,
+        // The domain guard of a closed ticket (C5); the bindings refuse
+        // earlier with the same code.
+        RepositoryErrorKind::TicketClosed => ResultCode::TicketClosed,
         // The boundary allocates operation IDs, so a mismatch is its own
         // fault.
         RepositoryErrorKind::OperationMismatch => ResultCode::InternalError,

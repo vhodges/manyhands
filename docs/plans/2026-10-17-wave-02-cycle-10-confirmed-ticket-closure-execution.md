@@ -1203,3 +1203,101 @@ Base `96ed63d`. Two commits: the refactor `1c15078`, then the fixes.
 `--lib recovery` was 46 at Tasks 0-2; four closure tests named "…recovery…"
 from Tasks 4 and 6A make it 50 at the base. fmt and Clippy (`-D warnings`)
 are clean.
+
+## Task 7 — Closed-Ticket Domain Guard (C5) (2026-10-18)
+
+Base `54494bf`.
+
+### What landed
+
+- **`src/repository/ticket_guard.rs`.** `require_ticket_open(repo,
+  primary_branch, item)` reads the ticket at its canonical path from the
+  local primary branch tip and, when the branch exists, from
+  `manyhands/ticket/<ULID>`. It reads Git objects only, never a working tree.
+  A copy is closed exactly as the closure observation decides
+  `AlreadyClosed`: it reuses `closure/observe.rs` `tree_ticket` and
+  `file_closure` (either closure key closes; one key alone is `Malformed`,
+  which is closed). Those two, `TreeTicket.bytes` and `FileClosure` are now
+  `pub(in super::super)`; there is no second parser. A missing branch or a
+  tip without the ticket holds no closed copy.
+- **`RepositoryErrorKind::TicketClosed`.** It maps to the existing
+  `ResultCode::TicketClosed` in `mutation/outcome.rs` and `read/mod.rs`.
+- **Call sites (`src/repository.rs`).** A private `refuse_closed_ticket`
+  checks only a new row (`record.is_new`), a ticket target and Edit intent.
+  It reads the configured primary branch (a configuration that is not valid
+  is left for the call to report). It runs right after `begin_lifecycle`,
+  under the lease, in:
+  - `save_ticket_with_effective_config`, after the indexing-owner check;
+  - public `prepare_context`;
+  - `checkpoint_comment_locally`, after the indexing-owner check and before
+    the publication binding is recorded.
+
+  A refusal goes through `finish_authoring_lifecycle` with empty effects, so
+  the new row ends `completed`/`rejected` and nothing is provisioned.
+  `prepare_context_unlocked` is not guarded, so repair, the closure
+  lifecycle and the internal callers are exempt.
+- **`bind/ticket.rs`.** The `refuse_closed` comment now says it is the
+  earlier refusal, and that the domain refuses as well.
+- **Test-only re-export.** `mutation/mod.rs` gains
+  `#[cfg(test)] pub(super) use outcome::repository_error_code` for the
+  mapping test.
+
+### Decisions to review
+
+- The primary branch name comes from the configuration file at the root, as
+  every authoring call already reads it. Only the ticket is read from Git.
+- The guard checks only Edit intent. A Create cannot meet a closed copy of
+  its own ID, because creation requires a missing destination.
+
+### Named test edits
+
+- **Edit 1.** `tests/local_authoring.rs`
+  `ticket_edit_preserves_unknown_closure_and_exact_body` is now a refusal
+  test. It expects `TicketClosed` and checks that the primary file is
+  byte-identical (unknown key, both closure fields, exact body), that the
+  branches and registered worktrees are unchanged, and that no ticket
+  worktree exists.
+- **Edit 2.** `outcome_tests.rs` `KINDS` (39→40) and `kind_count` gain
+  `TicketClosed`. The `read/tests.rs` case list gains
+  `(TicketClosed, TicketClosed)`.
+- No other existing test changed.
+
+### Tests
+
+- **Red, compile.** 19 errors: 13 E0599 (no `TicketClosed`), 5 E0425
+  (`require_ticket_open`) and 1 E0425 (`repository_error_code` re-export).
+- **Red, runtime** (variant, mappings and an `Ok(())` guard stub in place).
+  9 of the 12 failed:
+  - `save_edit_of_closed_ticket_is_refused_before_provisioning`,
+    `refused_error_maps_to_ticket_closed_result_code`: "the save was made";
+  - `prepare_context_edit_of_closed_ticket_refused`: "a context was made";
+  - `new_comment_on_closed_ticket_refused`: "the comment was checkpointed";
+  - `relationship_and_slug_saves_refused`,
+    `save_refused_when_context_copy_closed`,
+    `dirty_draft_cannot_hide_closure`, `resumed_row_not_refused` (its new-row
+    tail): "the write was made";
+  - `guard_reads_branch_tips_only`: `unwrap_err()` on `Ok`.
+
+  `create_unaffected`, `repair_of_closed_ticket_still_allowed` and
+  `writes_to_other_tickets_that_depend_on_closed_ticket_allowed` pin
+  exemptions and passed.
+- **Mutation check.** With the `record.is_new` condition disabled,
+  `resumed_row_not_refused` fails with `TicketClosed` on the resumed row.
+- **Green.**
+
+| Args | Before | Task 7 |
+| --- | --- | --- |
+| `--lib ticket_guard` | 0 | 12 (+12) |
+| `--lib mutation::outcome` | 37 | 37 (one table extended, edit 2) |
+| `--lib read` | 105 | 105 (one case list extended, edit 2) |
+| `--lib closure` | 168 | 169 (+1: `dirty_draft_cannot_hide_closure`) |
+| `--test local_authoring` | 140 | 140 (edit 1) |
+| `--test mutation_relationships` | — | 27 |
+| `--test mutation_contract` | — | 43 |
+| `--test mutation_replay` | — | 308 |
+| `--test comment_publication` | — | 41 SSH |
+| `--test read_items` | — | 76 |
+| `--test mutation_bridges` | — | 129 |
+
+`cargo check --tests --all-features --locked` passes (the production
+wrappers compile). fmt and Clippy (`-D warnings`) are clean.

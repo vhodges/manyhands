@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Every repository error kind and the code a mutation reports for it.
-const KINDS: [(RepositoryErrorKind, ResultCode); 39] = [
+const KINDS: [(RepositoryErrorKind, ResultCode); 40] = [
     (
         RepositoryErrorKind::InvalidSharedKeyMetadata,
         ResultCode::InvalidInput,
@@ -143,6 +143,7 @@ const KINDS: [(RepositoryErrorKind, ResultCode); 39] = [
         RepositoryErrorKind::InvalidItemSource,
         ResultCode::InvalidInput,
     ),
+    (RepositoryErrorKind::TicketClosed, ResultCode::TicketClosed),
     (RepositoryErrorKind::Io, ResultCode::InternalError),
     (RepositoryErrorKind::Sqlite, ResultCode::InternalError),
     (RepositoryErrorKind::Git, ResultCode::InternalError),
@@ -192,11 +193,12 @@ fn kind_count(kind: RepositoryErrorKind) -> usize {
         | Kind::NotRepairable
         | Kind::AmbiguousIdentity
         | Kind::InvalidItemSource
+        | Kind::TicketClosed
         | Kind::RollbackIncomplete
         | Kind::Io
         | Kind::Sqlite
         | Kind::Git
-        | Kind::InjectedFailure => 39,
+        | Kind::InjectedFailure => 40,
     }
 }
 

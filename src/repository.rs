@@ -50,6 +50,7 @@ mod promotion;
 mod read;
 mod recovery;
 mod remote;
+mod ticket_guard;
 pub mod transport;
 
 pub use bridges::abandon::{
@@ -236,6 +237,33 @@ fn refuse_repair_intent(
         ContextIntent::Create | ContextIntent::Edit => Ok(()),
         ContextIntent::Repair => Err(repair_intent_error(operation, root)),
     }
+}
+
+/// The closed-ticket guard (C5) of an edit of a ticket, asked under the
+/// lease once the call's row is begun. Only a new row is refused: a
+/// resumed row predates any closure, since closure blocks while one
+/// exists (C12). A creation, a repair and a write to another kind are not
+/// asked. A configuration that is not valid is left for the call to
+/// report.
+fn refuse_closed_ticket(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+    target: &AuthoringTarget,
+    record: RecoveryRecord,
+) -> Result<(), RepositoryError> {
+    if !record.is_new
+        || !matches!(target.kind, AuthoringKind::Ticket)
+        || !matches!(target.intent, ContextIntent::Edit)
+    {
+        return Ok(());
+    }
+    let ConfigurationInspection::Valid(configuration) = read_configuration_for(root, operation)?
+    else {
+        return Ok(());
+    };
+    ticket_guard::require_ticket_open(repository, &configuration.primary_branch, &target.item_id)
+        .map_err(|error| error.for_operation(operation, root))
 }
 
 fn creation_destination_is_safe(expected: &ExpectedPathObservation) -> bool {
@@ -1054,6 +1082,9 @@ pub enum RepositoryErrorKind {
     /// The corrected source of a repair is not a conforming item of its
     /// path, or changes a ticket's closure fields.
     InvalidItemSource,
+    /// A new write to a ticket that its primary or context branch tip
+    /// holds with closure fields (C5).
+    TicketClosed,
     RollbackIncomplete,
     Io,
     Sqlite,
@@ -1710,6 +1741,9 @@ impl RepositoryService {
             &authoring_context_target(&target),
         )?;
         let effects = CallEffects::default();
+        if let Err(error) = refuse_closed_ticket(&repository, &root, operation, &target, record) {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let outcome = match self.prepare_context_unlocked(target, Some(record), &effects) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -2406,6 +2440,12 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Every ticket save, relationship and short-code write comes here.
+        if let Err(error) =
+            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
+        {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let result = (|| {
             let intent = request.target.intent;
             let context = match self.prepare_context_unlocked(
@@ -2738,6 +2778,13 @@ impl RepositoryService {
             });
         }
         let effects = CallEffects::default();
+        // Before the publication binding is recorded: a refusal leaves
+        // nothing for the row to owe.
+        if let Err(error) =
+            refuse_closed_ticket(&root_repository, &root, operation, &request.target, record)
+        {
+            return self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error));
+        }
         let mut known_checkpoint = None;
         let mut retained_binding = None;
         let result = (|| {

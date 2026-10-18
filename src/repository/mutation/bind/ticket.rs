@@ -230,9 +230,10 @@ fn read_ticket(
     )
 }
 
-/// The guard of a write to a lifecycle-closed ticket. It is in the
-/// bindings and not in the domain operation, whose other callers, the
-/// closure operation among them, are not refused.
+/// The earlier refusal of a write to a lifecycle-closed ticket, from the
+/// item the binding read, before any preview or record. The domain
+/// operation refuses a new row's write as well, under the lease and from
+/// the branch tips (C5); the closure operation and repair are not refused.
 fn refuse_closed(item: &ItemDto) -> Result<(), Answer> {
     if item
         .closure

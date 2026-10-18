@@ -422,12 +422,12 @@ fn pending_work(
 }
 
 /// A ticket file as one Git tree holds it.
-struct TreeTicket {
-    bytes: Vec<u8>,
+pub(in super::super) struct TreeTicket {
+    pub(in super::super) bytes: Vec<u8>,
     /// A Blob with mode `100644` or `100755`.
     canonical_entry: bool,
 }
-fn tree_ticket(
+pub(in super::super) fn tree_ticket(
     worker: &git2::Repository,
     tree: Oid,
     path: &Path,
@@ -469,7 +469,7 @@ fn commit_tree(
 
 /// The closure a ticket's front matter carries, read without asking that it
 /// be a conforming ticket: a file naming either closure key is closed.
-enum FileClosure {
+pub(in super::super) enum FileClosure {
     Open,
     /// Both fields, exactly as the file has them.
     Closed {
@@ -479,7 +479,7 @@ enum FileClosure {
     /// A closure key whose value is missing or not text.
     Malformed,
 }
-fn file_closure(bytes: &[u8]) -> FileClosure {
+pub(in super::super) fn file_closure(bytes: &[u8]) -> FileClosure {
     let Some(values) = std::str::from_utf8(bytes)
         .ok()
         .and_then(canonical::front_matter)

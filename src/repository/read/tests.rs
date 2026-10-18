@@ -46,6 +46,7 @@ fn repository_error_kinds_map_to_pinned_codes() {
         (RepositoryErrorKind::Io, ResultCode::InternalError),
         (RepositoryErrorKind::Sqlite, ResultCode::InternalError),
         (RepositoryErrorKind::Git, ResultCode::InternalError),
+        (RepositoryErrorKind::TicketClosed, ResultCode::TicketClosed),
         // Kinds no read produces are internal, never a guess.
         (
             RepositoryErrorKind::DirtyWorktree,
