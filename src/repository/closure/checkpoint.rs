@@ -5,8 +5,8 @@
 //!
 //! Nothing here acquires a lease: the integration holds it. Every object is
 //! built in the repository ODB, unreferenced, before any ref moves; the one
-//! ref this module moves is the context's, through the proven
-//! `sync::fast_forward` order.
+//! ref this module moves is the context's: a safe checkout with no ref lock
+//! held, then one short guarded ref update (R-T6-3).
 use super::{
     PlannedClosure,
     observe::{ClosureObservation, closed_by_text, closed_ticket_bytes, ticket_path},
@@ -16,8 +16,7 @@ use crate::{
     canonical::{self, CanonicalItem, ItemId},
     repository::{
         CommitIdentity, ConfirmedCommitIdentity, FailurePoint, PlannedIntegration, RepositoryError,
-        RepositoryOperation, RepositoryService, SynchronizationError,
-        mark_document_refresh_required,
+        RepositoryOperation, RepositoryService, mark_document_refresh_required,
         promotion::{
             integrate,
             lifecycle::{LeasedIntegration, LifecycleError, LifecycleKind, PreIntegration},
@@ -228,7 +227,8 @@ pub(in super::super) fn context_repository(
 }
 
 /// Step 6: the safe checkout of the checkpoint in the context worktree, then
-/// the guarded ref update `from → to` (`sync::fast_forward` order).
+/// the guarded ref update `from → to`. No ref lock is held across the
+/// checkout, so a stop there leaves none behind (R-T6-3).
 #[cfg_attr(not(test), allow(dead_code))] // The tests' form; production passes its failure point.
 pub(in super::super) fn move_context_to_checkpoint(
     context_repo: &git2::Repository,
@@ -247,13 +247,54 @@ pub(in super::super) fn move_context_to_checkpoint_with(
     to: Oid,
     between: impl FnOnce() -> Result<(), RepositoryError>,
 ) -> Result<(), RepositoryError> {
-    sync::fast_forward_with(context_repo, &KIND.context_ref(item), from, to, between).map_err(
-        |error| match error {
-            SynchronizationError::Repository(error) => error,
-            SynchronizationError::ExternalChange => shared::changed(),
-            _ => unavailable(context_repo),
-        },
-    )
+    let branch = KIND.context_ref(item);
+    let commit = context_repo
+        .find_commit(to)
+        .map_err(|_| unavailable(context_repo))?;
+    // Under the integration lease and without the ref lock: a stop during
+    // the checkout or at `between` leaves no lock behind (R-T6-3).
+    if !context_at(context_repo, &branch, from) {
+        return Err(shared::changed());
+    }
+    let mut checkout = git2::build::CheckoutBuilder::new();
+    // SAFE alone defaults to overwriting ignored user entries in libgit2.
+    checkout.safe().overwrite_ignored(false);
+    context_repo
+        .checkout_tree(commit.as_object(), Some(&mut checkout))
+        .map_err(|_| unavailable(context_repo))?;
+    between()?;
+    guarded_context_move(context_repo, &branch, from, to)
+}
+
+/// The ref is at `oid` and HEAD names it.
+fn context_at(repo: &git2::Repository, branch: &str, oid: Oid) -> bool {
+    repo.refname_to_id(branch).ok() == Some(oid)
+        && repo
+            .find_reference("HEAD")
+            .ok()
+            .and_then(|r| r.symbolic_target().map(str::to_owned))
+            .as_deref()
+            == Some(branch)
+}
+
+/// The one ref effect of step 6: lock, re-check the ref and HEAD, move
+/// `from → to`, commit. The lock is held only for this transaction.
+fn guarded_context_move(
+    repo: &git2::Repository,
+    branch: &str,
+    from: Oid,
+    to: Oid,
+) -> Result<(), RepositoryError> {
+    let failed = |_| unavailable(repo);
+    let mut transaction = repo.transaction().map_err(failed)?;
+    transaction.lock_ref(branch).map_err(failed)?;
+    if !context_at(repo, branch, from) {
+        return Err(shared::changed());
+    }
+    transaction
+        .set_target(branch, to, None, "manyhands closure checkpoint")
+        .map_err(failed)?;
+    transaction.commit().map_err(failed)
 }
 
 /// What a `closing` record left in the context, read under the lease.
@@ -494,6 +535,14 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
     if closing && r.base_oid != Some(base) {
         return Err(E::reconfirmation_required());
     }
+    // A synchronization of this context still running holds the checkpoint
+    // off before anything is written, the identity included; the check is
+    // repeated in the `closing` transaction below.
+    if state::with_transaction(service, root, |tx, id| {
+        record::context_synchronization_unfinished(tx, id, &r.item_id)
+    })? {
+        return Err(E::busy());
+    }
     // Step 4: persist a confirmed identity before any commit (T3-1, Q3-1).
     let identity = integrate::promotion_identity::<E>(service, repo, root, confirmation)?;
     if closed_by_text(&identity) != *closed_by {
@@ -574,9 +623,9 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
             let tip = match reconcile_closing(&context_repo, r)? {
                 ClosingState::NothingWritten => return Ok(None),
                 ClosingState::CheckoutDone => {
-                    // A process that stopped here may have left the ref's
-                    // lock: it is never adopted or removed (as Cycle 09's
-                    // tracking lock), and the record is kept.
+                    // The checkout holds no ref lock (R-T6-3). A lock held
+                    // by another writer is never adopted or removed: the
+                    // record is kept for a retry.
                     finish_context_move(&context_repo, r).map_err(|_| E::recovery_required())?;
                     context_moved(service, root)?;
                     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
@@ -670,17 +719,7 @@ fn finish_context_move(
     let (Some(from), Some(to)) = (r.context_oid, r.closure_oid) else {
         return Err(state::recovery_required());
     };
-    let branch = KIND.context_ref(&r.item_id);
-    let failed = |_| unavailable(context_repo);
-    let mut transaction = context_repo.transaction().map_err(failed)?;
-    transaction.lock_ref(&branch).map_err(failed)?;
-    if context_repo.refname_to_id(&branch).ok() != Some(from) {
-        return Err(shared::changed());
-    }
-    transaction
-        .set_target(&branch, to, None, "manyhands closure checkpoint")
-        .map_err(failed)?;
-    transaction.commit().map_err(failed)
+    guarded_context_move(context_repo, &KIND.context_ref(&r.item_id), from, to)
 }
 
 #[cfg(test)]

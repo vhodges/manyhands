@@ -341,12 +341,10 @@ impl run::PromotionIo for FakeIo {
         }
         let repo = git2::Repository::open(&req.root).unwrap();
         let reference = match &req.target {
-            SynchronizationTarget::Context {
-                kind: AuthoringKind::Ticket,
-                ..
-            } => format!("refs/heads/manyhands/ticket/{ITEM}"),
-            _ if primary => "refs/heads/main".into(),
-            _ => format!("refs/heads/manyhands/document/{ITEM}"),
+            SynchronizationTarget::Primary => "refs/heads/main".into(),
+            SynchronizationTarget::Context { kind, item_id } => {
+                plan.context(*kind, item_id).remote_ref().to_owned()
+            }
         };
         let oid = repo.refname_to_id(&reference).unwrap();
         if primary {

@@ -570,6 +570,20 @@ impl RepositoryService {
             }
             LocalPollClassification::FastForward { .. } => {}
         }
+        // R-T6-4: from `closing` until retirement the closure reconciles a
+        // ticket context's ref against its own record; a poll never moves
+        // it. Tracking is already updated, so the closure's re-check sees
+        // the remote change. The target is left as not reached.
+        if let SynchronizationTarget::Context {
+            kind: crate::repository::AuthoringKind::Ticket,
+            item_id,
+        } = &update.target
+            && state::with_transaction(self, root, |tx, id| {
+                crate::repository::closure::record::written_closure_unfinished(tx, id, item_id)
+            })?
+        {
+            return Ok(PollDisposition::NotReached);
+        }
         let Ok(linked) = poll_materialized_target(root, plan.primary_branch(), &update.target)
         else {
             return Ok(PollDisposition::Inaccessible);

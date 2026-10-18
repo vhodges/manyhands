@@ -956,23 +956,15 @@ fn process_exit_at_every_boundary_reopens_without_repeated_effects() {
             fs::remove_file(&lock).unwrap();
         }
         if EXITS.get(point) == Some(&FailurePoint::ClosureDuringCheckpointCheckout) {
-            // The exit left the checkout and libgit2's lock on the context
-            // ref, which has no ownership token: the retry refuses with the
-            // record kept and nothing moved, never adopting the lock.
-            let lock = f.repo.commondir().join(format!("{}.lock", context_ref()));
-            let stopped = f.stored(req.operation_id);
-            let before = refs(&f.repo);
-            assert!(matches!(
-                f.run_io(&reopened, req.clone(), &mut io),
-                Err(TicketClosureError::RecoveryRequired)
-            ));
-            assert_eq!(f.stored(req.operation_id), stopped);
-            assert_eq!(refs(&f.repo), before);
-            // The simulated operator, on this disposable fixture only.
-            let metadata = fs::symlink_metadata(&lock).unwrap();
-            assert!(metadata.is_file() && !metadata.file_type().is_symlink());
-            assert_eq!(fs::read(&lock).unwrap(), b"");
-            fs::remove_file(&lock).unwrap();
+            // The checkout ran before any ref lock was taken: the exit leaves
+            // no lock, and the same ID finishes below with no operator.
+            assert!(
+                !f.repo
+                    .commondir()
+                    .join(format!("{}.lock", context_ref()))
+                    .exists()
+            );
+            assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
         }
         if point == F11_SEAM {
             assert_eq!(f.stored(req.operation_id).step, ClosureStep::Complete);
@@ -1324,8 +1316,11 @@ fn contained(tracking: bool) -> Fixture {
     checkout(&f.repo, context);
     f.tracking("main", context);
     if tracking {
+        // Published once before its last local commit: the guard must be
+        // this OID, never the context tip.
+        let published = f.repo.find_commit(context).unwrap().parent_id(0).unwrap();
         f.repo
-            .reference(&tracking_context_ref(), context, true, "fixture")
+            .reference(&tracking_context_ref(), published, true, "fixture")
             .unwrap();
     }
     f
@@ -1336,6 +1331,8 @@ fn contained(tracking: bool) -> Fixture {
 fn without_a_child_the_tracking_oid_guards_the_delete() {
     let f = contained(true);
     let context = f.context_oid();
+    let tracking = f.repo.refname_to_id(&tracking_context_ref()).unwrap();
+    assert_ne!(tracking, context);
     let req = f.request();
     let mut io = GuardIo::default();
     let result = outcome(f.run_io(&f.service, req.clone(), &mut io).unwrap());
@@ -1344,8 +1341,10 @@ fn without_a_child_the_tracking_oid_guards_the_delete() {
         ClosureRecording::Recorded { .. }
     ));
     assert_eq!(io.child_targets(), [SynchronizationTarget::Primary]);
-    assert_eq!(*io.guards.borrow(), [context]);
-    assert_eq!(f.stored(req.operation_id).context_attempt, 0);
+    assert_eq!(*io.guards.borrow(), [tracking]);
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.remote_context_oid, Some(tracking));
+    assert_eq!(r.context_attempt, 0);
     assert_eq!(close_reservations(&f, req.operation_id), 1);
     f.assert_cleaned();
 }
@@ -1513,4 +1512,284 @@ fn an_active_manual_context_synchronization_holds_off_the_checkpoint() {
         .unwrap();
     outcome(f.run_io(&f.service, req, &mut io).unwrap());
     assert!(f.primary_ticket().closed_at.is_some());
+}
+
+// --- Fix round 1 (R-T6-3, R-T6-4 and minors) -----------------------------
+
+/// One automatic poll after a fetch that left `advertised` as the remote's
+/// refs (the tracking refs are the test's).
+fn poll(f: &Fixture, advertised: Vec<(String, Oid)>) -> crate::repository::RemotePollReport {
+    use crate::repository::{
+        RemoteOperationPriority, RemoteOperationSafePoint, RemotePollOutcome, RemotePollResult,
+        remote::reservation::RemotePollReservationOutcome,
+    };
+    let plan = f.configure_endpoints();
+    let configuration = f
+        .service
+        .observation_configuration(f.root(), &plan)
+        .unwrap();
+    let owner = match f
+        .service
+        .reserve_remote_poll(
+            f.root(),
+            OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan),
+            RemoteOperationPriority::Poll,
+        )
+        .unwrap()
+    {
+        RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    f.service
+        .remote_safe_point(f.root(), &owner, RemoteOperationSafePoint::BeforeTransport)
+        .unwrap();
+    match f
+        .service
+        .poll_after_fetch(f.root(), &owner, &plan, &configuration, advertised)
+        .unwrap()
+    {
+        RemotePollResult::Complete(RemotePollOutcome::Polled(r)) => r,
+        RemotePollResult::IndexPending(p) => match p.authoritative {
+            RemotePollOutcome::Polled(r) => r,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
+
+/// R-T6-4, the brief's "collaborator content arriving" with a remote: a
+/// poll in the `closing` window updates tracking but never fast-forwards the
+/// ticket context, so the same ID re-checks consent and abandons with
+/// nothing written; after that a poll may fast-forward and a new ID closes.
+#[test]
+fn a_poll_while_closing_updates_tracking_but_never_moves_the_context() {
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::ClosureAfterClosingRecorded),
+        req.clone(),
+        &mut io,
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
+    let context = f.context_oid();
+    // A collaborator pushes to the ticket context.
+    let pushed = support::tree_commit(
+        &f.repo,
+        context,
+        &[("collaborator.txt", Some((&b"collaborator\n"[..], 0o100644)))],
+    );
+    f.repo
+        .reference(&tracking_context_ref(), pushed, true, "fixture")
+        .unwrap();
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let remote_ref = plan
+        .context(AuthoringKind::Ticket, &id())
+        .remote_ref()
+        .to_owned();
+    let main = f.repo.refname_to_id("refs/remotes/origin/main").unwrap();
+    let advertised = vec![("refs/heads/main".to_owned(), main), (remote_ref, pushed)];
+    poll(&f, advertised.clone());
+    assert_eq!(f.context_oid(), context, "the closing context is not moved");
+    assert_eq!(
+        f.repo.refname_to_id(&tracking_context_ref()).unwrap(),
+        pushed
+    );
+    assert!(matches!(
+        f.run_io(&f.reopened(), req.clone(), &mut io),
+        Err(TicketClosureError::ReconfirmationRequired)
+    ));
+    let r = f.stored(req.operation_id);
+    assert_eq!(r.step, ClosureStep::Abandoned);
+    assert_eq!(f.context_oid(), context);
+    assert!(f.reachable(&close_subject()).is_empty());
+    // The closure is over: a poll may move the context, and a new ID closes.
+    poll(&f, advertised);
+    assert_eq!(f.context_oid(), pushed);
+    outcome(f.run_io(&f.service, f.request(), &mut io).unwrap());
+    assert!(f.primary_ticket().closed_at.is_some());
+}
+
+/// Obligation 9, restart: a manual context synchronization interrupted
+/// before the checkpoint cannot be restarted once it is written.
+#[test]
+fn an_interrupted_manual_context_synchronization_cannot_restart_after_the_checkpoint() {
+    let f = Fixture::remote();
+    let plan = f.configure_endpoints();
+    let target = f.manual_context_sync(&plan);
+    let sync = OperationId::new();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root(), sync, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    f.db()
+        .execute(
+            "UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",
+            [sync.to_string()],
+        )
+        .unwrap();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterClosureCheckpoint),
+        req.clone(),
+        &mut io,
+    );
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Closing);
+    assert!(matches!(
+        f.service
+            .restart_remote_synchronization(f.root(), sync, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+}
+
+/// Obligation 9 after integration: the fence lasts until retirement.
+#[test]
+fn a_manual_context_synchronization_is_refused_while_publication_is_pending() {
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = FakeIo {
+        failure: Some((true, SynchronizationError::PushRejected)),
+        ..FakeIo::default()
+    };
+    let result = authoritative(f.run_io(&f.service, req.clone(), &mut io).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::AwaitingPublication
+        }
+    );
+    assert_eq!(
+        f.stored(req.operation_id).step,
+        ClosureStep::PublicationPending
+    );
+    let plan = f.configure_endpoints();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation(f.root(), OperationId::new(), &f.manual_context_sync(&plan))
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+}
+
+/// Minor 2: the hold-off comes before the identity step, so a confirmed
+/// identity is not persisted when the closure is held off.
+#[test]
+fn a_held_off_checkpoint_persists_no_confirmed_identity() {
+    let f = Fixture::remote();
+    {
+        let mut config = f.repo.config().unwrap();
+        config.set_str("user.name", "").unwrap();
+        config.set_str("user.email", "").unwrap();
+    }
+    let expected = match f
+        .service
+        .preview_ticket_closure(PreviewTicketClosureRequest {
+            root: f.root().into(),
+            item_id: id(),
+            confirmed_identity: None,
+        })
+        .unwrap()
+    {
+        TicketClosurePreflight::Blocked {
+            identity_configuration: Some(expected),
+            ..
+        } => expected,
+        other => panic!("expected the identity boundary: {other:?}"),
+    };
+    let confirmation = ConfirmedCommitIdentity {
+        confirmation_id: OperationId::new(),
+        identity: crate::repository::CommitIdentity {
+            name: "Confirmed".into(),
+            email: "confirmed@example.invalid".into(),
+        },
+        expected_configuration: expected,
+    };
+    let preview = match f
+        .service
+        .preview_ticket_closure(PreviewTicketClosureRequest {
+            root: f.root().into(),
+            item_id: id(),
+            confirmed_identity: Some(confirmation.clone()),
+        })
+        .unwrap()
+    {
+        TicketClosurePreflight::Ready(p) => p,
+        other => panic!("not ready: {other:?}"),
+    };
+    let req = CloseTicketRequest {
+        root: f.root().into(),
+        operation_id: OperationId::new(),
+        item_id: id(),
+        expected: preview.expectation(),
+        approval: None,
+        confirmed_identity: Some(confirmation),
+    };
+    let plan = f.configure_endpoints();
+    let target = f.manual_context_sync(&plan);
+    let root = f.root().to_owned();
+    f.hook(move |service, point| {
+        if point == FailurePoint::AfterContextSync {
+            assert!(matches!(
+                service
+                    .reserve_remote_operation(&root, OperationId::new(), &target)
+                    .unwrap(),
+                RemoteReservationOutcome::Reserved(_)
+            ));
+        }
+    });
+    let config = fs::read(f.repo.path().join("config")).unwrap();
+    let mut io = FakeIo::default();
+    assert!(matches!(
+        f.run_io(&f.service, req.clone(), &mut io),
+        Err(TicketClosureError::Busy)
+    ));
+    assert_eq!(fs::read(f.repo.path().join("config")).unwrap(), config);
+    assert_eq!(f.stored(req.operation_id).closure_oid, None);
+}
+
+/// Minor 6: read after closure while the context still exists (cleanup
+/// cancelled). The read API lists one effective copy, the kept context's
+/// while it exists; it is closed, as is the primary's ticket.
+#[test]
+fn a_closed_ticket_with_its_context_kept_lists_one_closed_copy() {
+    let f = Fixture::new();
+    let req = f.request();
+    let (root, op) = (f.root().to_owned(), req.operation_id);
+    f.hook(move |service, point| {
+        if point == FailurePoint::AfterIntegrationRef {
+            assert!(service.cancel_ticket_closure(&root, op).unwrap());
+        }
+    });
+    let result = authoritative(f.close(&f.service, req.clone()).unwrap());
+    assert_eq!(
+        result.cleanup(),
+        PromotionCleanup::Pending {
+            reason: PromotionCleanupPending::Cancelled
+        }
+    );
+    assert!(f.root().join(".manyhands/worktrees").join(ID).exists());
+    let repository = f.service.resolve_repository(f.root()).unwrap();
+    let listed = f
+        .service
+        .list_tickets(&repository, &TicketFilter::default())
+        .unwrap();
+    let copies: Vec<_> = listed
+        .items
+        .iter()
+        .filter(|i| i.id.as_deref() == Some(ID))
+        .collect();
+    assert_eq!(copies.len(), 1);
+    assert_eq!(
+        copies[0].closure.as_ref().map(|c| c.state),
+        Some(ClosureState::Closed)
+    );
+    assert_eq!(copies[0].status.as_deref(), Some("open"));
+    let primary = f.primary_ticket();
+    assert!(primary.closed_at.is_some());
+    assert_eq!(primary.status, "open");
 }

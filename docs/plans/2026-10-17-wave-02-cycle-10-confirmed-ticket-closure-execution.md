@@ -1030,11 +1030,12 @@ warnings` is clean.
   `refs/heads/manyhands/ticket/<ULID>.lock`. `resume_written` now maps a
   failed finishing ref move to `RecoveryRequired` (record kept), and never
   adopts or removes the lock, as Cycle 09 treats the F10 tracking lock.
+  Superseded in fix round 1 (R-T6-3): no lock is held across the checkout.
 - **Promotion test helpers.** Visibility only (`FakeIo`, `Calls`,
   `NoCredentials`, `HOOKS`, `TRACKING_HOOKS`, `COMMIT_HOOKS`, the
-  `run_tests` module), plus one helper line: `FakeIo`
-  derives the context ref from the target's kind (a document target gets
-  the same ref as before).
+  `run_tests` module), plus one behaviour-neutral fixture edit: `FakeIo`
+  takes the context ref from the target (its kind and item), not from
+  promotion's constant; a document target gets the same ref as before.
 
 ### Obligation findings
 
@@ -1072,3 +1073,52 @@ primary child's reservation found the manual slot). Mutations, each restored:
 
 fmt is clean. `cargo clippy --all-targets --all-features --locked -- -D
 warnings` is clean.
+
+### Task 6A fix round 1 (R-T6-3, R-T6-4)
+
+- **R-T6-3, no stale ref lock.** `sync::fast_forward_with` is deleted;
+  `sync.rs` is back to its base form, and `sync::fast_forward` is unchanged.
+  `move_context_to_checkpoint_with` now runs these steps under the lease,
+  with no ref lock until the last one:
+  1. Verify that the ref is at `context_oid` and that HEAD names it.
+  2. Run the safe checkout (`safe().overwrite_ignored(false)`).
+  3. Run `ClosureDuringCheckpointCheckout`.
+  4. Run the guarded move: lock, re-check the ref *and* HEAD, `set_target`,
+     commit. The resume's `finish_context_move` uses the same guarded move.
+
+  An exit inside the seam leaves no lock, and the same ID finishes with no
+  operator step. No code removes an unowned lock.
+- **R-T6-4, polling fence.** `poll_fast_forward_unlocked` does not move a
+  ticket context whose closure is unfinished from `closing` on
+  (`written_closure_unfinished`). The target stays `NotReached`. Tracking is
+  already updated, so the same-ID retry sees `ContextBehindRemote` and
+  abandons with nothing written.
+- **Early hold-off.** `checkpoint::pre_integration` reads
+  `context_synchronization_unfinished` before step 4, so a confirmed identity
+  is not persisted when the checkpoint is held off. The check inside the
+  `closing` transaction stays.
+- **Tests (+5, closure 162).**
+  - `a_poll_while_closing_updates_tracking_but_never_moves_the_context`
+  - `an_interrupted_manual_context_synchronization_cannot_restart_after_the_checkpoint`
+  - `a_manual_context_synchronization_is_refused_while_publication_is_pending`
+  - `a_held_off_checkpoint_persists_no_confirmed_identity`
+  - `a_closed_ticket_with_its_context_kept_lists_one_closed_copy`
+
+  The process-exit test now asserts that no lock is left and that the retry
+  needs no operator. In the 8b fixture the tracking OID differs from the
+  context tip, so a guard taken from `context_oid` fails.
+- **Red.** The lock, poll and identity tests failed before the fixes. Two
+  mutations failed: narrowing the step list to `'closing'` (the
+  publication-pending test) and deleting the restart fence (the restart
+  test).
+
+| Args | Fix round 1 |
+| --- | --- |
+| `--lib closure` | 162 |
+| `--lib promotion` | 199 |
+| `--lib remote::reservation` | 52 |
+| `--lib cleanup` | 46 |
+| `--lib remote::poll` | 79 |
+| `--test remote_polling` | 84 SSH |
+
+fmt and Clippy (`-D warnings`) are clean.
