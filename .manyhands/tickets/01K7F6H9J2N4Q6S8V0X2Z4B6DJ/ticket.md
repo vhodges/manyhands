@@ -44,8 +44,8 @@ rounds were re-reviewed. The final local gate on `35d4d39` passed 3,325 tests
 Clippy are clean. The native run happens on main after the merge, so no
 native pass is claimed here.
 
-Owner confirmation of the R-T6-1, R-T8-1 and R-F-4 design amendments is still
-outstanding.
+The owner confirmed the R-T6-1, R-T8-1 and R-F-4 design amendments on
+2026-10-18, after the merge.
 
 ## Follow-ups
 
