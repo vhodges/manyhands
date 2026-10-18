@@ -2,7 +2,6 @@
 //! lease acquisition. The record holds IDs, ref names, OIDs, timestamps
 //! (`closed_at` included), fixed step names and fixed categories; never
 //! `closed_by`, a title, a body, an endpoint or a secret.
-#![allow(dead_code)] // The closure lifecycle (Tasks 4–6) composes these transaction-scoped seams.
 use super::{ClosureBlocker, ClosureExpectation};
 use crate::{
     canonical::ItemId,
@@ -1234,6 +1233,30 @@ pub(in super::super) fn reconcile_completion(
 /// as a merge, so promotion's `already_contained` test cannot decide it.
 fn deletion_reservation_required(r: &ClosureRecord) -> bool {
     r.remote_name.is_some() && !(r.context_attempt == 0 && r.remote_context_oid.is_none())
+}
+/// C1, C9: the remote context branch never receives a closure checkpoint.
+/// From `closing` until retirement the ticket context may hold one, so a
+/// synchronization of that context, which would push it, is refused.
+pub(in super::super) fn written_closure_unfinished(
+    db: &Connection,
+    id: i64,
+    item: &ItemId,
+) -> Result<bool, RepositoryError> {
+    if !crate::repository::recovery::has_table(db, "ticket_closures")
+        .map_err(|_| state::recovery_required())?
+    {
+        return Ok(false);
+    }
+    db.query_row("SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE repository_id=?1 AND item_id=?2 AND step IN ('closing','integrating','integrated','published','publication_pending','remote_deleted','worktree_removing','worktree_removed','branch_deleted'))",params![id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())
+}
+/// The other order of the same rule: an unfinished synchronization of the
+/// ticket context, reserved before the checkpoint, holds the checkpoint off.
+pub(in super::super) fn context_synchronization_unfinished(
+    db: &Connection,
+    id: i64,
+    item: &ItemId,
+) -> Result<bool, RepositoryError> {
+    db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2 AND phase NOT IN ('completed','interrupted','cancelled','failed'))",params![id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())
 }
 pub(in super::super) fn request_cancellation(
     tx: &Transaction<'_>,

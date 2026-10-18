@@ -3,8 +3,8 @@ use crate::repository::{keys::*, remote::state, *};
 use crate::repository::{remote::observation::ObservationConfiguration, transport::*};
 use std::fs;
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
-type BoundaryHook = Box<dyn FnMut(&RepositoryService, FailurePoint)>;
-thread_local! { static HOOKS: RefCell<BTreeMap<PathBuf, BoundaryHook>> = RefCell::new(BTreeMap::new()); }
+pub(in super::super) type BoundaryHook = Box<dyn FnMut(&RepositoryService, FailurePoint)>;
+thread_local! { pub(in super::super) static HOOKS: RefCell<BTreeMap<PathBuf, BoundaryHook>> = RefCell::new(BTreeMap::new()); }
 pub(super) fn checkpoint(service: &RepositoryService, root: &std::path::Path, point: FailurePoint) {
     HOOKS.with(|hooks| {
         let hook = hooks.borrow_mut().remove(root);
@@ -14,7 +14,7 @@ pub(super) fn checkpoint(service: &RepositoryService, root: &std::path::Path, po
         }
     });
 }
-type TrackingHook = Box<dyn FnOnce(&RepositoryService)>;
+pub(in super::super) type TrackingHook = Box<dyn FnOnce(&RepositoryService)>;
 type OutcomeReadHook = Box<dyn FnOnce() -> Result<(), RepositoryError>>;
 thread_local! { static OUTCOME_READ_HOOKS:RefCell<BTreeMap<PathBuf,OutcomeReadHook>>=RefCell::new(BTreeMap::new()); }
 pub(super) fn outcome_authority_read(root: &std::path::Path) -> Result<(), RepositoryError> {
@@ -29,8 +29,8 @@ pub(super) fn observation_prepared(service: &RepositoryService, root: &std::path
         hook(service);
     }
 }
-thread_local! { static TRACKING_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
-thread_local! { static COMMIT_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
+thread_local! { pub(in super::super) static TRACKING_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
+thread_local! { pub(in super::super) static COMMIT_HOOKS: RefCell<BTreeMap<PathBuf, TrackingHook>> = RefCell::new(BTreeMap::new()); }
 pub(super) fn completion_returned(
     service: &RepositoryService,
     root: &std::path::Path,
@@ -58,7 +58,7 @@ fn hook(f: &Fixture, callback: impl FnMut(&RepositoryService, FailurePoint) + 's
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const DOC: &str = "docs/document.md";
-struct NoCredentials;
+pub(in super::super) struct NoCredentials;
 impl SessionCredentialProvider for NoCredentials {
     fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
         panic!("local promotion requested credentials")
@@ -297,16 +297,16 @@ impl Fixture {
     }
 }
 #[derive(Default)]
-struct Calls {
-    children: Vec<(SynchronizationTarget, OperationId, bool)>,
-    deletes: usize,
+pub(in super::super) struct Calls {
+    pub(in super::super) children: Vec<(SynchronizationTarget, OperationId, bool)>,
+    pub(in super::super) deletes: usize,
 }
 #[derive(Default)]
-struct FakeIo {
-    calls: Rc<RefCell<Calls>>,
-    failure: Option<(bool, SynchronizationError)>,
-    deletion: Option<DeleteObservation>,
-    already_current: bool,
+pub(in super::super) struct FakeIo {
+    pub(in super::super) calls: Rc<RefCell<Calls>>,
+    pub(in super::super) failure: Option<(bool, SynchronizationError)>,
+    pub(in super::super) deletion: Option<DeleteObservation>,
+    pub(in super::super) already_current: bool,
 }
 impl run::PromotionIo for FakeIo {
     fn synchronize(
@@ -340,10 +340,13 @@ impl run::PromotionIo for FakeIo {
             assert!(matches!(reservation, RemoteReservationOutcome::Reserved(_)));
         }
         let repo = git2::Repository::open(&req.root).unwrap();
-        let reference = if primary {
-            "refs/heads/main".into()
-        } else {
-            format!("refs/heads/manyhands/document/{ITEM}")
+        let reference = match &req.target {
+            SynchronizationTarget::Context {
+                kind: AuthoringKind::Ticket,
+                ..
+            } => format!("refs/heads/manyhands/ticket/{ITEM}"),
+            _ if primary => "refs/heads/main".into(),
+            _ => format!("refs/heads/manyhands/document/{ITEM}"),
         };
         let oid = repo.refname_to_id(&reference).unwrap();
         if primary {

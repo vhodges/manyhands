@@ -27,7 +27,6 @@ use rusqlite::{Connection, Transaction};
 use std::path::{Path, PathBuf};
 
 /// Which parent lifecycle a runner, child fence or reservation arm serves.
-#[allow(dead_code)] // TicketClosure is constructed by the closure lifecycle (Task 6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum LifecycleKind {
     DocumentPromotion,
@@ -197,17 +196,24 @@ pub(in super::super) trait LifecyclePreview {
     fn publication_remote(&self) -> Option<&str>;
     fn primary_oid(&self) -> Oid;
     fn tracking_primary(&self) -> Option<Oid>;
+    /// With a remote, a context child synchronizes the context before
+    /// integration. Promotion's Cycle 09 rule: unless the context is already
+    /// contained and no tracking context was observed.
+    fn runs_context_child(&self) -> bool {
+        !(self.integration() == PlannedIntegration::AlreadyContained
+            && self.tracking_context().is_none())
+    }
 }
 
 /// The hook's input: what the integration stage holds under its lease. The
 /// operation and record are absent only for an integration called outside
 /// the runner (unit tests).
-#[allow(dead_code)] // Read by the closure checkpoint hook (Task 4).
 pub(in super::super) struct LeasedIntegration<'a, R> {
     pub(in super::super) repository: &'a git2::Repository,
     pub(in super::super) root: &'a Path,
     pub(in super::super) context: &'a integrate::IntegrationContext,
     pub(in super::super) base: Oid,
+    #[allow(dead_code)] // Bound for every hook; the closure hooks read the record's own ID.
     pub(in super::super) operation_id: Option<OperationId>,
     pub(in super::super) record: Option<&'a R>,
 }
@@ -301,6 +307,8 @@ pub(in super::super) trait Lifecycle {
         op: OperationId,
     ) -> Result<Option<Self::Record>, RepositoryError>;
     fn save_record(tx: &Transaction<'_>, id: i64, r: &Self::Record) -> Result<(), RepositoryError>;
+    /// `observed` is the revalidated preview a new record is inserted from;
+    /// `None` when the record already exists (a replay or resume).
     fn begin_record(
         tx: &Transaction<'_>,
         id: i64,
@@ -308,12 +316,16 @@ pub(in super::super) trait Lifecycle {
         item: &ItemId,
         expectation: Self::Expectation,
         remote: Option<&str>,
+        observed: Option<&Self::Preview>,
     ) -> Result<Self::Record, RepositoryError>;
     fn replacement_guard(
         tx: &Transaction<'_>,
         id: i64,
         item: &ItemId,
     ) -> Result<Self::ReplacementGuard, RepositoryError>;
+    /// `observed` is the revalidated preview, `None` when the refusal came
+    /// before any observation was made (a blocked or failed revalidation).
+    #[allow(clippy::too_many_arguments)] // Promotion's refusal shape plus the observation.
     fn refuse_record(
         tx: &Transaction<'_>,
         id: i64,
@@ -321,6 +333,7 @@ pub(in super::super) trait Lifecycle {
         item: &ItemId,
         expectation: Self::Expectation,
         remote: Option<&str>,
+        observed: Option<&Self::Preview>,
         refusal: &Self::Refusal,
     ) -> Result<Self::Record, RepositoryError>;
     fn clear_cancellation(
@@ -363,7 +376,13 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<bool, RepositoryError>;
 
     // Observation.
-    fn preview_request(root: PathBuf, item_id: ItemId) -> Self::PreviewRequest;
+    /// `identity` is the request's configuration-bound confirmation, which a
+    /// lifecycle whose consent binds an identity observes with.
+    fn preview_request(
+        root: PathBuf,
+        item_id: ItemId,
+        identity: Option<&ConfirmedCommitIdentity>,
+    ) -> Self::PreviewRequest;
     fn preview(
         service: &RepositoryService,
         request: Self::PreviewRequest,
@@ -712,6 +731,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         item: &ItemId,
         expectation: PromotionExpectation,
         remote: Option<&str>,
+        _observed: Option<&DocumentPromotionPreview>,
     ) -> Result<PromotionRecord, RepositoryError> {
         record::begin_record(tx, id, op, item, expectation, remote)
     }
@@ -729,6 +749,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
         item: &ItemId,
         expectation: PromotionExpectation,
         remote: Option<&str>,
+        _observed: Option<&DocumentPromotionPreview>,
         refusal: &record::Refusal,
     ) -> Result<PromotionRecord, RepositoryError> {
         record::refuse_record(tx, id, op, item, expectation, remote, refusal)
@@ -785,7 +806,11 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<bool, RepositoryError> {
         record::reconcile_completion(tx, id, op)
     }
-    fn preview_request(root: PathBuf, item_id: ItemId) -> PreviewDocumentPromotionRequest {
+    fn preview_request(
+        root: PathBuf,
+        item_id: ItemId,
+        _identity: Option<&ConfirmedCommitIdentity>,
+    ) -> PreviewDocumentPromotionRequest {
         PreviewDocumentPromotionRequest { root, item_id }
     }
     fn preview(

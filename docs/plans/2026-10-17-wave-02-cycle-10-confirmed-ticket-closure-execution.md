@@ -980,3 +980,95 @@ reachable.
 
 fmt is clean. `cargo clippy --all-targets --all-features --locked -- -D
 warnings` is clean.
+
+## Task 6A — `close_ticket` Over The Generic Runner (2026-10-18)
+
+### What landed
+
+- **Public interface (R-T3-2).** `closure/mod.rs` adds `CloseTicketRequest`,
+  `TicketClosureResult`, `TicketClosureOutcome { operation_id, closure,
+  integration, publication, cleanup }`, `ClosureRecording::{Recorded {
+  checkpoint_oid }, Existing}` and `TicketClosureError` with the design's 13
+  variants. `RepositoryService::close_ticket` and `cancel_ticket_closure`
+  have the design's signatures. All are re-exported from `src/repository.rs`.
+  `Transport` boxes its error, as promotion's does (`result_large_err`).
+- **`closure/lifecycle.rs`.** `TicketClosureLifecycle: Lifecycle`. Its
+  `Preview` is the `ClosureObservation` itself (R-T4-2), which
+  `pre_integration_with` hands to `checkpoint::pre_integration`;
+  `resume_written` forwards to `checkpoint::resume_written`. `Preflight` is
+  `Result<ClosureObservation, Vec<ClosureBlocker>>`. `ready` maps a lone
+  `IdentityRequired` to `ExternalChange` (design: a `Record` closure whose
+  identity changed since preview). `From<RepositoryError>` keeps every kind,
+  `ExternalChange` included, as `Repository(_)`.
+- **Seam changes (crate-private; promotion unchanged).**
+  - `begin_record`/`refuse_record` take `observed: Option<&Preview>`: the
+    runner passes the revalidated preview of a new record, so closure
+    inserts the observed `closure_kind`; `None` only for a refusal made
+    before any observation (R-T2-1).
+  - `preview_request` takes the request's identity confirmation, so every
+    runner preview of a `Record` closure observes the same `closed_by`.
+  - `LifecyclePreview::runs_context_child` (default: promotion's Cycle 09
+    rule); closure returns `needs_context_child` (no child when contained).
+  - `run_lifecycle` (production children) and `run_with_io` are
+    `pub(in super::super)`; `PromotionIo` likewise.
+- **Dead code (R-T2-5, R-T4-2).** The module-wide allows in
+  `closure/record.rs` and `closure/checkpoint.rs`, the item allows in
+  `closure/observe.rs` and `LifecycleKind`'s are gone. Four items read only
+  by tests keep `#[cfg_attr(not(test), allow(dead_code))]` with a reason;
+  `LeasedIntegration::operation_id` keeps a field allow.
+- **Remote context never receives the checkpoint (obligation 9, C1/C9).**
+  - `reservation.rs`: a manual reservation or restart of a ticket context
+    synchronization is `Busy` while that ticket has a closure from `closing`
+    to `branch_deleted` (`record::written_closure_unfinished`).
+  - `checkpoint::pre_integration`: the transaction that records `closing`
+    first checks for an unfinished synchronization of the context
+    (`record::context_synchronization_unfinished`) and returns `Busy` with
+    nothing written. The two SQLite transactions exclude each other.
+- **A stale ref lock after an exit inside the checkout seam.**
+  `sync::fast_forward_with` holds the context ref's lock across the checkout,
+  so a process exit at `ClosureDuringCheckpointCheckout` leaves
+  `refs/heads/manyhands/ticket/<ULID>.lock`. `resume_written` now maps a
+  failed finishing ref move to `RecoveryRequired` (record kept), and never
+  adopts or removes the lock, as Cycle 09 treats the F10 tracking lock.
+- **Promotion test helpers.** Visibility only (`FakeIo`, `Calls`,
+  `NoCredentials`, `HOOKS`, `TRACKING_HOOKS`, `COMMIT_HOOKS`, the
+  `run_tests` module), plus one helper line: `FakeIo`
+  derives the context ref from the target's kind (a document target gets
+  the same ref as before).
+
+### Obligation findings
+
+- **8(e) unreachable for the same ID.** After a `PrimaryAdvanced` reset, a
+  context that becomes contained with no tracking ref changes the bound
+  cleanup set (`remote_branch` is no longer planned), so the post-sync
+  consent check abandons `ReconfirmationRequired` before any write. Pinned by
+  `a_reset_that_leaves_the_context_contained_without_tracking_reconfirms`.
+- **9 reachable before this task.** A manual `synchronize_remote` of the
+  ticket context during `closing` or later would merge and push the
+  checkpoint. Now refused, both orders tested.
+
+### Tests
+
+`closure/run_tests.rs`, 31 tests. Red: the two obligation-9 tests failed
+before the refusal existed (`Reserved` where `Busy` was expected; the
+primary child's reservation found the manual slot). Mutations, each restored:
+
+| Mutation | Red test(s) |
+| --- | --- |
+| M6: no reload after a `Checkpoint` hook (`run.rs`) | `runner_reloads_the_record_the_checkpoint_hook_wrote` (record stays `closing`) |
+| M5a: runner's written-effect branch off (`run.rs`) | `never_abandons_after_the_checkout` (`ReconfirmationRequired`) |
+| M5b: `resume_written` skipped (`integrate.rs`) | all three `never_abandons_*` (`ReconfirmationRequired`) |
+| M7: `integration_context` from `context_oid` (`run.rs`) | `adopted_context_is_merged_reconciled_after_f4_and_retired` |
+| `ready` without the `IdentityRequired` → `ExternalChange` mapping | `a_changed_or_missing_identity_since_the_preview_is_external_change` (`Blocked`) |
+
+| Args | Before | Task 6A |
+| --- | --- | --- |
+| `--lib closure` | 126 | 157 (+31) |
+| `--lib promotion` | 199 | 199 |
+| `--lib remote::reservation` | 52 | 52 |
+| `--lib cleanup` | 45 | 46 (+1: a new closure test named "…cleanup…") |
+| `--test remote_reservation` | 13 | 13 |
+| `--test document_promotion` | 74 SSH | 74 SSH |
+
+fmt is clean. `cargo clippy --all-targets --all-features --locked -- -D
+warnings` is clean.

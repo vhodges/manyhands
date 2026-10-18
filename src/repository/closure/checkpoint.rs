@@ -7,7 +7,6 @@
 //! built in the repository ODB, unreferenced, before any ref moves; the one
 //! ref this module moves is the context's, through the proven
 //! `sync::fast_forward` order.
-#![allow(dead_code)] // `TicketClosureLifecycle` (Task 6) calls the hook and resume; remove there.
 use super::{
     PlannedClosure,
     observe::{ClosureObservation, closed_by_text, closed_ticket_bytes, ticket_path},
@@ -43,6 +42,8 @@ fn checkpoint_subject(item: &ItemId) -> String {
 pub(in super::super) struct PreparedClosure {
     /// Whole UTC seconds; also the checkpoint's author and committer time.
     pub closed_at: OffsetDateTime,
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Evidence for the tests; production reads it through the tree.
     pub ticket_blob: Oid,
     pub checkpoint_commit: Oid,
     /// The checkpoint tree when `base ≤ context`, else the clean in-memory
@@ -228,6 +229,7 @@ pub(in super::super) fn context_repository(
 
 /// Step 6: the safe checkout of the checkpoint in the context worktree, then
 /// the guarded ref update `from → to` (`sync::fast_forward` order).
+#[cfg_attr(not(test), allow(dead_code))] // The tests' form; production passes its failure point.
 pub(in super::super) fn move_context_to_checkpoint(
     context_repo: &git2::Repository,
     item: &ItemId,
@@ -380,6 +382,8 @@ pub(in super::super) fn reconcile_closing(
 /// The closure's authority after a checkpoint (C9): `closed_by` from the
 /// checkpoint's ticket Blob and the merge signature from its author.
 pub(in super::super) struct CheckpointAuthority {
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Proven to name the author; the merge needs only the signature.
     pub closed_by: String,
     pub signature: CommitIdentity,
 }
@@ -503,7 +507,13 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
         Err(ClosureStop::Repository(error)) => return Err(error.into()),
     };
     let operation = r.operation_id;
-    state::with_transaction(service, root, |tx, id| {
+    // C1, C9: a synchronization of this context still running would push
+    // the checkpoint; this transaction and its reservation exclude each
+    // other (`written_closure_unfinished` refuses it from `closing` on).
+    let held_off = state::with_transaction(service, root, |tx, id| {
+        if record::context_synchronization_unfinished(tx, id, &r.item_id)? {
+            return Ok(true);
+        }
         if !closing {
             record::begin_closing(
                 tx,
@@ -512,13 +522,15 @@ pub(in super::super) fn pre_integration<E: LifecycleError>(
                 base,
                 prepared.closed_at,
                 prepared.checkpoint_commit,
-            )
+            )?;
         } else if r.closure_oid != Some(prepared.checkpoint_commit) {
-            record::replace_unmoved_closure(tx, id, operation, prepared.checkpoint_commit)
-        } else {
-            Ok(())
+            record::replace_unmoved_closure(tx, id, operation, prepared.checkpoint_commit)?;
         }
+        Ok(false)
     })?;
+    if held_off {
+        return Err(E::busy());
+    }
     boundary(service, root, FailurePoint::ClosureAfterClosingRecorded)?;
     // Step 6, on the context worktree's repository.
     let context_repo = context_repository(root, &r.item_id)?;
@@ -562,7 +574,10 @@ pub(in super::super) fn resume_written<E: LifecycleError>(
             let tip = match reconcile_closing(&context_repo, r)? {
                 ClosingState::NothingWritten => return Ok(None),
                 ClosingState::CheckoutDone => {
-                    finish_context_move(&context_repo, r)?;
+                    // A process that stopped here may have left the ref's
+                    // lock: it is never adopted or removed (as Cycle 09's
+                    // tracking lock), and the record is kept.
+                    finish_context_move(&context_repo, r).map_err(|_| E::recovery_required())?;
                     context_moved(service, root)?;
                     boundary(service, root, FailurePoint::AfterClosureCheckpoint)?;
                     closure

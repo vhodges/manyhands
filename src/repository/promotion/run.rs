@@ -18,7 +18,7 @@ use record::{
 
 // The production adapter calls the existing children and exact-delete transport.
 // Tests inject only those external calls; all parent storage/Git/cleanup remains real.
-pub(super) trait PromotionIo {
+pub(in super::super) trait PromotionIo {
     fn synchronize(
         &mut self,
         service: &RepositoryService,
@@ -49,6 +49,16 @@ pub(super) fn promote<P: SessionCredentialProvider>(
         request,
         &mut Direct(session, DocumentPromotionLifecycle::KIND),
     )
+}
+
+/// Any lifecycle over the production children and exact-delete transport.
+pub(in super::super) fn run_lifecycle<L: Lifecycle, P: SessionCredentialProvider>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: LifecycleRequest<L::Expectation>,
+    session: &mut SessionCredentials<P>,
+) -> Result<L::Output, L::Error> {
+    run_with_io(lifecycle, service, request, &mut Direct(session, L::KIND))
 }
 
 struct Direct<'a, P>(&'a mut SessionCredentials<P>, LifecycleKind);
@@ -192,8 +202,12 @@ fn preview<L: Lifecycle>(
     service: &RepositoryService,
     root: &Path,
     item: &ItemId,
+    identity: Option<&ConfirmedCommitIdentity>,
 ) -> Result<L::Preflight, RepositoryError> {
-    L::preview(service, L::preview_request(root.into(), item.clone()))
+    L::preview(
+        service,
+        L::preview_request(root.into(), item.clone(), identity),
+    )
 }
 fn abandon<L: Lifecycle>(
     service: &RepositoryService,
@@ -244,7 +258,7 @@ pub(super) fn promote_with_io(
         io,
     )
 }
-fn run_with_io<L: Lifecycle>(
+pub(in super::super) fn run_with_io<L: Lifecycle>(
     lifecycle: &L,
     service: &RepositoryService,
     request: LifecycleRequest<L::Expectation>,
@@ -352,6 +366,7 @@ fn promote_inner<L: Lifecycle>(
                 &request.item_id,
                 request.expected,
                 prior.remote_name(),
+                None,
             )
         })
         .map_err(mapped::<L::Error>)?;
@@ -389,10 +404,17 @@ fn promote_inner<L: Lifecycle>(
     } else {
         None
     };
+    // The revalidated preview a new record is inserted from (its observed
+    // effect), absent when revalidation refused before observing one.
+    let mut observed = None;
     let refusal = if prior.is_none() {
         let observation = L::prepare(
             service,
-            L::preview_request(root.clone(), request.item_id.clone()),
+            L::preview_request(
+                root.clone(),
+                request.item_id.clone(),
+                request.confirmed_identity.as_ref(),
+            ),
         )?;
         config = L::configuration(&observation).clone();
         let (repository, _) =
@@ -407,8 +429,11 @@ fn promote_inner<L: Lifecycle>(
         )?);
         match L::revalidate(&observation, service, &repository).map(L::ready) {
             Ok(Err(blocked)) => Some(blocked),
-            Ok(Ok(p)) if p.expectation() != request.expected => Some(L::Refusal::external_change()),
-            Ok(_) => None,
+            Ok(Ok(p)) => {
+                let changed = p.expectation() != request.expected;
+                observed = Some(p);
+                changed.then(L::Refusal::external_change)
+            }
             Err(error) if error.kind == RepositoryErrorKind::ExternalChange => {
                 Some(L::Refusal::external_change())
             }
@@ -436,6 +461,7 @@ fn promote_inner<L: Lifecycle>(
                 &request.item_id,
                 request.expected,
                 config.publication_remote.as_deref(),
+                observed.as_ref(),
                 refusal,
             )?
         } else {
@@ -446,6 +472,7 @@ fn promote_inner<L: Lifecycle>(
                 &request.item_id,
                 request.expected,
                 config.publication_remote.as_deref(),
+                observed.as_ref(),
             )?
         };
         Ok((r, existing))
@@ -541,13 +568,15 @@ fn promote_inner<L: Lifecycle>(
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
-        let cleanup_only = preview::<L>(service, &root, r.item_id())
-            .ok()
-            .and_then(|p| L::ready(p).ok())
-            .is_some_and(|p| {
-                p.integration() == PlannedIntegration::AlreadyContained
-                    && p.tracking_context().is_none()
-            });
+        let cleanup_only = preview::<L>(
+            service,
+            &root,
+            r.item_id(),
+            request.confirmed_identity.as_ref(),
+        )
+        .ok()
+        .and_then(|p| L::ready(p).ok())
+        .is_some_and(|p| !p.runs_context_child());
         if r.remote_name().is_some()
             && !cleanup_only
             && let Err(error) = child::<L>(service, &request, &mut r, ChildRole::Context, io)
@@ -557,7 +586,12 @@ fn promote_inner<L: Lifecycle>(
             }
             return Err(L::Error::context_synchronization(Box::new(error)));
         }
-        let p = match L::ready(preview::<L>(service, &root, r.item_id())?) {
+        let p = match L::ready(preview::<L>(
+            service,
+            &root,
+            r.item_id(),
+            request.confirmed_identity.as_ref(),
+        )?) {
             Ok(p) if p.expectation() == r.expectation() => p,
             _ => {
                 return Err(abandon::<L>(
@@ -583,7 +617,12 @@ fn promote_inner<L: Lifecycle>(
         let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         written_request::<L>(&root, &r, &bound_primary, context)?
     } else {
-        let p = match L::ready(preview::<L>(service, &root, r.item_id())?) {
+        let p = match L::ready(preview::<L>(
+            service,
+            &root,
+            r.item_id(),
+            request.confirmed_identity.as_ref(),
+        )?) {
             Ok(p) => p,
             _ => {
                 return Err(abandon::<L>(

@@ -17,11 +17,11 @@ pub(super) mod integrate;
 pub(super) mod lifecycle;
 pub(super) mod observe;
 pub(super) mod record;
-mod run;
+pub(super) mod run;
 
 #[cfg(test)]
 #[path = "run_tests.rs"]
-mod run_tests;
+pub(super) mod run_tests;
 
 /// A refusal before promotion has changed the primary. Integration uncertainty
 /// is carried by the internal pending state, never by this error.

@@ -304,6 +304,23 @@ fn publication_intent(
     })
 }
 
+/// C1, C9: from `closing` until retirement a ticket context may hold its
+/// closure checkpoint, which a synchronization of that context would push to
+/// the remote context branch. Such a reservation or restart is `Busy`.
+fn closure_holds_context(
+    tx: &Transaction<'_>,
+    id: i64,
+    target: &RemoteOperationTarget,
+) -> Result<bool, RepositoryError> {
+    match target.item() {
+        Some((crate::repository::AuthoringKind::Ticket, item))
+            if target.action() == RemoteOperationAction::SynchronizeContext =>
+        {
+            crate::repository::closure::record::written_closure_unfinished(tx, id, item)
+        }
+        _ => Ok(false),
+    }
+}
 fn is_sync(target: &RemoteOperationTarget) -> bool {
     matches!(
         target.action(),
@@ -1140,6 +1157,11 @@ impl RepositoryService {
                 return Err(mismatch());
             }
             crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+            if closure_holds_context(tx, repository_id, target)? {
+                return Ok(RemotePollReservationOutcome::Reservation(
+                    RemoteReservationOutcome::Busy,
+                ));
+            }
             if poll_kind == Some(state::PollKind::Update)
                 && state::has_pending_conflict(tx, repository_id)?
             {
@@ -2417,6 +2439,9 @@ impl RepositoryService {
             }
             if record.authority.is_some() || record.phase == RemoteOperationPhase::Cancelled {
                 return Ok(RemoteReservationOutcome::Replay(record.into()));
+            }
+            if closure_holds_context(tx, id, target)? {
+                return Ok(RemoteReservationOutcome::Busy);
             }
             let foreign_conflict: bool = tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND operation.id!=?2 AND step.phase IN ('conflict_pending','resolution_prepared','commit_prepared'))",

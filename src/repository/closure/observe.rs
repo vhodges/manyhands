@@ -163,7 +163,6 @@ fn preserved(original: &Ticket, normalized: &Ticket) -> bool {
 /// re-check and the leased revalidation. It carries no authority to mutate
 /// Git or the registry. It deliberately has no `Debug`: `closure` and
 /// `identity` hold personal data.
-#[allow(dead_code)] // `base`, `needs_context_child`, `identity`: read by Tasks 4 and 6.
 pub(in super::super) struct ClosureObservation {
     pub(in super::super) item_id: ItemId,
     pub(in super::super) ticket_path: PathBuf,
@@ -182,6 +181,8 @@ pub(in super::super) struct ClosureObservation {
     pub(in super::super) cleanup: PlannedCleanup,
     /// The selected identity of a `Record` closure; `None` for `Existing`,
     /// whose merge signer is resolved at execution.
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Observed for the tests; execution re-selects under the lease.
     pub(in super::super) identity: Option<CommittingIdentity>,
     pub(in super::super) expectation: ClosureExpectation,
     pub(in super::super) context_branch: String,
@@ -249,7 +250,6 @@ struct PendingWork {
 
 /// Prepared outside the lease (discovery), revalidated inside it without
 /// discovery (Task 6 SPEC P2), as promotion's `PreparedObservation`.
-#[allow(dead_code)] // Revalidated under the lease by the lifecycle (Task 6).
 pub(in super::super) struct PreparedClosureObservation {
     pub(in super::super) observed: Result<ClosureObservation, ClosureRefusal>,
     pub(in super::super) configuration: canonical::RepositoryConfig,
@@ -343,7 +343,6 @@ fn prepare_observation_at(
 
 /// Inside the lease: no discovery; the guard, the registration and a fresh
 /// Git observation, including pending work and identity, all re-read.
-#[allow(dead_code)] // Called under the lease by the lifecycle (Task 6).
 pub(in super::super) fn revalidate_under_lease(
     prepared: &PreparedClosureObservation,
     service: &RepositoryService,

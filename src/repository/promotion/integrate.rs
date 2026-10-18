@@ -118,7 +118,7 @@ pub(in super::super) fn prepare_integration_for<L: Lifecycle>(
     let (repository, root) = canonical_repository_root(root, RepositoryOperation::Read)?;
     let observation = L::prepare(
         service,
-        L::preview_request(root.clone(), record.context.item_id.clone()),
+        L::preview_request(root.clone(), record.context.item_id.clone(), identity),
     )?;
     let lease = repository_lease(&repository, &root, RepositoryOperation::Read)?;
     let primary_ref = format!("refs/heads/{}", record.context.primary_branch);

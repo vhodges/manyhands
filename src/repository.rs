@@ -29,8 +29,9 @@ mod bridges;
 mod cleanup;
 mod closure;
 pub use closure::{
-    ClosureBlocker, ClosureExpectation, PlannedClosure, PreviewTicketClosureRequest,
-    TicketClosurePreflight, TicketClosurePreview,
+    CloseTicketRequest, ClosureBlocker, ClosureExpectation, ClosureRecording, PlannedClosure,
+    PreviewTicketClosureRequest, TicketClosureError, TicketClosureOutcome, TicketClosurePreflight,
+    TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
 mod coordination;
