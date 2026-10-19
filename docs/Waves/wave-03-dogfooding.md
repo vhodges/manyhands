@@ -196,7 +196,7 @@ owning RFC/PRD before planning the affected implementation.
 | Full command-specific JSON schemas and malformed-content DTO details are not yet published. | Every CLI Cycle publishes schemas/fixtures with its verbs. C5 cannot exit until the complete command inventory has schemas and documented exit behavior. |
 | Marker-only repair needs an identity and context before it can become conforming; duplicate/mismatched IDs are different problems. | F2 provides explicit adoption previews, stable ID allocation and retry evidence. Ambiguous identity stays non-editable; no implicit migration during refresh. |
 | A pristine worktree may have an unsaved editor draft, including while a CLI action changes or cleans up its context. | D2/D3 preserve base/current drafts and reject stale writes. A removed context leaves an exportable/recoverable draft; never silently recreate a closed ticket context or lose the draft. |
-| Existing transport bootstrap runs before argument handling and emits plain stderr on failure in the unmerged Cycle 03 design. | C1 must preserve the pre-thread initialization boundary while adapting handled startup failures to the CLI envelope when `--json` is recognizable. Verify actual merged startup rather than overwriting it. |
+| Wave 02 Cycle 03 is merged; its original bootstrap ran before argument handling and emitted plain stderr on failure. | Amended 2026-10-18 by C1 (ruling R-1): C1 parses arguments first, without starting threads or native Git. Commands opening services initialize transport before any thread or native Git activity; help, version, usage errors and unavailable commands do not initialize it. Handled startup failures use the CLI envelope when `--json` is recognizable, preserving the pre-thread boundary. |
 
 The two CLI/discovery refinements were approved with this Wave and adopted in
 the CLI and desktop RFCs:
@@ -426,6 +426,11 @@ passed as `--id` is rejected as an invalid ID.
 Preserve early transport initialization while adapting handled startup
 failures to the CLI envelope when `--json` is recognizable, and test that
 failure output boundary against the actual merged startup.
+
+Amended 2026-10-18 by C1: `path observe` and `ticket check` move to C3,
+which owns the repair and authoring flows they feed. C1 includes `folder list`
+and by-path `document show`/`ticket show` with optional `--context`, and lists
+the moved verbs as planned rather than executing them.
 
 **Out of scope:** Canonical/config/key writes, network attempts, request replay,
 desktop views and polling scheduling. Help must distinguish the implemented

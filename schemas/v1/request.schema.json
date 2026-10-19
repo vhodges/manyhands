@@ -69,6 +69,8 @@
             "busy",
             "internal_error",
             "invalid_input",
+            "usage_error",
+            "command_unavailable",
             "request_mismatch",
             "request_not_found",
             "confirmation_mismatch",

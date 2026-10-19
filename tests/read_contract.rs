@@ -705,6 +705,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
     let effects = "effects.schema.json";
     vec![
         (
+            "cli_help_command.schema.json",
+            "repository",
+            support::cli::CLI_REPOSITORY_VALUES.to_vec(),
+        ),
+        (
             envelope,
             "outcome",
             Outcome::ALL.map(Outcome::as_str).to_vec(),

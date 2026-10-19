@@ -1335,7 +1335,11 @@ fn golden_envelopes() -> Vec<(String, Value)> {
     let mutation = mutation::CASES
         .iter()
         .map(|case| (MUTATION_GOLDENS, mutation::fixture_directory(), case));
+    let cli = support::cli::CLI_CASES
+        .iter()
+        .map(|case| ("cli_v1", support::cli::cli_fixture_directory(), case));
     read.chain(mutation)
+        .chain(cli)
         .map(|(set, directory, case)| {
             (
                 format!("{set}/{case}"),
@@ -1454,8 +1458,10 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 44] = [
+const DATA_ROOTS: [&str; 46] = [
     "cancel.schema.json",
+    "cli_help.schema.json",
+    "cli_version.schema.json",
     "comment_list.schema.json",
     "cycle_list.schema.json",
     "dependency_tree.schema.json",
@@ -1655,7 +1661,15 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 4] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 6] = [
+    (
+        ResultCode::UsageError,
+        "a CLI parse result; no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::CommandUnavailable,
+        "a CLI parse result; no command of execute or prepare returns it",
+    ),
     (
         ResultCode::RemoteUnavailable,
         "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
