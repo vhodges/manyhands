@@ -59,9 +59,32 @@ implementation baseline.
 - `SshAuthority { host: String, port: u16 }` has public fields and no
   parser. `inspect_host` normalizes the host itself.
 - `tests/support/golden.rs` fixes its directory to `tests/fixtures/read_v1`
-  and refuses cases not listed in `CASES`.
-- `tests/support/ssh_harness.rs` already isolates a child process from the
-  developer's Git configuration and data directories.
+  and refuses cases not listed in `CASES`. `tests/support/mutation_golden.rs`
+  keeps a second directory with its own cases, reusing `golden::render` and
+  `golden::update_requested` without editing `golden.rs`; the CLI follows
+  that pattern.
+- Five pre-existing contract tests cover every code and schema:
+  - `tests/mutation_contract.rs`:
+    - `every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it` (line 1693), over `golden_envelopes()` (line 1331), which scans `read_v1` and `mutation_v1`;
+    - `every_result_code_has_a_mutation_golden_or_a_reason_none_has_it` (line 1679), over `CODES_NO_MUTATION_GOLDEN_HAS` (line 1658);
+    - `every_schema_is_reachable_from_a_published_root` (line 1566), over `DATA_ROOTS` (line 1457);
+    - `every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root` (line 1610).
+  - `tests/read_contract.rs`: `published_enumerations_list_exactly_the_registered_values` (line 1013), over `contract_enumerations()` (line 703). It counts every `enum` keyword in every published schema, and the schema checker has no `const`.
+- `tests/support/ssh_harness.rs` isolates a child process from the
+  developer's Git configuration and data directories through environment
+  variables. It also redirects libgit2's configuration search paths, but only
+  in-process, which a CLI child cannot do (Cycle ruling R-5).
+- `directories` 5 resolves the platform data directory from `XDG_DATA_HOME`
+  or `HOME` on Linux, from `HOME` on macOS, and through the Windows
+  known-folder API on Windows, which ignores `LOCALAPPDATA` (Cycle ruling
+  R-3).
+- `initialize_git_transport_before_threads` can fail only if libgit2 rejects
+  its timeout options (`src/runtime.rs:24-35`).
+- `resolve_repository` opens a read session, and the session requires a
+  readable index. So every repository-scoped read fails with
+  `index_unavailable` on a degraded index, including `index status` (Cycle
+  ruling R-2). `open_at` takes the cache lock, so `busy` can arise while the
+  service opens, before any read.
 
 ## Module Layout
 
@@ -83,10 +106,16 @@ Rust resolves `mod catalog;` in `src/bin/manyhands-cli.rs` to
 binary does not compile it.
 
 `clap` is added as a direct dependency with default features off and
-`std`, `help`, `usage` and `error-context` on. Colour is off. Task 0 confirms
-the version that resolves, and Task 2 confirms that help text does not
-depend on the terminal's width (a test runs it with different `COLUMNS`
-values and compares).
+`std`, `help`, `usage` and `error-context` on. Without the `color` feature
+there is no colour, and the colour methods (`Command::color`,
+`disable_colored_help`) do not exist, so they are not called. Without
+`wrap_help`, clap does not read the terminal width. The root command sets
+`.bin_name("manyhands-cli")`, so help reads the same on Windows, where argv[0]
+ends in `.exe`.
+
+`src/bin/manyhands-cli.rs` carries `#![allow(clippy::result_large_err)]`, as
+`src/repository/read/mod.rs` does, because the bin passes `ReadError` in
+`Result`s.
 
 ## Startup Order
 
@@ -118,17 +147,19 @@ calls, and unit tests drive `run` with a fake that records the calls.
 ## Command Catalog
 
 `catalog.rs` holds one static table. Each entry has the resource, the verb,
-a one-line summary, its availability (`Available` or `Planned("C2")` and so
-on), whether `--repo` is required or refused, and its options. It is the
-only list of commands: the parser, text help, JSON help and the
-`command_unavailable` result are all built from it.
+a one-line summary and its availability (`Available` or `Planned("C2")` and
+so on). An available command also has its `--repo` rule (required or
+refused) and its options. A planned command has neither: its rules belong to
+the Cycle that delivers it (decision 13). The table is the only list of
+commands: the parser, text help, JSON help and the `command_unavailable`
+result are all built from it.
 
 | Delivered by | Commands |
 | --- | --- |
 | C1 | `repo list`, `repo inspect`, `repo identity`, `remote list`, `key list`, `key show`, `key public`, `host list`, `host inspect`, `document list`, `document show`, `folder list`, `ticket list`, `ticket show`, `ticket ready`, `ticket blocked`, `ticket deps`, `ticket children`, `ticket cycles`, `ticket plan`, `ticket critical-path`, `ticket find`, `comment list`, `index status`, `poll status`, `operation list`, `operation show`, `id new` |
-| C2 | `repo create`, `repo enable`, `repo remove`, `repo identity-set`, `remote add`, `remote remove`, `remote select`, `key generate`, `key import`, `key select`, `key clear`, `key remove`, `key delete`, `host approve`, `host replace` |
+| C2 | `repo create`, `repo enable`, `repo remove`, `repo identity-set`, `remote add`, `remote remove`, `remote select`, `key generate`, `key import`, `key select`, `key clear`, `key remove`, `key delete`, `host approve`, `host replace`, `host observe`, `request show`, `request cancel` |
 | C3 | `folder create`, `document create`, `document save`, `document move`, `document repair`, `ticket create`, `ticket save`, `ticket repair`, `ticket slug-assign`, `index refresh`, `index rebuild`, `path observe`, `ticket check` |
-| C4 | `comment add`, `item sync`, `repo sync`, `conflict show`, `conflict resolve`, `operation resume` |
+| C4 | `comment add`, `item sync`, `repo sync`, `conflict show`, `conflict resolve`, `operation resume`, `operation abandon` |
 | C5 | `document promote`, `ticket close`, `poll once`, `poll configure`, `poll pause`, `poll resume` |
 
 A unit test compares the table with this list, so a command cannot be added
@@ -155,10 +186,37 @@ or dropped silently.
 | `--direction down\|up\|both` | `ticket deps` | default `down` |
 | `--depth <n>` | `ticket deps` | unsigned integer |
 
-Only `--json` and `--non-interactive` are global, matching the RFC synopsis,
-where they precede the resource and every other option follows the verb.
-`--input`, `--request-id`, `--prepare` and `--confirm` are not declared on
-any available verb, so supplying one is a usage error.
+Only `--json`, `--non-interactive`, `--help` and `--version` are global,
+matching the RFC synopsis, where they precede the resource and every other
+option follows the verb. `--input`, `--request-id`, `--prepare` and
+`--confirm` are not declared on any available verb, so supplying one is a
+usage error.
+
+clap setup on every command in the tree:
+
+- `disable_help_flag(true)`, `disable_help_subcommand(true)` and
+  `disable_version_flag(true)`. clap's own help and version are reported as
+  errors (`ErrorKind::DisplayHelp`), and its `help` subcommand would add
+  commands the catalog does not have. Instead, global `--help` and
+  `--version` flags (`ArgAction::SetTrue`) are declared on the root.
+- `args_override_self(true)` on the root, so a repeated flag such as
+  `--json --json` is accepted, not an error.
+- `subcommand_required(false)` on the root and on each resource, so a bare
+  call or a bare resource parses instead of erroring.
+
+After a successful parse, the action is decided in this order:
+
+1. `--help` set, or found by the raw scan below: `Help` for the matched
+   command, the matched resource, or the root.
+2. `--version` set: `Version`.
+3. No resource: `Help` for the root (the bare call).
+4. A resource with no verb: `Help` for that resource, exit 0.
+5. A planned verb: `Unavailable`.
+6. An available verb whose per-verb rules (below) fail: `Usage`.
+7. Otherwise: `Run`.
+
+A clap error (unknown command or option, bad value, missing value) is
+`Usage`.
 
 Per-verb rules, enforced after clap parsing:
 
@@ -186,10 +244,19 @@ rules are checked by one function over the parsed matches.
   after the service opens, so the failure is an F1 envelope like any other.
   A short code therefore fails as `invalid_id`, as the relationships RFC
   requires.
+- Order and scope: a repository-scoped verb resolves `--repo` first, then
+  parses its IDs, and an ID failure carries `repo.scope()`
+  (`ReadError::invalid_id().with_scope(repo.scope())`). This matches F1's
+  golden `failure_invalid_id`. So a bad `--id` with an unregistered repository
+  is `repository_not_registered`. `--key-id` belongs to application-global
+  verbs, and its failure keeps the default scope.
 - `--authority` is `host`, `host:port`, or `[address]` / `[address]:port`
   for IPv6. The port defaults to 22. A port that is not 1–65535, an empty
-  host, or anything else that does not fit is a `usage_error`. The host is
-  passed to `inspect_host` as written; F1 normalizes it.
+  host, or anything else that does not fit is a `usage_error`. IPv6 brackets
+  are stripped, so `[::1]:2222` becomes `SshAuthority { host: "::1", port:
+  2222 }`: F1's `stored_authority` adds brackets itself, and a bracketed host
+  would never match. Other hosts are passed as written; F1 normalizes their
+  case.
 - `--closure` and `--direction` use clap's value lists; a bad value is a
   `usage_error`.
 - `--depth` is a `u32`; anything else is a `usage_error`.
@@ -205,20 +272,28 @@ accepts any values, including ones that look like options. So
 `ticket close --id X --prepare` parses as the command `ticket close`, and the
 result is `command_unavailable`, not a complaint about `--prepare`.
 
-### Recognizing `--json` when parsing fails
+### Recognizing `--json` and `--help` from the raw arguments
 
-When clap returns an error, the invocation is in JSON mode if any argument
-before a literal `--` is exactly `--json`. Abbreviations and `--json=...` do
-not count.
+A planned verb's catch-all argument captures everything after its first
+unknown option, including a later `--json` or `--help`. And a clap error
+reports neither. So, whatever clap returns:
+
+- JSON mode is `matches.get_flag("json") || json_requested(&args)`.
+- Help is requested if `matches.get_flag("help") || help_requested(&args)`.
+
+Both scans look for an argument exactly equal to the flag, before a literal
+`--`. Abbreviations and `--json=...` do not count.
 
 ### The `command` field
 
 - A parsed command, available or not: `<resource> <verb>`, for example
   `ticket list` or `ticket close`.
-- Help and version: `cli help` and `cli version`, including a command's own
-  `--help`.
-- A usage error that names a known resource and verb: that command.
-- Any other usage error: `cli usage`.
+- Help and version: `cli help` and `cli version`, including a command's or a
+  resource's own help.
+- A usage error: the command named by the first two arguments that are not
+  options (skipping the global flags), if they are a catalog command;
+  otherwise `cli usage`. clap's error does not say which subcommand failed,
+  so this scan names it.
 
 ## Result Codes
 
@@ -233,9 +308,33 @@ Both have no recovery action: they join the no-action arm of the `match` in
 `src/repository/mutation/outcome.rs` (decision 9). They are added to:
 
 - the envelope schema's `code` enum and the request schema's `result.code`
-  enum;
+  enum, after `invalid_input` in both, matching their position in
+  `ResultCode::ALL`;
 - `DESIGN_CODES` and the list in `result_code_messages_are_fixed` in
-  `src/results_tests.rs` (both are named edits in the plan).
+  `src/results_tests.rs` (named edits 1 and 2). `DESIGN_CODES`' doc comment,
+  which describes the order of its groups, gains a sentence for the CLI
+  codes.
+
+Their evidence in the shared contract tests (decision 11):
+
+- `golden_envelopes()` in `tests/mutation_contract.rs` also reads every JSON
+  case of `tests/fixtures/cli_v1` (named edit 3). The CLI's usage and
+  unavailable goldens then satisfy
+  `every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it`,
+  and the help and version goldens satisfy the data-root test.
+- `DATA_ROOTS` gains `cli_help.schema.json` and `cli_version.schema.json`
+  (named edit 4).
+- `CODES_NO_MUTATION_GOLDEN_HAS` gains both codes with the reason "a CLI
+  parse result; no command of execute or prepare returns it" (named edit 5).
+- `contract_enumerations()` in `tests/read_contract.rs` gains the new
+  schemas' enumerations, each tied to a Rust constant in the bin's catalog
+  (named edit 6). The tests cannot reach the bin's constants, so the constant
+  lists are duplicated in `tests/support/cli.rs`, and a bin unit test checks
+  them against the catalog.
+
+Because the usage and unavailable goldens are the codes' evidence, the codes,
+their schemas entries, the CLI harness and those first goldens land in the
+same task, so no commit leaves these tests red.
 
 A usage error or unavailable command envelope has an empty scope, null
 `data` and no recovery. In human mode, stderr adds clap's own explanation of
@@ -272,8 +371,21 @@ no effects.
 }
 ```
 
-The root help lists every command. A command's own help lists just that
-command. `repository` is `required` or `refused`. `value` is null for a flag.
+The root help lists every command, a resource's help lists that resource's
+commands, and a command's own help lists just that command. `repository` is
+`required` or `refused` for an available command, and null for a planned
+one, whose `options` are empty (decision 13). `value` is null for a flag.
+Text help for a planned command shows its name, its summary and
+`Arrives with <Cycle>.`
+
+The schema writes `repository` as `"enum": ["required", "refused", null]`
+and `schema_version` as `"enum": [1]`, because the schema checker has no
+`const`. Both enumerations are registered in `contract_enumerations()`
+(named edit 6).
+
+The version golden contains the package version (`0.1.0` at this baseline).
+Placeholders must be at least eight characters, so a version bump
+regenerates the `version` and `version_text` fixtures; that is accepted.
 
 `cli version` data, schema `cli_version.schema.json`:
 
@@ -324,14 +436,22 @@ failure envelope through `to_envelope`.
 
 The scope of each success is what F1's golden tests use for the same read:
 `repo.scope()` for repository reads, with `item_id` set for reads of one
-item, and `Scope::default()` for application-global reads. Task 1 copies
-the exact scope each golden test in `tests/read_contract.rs` uses.
+item, and `Scope::default()` for application-global reads. The plan's verb
+tasks copy the exact scope each golden test in `tests/read_contract.rs` uses
+for the same read.
+
+`index status` cannot report `state: unavailable` through the CLI: the
+repository resolves first, and resolution needs a readable index. F1's
+`index_status_unavailable` golden therefore has no CLI counterpart (Cycle
+ruling R-2).
 
 **Kind of item (decision 10).** `document show --id` returns
 `item_not_found` when the item is a ticket, and `ticket show --id` when it
 is a document. A by-path `show` of the wrong kind of file is the same. The
 check is in dispatch, on the returned DTO's `kind`, so the F1 read is
-unchanged.
+unchanged. The failure's scope is the scope the success would have had:
+`repo.scope()` with the item ID for `--id`, and `repo.scope()` alone for
+`--path`.
 
 ## Output And Exit Status
 
@@ -342,7 +462,9 @@ unchanged.
   written to stderr.
 - **Human mode, success.** The human text to stdout. A list whose index is
   `stale` or `never_refreshed`, or whose `complete` is false, also writes one
-  note line per condition to stderr.
+  note line per condition to stderr. Each renderer returns
+  `Human { stdout: String, notes: Vec<String> }`, so it can report those
+  conditions from the DTO it knows.
 - **Human mode, failure.** To stderr: the message, the code, and one line per
   recovery action naming the action and its arguments.
 
@@ -396,20 +518,32 @@ content (IDs and codes present, no secret) rather than layout.
 - The catalog equals the table above, and every available verb has a
   dispatch function.
 - Per-verb option rules: each required, refused and conflicting case.
-- `--json` recognition on clap errors, including after `--`.
-- `--authority` parsing, including IPv6, default port and bad ports.
+- The parse-action order in "Parsing", including:
+  - a bare resource (`ticket`), `ticket --help`, `ticket list --help --json`;
+  - `ticket close --id X --prepare --json`, which is `Unavailable` in JSON
+    mode;
+  - `ticket close --id X --help`, which is help for `ticket close`.
+- `json_requested` and `help_requested`, including after `--` and the
+  `--json=1` form.
+- `--authority` parsing, including IPv6 (brackets stripped), the default
+  port and bad ports.
 - The `command` field for each case in "The `command` field".
 - Exit mapping for every `FailureClass`.
 - Data-directory resolution: unset, absolute, relative, empty.
-- Startup order with the fake `Startup`: help, version, the bare call,
-  usage errors and unavailable commands never call it; every available
-  command starts the transport before opening the service; a transport
-  failure stops before the service opens.
+- Startup order with the fake `Startup`:
+  - help, version, the bare call, usage errors and unavailable commands
+    never call it;
+  - every available command starts the transport before opening the
+    service;
+  - a transport failure stops before the service opens and yields
+    `internal_error`, exit 1 (Cycle ruling R-4).
+- The enumeration constants duplicated in `tests/support/cli.rs` equal the
+  catalog's.
 
 ### Integration tests: `tests/cli.rs`
 
-A new default-harness target. A helper in `tests/support/cli.rs` runs
-`env!("CARGO_BIN_EXE_manyhands-cli")` with:
+A new default-harness target. A helper in `tests/support/cli.rs` builds a
+`std::process::Command` for `env!("CARGO_BIN_EXE_manyhands-cli")` with:
 
 - `MANYHANDS_DATA_DIR` set to the fixture's data directory;
 - `HOME`, `USERPROFILE`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
@@ -417,14 +551,26 @@ A new default-harness target. A helper in `tests/support/cli.rs` runs
   directories;
 - every inherited `GIT_*`, `SSH_*` and `GCM_*` variable removed, then
   `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL` pointing into the
-  temporary home, as `tests/support/ssh_harness.rs` does;
+  temporary home. This is the environment half of what
+  `tests/support/ssh_harness.rs` does; libgit2's system configuration cannot
+  be redirected for a child (Cycle ruling R-5);
 - stdin closed, stdout and stderr captured, and a timeout after which the
   test fails.
 
-Fixtures come from `tests/support` (`born_repository`, `enabled_repository`,
-`items::contract_repository`, `items::relationship_repository`,
-`credentials` helpers). They are built in the test process; only the CLI
-runs in a child.
+`run_cli` runs that command to completion. `cli_command` returns it
+unstarted, for the broken-pipe case.
+
+Fixtures are built in the test process; only the CLI runs in a child:
+
+- `born_repository`, `enabled_repository`, `items::contract_repository` and
+  `items::relationship_repository`;
+- comments are written with `items::write_comment` and `items::COMMENT_*`,
+  as `tests/read_contract.rs` does;
+- keys with `credentials::register_keys`, pins with `credentials::pin_host`,
+  and operations with the `operations` helpers;
+- a repository under a path with a space and `é` is built by a new
+  `born_repository_in(parent, name)` in `tests/support/cli.rs`, made the
+  same way as `born_repository` and enabled after it exists.
 
 Cases:
 
@@ -432,43 +578,86 @@ Cases:
   in `tests/fixtures/cli_v1/`, checked against the envelope schema and its
   data schema.
 - Every F1 failure code a C1 verb can reach, through the binary, with its
-  exit status: `invalid_path`, `not_repository`, `not_repository_root`,
-  `bare_repository`, `repository_not_registered`, `invalid_id`,
-  `item_not_found`, `path_not_found`, `key_not_found`,
-  `authority_not_found`, `operation_not_found`, `index_unavailable`,
-  `busy` (another process holds the exclusive lock) and `internal_error`
-  (where a fixture can produce it). Cases the binary cannot reach are listed
-  in the plan with the reason.
+  exit status:
+  - input class: `invalid_path`, `not_repository`, `not_repository_root`,
+    `bare_repository`, `invalid_id`, `item_not_found`, `path_not_found`,
+    `key_not_found`, `authority_not_found`, `operation_not_found`;
+  - blocked class: `repository_not_registered`, `index_unavailable`,
+    `public_key_unavailable` (`key public` for a key registered without a
+    public key), and `repository_inaccessible` (Unix only, as F1 produces
+    it);
+  - transient class: `busy`, with another process holding the exclusive
+    lock;
+  - internal class: `internal_error`, with `MANYHANDS_DATA_DIR` naming a
+    regular file.
+- Codes no C1 command can produce, with the reason:
+  - `repository_not_enabled`: F1 reports an unregistered repository as
+    `repository_not_registered`;
+  - `relationship_cycle` and `invalid_relationship`: only `ticket check`
+    returns them, and it moved to C3;
+  - `internal_error` from a transport-start failure (Cycle ruling R-4);
+  - every mutation code.
 - `usage_error` and `command_unavailable`, in both modes, including a
-  mutation-only option on a read and `--json` on a parse error.
-- A short code as `--id` is `invalid_id`.
-- Help, version and the bare call in both modes. They exit 0, and the
-  data directory named by `MANYHANDS_DATA_DIR` does not exist afterwards.
+  mutation-only option on a read and `--json` after a planned verb's
+  options.
+- A short code as `--id` is `invalid_id`, and a bad `--id` with an
+  unregistered repository is `repository_not_registered`.
+- Help, version and the bare call in both modes. They exit 0, and the data
+  directory named by `MANYHANDS_DATA_DIR` does not exist afterwards.
 - Human mode: the four pinned outputs, and stdout/stderr separation for one
   success and one failure.
-- Redaction: a fixture with sentinel secrets in a remote URL and in stored
-  problem guidance; no sentinel appears in any stdout or stderr the suite
-  produces.
+- Stale reads:
+  - a list is made stale by setting `refresh_required = 1` through
+    `items::index(data_dir)`;
+  - a `show` by moving the file's modification time 30 seconds ahead, as
+    `tests/read_comments.rs` does.
+- Redaction: one fixture plants every sentinel the support code has, and no
+  sentinel appears in any stdout or stderr of any C1 verb in either mode:
+  - a remote URL password and query;
+  - stored problem guidance;
+  - `credentials::SECRET_SENTINELS` from registered keys;
+  - `operations::KEY_MATERIAL_SENTINEL`.
 - No repository change: `repository_and_worktree_snapshot` is equal before
   and after every read command.
-- The platform data directory is never used: every child gets
-  `MANYHANDS_DATA_DIR`, and a case runs `repo list` with it unset but the
-  platform variables pointed at a temporary directory, and checks the
-  directory is created there.
+- Platform default (Linux and macOS only, Cycle ruling R-3): `repo list`
+  with `MANYHANDS_DATA_DIR` removed and the platform variables pointed at a
+  temporary directory creates its data directory there.
+- Every child's stdout and stderr reach end of file when it exits, so no
+  descendant holds them.
+
+The exit-class coverage test is table-driven. Each row is a command line
+with its expected code and exit, run through the binary in that test. Class
+coverage is asserted over the table, so the table cannot drift from what
+runs.
+
+`busy` needs a child process that holds the lock. `tests/cli.rs` defines a
+top-level `#[test] fn index_lease_child()`, copied from
+`tests/read_boundary.rs:34-58`, and the test starts it with the public
+`support::hold_lease_in_child_for_test`. `busy` can come back with an empty
+or a repository scope, because the service open and the resolution both
+take the lock.
 
 ### Golden harness
 
-`tests/support/golden.rs` gains a function taking the fixture directory and
-its case list, so `tests/fixtures/cli_v1/` and its own `CASES` list sit
-beside F1's. The existing `read_v1` functions keep their behavior.
-Placeholders replace absolute paths, ULIDs from `id new`, object IDs and
-times, as F1 does. `.gitattributes` marks `tests/fixtures/cli_v1/` as `-text`.
+`tests/support/cli.rs` keeps the CLI's goldens the way
+`tests/support/mutation_golden.rs` keeps the mutation goldens:
+
+- its own directory, `tests/fixtures/cli_v1/`;
+- its own `CLI_CASES` for JSON goldens and `CLI_TEXT_CASES` for `.txt`
+  goldens;
+- reusing `golden::render` and `golden::update_requested`.
+
+`golden.rs` is not edited. A test checks that the directory holds exactly
+the listed cases. Placeholders replace absolute paths, ULIDs from `id new`,
+object IDs and times, as F1 does. `.gitattributes` marks
+`tests/fixtures/cli_v1/` as `-text`.
 
 ### Native
 
-`tests/cli.rs` joins the test list in `.github/workflows/build.yml`. The
-binary path comes from Cargo on every platform. Native CI runs on main after
-merge.
+`--bin manyhands-cli --test cli` joins the test list in
+`.github/workflows/build.yml`, so the bin's unit tests also run natively.
+The binary path comes from Cargo on every platform. Native CI runs on main
+after merge.
 
 ## Document Amendments
 
@@ -480,13 +669,18 @@ Made on this branch:
   - `folder list`, and `--path`/`--context` on `document show` and
     `ticket show`;
   - `path observe` and `ticket check` are C3 verbs;
+  - F2's `request show`, `request cancel` and `host observe` (C2) and
+    `operation abandon` (C4) join the taxonomy;
   - `usage_error` and `command_unavailable`;
   - help and version as JSON results, with commands `cli help`,
     `cli version`, and `cli usage` for an unnameable usage error;
   - `MANYHANDS_DATA_DIR`;
   - human mode writes results to stdout and failures to stderr.
-- **Wave 03:** the "unmerged Cycle 03" sentence is corrected, and the C1
-  section notes the two moved verbs.
+- **Wave 03:**
+  - the clarification row about transport bootstrap: Cycle 03 is merged,
+    and C1 parses arguments first while keeping the pre-thread boundary
+    (Cycle ruling R-1);
+  - the C1 section notes the two verbs moved to C3.
 - **API audit:** the C1 refresh from Task 0.
 
 ## Alternatives Rejected

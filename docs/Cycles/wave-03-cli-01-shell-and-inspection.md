@@ -13,7 +13,7 @@ id: "01M58XQ59NBC37ENGH0BA9X40Q"
 ## Status
 
 Draft for owner review. The owner answered the planning questions on
-2026-10-18 (decisions 1–10 below). The design and the implementation plan are
+2026-10-18 (decisions 1–13 below). The design and the implementation plan are
 companions:
 
 - [Design](../plans/2026-10-18-wave-03-cli-01-shell-and-inspection-design.md)
@@ -92,11 +92,18 @@ Authority, in order:
 
 - No canonical, configuration or key writes; no network attempts; no request
   replay or confirmation; no prompts; no desktop views; no polling.
-- `--input`, `--request-id`, `--prepare` and `--confirm` are recognized
-  global options but are refused on every C1 verb as usage errors.
-  `--non-interactive` is accepted and has no effect yet.
+- `--input`, `--request-id`, `--prepare` and `--confirm` are not accepted by
+  any C1 verb; supplying one is a usage error. `--non-interactive` is
+  accepted and has no effect yet.
 - `path observe` and `ticket check` move to C3, which owns the repair and
   authoring flows they feed (decision 5).
+- F2's commands `request show`, `request cancel` and `host observe` arrive
+  with C2, and `operation abandon` with C4 (decision 12). C1 lists them as
+  planned.
+- `index status` on a degraded index fails with `index_unavailable` through
+  the CLI, because every repository-scoped command resolves its repository
+  first and resolution needs a readable index. F1's `unavailable` status DTO
+  is reachable only by a caller that resolved earlier (ruling R-2).
 - `conflict show` stays deferred to the first of C4 or D5, as F1 decided.
 - `index refresh` and `index rebuild` are C3's. A read reports a stale or
   never-refreshed index and does not refresh it.
@@ -125,8 +132,9 @@ Authority, in order:
    `cli version` and `cli usage`.
 5. **Codes.** An unknown command or option, or a malformed option value, is
    `usage_error`. A command the RFC approves but a later Cycle delivers is
-   `command_unavailable`, and its message names that Cycle. Both are of the
-   input class, exit 2, with no recovery action.
+   `command_unavailable`; its human output names that Cycle, and its JSON
+   `message` is the code's fixed message. Both are of the input class,
+   exit 2, with no recovery action.
 6. **Never printed.** No secret, credential, backend error text, SQL or
    `Debug` rendering, in either mode. Remote locations are redacted by F1.
    Requested bodies and sources are printed only by `show`.
@@ -147,10 +155,17 @@ Authority, in order:
   zero.
 - `--json` is honored on usage errors.
 - A short code passed as `--id` is `invalid_id`.
-- Planted secrets never appear in stdout or stderr.
-- The platform data directory is never touched by tests.
-- The binary has no display or desktop dependency. No process outlives the
-  command.
+- Planted secrets, including key-material sentinels, never appear in stdout
+  or stderr.
+- The platform data directory is never touched by tests. The one test of the
+  platform default runs only on Linux and macOS, where it can be redirected
+  (ruling R-3).
+- The binary has no display or desktop dependency, shown by a `cargo tree`
+  check that fails if `gpui-kit` is in the CLI's normal dependency graph.
+- No process outlives the command: the CLI spawns no thread or child, and
+  each test child's output pipes reach end of file when it exits.
+- A transport-start failure cannot be produced through the real binary; the
+  startup-order unit test with a fake is the evidence (ruling R-4).
 - The CLI RFC, the Wave document and the API audit carry the amendments
   listed in the design.
 
@@ -175,6 +190,41 @@ Authority, in order:
    library ticket. The exception covers only that line.
 10. **Kind mismatch.** Approved with the design: a `show` verb of the wrong
     kind is `item_not_found`.
+11. **Named test edits 3–6.** The two codes and two schemas must satisfy
+    existing contract tests that require every code and schema to have a
+    golden or a listed reason. The owner approved:
+    - `golden_envelopes` in `tests/mutation_contract.rs` also scanning
+      `tests/fixtures/cli_v1`;
+    - `DATA_ROOTS` gaining the two CLI schemas;
+    - `CODES_NO_MUTATION_GOLDEN_HAS` gaining both codes with a reason;
+    - `contract_enumerations` in `tests/read_contract.rs` tying the new
+      schema enumerations to Rust constants.
+12. **F2's commands.** `request show`, `request cancel` and `host observe`
+    arrive with C2; `operation abandon` with C4. C1 catalogs them as planned
+    and the CLI RFC gains them.
+13. **Help for planned commands.** Name, summary and delivering Cycle only.
+    JSON help gives a planned command `"repository": null` and
+    `"options": []`; each later Cycle publishes its own rules.
+
+## Rulings (2026-10-18, after the independent review)
+
+- **R-1.** The transport-start ruling in the review record stands. The Wave's
+  clarification row is amended to say so.
+- **R-2.** `index status` on a degraded index is `index_unavailable` through
+  the CLI. It is accepted as CLI behavior, not raised as a library change: the
+  recovery it offers, `index.rebuild`, is the right next step. Cost if wrong:
+  a library ticket to resolve without a readable index.
+- **R-3.** On Windows, the `directories` crate finds the local application
+  data folder through the Windows API and ignores `LOCALAPPDATA`. The
+  platform-default test is therefore compiled only on Linux and macOS.
+  Windows coverage of the default location is an inspection item.
+- **R-4.** `initialize_git_transport_before_threads` fails only if libgit2
+  rejects its own timeout options, which no test can arrange through the
+  binary. The handled failure path is proven with the fake `Startup`.
+- **R-5.** The CLI child cannot be isolated from libgit2's system-level
+  configuration (`/etc/gitconfig`, `%PROGRAMDATA%`), because libgit2 is
+  redirected only in-process. Fixtures set a repository-local identity,
+  which wins, so the effect is limited to settings no fixture relies on.
 
 ## Review Record
 
@@ -184,7 +234,8 @@ Authority, in order:
 | Planning | The Wave text calls Cycle 03 "unmerged". | Settled | It is merged. The Wave sentence is corrected on this branch. |
 | Planning | `host inspect` in the RFC takes `--repo`; F1's read is application-global. | Decision | Decision 7. |
 | Planning | No result code exists for usage errors or for approved but undelivered commands. | Decision | Decisions 3 and 9. |
-| Planning | Tests cannot redirect the platform data directory on macOS or Windows. | Decision | Decision 2. |
+| Planning | Tests cannot redirect the platform data directory on Windows; on macOS it follows `HOME`. | Decision | Decision 2; ruling R-3. |
+| Independent review of the three drafts (2026-10-18, at `2478f75`) | 40 findings: 6 blocking, 18 important, 16 minor. The blocking ones were existing contract tests the codes and schemas break, a Windows test that would touch real data, a vacuous `cargo tree` check, and two clap behaviors (`--help` reported as an error; `--json` swallowed after a planned verb). | Settled | Decisions 11–13, rulings R-1 to R-5, and corrections throughout the design and plan. |
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,
