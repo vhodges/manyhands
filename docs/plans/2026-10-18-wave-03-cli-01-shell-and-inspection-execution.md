@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0 and 1 have been executed. For each later task, record its actual starting
+Tasks 0–2 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -202,8 +202,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | Task | Status | Base / endpoint | Reviews | Verification |
 | --- | --- | --- | --- | --- |
 | 0 — Baseline, audit refresh and ledger | Complete; both controller reviews passed | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → `2aa71e7a1c4895c1e62c65d37fc81116902642c9` | Spec and quality reviews passed, no findings (controller handoff for Task 1) | Five baseline commands above; 183 targeted tests; documentation checks |
-| 1 — Clap, catalog and parsing | Implemented; quality-review fix awaiting re-review | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` plus follow-up `fix: reject invalid CLI authority delimiters` | Spec PASS; quality found one important authority-validation issue, fixed below; re-review pending | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
-| 2 — Startup, rendering and main | Not started | Not established | Not requested | Not run |
+| 1 — Clap, catalog and parsing | Complete; controller reviews passed | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` → `371c294195c48d8357146136bd1782db2daf2538` | Spec PASS; important authority-validation finding fixed; quality re-review PASS (Task 2 controller handoff) | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
+| 2 — Startup, rendering and main | Implemented and self-reviewed; controller reviews pending | `371c294195c48d8357146136bd1782db2daf2538` → checkpoint introducing this entry, `feat: CLI startup, rendering, help and version` | Spec/quality self-review PASS; no unresolved findings; no independent review claimed | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
 | 3 — Codes, schemas, harness and first goldens | Not started | Not established | Not requested | Not run |
 | 4 — Repository, credential, status and utility verbs | Not started | Not established | Not requested | Not run |
 | 5 — Content verbs | Not started | Not established | Not requested | Not run |
@@ -355,3 +355,100 @@ reserved for Task 8; no native workflow, push, PR, closure or cleanup occurred.
   `.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A0S7NC3VH4V9T2BDV6P84X.md`.
   New commit subject: `fix: reject invalid CLI authority delimiters`; endpoint
   SHA is returned after commit. No amend, push, PR, merge, closure or cleanup.
+
+### Task 2 checkpoint — 2026-10-19
+
+**Authorization and base.** The controller dispatched only Task 2 with the
+owner's checkpoint-commit approval, test-first execution and self-review, and
+no subagents. Initial HEAD was
+`371c294195c48d8357146136bd1782db2daf2538`, with a clean worktree on
+`manyhands/ticket/01M4CC0VMSZ7BRS740C8VSQ5ZK`. Read the current AGENTS, ticket,
+prior checkpoint comments, approved Cycle/design/implementation plan and this
+ledger. The required `git fetch origin main && git merge origin/main` ran
+inside the ticket worktree and returned **Already up to date**; no commit or
+base change. `origin/main` remains `f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+No rebase or merge into main occurred.
+
+**Task 1 review handoff.** The controller reports **spec PASS** and **quality
+re-review PASS** after `371c294` rejected `@` and `/` in unbracketed authority
+hosts. This resolves the pending re-review recorded above. Task 1 source and
+tests were not changed in Task 2.
+
+**Implementation.**
+
+- Added `render.rs` and its tests: exhaustive exit mapping, compact JSON plus
+  newline, human stdout/notes, fixed failure/code/recovery lines, human-only
+  extra detail, and `write_all`/flush on both streams. A private writer helper
+  permits short-write and all four write/flush failure cases to be tested;
+  the process wrapper exits 1 on error without printing a diagnostic.
+- Serialization failure maps to a fixed `internal_error` envelope, retaining
+  command/scope and discarding the serializer's error text. A sentinel test
+  proves that backend text is not printed. Both temporary code constants
+  remain `ResultCode::InvalidInput`, pending Task 3's codes and goldens.
+- Added `startup.rs` and its tests: service-free actions, transport-before-open
+  for all 28 available Run actions, transport failure, service-open failure,
+  successful ID dispatch, and unset/empty/absolute/relative data paths. Unix
+  coverage also preserves non-UTF-8 data-directory paths.
+- Help uses the existing clap tree. Its catalog-derived `after_help` epilogue
+  exposes all 72 full command names and their availability/delivering Cycle,
+  because clap's default root help stops at resources. Resource help filters
+  that epilogue; available-command help inherits global flags and full binary
+  names after `Command::build`. Planned-command help is exactly name, summary
+  and `Arrives with <Cycle>.`, with no speculative options. Root/resource help
+  documents `MANYHANDS_DATA_DIR` as an advanced/testing override.
+- JSON help uses the approved bin-private DTO fields, default scope and
+  not-requested effects. `RepoRule` serializes through `REPOSITORY_VALUES[0/1]`;
+  planned entries retain null repository and empty options. Version has only
+  `name` and package `version` data. Usage/unavailable canonical commands,
+  empty recovery and human-only detail follow the approved contract.
+- Added `dispatch.rs`, `human.rs` and their tests. Only `id new` calls a read
+  service, using the direct `NewIdDto` return without fallible wrapping.
+  Its human form is only ID plus newline. The exact other 27 available verbs
+  are explicit placeholders, each tested in both modes. An unlisted Run is
+  classified as an internal routing error rather than accidentally succeeding.
+- Wired `main` to args_os → parse → run with RealStartup → write_and_exit.
+  RealStartup retains the pre-thread unsafe-call safety comment, uses the
+  data-directory helper, converts RepositoryError through ReadError, and maps
+  current-directory failure to `internal_error`. Explicit module paths are
+  retained; the catalog/parser dead-code allows are removed. The authority
+  annotation remains for Task 4.
+
+**RED/GREEN and final verification.** All Rust commands ran inside this
+worktree through Devenv, locked except fmt. Only the CLI bin was tested/linted;
+the full suite remains reserved for Task 8.
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli render` before implementation | RED: 8 tests failed at the unimplemented render/writer scaffolding; 24 filtered out |
+| Same render command after implementation | GREEN: 8 passed, 0 failed; 24 filtered out |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` with new startup/dispatch/human tests and scaffolding | RED: 16 failed at unimplemented entry points; existing 32 passed |
+| Same bin command after startup/dispatch/human implementation | GREEN: 48 passed, 0 failed/ignored/filtered |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` before main wiring | Exit 0, no application output: observed missing-help baseline |
+| Same smoke command after main wiring | PASS: exit 0, clap root help, all 72 catalog entries and override documentation printed |
+| `devenv shell -- cargo fmt --check` | Initial formatting-only differences corrected via apply_patch; final PASS |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` after wiring/formatting | PASS: **48 passed**, 0 failed/ignored/filtered (24 existing + 24 new) |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli -- -D warnings` | PASS before and after formatting; final exit 0 |
+| `git diff --check` | PASS |
+| `git merge-tree --write-tree HEAD origin/main` before checkpoint | PASS, exit 0; tree `d9f4da4a338237e4535f57937fa843d3e531e203` |
+
+**Self-review.** Compared the actual Task 2 changes with every interface and
+Step 1–5 requirement, including startup short-circuiting, all help targets,
+planned-help restrictions, scope/effects, exact failure prefixes, recovery
+arguments, newline/stream behavior, write failure exit handling and the unsafe
+initialization boundary. Inspected final production files and main diff. No
+unresolved spec or quality finding. This is self-review only; independent
+controller review remains pending. The merge-tree check covers committed
+HEAD against main, not the uncommitted Task 2 additions.
+
+**Boundaries and remaining evidence.** Only the nine intended CLI Rust files,
+this ledger and the canonical checkpoint comment change. No library,
+repository, existing test, schema, dependency or lockfile changes. The real
+binary golden/schema harness belongs to Task 3; real broken-pipe process
+coverage belongs to Task 7 (writer failure behavior is unit-tested here).
+Native evidence and the full Cycle gate remain future work. Task 3 was not
+started. Ticket remains open; no push, PR, closure or cleanup.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A1FZQYZV2DNHRTBJT9B8MV.md`.
+The endpoint is the commit introducing this entry; its SHA is returned after
+creation to avoid a self-referential commit ID.
