@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M4R19P943QZKHHKRXV2D2TP2"
 title: "A registration whose directory is gone cannot be removed"
 type: "defect"
-status: "open"
+status: "closed"
+closed_at: "2026-10-19T22:33:49Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 ---
@@ -79,3 +81,31 @@ a root whose `.git` is gone, at the library level and through `repo remove`.
   lease, journal rows, cache entries), and whether the removal clears it.
 - Whether a registration that is only unreachable for the moment (an
   unmounted drive) should be removed as readily as a deleted one.
+
+## Implementation planning — 2026-10-19
+
+The [implementation plan](../../../docs/plans/2026-10-19-missing-repository-registration-removal-implementation.md)
+records the reproduced failures, proposed behavior, concrete tasks and
+verification checkpoints. The owner agreed to preserve unrelated unfinished
+operation/reservation blocks; explicit abandonment is outside this fix.
+The owner approved the plan. Sequential implementation is tracked in the
+[execution ledger](../../../docs/plans/2026-10-19-missing-repository-registration-removal-execution.md).
+
+Implementation and final local verification are complete. All four required
+Devenv gates passed, and independent review's concurrent-retry finding was
+fixed and re-reviewed with no outstanding findings.
+
+## Closure — 2026-10-19
+
+The owner approved closing this ticket and committing the reviewed change,
+merging it into local main and pushing main to origin, removing the ticket's
+local/remote branches and worktree, and then dispatching one GitHub Build run
+against main.
+
+All six implementation tasks and the execution baseline are complete. The four
+required Devenv gates passed; the complete test run reported 3,513 passing
+tests/cases, zero failures and one existing opt-in characterization ignored.
+CLI and bounded desktop startup smokes completed. Independent final review's
+concurrent-retry finding was reproduced, fixed and re-reviewed with no
+outstanding findings. The approved same-second registration-stamp limitation
+remains documented. Native CI is the authorized post-merge follow-up.
