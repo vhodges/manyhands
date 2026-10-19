@@ -8,7 +8,10 @@
 use std::path::Path;
 
 use manyhands::{
-    repository::{RepositoryListDto, RepositorySummaryDto, ResolvedRepository},
+    canonical::ItemId,
+    repository::{
+        ItemDto, ItemDtoKind, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
+    },
     results::ResultCode,
 };
 
@@ -77,8 +80,42 @@ impl RepositoryEntry {
     }
 }
 
+/// What activating a row opens: an item by its ID, or a nonconforming
+/// entry, which has none, by its path in its context (ruling R4).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum OpenTarget {
+    Item {
+        repo: RepoKey,
+        kind: ItemDtoKind,
+        id: ItemId,
+    },
+    Inspect {
+        repo: RepoKey,
+        worktree: String,
+        path: String,
+    },
+}
+
+impl OpenTarget {
+    /// What `item`, listed in `repo`, opens as: by ID when it has a
+    /// well-formed one, otherwise by its path.
+    pub(crate) fn for_item(repo: &RepoKey, item: &ItemDto) -> Self {
+        match item.id.as_deref().map(str::parse::<ItemId>) {
+            Some(Ok(id)) => Self::Item {
+                repo: repo.clone(),
+                kind: item.kind,
+                id,
+            },
+            _ => Self::Inspect {
+                repo: repo.clone(),
+                worktree: item.context.worktree.clone(),
+                path: item.path.clone(),
+            },
+        }
+    }
+}
+
 /// The navigation region's pane.
-#[allow(dead_code)] // The panes' views arrive with Task 5.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum Pane {
     #[default]
@@ -122,7 +159,6 @@ impl Navigation {
         self.pane
     }
 
-    #[allow(dead_code)] // The pane switch arrives with Task 5.
     pub(crate) fn set_pane(&mut self, pane: Pane) {
         self.pane = pane;
     }

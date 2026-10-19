@@ -12,10 +12,12 @@ use std::{
 };
 
 use manyhands::{
+    canonical::ItemId,
     repository::{
-        CancellationToken, CommitIdentity, ConfirmationId, IndexRefreshInput, Mutation,
-        MutationCall, MutationDataDto, NoProgress, PrepareDataDto, RepoCreateInput,
-        RepoRemoveInput, RepositoryService, RequestId,
+        CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
+        IndexRefreshInput, Mutation, MutationCall, MutationDataDto, NoProgress, PrepareDataDto,
+        RepoCreateInput, RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput,
+        TicketDraft,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -109,6 +111,17 @@ impl Fixture {
         let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
         let created = self.execute(Some(confirmation), Mutation::RepoCreate(input()));
         assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+        // `repo create` commits the configuration without updating Git's
+        // index, which then shows it deleted and untracked: the library's
+        // own fixtures add it back the same way (`tests/support/items.rs`,
+        // `commit`). Without this, `ticket create` answers
+        // `worktree_not_clean` and `commit_file` would commit the
+        // configuration's removal.
+        let repository = git2::Repository::open(&root).unwrap();
+        let head = repository.head().unwrap().peel_to_tree().unwrap();
+        let mut index = repository.index().unwrap();
+        index.read_tree(&head).unwrap();
+        index.write().unwrap();
         root
     }
 
@@ -138,6 +151,81 @@ impl Fixture {
             .unwrap();
     }
 
+    /// Creates a ticket with `id`, `title` and the status text `status`
+    /// in `root` through `execute` of `ticket create`. It is open: no
+    /// local operation closes a ticket.
+    pub(crate) fn create_ticket(&self, root: &Path, id: &str, title: &str, status: &str) {
+        let created = self.execute(
+            None,
+            Mutation::TicketCreate(TicketCreateInput {
+                root: root.to_owned(),
+                id: item_id(id),
+                draft: TicketDraft {
+                    title: title.to_owned(),
+                    ticket_type: "task".to_owned(),
+                    status: status.to_owned(),
+                    project: None,
+                    team: None,
+                    body: format!("Body of {title}.\n"),
+                },
+                deps: Vec::new(),
+                parent: None,
+                initials: None,
+            }),
+        );
+        assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    }
+
+    /// Creates a document with `id` and `title` at `path`, below `docs/`,
+    /// in `root` through `execute` of `document create`.
+    pub(crate) fn create_document(&self, root: &Path, id: &str, path: &str, title: &str) {
+        let created = self.execute(
+            None,
+            Mutation::DocumentCreate(DocumentCreateInput {
+                root: root.to_owned(),
+                id: item_id(id),
+                path: PathBuf::from(path),
+                draft: DocumentDraft {
+                    title: title.to_owned(),
+                    body: format!("# {title}\n"),
+                },
+            }),
+        );
+        assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    }
+
+    /// Commits a lifecycle-closed ticket's canonical file, carrying
+    /// `closed_at` and `closed_by` as `tests/support/items.rs` writes it:
+    /// no local operation closes a ticket. Refresh to index it.
+    pub(crate) fn commit_closed_ticket(&self, root: &Path, id: &str, title: &str) {
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
+             type: task\nstatus: done\nclosed_at: 2026-09-30T12:34:56Z\n\
+             closed_by: Ada Lovelace <ada@example.invalid>\n---\nBody of {title}.\n"
+        );
+        self.commit_file(root, &ticket_path(id), source.as_bytes());
+    }
+
+    /// Commits a file under `.manyhands/tickets/` whose front matter gives
+    /// a key twice, as `tests/read_items.rs` makes a nonconforming ticket.
+    /// Refresh to index it.
+    pub(crate) fn commit_nonconforming_ticket(&self, root: &Path, id: &str) {
+        let source = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\n\
+                      repeated: 1\nrepeated: 2\n---\nBroken.\n";
+        self.commit_file(root, &ticket_path(id), source.as_bytes());
+    }
+
+    /// Commits a file under `docs/` carrying only the managed marker, as
+    /// `tests/read_items.rs` makes a nonconforming document. Refresh to
+    /// index it.
+    pub(crate) fn commit_nonconforming_document(&self, root: &Path, rel_path: &str) {
+        self.commit_file(
+            root,
+            rel_path,
+            b"---\nmanyhands_managed: true\n---\nOnly a marker.\n",
+        );
+    }
+
     /// Refreshes the index of `root` through the library.
     pub(crate) fn refresh(&self, root: &Path) {
         let refreshed = self.execute(
@@ -165,6 +253,16 @@ impl Fixture {
             &CancellationToken::new(),
         )
     }
+}
+
+/// An item ID from its text.
+pub(crate) fn item_id(id: &str) -> ItemId {
+    id.parse().unwrap()
+}
+
+/// Where a ticket's canonical file is, relative to its context.
+pub(crate) fn ticket_path(id: &str) -> String {
+    format!(".manyhands/tickets/{id}/ticket.md")
 }
 
 /// Removes the registration of `root` through `service`'s own `prepare`

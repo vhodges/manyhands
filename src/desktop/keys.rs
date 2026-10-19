@@ -36,8 +36,15 @@ gpui_kit::actions!(
         Quit,
         /// Quit at once, without waiting for the running job.
         QuitNow,
+        /// Open the selected row of the document tree. The ticket list is
+        /// the Kit's, whose own `enter` binding opens its row.
+        OpenSelected,
     ]
 );
+
+/// The key context of the document tree's wrapper, where `enter` opens
+/// the selected row.
+pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -57,6 +64,7 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-shift-r", Rebuild, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
     ]);
 }
 

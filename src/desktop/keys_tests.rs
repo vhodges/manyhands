@@ -4,13 +4,14 @@ use gpui_kit::{Action, Keystroke, TestAppContext};
 
 use super::{
     CloseTab, Find, FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion,
-    NextTab, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, bind,
+    NextTab, OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild,
+    Refresh, bind,
 };
 
 #[gpui_kit::test]
 fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
     cx.update(bind);
-    let table: [(&str, Box<dyn Action>); 14] = [
+    let table: [(&str, Box<dyn Action>); 15] = [
         ("f6", Box::new(NextRegion)),
         ("shift-f6", Box::new(PreviousRegion)),
         ("secondary-1", Box::new(FocusRepositories)),
@@ -25,6 +26,8 @@ fn each_key_is_bound_to_its_action(cx: &mut TestAppContext) {
         ("secondary-shift-r", Box::new(Rebuild)),
         ("secondary-,", Box::new(OpenSettings)),
         ("secondary-q", Box::new(Quit)),
+        // In the document tree; the ticket list is the Kit's own.
+        ("enter", Box::new(OpenSelected)),
     ];
     cx.update(|cx| {
         for (keys, action) in &table {
