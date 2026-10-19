@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1: CLI Shell And Inspection"
 date: 2026-10-18
-status: "implemented, review-ready"
+status: "closed"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M58XQ59NBC37ENGH0BA9X40Q"
 
 ## Status
 
-**Implemented, review-ready on 2026-10-19.** The final Linux Devenv gate at
+**Closed with owner approval on 2026-10-19.** The final Linux Devenv gate at
 `309c9e071994f55eb0b1fa9f44546cc2722d0398` passed: **3,468 tests/cases passed,
 0 failed, 1 intentionally ignored**, including 11 doc tests. CLI and bounded
 Wayland desktop launch evidence, every acceptance criterion, prior gate
@@ -24,9 +24,10 @@ quality **PASS** on `309c9e0`, with **no Critical, Important or Minor findings**
 The reviewer also confirmed spec PASS for decision 14's test-only baseline
 reload, with all four assertions unchanged and no production change. See the
 [final approval record](../plans/2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#final-independent-review-approvals--2026-10-19).
-Task 8 is complete. The ticket remains **open**; these code-review approvals
-do not authorize merge or closure. Native CI is post-merge on main and has
-not been dispatched.
+Task 8 is complete. The owner subsequently authorized ticket closure, local
+merge to main and push, removal of both ticket branches and the local worktree,
+and one post-merge native Build dispatch on main. The ticket is **closed**;
+the owner will monitor that CI run. No native pass is claimed by this closure.
 
 **Approved by the owner on 2026-10-19**, together with the design and the
 implementation plan, for subagent-driven execution. The owner answered the planning questions on

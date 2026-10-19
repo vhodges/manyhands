@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
 title: "Wave 03 C1: CLI Shell And Inspection"
 type: "cycle"
-status: "open"
+status: "closed"
+closed_at: "2026-10-19T17:08:51Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 wave: "03"
@@ -19,8 +21,8 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-cli-01-shell-and-inspection.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-cli-01-shell-and-inspection.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
 
 ## Entry Gate
@@ -49,3 +51,21 @@ as `--id` is rejected as an invalid ID.
 Real-repository read tests through the binary, golden
 schemas and human/JSON error tests; no display or desktop dependency; no
 canonical mutation or resident process.
+
+## Closure — 2026-10-19
+
+The owner approved marking this ticket done, committing its closure, merging
+the ticket branch into local main and pushing main, removing the local and
+remote ticket branches and local worktree, and dispatching one native Build
+run on GitHub. The owner will monitor that run.
+
+Tasks 0–8 are complete. Independent whole-branch spec and quality reviews
+passed with no remaining findings. The final Devenv gate on `309c9e0` passed
+3,468 tests/cases, with zero failures and one existing opt-in test ignored;
+check, fmt and all-target/all-feature Clippy passed. CLI and bounded desktop
+launch smoke checks passed. The approved fixture-only correction is recorded
+as Cycle decision 14. The execution ledger contains the full evidence.
+
+Native CI runs after the merge on main; this closure does not claim a native
+pass. The CLI's ticket-closure and comment-writing commands are still planned,
+so this lifecycle update uses the canonical filesystem records.
