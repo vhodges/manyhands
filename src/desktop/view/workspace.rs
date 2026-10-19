@@ -270,6 +270,13 @@ impl Workspace {
                     if this.navigation.selected().is_none() {
                         this.clear_lists(cx);
                     }
+                    // One the list let go is resolved again, which says
+                    // why it is gone; its lists go until it resolves.
+                    if let Some(key) = this.navigation.take_vanished() {
+                        let stamp = this.navigation.retry_resolution(key.clone());
+                        this.clear_lists(cx);
+                        this.resolve(key, stamp, cx);
+                    }
                     this.repositories_loaded(cx);
                     cx.notify();
                 }

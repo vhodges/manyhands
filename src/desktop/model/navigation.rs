@@ -130,6 +130,9 @@ pub(crate) struct Navigation {
     /// out of the list, so its resolution can still say why it is gone.
     /// Selecting another entry lets it go.
     kept: Option<RepositoryEntry>,
+    /// The last list read did not give the selected entry, which the one
+    /// before it did: it is to be resolved again.
+    vanished: bool,
     pane: Pane,
     generations: Generations,
 }
@@ -140,6 +143,7 @@ impl Default for Navigation {
             repositories: ListState::Loading,
             selected: None,
             kept: None,
+            vanished: false,
             pane: Pane::default(),
             generations: Generations::default(),
         }
@@ -191,8 +195,10 @@ impl Navigation {
 
     /// A list read completed. Each entry still listed keeps what it last
     /// resolved to. A selection the read did not give is kept out of the
-    /// list, or cleared when there is no entry to keep. False when the read
-    /// is no longer wanted.
+    /// list, or cleared when there is no entry to keep. One the read
+    /// before gave is no longer known to resolve: it is reset to Unknown,
+    /// and `take_vanished` gives it to be resolved again. False when the
+    /// read is no longer wanted.
     pub(crate) fn apply_repositories(
         &mut self,
         stamp: Stamp,
@@ -201,6 +207,11 @@ impl Navigation {
         if !self.generations.is_current(&stamp) {
             return false;
         }
+        let listed_before = self.selected.as_ref().is_some_and(|key| {
+            self.repositories
+                .rows()
+                .is_some_and(|rows| rows.iter().any(|entry| entry.key() == key))
+        });
         let previous = std::mem::replace(&mut self.repositories, ListState::Loading);
         let mut previous = match previous {
             ListState::Ready { rows, .. } => rows,
@@ -230,6 +241,12 @@ impl Navigation {
             && self.entry(&key).is_none()
         {
             self.kept = previous.into_iter().find(|entry| *entry.key() == key);
+            if let Some(kept) = self.kept.as_mut()
+                && listed_before
+            {
+                kept.resolution = Resolution::Unknown;
+                self.vanished = true;
+            }
             if self.kept.is_none() {
                 self.selected = None;
                 // A resolution still running is for an entry not here.
@@ -237,6 +254,15 @@ impl Navigation {
             }
         }
         true
+    }
+
+    /// The selected entry, when the last list read let it go from the list
+    /// and it is to be resolved again; once.
+    pub(crate) fn take_vanished(&mut self) -> Option<RepoKey> {
+        if !std::mem::take(&mut self.vanished) {
+            return None;
+        }
+        self.selected.clone()
     }
 
     /// Selects `key` and starts resolving it. A resolution started for an
@@ -248,6 +274,8 @@ impl Navigation {
         if let Some(entry) = self.entry_mut(&key) {
             entry.resolution = Resolution::Unknown;
         }
+        // Selecting resolves: nothing is left to resolve again.
+        self.vanished = false;
         self.selected = Some(key);
         self.generations.next(ViewScope::Selection)
     }

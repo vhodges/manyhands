@@ -230,7 +230,9 @@ fn a_real_resolution_is_kept_as_resolved() {
 
 /// A new list keeps what each still-listed entry resolved to. A selection
 /// that is no longer listed stays selected, out of the list, so its
-/// resolution can still say why; selecting another lets it go.
+/// resolution can say why; selecting another lets it go. What it resolved
+/// to before no longer stands: it is Unknown and to be resolved again,
+/// once.
 #[test]
 fn a_new_list_keeps_resolutions_and_a_vanished_selection_until_another_is_selected() {
     let mut navigation = loaded(&["/r/a", "/r/b"]);
@@ -244,6 +246,7 @@ fn a_new_list_keeps_resolutions_and_a_vanished_selection_until_another_is_select
         Resolution::Unavailable(ResultCode::InvalidPath)
     ));
     assert_eq!(navigation.selected(), Some(&"/r/a".to_owned()));
+    assert_eq!(navigation.take_vanished(), None);
 
     let stamp = navigation.load_repositories();
     assert!(navigation.apply_repositories(stamp, list(&["/r/c"])));
@@ -252,8 +255,20 @@ fn a_new_list_keeps_resolutions_and_a_vanished_selection_until_another_is_select
     assert!(rows.iter().all(|entry| entry.key() != "/r/a"), "not listed");
     assert!(matches!(
         navigation.selected_entry().map(|entry| &entry.resolution),
-        Some(Resolution::Unavailable(ResultCode::InvalidPath))
+        Some(Resolution::Unknown)
     ));
+    assert_eq!(navigation.take_vanished(), Some("/r/a".to_owned()));
+    assert_eq!(navigation.take_vanished(), None);
+    let stamp = navigation.retry_resolution("/r/a".to_owned());
+    assert!(navigation.apply_resolution(stamp, failure(ResultCode::RepositoryNotRegistered)));
+    assert!(matches!(
+        navigation.selected_entry().map(|entry| &entry.resolution),
+        Some(Resolution::Unavailable(ResultCode::RepositoryNotRegistered))
+    ));
+    // Still out of the list at the next read: not resolved again.
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/c"])));
+    assert_eq!(navigation.take_vanished(), None);
     // A failed list read keeps the selection the same way.
     let stamp = navigation.load_repositories();
     assert!(navigation.apply_repositories(stamp, ReadResult::Busy));

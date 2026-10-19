@@ -406,6 +406,43 @@ fn a_registration_removed_by_a_second_actor_shows_unavailable(cx: &mut TestAppCo
     assert!(!shell.present("selection-index", cx));
 }
 
+/// The selected registration is removed by a second actor and only the
+/// list is read again, as its Retry does. The entry, gone from the list,
+/// is resolved again: Unavailable as not registered, its lists no longer
+/// shown, never still Resolved.
+#[gpui_kit::test]
+fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
+    cx: &mut TestAppContext,
+) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    assert!(shell.present("selection-configuration", cx));
+    assert!(shell.workspace.read_with(cx, |workspace, _| {
+        workspace.documents().repo() == Some(&key(&shell.a))
+    }));
+
+    let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&second, &shell.a);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.visual(cx).run_until_parked();
+
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(matches!(
+        shell.resolution(&shell.a, cx),
+        Resolution::Unavailable(ResultCode::RepositoryNotRegistered)
+    ));
+    assert_eq!(
+        shell.label("selection-unavailable", cx).as_deref(),
+        Some(ResultCode::RepositoryNotRegistered.message())
+    );
+    assert!(!shell.present("selection-configuration", cx));
+    assert!(shell.workspace.read_with(cx, |workspace, _| {
+        workspace.documents().repo().is_none()
+    }));
+}
+
 /// Review Focus 1: B is selected while A's resolution is held; releasing
 /// A leaves B selected and shown.
 #[gpui_kit::test]
