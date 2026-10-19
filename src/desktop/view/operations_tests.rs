@@ -31,7 +31,7 @@ use crate::desktop::{
         git_home,
     },
     view::{
-        harness::{Shell, key},
+        harness::{Shell, WAIT, key},
         workspace::Region,
     },
 };
@@ -40,10 +40,6 @@ const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
 const DOC_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG2";
 const DOC_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG3";
-
-/// Long enough for the worker on a loaded machine, inside the scheduler's
-/// fifteen seconds.
-const WAIT: Duration = Duration::from_secs(10);
 
 fn finished(operations: &Operations, id: DesktopRequestId) -> Option<(Outcome, ResultCode)> {
     match &operations.request(id)?.state {

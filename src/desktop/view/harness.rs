@@ -1,7 +1,11 @@
 //! A main window over a fixture, for the views' tests: frames, clicks,
 //! keys and the labels a test reads.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui_kit::{
     App, ElementId, Entity, TestAppContext, VisualTestContext, Window, WindowHandle,
@@ -16,6 +20,37 @@ use crate::desktop::{
     services::requests::{DesktopRequest, DesktopRequestId},
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
+
+/// How long a test waits on the worker: long enough on a loaded machine,
+/// inside the scheduler's fifteen seconds of parking.
+pub(crate) const WAIT: Duration = Duration::from_secs(10);
+
+/// How often a wait looks again while the worker runs.
+const POLL: Duration = Duration::from_millis(10);
+
+/// Waits, with the worker running, until `done` holds of `entity`, then
+/// lets the reads that started finish. Panics after `WAIT` of real time.
+/// Every test that waits on the worker waits here, never with
+/// `VisualTestContext::condition`, whose timer gives up after three
+/// seconds of parked time. The test allows parking.
+pub(crate) async fn wait_until<T: 'static>(
+    cx: &TestAppContext,
+    entity: &Entity<T>,
+    done: impl Fn(&T, &App) -> bool,
+) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        cx.run_until_parked();
+        if entity.read_with(cx, |value, cx| done(value, cx)) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the awaited state did not arrive in {WAIT:?}"
+        );
+        cx.executor().timer(POLL).await;
+    }
+}
 
 pub(crate) struct Shell {
     pub window: WindowHandle<Root>,
@@ -187,11 +222,7 @@ impl Shell {
         done: impl Fn(&Operations) -> bool + 'static,
     ) {
         let operations = self.operations(cx);
-        let mut visual = self.visual(cx);
-        visual
-            .condition(&operations, move |operations, _| done(operations))
-            .await;
-        visual.run_until_parked();
+        wait_until(cx, &operations, move |operations, _| done(operations)).await;
     }
 
     /// Waits until the request `id` has ended: finished, removed or not
@@ -214,3 +245,7 @@ impl Shell {
 pub(crate) fn key(root: &Path) -> String {
     root.to_str().unwrap().to_owned()
 }
+
+#[cfg(test)]
+#[path = "harness_tests.rs"]
+mod tests;

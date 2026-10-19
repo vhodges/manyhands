@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{ItemDto, ItemDtoKind, TicketFilter},
     results::{ProblemCode, ResultCode},
@@ -474,10 +474,9 @@ async fn a_deleted_item_shows_item_not_found_with_refresh(cx: &mut TestAppContex
     let operations = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.services().operations().clone());
-    let mut visual = VisualTestContext::from_window(shell.window.into(), cx);
     // The refresh Refresh submitted: the user's, of this root. A
     // background refresh at launch is not it.
-    let submitted = operations.read_with(&visual, |operations, _| {
+    let submitted = operations.read_with(cx, |operations, _| {
         operations
             .requests()
             .iter()
@@ -488,15 +487,8 @@ async fn a_deleted_item_shows_item_not_found_with_refresh(cx: &mut TestAppContex
             .map(|request| request.id)
             .expect("Refresh submitted a refresh")
     });
-    visual
-        .condition(&operations, move |operations, _| {
-            operations
-                .request(submitted)
-                .is_some_and(|request| matches!(request.state, RequestState::Finished(..)))
-        })
-        .await;
-    visual.run_until_parked();
-    let refreshed = operations.read_with(&visual, |operations, _| {
+    shell.until_ended(submitted, cx).await;
+    let refreshed = operations.read_with(cx, |operations, _| {
         operations
             .requests()
             .iter()
@@ -604,10 +596,8 @@ async fn a_refresh_removed_on_quit_ends_refreshing(cx: &mut TestAppContext) {
 
     // The worker must not outlive the test: let the held job end.
     held.release();
-    let operations = services.operations().clone();
-    let mut visual = VisualTestContext::from_window(shell.window.into(), cx);
-    visual
-        .condition(&operations, move |operations, _| {
+    shell
+        .until(cx, move |operations| {
             operations
                 .request(busy)
                 .is_some_and(|request| matches!(request.state, RequestState::Finished(..)))

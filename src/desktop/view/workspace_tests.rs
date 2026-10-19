@@ -31,7 +31,7 @@ use crate::desktop::{
         fixtures::{Fixture, refresh_through, remove_registration},
         snapshot::RepositorySnapshot,
     },
-    view::sidebar::configuration_label,
+    view::{harness::wait_until, sidebar::configuration_label},
 };
 
 struct Setup {
@@ -137,11 +137,10 @@ async fn quitting_with_a_held_job_waits_for_it(cx: &mut TestAppContext) {
     );
 
     held.release();
-    visual
-        .condition(&setup.workspace, |workspace, _| {
-            workspace.quit_phase() == QuitPhase::Quit
-        })
-        .await;
+    wait_until(&visual, &setup.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
 }
 
 /// Quit now does not wait: the job is still held when the app quits.
@@ -171,14 +170,13 @@ async fn quit_now_quits_while_the_job_is_held(cx: &mut TestAppContext) {
     let operations = setup.workspace.read_with(&visual, |workspace, _| {
         workspace.services().operations().clone()
     });
-    visual
-        .condition(&operations, move |operations, _| {
-            matches!(
-                operations.request(id).map(|request| &request.state),
-                Some(RequestState::Finished(..))
-            )
-        })
-        .await;
+    wait_until(&visual, &operations, move |operations, _| {
+        matches!(
+            operations.request(id).map(|request| &request.state),
+            Some(RequestState::Finished(..))
+        )
+    })
+    .await;
 }
 
 /// A window over a fixture with two repositories, `a` and `b`, whose
