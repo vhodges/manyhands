@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1 CLI Shell And Inspection Implementation Plan"
 date: 2026-10-18
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -36,7 +36,7 @@ id: "01M58XQ5A2C0CEG8ZKW4YDR66J"
   - Named edit 4: `tests/mutation_contract.rs` `DATA_ROOTS` gains `cli_help.schema.json` and `cli_version.schema.json` (44 entries become 46).
   - Named edit 5: `tests/mutation_contract.rs` `CODES_NO_MUTATION_GOLDEN_HAS` gains both codes, with the reason `"a CLI parse result; no command of execute or prepare returns it"` (4 entries become 6).
   - Named edit 6: `tests/read_contract.rs` `contract_enumerations()` gains one entry, `("cli_help_command.schema.json", "repository", CLI_REPOSITORY_VALUES)`.
-- **Test runs.** Between tasks, run only the tests relevant to the change. The full suite runs once, in Task 8.
+- **Test runs (owner, 2026-10-19).** In every task, run only the tests targeted at the code under development in that task: the filters and targets the task's run steps name. Do not run the full suite between tasks. The full run is saved for the final review, Task 8 Step 1.
 - **No subagents.** Implementers never dispatch subagents.
 - **Commits.** Commit at the end of every task. Messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Authorization.** Never push, open a pull request, merge, close the ticket or clean up without separate owner authorization.

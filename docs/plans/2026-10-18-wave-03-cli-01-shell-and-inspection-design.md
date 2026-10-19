@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1 CLI Shell And Inspection Design"
 date: 2026-10-18
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document

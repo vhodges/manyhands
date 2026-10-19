@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1: CLI Shell And Inspection"
 date: 2026-10-18
-status: draft
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,8 @@ id: "01M58XQ59NBC37ENGH0BA9X40Q"
 
 ## Status
 
-Draft for owner review. The owner answered the planning questions on
+**Approved by the owner on 2026-10-19**, together with the design and the
+implementation plan, for subagent-driven execution. The owner answered the planning questions on
 2026-10-18 (decisions 1–13 below). The design and the implementation plan are
 companions:
 
