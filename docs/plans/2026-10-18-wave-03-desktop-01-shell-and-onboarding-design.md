@@ -228,7 +228,7 @@ to the UI over a `futures::channel::mpsc` channel that a foreground task
 (`cx.spawn`) awaits and drains into the request model; the worker receives
 jobs over a `std::sync::mpsc` channel. GPUI does not re-export an async
 channel, so this needs `futures` as a direct, desktop-only dependency
-(open decision 7; it is already locked at 0.3.34 through GPUI). Without it the
+(Cycle decision 7, approved 2026-10-19; already locked at 0.3.34 through GPUI). Without it the
 only alternatives are a UI timer that polls a `std` channel, which the scroll
 performance lessons warn against, or parking an executor thread on a blocking
 receive. Its `ProgressSink` only forwards a clone of the event (the F2 rule
@@ -743,7 +743,7 @@ was checked against source before it was applied.
 | R13, read-only discussion | Wave D1 does not list comments; the desktop RFC's item view includes discussion. | Ruling | Show comments read-only; submission stays D4 — inspection only — cost if wrong: remove one panel. | Item view test. |
 | R14, key generation retry | The passphrase is not part of the replay digest. | Settled | Retry re-prompts; same request ID — `mutation/bind/key.rs` says two requests differing only in passphrase are the same request. | Key generation retry test. |
 | R15, CI | Bin unit tests are not in the native workflow's `--test` list. | Ruling | Add `--bin manyhands` with `--features desktop-test-support` to the workflow's test step — native CI runs after merge — cost if wrong: desktop tests unrun natively until fixed. | Task 17. |
-| Project convention (F1 decision 3) | The worker must wake the UI; GPUI exposes no async channel. | Decision (open) | Recommended: `futures = { version = "0.3", optional = true }` enabled by `desktop`; `Cargo.lock` gains only the direct edge. Recorded as Cycle decision 7 when answered. | Task 1 manifest change. |
+| Project convention (F1 decision 3) | The worker must wake the UI; GPUI exposes no async channel. | Decision | Cycle decision 7, approved 2026-10-19: `futures = { version = "0.3", optional = true }` enabled by `desktop`; `Cargo.lock` gains only the direct edge. | Task 1 manifest change. |
 | Independent review 1, blocking | `cargo tree` has no `--bin`; under `sh` without `pipefail` the check passed even when `cargo tree` failed. | Settled | Package-level, no-feature graph written to a file; a failing `cargo tree` fails the script. Contract 8 reworded. | Task 1 script; Task 17 gate. |
 | Independent review 2, blocking | The test scheduler runs background work on the test thread, so a blocking read gate deadlocks; parking panics unless allowed. | Settled | Async read gates; job delays on the worker thread only; `allow_parking` and the 15 s cap stated; feasibility test includes a worker round trip. | Task 1, Task 2. |
 | Independent review 3 | `AGENTS.md` requires merging main into ticket branches, never rebasing. | Settled | Baseline and checkpoints merge; `merge-tree` check before review-ready. The planning rebase rewrote no published history. | Plan baseline, Part B checkpoint, Task 17. |

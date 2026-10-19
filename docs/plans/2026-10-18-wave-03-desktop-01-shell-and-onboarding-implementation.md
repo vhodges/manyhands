@@ -30,7 +30,7 @@ stamp and is dropped if its view has moved on.
 
 **Tech stack:** Rust 2024; `gpui-kit` 0.6.6 (GPUI `gpui-pre` 0.3.6) through
 `gpui_kit::*` only; the headless library; `futures` 0.3 (desktop-only,
-pending decision 7); Devenv.
+decision 7); Devenv.
 
 **Spec:** [Cycle](../Cycles/wave-03-desktop-01-shell-and-onboarding.md) and
 [design](2026-10-18-wave-03-desktop-01-shell-and-onboarding-design.md).
@@ -53,7 +53,7 @@ changes, publication, merge, ticket closure or worktree cleanup.
   `Root` as each window's first entity.
 - Dependencies: `gpui-kit`'s `test-support` through the new
   `desktop-test-support` feature; `futures = "0.3"` optional under `desktop`
-  only if decision 7 approves it. Nothing else. Commit `Cargo.lock` with
+  (decision 7, approved). Nothing else. Commit `Cargo.lock` with
   manifest changes.
 - No desktop module, test or production, uses `use gpui_kit::*`; import
   names explicitly (`gpui-pre` re-exports a `test` attribute that a glob
@@ -97,7 +97,7 @@ changes, publication, merge, ticket closure or worktree cleanup.
 
 | Path | Task | Change |
 | --- | --- | --- |
-| `Cargo.toml`, `Cargo.lock` | 1 | `desktop-test-support` feature; `futures` if approved. |
+| `Cargo.toml`, `Cargo.lock` | 1 | `desktop-test-support` feature; `futures` (decision 7). |
 | `src/main.rs` | 1 | Transport init then `desktop::run()`. |
 | `src/desktop/mod.rs`, `keys.rs` | 1, 4 | Startup, actions, bindings. |
 | `src/desktop/test_support/{mod,git_home,fixtures}.rs` | 1 | Test isolation and real-repository builders. |
@@ -144,8 +144,8 @@ Re-check the design's Library Surface Audit against every change to
 (`git diff --stat f6a4c06 origin/main -- src/repository.rs src/repository src/results.rs`).
 Update the design before coding if a cited signature moved.
 
-Confirm decision 7 (`futures`) is answered. If it is declined, Task 3 uses
-the design's fallback and the design is amended first.
+Decision 7 (`futures` as a direct, desktop-only dependency) was approved on
+2026-10-19; Task 1 adds it.
 
 ---
 
@@ -180,12 +180,12 @@ the design's fallback and the design is amended first.
   ```toml
   [features]
   default = []
-  desktop = ["dep:gpui-kit", "dep:futures"]   # "dep:futures" only if decision 7 approves
+  desktop = ["dep:gpui-kit", "dep:futures"]
   desktop-test-support = ["desktop", "gpui-kit?/test-support"]
   editor-probe = ["desktop", "dep:zorite-editor"]
 
   [dependencies]
-  futures = { version = "0.3", optional = true }  # only if decision 7 approves
+  futures = { version = "0.3", optional = true }
   ```
 
   Run `devenv shell -- cargo check --all-features --locked`. If `--locked`

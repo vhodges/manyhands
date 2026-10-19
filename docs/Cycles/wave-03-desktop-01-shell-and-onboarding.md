@@ -251,14 +251,13 @@ Decided during planning, each as recommended.
    cleared and dropped. That freed heap copies are not zeroed is a recorded
    residual risk.
 
-## Open Decision
+## Product-Owner Decision (2026-10-19)
 
-7. **`futures` as a direct, desktop-only dependency.** The mutation worker
-   must wake the UI when a job progresses or finishes, and GPUI exposes no
-   async channel. Recommended: `futures = { version = "0.3", optional = true }`,
+7. **`futures` as a direct, desktop-only dependency.** Approved. The
+   mutation worker must wake the UI when a job progresses or finishes, and
+   GPUI exposes no async channel. `futures = { version = "0.3", optional = true }`,
    enabled only by `desktop`; it is already locked at 0.3.34 through GPUI, so
-   `Cargo.lock` gains only the direct edge. Declining it means a UI timer
-   polling a `std` channel, which the editor performance work warned against.
+   `Cargo.lock` gains only the direct edge. No other dependency is added.
 
 ## Review Record
 
