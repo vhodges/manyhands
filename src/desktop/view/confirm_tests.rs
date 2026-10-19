@@ -20,7 +20,10 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, resume_through},
-    view::{harness::Shell, workspace::Region},
+    view::{
+        harness::Shell,
+        workspace::{QuitPhase, REGIONS, Region},
+    },
 };
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
@@ -105,6 +108,53 @@ fn escape_closes_the_dialog_with_no_request_and_focus_returns_to_abandon(cx: &mu
     assert!(shell.present(Region::Operations.ring_id(), cx));
     // The pending row is untouched.
     assert!(shell.present(("pending-row", 0usize), cx));
+}
+
+/// The region rings the frame draws.
+fn rings(shell: &Shell, cx: &mut TestAppContext) -> Vec<Region> {
+    REGIONS
+        .into_iter()
+        .filter(|region| shell.present(region.ring_id(), cx))
+        .collect()
+}
+
+/// Every dialog traps focus (design, Layout And Keyboard): with the
+/// Abandon dialog open, `F6`, `secondary-2` and `secondary-r` neither move
+/// focus behind it nor submit a refresh, and Escape still closes it.
+#[gpui_kit::test]
+fn region_and_refresh_keys_do_not_escape_the_dialog(cx: &mut TestAppContext) {
+    let (shell, root, _) = stranded(cx);
+    shell.select(&root, cx);
+    shell.click(("pending-abandon", 0usize), cx);
+    assert!(shell.present("confirm-ok", cx));
+    let before = rings(&shell, cx);
+
+    shell.keys("f6", cx);
+    assert_eq!(rings(&shell, cx), before);
+    shell.keys("secondary-2", cx);
+    assert_eq!(rings(&shell, cx), before);
+    shell.keys("secondary-r", cx);
+    assert_eq!(rings(&shell, cx), before);
+    assert!(shell.requests(cx, |_| true).is_empty());
+    assert!(shell.present("confirm-dialog", cx));
+
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(shell.requests(cx, |_| true).is_empty());
+}
+
+/// Quit still works while a dialog is open.
+#[gpui_kit::test]
+fn quit_works_while_a_dialog_is_open(cx: &mut TestAppContext) {
+    let (shell, _, _) = stranded(cx);
+    shell.click(("pending-abandon", 0usize), cx);
+    assert!(shell.present("confirm-dialog", cx));
+
+    shell.keys("secondary-q", cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Quit);
 }
 
 /// A stale preview: the operation is finished through the library after

@@ -23,7 +23,7 @@ use gpui_kit::{
     ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Task,
     TestSupportExt, Window,
     component::{
-        ActiveTheme, Root, Selectable,
+        ActiveTheme, Root, Selectable, WindowExt,
         button::{Button, ButtonVariants},
         h_flex,
         list::ListEvent,
@@ -856,6 +856,22 @@ impl Workspace {
     }
 }
 
+/// A workspace action's handler that does nothing while a dialog is open.
+/// The dialog layer is drawn inside the workspace, so its keys reach these
+/// handlers, and the Kit's focus trap holds only Tab and shift-Tab. Every
+/// dialog traps focus (design, Layout And Keyboard): a region key would
+/// focus behind it, out of Escape's reach, and Refresh would submit.
+fn unless_dialog<A: 'static>(
+    cx: &mut Context<Workspace>,
+    f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    cx.listener(move |this, action: &A, window, cx| {
+        if !window.has_active_dialog(cx) {
+            f(this, action, window, cx)
+        }
+    })
+}
+
 /// The tab the single content item is stamped as, until Task 8 opens tabs.
 const CONTENT_TAB: TabId = TabId(0);
 
@@ -1095,37 +1111,47 @@ impl Render for Workspace {
         v_flex()
             .id("workspace")
             .key_context("Workspace")
+            // Quit works with a dialog open; nothing else here does.
             .on_action(cx.listener(|this, _: &Quit, _, cx| {
                 this.request_quit(cx);
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
-            .on_action(cx.listener(|this, _: &OpenSelected, _, cx| this.open_selected_document(cx)))
-            .on_action(cx.listener(|this, _: &Refresh, _, cx| {
+            .on_action(unless_dialog(cx, |this, _: &OpenSelected, _, cx| {
+                this.open_selected_document(cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &Refresh, _, cx| {
                 this.maintain_index(false, cx);
             }))
-            .on_action(cx.listener(|this, _: &Rebuild, _, cx| {
+            .on_action(unless_dialog(cx, |this, _: &Rebuild, _, cx| {
                 this.maintain_index(true, cx);
             }))
-            .on_action(
-                cx.listener(|this, _: &NextRegion, window, cx| this.cycle_region(1, window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &PreviousRegion, window, cx| {
-                    this.cycle_region(-1, window, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &FocusRepositories, window, cx| {
-                this.focus_region(Region::Repositories, window, cx)
+            .on_action(unless_dialog(cx, |this, _: &NextRegion, window, cx| {
+                this.cycle_region(1, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &FocusNavigation, window, cx| {
-                this.focus_region(Region::Navigation, window, cx)
+            .on_action(unless_dialog(cx, |this, _: &PreviousRegion, window, cx| {
+                this.cycle_region(-1, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &FocusContent, window, cx| {
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &FocusRepositories, window, cx| {
+                    this.focus_region(Region::Repositories, window, cx)
+                },
+            ))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &FocusNavigation, window, cx| {
+                    this.focus_region(Region::Navigation, window, cx)
+                },
+            ))
+            .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &FocusOperations, window, cx| {
-                this.focus_region(Region::Operations, window, cx)
-            }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &FocusOperations, window, cx| {
+                    this.focus_region(Region::Operations, window, cx)
+                },
+            ))
             .relative()
             .size_full()
             .bg(cx.theme().background)
