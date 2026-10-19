@@ -6,11 +6,24 @@
 
 use serde::{Serialize, Serializer, ser::SerializeStruct};
 
-use crate::results::{OperationFailureCode, ProblemCode, contract_enum};
+use crate::results::{OperationFailureCode, ProblemCode, ResultCode, contract_enum};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct NewIdDto {
     pub id: String,
+}
+
+/// What `path observe` found at a path in a context, as a token a write
+/// takes: a file's is the token the item reads give for it, and a path
+/// where nothing exists has one too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PathObservationDto {
+    /// Relative to the context, with forward slashes.
+    pub path: String,
+    /// Whether a file is at the path.
+    pub exists: bool,
+    pub observation: String,
+    pub context: ItemContextDto,
 }
 
 /// A problem found in observed content.
@@ -148,12 +161,32 @@ pub struct RepositoryInspectionDto {
     pub remotes: Vec<RemoteDto>,
 }
 
+contract_enum!(
+    /// Where the initials a short code is composed with come from:
+    /// `manyhands.initials` in the repository's own Git configuration, or
+    /// the name of the identity a commit would carry. `none` when neither
+    /// gives two or three ASCII letters or digits.
+    InitialsSource {
+        Repository => "repository",
+        Derived => "derived",
+        None => "none",
+    }
+);
+
 /// `name` and `email` are both set, or `source` is `none` and neither is.
+///
+/// `initials` is what a short code assigned now, with no initials given
+/// for the call, would be composed with, in lower case. It is set, or
+/// `initials_source` is `none`: a `manyhands.initials` that is not two or
+/// three ASCII letters or digits is not used and nothing is derived in
+/// its place, as when a short code is composed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IdentityDto {
     pub name: Option<String>,
     pub email: Option<String>,
     pub source: IdentitySource,
+    pub initials: Option<String>,
+    pub initials_source: InitialsSource,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -250,16 +283,19 @@ pub struct HostPinListDto {
     pub reapproval_required: bool,
 }
 
-/// One pinned host key. `fingerprint` has the form a key's `fingerprint` has:
-/// `SHA256:` and the digest of the host's public key.
+/// One pinned host key. `pinned_fingerprint` has the form a key's
+/// `fingerprint` has: `SHA256:` and the digest of the host's public key.
+/// A stored pin is named `pinned_*` in every published shape:
+/// `pinned_fingerprint` is what `host replace` is given as the old
+/// fingerprint.
 /// `reapproval_required` is the application-wide marker left when the pin
 /// registry was lost, so it is the same for every pin of one read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct HostPinDto {
     pub host: String,
     pub port: u16,
-    pub algorithm: String,
-    pub fingerprint: String,
+    pub pinned_algorithm: String,
+    pub pinned_fingerprint: String,
     pub reapproval_required: bool,
 }
 
@@ -348,6 +384,36 @@ pub struct ItemListDto {
     /// refresh stops at the same place again.
     pub complete: bool,
     pub index: IndexStateDto,
+}
+
+/// The folders under `docs/` in the primary worktree, ordered by path.
+///
+/// The list is what the last refresh or rebuild stored, and nothing else:
+/// no directory is listed to answer it. `index` says how far behind the
+/// repository that is. A folder made or removed since, by Manyhands or by
+/// anything else, is here or missing accordingly until the next refresh.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentFolderListDto {
+    pub items: Vec<DocumentFolderDto>,
+    /// False when the last refresh could not read, or stopped part of the
+    /// way through, `docs` or a directory under it in the primary
+    /// worktree: one it could not open, one deeper than it goes, a
+    /// symbolic link, or the place where it met its limit on entries.
+    /// Folders may then be missing, and `index.state` can still be
+    /// `current`: a refresh stops at the same place again.
+    pub complete: bool,
+    pub index: IndexStateDto,
+}
+
+/// One directory under `docs/`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DocumentFolderDto {
+    /// Relative to the repository root, beginning with `docs/`, written
+    /// with forward slashes on every platform.
+    pub path: String,
+    /// The refresh found nothing in the directory: no file, whether a
+    /// document or not, no directory and no link.
+    pub empty: bool,
 }
 
 /// A document or a ticket, or a file where one should be.
@@ -680,9 +746,11 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation does. The local store records the first twelve,
+    /// What an operation does. The local store records the first thirteen,
     /// the remote store the next five and the key-material store the last
     /// two; a local synchronization is reported under its remote name.
+    /// `repair_item` is a repair of a nonconforming file: the corrected
+    /// source written and committed in the editing context of its item.
     OperationAction {
         CreateAndEnable => "create_and_enable",
         Enable => "enable",
@@ -696,6 +764,7 @@ contract_enum!(
         SaveDocument => "save_document",
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",
+        RepairItem => "repair_item",
         Poll => "poll",
         SynchronizeContext => "synchronize_context",
         SynchronizePrimary => "synchronize_primary",
@@ -781,7 +850,10 @@ pub struct OperationDto {
     ///
     /// A local operation that is `completed` with the step `rejected` was
     /// refused and changed nothing. Asking for it again under the same ID
-    /// begins it anew.
+    /// begins it anew. One that is `completed` with the step `abandoned`
+    /// was closed by `operation abandon` while it was pending: what it
+    /// had written was left where it was, and its ID is never begun
+    /// again.
     pub completed_step: Option<String>,
     /// Null when nothing is left to do. Also null for a remote operation
     /// that holds the reservation, whose store does not say whether
@@ -941,4 +1013,69 @@ pub struct UnplannableReasonDto {
     pub code: UnplannableReasonCode,
     pub ids: Vec<String>,
     pub complete: bool,
+}
+
+/// What a proposed `deps` and `parent` come to for one ticket, and whether
+/// a save that wrote them would be rejected.
+///
+/// The check is a read, and a read that could answer succeeds, so this is
+/// the data of an `ok` envelope whether or not the proposal is acceptable.
+/// A null `rejection` says a save may write these relationships. One that
+/// is not null says the read succeeded and its answer is that this
+/// proposal would be rejected with that code: the check itself did not
+/// fail. The ticket bindings read it before anything else is done and turn
+/// it into a rejected mutation that carries the code.
+///
+/// The first three fields describe the proposal and are filled either way.
+///
+/// `index` and `complete` say what the answer was made from, and mean what
+/// they mean on the ticket relationship reads. The check scans nothing: an
+/// answer from an index that is not `current`, or with `complete` false,
+/// may lack tickets a refresh would bring, so a null `rejection` then says
+/// only that no cycle runs through the tickets the index holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelationshipCheckDto {
+    /// The proposed dependencies as a save writes them: in ID order, each
+    /// once.
+    pub deps: Vec<String>,
+    pub parent: Option<String>,
+    /// The proposed dependencies and parent that nothing the index holds
+    /// has the ID of, in ID order, each once. They are accepted: a later
+    /// fetch or merge may bring the ticket. The ticket's own ID is never
+    /// one of them.
+    pub unresolved: Vec<String>,
+    pub rejection: Option<RelationshipRejectionDto>,
+    /// False when the last refresh could not read, or stopped part of the
+    /// way through, `.manyhands/tickets`, `.manyhands` or
+    /// `.manyhands/worktrees`. Tickets may then be missing from what the
+    /// check was made against, and `index.state` can still be `current`.
+    pub complete: bool,
+    /// The state of the index the check answered from.
+    pub index: IndexStateDto,
+}
+
+/// Why a save of the proposed relationships would be rejected.
+///
+/// `code` is one of `CODES`. For `invalid_relationship`, `ids` holds every
+/// proposed ID that the index holds as a document or a comment. For
+/// `relationship_cycle` it holds the tickets of the cycle the proposal
+/// would put the ticket on, the ticket included and closed tickets
+/// counted: a set, not a path, and the ticket alone when it names itself.
+/// Either way `ids` is in ID order, each once.
+///
+/// One rejection is reported: `invalid_relationship` first, then the ticket
+/// naming itself, which is always the ticket alone whatever other cycle
+/// the proposal closes, then a dependency cycle, then a parent cycle.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RelationshipRejectionDto {
+    pub code: ResultCode,
+    pub ids: Vec<String>,
+}
+
+impl RelationshipRejectionDto {
+    /// Every code a rejection can carry.
+    pub const CODES: [ResultCode; 2] = [
+        ResultCode::RelationshipCycle,
+        ResultCode::InvalidRelationship,
+    ];
 }

@@ -165,6 +165,58 @@ pub fn insert_remote_synchronization(
         .unwrap();
 }
 
+/// Makes the synchronization `child`, of `item`'s branch, the one a
+/// comment's binding keeps: the submission `parent`, completed, and its
+/// binding with a receipt, as the index holds them once the comment is
+/// committed and handed to the index. The synchronization's own row is
+/// inserted with `insert_remote_synchronization`.
+pub fn insert_comment_binding(
+    data_directory: &Path,
+    parent: &str,
+    child: &str,
+    (kind, item): (&str, &str),
+    comment: &str,
+) {
+    let connection = items::index(data_directory);
+    let root: String = connection
+        .query_row("SELECT root_path FROM repositories", [], |row| row.get(0))
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO operation_records (
+                repository_id, root_path, operation_ulid, action, target, state,
+                completed_step, observed_at
+             ) SELECT id, root_path, ?1, 'submit_comment', ?2, 'completed',
+                      'authoritative_observed', ?3
+                 FROM repositories",
+            params![
+                parent,
+                format!("authoring-context-v1/{kind}/{item}/Edit\0.manyhands/comments\0{comment}"),
+                STORED_AT
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO comment_publication_bindings (
+                operation_ulid, local_record_id, root_digest, kind, item_ulid, comment_ulid,
+                synchronization_ulid, pre_checkpoint_oid, checkpoint_oid, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, '0')",
+            params![
+                parent,
+                connection.last_insert_rowid(),
+                blake3::hash(root.as_bytes()).as_bytes().as_slice(),
+                kind,
+                item,
+                comment,
+                child,
+                "0".repeat(40),
+                PUBLISHED_OID
+            ],
+        )
+        .unwrap();
+}
+
 /// The commit a completed synchronization published in these fixtures.
 pub const PUBLISHED_OID: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -224,4 +276,66 @@ pub fn insert_key_material(
         )
         .unwrap();
     key_id
+}
+
+/// A call that is indexing under an operation's row with no lease held,
+/// stood in for by the row itself: claimed for indexing, with a heartbeat
+/// that is fresh. No hook runs a second call inside the first's refresh,
+/// and two threads would race.
+pub struct LiveIndexOwner {
+    index: Connection,
+    operation: String,
+    claimed: (String, Option<String>, i64),
+}
+
+impl LiveIndexOwner {
+    /// Stands the owner on the pending row of `operation`.
+    pub fn on(data_directory: &Path, operation: &str) -> Self {
+        let index = items::index(data_directory);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let changed = index
+            .execute(
+                "UPDATE operation_records SET state = 'indexing', observed_at = ?2
+                  WHERE operation_ulid = ?1 AND state != 'completed'",
+                params![operation, now + 60],
+            )
+            .unwrap();
+        assert_eq!(changed, 1, "the pending row of the operation");
+        let mut owner = Self {
+            index,
+            operation: operation.to_owned(),
+            claimed: (String::new(), None, 0),
+        };
+        owner.claimed = owner.row();
+        assert_eq!(owner.claimed.0, "indexing");
+        owner
+    }
+
+    /// The row's state, step and heartbeat.
+    pub fn row(&self) -> (String, Option<String>, i64) {
+        self.index
+            .query_row(
+                "SELECT state, completed_step, observed_at FROM operation_records
+                  WHERE operation_ulid = ?1",
+                [&self.operation],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap()
+    }
+
+    /// The row is as the owner's claim left it: nothing was recorded on
+    /// it and no one else claimed it.
+    pub fn assert_left_alone(&self) {
+        assert_eq!(self.row(), self.claimed);
+    }
+
+    /// The owner died: its heartbeat is old.
+    pub fn die(&self) {
+        self.index
+            .execute(
+                "UPDATE operation_records SET observed_at = 0 WHERE operation_ulid = ?1",
+                [&self.operation],
+            )
+            .unwrap();
+    }
 }

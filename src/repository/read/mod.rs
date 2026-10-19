@@ -43,22 +43,27 @@ mod items;
 mod resolve;
 mod status;
 
+pub(crate) use admin::identity_dto;
+pub(crate) use credentials::stored_authority;
 pub use dto::{
     Accessibility, ChangeSource, ClosureDto, ClosureState, CommentDto, CommentListDto,
     ConfigurationDto, ConfigurationState, CycleDto, CycleKind, CycleListDto, DependencyDirection,
-    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, HostPinDto,
-    HostPinListDto, IdentityAvailability, IdentityDto, IdentitySource, IndexProblemDto, IndexState,
-    IndexStateDto, IndexStatusDto, IndexStatusState, ItemContextDto, ItemContextKind, ItemDto,
-    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, KeyOwnership, KeyPrivateSourceState,
-    KeyPublicMetadataState, NewIdDto, OperationAction, OperationDto, OperationFamily,
-    OperationListDto, OperationNextAction, OperationOwner, PlanBatchDto, PlanDto, PollingOutcome,
-    PollingStatusDto, ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode,
-    ReadinessReasonDto, ReadinessState, RemoteDto, RemoteListDto, RepositoryInspectionDto,
-    RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode, UnplannableReasonDto,
-    UnplannableTicketDto,
+    DependencyDto, DependencyState, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderDto,
+    DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityAvailability, IdentityDto,
+    IdentitySource, IndexProblemDto, IndexState, IndexStateDto, IndexStatusDto, IndexStatusState,
+    InitialsSource, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind, ItemListDto, KeyDto,
+    KeyListDto, KeyOwnership, KeyPrivateSourceState, KeyPublicMetadataState, NewIdDto,
+    OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+    OperationOwner, PathObservationDto, PlanBatchDto, PlanDto, PollingOutcome, PollingStatusDto,
+    ProblemDto, PublicKeyDto, ReadinessDto, ReadinessReasonCode, ReadinessReasonDto,
+    ReadinessState, RelationshipCheckDto, RelationshipRejectionDto, RemoteDto, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, UnplannableReasonCode,
+    UnplannableReasonDto, UnplannableTicketDto,
 };
-pub use items::{ClosureFilter, ReadinessFilter, TicketFilter};
+pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
+pub(crate) use items::{is_plain_relative, observe_in_context};
 pub use resolve::ResolvedRepository;
+pub(crate) use status::local_action;
 
 /// The argument of a recovery action that names a repository root.
 const ROOT_ARGUMENT: &str = "root";
@@ -277,6 +282,9 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         | RepositoryErrorKind::RepositoryNotEnabled => ResultCode::RepositoryNotRegistered,
         RepositoryErrorKind::IndexUnavailable => ResultCode::IndexUnavailable,
         RepositoryErrorKind::RepositoryBusy => ResultCode::Busy,
+        // The closed-ticket guard (C5). No read writes, but the code is
+        // the same wherever the kind is met.
+        RepositoryErrorKind::TicketClosed => ResultCode::TicketClosed,
         // A backend failure. Its text stays in the source.
         RepositoryErrorKind::Io | RepositoryErrorKind::Sqlite | RepositoryErrorKind::Git => {
             ResultCode::InternalError
@@ -295,7 +303,11 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         | RepositoryErrorKind::InvalidIdentity
         | RepositoryErrorKind::MissingAuthoringTarget
         | RepositoryErrorKind::OccupiedItemPath
-        | RepositoryErrorKind::MismatchedAuthoringContext => ResultCode::InternalError,
+        | RepositoryErrorKind::MismatchedAuthoringContext
+        // What a repair is refused for. No read repairs.
+        | RepositoryErrorKind::NotRepairable
+        | RepositoryErrorKind::AmbiguousIdentity
+        | RepositoryErrorKind::InvalidItemSource => ResultCode::InternalError,
         // Configuration and remote changes.
         RepositoryErrorKind::InvalidConfiguration
         | RepositoryErrorKind::InvalidPublicationRemote
@@ -305,6 +317,7 @@ fn repository_error_code(kind: RepositoryErrorKind) -> ResultCode {
         // Recoverable operations, which only a mutation begins or resumes.
         RepositoryErrorKind::RegistryRefreshPending
         | RepositoryErrorKind::OperationMismatch
+        | RepositoryErrorKind::OperationAbandoned
         | RepositoryErrorKind::RecoveryRequired
         | RepositoryErrorKind::ExternalChange
         | RepositoryErrorKind::RollbackIncomplete
@@ -414,7 +427,7 @@ impl RepositoryService {
     /// and gives `read` a read-only connection inside a deferred transaction
     /// that is rolled back whatever `read` returns. A lock not obtained in
     /// time is `busy`; a degraded index is `index_unavailable`.
-    fn read_session<T>(
+    pub(super) fn read_session<T>(
         &self,
         operation: RepositoryOperation,
         read: impl FnOnce(&Connection) -> Result<T, ReadError>,

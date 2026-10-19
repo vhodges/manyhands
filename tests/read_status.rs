@@ -391,14 +391,27 @@ fn polling_status_reports_the_stored_policy_and_the_latest_outcome() {
     );
     assert_eq!(failed.backoff_seconds, Some(60));
     assert_eq!(failed.active_operation_id, None);
-    // The attempt observed nothing, and no time is stored for an outcome.
+    // The attempt observed nothing; finish stores a retry deadline separately
+    // from the last successful advertisement time.
     assert_eq!(failed.latest_observed_at, None);
-    assert_eq!(failed.next_eligible_at, None);
+    let attempt = service
+        .remote_snapshot(root)
+        .unwrap()
+        .latest_attempt_at()
+        .unwrap();
+    assert_eq!(
+        failed.next_eligible_at,
+        Some(
+            (attempt + time::Duration::seconds(60))
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        )
+    );
 
     operations::insert_current_observation(enabled.data_directory.path());
     let observed = service.polling_status(&repo).unwrap();
     assert_eq!(observed.latest_observed_at.as_deref(), Some(STORED_AT_TEXT));
-    assert_eq!(observed.next_eligible_at, None);
+    assert_eq!(observed.next_eligible_at, failed.next_eligible_at);
     assert_eq!(
         PollingStatusFields::of(&observed),
         PollingStatusFields::of(&failed)
@@ -1286,6 +1299,82 @@ fn a_remote_operation_about_an_item_names_it() {
             .unwrap();
         assert!(service.list_operations(&repo).unwrap().items.is_empty());
     }
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn status_lists_closure_parent_and_hides_its_reservation() {
+    let (fixture, enabled, repo) = enabled();
+    let (service, data) = (&enabled.service, enabled.data_directory.path());
+    configure_remote(data);
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let id = OperationId::new();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::Close,
+        AuthoringKind::Ticket,
+        items::item_id(TICKET_A),
+    )
+    .unwrap();
+    reserved(
+        service
+            .reserve_remote_operation(&fixture.root, id, &target)
+            .unwrap(),
+    );
+    // The closure parent's own journal, at its checkpoint step.
+    items::index(data)
+        .execute(
+            "INSERT INTO ticket_closures (
+                repository_id, operation_id, item_id, expectation, remote_name, step,
+                context_oid, base_oid, updated_at, closure_kind, closed_at, closure_oid
+             ) SELECT id, ?1, ?2, zeroblob(32), 'origin', 'closing',
+                      '1111111111111111111111111111111111111111',
+                      '2222222222222222222222222222222222222222', ?3, 'record', ?4,
+                      '3333333333333333333333333333333333333333'
+                 FROM repositories",
+            rusqlite::params![
+                id.to_string(),
+                TICKET_A,
+                operations::STORED_AT,
+                STORED_AT_TEXT
+            ],
+        )
+        .unwrap();
+
+    let list = service.list_operations(&repo).unwrap();
+    let [operation] = &list.items[..] else {
+        panic!("{list:?}");
+    };
+    assert_eq!(operation.operation_id, Some(id.to_string()));
+    assert_eq!(operation.family, OperationFamily::Remote);
+    assert_eq!(operation.owner, OperationOwner::Repository);
+    assert_eq!(operation.action, OperationAction::Close);
+    assert_eq!(operation.state, "closing");
+    assert_eq!(operation.completed_step.as_deref(), Some("closing"));
+    assert_eq!(operation.next_action, None);
+    assert_eq!(operation.item_id.as_deref(), Some(TICKET_A));
+    assert_eq!(operation.failure_code, None);
+    assert_eq!(&service.show_operation(&repo, id).unwrap(), operation);
+    let json = serde_json::to_string(&list).unwrap();
+    assert!(!json.contains("3333333333") && !json.contains("closure_kind"));
+
+    // A finished closure is shown by its ID and no longer listed.
+    items::index(data)
+        .execute(
+            "UPDATE ticket_closures SET step='abandoned', refusal_category='external_change'",
+            [],
+        )
+        .unwrap();
+    items::index(data)
+        .execute(
+            "UPDATE remote_operation_records SET phase='cancelled', outcome='cancelled'",
+            [],
+        )
+        .unwrap();
+    assert!(service.list_operations(&repo).unwrap().items.is_empty());
+    let shown = service.show_operation(&repo, id).unwrap();
+    assert_eq!(shown.action, OperationAction::Close);
+    assert_eq!(shown.state, "abandoned");
     assert_git_transport_uninitialized();
 }
 

@@ -8,8 +8,9 @@ use time::OffsetDateTime;
 
 use super::{
     Accessibility, ConfigurationDto, ConfigurationState, IdentityAvailability, IdentityDto,
-    IdentitySource, ProblemDto, ReadError, RemoteDto, RemoteListDto, RepositoryInspectionDto,
-    RepositoryListDto, RepositorySummaryDto, ResolvedRepository, index_state,
+    IdentitySource, InitialsSource, ProblemDto, ReadError, RemoteDto, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositorySummaryDto, ResolvedRepository,
+    index_state,
     resolve::{at_root, open_exactly, selected_repository},
 };
 use crate::{
@@ -17,7 +18,8 @@ use crate::{
     repository::{
         ConfigurationInspection, IdentityConfigProvider, IdentityInspection, RemoteInfo,
         RepositoryError, RepositoryIdentityConfig, RepositoryOperation, RepositoryService,
-        SuppliedIdentityConfig, read_configuration_guarded, remote_info_for, resolve_identity,
+        SuppliedIdentityConfig, bridges::identity::local_initials, read_configuration_guarded,
+        remote_info_for, resolve_identity,
     },
     results::{
         ProblemCode, REDACTED, ResultCode, absolute_path_string, redact_url, relative_path_string,
@@ -155,6 +157,49 @@ fn remote_dtos(
         .collect();
     remotes.sort_by(|left, right| left.name.cmp(&right.name));
     remotes
+}
+
+/// The identity a commit in `repository` would carry, with the level of
+/// configuration it comes from, and the initials a short code would be
+/// composed with. The repository's own configuration is read first for
+/// both; `effective_config` is what Git finds at every level.
+pub(crate) fn identity_dto(
+    repository: &Repository,
+    root: &Path,
+    effective_config: &Config,
+    operation: RepositoryOperation,
+) -> Result<IdentityDto, ReadError> {
+    let git = |error| RepositoryError::git(operation, Some(root.to_owned()), error);
+    let local_config = repository.config().map_err(git)?;
+    let identity = resolve_identity(&local_config, effective_config, root, operation)?;
+    let (name, email, source) = match identity {
+        Some((identity, level)) => {
+            let Some(source) = identity_source(level) else {
+                return Err(ReadError::new(ResultCode::InternalError));
+            };
+            (Some(identity.name), Some(identity.email), source)
+        }
+        None => (None, None, IdentitySource::None),
+    };
+    // As a short code is composed: the repository's own initials come
+    // first, and ones that do not fit are not replaced by derived ones.
+    let (initials, initials_source) = match local_initials(repository).map_err(git)? {
+        Some(configured) => match canonical::normalize_initials(&configured) {
+            Ok(initials) => (Some(initials), InitialsSource::Repository),
+            Err(canonical::InitialsProblem::Invalid) => (None, InitialsSource::None),
+        },
+        None => match name.as_deref().and_then(canonical::derive_initials) {
+            Some(initials) => (Some(initials), InitialsSource::Derived),
+            None => (None, InitialsSource::None),
+        },
+    };
+    Ok(IdentityDto {
+        name,
+        email,
+        source,
+        initials,
+        initials_source,
+    })
 }
 
 impl RepositoryService {
@@ -297,29 +342,11 @@ impl RepositoryService {
     ) -> Result<IdentityDto, ReadError> {
         let operation = RepositoryOperation::Read;
         let repository = repo.open()?;
-        let mut resolve = || {
-            let local_config = repository.config().map_err(|error| {
-                RepositoryError::git(operation, Some(repo.root().to_owned()), error)
-            })?;
-            let effective_config =
-                identity_config.effective_config(&repository, repo.root(), operation)?;
-            resolve_identity(&local_config, &effective_config, repo.root(), operation)
-        };
-        let Some((identity, level)) = resolve().map_err(|error| repo.failure(error))? else {
-            return Ok(IdentityDto {
-                name: None,
-                email: None,
-                source: IdentitySource::None,
-            });
-        };
-        let Some(source) = identity_source(level) else {
-            return Err(repo.failure(ReadError::new(ResultCode::InternalError)));
-        };
-        Ok(IdentityDto {
-            name: Some(identity.name),
-            email: Some(identity.email),
-            source,
-        })
+        let effective_config = identity_config
+            .effective_config(&repository, repo.root(), operation)
+            .map_err(|error| repo.failure(error))?;
+        identity_dto(&repository, repo.root(), &effective_config, operation)
+            .map_err(|error| repo.failure(error))
     }
 
     /// The repository's remotes in name order, with any credential removed

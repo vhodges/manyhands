@@ -1,9 +1,1140 @@
 use super::*;
+
+fn promote_target() -> RemoteOperationTarget {
+    RemoteOperationTarget::for_context(
+        &plan(),
+        RemoteOperationAction::Promote,
+        crate::repository::AuthoringKind::Document,
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+    )
+    .unwrap()
+}
+#[test]
+fn promotion_manual_reservation_holds_across_cleanup_and_only_final_sql_finishes() {
+    let (_data, root, service) = fixture();
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &promote_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    for point in [
+        RemoteOperationSafePoint::BeforeTransport,
+        RemoteOperationSafePoint::AfterAdvertisement,
+    ] {
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .unwrap(),
+            RemoteSafePointOutcome::Continue
+        );
+    }
+    assert!(
+        service
+            .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+            .is_err()
+    );
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    // A local cleanup checkpoint does not release or rewrite the remote owner.
+    for _ in 0..3 {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            let r = owned(&service, tx, id, &owner)?;
+            assert_eq!(r.target.action(), RemoteOperationAction::Promote);
+            Ok(())
+        })
+        .unwrap();
+    }
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_some()
+    );
+}
+#[test]
+fn promotion_cancellation_keeps_the_slot_and_does_not_write_poll_policy() {
+    let (data, root, service) = fixture();
+    let owner = match service
+        .reserve_remote_operation(root.path(), OperationId::new(), &promote_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    service
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch(
+        "UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=1234",
+    )
+    .unwrap();
+    service
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    let policy: (Option<String>, Option<i64>, Option<i64>) = db
+        .query_row(
+            "SELECT latest_outcome,latest_attempt_at,next_eligible_at FROM remote_polling_state",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(policy, (None, None, Some(1234)));
+}
+#[test]
+fn promotion_restart_fences_old_epoch_preserves_step_and_poll_policy() {
+    let (data, root, service) = fixture();
+    let op = OperationId::new();
+    let owner = match service
+        .reserve_remote_operation(root.path(), op, &promote_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    service
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("UPDATE remote_operation_records SET phase='interrupted'; UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=1234").unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let new = match reopened
+        .restart_remote_promotion(root.path(), op, &promote_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .is_err()
+    );
+    assert_eq!(new.epoch, owner.epoch + 1);
+    reopened
+        .remote_safe_point(
+            root.path(),
+            &new,
+            RemoteOperationSafePoint::AfterAdvertisement,
+        )
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT next_eligible_at FROM remote_polling_state",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1234
+    );
+}
+#[test]
+fn promotion_yields_running_poll_and_is_busy_against_sync() {
+    for poll in [true, false] {
+        let (_data, root, service) = fixture();
+        let target = if poll {
+            RemoteOperationTarget::for_poll(&plan())
+        } else {
+            RemoteOperationTarget::for_primary_synchronization(&plan())
+        };
+        let owner = match service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(o) => o,
+            other => panic!("{other:?}"),
+        };
+        let result = service
+            .reserve_remote_operation(root.path(), OperationId::new(), &promote_target())
+            .unwrap();
+        if poll {
+            assert!(matches!(result, RemoteReservationOutcome::PollYielding));
+            assert_eq!(
+                service
+                    .remote_safe_point(
+                        root.path(),
+                        &owner,
+                        RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .unwrap(),
+                RemoteSafePointOutcome::Interrupted
+            );
+        } else {
+            assert!(matches!(result, RemoteReservationOutcome::Busy));
+        }
+    }
+}
+
+#[test]
+fn promotion_child_ownership_dominates_interruption_and_authority_never_reexecutes() {
+    use crate::repository::promotion::record::{self, ChildRole, ChildState};
+    use crate::repository::{AuthoringKind, PromotionExpectation};
+    for primary in [false, true] {
+        for mode in ["absent", "candidate", "conflict", "complete", "uncertain"] {
+            let (data, root, service) = fixture();
+            let role = if primary {
+                ChildRole::Primary
+            } else {
+                ChildRole::Context
+            };
+            let parent = state::with_transaction(&service, root.path(), |tx, id| {
+                let mut r = record::begin_record(
+                    tx,
+                    id,
+                    OperationId::new(),
+                    &"01ARZ3NDEKTSV4RRFFQ69G5FAV".parse().unwrap(),
+                    PromotionExpectation::from_bytes([7; 32]),
+                    Some("origin"),
+                )?;
+                if primary {
+                    r.context_oid = sync_evidence().expected_oid;
+                    r.step = record::PromotionStep::ContextSynchronized;
+                    record::save_record(tx, id, &r)?;
+                    r.base_oid = r.context_oid;
+                    r.integration_kind = Some(record::IntegrationKind::Merged);
+                    r.step = record::PromotionStep::Integrating;
+                    record::save_record(tx, id, &r)?;
+                    r.integration_oid = sync_evidence().local_oid;
+                    r.step = record::PromotionStep::Integrated;
+                    record::save_record(tx, id, &r)?;
+                }
+                record::next_attempt(tx, id, r.operation_id, role)
+            })
+            .unwrap();
+            let child = if primary {
+                parent.primary_sync_id.unwrap()
+            } else {
+                parent.context_sync_id.unwrap()
+            };
+            let target = if primary {
+                sync_target()
+            } else {
+                RemoteOperationTarget::for_context(
+                    &plan(),
+                    RemoteOperationAction::SynchronizeContext,
+                    AuthoringKind::Document,
+                    parent.item_id.clone(),
+                )
+                .unwrap()
+            };
+            if mode == "absent" {
+                state::with_transaction(&service, root.path(), |tx, _| {
+                    assert!(matches!(
+                        record::child_state(tx, &parent, role)?,
+                        ChildState::Absent
+                    ));
+                    Ok(())
+                })
+                .unwrap();
+                continue;
+            }
+            let owner = match service
+                .reserve_remote_operation(root.path(), child, &target)
+                .unwrap()
+            {
+                RemoteReservationOutcome::Reserved(o) => o,
+                other => panic!("{other:?}"),
+            };
+            if mode == "complete" {
+                sync_push_prepared(&service, root.path(), &owner);
+                let mut evidence = sync_evidence();
+                evidence.push_advertised_oid = evidence.push_oid;
+                service
+                    .checkpoint_synchronization(
+                        root.path(),
+                        &owner,
+                        state::SynchronizationCheckpoint::PushVerified,
+                        &evidence,
+                    )
+                    .unwrap();
+                service
+                    .classify_synchronization(
+                        root.path(),
+                        &owner,
+                        state::SynchronizationAuthority::Published(evidence.push_oid.unwrap()),
+                    )
+                    .unwrap();
+            } else if mode != "uncertain" {
+                service
+                    .prepare_synchronization_integration(
+                        root.path(),
+                        &owner,
+                        &state::IntegrationStepIntent {
+                            ordinal: 0,
+                            stage: if primary {
+                                super::super::merge::IntegrationStage::Primary
+                            } else {
+                                super::super::merge::IntegrationStage::Context
+                            },
+                            local_oid: sync_evidence().expected_oid.unwrap(),
+                            incoming_oid: sync_evidence().local_oid.unwrap(),
+                            baseline_tree_oid: sync_evidence().primary_tracking_oid.unwrap(),
+                            baseline_index_digest: [7; 32],
+                        },
+                    )
+                    .unwrap();
+                service
+                    .begin_synchronization_integration_effect(
+                        root.path(),
+                        &owner,
+                        0,
+                        if mode == "candidate" {
+                            sync_evidence().push_oid
+                        } else {
+                            None
+                        },
+                    )
+                    .unwrap();
+                if mode == "conflict" {
+                    service
+                        .release_synchronization_conflict(root.path(), &owner, 0, [7; 32])
+                        .unwrap();
+                }
+                Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute("UPDATE remote_operation_records SET phase='interrupted' WHERE operation_ulid=?1",[child.to_string()]).unwrap();
+            } else {
+                Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute_batch("PRAGMA ignore_check_constraints=ON;UPDATE remote_operation_records SET owner_epoch=-1").unwrap();
+            }
+            state::with_transaction(&service, root.path(), |tx, id| {
+                let state = record::child_state(tx, &parent, role);
+                match mode {
+                    "complete" => assert!(matches!(state?, ChildState::Complete(_))),
+                    "uncertain" => assert!(state.is_err()),
+                    _ => assert!(matches!(state?, ChildState::Retained(_))),
+                }
+                assert!(record::next_attempt(tx, id, parent.operation_id, role).is_err());
+                let actual = record::read_record(tx, id, parent.operation_id)?.unwrap();
+                assert_eq!(actual.context_sync_id, parent.context_sync_id);
+                assert_eq!(actual.primary_sync_id, parent.primary_sync_id);
+                Ok(())
+            })
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn poll_progress_probe_is_read_only_and_fences_flags_and_owner_epoch() {
+    let (data, root, service) = poll_fixture();
+    let owner = match service
+        .reserve_remote_poll(
+            root.path(),
+            OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan()),
+            RemoteOperationPriority::Poll,
+        )
+        .unwrap()
+    {
+        RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(o)) => o,
+        other => panic!("{other:?}"),
+    };
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("CREATE TABLE probe_writes(n INTEGER);INSERT INTO probe_writes VALUES(0);CREATE TRIGGER probe_update AFTER UPDATE ON remote_operation_records BEGIN UPDATE probe_writes SET n=n+1;END;").unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Continue
+    );
+    assert_eq!(
+        db.query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    db.execute_batch("UPDATE remote_operation_records SET yield_requested=1")
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+    db.execute_batch("UPDATE remote_operation_records SET cancel_requested=1")
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    let count = db
+        .query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert_eq!(
+        db.query_row("SELECT n FROM probe_writes", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        count
+    );
+    let other = RepositoryService::open_at(data.path()).unwrap();
+    assert!(poll_progress(&other, &owner).is_err());
+    db.execute_batch("UPDATE remote_operation_records SET cancel_requested=0,yield_requested=0,owner_epoch=owner_epoch+1").unwrap();
+    assert_eq!(
+        poll_progress(&service, &owner).unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+}
 use crate::repository::{
     REGISTRY_FILE,
     remote::{RemoteRefObservation, RemoteRefPlan},
 };
 use rusqlite::Connection;
+
+fn poll_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
+    let result = fixture();
+    let repo = git2::Repository::init(result.1.path()).unwrap();
+    let tree = repo
+        .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+        .unwrap();
+    let signature = git2::Signature::now("Fixture", "fixture@example.test").unwrap();
+    repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+        .unwrap();
+    result
+}
+
+fn update_owner(service: &RepositoryService, root: &Path) -> RemoteReservation {
+    match service
+        .reserve_remote_poll(
+            root,
+            OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan()),
+            RemoteOperationPriority::Poll,
+        )
+        .unwrap()
+    {
+        RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(owner)) => {
+            owner
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn update_points() -> [RemoteOperationSafePoint; 8] {
+    use RemoteOperationSafePoint::*;
+    [
+        BeforeTransport,
+        AfterAdvertisement,
+        BetweenObservations,
+        BeforeBatchCommit,
+        AfterBatchCommit,
+        BeforeLocalMutation,
+        BeforeLocalMutation,
+        BeforeDiscovery,
+    ]
+}
+
+fn advance_update(
+    service: &RepositoryService,
+    root: &Path,
+    owner: &RemoteReservation,
+    count: usize,
+) {
+    for point in update_points().into_iter().take(count) {
+        let result = if point == RemoteOperationSafePoint::AfterBatchCommit {
+            commit_observation_batch(service, root, owner, &plan(), &[], 123)
+        } else {
+            service.remote_safe_point(root, owner, point)
+        };
+        assert_eq!(result.unwrap(), RemoteSafePointOutcome::Continue);
+    }
+}
+
+#[test]
+fn update_local_stage_is_ordered_repeatable_active_and_completion_requires_discovery() {
+    use RemoteOperationSafePoint::*;
+    let (_data, root, service) = poll_fixture();
+    let owner = update_owner(&service, root.path());
+    for point in [BeforeLocalMutation, BeforeDiscovery] {
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .unwrap_err()
+                .kind,
+            RepositoryErrorKind::RecoveryRequired
+        );
+    }
+    advance_update(&service, root.path(), &owner, 5);
+    assert_eq!(
+        service
+            .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, BeforeLocalMutation)
+                .unwrap(),
+            RemoteSafePointOutcome::Continue
+        );
+        assert_eq!(
+            service
+                .active_remote_operation(root.path())
+                .unwrap()
+                .unwrap()
+                .phase(),
+            RemoteOperationPhase::LocalPrepared
+        );
+        assert!(matches!(
+            service
+                .reserve_remote_poll(
+                    root.path(),
+                    OperationId::new(),
+                    &RemoteOperationTarget::for_poll(&plan()),
+                    RemoteOperationPriority::Poll
+                )
+                .unwrap(),
+            RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Busy)
+        ));
+    }
+    assert_eq!(
+        service
+            .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(
+        service
+            .remote_safe_point(root.path(), &owner, BeforeBatchCommit)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    service
+        .remote_safe_point(root.path(), &owner, BeforeDiscovery)
+        .unwrap();
+    for point in [BeforeDiscovery, BeforeLocalMutation, AfterAdvertisement] {
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .unwrap_err()
+                .kind,
+            RepositoryErrorKind::RecoveryRequired
+        );
+    }
+    assert_eq!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .unwrap()
+            .phase(),
+        RemoteOperationPhase::LocalPrepared
+    );
+    service
+        .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+        .unwrap();
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn update_requests_at_every_boundary_release_slot_preserve_policy_and_fence_owner() {
+    for cancel in [false, true] {
+        for boundary in 0..=update_points().len() {
+            let (data, root, service) = poll_fixture();
+            let owner = update_owner(&service, root.path());
+            let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute_batch("UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=1234").unwrap();
+            let before_batch_commit = boundary == update_points().len();
+            let count = if before_batch_commit {
+                4
+            } else if boundary == 4 {
+                5
+            } else {
+                boundary
+            };
+            advance_update(&service, root.path(), &owner, count);
+            if cancel {
+                service
+                    .cancel_remote_operation(root.path(), owner.operation_id())
+                    .unwrap();
+            } else {
+                assert!(matches!(
+                    service
+                        .reserve_remote_operation(
+                            root.path(),
+                            OperationId::new(),
+                            &RemoteOperationTarget::for_primary_synchronization(&plan())
+                        )
+                        .unwrap(),
+                    RemoteReservationOutcome::PollYielding
+                ));
+            }
+            let point = if before_batch_commit {
+                RemoteOperationSafePoint::BeforeBatchCommit
+            } else {
+                update_points()[boundary]
+            };
+            let result = if before_batch_commit {
+                commit_observation_batch(&service, root.path(), &owner, &plan(), &[], 124)
+            } else {
+                service.remote_safe_point(root.path(), &owner, point)
+            };
+            assert_eq!(
+                result.unwrap(),
+                if cancel {
+                    RemoteSafePointOutcome::Cancelled
+                } else {
+                    RemoteSafePointOutcome::Interrupted
+                }
+            );
+            assert!(
+                service
+                    .active_remote_operation(root.path())
+                    .unwrap()
+                    .is_none()
+            );
+            let snapshot = service.remote_snapshot(root.path()).unwrap();
+            assert_eq!(
+                snapshot.polling().automatic_backoff().unwrap().as_secs(),
+                120
+            );
+            assert_eq!(snapshot.next_eligible_at().unwrap().unix_timestamp(), 1234);
+            assert_eq!(snapshot.latest_attempt_at().is_some(), cancel);
+            assert_eq!(
+                service
+                    .remote_safe_point(root.path(), &owner, point)
+                    .unwrap_err()
+                    .kind,
+                RepositoryErrorKind::RecoveryRequired
+            );
+        }
+    }
+}
+
+#[test]
+fn update_restart_from_every_abandoned_or_interrupted_stage_reobserves_with_new_epoch() {
+    for interrupted in [false, true] {
+        for count in 0..=update_points().len() {
+            let (data, root, service) = poll_fixture();
+            let owner = update_owner(&service, root.path());
+            advance_update(&service, root.path(), &owner, count);
+            if interrupted {
+                Connection::open(data.path().join(REGISTRY_FILE))
+                    .unwrap()
+                    .execute_batch(
+                        "UPDATE remote_operation_records SET phase='interrupted',yield_requested=1",
+                    )
+                    .unwrap();
+            }
+            let reopened = RepositoryService::open_at(data.path()).unwrap();
+            let restarted = match reopened
+                .restart_remote_poll(
+                    root.path(),
+                    owner.operation_id(),
+                    &RemoteOperationTarget::for_poll(&plan()),
+                )
+                .unwrap()
+            {
+                RemoteReservationOutcome::Reserved(owner) => owner,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(restarted.epoch, owner.epoch + 1);
+            let inspection = reopened
+                .active_remote_operation(root.path())
+                .unwrap()
+                .unwrap();
+            assert_eq!(inspection.phase(), RemoteOperationPhase::Reserved);
+            assert_eq!(inspection.completed_step(), None);
+            assert!(!inspection.yield_requested());
+            assert_eq!(
+                service
+                    .remote_safe_point(
+                        root.path(),
+                        &owner,
+                        RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .unwrap_err()
+                    .kind,
+                RepositoryErrorKind::RecoveryRequired
+            );
+            advance_update(&reopened, root.path(), &restarted, 8);
+        }
+    }
+}
+
+#[test]
+fn poll_kind_is_stored_identity_and_terminal_update_replays() {
+    for cancelled in [false, true] {
+        let (data, root, service) = poll_fixture();
+        let owner = update_owner(&service, root.path());
+        advance_update(&service, root.path(), &owner, 8);
+        service
+            .finish_remote_operation(
+                root.path(),
+                &owner,
+                if cancelled {
+                    RemoteOutcomeCategory::Cancelled
+                } else {
+                    RemoteOutcomeCategory::Completed
+                },
+            )
+            .unwrap();
+        let reopened = RepositoryService::open_at(data.path()).unwrap();
+        let target = RemoteOperationTarget::for_poll(&plan());
+        assert!(matches!(
+            reopened
+                .restart_remote_poll(root.path(), owner.operation_id(), &target)
+                .unwrap(),
+            RemoteReservationOutcome::Replay(_)
+        ));
+        assert!(matches!(
+            reopened
+                .reserve_remote_poll(
+                    root.path(),
+                    owner.operation_id(),
+                    &target,
+                    RemoteOperationPriority::Poll
+                )
+                .unwrap(),
+            RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Replay(_))
+        ));
+        assert_eq!(
+            reopened
+                .restart_remote_observation(root.path(), owner.operation_id(), &target)
+                .unwrap_err()
+                .kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+        assert_eq!(
+            reopened
+                .reserve_remote_operation(root.path(), owner.operation_id(), &target)
+                .unwrap_err()
+                .kind,
+            RepositoryErrorKind::OperationMismatch
+        );
+    }
+    let (_data, root, service) = poll_fixture();
+    let observe = reserve(&service, root.path());
+    assert_eq!(
+        service
+            .reserve_remote_poll(
+                root.path(),
+                observe.operation_id(),
+                &RemoteOperationTarget::for_poll(&plan()),
+                RemoteOperationPriority::Poll
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert_eq!(
+        service
+            .restart_remote_poll(
+                root.path(),
+                observe.operation_id(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+}
+
+#[test]
+fn observe_legacy_migration_freezes_discovery_completion_and_restart() {
+    let (data, root, service) = poll_fixture();
+    let owner = reserve(&service, root.path());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // Remove just the additive column, representing a pre-Cycle-08 envelope.
+    db.execute_batch("DROP TRIGGER IF EXISTS remote_poll_kind_immutable; ALTER TABLE remote_operation_records DROP COLUMN poll_kind").unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT poll_kind FROM remote_operation_records",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "observe"
+    );
+    let owner = match reopened
+        .restart_remote_observation(
+            root.path(),
+            owner.operation_id(),
+            &RemoteOperationTarget::for_poll(&plan()),
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("{other:?}"),
+    };
+    reopened
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::BeforeBatchCommit,
+        )
+        .unwrap();
+    assert_eq!(
+        reopened
+            .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    commit_observation_batch(&reopened, root.path(), &owner, &plan(), &[], 123).unwrap();
+    assert_eq!(
+        reopened
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::BeforeDiscovery
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert!(
+        matches!(reopened.restart_remote_observation(root.path(), owner.operation_id(), &RemoteOperationTarget::for_poll(&plan())).unwrap(), RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Completed)
+    );
+}
+
+#[test]
+fn finish_updates_attempt_deadline_and_phase_atomically_from_pre_finish_policy() {
+    use RemoteOutcomeCategory::*;
+    for priority in [
+        RemoteOperationPriority::Poll,
+        RemoteOperationPriority::Manual,
+    ] {
+        for category in [
+            Completed,
+            ConfigurationRequired,
+            SelectedKeyUnavailable,
+            UnlockRequired,
+            HostApprovalRequired,
+            TransportUnavailable,
+            ProtocolRejected,
+            Cancelled,
+            RepositoryUnavailable,
+        ] {
+            let (data, root, service) = poll_fixture();
+            let owner = match service
+                .reserve_remote_poll(
+                    root.path(),
+                    OperationId::new(),
+                    &RemoteOperationTarget::for_poll(&plan()),
+                    priority,
+                )
+                .unwrap()
+            {
+                RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(
+                    owner,
+                )) => owner,
+                other => panic!("{other:?}"),
+            };
+            let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            db.execute_batch("UPDATE remote_polling_state SET interval_seconds=300,automatic_backoff_seconds=120,latest_attempt_at=100,next_eligible_at=1234").unwrap();
+            let policy_before_batch = service.remote_snapshot(root.path()).unwrap();
+            advance_update(&service, root.path(), &owner, 8);
+            let policy_after_batch = service.remote_snapshot(root.path()).unwrap();
+            assert_eq!(policy_before_batch.polling(), policy_after_batch.polling());
+            assert_eq!(
+                policy_before_batch.latest_outcome(),
+                policy_after_batch.latest_outcome()
+            );
+            assert_eq!(
+                policy_before_batch.latest_attempt_at(),
+                policy_after_batch.latest_attempt_at()
+            );
+            assert_eq!(
+                policy_before_batch.next_eligible_at(),
+                policy_after_batch.next_eligible_at()
+            );
+            db.execute_batch("CREATE TRIGGER fail_finish BEFORE UPDATE OF phase ON remote_operation_records WHEN NEW.phase IN ('completed','failed','cancelled') BEGIN SELECT RAISE(ABORT,'fault'); END").unwrap();
+            let before = service.remote_snapshot(root.path()).unwrap();
+            assert_eq!(
+                service
+                    .finish_remote_operation(root.path(), &owner, category)
+                    .unwrap_err()
+                    .kind,
+                RepositoryErrorKind::RecoveryRequired
+            );
+            assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+            assert_eq!(
+                service
+                    .active_remote_operation(root.path())
+                    .unwrap()
+                    .unwrap()
+                    .phase(),
+                RemoteOperationPhase::LocalPrepared
+            );
+            db.execute_batch("DROP TRIGGER fail_finish").unwrap();
+            service
+                .finish_remote_operation(root.path(), &owner, category)
+                .unwrap();
+            let snapshot = service.remote_snapshot(root.path()).unwrap();
+            let attempt = snapshot.latest_attempt_at().unwrap().unix_timestamp();
+            assert!(attempt >= 100);
+            let delay = match category {
+                Cancelled => None,
+                Completed => Some(300),
+                _ if priority == RemoteOperationPriority::Manual => None,
+                TransportUnavailable | ProtocolRejected => Some(240),
+                _ => Some(300),
+            };
+            assert_eq!(
+                snapshot.next_eligible_at().unwrap().unix_timestamp(),
+                delay.map_or(1234, |delay| attempt + delay)
+            );
+            assert_eq!(
+                snapshot
+                    .polling()
+                    .automatic_backoff()
+                    .map(|value| value.as_secs()),
+                match category {
+                    Completed => None,
+                    TransportUnavailable | ProtocolRejected
+                        if priority == RemoteOperationPriority::Poll =>
+                        Some(240),
+                    _ => Some(120),
+                }
+            );
+            assert_eq!(snapshot.latest_outcome(), Some(category));
+            assert!(
+                service
+                    .active_remote_operation(root.path())
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn pending_conflict_blocks_only_update_without_record_or_policy_change() {
+    let (data, root, service) = poll_fixture();
+    let sync = sync_owner(&service, root.path());
+    let repo = git2::Repository::open(root.path()).unwrap();
+    let commit = repo.head().unwrap().peel_to_commit().unwrap();
+    service
+        .prepare_synchronization_integration(
+            root.path(),
+            &sync,
+            &state::IntegrationStepIntent {
+                ordinal: 0,
+                stage: super::super::merge::IntegrationStage::Primary,
+                local_oid: commit.id(),
+                incoming_oid: commit.id(),
+                baseline_tree_oid: commit.tree_id(),
+                baseline_index_digest: [0; 32],
+            },
+        )
+        .unwrap();
+    service
+        .begin_synchronization_integration_effect(root.path(), &sync, 0, None)
+        .unwrap();
+    service
+        .release_synchronization_conflict(root.path(), &sync, 0, [1; 32])
+        .unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let rows = || {
+        db.query_row("SELECT count(*) FROM remote_operation_records", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(rows(), 1);
+    let result = service
+        .reserve_remote_poll(
+            root.path(),
+            OperationId::new(),
+            &RemoteOperationTarget::for_poll(&plan()),
+            RemoteOperationPriority::Poll,
+        )
+        .unwrap();
+    assert!(matches!(
+        result,
+        RemotePollReservationOutcome::ConflictPending
+    ));
+    assert_eq!(rows(), 1);
+    assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+    reserve(&service, root.path());
+}
+
+#[test]
+fn update_local_prepared_journal_guard_yields_without_creating_local_rows() {
+    for priority in [
+        RemoteOperationPriority::Poll,
+        RemoteOperationPriority::Manual,
+    ] {
+        for action in [
+            RepositoryOperation::SaveDocument,
+            RepositoryOperation::PrepareContext,
+            RepositoryOperation::SubmitComment,
+        ] {
+            let (data, root, service) = poll_fixture();
+            let owner = match service
+                .reserve_remote_poll(
+                    root.path(),
+                    OperationId::new(),
+                    &RemoteOperationTarget::for_poll(&plan()),
+                    priority,
+                )
+                .unwrap()
+            {
+                RemotePollReservationOutcome::Reservation(RemoteReservationOutcome::Reserved(
+                    owner,
+                )) => owner,
+                other => panic!("{other:?}"),
+            };
+            advance_update(&service, root.path(), &owner, 6);
+            let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+            let local_id = OperationId::new();
+            let error = crate::repository::recovery::begin_or_reconcile_operation(
+                &mut db,
+                root.path(),
+                action,
+                local_id,
+                "local-fixture",
+            )
+            .err()
+            .expect("active poll must reject local journal begin");
+            assert_eq!(
+                error.kind,
+                if priority == RemoteOperationPriority::Poll {
+                    RepositoryErrorKind::RepositoryBusy
+                } else {
+                    RepositoryErrorKind::RecoveryRequired
+                }
+            );
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM operation_records", [], |row| row
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                service
+                    .active_remote_operation(root.path())
+                    .unwrap()
+                    .unwrap()
+                    .yield_requested(),
+                priority == RemoteOperationPriority::Poll
+            );
+            if priority == RemoteOperationPriority::Manual {
+                service
+                    .cancel_remote_operation(root.path(), owner.operation_id())
+                    .unwrap();
+            }
+            service
+                .remote_safe_point(
+                    root.path(),
+                    &owner,
+                    RemoteOperationSafePoint::BeforeLocalMutation,
+                )
+                .unwrap();
+            crate::repository::recovery::begin_or_reconcile_operation(
+                &mut db,
+                root.path(),
+                action,
+                local_id,
+                "local-fixture",
+            )
+            .unwrap();
+        }
+    }
+}
+
+#[test]
+fn cancellation_attempt_writer_fault_rolls_back_phase_outcome_and_retains_request() {
+    let (data, root, service) = poll_fixture();
+    let owner = update_owner(&service, root.path());
+    advance_update(&service, root.path(), &owner, 6);
+    service
+        .cancel_remote_operation(root.path(), owner.operation_id())
+        .unwrap();
+    let before = service.remote_snapshot(root.path()).unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("CREATE TRIGGER fail_attempt BEFORE UPDATE OF latest_attempt_at ON remote_polling_state BEGIN SELECT RAISE(ABORT,'fault'); END").unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::BeforeLocalMutation
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+    assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+    let active = service
+        .active_remote_operation(root.path())
+        .unwrap()
+        .unwrap();
+    assert_eq!(active.phase(), RemoteOperationPhase::LocalPrepared);
+    assert!(active.cancel_requested());
+    db.execute_batch("DROP TRIGGER fail_attempt").unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::BeforeLocalMutation
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    assert!(
+        service
+            .remote_snapshot(root.path())
+            .unwrap()
+            .latest_attempt_at()
+            .is_some()
+    );
+}
 
 fn fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService) {
     fixture_in(&std::env::temp_dir())
@@ -145,7 +1276,20 @@ fn crash_after_batch_commit_completes_without_replacing_evidence() {
     assert!(
         matches!(reopened.restart_remote_observation(root.path(),token.operation_id(),&RemoteOperationTarget::for_poll(&plan())).unwrap(), RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Completed)
     );
-    assert_eq!(before, reopened.remote_snapshot(root.path()).unwrap());
+    let after = reopened.remote_snapshot(root.path()).unwrap();
+    assert_eq!(before.observations(), after.observations());
+    assert_eq!(before.contexts(), after.contexts());
+    assert_eq!(before.polling(), after.polling());
+    assert_eq!(before.latest_outcome(), after.latest_outcome());
+    let absent = "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap();
+    assert_eq!(
+        before.publication_evidence_for(crate::repository::AuthoringKind::Document, &absent),
+        after.publication_evidence_for(crate::repository::AuthoringKind::Document, &absent)
+    );
+    assert_eq!(
+        after.next_eligible_at().unwrap().unix_timestamp(),
+        after.latest_attempt_at().unwrap().unix_timestamp() + 300
+    );
     assert!(
         reopened
             .active_remote_operation(root.path())
@@ -611,7 +1755,20 @@ fn acknowledged_yield_after_batch_commit_replays_completed_evidence() {
     assert!(
         matches!(service.restart_remote_observation(root.path(),background.operation_id(),&RemoteOperationTarget::for_poll(&plan())).unwrap(),RemoteReservationOutcome::Replay(record) if record.phase()==RemoteOperationPhase::Completed)
     );
-    assert_eq!(before, service.remote_snapshot(root.path()).unwrap());
+    let after = service.remote_snapshot(root.path()).unwrap();
+    assert_eq!(before.observations(), after.observations());
+    assert_eq!(before.contexts(), after.contexts());
+    assert_eq!(before.polling(), after.polling());
+    assert_eq!(before.latest_outcome(), after.latest_outcome());
+    let absent = "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap();
+    assert_eq!(
+        before.publication_evidence_for(crate::repository::AuthoringKind::Document, &absent),
+        after.publication_evidence_for(crate::repository::AuthoringKind::Document, &absent)
+    );
+    assert_eq!(
+        after.next_eligible_at().unwrap().unix_timestamp(),
+        after.latest_attempt_at().unwrap().unix_timestamp() + 300
+    );
     assert!(
         service
             .active_remote_operation(root.path())
@@ -2409,5 +3566,845 @@ fn sync_terminal_slot_release_does_not_classify_or_authorize_a_new_action() {
                 &sync_evidence()
             )
             .is_err()
+    );
+}
+
+// Cycle 10 Task 5: the `Close` arms. A closure parent holds its manual slot
+// exactly as a promotion parent does, and only its final SQL finishes it.
+const CLOSE_ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+fn close_item() -> crate::canonical::ItemId {
+    CLOSE_ITEM.parse().unwrap()
+}
+fn close_target() -> RemoteOperationTarget {
+    RemoteOperationTarget::for_context(
+        &plan(),
+        RemoteOperationAction::Close,
+        crate::repository::AuthoringKind::Ticket,
+        close_item(),
+    )
+    .unwrap()
+}
+fn close_oid(digit: char) -> git2::Oid {
+    git2::Oid::from_str(&digit.to_string().repeat(40)).unwrap()
+}
+/// A `record` closure parent with the fixture's remote, at `confirmed`.
+fn close_parent(
+    service: &RepositoryService,
+    root: &Path,
+) -> crate::repository::closure::record::ClosureRecord {
+    use crate::repository::closure::{ClosureExpectation, record as closure};
+    state::with_transaction(service, root, |tx, id| {
+        closure::begin_record(
+            tx,
+            id,
+            OperationId::new(),
+            &close_item(),
+            ClosureExpectation::from_bytes([7; 32]),
+            Some("origin"),
+            closure::ClosureKind::Record,
+        )
+    })
+    .unwrap()
+}
+/// Walks a closure parent through its checkpoint to `branch_deleted`. The
+/// pre-closure context is `1…`, the base `2…`, the checkpoint `3…`.
+fn close_parent_at_branch_deleted(
+    service: &RepositoryService,
+    root: &Path,
+) -> crate::repository::closure::record::ClosureRecord {
+    use crate::repository::{
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::{IntegrationKind, PublicationCategory},
+    };
+    let parent = close_parent(service, root);
+    state::with_transaction(service, root, |tx, id| {
+        let op = parent.operation_id;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.context_oid = Some(close_oid('1'));
+        r.remote_context_oid = Some(close_oid('1'));
+        r.step = ClosureStep::ContextSynchronized;
+        closure::save_record(tx, id, &r)?;
+        closure::begin_closing(
+            tx,
+            id,
+            op,
+            close_oid('2'),
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            close_oid('3'),
+        )?;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.integration_kind = Some(IntegrationKind::Merged);
+        r.step = ClosureStep::Integrating;
+        closure::save_record(tx, id, &r)?;
+        r.integration_oid = Some(close_oid('4'));
+        r.step = ClosureStep::Integrated;
+        closure::save_record(tx, id, &r)?;
+        r.publication = Some(PublicationCategory::Published);
+        for step in [
+            ClosureStep::Published,
+            ClosureStep::RemoteDeleted,
+            ClosureStep::WorktreeRemoving,
+            ClosureStep::WorktreeRemoved,
+            ClosureStep::BranchDeleted,
+        ] {
+            r.step = step;
+            closure::save_record(tx, id, &r)?;
+        }
+        closure::read_record(tx, id, op).map(Option::unwrap)
+    })
+    .unwrap()
+}
+fn reserve_close(service: &RepositoryService, root: &Path, op: OperationId) -> RemoteReservation {
+    match service
+        .reserve_remote_operation(root, op, &close_target())
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn close_reservation_holds_slot_like_promote() {
+    let (data, root, service) = fixture();
+    let owner = reserve_close(&service, root.path(), OperationId::new());
+    for point in [
+        RemoteOperationSafePoint::BeforeTransport,
+        RemoteOperationSafePoint::AfterAdvertisement,
+    ] {
+        assert_eq!(
+            service
+                .remote_safe_point(root.path(), &owner, point)
+                .unwrap(),
+            RemoteSafePointOutcome::Continue
+        );
+    }
+    // Only the parent's final SQL completes a close slot.
+    assert!(
+        service
+            .finish_remote_operation(root.path(), &owner, RemoteOutcomeCategory::Completed)
+            .is_err()
+    );
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    state::with_transaction(&service, root.path(), |tx, id| {
+        let r = owned(&service, tx, id, &owner)?;
+        assert_eq!(r.target.action(), RemoteOperationAction::Close);
+        Ok(())
+    })
+    .unwrap();
+    // A yield is a recoverable stop: the slot stays reserved, no poll
+    // bookkeeping is written, and the parent records the stop between steps.
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch(
+        "UPDATE remote_operation_records SET yield_requested=1; UPDATE remote_polling_state SET next_eligible_at=1234",
+    )
+    .unwrap();
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Interrupted
+    );
+    let row: (String, bool) = db
+        .query_row(
+            "SELECT phase,yield_requested FROM remote_operation_records",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("reserved".to_owned(), false));
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_some()
+    );
+    let policy: (Option<String>, Option<i64>, Option<i64>) = db
+        .query_row(
+            "SELECT latest_outcome,latest_attempt_at,next_eligible_at FROM remote_polling_state",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(policy, (None, None, Some(1234)));
+}
+
+#[test]
+fn close_restart_fences_owner_epoch() {
+    use crate::repository::promotion::lifecycle::LifecycleKind;
+    let (data, root, service) = fixture();
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    let owner = reserve_close(&service, root.path(), op);
+    service
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch("UPDATE remote_operation_records SET phase='interrupted'; UPDATE remote_polling_state SET next_eligible_at=1234").unwrap();
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let new = match reopened
+        .restart_remote_lifecycle(
+            LifecycleKind::TicketClosure,
+            root.path(),
+            op,
+            &close_target(),
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    assert!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .is_err()
+    );
+    assert_eq!(new.epoch, owner.epoch + 1);
+    reopened
+        .remote_safe_point(
+            root.path(),
+            &new,
+            RemoteOperationSafePoint::AfterAdvertisement,
+        )
+        .unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT next_eligible_at FROM remote_polling_state",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1234
+    );
+    // The close restart is its own kind: a promotion restart of a close
+    // target is a mismatch, and an abandoned parent never restarts.
+    assert_eq!(
+        reopened
+            .restart_remote_lifecycle(
+                LifecycleKind::DocumentPromotion,
+                root.path(),
+                op,
+                &close_target()
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    db.execute_batch("UPDATE remote_operation_records SET phase='interrupted'; UPDATE ticket_closures SET step='abandoned',refusal_category='external_change'").unwrap();
+    assert_eq!(
+        reopened
+            .restart_remote_lifecycle(
+                LifecycleKind::TicketClosure,
+                root.path(),
+                op,
+                &close_target()
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::RecoveryRequired
+    );
+}
+
+#[test]
+fn close_cancel_flags_parent_and_reservation() {
+    use crate::repository::closure::record as closure;
+    let (data, root, service) = fixture();
+    let parent = close_parent(&service, root.path());
+    let op = parent.operation_id;
+    let owner = reserve_close(&service, root.path(), op);
+    service
+        .remote_safe_point(
+            root.path(),
+            &owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute_batch(
+        "UPDATE remote_polling_state SET automatic_backoff_seconds=120,next_eligible_at=1234",
+    )
+    .unwrap();
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::request_cancellation(tx, id, op)
+        })
+        .unwrap()
+    );
+    let flags: (bool, bool) = db
+        .query_row(
+            "SELECT c.cancel_requested,r.cancel_requested FROM ticket_closures c JOIN remote_operation_records r ON r.operation_ulid=c.operation_id",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(flags, (true, true));
+    assert_eq!(
+        service
+            .remote_safe_point(
+                root.path(),
+                &owner,
+                RemoteOperationSafePoint::AfterAdvertisement
+            )
+            .unwrap(),
+        RemoteSafePointOutcome::Cancelled
+    );
+    // The close slot is kept; the parent records the cancellation between
+    // whole steps, and no poll policy is written.
+    assert!(
+        service
+            .active_remote_operation(root.path())
+            .unwrap()
+            .is_some()
+    );
+    assert!(matches!(
+        service
+            .reserve_remote_operation(
+                root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan())
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Busy
+    ));
+    let policy: (Option<String>, Option<i64>, Option<i64>) = db
+        .query_row(
+            "SELECT latest_outcome,latest_attempt_at,next_eligible_at FROM remote_polling_state",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(policy, (None, None, Some(1234)));
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| Ok(closure::read_record(
+            tx, id, op
+        )?
+        .unwrap()
+        .cancel_requested))
+        .unwrap()
+    );
+}
+
+/// Runs `finish_parent(TicketClosure)` against a closure parent at
+/// `branch_deleted` after `setup` adjusts its rows. Returns the result and
+/// the close reservation's phase afterwards.
+fn finish_close_case(setup: impl FnOnce(&Connection, OperationId)) -> (bool, String) {
+    use crate::repository::promotion::lifecycle::LifecycleKind;
+    let (data, root, service) = fixture();
+    let parent = close_parent_at_branch_deleted(&service, root.path());
+    let op = parent.operation_id;
+    let owner = reserve_close(&service, root.path(), op);
+    for point in [
+        RemoteOperationSafePoint::BeforeTransport,
+        RemoteOperationSafePoint::AfterAdvertisement,
+    ] {
+        service
+            .remote_safe_point(root.path(), &owner, point)
+            .unwrap();
+    }
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    setup(&db, op);
+    let finished = state::with_transaction(&service, root.path(), |tx, id| {
+        finish_parent(LifecycleKind::TicketClosure, &service, tx, id, &owner)
+    })
+    .is_ok();
+    let phase = db
+        .query_row("SELECT phase FROM remote_operation_records", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    (finished, phase)
+}
+fn retire(db: &Connection, op: OperationId, kind: &str, oid: char) {
+    db.execute(
+        "INSERT INTO retired_contexts(repository_id,kind,item_id,operation_id,retired_oid) SELECT id,?1,?2,?3,?4 FROM repositories",
+        rusqlite::params![kind, CLOSE_ITEM, op.to_string(), close_oid(oid).to_string()],
+    )
+    .unwrap();
+}
+fn complete(db: &Connection) {
+    db.execute_batch("UPDATE ticket_closures SET step='complete'")
+        .unwrap();
+}
+
+#[test]
+fn finish_close_requires_complete_closure_and_ticket_retirement_at_merged_context() {
+    // The checkpoint `3…` is the merged context.
+    assert_eq!(
+        finish_close_case(|db, op| {
+            complete(db);
+            retire(db, op, "ticket", '3');
+        }),
+        (true, "completed".to_owned())
+    );
+    // An adopted synchronization over the checkpoint is the merged context.
+    assert_eq!(
+        finish_close_case(|db, op| {
+            db.execute_batch(&format!(
+                "UPDATE ticket_closures SET adopted_context_oid='{}'",
+                close_oid('5')
+            ))
+            .unwrap();
+            complete(db);
+            retire(db, op, "ticket", '5');
+        }),
+        (true, "completed".to_owned())
+    );
+    for (name, setup) in [
+        (
+            "not complete",
+            Box::new(|db: &Connection, op| retire(db, op, "ticket", '3'))
+                as Box<dyn FnOnce(&Connection, OperationId)>,
+        ),
+        ("no retirement", Box::new(|db: &Connection, _| complete(db))),
+        (
+            "pre-closure context",
+            Box::new(|db: &Connection, op| {
+                complete(db);
+                retire(db, op, "ticket", '1');
+            }),
+        ),
+        (
+            "checkpoint, not adopted context",
+            Box::new(|db: &Connection, op| {
+                db.execute_batch(&format!(
+                    "UPDATE ticket_closures SET adopted_context_oid='{}'",
+                    close_oid('5')
+                ))
+                .unwrap();
+                complete(db);
+                retire(db, op, "ticket", '3');
+            }),
+        ),
+        (
+            "another operation",
+            Box::new(|db: &Connection, _| {
+                complete(db);
+                retire(db, OperationId::new(), "ticket", '3');
+            }),
+        ),
+    ] {
+        let (finished, phase) = finish_close_case(setup);
+        assert!(!finished, "{name}");
+        assert_ne!(phase, "completed", "{name}");
+    }
+}
+
+#[test]
+fn finish_close_refuses_document_retirement_row() {
+    let (finished, phase) = finish_close_case(|db, op| {
+        complete(db);
+        retire(db, op, "document", '3');
+    });
+    assert!(!finished);
+    assert_ne!(phase, "completed");
+}
+
+/// A closure parent with a minted context attempt, and its child execution.
+fn close_child(
+    service: &RepositoryService,
+    root: &Path,
+) -> (
+    crate::repository::closure::record::ClosureRecord,
+    crate::repository::promotion::record::ChildExecution,
+) {
+    use crate::repository::{closure::record as closure, promotion::record::ChildRole};
+    let parent = close_parent(service, root);
+    let parent = state::with_transaction(service, root, |tx, id| {
+        closure::next_attempt(tx, id, parent.operation_id, ChildRole::Context)
+    })
+    .unwrap();
+    let execution = closure::child_execution(&parent, ChildRole::Context).unwrap();
+    (parent, execution)
+}
+fn context_request(
+    root: &Path,
+    child: OperationId,
+    kind: crate::repository::AuthoringKind,
+) -> crate::repository::SynchronizeRemoteRequest {
+    crate::repository::SynchronizeRemoteRequest {
+        root: root.into(),
+        operation_id: child,
+        target: crate::repository::SynchronizationTarget::Context {
+            kind,
+            item_id: close_item(),
+        },
+        approval: None,
+        confirmed_identity: None,
+        restart: false,
+    }
+}
+fn context_sync_target(kind: crate::repository::AuthoringKind) -> RemoteOperationTarget {
+    RemoteOperationTarget::for_context(
+        &plan(),
+        RemoteOperationAction::SynchronizeContext,
+        kind,
+        close_item(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn child_fence_accepts_ticket_target_only_for_closure_parent() {
+    use crate::repository::{
+        AuthoringKind, PromotionExpectation,
+        promotion::record::{self as promotion, ChildRole},
+    };
+    let (data, root, service) = fixture();
+    let (parent, execution) = close_child(&service, root.path());
+    let child = parent.context_sync_id.unwrap();
+    execution
+        .validate_request(&context_request(root.path(), child, AuthoringKind::Ticket))
+        .unwrap();
+    // The fence reads the closure parent in the reservation transaction.
+    let owner = match service
+        .reserve_promotion_child(
+            root.path(),
+            child,
+            &context_sync_target(AuthoringKind::Ticket),
+            &execution,
+        )
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(o) => o,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(owner.operation_id(), child);
+    // Its explicit restart passes the same fence.
+    Connection::open(data.path().join(REGISTRY_FILE))
+        .unwrap()
+        .execute_batch("UPDATE remote_operation_records SET phase='interrupted'")
+        .unwrap();
+    assert!(matches!(
+        service
+            .restart_promotion_child(
+                root.path(),
+                child,
+                &context_sync_target(AuthoringKind::Ticket),
+                &execution,
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    // A promotion parent's child is never admitted for a ticket target.
+    let (_data, root, service) = fixture();
+    let parent = state::with_transaction(&service, root.path(), |tx, id| {
+        let r = promotion::begin_record(
+            tx,
+            id,
+            OperationId::new(),
+            &close_item(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+        )?;
+        promotion::next_attempt(tx, id, r.operation_id, ChildRole::Context)
+    })
+    .unwrap();
+    let execution = promotion::child_execution(&parent, ChildRole::Context).unwrap();
+    let child = parent.context_sync_id.unwrap();
+    assert_eq!(
+        execution
+            .validate_request(&context_request(root.path(), child, AuthoringKind::Ticket))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    execution
+        .validate_request(&context_request(
+            root.path(),
+            child,
+            AuthoringKind::Document,
+        ))
+        .unwrap();
+    assert!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &context_sync_target(AuthoringKind::Ticket),
+                &execution,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn child_fence_refuses_document_target_for_closure_parent() {
+    use crate::repository::AuthoringKind;
+    let (data, root, service) = fixture();
+    let (parent, execution) = close_child(&service, root.path());
+    let child = parent.context_sync_id.unwrap();
+    assert_eq!(
+        execution
+            .validate_request(&context_request(
+                root.path(),
+                child,
+                AuthoringKind::Document
+            ))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    // Another ID than the minted child is refused too.
+    assert_eq!(
+        execution
+            .validate_request(&context_request(
+                root.path(),
+                OperationId::new(),
+                AuthoringKind::Ticket
+            ))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert_eq!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &context_sync_target(AuthoringKind::Document),
+                &execution,
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert_eq!(
+        Connection::open(data.path().join(REGISTRY_FILE))
+            .unwrap()
+            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+}
+
+/// Walks a closure parent through its checkpoint to `integrated`, then mints
+/// its primary attempt (Task 5 minor 5).
+fn close_primary_child(
+    service: &RepositoryService,
+    root: &Path,
+) -> (
+    crate::repository::closure::record::ClosureRecord,
+    crate::repository::promotion::record::ChildExecution,
+) {
+    use crate::repository::{
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::{ChildRole, IntegrationKind},
+    };
+    let parent = close_parent(service, root);
+    let parent = state::with_transaction(service, root, |tx, id| {
+        let op = parent.operation_id;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.context_oid = Some(close_oid('1'));
+        r.step = ClosureStep::ContextSynchronized;
+        closure::save_record(tx, id, &r)?;
+        closure::begin_closing(
+            tx,
+            id,
+            op,
+            close_oid('2'),
+            time::OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            close_oid('3'),
+        )?;
+        let mut r = closure::read_record(tx, id, op)?.unwrap();
+        r.integration_kind = Some(IntegrationKind::Merged);
+        r.step = ClosureStep::Integrating;
+        closure::save_record(tx, id, &r)?;
+        r.integration_oid = Some(close_oid('4'));
+        r.step = ClosureStep::Integrated;
+        closure::save_record(tx, id, &r)?;
+        closure::next_attempt(tx, id, op, ChildRole::Primary)
+    })
+    .unwrap();
+    let execution = closure::child_execution(&parent, ChildRole::Primary).unwrap();
+    (parent, execution)
+}
+/// Moves the closure parent to `step` and returns whether the fence admits
+/// its primary child with no reservation yet.
+fn close_primary_fence_at(
+    service: &RepositoryService,
+    root: &Path,
+    parent: &crate::repository::closure::record::ClosureRecord,
+    execution: &crate::repository::promotion::record::ChildExecution,
+    step: crate::repository::closure::record::ClosureStep,
+) -> Result<(), RepositoryErrorKind> {
+    use crate::repository::{
+        closure::record::{self as closure, ClosureStep},
+        promotion::record::PublicationCategory,
+    };
+    state::with_transaction(service, root, |tx, id| {
+        let mut r = closure::read_record(tx, id, parent.operation_id)?.unwrap();
+        if r.step != step {
+            r.publication = Some(if step == ClosureStep::PublicationPending {
+                PublicationCategory::Transport
+            } else {
+                PublicationCategory::Published
+            });
+            r.step = step;
+            closure::save_record(tx, id, &r)?;
+        }
+        Ok(execution.validate(tx, id, parent.primary_sync_id.unwrap()))
+    })
+    .unwrap()
+    .map_err(|e| e.kind)
+}
+
+/// Task 5 minor 5: a closure parent admits its primary child only from
+/// `integrated` or `publication_pending`, as a promotion parent does.
+#[test]
+fn child_fence_admits_closure_primary_only_while_integrated_or_publication_pending() {
+    use crate::repository::closure::record::ClosureStep;
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    let child = parent.primary_sync_id.unwrap();
+    execution
+        .validate_request(&crate::repository::SynchronizeRemoteRequest {
+            root: root.path().into(),
+            operation_id: child,
+            target: crate::repository::SynchronizationTarget::Primary,
+            approval: None,
+            confirmed_identity: None,
+            restart: false,
+        })
+        .unwrap();
+    // A context target is never the primary child's.
+    assert_eq!(
+        execution
+            .validate_request(&context_request(
+                root.path(),
+                child,
+                crate::repository::AuthoringKind::Ticket
+            ))
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    for step in [ClosureStep::Integrated, ClosureStep::PublicationPending] {
+        assert_eq!(
+            close_primary_fence_at(&service, root.path(), &parent, &execution, step),
+            Ok(()),
+            "{step:?}"
+        );
+    }
+    for step in [
+        ClosureStep::Published,
+        ClosureStep::RemoteDeleted,
+        ClosureStep::WorktreeRemoving,
+        ClosureStep::WorktreeRemoved,
+        ClosureStep::BranchDeleted,
+    ] {
+        assert_eq!(
+            close_primary_fence_at(&service, root.path(), &parent, &execution, step),
+            Err(RepositoryErrorKind::OperationMismatch),
+            "{step:?}"
+        );
+    }
+    // Refused through the reservation fence as well: no row is written.
+    assert_eq!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &RemoteOperationTarget::for_primary_synchronization(&plan()),
+                &execution,
+            )
+            .unwrap_err()
+            .kind,
+        RepositoryErrorKind::OperationMismatch
+    );
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| state::read_operation(
+            tx, id, child
+        ))
+        .unwrap()
+        .is_none()
+    );
+}
+
+/// A closure context attempt before it reserved is refused once the
+/// parent's cancellation is requested, and so is its primary attempt.
+#[test]
+fn child_fence_refuses_unreserved_closure_children_after_cancellation() {
+    use crate::repository::closure::record::{self as closure, ClosureStep};
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_child(&service, root.path());
+    let child = parent.context_sync_id.unwrap();
+    let validate = |execution: &crate::repository::promotion::record::ChildExecution,
+                    child: OperationId| {
+        state::with_transaction(&service, root.path(), |tx, id| {
+            Ok(execution.validate(tx, id, child).map_err(|e| e.kind))
+        })
+        .unwrap()
+    };
+    assert_eq!(validate(&execution, child), Ok(()));
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::request_cancellation(tx, id, parent.operation_id)
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        validate(&execution, child),
+        Err(RepositoryErrorKind::OperationMismatch)
+    );
+    assert!(
+        service
+            .reserve_promotion_child(
+                root.path(),
+                child,
+                &context_sync_target(crate::repository::AuthoringKind::Ticket),
+                &execution,
+            )
+            .is_err()
+    );
+    // The primary role reads the same flag.
+    let (_data, root, service) = fixture();
+    let (parent, execution) = close_primary_child(&service, root.path());
+    let child = parent.primary_sync_id.unwrap();
+    assert_eq!(
+        close_primary_fence_at(
+            &service,
+            root.path(),
+            &parent,
+            &execution,
+            ClosureStep::Integrated
+        ),
+        Ok(())
+    );
+    assert!(
+        state::with_transaction(&service, root.path(), |tx, id| {
+            closure::request_cancellation(tx, id, parent.operation_id)
+        })
+        .unwrap()
+    );
+    assert_eq!(
+        state::with_transaction(&service, root.path(), |tx, id| Ok(execution
+            .validate(tx, id, child)
+            .map_err(|e| e.kind)))
+        .unwrap(),
+        Err(RepositoryErrorKind::OperationMismatch)
     );
 }

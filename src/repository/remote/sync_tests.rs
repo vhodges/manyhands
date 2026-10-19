@@ -7243,26 +7243,7 @@ fn absent_test_hook_root_keeps_its_exact_fallback_key() {
 }
 
 fn registered_worktree_gitdir_text(worktree: &Path) -> String {
-    let gitdir = worktree.join(".git");
-    let text = gitdir.to_str().expect("fixture Git path must be UTF-8");
-    // libgit2 reads this field verbatim, then dirname scans only '/'. Encode
-    // Git metadata, not native path display; Unix backslashes are literal names.
-    #[cfg(windows)]
-    let text = {
-        use std::path::{Component, Prefix};
-        let text = match gitdir.components().next() {
-            // Match Git's ordinary drive/UNC presentation, so '..' remains
-            // meaningful without discarding the UNC server/share root.
-            Some(Component::Prefix(prefix)) => match prefix.kind() {
-                Prefix::VerbatimDisk(_) => text[4..].to_owned(),
-                Prefix::VerbatimUNC(_, _) => format!(r"\\{}", &text[8..]),
-                _ => text.to_owned(),
-            },
-            _ => text.to_owned(),
-        };
-        text.replace('\\', "/")
-    };
-    format!("{text}\n")
+    super::super::git_metadata_link_text(&worktree.join(".git"))
 }
 
 #[test]
@@ -10224,6 +10205,41 @@ fn resolution_creator_comment(creator: Option<&str>, reply: bool, body: &str) ->
     )
 }
 
+/// A comment's author is in the `created_by` field when its value names
+/// somebody and among the unknown keys when it does not. A resolution keeps
+/// it only when both places hold what they held.
+#[test]
+fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read() {
+    let path =
+        Path::new(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAV/01CRZ3NDEKTSV4RRFFQ69G5FAV.md");
+    let comment = |creator: &str| {
+        let source = resolution_creator_comment(None, false, "body")
+            .replace("---\n\nbody", &format!("{creator}---\n\nbody"));
+        canonical::parse_item(path, &source).unwrap()
+    };
+    let alice = "created_by: \"Alice <alice@example.invalid>\"\n";
+    let mallory = "created_by: \"Mallory <mallory@example.invalid>\"\n";
+    let alice_list = "created_by: [\"Alice <alice@example.invalid>\"]\n";
+    let mallory_list = "created_by: [\"Mallory <mallory@example.invalid>\"]\n";
+    let values = [
+        "",
+        alice,
+        mallory,
+        alice_list,
+        mallory_list,
+        "created_by: \"\"\n",
+    ];
+    for old in values {
+        for new in values {
+            assert_eq!(
+                RepositoryService::preserves_item_invariants(&comment(old), &comment(new)),
+                old == new,
+                "{old:?} -> {new:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies() {
     for creator in [Some("Alice <alice@example.invalid>"), None] {
@@ -10291,8 +10307,7 @@ fn comment_resolution_preserves_created_by_and_exact_bytes_for_roots_and_replies
             else {
                 panic!("expected comment");
             };
-            let expected_creator = creator.map(|value| serde_yaml::Value::String(value.to_owned()));
-            assert!(comment.unknown.get("created_by") == expected_creator.as_ref());
+            assert!(comment.created_by.as_deref() == creator);
         }
     }
 }
@@ -15523,4 +15538,170 @@ mod process_death {
             );
         }
     }
+}
+
+/// The local row of a synchronization with no publication remote is
+/// left pending by a refresh that stopped, and is then abandoned. An
+/// abandoned row is `completed` in the journal, which is not "the refresh
+/// was done": the repeat of the ID is refused, neither replayed as
+/// complete nor begun again, and writes nothing.
+#[test]
+fn a_local_synchronization_whose_row_was_abandoned_is_refused_and_not_replayed_as_complete() {
+    let (root, data, service) = fixture();
+    let req = request(root.path());
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        data.path(),
+        FailurePoint::AfterIndexClaim,
+    )
+    .unwrap();
+    assert!(matches!(
+        failing
+            .synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::IndexPending(_)
+    ));
+    let db = rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // The claim's owner is gone: its heartbeat is stale.
+    assert_eq!(
+        db.execute(
+            "UPDATE operation_records SET observed_at = observed_at - 60 WHERE state != 'completed'",
+            [],
+        )
+        .unwrap(),
+        1
+    );
+    assert!(matches!(
+        service
+            .abandon_operation(crate::repository::AbandonOperationRequest {
+                root: root.path().into(),
+                operation_id: req.operation_id,
+                expected: None,
+            })
+            .unwrap(),
+        crate::repository::AbandonOperationOutcome::Abandoned(_)
+    ));
+    let journal = |db: &rusqlite::Connection| -> Vec<(String, String, Option<String>)> {
+        db.prepare(
+            "SELECT operation_ulid, state, completed_step FROM operation_records ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let before = (journal(&db), local_binding_image(root.path()));
+
+    for _ in 0..2 {
+        let repeated =
+            service.synchronize_remote(req.clone(), &mut SessionCredentials::new(NoPrompt));
+        assert!(
+            matches!(
+                repeated,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::OperationAbandoned,
+                    ..
+                }))
+            ),
+            "{repeated:?}"
+        );
+    }
+
+    assert_eq!(before, (journal(&db), local_binding_image(root.path())));
+    assert!(before.0.contains(&(
+        req.operation_id.to_string(),
+        "completed".to_owned(),
+        Some("abandoned".to_owned())
+    )));
+    // Another synchronization runs at once.
+    assert!(matches!(
+        service
+            .synchronize_remote(request(root.path()), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::Complete(_)
+    ));
+}
+
+/// The second place a synchronization reads its local row: the index
+/// hand-off of a synchronization whose authority is recorded. Its repeat
+/// does not pass through the local replay, which refuses an abandoned row
+/// first for a synchronization with no remote; here the check in the
+/// refresh itself is the only one. A hand-off row that was closed as
+/// abandoned is `completed` and is not a hand-off that was done: the
+/// repeat is refused, and the hand-off stays owed.
+///
+/// `abandon_operation` refuses an ID the remote journal holds, so the row
+/// is closed here as an abandon would leave it.
+#[test]
+fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
+    use RemoteOperationSafePoint as Point;
+    let (fixture, candidate, tip) = open_attempt_fixture(true);
+    fixture.prepare(candidate, Some(tip), false).unwrap();
+    fixture.point(Point::BeforePush);
+    fixture
+        .advance(state::PublicationPhase::Returned, None)
+        .unwrap();
+    fixture.point(Point::AfterPushReturn);
+    fixture
+        .advance(state::PublicationPhase::Verified, Some(candidate))
+        .unwrap();
+    fixture.point(Point::AfterPushVerification);
+    let authority = fixture.authority();
+    fixture
+        .service
+        .classify_synchronization(fixture.root.path(), &fixture.owner, authority)
+        .unwrap();
+    let root = fixture.root.path();
+    let mut replay = request(root);
+    replay.operation_id = fixture.operation;
+    // A hand-off that stopped: its local row is left pending.
+    let service = RepositoryService::open_at(fixture.data.path()).unwrap();
+    *service.failure_point.lock().unwrap() = Some(FailurePoint::BeforeIndexTransactionCommit);
+    assert!(matches!(
+        service
+            .synchronize_remote(replay.clone(), &mut SessionCredentials::new(NoPrompt))
+            .unwrap(),
+        SynchronizationResult::IndexPending(_)
+    ));
+    *service.failure_point.lock().unwrap() = None;
+    let db = rusqlite::Connection::open(fixture.data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.execute(
+            "UPDATE operation_records SET state = 'completed', completed_step = 'abandoned'
+              WHERE operation_ulid = ?1 AND state != 'completed'",
+            [fixture.operation.to_string()],
+        )
+        .unwrap(),
+        1
+    );
+    let image = local_binding_image(root);
+    assert_eq!(fixture.envelope().4, 1, "the hand-off is owed");
+
+    for restart in [false, true] {
+        let mut repeat = replay.clone();
+        repeat.restart = restart;
+        let repeated = service.synchronize_remote(repeat, &mut SessionCredentials::new(NoPrompt));
+        assert!(
+            matches!(
+                repeated,
+                Err(SynchronizationError::Repository(RepositoryError {
+                    kind: RepositoryErrorKind::OperationAbandoned,
+                    ..
+                }))
+            ),
+            "restart {restart}: {repeated:?}"
+        );
+    }
+
+    // Not reported as done, and nothing written.
+    assert_eq!(fixture.envelope().4, 1, "the hand-off is still owed");
+    assert_eq!(local_binding_image(root), image);
+    let row: (String, Option<String>) = db
+        .query_row(
+            "SELECT state, completed_step FROM operation_records WHERE operation_ulid = ?1",
+            [fixture.operation.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("completed".to_owned(), Some("abandoned".to_owned())));
 }

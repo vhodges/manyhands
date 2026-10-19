@@ -27,6 +27,12 @@ pub(super) struct AdvertisementGate {
     pub reached: std::sync::mpsc::Sender<()>,
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
+/// A real upload-pack relay pauses only after forwarding this many transfer
+/// bytes. The same controller contract as advertisements; no synthetic transport.
+pub(super) struct TransferGate {
+    pub after_bytes: usize,
+    pub gate: AdvertisementGate,
+}
 /// Fixed labels shared by the gated receiver-receipt regression and its worker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReceiveAuditEvent {
@@ -113,6 +119,7 @@ pub enum FixtureBoundary {
 #[derive(Clone, Copy)]
 pub(super) enum Fault {
     Disconnect(FixtureBoundary),
+    DisconnectAfterTransferBytes(usize),
     Stall(FixtureBoundary, Duration),
     Pace(Duration),
 }
@@ -123,7 +130,11 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
+    /// Every socket the listener accepted, whatever became of it.
+    pub sockets: AtomicUsize,
     pub authentication_attempts: AtomicUsize,
+    pub upload_pack_bytes: AtomicUsize,
+    pub byte_disconnects: AtomicUsize,
     pub rejected_authentications: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
@@ -135,6 +146,7 @@ pub(super) struct Shared {
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
+    pub transfer_hold: Mutex<Option<TransferGate>>,
     pub receive_audit_hold: Mutex<Option<ReceiveAuditGate>>,
     pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
@@ -207,6 +219,26 @@ impl SshRemoteFixture {
         *gate = Some(AdvertisementGate {
             reached: ready,
             release: released,
+        });
+        Ok(AdvertisementHold { reached, release })
+    }
+
+    pub fn hold_transfer_after(
+        &self,
+        after_bytes: usize,
+    ) -> Result<AdvertisementHold, FixtureError> {
+        let mut hold = fixed(self.shared.transfer_hold.lock())?;
+        if hold.is_some() || after_bytes == 0 {
+            return Err(FixtureError);
+        }
+        let (ready, reached) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *hold = Some(TransferGate {
+            after_bytes,
+            gate: AdvertisementGate {
+                reached: ready,
+                release: released,
+            },
         });
         Ok(AdvertisementHold { reached, release })
     }
@@ -285,7 +317,10 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
+            sockets: AtomicUsize::new(0),
             authentication_attempts: AtomicUsize::new(0),
+            upload_pack_bytes: AtomicUsize::new(0),
+            byte_disconnects: AtomicUsize::new(0),
             rejected_authentications: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
@@ -297,6 +332,7 @@ impl SshRemoteFixture {
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
+            transfer_hold: Mutex::new(None),
             receive_audit_hold: Mutex::new(None),
             receive_receipt_events: Mutex::new(None),
             hostile: Mutex::new(None),
@@ -339,6 +375,22 @@ impl SshRemoteFixture {
         competing: git2::Oid,
     ) -> Result<(), FixtureError> {
         self.race_update("refs/heads/main", expected, competing)
+    }
+    pub fn race_context_update(
+        &self,
+        reference: ObservationRef,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
+        if !matches!(
+            reference,
+            ObservationRef::RemoteDocument
+                | ObservationRef::RemoteTicket
+                | ObservationRef::LocalTicket
+        ) {
+            return Err(FixtureError);
+        }
+        self.race_update(reference.name(), expected, competing)
     }
     /// The same single competing write for any one owned branch.
     pub fn race_update(
@@ -428,6 +480,17 @@ impl SshRemoteFixture {
             if reject { "refuse" } else { "ignore" },
         ))
     }
+    /// Native receive-pack refusal, scoped to fixture-owned context deletions.
+    pub fn reject_context_deletion(&self, reject: bool) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        let mut config = fixed(repo.config())?;
+        fixed(config.set_bool("core.bare", !reject))?;
+        fixed(repo.set_head(ObservationRef::RemoteDocument.name()))?;
+        fixed(config.set_str(
+            "receive.denyDeleteCurrent",
+            if reject { "refuse" } else { "ignore" },
+        ))
+    }
     pub fn receive_status_withheld(&self) -> bool {
         self.shared.receive_status_withheld.load(Ordering::SeqCst)
     }
@@ -479,6 +542,12 @@ impl SshRemoteFixture {
     }
     pub fn allow_client_public_key(&self, key: PublicKey) {
         *self.shared.allowed.lock().unwrap() = key;
+    }
+    /// How many connections the server has accepted: every socket, also
+    /// one whose client went away before it authenticated, as a client
+    /// that refuses the host's key does.
+    pub fn accepted_sockets(&self) -> usize {
+        self.shared.sockets.load(Ordering::SeqCst)
     }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
@@ -543,6 +612,19 @@ impl SshRemoteFixture {
     pub fn disconnect_at(&self, boundary: FixtureBoundary) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Disconnect(boundary));
     }
+    /// Disconnect a negotiated upload only after this many response bytes have
+    /// actually been forwarded. Install while its byte barrier is held.
+    pub fn disconnect_after_transfer_bytes(&self, after_bytes: usize) {
+        assert!(after_bytes > 0);
+        *self.shared.fault.lock().unwrap() = Some(Fault::DisconnectAfterTransferBytes(after_bytes));
+    }
+    /// Sideband-1 PACK payload bytes, excluding framing, ACKs and progress text.
+    pub fn upload_pack_bytes(&self) -> usize {
+        self.shared.upload_pack_bytes.load(Ordering::SeqCst)
+    }
+    pub fn byte_disconnects(&self) -> usize {
+        self.shared.byte_disconnects.load(Ordering::SeqCst)
+    }
     pub fn stall_at(&self, boundary: FixtureBoundary, delay: Duration) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Stall(boundary, delay));
     }
@@ -592,4 +674,10 @@ pub fn generate_key() -> Result<PrivateKey, FixtureError> {
 
 pub fn receiver_command_fragmentation() -> Result<(), FixtureError> {
     server::receiver_command_fragmentation()
+}
+pub fn deletion_effect_proof(path: &Path, oid: git2::Oid) -> Result<(), FixtureError> {
+    server::deletion_effect_proof(path, oid)
+}
+pub fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
+    server::upload_pack_counter_fragmentation()
 }

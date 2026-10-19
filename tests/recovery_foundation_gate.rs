@@ -1117,7 +1117,6 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
         "comment_publication_bindings",
         "operation_records",
         "operation_record_contexts",
-        "registry_migrations",
     ] {
         assert!(
             !connection
@@ -1126,9 +1125,29 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
                     [table],
                     |row| row.get::<_, bool>(0)
                 )
-                .unwrap()
+                .unwrap(),
+            "unexpected partial recovery table: {table}"
         );
     }
+    // Cycle 09's registry-schema transaction commits before the independent
+    // recovery migration. Its shared marker table must survive, but neither
+    // marker from the failed recovery transaction may leak into it.
+    let committed_markers = connection
+        .prepare("SELECT name FROM registry_migrations ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        committed_markers,
+        [
+            "cycle_09_context_publication_evidence",
+            "cycle_09_document_promotions",
+            "cycle_09_retired_contexts",
+            "cycle_10_ticket_closures",
+        ]
+    );
     let legacy_columns = connection
         .prepare("SELECT name FROM pragma_table_info('index_operations') ORDER BY cid")
         .unwrap()

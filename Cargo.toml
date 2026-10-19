@@ -13,6 +13,7 @@ editor-probe = ["desktop", "dep:zorite-editor"]
 
 [dependencies]
 blake3 = "1"
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
 directories = "5"
 fs4 = "0.13"
 git2 = "0.20"
@@ -68,7 +69,23 @@ name = "remote_merge_recovery"
 harness = false
 
 [[test]]
+name = "mutation_remote"
+harness = false
+
+[[test]]
 name = "comment_publication"
+harness = false
+
+[[test]]
+name = "remote_polling"
+harness = false
+
+[[test]]
+name = "document_promotion"
+harness = false
+
+[[test]]
+name = "ticket_closure"
 harness = false
 
 [[test]]

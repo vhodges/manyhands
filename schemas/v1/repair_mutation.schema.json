@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 repair mutation data",
+  "description": "The data of a document repair or ticket repair envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the item. A request whose source names no item carries none. It never holds the corrected source or anything the nonconforming file held.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "path", "adopted"],
+  "properties": {
+    "id": {
+      "description": "The ID the corrected source carries.",
+      "type": "string"
+    },
+    "path": {
+      "description": "The file the request corrects, relative to the item's context, with forward slashes: the path it has on the primary branch too.",
+      "type": "string"
+    },
+    "adopted": {
+      "description": "Whether the ID was assigned to a file that held no valid one. False for a file that held this ID already. Null when the request stopped before the file was read.",
+      "type": ["boolean", "null"]
+    }
+  }
+}

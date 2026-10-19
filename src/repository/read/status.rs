@@ -19,7 +19,7 @@ use crate::{
     canonical::ItemId,
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
-        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
+        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId, recovery,
         remote::state::{self, StoredRemoteOperation},
     },
     results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
@@ -65,7 +65,7 @@ fn stored_name(stored: &str) -> Result<String, ReadError> {
 
 /// The action a local operation record names. The names are the ones the
 /// recovery store writes; the contract strings happen to equal them.
-fn local_action(stored: &str) -> Option<OperationAction> {
+pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
     match stored {
         "create_and_enable" => Some(OperationAction::CreateAndEnable),
         "enable" => Some(OperationAction::Enable),
@@ -79,6 +79,7 @@ fn local_action(stored: &str) -> Option<OperationAction> {
         "save_document" => Some(OperationAction::SaveDocument),
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),
+        "repair_item" => Some(OperationAction::RepairItem),
         _ => None,
     }
 }
@@ -132,7 +133,10 @@ fn local_operations(
                 observed_at, target
            FROM operation_records
           WHERE root_path = ?1
-            AND ((?2 IS NULL AND state != 'completed') OR operation_ulid = ?2)
+            AND ((?2 IS NULL
+                  AND (state != 'completed'
+                       OR completed_step IS 'comment_registration_pending'))
+                 OR operation_ulid = ?2)
           ORDER BY id ASC",
     )?;
     let mut rows = statement.query(params![repo.root().to_str(), id])?;
@@ -163,7 +167,10 @@ fn local_operations(
             Some(_) => return Err(invalid_stored_data()),
             None => (action, item_id),
         };
-        let listed = state != LOCAL_COMPLETED;
+        // A comment committed with no registration is completed and
+        // still owes its index hand-off.
+        let listed = state != LOCAL_COMPLETED
+            || recovery::waits_for_registration(&state, completed_step.as_deref());
         operations.push(StoredOperation {
             listed,
             dto: OperationDto {
@@ -285,7 +292,8 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
 /// - A synchronization that was interrupted or that failed is listed and
 ///   can be resumed: asked for again under its ID with a restart, it is
 ///   given the reservation back. A cancelled one is never given it, and a
-///   promotion or closure has no restart.
+///   promotion or closure has no boundary resume. Promotion's parent journal
+///   supplies its lifecycle step independently of its internal reservation.
 /// - A synchronization that completed and whose index hand-off is still
 ///   pending is listed and can be resumed: asked for again, it does only
 ///   that hand-off.
@@ -294,7 +302,15 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
 ///
 /// A poll that ended is not listed, whatever became of it. A new poll
 /// takes its place, and listing each would grow without bound.
-fn remote_standing(record: &StoredRemoteOperation) -> (bool, Option<OperationNextAction>) {
+///
+/// `of_a_comment` says the synchronization is the one a comment's binding
+/// keeps. It is listed as any other is and no resume is offered for it:
+/// it is the comment submission's to take up, and `operation resume`
+/// refuses it.
+fn remote_standing(
+    record: &StoredRemoteOperation,
+    of_a_comment: bool,
+) -> (bool, Option<OperationNextAction>) {
     let (_, holds_reservation) = remote_phase(record.phase);
     let is_synchronization = matches!(
         record.target.action(),
@@ -307,15 +323,20 @@ fn remote_standing(record: &StoredRemoteOperation) -> (bool, Option<OperationNex
     if holds_reservation {
         (true, None)
     } else if is_synchronization && (stopped || record.index_pending) {
-        (true, Some(OperationNextAction::Resume))
+        (true, (!of_a_comment).then_some(OperationNextAction::Resume))
     } else {
         (record.index_pending || record.reconciliation_required, None)
     }
 }
 
-fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, ReadError> {
+fn remote_operation(
+    connection: &Connection,
+    record: &StoredRemoteOperation,
+) -> Result<StoredOperation, ReadError> {
     let (state, _) = remote_phase(record.phase);
-    let (listed, next_action) = remote_standing(record);
+    let of_a_comment =
+        recovery::is_comment_synchronization(connection, &record.operation_id.to_string())?;
+    let (listed, next_action) = remote_standing(record, of_a_comment);
     Ok(StoredOperation {
         listed,
         dto: OperationDto {
@@ -337,6 +358,99 @@ fn remote_operation(record: &StoredRemoteOperation) -> Result<StoredOperation, R
     })
 }
 
+fn promotion_operations(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: Option<&str>,
+) -> Result<Vec<StoredOperation>, ReadError> {
+    if !recovery::has_table(connection, "document_promotions")? {
+        return Ok(Vec::new());
+    }
+    let records = match id {
+        Some(id) => crate::repository::promotion::record::read_record(
+            connection,
+            repo.registration_id(),
+            OperationId::parse(id).map_err(|_| invalid_stored_data())?,
+        )
+        .map_err(|_| invalid_stored_data())?
+        .into_iter()
+        .collect(),
+        None => crate::repository::promotion::record::records(connection, repo.registration_id())
+            .map_err(|_| invalid_stored_data())?,
+    };
+    records
+        .into_iter()
+        .filter(|r| id.is_some() || !r.step.terminal())
+        .map(|r| {
+            Ok(StoredOperation {
+                listed: !r.step.terminal(),
+                dto: OperationDto {
+                    operation_id: Some(r.operation_id.to_string()),
+                    family: OperationFamily::Remote,
+                    owner: OperationOwner::Repository,
+                    action: OperationAction::Promote,
+                    state: r.step.name().to_owned(),
+                    completed_step: Some(r.step.name().to_owned()),
+                    next_action: None,
+                    item_id: Some(r.item_id.to_string()),
+                    key_id: None,
+                    worktree: None,
+                    updated_at: Some(stored_time(r.updated_at)?),
+                    failure_code: None,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Ticket closure parents, as promotion parents: the stored step, including
+/// `closing`, is both state and completed step, and no boundary resume is
+/// offered.
+fn closure_operations(
+    connection: &Connection,
+    repo: &ResolvedRepository,
+    id: Option<&str>,
+) -> Result<Vec<StoredOperation>, ReadError> {
+    if !recovery::has_table(connection, "ticket_closures")? {
+        return Ok(Vec::new());
+    }
+    let records = match id {
+        Some(id) => crate::repository::closure::record::read_record(
+            connection,
+            repo.registration_id(),
+            OperationId::parse(id).map_err(|_| invalid_stored_data())?,
+        )
+        .map_err(|_| invalid_stored_data())?
+        .into_iter()
+        .collect(),
+        None => crate::repository::closure::record::records(connection, repo.registration_id())
+            .map_err(|_| invalid_stored_data())?,
+    };
+    records
+        .into_iter()
+        .filter(|r| id.is_some() || !r.step.terminal())
+        .map(|r| {
+            Ok(StoredOperation {
+                listed: !r.step.terminal(),
+                dto: OperationDto {
+                    operation_id: Some(r.operation_id.to_string()),
+                    family: OperationFamily::Remote,
+                    owner: OperationOwner::Repository,
+                    action: OperationAction::Close,
+                    state: r.step.name().to_owned(),
+                    completed_step: Some(r.step.name().to_owned()),
+                    next_action: None,
+                    item_id: Some(r.item_id.to_string()),
+                    key_id: None,
+                    worktree: None,
+                    updated_at: Some(stored_time(r.updated_at)?),
+                    failure_code: None,
+                },
+            })
+        })
+        .collect()
+}
+
 /// The registration's remote operations: the one with this ID, whatever
 /// its phase, or the ones the list includes. A SQLite failure keeps its
 /// meaning; a row the remote store's own checks reject is invalid.
@@ -356,17 +470,34 @@ fn remote_operations(
     repo: &ResolvedRepository,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
-    remote_records(connection, repo, id)?
-        .iter()
-        .map(remote_operation)
-        // The store narrows the rows; this decides which are listed.
-        .filter(|operation| {
-            id.is_some()
-                || operation
-                    .as_ref()
-                    .map_or(true, |operation| operation.listed)
-        })
-        .collect()
+    let has_promotions = recovery::has_table(connection, "document_promotions")?;
+    let has_closures = recovery::has_table(connection, "ticket_closures")?;
+    let mut operations = Vec::new();
+    for record in remote_records(connection, repo, id)? {
+        // The parent's stored step is authoritative for promotion and
+        // closure status; do not show the held reservation as a duplicate
+        // operation.
+        let parent = |exists: bool, sql: &str| -> Result<bool, ReadError> {
+            Ok(exists
+                && connection.query_row(sql, [record.operation_id.to_string()], |r| {
+                    r.get::<_, bool>(0)
+                })?)
+        };
+        if parent(
+            has_promotions,
+            "SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1)",
+        )? || parent(
+            has_closures,
+            "SELECT EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1)",
+        )? {
+            continue;
+        }
+        let operation = remote_operation(connection, &record)?;
+        if id.is_some() || operation.listed {
+            operations.push(operation);
+        }
+    }
+    Ok(operations)
 }
 
 /// A key-material phase under its contract name, or `None` for a phase
@@ -570,17 +701,18 @@ impl RepositoryService {
     /// The registration's stored polling policy, how the latest attempt to
     /// observe its remote ended, and the remote operation under way.
     ///
-    /// Nothing is contacted and no process is looked for. When the next
-    /// attempt is due is not stored, so `next_eligible_at` is null.
+    /// Nothing is contacted and no process is looked for. The stored next
+    /// eligibility deadline is returned without clamping or otherwise changing it.
     pub fn polling_status(&self, repo: &ResolvedRepository) -> Result<PollingStatusDto, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
             require_registration(connection, repo)?;
             let registration = repo.registration_id();
             // Only the policy row and the current batch's time are read, so
             // an observation this read does not report cannot fail it.
-            let (polling, latest_outcome) = state::select_polling_status(connection, registration)?
-                .ok_or_else(invalid_stored_data)?
-                .map_err(|_| invalid_stored_data())?;
+            let (polling, latest_outcome, next_eligible_at) =
+                state::select_polling_status(connection, registration)?
+                    .ok_or_else(invalid_stored_data)?
+                    .map_err(|_| invalid_stored_data())?;
             let observed_at: Option<i64> = connection
                 .query_row(
                     "SELECT observed_at FROM remote_observation_batches
@@ -601,7 +733,9 @@ impl RepositoryService {
                 latest_outcome: latest_outcome.map(polling_outcome),
                 latest_observed_at: observed_at.map(stored_time).transpose()?,
                 active_operation_id: active.map(|operation| operation.operation_id.to_string()),
-                next_eligible_at: None,
+                next_eligible_at: next_eligible_at
+                    .map(|time| stored_time(time.unix_timestamp()))
+                    .transpose()?,
             })
         })
         .map_err(|error| repo.failure(error))
@@ -627,6 +761,8 @@ impl RepositoryService {
             let mut items: Vec<OperationDto> = local_operations(connection, repo, None)?
                 .into_iter()
                 .chain(remote_operations(connection, repo, None)?)
+                .chain(promotion_operations(connection, repo, None)?)
+                .chain(closure_operations(connection, repo, None)?)
                 .chain(key_material_operations(connection, None)?)
                 .map(|operation| operation.dto)
                 .collect();
@@ -671,6 +807,8 @@ impl RepositoryService {
             local_operations(connection, repo, Some(&text))?
                 .into_iter()
                 .chain(remote_operations(connection, repo, Some(&text))?)
+                .chain(promotion_operations(connection, repo, Some(&text))?)
+                .chain(closure_operations(connection, repo, Some(&text))?)
                 .chain(key_material_operations(connection, Some(&text))?)
                 .min_by_key(|operation| (!operation.listed, family_rank(operation.dto.family)))
                 .map(|operation| operation.dto)

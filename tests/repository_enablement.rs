@@ -585,12 +585,16 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
         [
             "comment_publication_bindings",
             "configuration_observations",
+            "confirmation_records",
             "contexts",
             "discovered_comments",
+            "discovered_folders",
             "discovered_items",
+            "document_promotions",
             "item_edges",
             "item_problems",
             "key_material_operations",
+            "key_registry_changes",
             "operation_record_contexts",
             "operation_records",
             "owned_generated_keys",
@@ -603,6 +607,8 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_integration_windows",
             "remote_observation_batches",
             "remote_operation_records",
+            "remote_poll_dispositions",
+            "remote_poll_materializations",
             "remote_polling_state",
             "remote_publication_attempts",
             "remote_ref_observations",
@@ -611,8 +617,12 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
+            "request_operations",
+            "request_records",
+            "retired_contexts",
             "shared_ssh_keys",
             "ssh_host_pins",
+            "ticket_closures",
         ]
     );
     assert_eq!(
