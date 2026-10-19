@@ -51,7 +51,11 @@ abbreviations are never mutation selectors. Nonconforming resources without a
 valid ID are inspected/repaired by exact path plus observation token. Short IDs
 remain separate research; no lossy alias is introduced by this RFC.
 
-`--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
+Amended 2026-10-18 by C1: reads take their inputs as flags; `--input`,
+`--request-id`, `--prepare` and `--confirm` are mutation-only and are refused
+by C1 reads. `--non-interactive` is accepted but has no effect in C1.
+
+Mutation `--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
 `-` consumes stdin once. Mutations do not accept bodies/passphrases in command
 arguments and do not launch an implicit `$EDITOR`. A caller can edit files
 with its own tools, then submit them. Unknown input fields and invalid enum
@@ -59,13 +63,29 @@ values are rejected to catch mistakes. Missing and explicit `null` differ:
 missing optional update fields leave values unchanged; `null` clears only a
 documented nullable field. Empty strings do not mean clear.
 
+Amended 2026-10-18 by C1: `MANYHANDS_DATA_DIR` is an advanced/testing override
+for the application data directory. Unset uses the platform default; a nonempty
+absolute path is used directly, and a relative path resolves against the
+invocation directory. An empty value is `invalid_path`, exit 2. Opening services
+may create/migrate this directory; help, version, usage errors and unavailable
+commands do not open it or initialize the Git transport.
+
 ## Command taxonomy
 
-`--repo` is required except for `repo list`, `key` commands, `host list`,
+`--repo` is required except for `repo list`, `key` commands, `host list`, `host inspect`,
 `id new` and help/version operations. `--id` selects an item,
 `--key-id` selects a key, and `--operation-id` selects an operation; their names
 are not interchangeable. Every verb has human and JSON output. Each row lists command-specific inputs;
 IDs, request IDs, observation and consent rules below apply where relevant.
+
+Amended 2026-10-18 by C1: `host inspect --authority <host[:port]>` reads
+application-global pins and refuses `--repo`; bracketed IPv6 is accepted and
+the port defaults to 22. `folder list` joins the reads. `document show` and
+`ticket show` require exactly one of `--id` or repository-relative `--path`;
+only `--path` accepts an optional `--context` worktree path. `path observe`
+and `ticket check` move to C3. F2's `request show`, `request cancel` and
+`host observe` join C2, and `operation abandon` joins C4. These later verbs
+are cataloged as planned; their delivering Cycles publish their input rules.
 
 | Commands | Inputs and behavior |
 | --- | --- |
@@ -85,15 +105,18 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `key select`, `key clear` | Explicit shared selection or clearing; never changes Git commit identity. |
 | `key remove`, `key delete` | Unregister only, or separately delete owned generated files. Delete requires exact effect confirmation and cleared selection. Imported deletion is rejected. |
 | `key public` | Return public-key text/fingerprint if available; never private contents. |
-| `host list`, `host inspect` | Non-secret pins; inspect input `authority`; `--repo` identifies the relevant repository for an observation. |
+| `host list`, `host inspect` | Non-secret application-global pins; inspect takes `--authority`, never `--repo`. No network observation. |
+| `host observe` | Planned for C2: F2's configured-host observation for the approval flow. |
 | `host approve`, `host replace` | Input exact authority and presented fingerprint; replacement also requires old fingerprint. Explicit confirmation and transport re-observation required. |
-| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. |
+| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. |
+| `folder list` | List indexed document folders under `docs/`; no scan or refresh. |
 | `folder create` | Input repository-relative `path` under `docs/`; local empty folder until content is added. |
 | `document create` | Input `item_id`, repository-relative `path`, `title`, `body`. Explicit IDs support safe automation retries. |
 | `document save` | Input `observation`, optional `title`, `body`; preserve unknown metadata. No implicit publication. |
 | `document move` | Input source `observation`, `destination_path`, `destination_observation`; preserve ID and checkpoint both paths. |
 | `document repair`, `ticket repair` | Input exact `path`, `observation`, corrected complete `source`; preview and explicit confirmation. Validate identity/schema and use an owned authoring context, never patch primary as a shortcut. |
-| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. |
+| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. Show takes `--id` or `--path` with optional `--context`. |
+| `path observe`, `ticket check` | Planned for C3: observations and relationship validation for repair/authoring flows. |
 | `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Closure metadata cannot be supplied; free-form status may be `closed` without making the ticket lifecycle-closed. |
 | `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Project status does not control closure; `ticket close` owns `closed_at`/`closed_by`. Reopening is outside MVP. |
 | `comment list` | `--id` selects the parent item; return one flat, ordered list of roots and replies with parent IDs and depth, then visible malformed entries. Replies are not nested. |
@@ -103,6 +126,8 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `index status`, `index refresh`, `index rebuild` | Inspect cache freshness, or local scan/rebuild. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. |
+| `operation abandon` | Planned for C4: F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. |
+| `request show`, `request cancel` | Planned for C2: inspect or cancel through F2's request boundary. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
@@ -198,6 +223,22 @@ be recognized. No progress, ANSI escapes, prompts or logs go to stdout. Fatal
 process termination/broken output streams may prevent a final object; clients
 must use their request ID to inspect recovery. Human mode is readable prose
 plus stable IDs and actionable next steps; its layout is not a parsing API.
+
+Amended 2026-10-18 by C1: human successes write results to stdout; stale,
+never-refreshed or incomplete-list notes go to stderr. Human failures write
+their message, code and recovery actions to stderr, leaving stdout empty.
+JSON always writes one compact envelope and newline to stdout, with empty
+stderr. An output write/flush failure, including a broken pipe, exits 1
+without a panic or further diagnostic.
+
+Amended 2026-10-18 by C1: JSON help and version are success envelopes named
+`cli help` and `cli version`, with empty scope and no requested effects.
+Help data lists commands, availability, delivering Cycle, summary, repository
+rule and options; planned commands have null repository and empty options.
+Version data contains `name` and package `version`; `schema_version` remains
+in the envelope. Usage errors name the recognized two-word command, or
+`cli usage` when no catalog command can be named. The bare invocation is root
+help and exits zero.
 
 All envelope fields below are required; nullable fields use JSON null. Version 1
 uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
@@ -320,6 +361,12 @@ action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
 
 ## Exit statuses and partial completion
 
+Amended 2026-10-18 by C1: `usage_error` covers unknown commands/options,
+missing or conflicting inputs and malformed option values. An approved verb
+delivered by a later Cycle returns `command_unavailable`; human stderr names
+that Cycle. Both are input failures (exit 2), with empty scope, null data,
+no recovery actions and their fixed code messages in JSON.
+
 | Exit | Meaning |
 | --- | --- |
 | `0` | Requested work complete or documented no-op. Local-only comment/promotion/closure can succeed with publication pending when no remote exists. |
@@ -370,7 +417,10 @@ rollback. Platform-native stop handling follows the runtime RFC.
 
 ## Alternatives, risks and required evidence
 
-Structured file/stdin input is selected over large flag sets or an implicit
+Amended 2026-10-18 by C1: the structured-input rationale below applies to
+mutations; read inputs are flags.
+
+Structured file/stdin mutation input is selected over large flag sets or an implicit
 editor because it preserves multiline input and explicit concurrency tokens.
 One final JSON object is selected over streaming all commands because callers
 can inspect a single authoritative outcome.

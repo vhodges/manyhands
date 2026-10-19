@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–6 have been executed. For each later task, record its actual starting
+Tasks 0–7 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -207,8 +207,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 3 — Codes, schemas, harness and first goldens | Complete; controller reviews passed | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → `2e3849f31c0d7abd39b559ea15edce7312c2df03` | Spec PASS and quality PASS, no findings (Task 4 controller handoff) | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
 | 4 — Repository, credential, status and utility verbs | Complete; controller reviews passed | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` | Spec PASS; quality re-review PASS after metadata-escaping fix (Task 5 handoff) | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
 | 5 — Content verbs | Complete; controller reviews passed | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → `e1a7540502d30e42bb48cc897772e1c0c5691ffc` | Spec PASS and quality PASS, no findings (Task 6 controller handoff) | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract = 160 tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
-| 6 — Relationship verbs | Implemented; self-review PASS; controller review pending | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → checkpoint introducing the Task 6 entry below | Spec/quality self-review PASS; no library gap or unresolved finding | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
-| 7 — Boundaries, workflow and amendments | Not started | Not established | Not requested | Not run |
+| 6 — Relationship verbs | Complete; controller reviews passed | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → `e9b71527bb4177f5c862e61efaa7ac5a66d30148` | Spec PASS and quality PASS, no findings (Task 7 controller handoff) | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
+| 7 — Boundaries, workflow and amendments | Implemented; self-review PASS; controller review pending | `e9b71527bb4177f5c862e61efaa7ac5a66d30148` → checkpoint introducing the Task 7 entry below | Spec/quality self-review PASS, no unresolved findings or library gap | 4 new boundary tests; 62 CLI tests PASS; scoped bin/CLI clippy and fmt PASS; workflow/amendment diff review |
 | 8 — Full verification, review and handoff | Not started | Not established | Not requested | Full suite reserved here |
 
 ### Task 0 checkpoint — 2026-10-19
@@ -913,3 +913,105 @@ a self-referential SHA. Commit subject: `feat: CLI relationship reads`, with the
 owner-required co-author trailer. Task 7 remains unstarted; full-suite gates
 remain reserved for Task 8. Ticket stays open. No subagents, rebase, push, PR,
 merge into main, closure, cleanup or native workflow.
+
+### Task 7 checkpoint — 2026-10-19
+
+**Authorization and base.** Only Task 7 was authorized, with an owner-approved
+checkpoint commit, apply_patch edits and inline self-review. Initial HEAD was
+`e9b71527bb4177f5c862e61efaa7ac5a66d30148`, clean on
+`manyhands/ticket/01M4CC0VMSZ7BRS740C8VSQ5ZK` in its ticket worktree. Read
+AGENTS, the canonical ticket/latest comment, approved Cycle/design/plan and
+this ledger. The required main preflight fetched main, confirmed it is an
+ancestor of HEAD and returned **Already up to date** from `git merge
+origin/main`; no base or commit change. Main remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+**Task 6 review handoff.** Controller reports **spec PASS, quality PASS, no
+findings**, with **78 bin + 58 CLI + 43 mutation-contract = 179 tests** at
+`e9b7152`. This supersedes the pending controller-review status in the
+historical Task 6 checkpoint/comment. Those counts are carried-forward
+evidence, not a claim to have rerun bin or mutation-contract tests in Task 7.
+
+**Implementation and acceptance mapping.**
+
+- Added `tests/cli/boundaries.rs` and its module declaration in `tests/cli.rs`.
+  One `items::contract_repository()` fixture holds a password/query-bearing
+  remote fetch/push URL, stored problem-guidance sentinel, all registrations
+  from `credentials::register_keys`, and a sentinel-bearing key-material
+  operation from `operations::insert_key_material`. It also has a comment,
+  malformed document, stale index and a real linked document worktree.
+- Exactly **28 distinct C1 verbs**, with valid selectors and repository rules,
+  each succeed through the real binary in **both modes**: **56 invocations**.
+  The invocation-name set must equal the available commands in actual root
+  JSON help. Every stdout/stderr is substring-scanned for all eight sentinels;
+  JSON additionally passes `golden::find_sentinel` over parsed keys/values.
+- The same loop takes `repository_and_worktree_snapshot` immediately before
+  and after **each invocation**, including the seven application-global verbs.
+  It asserts equality of primary/linked-worktree files, Git configuration,
+  HEAD/index/statuses, references, worktree registrations and remotes. Setup
+  and refresh occur outside snapshots; the help catalog read is also bracketed
+  by a snapshot comparison. All CLI children use `CliEnv` and the existing
+  isolation helpers; no shared helper update was needed.
+- Broken pipe: wrote and committed a roughly **4 MiB** document, refreshed it,
+  then spawned `document show --id` with `cli_command`. A reader consumes
+  exactly 16 bytes and drops stdout. The process exits **1**, with empty stderr
+  and no panic. Prefix reading and stderr draining run concurrently in the
+  test process; child completion is bounded at 30 seconds, reader completion/
+  stderr EOF at one shared second after exit. A local Drop guard kills/reaps
+  the child even on timeout or assertion failure.
+- Platform default: `without_data_dir()` exercises the real `repo list --json`
+  binary with child-only temporary XDG/HOME values. It checks the literal
+  Linux `<XDG_DATA_HOME>/manyhands` or macOS `<HOME>/Library/Application
+  Support/com.manyhands.Manyhands` directory and registry file. The unused
+  override remains absent. The test is compiled only on Linux/macOS; its R-3
+  comment records Windows' known-folder API ignoring `LOCALAPPDATA`.
+- Exit table: seven `(args, code, exit)` rows execute in both modes, covering
+  success, usage error, unavailable command, invalid ID, unregistered repository,
+  a real child-held exclusive-cache-lease `busy`, and a regular-file data-root
+  `internal_error`. The classes of the rows actually run must equal success,
+  Input, Blocked, Transient and Internal. JSON fixes codes/messages; human
+  failures have empty stdout and typed stderr. The lease holder is released
+  and reaped through the existing support helper.
+- The workflow's existing Cargo test line gains only
+  `--bin manyhands-cli --test cli`. All existing targets, four matrix entries
+  and manual dispatch policy are preserved.
+- Added short **Amended 2026-10-18 by C1** notes in the affected RFC/Wave
+  sections. Checked every design amendment: read flags/mutation input;
+  application-global host inspection; folder list and path/context show;
+  C3's moved verbs; F2's C2/C4 taxonomy additions; both input codes; JSON
+  help/version/usage command names; advanced/testing data override; human
+  streams; and the Wave's merged Cycle 03 / parse-first pre-thread R-1 ruling.
+  The affected sections had no pre-existing C1 amendments to duplicate.
+
+**Verification.** Every Rust command ran through Devenv, locked except fmt.
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test cli boundaries::` | **4 passed**, 58 filtered, zero failed/ignored; existing implementation satisfies the new boundary tests |
+| `devenv shell -- cargo fmt --check` initially | Formatting-only differences in the new file, corrected through apply_patch |
+| `devenv shell -- cargo test --locked --test cli` after formatting | **62 passed**, zero failed/ignored/filtered, 7.96 seconds |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --test cli -- -D warnings` | **PASS** |
+| `devenv shell -- cargo fmt --check` finally | **PASS** |
+| `git diff --check` | **PASS** |
+| `git merge-tree --write-tree HEAD origin/main` before checkpoint | Exit 0, tree `102ce3d93d9afae2529316d0305ecccc92bbf6d5`; covers committed Task 6 base before these additions |
+
+**Self-review.** Reviewed the complete Task 7 diff and the new test file against
+all eight plan steps. Checked successful argument coverage, real planted data,
+scans on both streams/modes, per-call snapshots after setup, pipe deadline and
+reaping paths, child-only environment changes, genuine failure causes, class
+coverage, workflow preservation and every dated amendment. Spec/quality
+self-review **PASS**, no unresolved findings or library gap. No library,
+production CLI, existing test semantics, fixtures, schemas, dependencies or
+shared helpers changed. Independent controller review remains pending.
+
+**Limitations and handoff.** Evidence is Linux-local. macOS default resolution
+is coded but not run here; Windows default resolution remains the R-3 inspection
+item. No native workflow was dispatched. No whole-suite/full-gate claim: Task 8
+remains unstarted. Ticket remains open. No subagents, rebase, push, PR, merge
+into main, closure or cleanup.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A6NA59VSH7SQ28B81ZMSWE.md`.
+Endpoint is the commit introducing this entry, returned after creation to avoid
+a self-referential SHA. Commit subject: `test: CLI boundaries; docs: C1 contract
+amendments`, with the owner-required co-author trailer.
