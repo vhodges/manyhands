@@ -54,6 +54,10 @@ does not authorize implementation.
   `AGENTS.md` it brought in says to **merge** `origin/main` into ticket
   branches and never rebase them. Because the branch had never been pushed,
   no published history was rewritten. From here on this Cycle merges.
+- On 2026-10-19 C1 landed on main at `021f6845`. Merge `0ed8af7` brought it
+  into the ticket branch with no conflicts. The library's only change since
+  `f6a4c06` is two result codes the CLI emits itself. The design's audit
+  records the re-check.
 - **Wave 02 dependency.** The Wave requires Cycles 01–04 on main for D1. All
   ten Wave 02 Cycles are closed and on main.
 - **Wave 03 dependency.** F1 (`01M4CC0VMQ7R15A7M9SPN3KB67`) and F2
@@ -72,11 +76,10 @@ does not authorize implementation.
   cannot be removed", must be fixed, reviewed and merged to main as a
   shared-library change under track rule 5 before Part C begins. It is open
   and unstarted at this baseline. Parts A and B do not depend on it.
-- **Parallel work.** C1 (`01M4CC0VMSZ7BRS740C8VSQ5ZK`) is the only other
-  Wave 03 Cycle based on current main. The two tracks may both touch
-  `Cargo.toml`, `Cargo.lock` and `.github/workflows/build.yml`. Whichever
-  lands second merges main and resolves those files; neither changes the
-  other's sources. Track rule 5's "rebase onto it" is read as "merge it",
+- **Parallel work.** C1 (`01M4CC0VMSZ7BRS740C8VSQ5ZK`) landed first and is
+  merged into this branch. It added `clap` to `Cargo.toml` and appended
+  `--bin manyhands-cli --test cli` to the workflow's headless test step.
+  D1 merges main again before Task 17 and leaves C1's sources alone. Track rule 5's "rebase onto it" is read as "merge it",
   which `AGENTS.md` requires.
 
 Before implementation, fetch and merge then-current main, repeat the

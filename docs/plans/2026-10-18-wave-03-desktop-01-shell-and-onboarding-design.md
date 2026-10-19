@@ -31,6 +31,14 @@ replaces the provisional
 which predate F1 and F2: every headless part those rows marked missing now
 exists, and only presentation is absent.
 
+Re-checked on 2026-10-19 after merging main at `021f684` (Wave 03 C1). The
+library changed only by adding `ResultCode::UsageError` and
+`ResultCode::CommandUnavailable`, which the CLI emits itself and
+`RepositoryService` never returns, with their `recovery` arms. No signature
+cited below moved. D1 shows codes through `ResultCode::message()`, never an
+exhaustive match, so the new variants need no desktop change. C1 did not edit
+the API audit rows replaced here.
+
 | D1 need | Library entry point | Notes for D1 |
 | --- | --- | --- |
 | Open the service | `RepositoryService::open_default()` (`repository.rs`), `open_at(&Path)` for tests | `RepositoryService` is asserted `Sync` (`repository.rs`, test near the end of the file). Every method is synchronous. |

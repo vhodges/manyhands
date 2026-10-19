@@ -868,9 +868,12 @@ ticket comment.
 - [ ] A test walks every core action of the Cycle's Scope by keystrokes
   only (region keys, Tab, arrows, Enter, Escape) and asserts the focused
   element after each and visible focus style.
-- [ ] Add to the workflow's test step:
-  `cargo test --locked --features desktop-test-support --bin manyhands`, and
-  a step running `sh scripts/check-cli-no-gpui.sh`. Do not dispatch the
+- [ ] Add two new workflow steps after "Test headless credential and
+  platform contracts":
+  `cargo test --locked --no-fail-fast --target ${{ matrix.target }} --features desktop-test-support --bin manyhands`,
+  and `sh scripts/check-cli-no-gpui.sh`. Leave the headless step alone,
+  including C1's `--bin manyhands-cli --test cli`. Appending the desktop
+  feature to it would build the headless tests with GPUI. Do not dispatch the
   workflow without the product owner's approval (`AGENTS.md`, Native CI).
 - [ ] Fetch and merge `origin/main`; check
   `git merge-tree --write-tree HEAD origin/main` reports no conflict.
