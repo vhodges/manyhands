@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1 CLI Shell And Inspection Execution"
 date: 2026-10-19
-status: in-progress
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -192,9 +192,9 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–7 have been executed. For each later task, record its actual starting
-HEAD, ending commit/range, controller review disposition and targeted checks
-when dispatched. Unstarted rows deliberately have no invented base or result.
+Tasks 0–8 have been executed, including the authorized follow-ups below.
+Independent whole-branch quality review remains with the controller. The ledger
+records actual task bases, checkpoint ranges, review dispositions and checks.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
 (`docs: record C1 baseline and refresh the API audit`); its SHA is reported
 to the controller after creation rather than embedding a self-referential SHA.
@@ -208,8 +208,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 4 — Repository, credential, status and utility verbs | Complete; controller reviews passed | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` | Spec PASS; quality re-review PASS after metadata-escaping fix (Task 5 handoff) | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
 | 5 — Content verbs | Complete; controller reviews passed | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → `e1a7540502d30e42bb48cc897772e1c0c5691ffc` | Spec PASS and quality PASS, no findings (Task 6 controller handoff) | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract = 160 tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
 | 6 — Relationship verbs | Complete; controller reviews passed | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → `e9b71527bb4177f5c862e61efaa7ac5a66d30148` | Spec PASS and quality PASS, no findings (Task 7 controller handoff) | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
-| 7 — Boundaries, workflow and amendments | Implemented; self-review PASS; controller review pending | `e9b71527bb4177f5c862e61efaa7ac5a66d30148` → checkpoint introducing the Task 7 entry below | Spec/quality self-review PASS, no unresolved findings or library gap | 4 new boundary tests; 62 CLI tests PASS; scoped bin/CLI clippy and fmt PASS; workflow/amendment diff review |
-| 8 — Full verification, review and handoff | In progress under controller; not final-review-ready | Whole-branch spec review at `4cafe3641c8c7a7971d3ae3cb6fe528eb18ef90a`; bounded follow-up checkpoint below | P2 recovery escaping and P3 COLUMNS coverage fixed and self-reviewed; controller re-review pending | Follow-up: 79 bin + 64 CLI tests, test-inclusive clippy and fmt PASS. Controller reports full-suite closure-test failure and 1200-second global timeout; separate authorization pending |
+| 7 — Boundaries, workflow and amendments | Complete; controller reviews passed | `e9b71527bb4177f5c862e61efaa7ac5a66d30148` → `9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa` | Spec PASS and quality PASS, no findings (Task 8 controller handoff) | 4 new boundary tests; fresh 62 CLI tests, scoped bin/CLI clippy and fmt PASS reported by controller; workflow/amendment diff review |
+| 8 — Full verification, review and handoff | Local verification/documentation complete; review-ready; final quality review pending | Initial `9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa`; final checked Rust HEAD `309c9e071994f55eb0b1fa9f44546cc2722d0398` → checkpoint introducing the final entry below | Whole-branch spec re-review PASS after P2/P3 (controller report); independent whole-branch quality review pending | All four final gates PASS; 3,468 passed, 0 failed, 1 ignored including 11 doc tests; CLI smoke, no-GPUI graph, bounded Wayland launch and clean merge-tree |
 
 ### Task 0 checkpoint — 2026-10-19
 
@@ -1217,3 +1217,205 @@ with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; the endpoint is
 returned after commit. Controller review and the full Task 8 gate remain pending;
 this scoped result does not establish full-suite success or final review readiness.
 No subagents, push, PR, main merge, rebase, closure, cleanup or native dispatch.
+
+### Task 8 final verification and review-ready checkpoint — 2026-10-19
+
+**Scope, base and synchronization.** This is the authorized verification and
+documentation checkpoint, performed inline in the existing ticket worktree on
+`manyhands/ticket/01M4CC0VMSZ7BRS740C8VSQ5ZK`. The original Task 8 base was
+`9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa`; the final resumed/checked Rust HEAD
+is **`309c9e071994f55eb0b1fa9f44546cc2722d0398`**. Initial status was clean.
+Fetch/merge of `origin/main` before the final gate and again after verification
+both returned **Already up to date**. Main remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`; the final pre-documentation
+`git merge-tree --write-tree HEAD origin/main` exited **0**, tree
+`be75bbca9cdcfc756599686161828c935a136d07`. Source, tests, schemas and Cargo
+files have no change from the checked HEAD in this documentation checkpoint.
+
+#### Review handoffs and prior gate attempts
+
+- The controller reports **Task 7 spec PASS and quality PASS, no findings**,
+  with a fresh **62 CLI tests, scoped clippy and fmt PASS**. This supersedes
+  Task 7's historical pending-review text, without relabeling it as final
+  whole-branch approval.
+- Initial check/fmt passed at `9f65977`; all-target clippy failed on the
+  C1-authored `human_tests.rs:133` constant-size `chunks_exact` loop. Original
+  logs remain `/tmp/opencode/manyhands-c1-task8-{check,fmt,clippy}.log`.
+  `4cafe3641c8c7a7971d3ae3cb6fe528eb18ef90a` fixes only that test's iteration.
+  The controller reports independent spec/quality PASS for the behavior-
+  preserving fix; its exact test (1 passed, 77 filtered), test-inclusive
+  clippy and fmt evidence is recorded above.
+- The next all-feature/all-target clippy passed at `4cafe364`; the first full
+  test attempt failed `existing_closure_writes_no_checkpoint` (1,195 library
+  tests passed, 1 failed), then hit the 1,200-second outer budget in comment
+  publication. It was **not** a completed full suite. Logs remain
+  `/tmp/opencode/manyhands-c1-task8-resume-{clippy,test}.log`. The diagnosis,
+  timing evidence and owner-approved decision 14 are recorded above; no hang
+  was established. `309c9e0` reloads the persisted baseline before operations,
+  preserving every assertion. It changes no production or shared fixture.
+- Whole-branch spec review found P2 human recovery-field escaping and P3
+  missing COLUMNS help comparison. `2b84360a2fca123c37d09dd642b69b2afb368049`
+  fixes both; the controller reports **whole-branch spec re-review PASS**.
+  Its 79 bin + 64 CLI = 143 targeted passes and scoped clippy/fmt stand as
+  historical evidence. The actual production and test changes justify this
+  final full-gate retry. No broad tests were repeated after final success.
+- **Independent whole-branch quality review remains pending with the
+  controller.** No unknown approval is inferred from local checks, the spec
+  result, or earlier per-task reviews. The ticket remains **open**.
+
+#### Final full gate
+
+All commands ran serially through Devenv on the checked HEAD. A single shell
+sequence used `pipefail`, `tee` for complete output, `&&` between gates and a
+**7,200,000 ms (two-hour)** tool budget. It completed normally with **exit 0**,
+including the final doc-test summary. No background or timed-out full-suite
+process remains. Log directory `/tmp/opencode` was verified before use; prior
+attempt logs were preserved. Each filename below is under that directory.
+
+| Exact command | Result | Complete log |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | PASS, exit 0; 0.74 s Cargo time | `manyhands-c1-task8-final-check.log` |
+| `devenv shell -- cargo fmt --check` | PASS, exit 0 | `manyhands-c1-task8-final-fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS, exit 0; 7.68 s Cargo time | `manyhands-c1-task8-final-clippy.log` |
+| `devenv shell -- cargo test --all-features --locked --no-fail-fast` | PASS, exit 0; all targets and doc tests completed | `manyhands-c1-task8-final-test.log` |
+
+Counts below are the actual final log summaries, not accumulated runs or
+estimated coverage. **S** denotes the custom SSH runner: its complete case
+count is included once, and it has no ignored-case mechanism. All its cases
+ran without a filter. Other rows use libtest's reported counts; every row has
+**0 failed, 0 measured and 0 filtered out**. Helper tests counted by libtest
+are included, not subtracted or counted again as child executions.
+
+| Target | Passed | Ignored |
+| --- | ---: | ---: |
+| Library (`src/lib.rs`) | 1196 | 0 |
+| Desktop bin (`src/main.rs`) | 0 | 0 |
+| CLI bin (`src/bin/manyhands-cli.rs`) | 79 | 0 |
+| `canonical_foundation` | 62 | 0 |
+| `cli` | 64 | 0 |
+| `comment_publication` (S) | 41 | 0 |
+| `discovery_rebuild` | 78 | 0 |
+| `document_promotion` (S) | 74 | 0 |
+| `editor_feasibility` | 9 | 0 |
+| `journal_rejection` | 26 | 0 |
+| `key_material` | 39 | 0 |
+| `key_storage` | 2 | 0 |
+| `local_authoring` | 140 | 0 |
+| `mutation_bridges` | 129 | 0 |
+| `mutation_confirmation` | 154 | 0 |
+| `mutation_contract` | 43 | 0 |
+| `mutation_relationships` | 27 | 0 |
+| `mutation_remote` (S) | 88 | 0 |
+| `mutation_replay` | 308 | 0 |
+| `read_boundary` | 20 | 0 |
+| `read_characterization` | 0 | 1 |
+| `read_comments` | 22 | 0 |
+| `read_contract` | 71 | 0 |
+| `read_credentials` | 25 | 0 |
+| `read_items` | 76 | 0 |
+| `read_relationships` | 17 | 0 |
+| `read_repository` | 33 | 0 |
+| `read_status` | 24 | 0 |
+| `recovery_foundation_gate` | 51 | 0 |
+| `remote_merge_recovery` (S) | 25 | 0 |
+| `remote_observation` (S) | 15 | 0 |
+| `remote_polling` (S) | 84 | 0 |
+| `remote_reservation` | 13 | 0 |
+| `remote_synchronization` (S) | 63 | 0 |
+| `repository_enablement` | 78 | 0 |
+| `session_credentials` | 11 | 0 |
+| `shared_key_registry` | 39 | 0 |
+| `ssh_fixture` (S) | 35 | 0 |
+| `ssh_transport` (S) | 123 | 0 |
+| `ticket_closure` (S) | 73 | 0 |
+| Doc tests (`manyhands`, all compile-fail examples) | 11 | 0 |
+| **Total** | **3468** | **1** |
+
+Totals: **2,847 libtest/doc tests + 621 custom SSH cases = 3,468 passed**,
+**0 failed**, **1 intentionally ignored** across 40 executable targets plus
+doc tests. The ignored case is
+`read_characterization::reads_of_a_thousand_item_repository_are_characterized`,
+an existing opt-in characterization requiring `--ignored --nocapture`; it was
+not silently enabled or represented as passing. Doc tests contribute **11**
+to the total, not an additional 11 beyond it.
+
+#### Smoke checks and dependency boundary
+
+| Check | Evidence |
+| --- | --- |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | PASS, exit 0; bare invocation printed root help, all 72 catalog entries and `MANYHANDS_DATA_DIR` guidance. Complete log: `/tmp/opencode/manyhands-c1-task8-final-cli-smoke.log`. |
+| `set -o pipefail; devenv shell -- cargo tree --locked -e normal --no-default-features \| grep -ci gpui` | Printed **`0`**. Recorded pipeline statuses: Cargo/Devenv **0**, grep **1** (normal no-match result), so the exact plan pipeline exits 1 as expected. No GPUI/GPUI Kit in the CLI normal graph. The lightweight inspection was repeated only to persist output and component statuses: `/tmp/opencode/manyhands-c1-task8-final-dependency-tree.log`. |
+| Display inspection | `DISPLAY=:1`, `WAYLAND_DISPLAY=wayland-1`, `XDG_RUNTIME_DIR=/run/user/1000`, `XDG_SESSION_TYPE=wayland`; an active display was available and exercised. |
+| Desktop build | First 60-second bounded smoke attempt spent its budget compiling the desktop-only feature set and never launched; retained log `/tmp/opencode/manyhands-c1-task8-final-desktop-smoke.log`. Completed `devenv shell -- cargo build --locked --features desktop --bin manyhands` separately, exit 0, 36.70 s, log `manyhands-c1-task8-final-desktop-build.log` in `/tmp/opencode`. No source change. |
+| Desktop launch | `WAYLAND_DEBUG=1 timeout --signal=TERM --kill-after=5s 15s devenv shell -- cargo run --locked --features desktop --bin manyhands` reached the executable and created/configured a Wayland toplevel, attached rendered buffers and committed its surface. Log `/tmp/opencode/manyhands-c1-task8-final-desktop-launch.log`: launch at line 8, toplevel at 172, configure at 3415, buffer attach/commit at 3424–3426 and 4801–4803. No panic or startup error. Expected timeout exit **124**, after the bounded observation, terminated only this launch's process group. Process inspection found no remaining matching app/Cargo launch. This proves launch/render submission, not manual visual or button-interaction approval. |
+
+#### Acceptance mapping
+
+Each numbered row corresponds, in order, to one bullet under the Cycle's
+**Acceptance And Exit Evidence**. Test names are relative to `tests/cli/`
+unless a bin-private module or other path is named. All cited tests are in
+the successful final full run.
+
+| # | Cycle acceptance criterion | Test or evidence |
+| --- | --- | --- |
+| 1 | Every C1 verb runs through the real binary against fixtures in both modes, with golden envelope/schema checking. | `admin.rs` covers 14 admin/credential/status/utility verbs, `content.rs` six content verbs, `relationships.rs` eight relationship verbs. Their checked helpers validate envelope and data schemas/scopes. `boundaries::every_c1_verb_redacts_secrets_and_preserves_repository_in_both_modes` runs all **28** successfully in both modes (**56** invocations), with its name set compared to actual root JSON help. Bin `dispatch::tests::all_28_available_verbs_reach_a_real_dispatch_arm` and `no_available_verb_is_a_placeholder` also pass. |
+| 2 | Every reachable exit class, F1 failure code and the two CLI codes is tested. | `boundaries::exit_class_table_runs_every_reachable_class_through_the_binary` exercises success/Input/Blocked/Transient/Internal in both modes. `admin` repository/selector/public-key/inaccessible/degraded/lease tests cover `invalid_path`, `not_repository`, `not_repository_root`, `bare_repository`, `invalid_id`, `repository_not_registered`, `key_not_found`, `authority_not_found`, `operation_not_found`, `public_key_unavailable`, `repository_inaccessible`, `index_unavailable`, `busy`; content selector/kind tests cover `item_not_found`/`path_not_found`; help tests cover `internal_error`, `usage_error` and `command_unavailable`. Bin `render::tests::every_exit_class_has_its_contract_status` additionally covers the unreachable-in-C1 Incomplete/Cancelled mappings. The earlier **Design codes with no C1 envelope route** table records exclusions and reasons. |
+| 3 | Help, version and the bare call neither open data nor start transport; bare cargo run exits 0. | `help::root_help_and_bare_call_match_in_both_modes_without_data`, `version_in_both_modes_has_no_data_directory`, and resource/command help tests assert absent data directories. Bin `startup::tests::service_free_actions_never_call_startup_in_either_mode` proves no transport/service call; `every_available_run_starts_transport_before_service_and_maps_open_failure` pins the real-command order. CLI smoke above exits 0. |
+| 4 | `--json` is honored on usage errors. | `help::usage_errors_in_both_modes_do_not_open_data`, `mutation_only_options_on_reads_are_usage_errors_in_both_modes`, bin parser raw-scan/action-order tests, and the usage goldens. The harness requires one newline-terminated JSON object and empty stderr. |
+| 5 | A short code supplied as `--id` is `invalid_id`. | `content::bad_selectors_and_absent_ticket_are_scoped_input_failures` passes `items::SHARED_SLUG` to `ticket show`; `relationships::relationship_selectors_are_strict_and_resolve_repository_first` covers deps/children and lowercase IDs. Resolution-precedence tests retain repository errors before bad IDs. |
+| 6 | Planted secrets, including key material, never appear on either stream. | `boundaries::every_c1_verb_redacts_secrets_and_preserves_repository_in_both_modes` plants remote password/query, stored guidance, credential sentinels and operation key material in one fixture, scans both streams for all eight sentinels on all 56 invocations, and uses `golden::find_sentinel` on JSON. Recovery control escaping has both bin and real-binary regressions from P2; requested body/source preservation tests still pass. |
+| 7 | Tests never touch the platform data directory; redirected default test is Linux/macOS only (R-3). | Every child uses `CliEnv`'s temporary HOME/USERPROFILE/XDG/APPDATA/LOCALAPPDATA, explicit data override and Git/SSH/GCM isolation. `boundaries::platform_default_data_directory_is_created_only_under_the_temporary_home` removes the override and proves the literal Linux redirected location/registry. macOS code exists but was not run here. Windows default-location behavior is inspection-only because the known-folder API ignores `LOCALAPPDATA`; the default test is compiled out there. |
+| 8 | CLI has no display/desktop dependency in its normal graph. | Exact `cargo tree`/grep plan command above: printed 0, Cargo exit 0, grep exit 1. All-feature builds deliberately cover the separate desktop binary and do not substitute for this no-default-features graph check. |
+| 9 | No process outlives the command; CLI spawns no thread/child and pipes reach EOF. | Bin source inspection finds no thread/process spawn; the `Command` in `parse.rs` is clap's builder. `tests/support/cli.rs::run_cli` reaps every child within 30 seconds and requires both pipes to reach EOF within one shared second afterward. `boundaries::broken_stdout_pipe_exits_one_without_panic_or_lingering_process` proves exit 1, empty stderr and bounded completion for a 4 MiB show; its own test-process reader threads and child Drop guard are explicit. Every-call repository/worktree snapshots in the all-verbs boundary test also pass. |
+| 10 | Transport-start failure is proved with a fake, not a real-binary trigger (R-4). | Bin `startup::tests::transport_failure_stops_before_service_and_has_only_fixed_diagnostic` uses fake Startup, checks transport-only call order, `internal_error`, exit 1 and fixed human diagnostic. Real libgit2 timeout-option rejection cannot be arranged through CLI input. The real-binary regular-file data-root test separately proves the reachable internal-error class. |
+| 11 | CLI RFC, Wave and API audit carry the design amendments. | Task 7's dated C1 notes in `docs/RFC/cli-contract.md` cover read flags, global host inspection, folder/path/context reads, C3 moves, F2 taxonomy, codes, JSON help/version/usage, data override and human streams. `docs/Waves/wave-03-dogfooding.md` records parse-first/pre-thread R-1 and C3 moves. The API audit's dated Task 0 C1 refresh inventories all 28 read bindings/signatures and planned downstream verbs; its pending-binding wording is historical baseline evidence, superseded by this execution record. |
+
+**Current coverage inventory.** The real directory and registered cases contain
+**51 JSON + 4 text = 55 CLI golden fixtures**, not 54. The exact-directory test
+passed; no fixture was regenerated in Task 8. JSON success fixtures cover all
+28 verbs (plus the nonconforming document show); remaining JSON cases pin help,
+version and failures. Text pins root help, version, ticket list and item-not-found.
+Final CLI coverage is **79 bin tests + 64 integration tests = 143**; the
+integration count includes the inactive lease-child helper and directory check.
+The catalog has **72 verbs: 28 available and 44 planned**. Shared registry gates
+still cover **70 result codes, 46 data roots and 6 mutation-golden exceptions**.
+These are test/fixture inventories, not measured line or branch coverage.
+
+#### Limitations, review readiness and checkpoint
+
+- **R-2:** degraded-index CLI resolution returns `index_unavailable`; the F1
+  unavailable status DTO has no CLI success golden, as approved.
+- **R-3:** native Windows default location remains an inspection item; Linux
+  redirection passed, while macOS's redirected default test awaits native CI.
+- **R-4:** transport-initializer failure uses fake-startup evidence only.
+- **R-5:** child environment isolation cannot redirect libgit2's system-level
+  configuration search path (`/etc/gitconfig` or `%PROGRAMDATA%`). Fixture-local
+  identity wins, but this is not proof of full system-config isolation.
+- **Native:** `.github/workflows/build.yml` includes both `--bin manyhands-cli`
+  and `--test cli`. Native matrix execution is **after merge on main**, requires
+  owner dispatch approval, and was **not dispatched**. Linux-local success and
+  a workflow edit do not establish Windows/macOS/Linux-aarch64 results.
+- **Review:** all local verification is complete; the Cycle and design are
+  **implemented, review-ready**, with independent whole-branch quality review
+  still pending. The controller retains review disposition and any follow-up.
+  No final approval or ticket closure is claimed.
+
+Only the Cycle, design, this ledger and the final canonical comment are changed
+by this checkpoint. The six originally named pre-existing-test edits remain
+bounded; decision 14 is the separately recorded additional exception, not a
+retroactive expansion. No Rust, fixture, dependency or workflow edit occurs here.
+Read-only Node validation **PASS**: all 41 target summaries match the final
+test log, including totals/ignored/doc counts; all 11 acceptance rows are present;
+fixture names exactly match the 51 JSON/4 text registries; document statuses,
+local links, comment metadata and the ticket's open status are consistent.
+Evidence: `/tmp/opencode/manyhands-c1-task8-final-document-validation.log`.
+`git diff --check` **PASS**. Only these four files are staged for
+`docs: mark C1 review-ready` with the required co-author trailer. The endpoint
+SHA is returned after creation rather than embedded self-referentially.
+
+Canonical final verification/review-ready comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5AF9ADW9QFY9DH7DYC252V2.md`.
+Its ID came from the supported CLI `id new` with an isolated `/tmp/opencode`
+data directory; comment creation remains a filesystem operation because
+`comment add` is planned for C4. Ticket stays **open**. No subagents, rebase,
+push, PR, merge into main, closure, worktree cleanup or native dispatch.

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1 CLI Shell And Inspection Design"
 date: 2026-10-18
-status: approved
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -9,6 +9,19 @@ id: "01M58XQ59VYD01A301GTY39P1C"
 ---
 
 # Wave 03 C1 CLI Shell And Inspection Design
+
+## Implementation Status
+
+Implemented and locally verified on 2026-10-19 at
+`309c9e071994f55eb0b1fa9f44546cc2722d0398`: all four Devenv gates passed,
+with **3,468 tests/cases passed, 0 failed, 1 intentionally ignored**, including
+11 doc tests. The [execution ledger](2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#task-8-final-verification-and-review-ready-checkpoint--2026-10-19)
+maps every Cycle acceptance criterion to evidence and records the baseline
+corrections, review fixes, decision 14's narrow test exception, smoke checks
+and R-3/R-4/R-5 limits. The controller reports whole-branch spec re-review
+PASS after P2/P3; independent whole-branch quality review remains pending.
+Review-ready is not final approval or ticket closure. Native CI remains
+post-merge on main, not dispatched here.
 
 ## Intent And Approval Boundary
 

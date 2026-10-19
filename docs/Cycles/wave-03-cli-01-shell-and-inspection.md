@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C1: CLI Shell And Inspection"
 date: 2026-10-18
-status: approved
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,17 @@ id: "01M58XQ59NBC37ENGH0BA9X40Q"
 # Wave 03 C1: CLI Shell And Inspection
 
 ## Status
+
+**Implemented, review-ready on 2026-10-19.** The final Linux Devenv gate at
+`309c9e071994f55eb0b1fa9f44546cc2722d0398` passed: **3,468 tests/cases passed,
+0 failed, 1 intentionally ignored**, including 11 doc tests. CLI and bounded
+Wayland desktop launch evidence, every acceptance criterion, prior gate
+resolutions and platform limitations are recorded in the
+[execution ledger](../plans/2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#task-8-final-verification-and-review-ready-checkpoint--2026-10-19).
+The controller reports whole-branch spec re-review **PASS** after the P2/P3
+fixes. Independent whole-branch quality review remains pending; this status
+does not claim final approval. The ticket remains **open**. Native CI is
+post-merge on main and has not been dispatched.
 
 **Approved by the owner on 2026-10-19**, together with the design and the
 implementation plan, for subagent-driven execution. The owner answered the planning questions on
@@ -108,8 +119,9 @@ Authority, in order:
 - `conflict show` stays deferred to the first of C4 or D5, as F1 decided.
 - `index refresh` and `index rebuild` are C3's. A read reports a stale or
   never-refreshed index and does not refresh it.
-- No change under `src/repository/` except the one owner-approved line in
-  `src/repository/mutation/outcome.rs` (decision 9). Any other library gap
+- No change under `src/repository/` except the owner-approved no-action arm
+  in `src/repository/mutation/outcome.rs` (decision 9) and the later, separately
+  approved test-only baseline reload (decision 14). Any other library gap
   found during C1 becomes its own ticket under track rule 5.
 - Native evidence: C1 is proven on Linux. Its test target joins the native
   workflow's list, and native CI runs on main after merge.
