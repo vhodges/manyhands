@@ -12,9 +12,9 @@
 //! again under the same request, and Close.
 //!
 //! If the request is answered with a stale confirmation, or the state the
-//! preview showed has changed, the dialog shows that answer and Prepare
-//! again, which takes a fresh preview under the same desktop request and
-//! request ID. Any other answer closes the dialog: the operation area
+//! preview showed has changed and the library offers a new preview, the
+//! dialog shows that answer and Prepare again, which takes a fresh
+//! preview under the same desktop request and request ID. Any other answer closes the dialog: the operation area
 //! holds it. Text is the envelope's message, the code and fixed strings.
 
 use gpui_kit::{
@@ -32,7 +32,7 @@ use manyhands::{
     repository::{
         ConfirmationId, HostReplacementDto, PrepareDataDto, PreviewDetailsDto, PreviewDto,
     },
-    results::{Envelope, ResultCode},
+    results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
@@ -65,6 +65,23 @@ pub(crate) const STALE_CODES: [ResultCode; 5] = [
     ResultCode::ConfirmationNotFound,
     ResultCode::ExternalChange,
 ];
+
+/// Whether an execute answered `code` with `recovery` is shown with
+/// Prepare again. An external change is, only when the library offers
+/// `request.prepare`: on a record left accepted it offers
+/// `repo.inspect`, and a new preview would re-enter that record. The
+/// answer then closes the dialog, and the operation area shows its
+/// message and recovery. A spent or mismatched confirmation comes with
+/// no action, the library asking for a new preview (design,
+/// Confirmation Dialog).
+pub(crate) fn offers_prepare_again(code: ResultCode, recovery: &[RecoveryAction]) -> bool {
+    match code {
+        ResultCode::ExternalChange => recovery
+            .iter()
+            .any(|action| action.action == RecoveryActionKind::RequestPrepare),
+        code => STALE_CODES.contains(&code),
+    }
+}
 
 /// Opens the confirmation dialog for `intent`: prepares it, shows the
 /// preview and, on Confirm, submits it once as a user job. Closing it
@@ -360,7 +377,9 @@ impl ConfirmDialog {
         }
         match &request.state {
             RequestState::Queued | RequestState::Running { .. } => {}
-            RequestState::Finished(_, code, _, _, message) if STALE_CODES.contains(code) => {
+            RequestState::Finished(_, code, _, recovery, message)
+                if offers_prepare_again(*code, recovery) =>
+            {
                 self.phase = Phase::Stale {
                     code: *code,
                     message: message.clone(),

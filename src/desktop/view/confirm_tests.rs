@@ -7,10 +7,13 @@ use std::{path::PathBuf, time::Duration};
 use gpui_kit::{TestAppContext, component::dialog::Confirm};
 use manyhands::{
     repository::{LeaseKind, RepositoryService},
-    results::{Outcome, ResultCode},
+    results::{Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
-use super::{CLOSE, PREPARE_AGAIN, RETRY, STALE_CODES, SUBMITTED, local_time, prepare_again};
+use super::{
+    CLOSE, PREPARE_AGAIN, RETRY, STALE_CODES, SUBMITTED, local_time, offers_prepare_again,
+    prepare_again,
+};
 use crate::desktop::{
     services::{
         JobKind,
@@ -123,6 +126,18 @@ async fn a_stale_preview_is_shown_with_prepare_again(cx: &mut TestAppContext) {
     shell.until_ended(id, cx).await;
     let (_, code) = finished(&shell, id, cx);
     assert!(STALE_CODES.contains(&code), "{}", code.as_str());
+    // The library's own answer offers a new preview: the record was not
+    // left accepted.
+    let operations = shell.operations(cx);
+    let offered = operations.read_with(cx, |operations, _| {
+        match &operations.request(id).unwrap().state {
+            RequestState::Finished(_, _, _, recovery, _) => recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::RequestPrepare),
+            _ => false,
+        }
+    });
+    assert!(offered, "{}", code.as_str());
     assert_eq!(
         shell.label("confirm-code", cx).as_deref(),
         Some(code.as_str())
@@ -177,6 +192,28 @@ fn a_busy_preview_offers_retry_which_prepares_again(cx: &mut TestAppContext) {
     assert!(shell.present("confirm-command-name", cx));
     assert!(!shell.present("confirm-retry", cx));
     assert!(shell.requests(cx, |_| true).is_empty());
+}
+
+/// An external change offers Prepare again only when the library offers
+/// `request.prepare`. On a record left accepted it offers
+/// `repo.inspect` instead (`outcome.rs`, `ExternalChange`): a new preview
+/// would re-enter the accepted record, so the answer is shown with its
+/// own recovery, in the operation area. No local recipe leaves the
+/// record accepted, so this is a model test over the envelope's recovery.
+#[test]
+fn an_external_change_offers_prepare_again_only_when_the_library_does() {
+    let prepare = [RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
+    let inspect = [RecoveryAction::new(RecoveryActionKind::RepoInspect, [])];
+    assert!(offers_prepare_again(ResultCode::ExternalChange, &prepare));
+    assert!(!offers_prepare_again(ResultCode::ExternalChange, &inspect));
+    assert!(!offers_prepare_again(ResultCode::ExternalChange, &[]));
+    // A confirmation the library asks to be prepared again.
+    assert!(offers_prepare_again(
+        ResultCode::ConfirmationExpired,
+        &prepare
+    ));
+    // Not a stale answer at all.
+    assert!(!offers_prepare_again(ResultCode::Busy, &prepare[..0]));
 }
 
 /// The expiry is shown as a wall-clock time; an unreadable one as given.
