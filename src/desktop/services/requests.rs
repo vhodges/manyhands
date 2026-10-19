@@ -416,6 +416,10 @@ pub(crate) struct DesktopRequest {
     pub intent: Intent,
     pub confirmation: Option<ConfirmationId>,
     pub lane: Lane,
+    /// Which submission of the request this is: 1, then one more for each
+    /// retry or Prepare again. A `busy` background job taken again is
+    /// the same attempt.
+    pub attempt: u32,
     pub state: RequestState,
 }
 

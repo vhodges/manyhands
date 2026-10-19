@@ -18,6 +18,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     thread,
+    time::{Duration, Instant},
 };
 
 use futures::channel::{mpsc, oneshot};
@@ -31,7 +32,7 @@ use manyhands::{
         },
         transport::SshAuthority,
     },
-    results::Envelope,
+    results::{Envelope, ResultCode},
 };
 
 use super::{
@@ -132,6 +133,24 @@ enum Work {
 struct Job {
     id: DesktopRequestId,
     work: Work,
+    lane: Lane,
+    /// How many times a background job answered `busy` has been
+    /// admitted again.
+    busy_retries: usize,
+    /// A job admitted again after `busy` is not taken before this.
+    not_before: Option<Instant>,
+}
+
+impl Job {
+    fn new(id: DesktopRequestId, work: Work, lane: Lane) -> Self {
+        Self {
+            id,
+            work,
+            lane,
+            busy_retries: 0,
+            not_before: None,
+        }
+    }
 }
 
 /// What a retry rebuilds the job from.
@@ -140,6 +159,8 @@ struct Submitted {
     intent: Intent,
     confirmation: Option<ConfirmationId>,
     lane: Lane,
+    /// The attempt the last `Queued` event announced.
+    attempt: u32,
 }
 
 /// The job the worker is running.
@@ -267,6 +288,7 @@ impl WorkerHandle {
                 intent: intent.clone(),
                 confirmation,
                 lane,
+                attempt: 1,
             },
         );
         shared.send(WorkerEvent::Queued(DesktopRequest {
@@ -275,6 +297,7 @@ impl WorkerHandle {
             intent: intent.clone(),
             confirmation,
             lane,
+            attempt: 1,
             state: RequestState::Queued,
         }));
         let work = Work::Execute {
@@ -284,7 +307,7 @@ impl WorkerHandle {
             secret,
             cancel: CancellationToken::new(),
         };
-        admit(shared, &mut state, Job { id, work }, lane);
+        admit(shared, &mut state, Job::new(id, work, lane));
         id
     }
 
@@ -300,9 +323,14 @@ impl WorkerHandle {
     /// Queues the request `id` again, under its own request ID, with the
     /// confirmation of a preview prepared again: the attempt that met a
     /// stale confirmation left no record, so the library takes this one
-    /// as the request's first call. False, and nothing queued, when a
-    /// retry would be left alone.
-    pub(crate) fn reconfirm(&self, id: DesktopRequestId, confirmation: ConfirmationId) -> bool {
+    /// as the request's first call. Gives the attempt the new `Queued`
+    /// event announces; `None`, and nothing queued, when a retry would be
+    /// left alone.
+    pub(crate) fn reconfirm(
+        &self,
+        id: DesktopRequestId,
+        confirmation: ConfirmationId,
+    ) -> Option<u32> {
         self.requeue(id, Some(confirmation), None)
     }
 
@@ -311,7 +339,7 @@ impl WorkerHandle {
         id: DesktopRequestId,
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
-    ) -> bool {
+    ) -> Option<u32> {
         let shared = self.shared();
         let mut state = shared.lock();
         if state.closed
@@ -321,19 +349,19 @@ impl WorkerHandle {
                 .as_ref()
                 .is_some_and(|running| running.id == id)
         {
-            return false;
+            return None;
         }
-        let Some(submitted) = state.submitted.get_mut(&id) else {
-            return false;
-        };
+        let submitted = state.submitted.get_mut(&id)?;
+        submitted.attempt += 1;
         if confirmation.is_some() {
             submitted.confirmation = confirmation;
         }
-        let (request_id, intent, confirmation, lane) = (
+        let (request_id, intent, confirmation, lane, attempt) = (
             submitted.request_id,
             submitted.intent.clone(),
             submitted.confirmation,
             submitted.lane,
+            submitted.attempt,
         );
         shared.send(WorkerEvent::Queued(DesktopRequest {
             id,
@@ -341,6 +369,7 @@ impl WorkerHandle {
             intent: intent.clone(),
             confirmation,
             lane,
+            attempt,
             state: RequestState::Queued,
         }));
         let work = Work::Execute {
@@ -350,8 +379,19 @@ impl WorkerHandle {
             secret,
             cancel: CancellationToken::new(),
         };
-        admit(shared, &mut state, Job { id, work }, lane);
-        true
+        admit(shared, &mut state, Job::new(id, work, lane));
+        Some(attempt)
+    }
+
+    /// How many background jobs wait to be taken again after `busy`.
+    #[cfg(test)]
+    pub(crate) fn backing_off(&self) -> usize {
+        self.shared()
+            .lock()
+            .background
+            .iter()
+            .filter(|job| job.not_before.is_some())
+            .count()
     }
 
     /// Stops the request `id` if it still can be.
@@ -387,7 +427,7 @@ impl WorkerHandle {
         let mut state = shared.lock();
         let id = next_id(&mut state);
         let work = Work::ObserveHost { root, authority };
-        admit(shared, &mut state, Job { id, work }, Lane::User);
+        admit(shared, &mut state, Job::new(id, work, Lane::User));
         id
     }
 
@@ -427,12 +467,12 @@ fn next_id(state: &mut State) -> DesktopRequestId {
 
 /// Queues `job`, unless quitting has closed the queue: then it is removed
 /// at once.
-fn admit(shared: &Shared, state: &mut State, job: Job, lane: Lane) {
+fn admit(shared: &Shared, state: &mut State, job: Job) {
     if state.closed {
         shared.send(WorkerEvent::Removed(job.id));
         return;
     }
-    match lane {
+    match job.lane {
         Lane::User => state.user.push_back(job),
         Lane::Background => state.background.push_back(job),
     }
@@ -444,7 +484,13 @@ fn admit(shared: &Shared, state: &mut State, job: Job, lane: Lane) {
 fn run(shared: &Shared, backend: &dyn Backend) {
     let mut session = SessionCredentials::new(DesktopProvider);
     while let Some(job) = take(shared) {
-        let Job { id, work } = job;
+        let Job {
+            id,
+            work,
+            lane,
+            busy_retries,
+            ..
+        } = job;
         match work {
             Work::Execute {
                 request_id,
@@ -474,6 +520,35 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                     &mut progress,
                     &cancel,
                 );
+                // A background job answered `busy` waits and is taken again,
+                // behind every user job, with no event: the UI sees one
+                // request that finishes once.
+                if lane == Lane::Background
+                    && envelope.code == ResultCode::Busy
+                    && let Some(delay) = BUSY_RETRY_DELAYS.get(busy_retries)
+                {
+                    let mut state = shared.lock();
+                    state.running = None;
+                    let work = Work::Execute {
+                        request_id,
+                        intent,
+                        confirmation,
+                        secret: None,
+                        cancel,
+                    };
+                    admit(
+                        shared,
+                        &mut state,
+                        Job {
+                            id,
+                            work,
+                            lane,
+                            busy_retries: busy_retries + 1,
+                            not_before: Some(Instant::now() + *delay),
+                        },
+                    );
+                    continue;
+                }
                 // The job is over before the UI hears so, so a quit that
                 // hears it finds the worker idle.
                 finish(shared);
@@ -500,10 +575,15 @@ fn take(shared: &Shared) -> Option<Job> {
         if state.shut_down {
             return None;
         }
+        let now = Instant::now();
+        let ready = state
+            .background
+            .iter()
+            .position(|job| job.not_before.is_none_or(|at| at <= now));
         if let Some(job) = state
             .user
             .pop_front()
-            .or_else(|| state.background.pop_front())
+            .or_else(|| ready.and_then(|at| state.background.remove(at)))
         {
             let cancel = match &job.work {
                 Work::Execute { cancel, .. } => Some(cancel.clone()),
@@ -516,12 +596,35 @@ fn take(shared: &Shared) -> Option<Job> {
             });
             return Some(job);
         }
-        state = shared
-            .changed
-            .wait(state)
-            .unwrap_or_else(PoisonError::into_inner);
+        // Nothing is ready: wait for a change, or for the first job
+        // waiting after `busy` to be due.
+        let due = state
+            .background
+            .iter()
+            .filter_map(|job| job.not_before)
+            .min();
+        state = match due {
+            Some(due) => {
+                shared
+                    .changed
+                    .wait_timeout(state, due.saturating_duration_since(now))
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
+            }
+            None => shared
+                .changed
+                .wait(state)
+                .unwrap_or_else(PoisonError::into_inner),
+        };
     }
 }
+
+/// The waits before a background job answered `busy` is taken again.
+const BUSY_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+];
 
 fn finish(shared: &Shared) {
     shared.lock().running = None;

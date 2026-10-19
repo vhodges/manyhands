@@ -30,7 +30,10 @@ use crate::desktop::{
         fixtures::{Fixture, abandon_through, item_id, ticket_path, ticket_source},
         git_home,
     },
-    view::harness::{Shell, key},
+    view::{
+        harness::{Shell, key},
+        workspace::Region,
+    },
 };
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
@@ -642,6 +645,10 @@ async fn a_pending_local_operation_offers_resume_and_abandon_confirms_it(cx: &mu
         shell.label("pending-empty", cx).as_deref(),
         Some(NOTHING_PENDING)
     );
+    // The dialog gave focus back to Abandon, whose row is now gone: focus
+    // is on the operation area itself, not nowhere.
+    shell.run(cx);
+    assert!(shell.present(Region::Operations.ring_id(), cx));
 }
 
 /// Resume runs `operation resume` as a user job; the operation finishes

@@ -30,6 +30,7 @@ fn request(id: u64) -> DesktopRequest {
         },
         confirmation: None,
         lane: Lane::User,
+        attempt: 1,
         state: RequestState::Queued,
     }
 }

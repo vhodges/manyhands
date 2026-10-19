@@ -48,6 +48,7 @@ pub(crate) const CLOSE: &str = "Close";
 pub(crate) const PREPARE_AGAIN: &str = "Prepare again";
 pub(crate) const PREPARING: &str = "Preparing the preview";
 pub(crate) const SUBMITTED: &str = "Submitted";
+pub(crate) const NOT_QUEUED: &str = "The request cannot be submitted again now: it is still queued or running, or Manyhands is quitting.";
 pub(crate) const SECRET_REQUIRED: &str = "The passphrase is needed again.";
 pub(crate) const REQUESTED_KEY: &str = "Requested key";
 pub(crate) const PINNED_KEY: &str = "Pinned key";
@@ -151,8 +152,9 @@ enum Phase {
         message: String,
         replacement: Option<HostReplacementDto>,
     },
-    /// The command could not be made; nothing was asked of the library.
-    NotBuilt(&'static str),
+    /// Nothing was asked of the library: the command could not be made,
+    /// or the request could not be queued again.
+    Message(&'static str),
 }
 
 pub(crate) struct ConfirmDialog {
@@ -161,6 +163,9 @@ pub(crate) struct ConfirmDialog {
     origin: FocusHandle,
     /// The desktop request this dialog submitted, or prepares again.
     request: Option<DesktopRequestId>,
+    /// The attempt of `request` this dialog submitted: an answer to an
+    /// earlier one is not this dialog's to show.
+    attempt: u32,
     preview: Option<(Box<PreviewDto>, ConfirmationId)>,
     phase: Phase,
     generations: Generations,
@@ -185,6 +190,7 @@ impl ConfirmDialog {
             services,
             origin,
             request,
+            attempt: 0,
             preview: None,
             phase: Phase::Preparing,
             generations: Generations::default(),
@@ -203,12 +209,12 @@ impl ConfirmDialog {
         let mutation = match self.intent.build(None, || services.key_store()) {
             Ok(mutation) => mutation,
             Err(NotBuilt::KeyStoreUnavailable) => {
-                self.phase = Phase::NotBuilt(KEY_STORE_UNAVAILABLE);
+                self.phase = Phase::Message(KEY_STORE_UNAVAILABLE);
                 cx.notify();
                 return;
             }
             Err(NotBuilt::MissingSecret) => {
-                self.phase = Phase::NotBuilt(SECRET_REQUIRED);
+                self.phase = Phase::Message(SECRET_REQUIRED);
                 cx.notify();
                 return;
             }
@@ -292,12 +298,16 @@ impl ConfirmDialog {
             None => {
                 self.request =
                     Some(worker.submit(self.intent.clone(), Lane::User, Some(confirmation), None));
+                self.attempt = 1;
             }
-            Some(id) => {
-                if !worker.reconfirm(id, confirmation) {
+            Some(id) => match worker.reconfirm(id, confirmation) {
+                Some(attempt) => self.attempt = attempt,
+                None => {
+                    self.phase = Phase::Message(NOT_QUEUED);
+                    cx.notify();
                     return;
                 }
-            }
+            },
         }
         self.phase = Phase::Submitted;
         cx.notify();
@@ -323,6 +333,11 @@ impl ConfirmDialog {
         let Some(request) = operations.request(id) else {
             return;
         };
+        // The model still holds an earlier attempt until this one's
+        // `Queued` event arrives through the worker's channel.
+        if request.attempt != self.attempt {
+            return;
+        }
         match &request.state {
             RequestState::Queued | RequestState::Running { .. } => {}
             RequestState::Finished(_, code, _, _, message) if STALE_CODES.contains(code) => {
@@ -680,7 +695,7 @@ impl Render for ConfirmDialog {
                 buttons =
                     buttons.child(Self::button("confirm-cancel", CLOSE, false, false, cancel));
             }
-            Phase::NotBuilt(why) => {
+            Phase::Message(why) => {
                 body = body.child(text("confirm-message", *why).text_sm());
                 buttons =
                     buttons.child(Self::button("confirm-cancel", CLOSE, false, false, cancel));

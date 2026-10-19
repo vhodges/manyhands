@@ -4,13 +4,13 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, component::dialog::Confirm};
 use manyhands::{
-    repository::RepositoryService,
+    repository::{LeaseKind, RepositoryService},
     results::{Outcome, ResultCode},
 };
 
-use super::{PREPARE_AGAIN, STALE_CODES, SUBMITTED, local_time};
+use super::{PREPARE_AGAIN, STALE_CODES, SUBMITTED, local_time, prepare_again};
 use crate::desktop::{
     services::{
         JobKind,
@@ -156,4 +156,63 @@ fn the_expiry_is_shown_in_local_time() {
     assert_eq!(time.len(), "2026-10-19 12:34:56".len(), "{shown}");
     assert!(time.ends_with(":56"), "{shown}");
     assert_eq!(local_time("not a time"), "not a time");
+}
+
+/// Prepare again re-queues the same request, whose `Queued` event comes
+/// through the worker's channel. A notify of the request model before it
+/// arrives finds the earlier attempt's answer still there: the dialog is
+/// not that answer's to show. It stays Submitted and closes once this
+/// attempt succeeds.
+#[gpui_kit::test]
+async fn an_answer_to_an_earlier_attempt_is_not_shown_after_prepare_again(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, _) = stranded(cx);
+
+    // The first attempt is answered `busy`: another call holds the lease.
+    shell.click(("pending-abandon", 0usize), cx);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &root,
+        shell.fixture.data_dir(),
+        LeaseKind::Repository,
+    )
+    .unwrap();
+    shell.click("confirm-ok", cx);
+    let id = abandons(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    assert_eq!(finished(&shell, id, cx).1, ResultCode::Busy);
+    drop(lease);
+    assert!(!shell.present("confirm-dialog", cx));
+
+    // Prepare again, as the operation area's `request.prepare` does.
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    shell.visual(cx).update(|window, cx| {
+        let origin = cx.focus_handle();
+        prepare_again(id, origin, &services, window, cx);
+    });
+    shell.run(cx);
+    assert!(shell.present("confirm-ok", cx));
+
+    // Confirm, and notify the model before the re-queue's event is
+    // applied: both in one update, so the worker's channel is not drained.
+    let operations = shell.operations(cx);
+    shell.visual(cx).update(|window, cx| {
+        window.dispatch_action(Box::new(Confirm { secondary: false }), cx);
+        operations.update(cx, |_, cx| cx.notify());
+    });
+    shell.frame(cx, |_, _| ());
+    assert_eq!(shell.label("confirm-state", cx).as_deref(), Some(SUBMITTED));
+    assert!(!shell.present("confirm-prepare-again", cx));
+
+    shell
+        .until(cx, move |operations| {
+            operations.request(id).is_some_and(|request| {
+                request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
+    assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
+    assert!(!shell.present("confirm-dialog", cx));
+    assert_eq!(abandons(&shell, cx), [id]);
 }

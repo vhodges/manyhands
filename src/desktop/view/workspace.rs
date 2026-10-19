@@ -13,7 +13,10 @@
 //! is not waited for, and the library's journals recover what it was
 //! doing.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -152,6 +155,8 @@ pub(crate) struct Workspace {
     /// The focus of each pending row's Abandon, so the dialog can give it
     /// back.
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
+    /// The Abandon controls the frame being drawn shows.
+    abandon_drawn: HashSet<(RepoKey, String)>,
     _operations: Subscription,
     _ticket_events: Subscription,
 }
@@ -208,6 +213,7 @@ impl Workspace {
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),
+            abandon_drawn: HashSet::new(),
             _operations: operations,
             _ticket_events: ticket_events,
         };
@@ -615,6 +621,8 @@ impl Workspace {
     /// is read again: its pending operations, its lists when it is
     /// selected, and the repository list, whose index state it shows.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
+        // The operation area shows the model.
+        cx.notify();
         if matches!(self.quit, QuitPhase::Finishing(_))
             && self.services.worker().quit() == QuitState::Idle
         {
@@ -727,10 +735,30 @@ impl Workspace {
         operation_id: &str,
         cx: &mut Context<Self>,
     ) -> FocusHandle {
+        let key = (root.clone(), operation_id.to_owned());
+        self.abandon_drawn.insert(key.clone());
         self.abandon_focus
-            .entry((root.clone(), operation_id.to_owned()))
+            .entry(key)
             .or_insert_with(|| cx.focus_handle())
             .clone()
+    }
+
+    /// Lets go of the focus of every Abandon this frame does not draw. If
+    /// one of them held focus, its row is gone (abandoned, resumed, or
+    /// read again without it): focus goes to the operation area itself,
+    /// the region the control was in (design, Layout And Keyboard).
+    fn prune_abandon_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let drawn = std::mem::take(&mut self.abandon_drawn);
+        let mut lost = false;
+        self.abandon_focus.retain(|key, focus| {
+            let kept = drawn.contains(key);
+            lost |= !kept && focus.is_focused(window);
+            kept
+        });
+        if lost {
+            let fallback = self.regions[Region::Operations.index()].clone();
+            window.defer(cx, move |window, cx| window.focus(&fallback, cx));
+        }
     }
 
     #[cfg(test)]
@@ -1040,6 +1068,7 @@ impl Render for Workspace {
             );
         let session = self.session_section(cx);
         let pending = self.pending_section(window, cx);
+        self.prune_abandon_focus(window, cx);
         let operations = self
             .region(
                 Region::Operations,
