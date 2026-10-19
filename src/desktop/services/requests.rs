@@ -10,7 +10,7 @@
 //!
 //! Nothing here derives `Debug`: an intent holds what the user typed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use manyhands::{
     repository::{
@@ -333,6 +333,31 @@ impl Intent {
         }
     }
 
+    /// The repository the command is about, when it is about one.
+    pub(crate) fn root(&self) -> Option<&Path> {
+        match self {
+            Self::RepoCreate { root, .. }
+            | Self::RepoEnable { root, .. }
+            | Self::RepoRemove { root }
+            | Self::RepoIdentitySet { root, .. }
+            | Self::RemoteAdd { root, .. }
+            | Self::RemoteRemove { root, .. }
+            | Self::RemoteSelect { root, .. }
+            | Self::IndexRefresh { root }
+            | Self::IndexRebuild { root }
+            | Self::HostApprove { root, .. }
+            | Self::HostReplace { root, .. }
+            | Self::OperationResume { root, .. }
+            | Self::OperationAbandon { root, .. } => Some(root),
+            Self::KeyGenerate { .. }
+            | Self::KeyImport { .. }
+            | Self::KeySelect { .. }
+            | Self::KeyClear
+            | Self::KeyRemove { .. }
+            | Self::KeyDelete { .. } => None,
+        }
+    }
+
     /// The kind the backend's seam knows the job by.
     pub(crate) fn job_kind(&self) -> JobKind {
         match self {
@@ -383,6 +408,7 @@ impl From<NotBuilt> for NotSent {
 }
 
 /// What the operation area lists: one request of this session.
+#[derive(Clone)]
 pub(crate) struct DesktopRequest {
     pub id: DesktopRequestId,
     /// The library's replay identity, kept for every attempt.
@@ -394,6 +420,7 @@ pub(crate) struct DesktopRequest {
 }
 
 /// Where a request stands.
+#[derive(Clone)]
 pub(crate) enum RequestState {
     Queued,
     Running {
@@ -405,16 +432,12 @@ pub(crate) enum RequestState {
     },
     /// The envelope's outcome, code, effects, recovery and message: what
     /// is shown, and nothing that could hold input.
-    Finished(
-        Outcome,
-        ResultCode,
-        #[allow(dead_code)] // The operation area shows effects (Task 7).
-        Effects,
-        Vec<RecoveryAction>,
-        String,
-    ),
-    /// The user dismissed it, or it was removed from the queue before it
-    /// ran.
+    Finished(Outcome, ResultCode, Effects, Vec<RecoveryAction>, String),
+    /// It was removed from the queue before it ran: cancelled while it
+    /// waited, or emptied from the queue on quit. Nothing was asked of the
+    /// library.
+    Removed,
+    /// The user dismissed it from the operation area.
     Dismissed,
     /// It was never sent to the library.
     NotSent(NotSent),

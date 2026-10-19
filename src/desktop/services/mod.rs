@@ -80,7 +80,6 @@ pub(crate) enum JobKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct KeyStoreUnavailable;
 
-#[allow(dead_code)] // The Keys page arrives with Task 15.
 pub(crate) const KEY_STORE_UNAVAILABLE: &str = "Manyhands could not find your SSH key store.";
 
 /// What the desktop calls the library through.
@@ -128,6 +127,10 @@ pub(crate) struct Services {
     backend: Arc<dyn Backend>,
     worker: WorkerHandle,
     operations: Entity<Operations>,
+    /// Whether the workspace refreshes every listed repository once its
+    /// list first loads. Tests that do not wait for the worker turn it
+    /// off.
+    launch_refresh: bool,
 }
 
 impl Services {
@@ -154,7 +157,25 @@ impl Services {
             backend,
             worker,
             operations,
+            launch_refresh: true,
         }
+    }
+
+    /// The same services, with no refresh at launch: for a test that
+    /// does not wait for the worker.
+    #[cfg(test)]
+    pub(crate) fn without_launch_refresh(mut self) -> Self {
+        self.launch_refresh = false;
+        self
+    }
+
+    pub(crate) fn launch_refresh(&self) -> bool {
+        self.launch_refresh
+    }
+
+    /// The key store a key command is built with.
+    pub(crate) fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable> {
+        self.backend.key_store()
     }
 
     pub(crate) fn worker(&self) -> &WorkerHandle {

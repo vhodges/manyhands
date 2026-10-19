@@ -38,6 +38,9 @@ pub(crate) enum ViewScope {
     Tab(TabId),
     Settings(SettingsPage),
     Operations(RepoKey),
+    /// A confirmation dialog's preview. Each dialog keeps its own
+    /// generations, so one scope serves them all.
+    Confirmation,
 }
 
 /// A scope and the generation it was at when the request was made.

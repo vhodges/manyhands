@@ -15,7 +15,8 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        FolderCreateInput, IndexRefreshInput, Mutation, MutationCall, MutationDataDto, NoProgress,
+        FailurePoint, FolderCreateInput, IndexRefreshInput, Mutation, MutationCall,
+        MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
         PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoRemoveInput, RepositoryService,
         RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
@@ -443,4 +444,102 @@ pub(crate) fn refresh_through(service: &RepositoryService, root: &Path) {
         &CancellationToken::new(),
     );
     assert_eq!(refreshed.code, ResultCode::Ok, "{}", refreshed.message);
+}
+
+impl Fixture {
+    /// Saves the ticket `id` of `root` with `title` through a service of
+    /// its own, opened over this fixture's data directory with
+    /// `FailurePoint::BeforeIndexTransactionCommit`: the recipe of
+    /// `tests/mutation_confirmation/abandon.rs`
+    /// (`an_abandoned_operation_that_had_committed_keeps_its_commit_and_says_so`)
+    /// and of `tests/mutation_replay/resume.rs` (`save_owing_its_hand_off`).
+    /// The save commits, its index hand-off fails, and its local operation
+    /// is left pending, waiting to be resumed. Gives its operation ID.
+    pub(crate) fn strand_ticket_save(&self, root: &Path, id: &str, title: &str) -> String {
+        let failing = RepositoryService::open_at_with_failure_point_for_testing(
+            self.data_dir(),
+            FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap();
+        let repo = failing.resolve_repository(root).unwrap();
+        let shown = failing.show_item(&repo, &item_id(id)).unwrap();
+        let owed = failing.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation: Mutation::TicketSave(TicketSaveInput {
+                    root: root.to_owned(),
+                    id: item_id(id),
+                    draft: TicketDraft {
+                        title: title.to_owned(),
+                        ticket_type: shown.ticket_type.unwrap(),
+                        status: shown.status.unwrap(),
+                        project: shown.project,
+                        team: shown.team,
+                        body: shown.body.unwrap_or_default(),
+                    },
+                    deps: RelationshipWrite::Unchanged,
+                    parent: RelationshipWrite::Unchanged,
+                    observation: shown.observation.unwrap(),
+                }),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(owed.code, ResultCode::DiscoveryPending, "{}", owed.message);
+        owed.operation_id.expect("the save's operation")
+    }
+}
+
+/// Executes `mutation` through `service`, with no confirmation: a second
+/// actor's call, on a service other than the desktop's.
+fn execute_through(
+    service: &RepositoryService,
+    confirmation: Option<ConfirmationId>,
+    mutation: Mutation,
+) -> Envelope<MutationDataDto> {
+    service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation,
+            mutation,
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    )
+}
+
+/// Abandons `root`'s pending operation `operation_id` through `service`'s
+/// own `prepare` and `execute` of `operation abandon`: a second actor.
+pub(crate) fn abandon_through(service: &RepositoryService, root: &Path, operation_id: &str) {
+    let input = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: root.to_owned(),
+            operation_id: OperationId::parse(operation_id).unwrap(),
+        })
+    };
+    let prepared = service.prepare(&input());
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("operation abandon gave no preview");
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let abandoned = execute_through(service, Some(confirmation), input());
+    assert_eq!(abandoned.code, ResultCode::Ok, "{}", abandoned.message);
+}
+
+/// Resumes `root`'s pending operation `operation_id` through `service`:
+/// a second actor's `operation resume`, which finishes it.
+pub(crate) fn resume_through(service: &RepositoryService, root: &Path, operation_id: &str) {
+    let resumed = execute_through(
+        service,
+        None,
+        Mutation::OperationResume(OperationResumeInput {
+            root: root.to_owned(),
+            operation_id: OperationId::parse(operation_id).unwrap(),
+        }),
+    );
+    assert_eq!(resumed.code, ResultCode::Ok, "{}", resumed.message);
 }

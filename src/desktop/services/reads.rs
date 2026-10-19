@@ -96,7 +96,6 @@ impl Services {
     /// envelope to `apply` on the asking entity, with `stamp`. A prepare
     /// answers with an envelope, not a `ReadError`, so it is not a `read`
     /// and is not retried; the envelope's code says what happened.
-    #[allow(dead_code)] // The views that prepare arrive with Task 7.
     pub(crate) fn prepare<V: 'static>(
         &self,
         stamp: Stamp,

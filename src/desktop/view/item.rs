@@ -210,7 +210,11 @@ impl ItemPane {
     }
 
     /// A worker event arrived: once the refresh Refresh asked for has
-    /// ended, however it ended, read the item again.
+    /// ended, however it ended, read the item again: finished, not sent,
+    /// or removed from the queue, by a cancel or on quit. A request the
+    /// model does not hold yet has not ended: its `Queued` event comes
+    /// through the worker's channel after `submit` returns, and another
+    /// event can reach the model first.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.refreshing else {
             return;

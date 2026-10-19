@@ -1,14 +1,24 @@
 use std::path::PathBuf;
 
 use manyhands::{
-    repository::{ProgressEvent, ProgressStage, RequestId},
-    results::{Effects, Envelope, ResultCode, Scope},
+    repository::{
+        OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+        OperationOwner, ProgressEvent, ProgressStage, RequestId,
+    },
+    results::{Effects, Envelope, RecoveryActionKind, ResultCode, Scope},
 };
 
-use super::Operations;
-use crate::desktop::services::{
-    requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
-    worker::{NotSent, WorkerEvent},
+use super::{
+    Operations, RecoveryControl, ResumeOffer, SYNCHRONIZATION_UNAVAILABLE, abandon_offered,
+    recovery_control, recovery_label, resume_offer,
+};
+use crate::desktop::{
+    model::list_state::LABEL_EMPTY,
+    services::{
+        ReadFailure, ReadResult,
+        requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+        worker::{NotSent, WorkerEvent},
+    },
 };
 
 fn request(id: u64) -> DesktopRequest {
@@ -137,7 +147,7 @@ fn removed_and_unsent_requests_say_so() {
     ));
     assert!(matches!(
         operations.request(DesktopRequestId(1)).unwrap().state,
-        RequestState::Dismissed
+        RequestState::Removed
     ));
     assert!(matches!(
         operations.request(DesktopRequestId(2)).unwrap().state,
@@ -175,4 +185,183 @@ fn a_finished_request_can_be_dismissed() {
         operations.request(DesktopRequestId(2)).unwrap().state,
         RequestState::Running { .. }
     ));
+}
+
+#[test]
+fn a_removed_request_is_not_a_dismissed_one_and_can_be_dismissed() {
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    operations.apply(WorkerEvent::Removed(DesktopRequestId(1)));
+    assert!(matches!(
+        operations.request(DesktopRequestId(1)).unwrap().state,
+        RequestState::Removed
+    ));
+    operations.dismiss(DesktopRequestId(1));
+    assert!(matches!(
+        operations.request(DesktopRequestId(1)).unwrap().state,
+        RequestState::Dismissed
+    ));
+}
+
+/// A finished request says its repository may have changed, once; a
+/// request that never ran says nothing.
+#[test]
+fn a_finished_request_marks_its_repository_changed() {
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    operations.apply(WorkerEvent::Queued(request(2)));
+    operations.apply(WorkerEvent::Removed(DesktopRequestId(2)));
+    assert!(operations.take_changed().is_empty());
+    let envelope = Envelope::failure("index refresh", Scope::default(), ResultCode::Busy, vec![]);
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(1),
+        Box::new(envelope),
+    ));
+    assert_eq!(
+        operations.take_changed().into_iter().collect::<Vec<_>>(),
+        ["/fixture/a".to_owned()]
+    );
+    assert!(operations.take_changed().is_empty());
+    operations.mark_changed("/fixture/b".to_owned());
+    assert_eq!(
+        operations.take_changed().into_iter().collect::<Vec<_>>(),
+        ["/fixture/b".to_owned()]
+    );
+}
+
+fn operation(
+    family: OperationFamily,
+    action: OperationAction,
+    next: Option<OperationNextAction>,
+) -> OperationDto {
+    OperationDto {
+        operation_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_owned()),
+        family,
+        owner: OperationOwner::Repository,
+        action,
+        state: "pending".to_owned(),
+        completed_step: None,
+        next_action: next,
+        item_id: None,
+        key_id: None,
+        worktree: None,
+        updated_at: None,
+        failure_code: None,
+    }
+}
+
+fn list(items: Vec<OperationDto>) -> OperationListDto {
+    OperationListDto {
+        items,
+        complete: true,
+    }
+}
+
+/// Each repository's pending operations load under their own stamp; a
+/// reload's earlier read is dropped, and a repository that is no longer
+/// listed is let go.
+#[test]
+fn pending_operations_load_per_repository_and_drop_stale_reads() {
+    let mut operations = Operations::default();
+    let first = operations.load_pending("/fixture/a".to_owned());
+    let second = operations.load_pending("/fixture/a".to_owned());
+    let other = operations.load_pending("/fixture/b".to_owned());
+    let row = operation(
+        OperationFamily::Local,
+        OperationAction::SaveTicket,
+        Some(OperationNextAction::Resume),
+    );
+    assert!(!operations.apply_pending(first, ReadResult::Ok(list(vec![row.clone()]))));
+    assert!(operations.apply_pending(second, ReadResult::Ok(list(vec![row]))));
+    assert!(operations.apply_pending(other, ReadResult::Ok(list(vec![]))));
+    assert_eq!(
+        operations.pending()["/fixture/a"]
+            .rows()
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    assert_eq!(operations.pending()["/fixture/b"].label(), LABEL_EMPTY);
+
+    // A repository that cannot be found is not resolved, and lists nothing.
+    let gone = operations.load_pending("/fixture/b".to_owned());
+    assert!(operations.apply_pending(
+        gone,
+        ReadResult::Failed(ReadFailure {
+            code: ResultCode::InvalidPath,
+            recovery: vec![],
+        })
+    ));
+    assert!(!operations.pending().contains_key("/fixture/b"));
+
+    operations.retain_pending(&[]);
+    assert!(operations.pending().is_empty());
+}
+
+/// Resume is offered for a local operation waiting to be resumed; a
+/// synchronization waiting for it shows Resume unavailable, with why.
+/// No local recipe leaves a pending synchronization, so the row is built
+/// here; production code never builds one.
+#[test]
+fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
+    let local = operation(
+        OperationFamily::Local,
+        OperationAction::SaveTicket,
+        Some(OperationNextAction::Resume),
+    );
+    assert_eq!(resume_offer(&local), ResumeOffer::Offered);
+    assert!(abandon_offered(&local));
+
+    for (family, action) in [
+        (OperationFamily::Remote, OperationAction::SynchronizeContext),
+        (OperationFamily::Remote, OperationAction::SynchronizePrimary),
+        (OperationFamily::Local, OperationAction::SynchronizeContext),
+    ] {
+        let synchronization = operation(family, action, Some(OperationNextAction::Resume));
+        assert_eq!(
+            resume_offer(&synchronization),
+            ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
+        );
+        assert_eq!(
+            SYNCHRONIZATION_UNAVAILABLE,
+            "Synchronization is not available yet"
+        );
+        assert!(!abandon_offered(&synchronization));
+    }
+
+    let waiting = operation(OperationFamily::Local, OperationAction::SaveTicket, None);
+    assert_eq!(resume_offer(&waiting), ResumeOffer::NotOffered);
+    let key = operation(
+        OperationFamily::KeyMaterial,
+        OperationAction::GenerateKey,
+        Some(OperationNextAction::RetryGeneration),
+    );
+    assert_eq!(resume_offer(&key), ResumeOffer::NotOffered);
+    assert!(!abandon_offered(&key));
+}
+
+/// Every recovery action maps to a control: the ones D1 offers run, the
+/// rest show as text, unavailable.
+#[test]
+fn recovery_actions_map_to_controls() {
+    use RecoveryActionKind as Kind;
+    let expected = [
+        (Kind::IndexRefresh, RecoveryControl::IndexRefresh),
+        (Kind::IndexRebuild, RecoveryControl::IndexRebuild),
+        (Kind::RequestRetry, RecoveryControl::Retry),
+        (Kind::RequestPrepare, RecoveryControl::Prepare),
+        (Kind::RequestCancel, RecoveryControl::Cancel),
+        (Kind::OperationResume, RecoveryControl::Resume),
+        (Kind::OperationAbandon, RecoveryControl::Abandon),
+        (Kind::RepoIdentitySet, RecoveryControl::Unavailable),
+        (Kind::HostApprove, RecoveryControl::Unavailable),
+        (Kind::HostReplace, RecoveryControl::Unavailable),
+        (Kind::RepoInspect, RecoveryControl::Unavailable),
+    ];
+    assert_eq!(expected.len(), Kind::ALL.len());
+    for (kind, control) in expected {
+        assert_eq!(recovery_control(kind), control, "{}", kind.as_str());
+        assert!(!recovery_label(kind).is_empty());
+    }
 }

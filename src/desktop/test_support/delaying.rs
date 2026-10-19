@@ -7,7 +7,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Condvar, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -16,8 +16,16 @@ use manyhands::repository::{RepositoryService, keys::KeyStore};
 
 use crate::desktop::services::{Backend, JobKind, KeyStoreUnavailable, ReadGate, ReadKind};
 
+/// How many times a test can put another real service in place.
+const REPLACEMENTS: usize = 8;
+
 pub(crate) struct DelayingBackend {
     service: Arc<RepositoryService>,
+    /// Real services a test put in place of the first, in order: the last
+    /// one set is the one in use. Each stays open for as long as the
+    /// backend, so a call already running on an earlier one finishes on
+    /// it.
+    replacements: [OnceLock<RepositoryService>; REPLACEMENTS],
     home: PathBuf,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
@@ -30,6 +38,7 @@ impl DelayingBackend {
     pub(crate) fn new(service: Arc<RepositoryService>, home: PathBuf) -> Self {
         Self {
             service,
+            replacements: Default::default(),
             home,
             reads: Mutex::default(),
             jobs: Mutex::default(),
@@ -65,6 +74,19 @@ impl DelayingBackend {
         JobGate(gate)
     }
 
+    /// Puts `service`, a real service the test opened over the same data
+    /// directory, in place of the one in use: what the library tests do
+    /// when they open a service with a failure point, and reopen it with
+    /// `open_at` before a retry. Call it while no job runs.
+    pub(crate) fn replace_service(&self, service: RepositoryService) {
+        let slot = self
+            .replacements
+            .iter()
+            .find(|slot| slot.get().is_none())
+            .expect("too many service replacements in one test");
+        assert!(slot.set(service).is_ok());
+    }
+
     /// The job kinds the worker has asked to run, in order. A job that
     /// was removed or not sent never appears.
     pub(crate) fn jobs_seen(&self) -> Vec<JobKind> {
@@ -74,7 +96,11 @@ impl DelayingBackend {
 
 impl Backend for DelayingBackend {
     fn service(&self) -> &RepositoryService {
-        &self.service
+        self.replacements
+            .iter()
+            .rev()
+            .find_map(OnceLock::get)
+            .unwrap_or(&self.service)
     }
 
     fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable> {

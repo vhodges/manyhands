@@ -178,8 +178,18 @@ impl TicketsPane {
     /// Shows `rows`, none selected.
     pub(crate) fn set(&self, rows: Vec<TicketRow>, window: &mut Window, cx: &mut App) {
         self.list.update(cx, |list, cx| {
+            // The selected row stays selected where the new rows still
+            // have it, by ID or, for a nonconforming entry, by path.
+            let selected = list
+                .selected_index()
+                .and_then(|ix| list.delegate().rows.get(ix.row))
+                .map(|row| (row.id.clone(), row.path.clone()));
+            let at = selected.and_then(|(id, path)| {
+                rows.iter()
+                    .position(|row| row.id == id && (id.is_some() || row.path == path))
+            });
             list.delegate_mut().rows = rows;
-            list.set_selected_index(None, window, cx);
+            list.set_selected_index(at.map(IndexPath::new), window, cx);
             cx.notify();
         });
     }

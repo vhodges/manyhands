@@ -70,12 +70,21 @@ impl DocumentsPane {
         }
     }
 
-    /// Shows `nodes`, the tree of `repo`, every folder open.
+    /// Shows `nodes`, the tree of `repo`, every folder open. The selected
+    /// row stays selected when the new tree still has it: a reload after a
+    /// refresh does not lose the user's place.
     pub(crate) fn set(&mut self, repo: &RepoKey, nodes: &[TreeNode], cx: &mut App) {
         let mut facts = HashMap::new();
         let items = items(repo, nodes, &mut facts);
         self.nodes = Rc::new(facts);
-        self.tree.update(cx, |tree, cx| tree.set_items(items, cx));
+        self.tree.update(cx, |tree, cx| {
+            let selected = tree.selected_item().map(|item| item.id.clone());
+            tree.set_items(items, cx);
+            if let Some(selected) = selected {
+                let at = tree.index_of(&selected);
+                tree.set_selected_index(at, cx);
+            }
+        });
     }
 
     /// Nothing is shown.

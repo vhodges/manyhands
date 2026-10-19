@@ -13,7 +13,10 @@ use std::{
 
 use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use manyhands::{
-    repository::{MutationDataDto, ProgressEvent, ProgressStage, ResolvedRepository},
+    repository::{
+        ConfirmationId, MutationDataDto, PrepareDataDto, ProgressEvent, ProgressStage,
+        ResolvedRepository,
+    },
     results::{Envelope, Outcome, ResultCode},
 };
 
@@ -308,7 +311,7 @@ fn cancelling_a_queued_job_removes_it_before_the_library_sees_it() {
             .any(|event| matches!(event, Seen::Removed(id) if *id == queued))
     );
     assert!(!harness.backend.jobs_seen().contains(&JobKind::IndexRebuild));
-    assert!(matches!(harness.state(queued), RequestState::Dismissed));
+    assert!(matches!(harness.state(queued), RequestState::Removed));
 }
 
 #[test]
@@ -472,11 +475,11 @@ fn quit_with_no_job_is_idle_and_admits_nothing_more() {
         .submit(harness.refresh(), Lane::User, None, None);
     let seen = harness.until_end_of(late);
     assert!(started(&seen).is_empty());
-    assert!(matches!(harness.state(late), RequestState::Dismissed));
+    assert!(matches!(harness.state(late), RequestState::Removed));
 }
 
 /// A retry after quitting is ignored: the finished request keeps its
-/// result rather than becoming Dismissed.
+/// result rather than becoming Removed.
 #[test]
 fn a_retry_after_quitting_leaves_the_finished_request_alone() {
     let mut harness = Harness::new();
@@ -557,4 +560,52 @@ fn a_host_observation_runs_on_the_worker_and_connects_nowhere() {
     assert_eq!(harness.backend.jobs_seen(), [JobKind::ObserveHost]);
     // An observation has no token: it cannot be cancelled.
     assert_eq!(harness.worker.cancel(id), CancelResult::TooLate);
+}
+
+/// A preview prepared again goes with the same request: the request is
+/// queued once more under its own request ID with the new confirmation,
+/// which the library accepts as a first call, since the stale attempt
+/// left no record.
+#[test]
+fn a_request_confirmed_again_keeps_its_request_id_and_runs_with_the_new_confirmation() {
+    let mut harness = Harness::new();
+    let intent = Intent::RepoRemove {
+        root: harness.root.clone(),
+    };
+    let stale = ConfirmationId::new();
+    let id = harness
+        .worker
+        .submit(intent.clone(), Lane::User, Some(stale), None);
+    let seen = harness.until_end_of(id);
+    assert_eq!(
+        finished(&seen, id).code,
+        ResultCode::ConfirmationNotFound,
+        "{}",
+        finished(&seen, id).message
+    );
+    let request_id = harness.operations.request(id).unwrap().request_id;
+
+    let prepared = harness
+        .fixture
+        .service()
+        .prepare(&intent.build(None, || unreachable!()).unwrap());
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("repo remove gave no preview: {}", prepared.message);
+    };
+    let fresh = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    assert!(harness.worker.reconfirm(id, fresh));
+    let seen = harness.until_end_of(id);
+    let Seen::Queued(queued) = &seen[0] else {
+        panic!("queued again first");
+    };
+    assert_eq!(queued.id, id);
+    assert_eq!(queued.request_id, request_id);
+    assert_eq!(queued.confirmation, Some(fresh));
+    assert_eq!(finished(&seen, id).code, ResultCode::Ok);
+    assert_eq!(
+        finished(&seen, id).request_id.as_deref(),
+        Some(request_id.to_string().as_str())
+    );
+    // A request that is not this worker's is left alone.
+    assert!(!harness.worker.reconfirm(DesktopRequestId(999), fresh));
 }

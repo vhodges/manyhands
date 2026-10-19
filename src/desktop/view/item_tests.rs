@@ -20,7 +20,10 @@ use crate::desktop::{
         },
         navigation::OpenTarget,
     },
-    services::requests::{Intent, RequestState},
+    services::{
+        JobKind,
+        requests::{Intent, Lane, RequestState},
+    },
     test_support::{
         fixtures::{Fixture, item_id, ticket_path},
         snapshot::RepositorySnapshot,
@@ -472,12 +475,24 @@ async fn a_deleted_item_shows_item_not_found_with_refresh(cx: &mut TestAppContex
         .workspace
         .read_with(cx, |workspace, _| workspace.services().operations().clone());
     let mut visual = VisualTestContext::from_window(shell.window.into(), cx);
-    visual
-        .condition(&operations, |operations, _| {
-            operations.requests().iter().any(|request| {
-                matches!(request.intent, Intent::IndexRefresh { .. })
-                    && matches!(request.state, RequestState::Finished(..))
+    // The refresh Refresh submitted: the user's, of this root. A
+    // background refresh at launch is not it.
+    let submitted = operations.read_with(&visual, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .find(|request| {
+                request.lane == Lane::User
+                    && matches!(&request.intent, Intent::IndexRefresh { root: r } if *r == root)
             })
+            .map(|request| request.id)
+            .expect("Refresh submitted a refresh")
+    });
+    visual
+        .condition(&operations, move |operations, _| {
+            operations
+                .request(submitted)
+                .is_some_and(|request| matches!(request.state, RequestState::Finished(..)))
         })
         .await;
     visual.run_until_parked();
@@ -551,4 +566,51 @@ fn opening_an_item_writes_nothing(cx: &mut TestAppContext) {
 
     assert_eq!(RepositorySnapshot::take(&root), before);
     assert_eq!(RepositorySnapshot::take(&worktree), worktree_before);
+}
+
+/// Refresh that is emptied from the queue on quit has ended: the item
+/// is read again and Refresh is offered, not "Refreshing" for ever.
+#[gpui_kit::test]
+async fn a_refresh_removed_on_quit_ends_refreshing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PRIMARY, "Going", "");
+    });
+    shell.fixture.commit_removal(&root, &ticket_path(PRIMARY));
+    shell.fixture.refresh(&root);
+    open(&shell, ticket(&root, PRIMARY), cx);
+    assert!(present(&shell, "item-refresh", cx));
+
+    // The worker is busy with another job, so Refresh's waits.
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    let (services, busy) = shell.workspace.read_with(cx, |workspace, _| {
+        let services = workspace.services().clone();
+        let busy = services.worker().submit(
+            Intent::IndexRefresh { root: root.clone() },
+            Lane::Background,
+            None,
+            None,
+        );
+        (services, busy)
+    });
+    held.wait_reached();
+    shell.click("item-refresh", cx);
+    assert!(present(&shell, "item-refreshing", cx));
+
+    let _ = services.worker().quit();
+    shell.run(cx);
+    assert!(!present(&shell, "item-refreshing", cx));
+    assert!(present(&shell, "item-refresh", cx));
+
+    // The worker must not outlive the test: let the held job end.
+    held.release();
+    let operations = services.operations().clone();
+    let mut visual = VisualTestContext::from_window(shell.window.into(), cx);
+    visual
+        .condition(&operations, move |operations, _| {
+            operations
+                .request(busy)
+                .is_some_and(|request| matches!(request.state, RequestState::Finished(..)))
+        })
+        .await;
 }

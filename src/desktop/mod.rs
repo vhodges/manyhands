@@ -258,7 +258,8 @@ fn open_test_window(cx: &mut App) -> WindowHandle<Root> {
 
 /// Opens the main window over a delaying backend that shares `fixture`'s
 /// service, and gives the backend so a test can hold its reads and jobs.
-/// The test keeps the fixture.
+/// The test keeps the fixture. Nothing is refreshed at launch: such a
+/// test does not wait for the worker.
 #[cfg(all(test, feature = "desktop-test-support"))]
 fn open_test_window_with(
     fixture: &test_support::fixtures::Fixture,
@@ -268,8 +269,24 @@ fn open_test_window_with(
     Arc<test_support::delaying::DelayingBackend>,
 ) {
     let backend = fixture.delaying_backend();
-    let services = Services::start(backend.clone(), cx);
-    (open_main_window(services, cx), backend)
+    (open_test_window_over(backend.clone(), false, cx), backend)
+}
+
+/// Opens the main window over `backend`, refreshing every repository at
+/// launch when `launch_refresh` is set.
+#[cfg(all(test, feature = "desktop-test-support"))]
+fn open_test_window_over(
+    backend: Arc<test_support::delaying::DelayingBackend>,
+    launch_refresh: bool,
+    cx: &mut App,
+) -> WindowHandle<Root> {
+    let services = Services::start(backend, cx);
+    let services = if launch_refresh {
+        services
+    } else {
+        services.without_launch_refresh()
+    };
+    open_main_window(services, cx)
 }
 
 #[cfg(test)]

@@ -1,18 +1,59 @@
-//! The session's desktop requests, newest first, as the worker's events
-//! left them.
+//! The operation area's model: the session's desktop requests, newest
+//! first, as the worker's events left them, and the operations each
+//! repository reports pending.
 //!
-//! Task 7 adds the pending operations each repository reports.
+//! A finished request marks its repository changed, so the views that
+//! show it read it again: its lists, its pending operations and the
+//! repository list. A preview that found nothing to confirm marks it too.
+//!
+//! The recovery actions an envelope offers map to the controls the
+//! operation area shows; an action D1 does not offer yet is shown as
+//! text, unavailable.
 
-use manyhands::repository::ProgressStage;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
+use manyhands::{
+    repository::{
+        OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
+        OperationNextAction, ProgressStage,
+    },
+    results::{RecoveryAction, RecoveryActionKind},
+};
+
+use super::{
+    list_state::{ListState, Rows},
+    navigation::UNAVAILABLE_CODES,
+    stamp::{Generations, RepoKey, Stamp, ViewScope},
+};
 use crate::desktop::services::{
-    requests::{DesktopRequest, DesktopRequestId, RequestState},
+    ReadResult,
+    requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     worker::WorkerEvent,
 };
+
+/// Why a synchronization's Resume is unavailable.
+pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
+/// Why a recovery action D1 does not offer yet is unavailable.
+pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
+
+impl Rows for OperationListDto {
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct Operations {
     requests: Vec<DesktopRequest>,
+    /// Each listed repository's pending operations, by root.
+    pending: BTreeMap<RepoKey, ListState<OperationListDto>>,
+    generations: Generations,
+    /// Repositories a finished request may have changed, not yet read
+    /// again.
+    changed: BTreeSet<RepoKey>,
 }
 
 impl Operations {
@@ -55,6 +96,11 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                let root = self
+                    .request(id)
+                    .and_then(|request| request.intent.root())
+                    .and_then(|root| root.to_str())
+                    .map(str::to_owned);
                 self.set(
                     id,
                     RequestState::Finished(
@@ -65,8 +111,11 @@ impl Operations {
                         envelope.message,
                     ),
                 );
+                if let Some(root) = root {
+                    self.changed.insert(root);
+                }
             }
-            WorkerEvent::Removed(id) => self.set(id, RequestState::Dismissed),
+            WorkerEvent::Removed(id) => self.set(id, RequestState::Removed),
             WorkerEvent::NotSent(id, why) => self.set(id, RequestState::NotSent(why)),
             // The Hosts page reads observations (Task 16).
             WorkerEvent::HostObserved(..) => {}
@@ -92,6 +141,239 @@ impl Operations {
         if let Some(request) = self.request_mut(id) {
             request.state = state;
         }
+    }
+
+    /// Says `root` may have changed, so the views that show it read it
+    /// again.
+    pub(crate) fn mark_changed(&mut self, root: RepoKey) {
+        self.changed.insert(root);
+    }
+
+    /// The repositories marked changed since the last call.
+    pub(crate) fn take_changed(&mut self) -> BTreeSet<RepoKey> {
+        std::mem::take(&mut self.changed)
+    }
+
+    /// Each listed repository's pending operations, by root.
+    pub(crate) fn pending(&self) -> &BTreeMap<RepoKey, ListState<OperationListDto>> {
+        &self.pending
+    }
+
+    /// Starts reading `root`'s pending operations; an earlier read is
+    /// dropped when it completes. Rows already shown stay until the new
+    /// read lands.
+    pub(crate) fn load_pending(&mut self, root: RepoKey) -> Stamp {
+        self.pending
+            .entry(root.clone())
+            .or_insert(ListState::Loading);
+        self.generations.next(ViewScope::Operations(root))
+    }
+
+    /// A pending-operations read completed. A repository that does not
+    /// resolve lists nothing. False when the read is no longer wanted.
+    pub(crate) fn apply_pending(
+        &mut self,
+        stamp: Stamp,
+        result: ReadResult<OperationListDto>,
+    ) -> bool {
+        if !self.generations.is_current(&stamp) {
+            return false;
+        }
+        let ViewScope::Operations(root) = stamp.scope else {
+            return false;
+        };
+        if let ReadResult::Failed(failure) = &result
+            && UNAVAILABLE_CODES.contains(&failure.code)
+        {
+            self.pending.remove(&root);
+            return true;
+        }
+        let state = ListState::from_read(result, |list| ListState::Ready {
+            complete: list.complete,
+            index: None,
+            rows: list,
+        });
+        self.pending.insert(root, state);
+        true
+    }
+
+    /// Lets go of every repository not in `roots`; their reads still
+    /// running are dropped.
+    pub(crate) fn retain_pending(&mut self, roots: &[RepoKey]) {
+        let gone: Vec<RepoKey> = self
+            .pending
+            .keys()
+            .filter(|root| !roots.contains(root))
+            .cloned()
+            .collect();
+        for root in gone {
+            self.pending.remove(&root);
+            self.generations.next(ViewScope::Operations(root));
+        }
+    }
+}
+
+/// What running a recovery action does.
+pub(crate) enum RecoveryStep {
+    /// Submit this command as a user job.
+    Submit(Intent),
+    /// Open the confirmation dialog for this command.
+    Confirm(Intent),
+    /// Submit the request again, under its own request ID.
+    Retry(DesktopRequestId),
+    /// Open the confirmation dialog for a fresh preview of the request.
+    Prepare(DesktopRequestId),
+    Cancel(DesktopRequestId),
+}
+
+impl Operations {
+    /// What the recovery action `action`, offered on the request `id`,
+    /// runs; `None` when D1 does not offer it, or it names nothing this
+    /// session can act on.
+    pub(crate) fn recovery_step(
+        &self,
+        id: DesktopRequestId,
+        action: &RecoveryAction,
+    ) -> Option<RecoveryStep> {
+        let request = self.request(id)?;
+        let root = || -> Option<PathBuf> {
+            match action.arguments.get("root") {
+                Some(root) => root.as_str().map(PathBuf::from),
+                None => request.intent.root().map(Path::to_owned),
+            }
+        };
+        let operation = || {
+            action
+                .operation_id
+                .as_deref()
+                .and_then(|id| OperationId::parse(id).ok())
+        };
+        // A request this session holds, by the request ID the action
+        // names; this one when it names none.
+        let named = || match action.arguments.get("request_id") {
+            None => Some(id),
+            Some(named) => {
+                let named = named.as_str()?;
+                self.requests
+                    .iter()
+                    .find(|request| request.request_id.to_string() == named)
+                    .map(|request| request.id)
+            }
+        };
+        Some(match recovery_control(action.action) {
+            RecoveryControl::IndexRefresh => {
+                RecoveryStep::Submit(Intent::IndexRefresh { root: root()? })
+            }
+            RecoveryControl::IndexRebuild => {
+                RecoveryStep::Submit(Intent::IndexRebuild { root: root()? })
+            }
+            RecoveryControl::Retry => RecoveryStep::Retry(named()?),
+            RecoveryControl::Prepare => {
+                if !request.intent.confirmed() {
+                    return None;
+                }
+                RecoveryStep::Prepare(id)
+            }
+            RecoveryControl::Cancel => RecoveryStep::Cancel(named()?),
+            RecoveryControl::Resume => RecoveryStep::Submit(Intent::OperationResume {
+                root: root()?,
+                operation_id: operation()?,
+            }),
+            RecoveryControl::Abandon => RecoveryStep::Confirm(Intent::OperationAbandon {
+                root: root()?,
+                operation_id: operation()?,
+            }),
+            RecoveryControl::Unavailable => return None,
+        })
+    }
+}
+
+/// Whether a pending row is a synchronization, which D1 cannot run.
+fn is_synchronization(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Remote
+        || matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
+/// What a pending row offers for Resume.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ResumeOffer {
+    /// A local operation waiting to be resumed: Resume runs it.
+    Offered,
+    /// Shown disabled, with why.
+    Unavailable(&'static str),
+    NotOffered,
+}
+
+/// Resume is offered when the row waits to be resumed and is a local
+/// command; a synchronization shows it unavailable.
+pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
+    if operation.next_action != Some(OperationNextAction::Resume) {
+        return ResumeOffer::NotOffered;
+    }
+    if is_synchronization(operation) {
+        return ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE);
+    }
+    match (operation.family, &operation.operation_id) {
+        (OperationFamily::Local, Some(_)) => ResumeOffer::Offered,
+        _ => ResumeOffer::NotOffered,
+    }
+}
+
+/// Abandon is offered for a pending local operation with an ID.
+pub(crate) fn abandon_offered(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Local
+        && operation.operation_id.is_some()
+        && !is_synchronization(operation)
+}
+
+/// The control a recovery action shows as.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RecoveryControl {
+    IndexRefresh,
+    IndexRebuild,
+    Retry,
+    Prepare,
+    Cancel,
+    Resume,
+    Abandon,
+    /// D1 does not offer it yet: shown as text, disabled.
+    Unavailable,
+}
+
+pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
+    match kind {
+        RecoveryActionKind::IndexRefresh => RecoveryControl::IndexRefresh,
+        RecoveryActionKind::IndexRebuild => RecoveryControl::IndexRebuild,
+        RecoveryActionKind::RequestRetry => RecoveryControl::Retry,
+        RecoveryActionKind::RequestPrepare => RecoveryControl::Prepare,
+        RecoveryActionKind::RequestCancel => RecoveryControl::Cancel,
+        RecoveryActionKind::OperationResume => RecoveryControl::Resume,
+        RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
+        // The settings pages that run these arrive with Tasks 12 to 16.
+        RecoveryActionKind::RepoIdentitySet
+        | RecoveryActionKind::HostApprove
+        | RecoveryActionKind::HostReplace
+        | RecoveryActionKind::RepoInspect => RecoveryControl::Unavailable,
+    }
+}
+
+/// A recovery action's control, in fixed text.
+pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
+    match kind {
+        RecoveryActionKind::IndexRefresh => "Refresh index",
+        RecoveryActionKind::IndexRebuild => "Rebuild index",
+        RecoveryActionKind::RequestRetry => "Retry",
+        RecoveryActionKind::RequestPrepare => "Prepare again",
+        RecoveryActionKind::RequestCancel => "Cancel",
+        RecoveryActionKind::OperationResume => "Resume",
+        RecoveryActionKind::OperationAbandon => "Abandon",
+        RecoveryActionKind::RepoIdentitySet => "Set identity",
+        RecoveryActionKind::HostApprove => "Approve host",
+        RecoveryActionKind::HostReplace => "Replace host key",
+        RecoveryActionKind::RepoInspect => "Inspect repository",
     }
 }
 

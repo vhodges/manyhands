@@ -294,6 +294,24 @@ impl WorkerHandle {
     /// and so is every request once quitting has closed the queue: its
     /// last result stands.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) {
+        self.requeue(id, None, secret);
+    }
+
+    /// Queues the request `id` again, under its own request ID, with the
+    /// confirmation of a preview prepared again: the attempt that met a
+    /// stale confirmation left no record, so the library takes this one
+    /// as the request's first call. False, and nothing queued, when a
+    /// retry would be left alone.
+    pub(crate) fn reconfirm(&self, id: DesktopRequestId, confirmation: ConfirmationId) -> bool {
+        self.requeue(id, Some(confirmation), None)
+    }
+
+    fn requeue(
+        &self,
+        id: DesktopRequestId,
+        confirmation: Option<ConfirmationId>,
+        secret: Option<SecretPassphrase>,
+    ) -> bool {
         let shared = self.shared();
         let mut state = shared.lock();
         if state.closed
@@ -303,11 +321,14 @@ impl WorkerHandle {
                 .as_ref()
                 .is_some_and(|running| running.id == id)
         {
-            return;
+            return false;
         }
-        let Some(submitted) = state.submitted.get(&id) else {
-            return;
+        let Some(submitted) = state.submitted.get_mut(&id) else {
+            return false;
         };
+        if confirmation.is_some() {
+            submitted.confirmation = confirmation;
+        }
         let (request_id, intent, confirmation, lane) = (
             submitted.request_id,
             submitted.intent.clone(),
@@ -330,6 +351,7 @@ impl WorkerHandle {
             cancel: CancellationToken::new(),
         };
         admit(shared, &mut state, Job { id, work }, lane);
+        true
     }
 
     /// Stops the request `id` if it still can be.

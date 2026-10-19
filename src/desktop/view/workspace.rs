@@ -13,7 +13,7 @@
 //! is not waited for, and the library's journals recover what it was
 //! doing.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -28,9 +28,10 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::{ClosureFilter, ResolvedRepository};
+use manyhands::repository::{ClosureFilter, OperationId, ResolvedRepository};
 
 use super::{
+    confirm::{confirm, prepare_again},
     documents::DocumentsPane,
     item::ItemPane,
     sidebar,
@@ -39,16 +40,21 @@ use super::{
 use crate::desktop::{
     keys::{
         FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion,
-        OpenSelected, PreviousRegion, Quit, QuitNow,
+        OpenSelected, PreviousRegion, Quit, QuitNow, Rebuild, Refresh,
     },
     model::{
         documents::Documents,
         list_state::{ListState, Rows},
         navigation::{Navigation, OpenTarget, Pane, Resolution},
+        operations::RecoveryStep,
         stamp::{RepoKey, Stamp, TabId, ViewScope},
         tickets::Tickets,
     },
-    services::{ReadKind, Services, requests::DesktopRequestId, worker::QuitState},
+    services::{
+        ReadKind, Services,
+        requests::{DesktopRequestId, Intent, Lane, RequestState},
+        worker::QuitState,
+    },
 };
 
 /// Where quitting stands.
@@ -115,7 +121,7 @@ impl Region {
 }
 
 pub(crate) struct Workspace {
-    services: Services,
+    pub(super) services: Services,
     /// One handle per region, in `REGIONS` order.
     regions: [FocusHandle; 4],
     navigation: Navigation,
@@ -138,6 +144,14 @@ pub(crate) struct Workspace {
     /// makes it a tab).
     item: Option<Entity<ItemPane>>,
     quit: QuitPhase,
+    /// The launch refreshes were submitted: once, after the repository
+    /// list first loads.
+    launched: bool,
+    /// Each repository's pending-operations read in flight.
+    pending_reads: HashMap<RepoKey, Task<()>>,
+    /// The focus of each pending row's Abandon, so the dialog can give it
+    /// back.
+    abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
     _operations: Subscription,
     _ticket_events: Subscription,
 }
@@ -191,6 +205,9 @@ impl Workspace {
             tickets_changed: false,
             item: None,
             quit: QuitPhase::Running,
+            launched: false,
+            pending_reads: HashMap::new(),
+            abandon_focus: HashMap::new(),
             _operations: operations,
             _ticket_events: ticket_events,
         };
@@ -247,10 +264,81 @@ impl Workspace {
                     if this.navigation.selected().is_none() {
                         this.clear_lists(cx);
                     }
+                    this.repositories_loaded(cx);
                     cx.notify();
                 }
             },
         ));
+        cx.notify();
+    }
+
+    /// The listed roots, in list order.
+    fn listed(&self) -> Option<Vec<RepoKey>> {
+        self.navigation
+            .repositories()
+            .rows()
+            .map(|rows| rows.iter().map(|entry| entry.key().clone()).collect())
+    }
+
+    /// The repository list loaded: the first time, every listed
+    /// repository is refreshed in the background, in list order. Each
+    /// listed repository's pending operations are read again, and those of
+    /// one no longer listed let go.
+    fn repositories_loaded(&mut self, cx: &mut Context<Self>) {
+        let Some(roots) = self.listed() else {
+            return;
+        };
+        if !self.launched {
+            self.launched = true;
+            if self.services.launch_refresh() {
+                for root in &roots {
+                    self.services.worker().submit(
+                        Intent::IndexRefresh {
+                            root: PathBuf::from(root),
+                        },
+                        Lane::Background,
+                        None,
+                        None,
+                    );
+                }
+            }
+        }
+        self.services.operations().update(cx, |operations, cx| {
+            operations.retain_pending(&roots);
+            cx.notify();
+        });
+        self.pending_reads.retain(|root, _| roots.contains(root));
+        for root in roots {
+            self.load_pending(root, cx);
+        }
+    }
+
+    /// Reads `root`'s pending operations again. The read resolves the
+    /// repository first; one that does not resolve lists nothing.
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    pub(crate) fn load_pending(&mut self, root: RepoKey, cx: &mut Context<Self>) {
+        let stamp = self
+            .services
+            .operations()
+            .update(cx, |operations, _| operations.load_pending(root.clone()));
+        let path = PathBuf::from(&root);
+        let read = self.services.read(
+            ReadKind::Operations,
+            stamp,
+            move |service| {
+                let repo = service.resolve_repository(&path)?;
+                service.list_operations(&repo)
+            },
+            cx,
+            |this: &mut Self, stamp, result, cx| {
+                this.services.operations().update(cx, |operations, cx| {
+                    if operations.apply_pending(stamp, result) {
+                        cx.notify();
+                    }
+                });
+            },
+        );
+        self.pending_reads.insert(root, read);
         cx.notify();
     }
 
@@ -308,7 +396,21 @@ impl Workspace {
             return;
         };
         self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, cx);
+        self.load_tickets(key, resolved, true, cx);
+    }
+
+    /// Reads the shown lists again after something changed them: the
+    /// rows stay, and so does the selected row where it still exists,
+    /// until the new reads land.
+    fn reload_lists(&mut self, cx: &mut Context<Self>) {
+        let Some((key, resolved)) = self.resolved_selection() else {
+            return;
+        };
+        if self.documents.repo() != Some(&key) {
+            return self.load_lists(cx);
+        }
+        self.load_documents(key.clone(), resolved.clone(), cx);
+        self.load_tickets(key, resolved, false, cx);
     }
 
     /// No repository's lists are shown; reads still running are dropped.
@@ -332,7 +434,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let stamp = self.documents.load(key);
-        self.documents_pane.clear(cx);
         let repo = resolved.clone();
         self.folder_read = Some(self.services.read(
             ReadKind::Folders,
@@ -362,21 +463,39 @@ impl Workspace {
     fn documents_changed(&mut self, cx: &mut Context<Self>) {
         match (self.documents.repo(), self.documents.state()) {
             (Some(repo), ListState::Ready { rows, .. }) => self.documents_pane.set(repo, rows, cx),
+            // One of the two reads has landed: a reload keeps the rows,
+            // and their selection, until the other does. A first load's
+            // pane is already empty.
+            (Some(_), ListState::Loading) => {}
             _ => self.documents_pane.clear(cx),
         }
         cx.notify();
     }
 
     #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn load_tickets(&mut self, key: RepoKey, resolved: ResolvedRepository, cx: &mut Context<Self>) {
+    fn load_tickets(
+        &mut self,
+        key: RepoKey,
+        resolved: ResolvedRepository,
+        clear: bool,
+        cx: &mut Context<Self>,
+    ) {
         let stamp = self.tickets.load(key);
-        self.read_tickets(stamp, resolved, cx);
+        self.read_tickets(stamp, resolved, clear, cx);
     }
 
+    /// Reads the tickets under `stamp`. With `clear`, the list is emptied
+    /// at once; without, its rows stay until the read lands.
     #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn read_tickets(&mut self, stamp: Stamp, resolved: ResolvedRepository, cx: &mut Context<Self>) {
+    fn read_tickets(
+        &mut self,
+        stamp: Stamp,
+        resolved: ResolvedRepository,
+        clear: bool,
+        cx: &mut Context<Self>,
+    ) {
         let filter = self.tickets.query().to_filter();
-        self.tickets_changed = true;
+        self.tickets_changed |= clear;
         self.ticket_read = Some(self.services.read(
             ReadKind::Tickets,
             stamp,
@@ -397,7 +516,7 @@ impl Workspace {
     pub(crate) fn set_closure(&mut self, closure: ClosureFilter, cx: &mut Context<Self>) {
         let stamp = self.tickets.set_closure(closure);
         match (stamp, self.resolved_selection()) {
-            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, cx),
+            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
             _ => cx.notify(),
         }
     }
@@ -492,13 +611,175 @@ impl Workspace {
     }
 
     /// A worker event arrived: if quitting waits for a job that has now
-    /// returned, quit.
+    /// returned, quit. A repository a finished request may have changed
+    /// is read again: its pending operations, its lists when it is
+    /// selected, and the repository list, whose index state it shows.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         if matches!(self.quit, QuitPhase::Finishing(_))
             && self.services.worker().quit() == QuitState::Idle
         {
             self.quit_now(cx);
         }
+        let changed = self
+            .services
+            .operations()
+            .update(cx, |operations, _| operations.take_changed());
+        if changed.is_empty() {
+            return;
+        }
+        let listed = self.listed().unwrap_or_default();
+        for root in &changed {
+            if listed.contains(root) {
+                self.load_pending(root.clone(), cx);
+            }
+        }
+        if self
+            .navigation
+            .selected()
+            .is_some_and(|selected| changed.contains(selected))
+        {
+            self.reload_lists(cx);
+        }
+        self.load_repositories(cx);
+    }
+
+    /// Refresh or Rebuild: the selected repository's index, as a user
+    /// job. With no repository selected, nothing.
+    pub(crate) fn maintain_index(
+        &mut self,
+        rebuild: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<DesktopRequestId> {
+        let root = PathBuf::from(self.navigation.selected()?);
+        let intent = if rebuild {
+            Intent::IndexRebuild { root }
+        } else {
+            Intent::IndexRefresh { root }
+        };
+        let id = self
+            .services
+            .worker()
+            .submit(intent, Lane::User, None, None);
+        cx.notify();
+        Some(id)
+    }
+
+    pub(super) fn cancel_request(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+        self.services.worker().cancel(id);
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_request(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
+        self.services.operations().update(cx, |operations, cx| {
+            operations.dismiss(id);
+            cx.notify();
+        });
+    }
+
+    /// Resume on a pending row: `operation resume` as a user job.
+    pub(super) fn resume(&mut self, root: RepoKey, operation_id: &str, cx: &mut Context<Self>) {
+        let Ok(operation_id) = OperationId::parse(operation_id) else {
+            return;
+        };
+        self.services.worker().submit(
+            Intent::OperationResume {
+                root: PathBuf::from(root),
+                operation_id,
+            },
+            Lane::User,
+            None,
+            None,
+        );
+        cx.notify();
+    }
+
+    /// Abandon on a pending row: the confirmation dialog for `operation
+    /// abandon`, which gives focus back to `origin`.
+    pub(super) fn abandon(
+        &mut self,
+        root: RepoKey,
+        operation_id: &str,
+        origin: FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(operation_id) = OperationId::parse(operation_id) else {
+            return;
+        };
+        window.focus(&origin, cx);
+        confirm(
+            Intent::OperationAbandon {
+                root: PathBuf::from(root),
+                operation_id,
+            },
+            origin,
+            &self.services,
+            window,
+            cx,
+        );
+    }
+
+    /// The focus of the Abandon of `root`'s operation `operation_id`,
+    /// made the first time it is drawn.
+    pub(super) fn abandon_focus_for(
+        &mut self,
+        root: &RepoKey,
+        operation_id: &str,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
+        self.abandon_focus
+            .entry((root.clone(), operation_id.to_owned()))
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn abandon_focus(&self, root: &str, operation_id: &str) -> Option<FocusHandle> {
+        self.abandon_focus
+            .get(&(root.to_owned(), operation_id.to_owned()))
+            .cloned()
+    }
+
+    /// Runs the recovery action `n` of the request `id`.
+    pub(super) fn run_recovery(
+        &mut self,
+        id: DesktopRequestId,
+        n: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let step = {
+            let operations = self.services.operations().read(cx);
+            let Some(RequestState::Finished(_, _, _, recovery, _)) =
+                operations.request(id).map(|request| &request.state)
+            else {
+                return;
+            };
+            let Some(action) = recovery.get(n) else {
+                return;
+            };
+            operations.recovery_step(id, action)
+        };
+        let origin = self.regions[Region::Operations.index()].clone();
+        match step {
+            Some(RecoveryStep::Submit(intent)) => {
+                self.services
+                    .worker()
+                    .submit(intent, Lane::User, None, None);
+            }
+            Some(RecoveryStep::Confirm(intent)) => {
+                confirm(intent, origin, &self.services, window, cx);
+            }
+            Some(RecoveryStep::Retry(id)) => self.services.worker().retry(id, None),
+            Some(RecoveryStep::Prepare(id)) => {
+                prepare_again(id, origin, &self.services, window, cx);
+            }
+            Some(RecoveryStep::Cancel(id)) => {
+                self.services.worker().cancel(id);
+            }
+            None => {}
+        }
+        cx.notify();
     }
 
     /// "Finishing" and the command quitting waits for. Fixed text only.
@@ -757,18 +1038,29 @@ impl Render for Workspace {
                     .flex_1()
                     .h_full(),
             );
+        let session = self.session_section(cx);
+        let pending = self.pending_section(window, cx);
         let operations = self
             .region(
                 Region::Operations,
                 window,
                 cx,
                 v_flex()
-                    .gap_1()
-                    .child(div().text_sm().child("Operations"))
-                    .children(finishing),
+                    .id("operation-area")
+                    .gap_2()
+                    .size_full()
+                    .overflow_y_scroll()
+                    .children(finishing)
+                    .child(
+                        h_flex()
+                            .gap_4()
+                            .items_start()
+                            .child(session.flex_1())
+                            .child(pending.flex_1()),
+                    ),
             )
             .w_full()
-            .h(px(120.));
+            .h(px(260.));
         // Root does not draw these layers itself: the window's first view
         // below it does.
         v_flex()
@@ -779,6 +1071,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
             .on_action(cx.listener(|this, _: &OpenSelected, _, cx| this.open_selected_document(cx)))
+            .on_action(cx.listener(|this, _: &Refresh, _, cx| {
+                this.maintain_index(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Rebuild, _, cx| {
+                this.maintain_index(true, cx);
+            }))
             .on_action(
                 cx.listener(|this, _: &NextRegion, window, cx| this.cycle_region(1, window, cx)),
             )
