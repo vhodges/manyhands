@@ -308,9 +308,11 @@ impl Workspace {
     }
 
     /// The repository list loaded: the first time, every listed
-    /// repository is refreshed in the background, in list order. Each
-    /// listed repository's pending operations are read again, and those of
-    /// one no longer listed let go.
+    /// repository is refreshed in the background, in list order. The
+    /// pending operations of each repository listed for the first time are
+    /// read, and those of one no longer listed let go. A repository already
+    /// read is read again only when a finished request changed it
+    /// (`operations_changed`), not whenever the list is.
     fn repositories_loaded(&mut self, cx: &mut Context<Self>) {
         let Some(roots) = self.listed() else {
             return;
@@ -336,7 +338,9 @@ impl Workspace {
         });
         self.pending_reads.retain(|root, _| roots.contains(root));
         for root in roots {
-            self.load_pending(root, cx);
+            if !self.pending_reads.contains_key(&root) {
+                self.load_pending(root, cx);
+            }
         }
     }
 

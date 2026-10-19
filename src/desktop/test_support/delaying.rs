@@ -29,6 +29,9 @@ pub(crate) struct DelayingBackend {
     home: PathBuf,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
+    /// Every read kind a read or prepare asked its gate for, in order:
+    /// only observed.
+    reads_seen: Mutex<Vec<ReadKind>>,
     /// Every job kind the worker reached `before_job` with, in order.
     seen: Mutex<Vec<JobKind>>,
 }
@@ -42,6 +45,7 @@ impl DelayingBackend {
             home,
             reads: Mutex::default(),
             jobs: Mutex::default(),
+            reads_seen: Mutex::default(),
             seen: Mutex::default(),
         }
     }
@@ -87,6 +91,18 @@ impl DelayingBackend {
         assert!(slot.set(service).is_ok());
     }
 
+    /// How many reads of `kind` were started: each read and prepare asks
+    /// its gate once, before its first library call; its busy retries do
+    /// not ask again.
+    pub(crate) fn reads_seen(&self, kind: ReadKind) -> usize {
+        self.reads_seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| **seen == kind)
+            .count()
+    }
+
     /// The job kinds the worker has asked to run, in order. A job that
     /// was removed or not sent never appears.
     pub(crate) fn jobs_seen(&self) -> Vec<JobKind> {
@@ -108,6 +124,7 @@ impl Backend for DelayingBackend {
     }
 
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {
+        self.reads_seen.lock().unwrap().push(kind);
         self.reads.lock().unwrap().get_mut(&kind)?.pop_front()
     }
 

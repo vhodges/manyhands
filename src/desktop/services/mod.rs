@@ -143,16 +143,24 @@ pub(crate) struct Services {
 
 impl Services {
     /// Starts the mutation worker over `backend`, and the foreground task
-    /// that applies its events to the request model. The task ends when
-    /// the worker does, after the last handle is dropped.
+    /// that applies its events to the request model. Every event waiting
+    /// is applied in one update with one notify, so the views read what a
+    /// batch changed once, not once per event. The task ends when the
+    /// worker does, after the last handle is dropped.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
+                let mut batch = vec![event];
+                while let Ok(event) = events.try_recv() {
+                    batch.push(event);
+                }
                 let applied = model.update(cx, |operations, cx| {
-                    operations.apply(event);
+                    for event in batch {
+                        operations.apply(event);
+                    }
                     cx.notify();
                 });
                 if applied.is_err() {

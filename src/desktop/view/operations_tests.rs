@@ -22,7 +22,7 @@ use super::{DISMISS, NOTHING_PENDING, outcome_label, recovery_id, request_id};
 use crate::desktop::{
     model::{navigation::OpenTarget, operations::Operations},
     services::{
-        JobKind,
+        JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
     test_support::{
@@ -178,6 +178,38 @@ async fn launch_refreshes_each_repository_in_the_background_and_a_manual_refresh
         assert!(!shell.present(request_id(id, "message"), cx));
     }
     assert_eq!(shell.backend.jobs_seen().len(), 3);
+}
+
+/// Reads stay bounded as the launch refreshes finish. Each repository's
+/// pending operations are read once at the first load and at most once
+/// more for each finished request that changed it, never again for every
+/// listed repository whenever the list is read; the list is read once at
+/// launch and at most once per batch of worker events.
+#[gpui_kit::test]
+async fn launch_refreshes_read_pending_operations_a_bounded_number_of_times(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    for name in ["a", "b", "c"] {
+        fixture.create_repository(name);
+    }
+    let shell = Shell::launch(fixture, |_| {}, cx);
+    let background = shell.requests(cx, |request| request.lane == Lane::Background);
+    assert_eq!(background.len(), 3);
+    shell
+        .until(cx, move |operations| {
+            background
+                .iter()
+                .all(|id| finished(operations, *id).is_some())
+        })
+        .await;
+
+    let pending = shell.backend.reads_seen(ReadKind::Operations);
+    let lists = shell.backend.reads_seen(ReadKind::Repositories);
+    // Three at the first load, and one per refresh that changed its root.
+    assert!((3..=6).contains(&pending), "{pending} pending reads");
+    assert!((1..=4).contains(&lists), "{lists} list reads");
 }
 
 /// The single repository `a`, refreshed, then a ticket committed the
