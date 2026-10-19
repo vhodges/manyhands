@@ -16,8 +16,8 @@ use manyhands::{
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FolderCreateInput, IndexRefreshInput, Mutation, MutationCall, MutationDataDto, NoProgress,
-        PrepareDataDto, RepoCreateInput, RepoRemoveInput, RepositoryService, RequestId,
-        TicketCreateInput, TicketDraft,
+        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoRemoveInput, RepositoryService,
+        RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -240,6 +240,120 @@ impl Fixture {
         );
     }
 
+    /// Commits an open ticket's canonical file to `root`'s primary branch,
+    /// with `extra` front matter lines (each ending in a newline) after the
+    /// fields Manyhands defines, as `tests/read_items.rs` writes one. Its
+    /// copy is the primary one. Refresh to index it.
+    pub(crate) fn commit_ticket(&self, root: &Path, id: &str, title: &str, extra: &str) {
+        let source = ticket_source(id, title, extra);
+        self.commit_file(root, &ticket_path(id), source.as_bytes());
+    }
+
+    /// Saves the ticket `id` of `root` with `title` through `execute` of
+    /// `ticket save`, from the observation `show_item` gives now. Saving a
+    /// ticket that has only its primary copy provisions its own item
+    /// context: a branch and a worktree.
+    pub(crate) fn save_ticket(&self, root: &Path, id: &str, title: &str) {
+        let repo = self.service.resolve_repository(root).unwrap();
+        let shown = self.service.show_item(&repo, &item_id(id)).unwrap();
+        let saved = self.execute(
+            None,
+            Mutation::TicketSave(TicketSaveInput {
+                root: root.to_owned(),
+                id: item_id(id),
+                draft: TicketDraft {
+                    title: title.to_owned(),
+                    ticket_type: shown.ticket_type.unwrap(),
+                    status: shown.status.unwrap(),
+                    project: shown.project,
+                    team: shown.team,
+                    body: shown.body.unwrap_or_default(),
+                },
+                deps: RelationshipWrite::Unchanged,
+                parent: RelationshipWrite::Unchanged,
+                observation: shown.observation.unwrap(),
+            }),
+        );
+        assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+    }
+
+    /// Commits a comment on `item` to `root`'s primary branch, as
+    /// `tests/support/items.rs` writes one: `extra` front matter lines
+    /// follow the required fields, so a comment without `created_by` has
+    /// no author. Refresh to index it.
+    pub(crate) fn commit_comment(
+        &self,
+        root: &Path,
+        item: &str,
+        id: &str,
+        parent: Option<&str>,
+        created_at: &str,
+        extra: &str,
+    ) {
+        let parent = parent
+            .map(|parent| format!("parent_id: {parent}\n"))
+            .unwrap_or_default();
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {id}\nitem_id: {item}\n\
+             {parent}created_at: {created_at}\n{extra}---\nBody of {id}.\n"
+        );
+        self.commit_file(
+            root,
+            &format!(".manyhands/comments/{item}/{id}.md"),
+            source.as_bytes(),
+        );
+    }
+
+    /// Overwrites `rel_path` under `root` with bytes that are not UTF-8,
+    /// without committing, as `tests/read_items.rs` makes a file with no
+    /// source to give. Not refreshed: the index still holds the item.
+    pub(crate) fn write_non_utf8(&self, root: &Path, rel_path: &str) {
+        fs::write(root.join(rel_path), [0xff, 0xfe, 0x00]).unwrap();
+    }
+
+    /// Deletes `rel_path` under `root` and commits the deletion with
+    /// `git2`. Refresh for the index to lose it.
+    pub(crate) fn commit_removal(&self, root: &Path, rel_path: &str) {
+        fs::remove_file(root.join(rel_path)).unwrap();
+        let repository = git2::Repository::open(root).unwrap();
+        let mut index = repository.index().unwrap();
+        index.remove_path(Path::new(rel_path)).unwrap();
+        index.write().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repository.head().unwrap().peel_to_commit().unwrap();
+        let identity = identity();
+        let signature = git2::Signature::now(&identity.name, &identity.email).unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                &format!("Remove {rel_path}"),
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+    }
+
+    /// Gives the document `id`, which lives in its own item worktree of
+    /// `root`, a second source with its ID in that worktree, committed on
+    /// the worktree's branch: the recipe of `tests/discovery_rebuild.rs`
+    /// (`document_worktree_with_a_second_source_for_its_item_is_rejected`)
+    /// for a context problem. Refresh for the index to reject the context.
+    /// Gives the worktree.
+    pub(crate) fn commit_duplicate_context(&self, root: &Path, id: &str) -> PathBuf {
+        let worktree = root
+            .join(".manyhands/worktrees")
+            .join(id)
+            .canonicalize()
+            .unwrap();
+        let source = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {id}\ntitle: Copy\n---\n"
+        );
+        self.commit_file(&worktree, "docs/copy.md", source.as_bytes());
+        worktree
+    }
+
     /// Refreshes the index of `root` through the library.
     pub(crate) fn refresh(&self, root: &Path) {
         let refreshed = self.execute(
@@ -277,6 +391,14 @@ pub(crate) fn item_id(id: &str) -> ItemId {
 /// Where a ticket's canonical file is, relative to its context.
 pub(crate) fn ticket_path(id: &str) -> String {
     format!(".manyhands/tickets/{id}/ticket.md")
+}
+
+/// An open ticket's canonical source, with `extra` front matter lines.
+pub(crate) fn ticket_source(id: &str, title: &str, extra: &str) -> String {
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
+         type: task\nstatus: open\n{extra}---\nBody of {title}.\n"
+    )
 }
 
 /// Removes the registration of `root` through `service`'s own `prepare`

@@ -191,7 +191,7 @@ fn arrows_move_in_the_list_and_enter_opens(cx: &mut TestAppContext) {
     let first = &list.items[0];
     let opened = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.opened().cloned());
+        .read_with(cx, |workspace, cx| workspace.opened(cx));
     assert_eq!(
         opened,
         Some(OpenTarget::Item {
@@ -200,8 +200,8 @@ fn arrows_move_in_the_list_and_enter_opens(cx: &mut TestAppContext) {
             id: first.id.as_deref().unwrap().parse().unwrap(),
         })
     );
-    assert_eq!(shell.label("open-kind", cx).as_deref(), Some("Ticket"));
-    assert_eq!(shell.label("open-id", cx), first.id.clone());
+    assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Ticket"));
+    assert_eq!(shell.label("item-id", cx), first.id.clone());
 
     // The last row is the nonconforming entry: it opens by path.
     let last = list.items.len() - 1;
@@ -214,7 +214,7 @@ fn arrows_move_in_the_list_and_enter_opens(cx: &mut TestAppContext) {
     assert_eq!(broken.id, None);
     let opened = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.opened().cloned());
+        .read_with(cx, |workspace, cx| workspace.opened(cx));
     assert_eq!(
         opened,
         Some(OpenTarget::Inspect {
@@ -223,5 +223,5 @@ fn arrows_move_in_the_list_and_enter_opens(cx: &mut TestAppContext) {
             path: broken.path.clone(),
         })
     );
-    assert_eq!(shell.label("open-path", cx), Some(broken.path.clone()));
+    assert_eq!(shell.label("item-path", cx), Some(broken.path.clone()));
 }

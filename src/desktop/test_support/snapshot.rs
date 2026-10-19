@@ -1,5 +1,6 @@
 //! What a test compares to show the desktop changed nothing in a
-//! repository: its refs, worktrees, status and Git configuration bytes.
+//! repository or one of its linked worktrees: its refs, worktrees, status
+//! and Git configuration bytes.
 
 use std::{
     fs,
@@ -16,7 +17,7 @@ pub(crate) struct RepositorySnapshot {
     pub worktrees: Vec<(String, PathBuf)>,
     /// Each path with a status, untracked and ignored included.
     pub status: Vec<(String, u32)>,
-    /// The bytes of `.git/config`.
+    /// The bytes of `.git/config`, which a linked worktree shares.
     pub config: Vec<u8>,
 }
 
@@ -75,7 +76,8 @@ impl RepositorySnapshot {
             })
             .collect();
         status.sort();
-        let config = fs::read(repository.path().join("config")).unwrap();
+        // A linked worktree shares its repository's configuration.
+        let config = fs::read(repository.commondir().join("config")).unwrap();
         Self {
             refs,
             worktrees,

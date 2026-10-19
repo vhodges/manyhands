@@ -16,8 +16,9 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    Role, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Task,
+    TestSupportExt, Window,
     component::{
         ActiveTheme, Root, Selectable,
         button::{Button, ButtonVariants},
@@ -27,10 +28,11 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::{ClosureFilter, ItemDtoKind, ResolvedRepository};
+use manyhands::repository::{ClosureFilter, ResolvedRepository};
 
 use super::{
     documents::DocumentsPane,
+    item::ItemPane,
     sidebar,
     tickets::{CLOSURE_FILTERS, TicketsPane},
 };
@@ -43,7 +45,7 @@ use crate::desktop::{
         documents::Documents,
         list_state::{ListState, Rows},
         navigation::{Navigation, OpenTarget, Pane, Resolution},
-        stamp::{RepoKey, Stamp},
+        stamp::{RepoKey, Stamp, TabId, ViewScope},
         tickets::Tickets,
     },
     services::{ReadKind, Services, requests::DesktopRequestId, worker::QuitState},
@@ -132,9 +134,9 @@ pub(crate) struct Workspace {
     /// The ticket rows changed and go to the Kit's list at the next frame,
     /// which has the window its selection needs.
     tickets_changed: bool,
-    /// What the last activated row opened (Task 6 shows it; Task 8 makes
-    /// it a tab).
-    opened: Option<OpenTarget>,
+    /// The item the last activated row opened, in the content region (Task 8
+    /// makes it a tab).
+    item: Option<Entity<ItemPane>>,
     quit: QuitPhase,
     _operations: Subscription,
     _ticket_events: Subscription,
@@ -187,7 +189,7 @@ impl Workspace {
             tickets_pane,
             ticket_read: None,
             tickets_changed: false,
-            opened: None,
+            item: None,
             quit: QuitPhase::Running,
             _operations: operations,
             _ticket_events: ticket_events,
@@ -218,8 +220,10 @@ impl Workspace {
 
     /// What the last activated row opened.
     #[cfg(test)]
-    pub(crate) fn opened(&self) -> Option<&OpenTarget> {
-        self.opened.as_ref()
+    pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {
+        self.item
+            .as_ref()
+            .map(|item| item.read(cx).target().clone())
     }
 
     /// Reads the repository list again.
@@ -392,10 +396,13 @@ impl Workspace {
         }
     }
 
-    /// Opens `target`. Until the item view arrives (Task 6) the content
-    /// region shows what was opened.
+    /// Opens `target` in the content region, in place of what was open,
+    /// and reads it. The single content item is stamped as tab 0 until
+    /// Task 8 gives each tab its own.
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
-        self.opened = Some(target);
+        let services = self.services.clone();
+        self.item =
+            Some(cx.new(|cx| ItemPane::new(target, ViewScope::Tab(CONTENT_TAB), services, cx)));
         cx.notify();
     }
 
@@ -534,12 +541,13 @@ impl Workspace {
     }
 }
 
+/// The tab the single content item is stamped as, until Task 8 opens tabs.
+const CONTENT_TAB: TabId = TabId(0);
+
 pub(crate) const PANES: [(&str, &str, Pane); 2] = [
     ("pane-documents", "Documents", Pane::Documents),
     ("pane-tickets", "Tickets", Pane::Tickets),
 ];
-
-pub(crate) const OPENED_NONCONFORMING: &str = "Nonconforming file";
 
 /// One of a row of choices: its element says whether it is chosen, and
 /// so does its text, not color alone.
@@ -691,35 +699,6 @@ impl Workspace {
             .child(choices)
             .child(body)
     }
-
-    /// What was opened, by kind and ID or by path.
-    fn opened_view(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let muted = cx.theme().muted_foreground;
-        let text = |id: &'static str, text: String| {
-            div()
-                .id(id)
-                .test_support()
-                .aria_label(text.clone())
-                .child(text)
-        };
-        Some(match self.opened.as_ref()? {
-            OpenTarget::Item { kind, id, .. } => v_flex()
-                .gap_1()
-                .child(text(
-                    "open-kind",
-                    match kind {
-                        ItemDtoKind::Document => "Document",
-                        ItemDtoKind::Ticket => "Ticket",
-                    }
-                    .to_owned(),
-                ))
-                .child(text("open-id", id.to_string()).text_color(muted)),
-            OpenTarget::Inspect { path, .. } => v_flex()
-                .gap_1()
-                .child(text("open-kind", OPENED_NONCONFORMING.to_owned()))
-                .child(text("open-path", path.clone()).text_color(muted)),
-        })
-    }
 }
 
 impl Render for Workspace {
@@ -746,8 +725,13 @@ impl Render for Workspace {
         let repositories = sidebar::repositories(&self.navigation, cx);
         let selection = sidebar::selection(&self.navigation, cx);
         let navigation = self.navigation_pane(cx);
-        let opened = self.opened_view(cx);
-        let content = v_flex().gap_3().children(opened).child(selection);
+        let content = v_flex()
+            .id("content")
+            .gap_3()
+            .size_full()
+            .overflow_y_scroll()
+            .children(self.item.clone())
+            .child(selection);
         let top = h_flex()
             .flex_1()
             .min_h_0()

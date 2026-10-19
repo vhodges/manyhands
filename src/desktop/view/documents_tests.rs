@@ -137,7 +137,7 @@ fn arrows_move_in_the_tree_and_enter_opens(cx: &mut TestAppContext) {
     let opened = |shell: &Shell, cx: &mut TestAppContext| {
         shell
             .workspace
-            .read_with(cx, |workspace, _| workspace.opened().cloned())
+            .read_with(cx, |workspace, cx| workspace.opened(cx))
     };
     assert_eq!(opened(&shell, cx), None);
 
@@ -162,7 +162,7 @@ fn arrows_move_in_the_tree_and_enter_opens(cx: &mut TestAppContext) {
             path: MARKER.to_owned(),
         })
     );
-    assert_eq!(shell.label("open-path", cx).as_deref(), Some(MARKER));
+    assert_eq!(shell.label("item-path", cx).as_deref(), Some(MARKER));
 
     for _ in at(MARKER)..at("Top") {
         shell.keys("down", cx);
@@ -177,8 +177,8 @@ fn arrows_move_in_the_tree_and_enter_opens(cx: &mut TestAppContext) {
             id: TOP.parse().unwrap(),
         })
     );
-    assert_eq!(shell.label("open-kind", cx).as_deref(), Some("Document"));
-    assert_eq!(shell.label("open-id", cx).as_deref(), Some(TOP));
+    assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Document"));
+    assert_eq!(shell.label("item-id", cx).as_deref(), Some(TOP));
 }
 
 /// Review Focus 1: A's document read is held while B is selected; B's
