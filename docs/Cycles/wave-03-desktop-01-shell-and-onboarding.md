@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D1: Desktop Shell, Onboarding And Discovery"
 date: 2026-10-18
-status: proposed
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -9,6 +9,9 @@ id: "01M58Y0GYPEDXT99ZC797CSKPG"
 ---
 
 # Wave 03 D1: Desktop Shell, Onboarding And Discovery
+
+**Approved by the product owner on 2026-10-19**, together with the design and
+implementation plan, for subagent-driven execution.
 
 ## Purpose And Authority
 

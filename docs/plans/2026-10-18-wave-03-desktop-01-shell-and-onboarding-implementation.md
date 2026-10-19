@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D1 Desktop Shell, Onboarding And Discovery Implementation Plan"
 date: 2026-10-18
-status: proposed
+status: approved
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -36,8 +36,10 @@ decision 7); Devenv.
 [design](2026-10-18-wave-03-desktop-01-shell-and-onboarding-design.md).
 Executors read both. Section names below refer to the design.
 
-**Status:** Proposed. Not approved; approval does not authorize Rust
-changes, publication, merge, ticket closure or worktree cleanup.
+**Status:** Approved by the product owner on 2026-10-19, together with the
+Cycle and design, for subagent-driven execution. Approval authorizes the
+Rust changes in this plan. It does not authorize publication, merge, ticket
+closure or worktree cleanup. Part C still waits for `01M4R19P94`.
 
 ## Global Constraints
 
@@ -77,6 +79,10 @@ changes, publication, merge, ticket closure or worktree cleanup.
 - Write each behavior's test before its code. Commit per task with a
   conventional message and the `Co-Authored-By` trailer.
 - Release and smoke runs use `--features desktop`, never `--all-features`.
+- Test runs: within a task, run only the tests its Verify line names. The
+  full suite runs at the Part checkpoints and in Task 17. This follows the
+  owner's standing rule, applied to C1 on 2026-10-19.
+- Implementers never dispatch subagents.
 
 ## Review Focus
 
