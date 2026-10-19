@@ -88,6 +88,20 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
     }
 }
 
+/// Escape only field-owned controls, preserving ordinary Unicode and paths.
+/// Never apply this to layout, canonical public-key text or requested bodies/sources.
+pub(super) fn field(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
 fn human_failure<T>(envelope: &Envelope<T>, extra: Option<&str>) -> Output {
     let mut stderr = format!(
         "error: {}\ncode: {}\n",
@@ -104,7 +118,7 @@ fn human_failure<T>(envelope: &Envelope<T>, extra: Option<&str>) -> Output {
         for (key, value) in &recovery.arguments {
             stderr.push_str(&format!(" {key}="));
             match value.as_str() {
-                Some(text) => stderr.push_str(text),
+                Some(text) => stderr.push_str(&field(text)),
                 None => stderr.push_str(&value.to_string()),
             }
         }

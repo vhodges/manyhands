@@ -1,4 +1,4 @@
-use super::render::Human;
+use super::render::{Human, field};
 use manyhands::repository::{
     CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderListDto,
     HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto,
@@ -11,20 +11,6 @@ fn text(stdout: String) -> Human {
         stdout,
         notes: Vec::new(),
     }
-}
-
-/// Escape only field-owned controls, preserving ordinary Unicode and paths.
-/// Never apply this to layout, canonical public-key text or requested bodies/sources.
-fn field(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.chars() {
-        if character.is_control() {
-            escaped.extend(character.escape_default());
-        } else {
-            escaped.push(character);
-        }
-    }
-    escaped
 }
 
 fn optional(value: Option<&str>) -> String {

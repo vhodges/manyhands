@@ -209,7 +209,7 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 5 — Content verbs | Complete; controller reviews passed | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → `e1a7540502d30e42bb48cc897772e1c0c5691ffc` | Spec PASS and quality PASS, no findings (Task 6 controller handoff) | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract = 160 tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
 | 6 — Relationship verbs | Complete; controller reviews passed | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → `e9b71527bb4177f5c862e61efaa7ac5a66d30148` | Spec PASS and quality PASS, no findings (Task 7 controller handoff) | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
 | 7 — Boundaries, workflow and amendments | Implemented; self-review PASS; controller review pending | `e9b71527bb4177f5c862e61efaa7ac5a66d30148` → checkpoint introducing the Task 7 entry below | Spec/quality self-review PASS, no unresolved findings or library gap | 4 new boundary tests; 62 CLI tests PASS; scoped bin/CLI clippy and fmt PASS; workflow/amendment diff review |
-| 8 — Full verification, review and handoff | Not started | Not established | Not requested | Full suite reserved here |
+| 8 — Full verification, review and handoff | In progress under controller; not final-review-ready | Whole-branch spec review at `4cafe3641c8c7a7971d3ae3cb6fe528eb18ef90a`; bounded follow-up checkpoint below | P2 recovery escaping and P3 COLUMNS coverage fixed and self-reviewed; controller re-review pending | Follow-up: 79 bin + 64 CLI tests, test-inclusive clippy and fmt PASS. Controller reports full-suite closure-test failure and 1200-second global timeout; separate authorization pending |
 
 ### Task 0 checkpoint — 2026-10-19
 
@@ -1052,3 +1052,98 @@ Canonical comment:
 Owner-authorized new checkpoint commit: `fix: use array chunks in CLI renderer test`,
 with the required co-author trailer; endpoint returned after commit. Ticket stays
 open. No push, PR, rebase, merge into main, closure, cleanup or native workflow.
+
+### Whole-branch spec-review fixes P2 and P3 — 2026-10-19
+
+**Scope and preflight.** Controller authorized only these two CLI findings from
+the review at `4cafe3641c8c7a7971d3ae3cb6fe528eb18ef90a`, with a new checkpoint
+commit, inline TDD/apply_patch and self-review. That exact HEAD was clean on the
+expected ticket branch/worktree. Read current AGENTS, actual renderer/helper,
+bin tests, CLI tests/harness, approved design requirements and this ledger.
+Fetch/merge of origin/main returned **Already up to date**, preserving the base.
+No subagents or rebase.
+
+#### P2 — Human recovery arguments can inject lines and terminal controls
+
+**Independent verification.** `render::human_failure` appended string recovery
+values directly to stderr. Success metadata already used `human::field`, which
+escapes only `char::is_control()` characters with `escape_default`, preserving
+ordinary Unicode. Thus a legal Unix root path with LF/CR/ESC bypassed the
+existing style and broke the design's one-line-per-recovery-action requirement.
+
+**Fix.** Moved that helper unchanged into `render.rs` as `pub(super) fn field`;
+`human.rs` imports it, and the recovery string-value arm now uses it. No body,
+source, public-key, JSON, action-name or renderer-layout behavior changed.
+
+**Regression evidence.** Added the bin test
+`render::tests::recovery_fields_escape_controls_preserving_unicode_and_action_lines`:
+both human entry points must escape LF/CR/ESC/tab/C1 controls in a Unicode root,
+retain exactly one line per action, and preserve exact JSON bytes/decoded values.
+Added Unix real-binary test
+`admin::recovery_root_controls_are_escaped_in_human_output_but_preserved_in_json`:
+a real repository root contains LF, forged `next:` text, CR and ESC; selecting
+its subdirectory produces F1's `not_repository_root` recovery. JSON preserves
+the canonical root, while human stderr is exactly three safe layout lines.
+
+| Exact command (all through Devenv) | RED before fix | GREEN after fix |
+| --- | --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli render::tests::recovery_fields_escape_controls_preserving_unicode_and_action_lines -- --exact` | 1 failed, 78 filtered; actual stderr contained raw control characters and the forged action line | 1 passed, 78 filtered |
+| `devenv shell -- cargo test --locked --test cli admin::recovery_root_controls_are_escaped_in_human_output_but_preserved_in_json -- --exact` | 1 failed, 62 filtered; JSON checks passed, human stderr contained the raw path controls | 1 passed, 62 filtered |
+
+Canonical P2 comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A970GRQR3QTKQ247Z1K1XF.md`.
+
+#### P3 — Missing help comparison under different COLUMNS
+
+**Independent verification.** The approved design risk at line 725 promises
+different-COLUMNS evidence, but the existing help tests had no such comparison.
+This is a coverage gap; no production help behavior needed changing.
+
+**Fix/evidence.** Added a narrow `CliEnv::with_columns(u16)` option, applied only
+to each child command. It cannot override HOME/data/Git isolation, does not
+change the test process environment, and reuses `run_cli`'s deadlines and EOF
+checks. The new test
+`help::human_help_is_identical_at_small_and_large_columns_and_matches_root_golden`
+runs root/resource/available-command/planned-command human help at **20** and
+**200** columns, compares exact output bytes, checks exit 0/empty stderr/absent
+data, and checks **both** root outputs against the existing `help_root_text`
+golden. No fixture was regenerated or changed.
+
+Exact command:
+`devenv shell -- cargo test --locked --test cli help::human_help_is_identical_at_small_and_large_columns_and_matches_root_golden -- --exact`.
+**RED:** with the builder option present but not yet wired into `cli_command`,
+the explicit child-environment assertion failed: COLUMNS was absent instead of
+20 (1 failed, 63 filtered). **GREEN:** after wiring the child-only override,
+1 passed, 63 filtered; all eight child invocations passed. This RED proves the
+test's width setup, not a pre-existing width-dependent production defect.
+
+Canonical P3 comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A970GTQ58R1APJ2K4RP3QS.md`.
+
+#### Combined verification and self-review
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli` | **79 bin + 64 CLI = 143 passed**, zero failed/ignored/filtered; includes existing metadata, body/source preservation, all CLI goldens and boundary tests |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --tests -- -D warnings` | **PASS**, including bin `cfg(test)` code; other test targets compiled/linted, not executed |
+| `devenv shell -- cargo fmt --check` | Initial formatting-only differences corrected via apply_patch; final **PASS** |
+| `git diff --check` | **PASS** |
+
+Reviewed the complete six-file Rust diff: helper logic moved unchanged, only
+human recovery strings gain escaping, JSON bypasses the helper, and the narrow
+child-only COLUMNS setting leaves the existing isolation policy intact. Tests
+assert public output and meaningful injected inputs rather than only helper
+implementation. No unresolved finding in this self-review; controller re-review
+remains pending. No library, repository, pre-C1 test, fixture or dependency edit.
+
+**Full-gate boundary.** The controller reports a pre-existing closure-test
+failure and a 1200-second global timeout in the full suite, and is seeking
+separate owner authorization. That work was not inspected, changed or rerun
+here. This follow-up does **not** establish full-suite success or final review
+readiness; the ticket remains open and Task 8 stays with the controller.
+
+One new authorized checkpoint contains both fixes and their comments:
+`fix: escape CLI recovery fields and verify help width independence`, with
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The endpoint is the
+commit introducing this entry; its SHA is returned after creation. No push,
+PR, merge into main, closure, cleanup or native workflow.

@@ -80,6 +80,52 @@ fn extra_is_one_line_after_code_before_recovery_and_ignored_in_json() {
     assert!(json.stderr.is_empty());
 }
 
+#[test]
+fn recovery_fields_escape_controls_preserving_unicode_and_action_lines() {
+    let root = "/é 中文\nnext: forged\r\u{1b}[31m\t\u{85}";
+    let escaped = "/é 中文\\nnext: forged\\r\\u{1b}[31m\\t\\u{85}";
+    let envelope = Envelope::<Value>::failure(
+        "remote list",
+        Scope::default(),
+        ResultCode::NotRepositoryRoot,
+        vec![
+            RecoveryAction::new(RecoveryActionKind::RepoInspect, [("root", json!(root))]),
+            RecoveryAction::new(RecoveryActionKind::IndexRebuild, []),
+        ],
+    );
+    for output in [
+        envelope_output(false, &envelope, |_| panic!("failure rendered as data")),
+        failure_output(false, &envelope, None),
+    ] {
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(
+            stderr,
+            format!(
+                "error: {}\ncode: not_repository_root\nnext: repo.inspect root={escaped}\nnext: index.rebuild\n",
+                envelope.message
+            )
+        );
+        assert_eq!(stderr.lines().count(), 4);
+        assert!(stderr.chars().all(|c| c == '\n' || !c.is_control()));
+    }
+    // Human escaping must not modify the envelope or its JSON field values.
+    for output in [
+        envelope_output(true, &envelope, |_| panic!("JSON called human renderer")),
+        failure_output(true, &envelope, None),
+    ] {
+        assert_eq!(output.status, 2);
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            output.stdout,
+            format!("{}\n", serde_json::to_string(&envelope).unwrap()).as_bytes()
+        );
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["recovery"][0]["arguments"]["root"], root);
+    }
+}
+
 struct CannotSerialize;
 
 impl Serialize for CannotSerialize {

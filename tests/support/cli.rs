@@ -21,6 +21,7 @@ pub struct CliEnv {
     pub data: PathBuf,
     current_dir: Option<PathBuf>,
     use_data_dir: bool,
+    columns: Option<u16>,
 }
 
 impl CliEnv {
@@ -30,6 +31,7 @@ impl CliEnv {
             data,
             current_dir: None,
             use_data_dir: true,
+            columns: None,
         }
     }
 
@@ -40,6 +42,11 @@ impl CliEnv {
 
     pub fn without_data_dir(mut self) -> Self {
         self.use_data_dir = false;
+        self
+    }
+
+    pub fn with_columns(mut self, columns: u16) -> Self {
+        self.columns = Some(columns);
         self
     }
 }
@@ -55,6 +62,9 @@ pub fn cli_command(args: &[&OsStr], env: &CliEnv) -> Command {
     command.args(args).env_remove("MANYHANDS_DATA_DIR");
     if env.use_data_dir {
         command.env("MANYHANDS_DATA_DIR", &env.data);
+    }
+    if let Some(columns) = env.columns {
+        command.env("COLUMNS", columns.to_string());
     }
     for (name, _) in std::env::vars_os() {
         let text = name.to_string_lossy().to_ascii_uppercase();

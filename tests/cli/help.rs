@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::support::{
     cli::{
-        CLI_REPOSITORY_VALUES, CliEnv, CliRun, assert_cli_golden, assert_cli_text_golden, json,
-        run_cli,
+        CLI_REPOSITORY_VALUES, CliEnv, CliRun, assert_cli_golden, assert_cli_text_golden,
+        cli_command, json, run_cli,
     },
     schema,
 };
@@ -88,6 +88,54 @@ fn root_help_and_bare_call_match_in_both_modes_without_data() {
     assert!(bare.stderr.is_empty());
     assert_eq!(bare.stdout, text.stdout);
     assert!(!env.data.exists());
+}
+
+#[test]
+fn human_help_is_identical_at_small_and_large_columns_and_matches_root_golden() {
+    let temp = tempfile::tempdir().unwrap();
+    let environments = [
+        (
+            20,
+            CliEnv::new(temp.path().join("small-data")).with_columns(20),
+        ),
+        (
+            200,
+            CliEnv::new(temp.path().join("large-data")).with_columns(200),
+        ),
+    ];
+    for args in [
+        vec!["--help"],
+        vec!["ticket", "--help"],
+        vec!["ticket", "deps", "--help"],
+        vec!["ticket", "close", "--help"],
+    ] {
+        let mut outputs = Vec::new();
+        for (columns, env) in &environments {
+            let argv: Vec<_> = args.iter().map(OsStr::new).collect();
+            let command = cli_command(&argv, env);
+            let width = columns.to_string();
+            // Verify distinct widths really reach the child command, so an
+            // unwired builder cannot turn this into two identical default runs.
+            assert_eq!(
+                command.get_envs().find(|(name, _)| *name == "COLUMNS"),
+                Some((OsStr::new("COLUMNS"), Some(OsStr::new(&width))))
+            );
+            let output = run_cli(&argv, env);
+            assert_eq!(output.status, 0);
+            assert!(output.stderr.is_empty());
+            assert!(!output.stdout.is_empty());
+            if args == ["--help"] {
+                assert_cli_text_golden(
+                    "help_root_text",
+                    std::str::from_utf8(&output.stdout).unwrap(),
+                    &[],
+                );
+            }
+            assert!(!env.data.exists());
+            outputs.push(output.stdout);
+        }
+        assert_eq!(outputs[0], outputs[1], "{args:?}");
+    }
 }
 
 #[test]

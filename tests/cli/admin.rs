@@ -382,6 +382,57 @@ fn repository_failures_and_resolution_precedence() {
     )));
 }
 
+#[cfg(unix)]
+#[test]
+fn recovery_root_controls_are_escaped_in_human_output_but_preserved_in_json() {
+    // Unix permits LF/CR/ESC in path components. Exercise the real F1 recovery
+    // root through the binary, not an invented error or a pre-escaped fixture.
+    let parent = tempfile::tempdir().unwrap();
+    let fixture = cli::born_repository_in(parent.path(), "é 中文\nnext: forged\r\u{1b}[31m");
+    let nested = fixture.root.join("docs");
+    fs::create_dir_all(&nested).unwrap();
+    let env = CliEnv::new(parent.path().join("data"));
+    let root = fs::canonicalize(&fixture.root).unwrap();
+    let root = root.to_str().unwrap();
+    let value = checked(
+        &[
+            "remote",
+            "list",
+            "--repo",
+            nested.to_str().unwrap(),
+            "--json",
+        ],
+        &env,
+        2,
+        "not_repository_root",
+        None,
+    );
+    assert_eq!(value["recovery"].as_array().unwrap().len(), 1);
+    assert_eq!(value["recovery"][0]["action"], "repo.inspect");
+    assert_eq!(value["recovery"][0]["arguments"]["root"], root);
+
+    let output = run(
+        &["remote", "list", "--repo", nested.to_str().unwrap()],
+        &env,
+    );
+    assert_eq!(output.status, 2);
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let escaped = root
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\u{1b}', "\\u{1b}");
+    assert_eq!(
+        stderr,
+        format!(
+            "error: {}\ncode: not_repository_root\nnext: repo.inspect root={escaped}\n",
+            manyhands::results::ResultCode::NotRepositoryRoot.message()
+        )
+    );
+    assert_eq!(stderr.lines().count(), 3);
+    assert!(stderr.chars().all(|c| c == '\n' || !c.is_control()));
+}
+
 #[test]
 fn selector_failures_preserve_global_and_repository_scopes() {
     let fixture = support::born_repository();
