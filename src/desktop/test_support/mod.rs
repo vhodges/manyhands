@@ -4,6 +4,7 @@
 //! builds its repositories through the library and keeps its data in
 //! temporary directories.
 
+pub(crate) mod delaying;
 pub(crate) mod fixtures;
 
 // The library tests' own isolation, shared rather than copied. Some of

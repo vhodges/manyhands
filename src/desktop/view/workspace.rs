@@ -1,20 +1,28 @@
-//! The main window's view. For now a placeholder that holds the service
+//! The main window's view. For now a placeholder that holds the services
 //! and renders Root's layers; the shell grows here.
 
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
     component::Root, div,
 };
-use manyhands::repository::RepositoryService;
+
+use crate::desktop::services::Services;
 
 pub(crate) struct Workspace {
-    // Held for the window's life; the views that read it come later.
-    _service: RepositoryService,
+    // Held for the window's life; the views that read through it come
+    // later.
+    #[cfg_attr(not(test), allow(dead_code))]
+    services: Services,
 }
 
 impl Workspace {
-    pub(crate) fn new(service: RepositoryService) -> Self {
-        Self { _service: service }
+    pub(crate) fn new(services: Services) -> Self {
+        Self { services }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn services(&self) -> &Services {
+        &self.services
     }
 }
 

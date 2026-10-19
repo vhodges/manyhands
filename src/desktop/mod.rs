@@ -4,9 +4,15 @@
 //! created inside `Root`'s own `cx.new`, so its entity comes after.
 
 mod keys;
+// Until the views that read through these arrive (Task 4), only tests
+// use most of them.
+#[cfg_attr(not(test), allow(dead_code, unused_imports))]
+mod model;
+#[cfg_attr(not(test), allow(dead_code, unused_imports))]
+mod services;
 mod view;
 
-use std::rc::Rc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     App, AppContext, Bounds, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
@@ -20,6 +26,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{RepositoryError, RepositoryErrorKind, RepositoryService};
 
+use services::{LibraryBackend, Services};
 use view::workspace::Workspace;
 
 /// Opens the service the desktop runs over. Production opens the default
@@ -51,7 +58,7 @@ pub(crate) fn run() {
 /// open, the startup failure window.
 fn start(opener: Opener, cx: &mut App) -> WindowHandle<Root> {
     match opener() {
-        Ok(service) => open_main_window(service, cx),
+        Ok(service) => open_main_window(library_services(service), cx),
         Err(error) => open_startup_failure_window(StartupFailure::from(&error), opener, cx),
     }
 }
@@ -69,18 +76,19 @@ fn window_options(cx: &App) -> WindowOptions {
 
 /// Builds `Root` over a new workspace. `Root`'s entity is reserved before
 /// this runs, so the workspace's comes after it.
-fn root_over_workspace(
-    service: RepositoryService,
-    window: &mut Window,
-    cx: &mut Context<Root>,
-) -> Root {
-    let workspace = cx.new(|_| Workspace::new(service));
+fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context<Root>) -> Root {
+    let workspace = cx.new(|_| Workspace::new(services));
     Root::new(workspace, window, cx)
 }
 
-fn open_main_window(service: RepositoryService, cx: &mut App) -> WindowHandle<Root> {
+/// The production services: the library, with no delays.
+fn library_services(service: RepositoryService) -> Services {
+    Services::new(Arc::new(LibraryBackend::new(service)))
+}
+
+fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {
     cx.open_window(window_options(cx), |window, cx| {
-        cx.new(|cx| root_over_workspace(service, window, cx))
+        cx.new(|cx| root_over_workspace(services, window, cx))
     })
     .expect("failed to open the Manyhands window")
 }
@@ -139,9 +147,12 @@ impl StartupFailureView {
     /// the workspace, created before the workspace as at startup.
     fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match (self.opener)() {
-            Ok(service) => window.defer(cx, move |window, cx| {
-                window.replace_root(cx, |window, cx| root_over_workspace(service, window, cx));
-            }),
+            Ok(service) => {
+                let services = library_services(service);
+                window.defer(cx, move |window, cx| {
+                    window.replace_root(cx, |window, cx| root_over_workspace(services, window, cx));
+                })
+            }
             Err(error) => {
                 self.failure = StartupFailure::from(&error);
                 cx.notify();
@@ -195,14 +206,15 @@ struct TestFixtures(Vec<test_support::fixtures::Fixture>);
 #[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for TestFixtures {}
 
-/// Opens the main window over a fixture's service. The fixture lives as
-/// long as the test's application.
+/// Opens the main window over a new fixture's delaying backend, which
+/// shares the fixture's own service. The fixture lives as long as the
+/// test's application.
 #[cfg(all(test, feature = "desktop-test-support"))]
 fn open_test_window(cx: &mut App) -> WindowHandle<Root> {
     let fixture = test_support::fixtures::Fixture::new();
-    let service = RepositoryService::open_at(fixture.data_dir()).unwrap();
+    let services = Services::new(fixture.delaying_backend());
     cx.default_global::<TestFixtures>().0.push(fixture);
-    open_main_window(service, cx)
+    open_main_window(services, cx)
 }
 
 #[cfg(test)]

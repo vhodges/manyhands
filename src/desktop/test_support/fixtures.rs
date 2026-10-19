@@ -8,6 +8,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use manyhands::{
@@ -20,7 +21,7 @@ use manyhands::{
     results::{Envelope, ResultCode},
 };
 
-use super::git_home;
+use super::{delaying::DelayingBackend, git_home};
 
 /// The identity every fixture repository is created and committed as.
 pub(crate) fn identity() -> CommitIdentity {
@@ -43,8 +44,9 @@ impl SessionCredentialProvider for NoPassphrase {
 /// service over the data directory.
 pub(crate) struct Fixture {
     // Fields drop in declaration order: the service closes before its
-    // directories are removed.
-    service: RepositoryService,
+    // directories are removed, unless a backend still shares it. A test
+    // keeps the fixture for as long as anything it built can read.
+    service: Arc<RepositoryService>,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -58,7 +60,7 @@ impl Fixture {
         let data = tempfile::tempdir().unwrap();
         let home = tempfile::tempdir().unwrap();
         let repositories = tempfile::tempdir().unwrap();
-        let service = RepositoryService::open_at(data.path()).unwrap();
+        let service = Arc::new(RepositoryService::open_at(data.path()).unwrap());
         Self {
             service,
             data,
@@ -69,6 +71,15 @@ impl Fixture {
 
     pub(crate) fn service(&self) -> &RepositoryService {
         &self.service
+    }
+
+    /// A delaying backend over this fixture's own service and home: the
+    /// desktop under test and the fixture see the same service.
+    pub(crate) fn delaying_backend(&self) -> Arc<DelayingBackend> {
+        Arc::new(DelayingBackend::new(
+            self.service.clone(),
+            self.home().to_owned(),
+        ))
     }
 
     pub(crate) fn data_dir(&self) -> &Path {

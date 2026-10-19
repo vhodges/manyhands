@@ -73,6 +73,28 @@ mod view {
         assert!(root_id < workspace_id);
     }
 
+    /// The test window reads through the fixture's own service, not a
+    /// second one opened beside it.
+    #[gpui_kit::test]
+    fn the_test_window_reads_through_the_fixture_service(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let window = cx.update(super::super::open_test_window);
+        let workspace = window
+            .update(cx, |root, _, _| {
+                root.view().clone().downcast::<Workspace>().unwrap()
+            })
+            .unwrap();
+        cx.update(|cx| {
+            let fixtures = cx.global::<super::super::TestFixtures>();
+            let fixture = fixtures.0.last().unwrap();
+            let services = workspace.read(cx).services();
+            assert!(std::ptr::eq(
+                services.backend().service(),
+                fixture.service()
+            ));
+        });
+    }
+
     #[gpui_kit::test]
     fn a_dialog_opened_on_the_main_window_is_rendered(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
