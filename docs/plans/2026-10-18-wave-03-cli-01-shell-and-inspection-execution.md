@@ -202,7 +202,7 @@ to the controller after creation rather than embedding a self-referential SHA.
 | Task | Status | Base / endpoint | Reviews | Verification |
 | --- | --- | --- | --- | --- |
 | 0 — Baseline, audit refresh and ledger | Complete; both controller reviews passed | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → `2aa71e7a1c4895c1e62c65d37fc81116902642c9` | Spec and quality reviews passed, no findings (controller handoff for Task 1) | Five baseline commands above; 183 targeted tests; documentation checks |
-| 1 — Clap, catalog and parsing | Complete; current controller checkpoint | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → checkpoint `feat: CLI command catalog and parser` introducing this entry | Implementer self-review passed; controller review pending | Catalog and parser RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
+| 1 — Clap, catalog and parsing | Implemented; quality-review fix awaiting re-review | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` plus follow-up `fix: reject invalid CLI authority delimiters` | Spec PASS; quality found one important authority-validation issue, fixed below; re-review pending | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
 | 2 — Startup, rendering and main | Not started | Not established | Not requested | Not run |
 | 3 — Codes, schemas, harness and first goldens | Not started | Not established | Not requested | Not run |
 | 4 — Repository, credential, status and utility verbs | Not started | Not established | Not requested | Not run |
@@ -316,3 +316,42 @@ Canonical completion comment:
 The endpoint SHA is returned to the controller after committing, avoiding a
 self-referential commit ID here. Task 2 remains unstarted. The full suite is
 reserved for Task 8; no native workflow, push, PR, closure or cleanup occurred.
+
+### Task 1 quality-review fix — 2026-10-19
+
+- Controller reports **Task 1 spec PASS** and one **important** quality finding:
+  unbracketed authorities accepted `user@example.com` and `example.com/path`.
+  This supersedes the original self-review's no-findings assessment for that
+  boundary. Fix base: `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747`; initial
+  worktree clean on the same ticket branch.
+- Independently verified design lines 264–270: only host/optional-port and
+  bracketed IPv6 forms fit the syntax. `authority` checked empty hosts,
+  brackets and whitespace but omitted `@` and `/`. In F1,
+  `src/repository/read/credentials.rs:116–120` rejects both delimiters;
+  `inspect_host` at lines 259–266 opens a read session before returning
+  `authority_not_found` on that rejection (or a session error). Thus letting
+  these inputs become `Action::Run` would cross the startup boundary after
+  wiring. No library change is needed.
+- Added four cases to the existing malformed-authority test: both reported
+  forms and each with an explicit `:2222` port. Every case asserts helper
+  `Err` and `Action::Usage` naming `host inspect` with a nonempty detail.
+- **RED:** `devenv shell -- cargo test --locked --bin manyhands-cli
+  parse::tests::malformed_authorities_are_usage_errors_before_dispatch --
+  --exact` failed at `user@example.com` before changing production code:
+  1 failed, 23 filtered out.
+- Minimal fix: add `@` and `/` to the unbracketed host's rejected characters.
+  Valid host text is still returned unchanged; port and IPv6 handling are
+  unchanged. **GREEN:** the identical targeted command passed, 1 passed and
+  23 filtered out.
+- Regression verification: `devenv shell -- cargo test --locked --bin
+  manyhands-cli` **24 passed**, including valid-host case preservation and
+  IPv6/default-port coverage; targeted bin clippy with `-D warnings` and
+  `cargo fmt --check`, both through Devenv, **PASS**. No full suite run.
+- Self-review: the only production change is the two-character rejection
+  extension; the existing helper is invoked before `Action::Run`, and the
+  regression covers both helper and action boundaries. Controller quality
+  re-review remains pending. Task 2 remains unstarted.
+- Canonical comment:
+  `.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A0S7NC3VH4V9T2BDV6P84X.md`.
+  New commit subject: `fix: reject invalid CLI authority delimiters`; endpoint
+  SHA is returned after commit. No amend, push, PR, merge, closure or cleanup.

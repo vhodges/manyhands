@@ -269,7 +269,10 @@ pub fn authority(text: &str) -> Result<(String, u16), String> {
             Some((host, port)) => (host, Some(port)),
             None => (text, None),
         };
-        if host.is_empty() || host.contains(['[', ']']) || host.chars().any(char::is_whitespace) {
+        if host.is_empty()
+            || host.contains(['[', ']', '@', '/'])
+            || host.chars().any(char::is_whitespace)
+        {
             return Err(invalid());
         }
         (host, port)

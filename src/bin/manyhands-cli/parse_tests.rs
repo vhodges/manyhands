@@ -523,6 +523,10 @@ fn malformed_authorities_are_usage_errors_before_dispatch() {
         "host:22:33",
         "host]",
         "[::1]:0",
+        "user@example.com",
+        "user@example.com:2222",
+        "example.com/path",
+        "example.com/path:2222",
     ] {
         assert!(authority(text).is_err(), "{text}");
         usage(
