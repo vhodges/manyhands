@@ -35,7 +35,7 @@ id: "01M58XQ5A2C0CEG8ZKW4YDR66J"
   - Named edit 3: `tests/mutation_contract.rs` `golden_envelopes()` also reads the JSON cases of `tests/fixtures/cli_v1`.
   - Named edit 4: `tests/mutation_contract.rs` `DATA_ROOTS` gains `cli_help.schema.json` and `cli_version.schema.json` (44 entries become 46).
   - Named edit 5: `tests/mutation_contract.rs` `CODES_NO_MUTATION_GOLDEN_HAS` gains both codes, with the reason `"a CLI parse result; no command of execute or prepare returns it"` (4 entries become 6).
-  - Named edit 6: `tests/read_contract.rs` `contract_enumerations()` gains the new schemas' enumerations.
+  - Named edit 6: `tests/read_contract.rs` `contract_enumerations()` gains one entry, `("cli_help_command.schema.json", "repository", CLI_REPOSITORY_VALUES)`.
 - **Test runs.** Between tasks, run only the tests relevant to the change. The full suite runs once, in Task 8.
 - **No subagents.** Implementers never dispatch subagents.
 - **Commits.** Commit at the end of every task. Messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -60,7 +60,7 @@ These are inputs the spec implies but no table in it lists. Each has its test in
 | 0 | `docs/plans/2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md` | `docs/research/wave-03-api-audit.md` |
 | 1 | `src/bin/manyhands-cli/{catalog,parse}.rs`, `{catalog,parse}_tests.rs` | `Cargo.toml`, `Cargo.lock`, `src/bin/manyhands-cli.rs` |
 | 2 | `src/bin/manyhands-cli/{startup,render,human,dispatch}.rs`, their `*_tests.rs` | `src/bin/manyhands-cli.rs` |
-| 3 | `tests/support/cli.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `schemas/v1/cli_help.schema.json`, `schemas/v1/cli_version.schema.json`, `tests/fixtures/cli_v1/` | `src/results.rs`, `src/repository/mutation/outcome.rs`, `src/results_tests.rs`, `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`, `tests/mutation_contract.rs`, `tests/read_contract.rs`, `tests/support/mod.rs`, `.gitattributes`, bin modules |
+| 3 | `tests/support/cli.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `schemas/v1/cli_help.schema.json`, `cli_help_command.schema.json`, `cli_help_option.schema.json`, `cli_version.schema.json`, `tests/fixtures/cli_v1/` | `src/results.rs`, `src/repository/mutation/outcome.rs`, `src/results_tests.rs`, `schemas/v1/envelope.schema.json`, `schemas/v1/request.schema.json`, `tests/mutation_contract.rs`, `tests/read_contract.rs`, `tests/support/mod.rs`, `.gitattributes`, bin modules |
 | 4 | `tests/cli/admin.rs` | `dispatch.rs`, `human.rs`, `tests/cli.rs`, `tests/support/cli.rs` |
 | 5 | `tests/cli/content.rs` | `dispatch.rs`, `human.rs`, `tests/cli.rs` |
 | 6 | `tests/cli/relationships.rs` | `dispatch.rs`, `human.rs`, `tests/cli.rs` |
@@ -131,7 +131,7 @@ pub struct CommandSpec {
 pub const COMMANDS: &[CommandSpec];
 pub fn find(resource: &str, verb: &str) -> Option<&'static CommandSpec>;
 pub fn resource_commands(resource: &str) -> Vec<&'static CommandSpec>;
-pub const REPOSITORY_VALUES: &[&str] = &["required", "refused"]; // JSON help enum, plus null
+pub const REPOSITORY_VALUES: &[&str] = &["required", "refused"]; // RepoRule as JSON help writes it; Task 2 renders through it
 
 // parse.rs
 pub struct Invocation { pub json: bool, pub action: Action }
@@ -180,6 +180,8 @@ pub fn authority(text: &str) -> Result<(String, u16), String>; // brackets strip
     - `["ticket","list","--bogus"]` gives `Usage` with `command: Some(ticket list)`;
     - `["ticket","list","--request-id","X"]` gives `Usage`.
   - **Repeated `--json`:** `["--json","ticket","list","--repo","r","--json"]` gives `Run` with `json` true (Review Focus 4).
+  - **Help wins over a clap error:** `["frobnicate","--help"]` gives `Help(Root)`; `["ticket","deps","--help"]` gives `Help(Command(ticket deps))`, not a missing-argument error.
+  - **Repeated value option:** `["ticket","show","--repo","r","--id","A","--id","B"]` gives `Run` whose `--id` is `B`.
   - **Raw scans:** `json_requested` with `--json` after `--`, and with `--json=1`, is false.
   - **`authority`:**
     - `example.com` gives `("example.com",22)`;
@@ -200,10 +202,11 @@ pub fn authority(text: &str) -> Result<(String, u16), String>; // brackets strip
   - Do not call any colour method; without the `color` feature they do not exist.
   - Use `try_get_matches_from`. Decide the action in the design's order.
   - Set `json` as `get_flag("json") || json_requested(&args)` on every path. Detect help as `get_flag("help") || help_requested(&args)`.
-  - On a clap error, `Usage { command, detail: error.render().to_string() }`. `command` comes from the first two arguments that do not start with `-`, looked up in the catalog.
+  - On a clap error, `Usage { command, detail: error.render().to_string() }`, unless `help_requested(&args)`: then help wins, for the target the raw scan names. `command` comes from the first two arguments that do not start with `-`, looked up in the catalog.
+  - Never mark an option `.required(true)`; the per-verb rules check required options after parsing.
 
   Run `devenv shell -- cargo test --locked --bin manyhands-cli`.
-- [ ] **Step 6: Leave `main` alone.** `main` still does only what it did before; Task 2 wires it. Run `devenv shell -- cargo clippy --locked --bin manyhands-cli -- -D warnings` and `devenv shell -- cargo fmt --check`.
+- [ ] **Step 6: Leave `main` alone.** `main` still does only what it did before; Task 2 wires it. Until then `catalog` and `parse` are unreachable from `main`, so put `#[allow(dead_code)] // wired into main in Task 2` on both `mod` declarations, and `#[allow(dead_code)] // used by host inspect in Task 4` on `parse::authority`. Task 2 Step 4 and Task 4 Step 2 remove them. Run `devenv shell -- cargo clippy --locked --bin manyhands-cli -- -D warnings` and `devenv shell -- cargo fmt --check`.
 - [ ] **Step 7: Commit.** `feat: CLI command catalog and parser`.
 
 ## Task 2: Startup, Rendering And Main
@@ -258,11 +261,11 @@ pub fn placeholder_verbs() -> Vec<&'static str>; // available verbs not yet disp
   - **Help output:**
     - Text help is clap's rendered help for the root, a resource or an available command.
     - A planned command's text help is its name, summary and `Arrives with <Cycle>.`.
-    - JSON help is a success envelope with command `cli help`, `Scope::default()`, `Effects::not_requested()`, and data from a bin-private `HelpDto`/`HelpCommandDto`/`HelpOptionDto` shaped as in the design.
-  - **Version output:** command `cli version`, data `{name: "manyhands-cli", version: env!("CARGO_PKG_VERSION"), schema_version: manyhands::results::SCHEMA_VERSION}`. Text is `manyhands-cli <version>`.
+    - JSON help is a success envelope with command `cli help`, `Scope::default()`, `Effects::not_requested()`, and data from a bin-private `HelpDto`/`HelpCommandDto`/`HelpOptionDto` shaped as in the design. A command's `repository` is written through `catalog::REPOSITORY_VALUES` (`Required` as index 0, `Refused` as index 1), or null for a planned command.
+  - **Version output:** command `cli version`, data `{name: "manyhands-cli", version: env!("CARGO_PKG_VERSION")}` (the envelope already carries `schema_version`). Text is `manyhands-cli <version>`.
   - **Usage and unavailable:** `Envelope::failure(<command or "cli usage">, Scope::default(), USAGE_CODE, vec![])` with the clap detail as `extra`. Unavailable uses `UNAVAILABLE_CODE` with `extra = "<command> arrives with <Cycle>."`.
 - [ ] **Step 3: Write `dispatch.rs`.** Implement `id new` only (`service.new_item_id()`, human: the ID and a newline). Every other available verb returns a `failure_output` with `UNAVAILABLE_CODE` for now, and is listed by `placeholder_verbs()`. A unit test asserts `placeholder_verbs()` lists exactly the available verbs other than `id new`. Tasks 4–6 shrink that list, and Task 6 asserts it is empty.
-- [ ] **Step 4: Write `main`.** It does exactly this:
+- [ ] **Step 4: Write `main`.** It does exactly this: (and remove the `#[allow(dead_code)]` Task 1 put on the `mod catalog;` and `mod parse;` declarations)
   1. `let args: Vec<OsString> = std::env::args_os().collect();`
   2. `let invocation = parse::parse(args);`
   3. `startup::run(invocation, &mut RealStartup)`, then `write_and_exit`.
@@ -288,7 +291,7 @@ pub fn placeholder_verbs() -> Vec<&'static str>; // available verbs not yet disp
   - `.gitattributes` (`tests/fixtures/cli_v1/** -text`)
   - `src/bin/manyhands-cli/render.rs` (the two constants)
 - Create:
-  - `schemas/v1/cli_help.schema.json` and `schemas/v1/cli_version.schema.json`
+  - `schemas/v1/cli_help.schema.json`, `cli_help_command.schema.json`, `cli_help_option.schema.json` and `cli_version.schema.json`
   - `tests/support/cli.rs`
   - `tests/cli.rs` and `tests/cli/help.rs`
   - `tests/fixtures/cli_v1/`
@@ -309,7 +312,7 @@ pub fn assert_cli_text_golden(name: &str, text: &str, placeholders: &[(&str, &st
 pub fn cli_fixture_directory() -> PathBuf; // tests/fixtures/cli_v1
 pub const CLI_CASES: &[&str];
 pub const CLI_TEXT_CASES: &[&str];
-pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"]; // equals catalog::REPOSITORY_VALUES
+pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"]; // the registry for named edit 6
 pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
 ```
 
@@ -342,9 +345,13 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   ```
 
   This is the only edit allowed under `src/repository/`. Add both strings to the two schema `code` enums, after `invalid_input`. Then set `render::USAGE_CODE = ResultCode::UsageError` and `render::UNAVAILABLE_CODE = ResultCode::CommandUnavailable`.
-- [ ] **Step 3: Write the two schemas** in the F1 style. Both are closed, with every property required.
-  - `cli_help.schema.json` has an array of commands. In each, `repository` is `{"type": ["string","null"], "enum": ["required","refused",null]}`, and an option's `value` is `["string","null"]`.
-  - `cli_version.schema.json` has `name`, `version` and `schema_version` (`{"type":"integer","enum":[1]}`). The checker has no `const`.
+- [ ] **Step 3: Write the four schemas** in the F1 style. All are closed, with every property required.
+  - `cli_help.schema.json` is the data root. Its `commands` array's `items` is a `$ref` to `cli_help_command.schema.json`.
+  - `cli_help_command.schema.json` has `command`, `available`, `delivered_by` and `summary`. Its `repository` is `{"type": ["string","null"], "enum": ["required","refused",null]}`. Its `options` array's `items` is a `$ref` to `cli_help_option.schema.json`.
+  - `cli_help_option.schema.json` has `name`, `value` (`["string","null"]`), `required` and `summary`.
+  - `cli_version.schema.json` has `name` and `version`, both strings.
+
+  The enumeration helper in `tests/read_contract.rs` walks only `properties`, not an array's `items`. That is why the command entry is its own schema.
 - [ ] **Step 4: Write `tests/support/cli.rs`** to the interface above.
   - The isolation list is the design's, exactly. Remove `MANYHANDS_DATA_DIR` before setting it from `CliEnv`.
   - Close stdin.
@@ -365,7 +372,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
     - `frobnicate --json` gives `cli usage`, exit 2, golden `usage_unknown_command`;
     - `ticket list --bogus --json` gives command `ticket list`, exit 2, golden `usage_unknown_option`.
   - **Unavailable:** `ticket close --id 01K7F6H9J2N4Q6S8V0X2Z4B6DJ --prepare --json` gives `command_unavailable`, exit 2, golden `unavailable_ticket_close`. In human mode, stderr names C5.
-  - **Review Focus 4:** `--json ticket list --json --repo <r>` gives one envelope, using a fixture from `enabled_repository`.
+  - **Review Focus 4:** `--json id new --json` gives one envelope. `id new` is the verb already dispatched at this point.
   - **Review Focus 5:** `repo list --json` with `MANYHANDS_DATA_DIR` naming a regular file gives `internal_error`, exit 1, one envelope, and no `panicked` in stderr.
 
   Generate fixtures once with `MANYHANDS_UPDATE_GOLDEN=1`. Read every generated file, then run again without the variable.
@@ -373,12 +380,8 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - **Edit 3:** `golden_envelopes()` chains a third source: `support::cli::CLI_CASES` from `cli_fixture_directory()`, labelled `cli_v1`.
   - **Edit 4:** `DATA_ROOTS` gains the two schema file names. Change the length to 46.
   - **Edit 5:** `CODES_NO_MUTATION_GOLDEN_HAS` gains both codes with the reason in Global Constraints. Change the length to 6.
-  - **Edit 6:** `contract_enumerations()` gains:
-    - `("cli_help.schema.json", "commands.repository", <CLI_REPOSITORY_VALUES plus null as the checker expects>)`;
-    - `("cli_version.schema.json", "schema_version", ...)`.
-
-    Match how existing entries list a nullable or integer enum. If the existing function cannot express either, stop and report rather than changing its logic.
-  - Add a bin unit test that `catalog::REPOSITORY_VALUES` equals the list in `tests/support/cli.rs`. Copy the list into the test, because the bin cannot import test support.
+  - **Edit 6:** `contract_enumerations()` gains one entry: `("cli_help_command.schema.json", "repository", CLI_REPOSITORY_VALUES.to_vec())`. The helper leaves `null` out of the expected list itself (`tests/read_contract.rs:676`), so the list has only the two strings.
+  - In `tests/cli/help.rs`, assert that the `repository` values across the root JSON help's commands are exactly `CLI_REPOSITORY_VALUES` plus null. That ties the binary's output to the registry.
 - [ ] **Step 8: Run the tests.**
   - `devenv shell -- cargo test --locked --lib results::tests`
   - `devenv shell -- cargo test --locked --lib read::`
@@ -418,7 +421,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - A repository-scoped verb resolves first, then parses its IDs.
   - `--key-id` uses `SharedKeyId::parse`, with failure `ReadError::invalid_id()` and the default scope.
   - `--operation-id` uses `OperationId::parse`, with failure `invalid_id` and the repository's scope.
-  - `host inspect` builds `SshAuthority { host, port }` from `parse::authority`.
+  - `host inspect` builds `SshAuthority { host, port }` from `parse::authority`. Remove the `#[allow(dead_code)]` Task 1 put on it.
   - Remove each verb from `placeholder_verbs()`.
 - [ ] **Step 3: Add failure cases** through the binary, each with its exit status and a golden:
   - `invalid_path`: `--repo` names a missing path;
@@ -429,7 +432,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - `invalid_id`: `--key-id` and `--operation-id` with a lowercase ULID;
   - `key_not_found`, `authority_not_found`, `operation_not_found`;
   - `public_key_unavailable`, exit 3: `key public` for the key `register_keys` registers without a public key (`keys.without_public`, as `tests/read_credentials.rs:636` uses);
-  - `repository_inaccessible`, exit 3, `#[cfg(unix)]`, produced the way `tests/read_contract.rs` produces `failure_repository_inaccessible`;
+  - `repository_inaccessible`, exit 3, `#[cfg(unix)]`, if the binary can reach it. Try a registered repository whose `.manyhands/config.toml` is mode `000`, read by `remote list`; F1 reads that file through a guarded reader and reports an unopenable file as `repository_inaccessible`. Skip the case when the test runs as root, because permissions do not apply. If no route gives the code, record it in the execution doc as unreachable through the CLI, with the reason;
   - `index_unavailable`, exit 3, from `index status`: `items::degraded_service(enabled)` returns its own data directory, so point `MANYHANDS_DATA_DIR` at it;
   - `busy`, exit 5: start the `index_lease_child` from Task 3 with `support::hold_lease_in_child_for_test(…, "index_lease_child")` and `LeaseKind::CacheWrite`, then run `index status`. Assert the code and exit only, because the scope depends on where the lock was met.
 
@@ -444,7 +447,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - A failure prints `error:`, `code:` and `next:` lines on stderr, and nothing on stdout.
 
   Add unit tests in `human_tests.rs` for each renderer, using DTOs built in the test.
-- [ ] **Step 6: Run** `devenv shell -- cargo test --locked --bin manyhands-cli` and `--test cli`. Run clippy and fmt, then commit: `feat: CLI repository, credential and status reads`.
+- [ ] **Step 6: Run** `devenv shell -- cargo test --locked --bin manyhands-cli` and `--test cli`. Also run `--test mutation_contract`, which reads every CLI golden. Run clippy and fmt, then commit: `feat: CLI repository, credential and status reads`.
 
 ## Task 5: Content Verbs
 
@@ -481,7 +484,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - Renderers return notes for stale, never-refreshed and incomplete lists.
 
   Pin `ticket list` as text golden `ticket_list_text`. Pin the stderr of `ticket show --id <absent ULID>` as text golden `item_not_found_text`. Unit-test the other renderers.
-- [ ] **Step 4: Run** `--bin manyhands-cli` and `--test cli`. Run clippy and fmt, then commit: `feat: CLI document, ticket and comment reads`.
+- [ ] **Step 4: Run** `--bin manyhands-cli` and `--test cli`. Also run `--test mutation_contract`. Run clippy and fmt, then commit: `feat: CLI document, ticket and comment reads`.
 
 ## Task 6: Relationship Verbs
 
@@ -510,7 +513,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
 
   Unit-test each renderer.
 - [ ] **Step 4: Empty the placeholder list.** The `placeholder_verbs()` test now asserts the list is empty. This changes a test written in this Cycle, not a pre-existing one.
-- [ ] **Step 5: Run** `--bin manyhands-cli` and `--test cli`. Run clippy and fmt, then commit: `feat: CLI relationship reads`.
+- [ ] **Step 5: Run** `--bin manyhands-cli` and `--test cli`. Also run `--test mutation_contract`. Run clippy and fmt, then commit: `feat: CLI relationship reads`.
 
 ## Task 7: Boundaries, Workflow And Document Amendments
 
@@ -532,7 +535,7 @@ pub fn born_repository_in(parent: &Path, name: &str) -> TestRepository;
   - Assert exit status 1, and that stderr does not contain `panicked`.
 - [ ] **Step 4: Platform default directory**, `#[cfg(any(target_os = "linux", target_os = "macos"))]` (ruling R-3).
   - Run `repo list --json` with `CliEnv::without_data_dir()`, and with `XDG_DATA_HOME` (Linux) or `HOME` (macOS) pointing at the env's temporary directories.
-  - Assert success, and that the Manyhands data directory now exists under that temporary location: `<XDG_DATA_HOME>/manyhands` on Linux, `<HOME>/Library/Application Support/com.manyhands.Manyhands` on macOS. Confirm both names against `directories::ProjectDirs::from("com","manyhands","Manyhands")` in a unit test in the test target, under the same environment.
+  - Assert success, and that the Manyhands data directory now exists under that temporary location: `<XDG_DATA_HOME>/manyhands` on Linux, `<HOME>/Library/Application Support/com.manyhands.Manyhands` on macOS. These are the names `directories` 5 gives `ProjectDirs::from("com","manyhands","Manyhands")`; the test does not compute them in-process, because changing the environment in-process is unsafe in edition 2024 and races with parallel tests.
   - Add a comment for Windows saying why the test is not compiled there.
 - [ ] **Step 5: Exit-class coverage.** Write one table-driven test. Each row is `(args, expected code, expected exit)` and runs through the binary inside the test. Assert that the table covers success and every class a C1 command can produce: input, blocked, transient and internal.
 - [ ] **Step 6: Workflow.** On the `cargo test` line of `.github/workflows/build.yml`, append `--bin manyhands-cli --test cli`. Do not dispatch the workflow.

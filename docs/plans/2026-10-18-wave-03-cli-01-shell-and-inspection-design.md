@@ -216,7 +216,18 @@ After a successful parse, the action is decided in this order:
 7. Otherwise: `Run`.
 
 A clap error (unknown command or option, bad value, missing value) is
-`Usage`.
+`Usage`, unless help was requested: when `help_requested(&args)` is true,
+help wins even over a clap error, and its target comes from the raw scan in
+"The `command` field" (a catalog command, else a known resource, else the
+root). So `frobnicate --help` is root help, exit 0.
+
+No option is marked `.required(true)` in clap. Required options are checked
+by the per-verb rules after parsing, so `ticket deps --help` is help, not a
+missing-argument error.
+
+A value option given twice keeps its last value (`--id A --id B` uses `B`),
+because `args_override_self` applies to every argument. This is accepted and
+tested.
 
 Per-verb rules, enforced after clap parsing:
 
@@ -326,11 +337,14 @@ Their evidence in the shared contract tests (decision 11):
   (named edit 4).
 - `CODES_NO_MUTATION_GOLDEN_HAS` gains both codes with the reason "a CLI
   parse result; no command of execute or prepare returns it" (named edit 5).
-- `contract_enumerations()` in `tests/read_contract.rs` gains the new
-  schemas' enumerations, each tied to a Rust constant in the bin's catalog
-  (named edit 6). The tests cannot reach the bin's constants, so the constant
-  lists are duplicated in `tests/support/cli.rs`, and a bin unit test checks
-  them against the catalog.
+- `contract_enumerations()` in `tests/read_contract.rs` gains one entry,
+  `("cli_help_command.schema.json", "repository", ["required", "refused"])`
+  (named edit 6). The helper walks only `properties`, never an array's
+  `items`, so each help command has its own schema reached by `$ref`, and it
+  leaves `null` out of the expected list itself. The list comes from
+  `CLI_REPOSITORY_VALUES` in `tests/support/cli.rs`. The tests cannot reach
+  the bin's constants, so the tie to the binary is a CLI test: the root
+  JSON help uses exactly `required`, `refused` and null across its commands.
 
 Because the usage and unavailable goldens are the codes' evidence, the codes,
 their schemas entries, the CLI harness and those first goldens land in the
@@ -378,10 +392,11 @@ one, whose `options` are empty (decision 13). `value` is null for a flag.
 Text help for a planned command shows its name, its summary and
 `Arrives with <Cycle>.`
 
-The schema writes `repository` as `"enum": ["required", "refused", null]`
-and `schema_version` as `"enum": [1]`, because the schema checker has no
-`const`. Both enumerations are registered in `contract_enumerations()`
-(named edit 6).
+Three schemas describe it: `cli_help.schema.json` (the root, an array of
+`$ref` items), `cli_help_command.schema.json` and
+`cli_help_option.schema.json`. The command schema writes `repository` as
+`"type": ["string", "null"], "enum": ["required", "refused", null]`, and it
+is registered in `contract_enumerations()` (named edit 6).
 
 The version golden contains the package version (`0.1.0` at this baseline).
 Placeholders must be at least eight characters, so a version bump
@@ -390,8 +405,12 @@ regenerates the `version` and `version_text` fixtures; that is accepted.
 `cli version` data, schema `cli_version.schema.json`:
 
 ```json
-{"name": "manyhands-cli", "version": "<CARGO_PKG_VERSION>", "schema_version": 1}
+{"name": "manyhands-cli", "version": "<CARGO_PKG_VERSION>"}
 ```
+
+The contract version is the envelope's own `schema_version`, so the data does
+not repeat it. An integer enumeration could not be registered with the
+enumeration test anyway.
 
 Text version prints `manyhands-cli <version>`.
 
@@ -537,8 +556,9 @@ content (IDs and codes present, no secret) rather than layout.
     service;
   - a transport failure stops before the service opens and yields
     `internal_error`, exit 1 (Cycle ruling R-4).
-- The enumeration constants duplicated in `tests/support/cli.rs` equal the
-  catalog's.
+- `help_requested` with a clap error (`frobnicate --help`), and help for a
+  verb with required options (`ticket deps --help`).
+- A repeated value option keeps its last value.
 
 ### Integration tests: `tests/cli.rs`
 
@@ -584,8 +604,12 @@ Cases:
     `key_not_found`, `authority_not_found`, `operation_not_found`;
   - blocked class: `repository_not_registered`, `index_unavailable`,
     `public_key_unavailable` (`key public` for a key registered without a
-    public key), and `repository_inaccessible` (Unix only, as F1 produces
-    it);
+    public key), and `repository_inaccessible` if the binary can reach it.
+    F1 produces it by deleting a repository after resolving it in-process,
+    which a CLI test cannot do: a missing root resolves to `invalid_path`.
+    The plan tries a route through the CLI on Unix (a registered root whose
+    configuration file cannot be opened). If no route gives the code, it is
+    recorded as unreachable through the CLI, with the reason;
   - transient class: `busy`, with another process holding the exclusive
     lock;
   - internal class: `internal_error`, with `MANYHANDS_DATA_DIR` naming a
