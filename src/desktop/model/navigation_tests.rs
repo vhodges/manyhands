@@ -6,7 +6,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{ListState, Navigation, Pane, Resolution, UNAVAILABLE_CODES};
+use super::{ListState, Navigation, NotReloaded, Pane, Resolution, UNAVAILABLE_CODES};
 use crate::desktop::{
     services::{ReadFailure, ReadResult},
     test_support::fixtures::Fixture,
@@ -114,6 +114,53 @@ fn a_busy_or_failed_list_read_is_kept_as_such() {
             ..
         })
     ));
+}
+
+/// A reload that stays busy or fails after a read that gave rows keeps
+/// those rows and says why; the next good read clears it.
+#[test]
+fn a_busy_or_failed_reload_keeps_the_last_rows_and_says_why() {
+    let mut navigation = loaded(&["/r/a", "/r/b"]);
+    let stamp = navigation.select("/r/a".to_owned());
+    assert!(navigation.apply_resolution(stamp, failure(ResultCode::InvalidPath)));
+    let roots = |navigation: &Navigation| -> Vec<String> {
+        navigation
+            .repositories()
+            .rows()
+            .unwrap()
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    };
+
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, ReadResult::Busy));
+    assert_eq!(roots(&navigation), ["/r/a", "/r/b"]);
+    assert!(matches!(navigation.not_reloaded(), Some(NotReloaded::Busy)));
+    assert!(matches!(
+        resolution(&navigation, "/r/a"),
+        Resolution::Unavailable(ResultCode::InvalidPath)
+    ));
+
+    let stamp = navigation.load_repositories();
+    let failed = ReadResult::Failed(ReadFailure {
+        code: ResultCode::IndexUnavailable,
+        recovery: Vec::new(),
+    });
+    assert!(navigation.apply_repositories(stamp, failed));
+    assert_eq!(roots(&navigation), ["/r/a", "/r/b"]);
+    assert!(matches!(
+        navigation.not_reloaded(),
+        Some(NotReloaded::Failed(ReadFailure {
+            code: ResultCode::IndexUnavailable,
+            ..
+        }))
+    ));
+
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/b"])));
+    assert!(navigation.not_reloaded().is_none());
+    assert_eq!(roots(&navigation), ["/r/b"]);
 }
 
 /// Unavailable is decided by resolution, never by the stored

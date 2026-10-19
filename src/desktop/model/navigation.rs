@@ -133,8 +133,20 @@ pub(crate) struct Navigation {
     /// The last list read did not give the selected entry, which the one
     /// before it did: it is to be resolved again.
     vanished: bool,
+    /// Why the rows shown are those of an earlier read: the last list
+    /// read stayed busy or failed.
+    not_reloaded: Option<NotReloaded>,
     pane: Pane,
     generations: Generations,
+}
+
+/// A list reload that gave no rows, while the rows of an earlier read are
+/// still shown.
+#[derive(Clone, Debug)]
+pub(crate) enum NotReloaded {
+    /// Still busy after every retry.
+    Busy,
+    Failed(ReadFailure),
 }
 
 impl Default for Navigation {
@@ -144,6 +156,7 @@ impl Default for Navigation {
             selected: None,
             kept: None,
             vanished: false,
+            not_reloaded: None,
             pane: Pane::default(),
             generations: Generations::default(),
         }
@@ -153,6 +166,12 @@ impl Default for Navigation {
 impl Navigation {
     pub(crate) fn repositories(&self) -> &ListState<Vec<RepositoryEntry>> {
         &self.repositories
+    }
+
+    /// Why the rows shown are not of the last list read, when they are
+    /// not.
+    pub(crate) fn not_reloaded(&self) -> Option<&NotReloaded> {
+        self.not_reloaded.as_ref()
     }
 
     pub(crate) fn selected(&self) -> Option<&RepoKey> {
@@ -197,8 +216,9 @@ impl Navigation {
     /// resolved to. A selection the read did not give is kept out of the
     /// list, or cleared when there is no entry to keep. One the read
     /// before gave is no longer known to resolve: it is reset to Unknown,
-    /// and `take_vanished` gives it to be resolved again. False when the
-    /// read is no longer wanted.
+    /// and `take_vanished` gives it to be resolved again. A read that
+    /// stays busy or fails after one that gave rows keeps those rows, and
+    /// `not_reloaded` says why. False when the read is no longer wanted.
     pub(crate) fn apply_repositories(
         &mut self,
         stamp: Stamp,
@@ -207,6 +227,20 @@ impl Navigation {
         if !self.generations.is_current(&stamp) {
             return false;
         }
+        if let ListState::Ready { .. } = self.repositories {
+            match result {
+                ReadResult::Busy => {
+                    self.not_reloaded = Some(NotReloaded::Busy);
+                    return true;
+                }
+                ReadResult::Failed(failure) => {
+                    self.not_reloaded = Some(NotReloaded::Failed(failure));
+                    return true;
+                }
+                ReadResult::Ok(_) => {}
+            }
+        }
+        self.not_reloaded = None;
         let listed_before = self.selected.as_ref().is_some_and(|key| {
             self.repositories
                 .rows()

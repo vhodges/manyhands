@@ -24,7 +24,7 @@ use manyhands::repository::{ConfigurationDto, ConfigurationState};
 use super::workspace::Workspace;
 use crate::desktop::model::{
     list_state::{ListState, index_label},
-    navigation::{Navigation, RepositoryEntry, Resolution},
+    navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
     stamp::RepoKey,
 };
 
@@ -36,6 +36,9 @@ pub(crate) const RETRY: &str = "Retry";
 pub(crate) const REMOVE: &str = "Remove";
 /// The selected repository's row says so in text.
 pub(crate) const SELECTED: &str = "Selected";
+/// The rows shown are those of an earlier read: the last one failed or
+/// stayed busy.
+pub(crate) const SHOWING_LAST_READ: &str = "Showing the last list read";
 
 /// A configuration state in fixed text.
 pub(crate) fn configuration_label(state: ConfigurationState) -> &'static str {
@@ -54,23 +57,40 @@ pub(crate) fn repositories(
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     let list = navigation.repositories();
-    let state = match list {
+    // A reload that gave no rows: the earlier rows stay, labeled as such,
+    // with what the reload gave.
+    let reload = navigation.not_reloaded().map(|why| match why {
+        NotReloaded::Busy => ListState::<Vec<RepositoryEntry>>::Busy,
+        NotReloaded::Failed(failure) => ListState::Failed(failure.clone()),
+    });
+    let shown = reload.as_ref().unwrap_or(list);
+    let state = match shown {
         ListState::Ready { rows, complete, .. } if !rows.is_empty() && *complete => None,
         _ => Some(
             div()
                 .id("repositories-state")
                 .test_support()
-                .aria_label(list.label())
+                .aria_label(shown.label())
                 .text_sm()
                 .text_color(muted)
-                .child(list.label()),
+                .child(shown.label()),
         ),
     };
-    let failure = match list {
+    let last_read = reload.is_some().then(|| {
+        div()
+            .id("repositories-last-read")
+            .test_support()
+            .aria_label(SHOWING_LAST_READ)
+            .text_xs()
+            .text_color(muted)
+            .child(SHOWING_LAST_READ)
+    });
+    let failure = match shown {
         ListState::Busy | ListState::Failed(_) => Some(
             v_flex()
                 .gap_1()
-                .children(match list {
+                .children(last_read)
+                .children(match shown {
                     ListState::Failed(failure) => Some(
                         div()
                             .id("repositories-failure")

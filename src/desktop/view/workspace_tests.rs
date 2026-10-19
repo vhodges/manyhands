@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use gpui_kit::{
@@ -13,14 +14,17 @@ use gpui_kit::{
     test::TestWindowExt,
 };
 use manyhands::{
-    repository::{ConfigurationState, RepositoryService},
+    repository::{ConfigurationState, LeaseKind, RepositoryService},
     results::ResultCode,
 };
 
 use super::{QuitPhase, REGIONS, Region, Workspace};
 use crate::desktop::{
     keys::{self, Quit},
-    model::{list_state::index_label, navigation::Resolution},
+    model::{
+        list_state::{LABEL_BUSY, index_label},
+        navigation::Resolution,
+    },
     open_test_window_with,
     services::{
         JobKind, ReadKind,
@@ -33,7 +37,7 @@ use crate::desktop::{
     },
     view::{
         harness::wait_until,
-        sidebar::{SELECTED, configuration_label},
+        sidebar::{SELECTED, SHOWING_LAST_READ, configuration_label},
     },
 };
 
@@ -444,6 +448,47 @@ fn a_list_reload_after_a_second_actor_removes_the_selection_shows_unavailable(
     assert!(shell.workspace.read_with(cx, |workspace, _| {
         workspace.documents().repo().is_none()
     }));
+}
+
+/// A list reload that stays busy keeps the rows of the last good read
+/// shown, labeled busy and as the last list read, with Retry; the
+/// sidebar does not collapse to "Busy". Retry, once the lease is let go,
+/// reads the list again and the labels go.
+#[gpui_kit::test]
+fn a_busy_list_reload_keeps_the_last_rows_with_a_label(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.click(row(0), cx);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &shell.a,
+        shell.fixture.data_dir(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    shell.visual(cx).run_until_parked();
+
+    assert_eq!(shell.label(row(0), cx).as_deref(), Some("a"));
+    assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
+    assert_eq!(
+        shell.label("repositories-state", cx).as_deref(),
+        Some(LABEL_BUSY)
+    );
+    assert_eq!(
+        shell.label("repositories-last-read", cx).as_deref(),
+        Some(SHOWING_LAST_READ)
+    );
+    assert!(shell.present("repositories-retry", cx));
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("a"));
+
+    drop(lease);
+    shell.click("repositories-retry", cx);
+    assert!(!shell.present("repositories-state", cx));
+    assert!(!shell.present("repositories-last-read", cx));
+    assert_eq!(shell.label(row(1), cx).as_deref(), Some("b"));
 }
 
 /// Review Focus 1: B is selected while A's resolution is held; releasing
