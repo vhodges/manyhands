@@ -8,6 +8,7 @@ use std::{
     collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::{Arc, Condvar, Mutex},
+    time::Duration,
 };
 
 use futures::channel::oneshot;
@@ -20,6 +21,8 @@ pub(crate) struct DelayingBackend {
     home: PathBuf,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
+    /// Every job kind the worker reached `before_job` with, in order.
+    seen: Mutex<Vec<JobKind>>,
 }
 
 impl DelayingBackend {
@@ -30,11 +33,13 @@ impl DelayingBackend {
             home,
             reads: Mutex::default(),
             jobs: Mutex::default(),
+            seen: Mutex::default(),
         }
     }
 
     /// Holds the next read of `kind` at its gate until the returned sender
     /// sends, or is dropped. Holds stack: each read takes the oldest.
+    #[must_use = "dropping the handle releases the hold"]
     pub(crate) fn hold_read(&self, kind: ReadKind) -> oneshot::Sender<()> {
         let (sender, receiver) = oneshot::channel();
         self.reads
@@ -48,7 +53,7 @@ impl DelayingBackend {
 
     /// Holds the next job of `kind` on the worker thread, before its
     /// library call, until the gate is released or dropped.
-    #[allow(dead_code)] // The worker arrives with Task 3.
+    #[must_use = "dropping the handle releases the hold"]
     pub(crate) fn hold_job(&self, kind: JobKind) -> JobGate {
         let gate = Arc::new(Gate::default());
         self.jobs
@@ -58,6 +63,12 @@ impl DelayingBackend {
             .or_default()
             .push_back(gate.clone());
         JobGate(gate)
+    }
+
+    /// The job kinds the worker has asked to run, in order. A job that
+    /// was removed or not sent never appears.
+    pub(crate) fn jobs_seen(&self) -> Vec<JobKind> {
+        self.seen.lock().unwrap().clone()
     }
 }
 
@@ -75,6 +86,7 @@ impl Backend for DelayingBackend {
     }
 
     fn before_job(&self, kind: JobKind) {
+        self.seen.lock().unwrap().push(kind);
         let gate = self
             .jobs
             .lock()
@@ -88,34 +100,63 @@ impl Backend for DelayingBackend {
 }
 
 #[derive(Default)]
+struct GateState {
+    reached: bool,
+    released: bool,
+}
+
+#[derive(Default)]
 struct Gate {
-    released: Mutex<bool>,
+    state: Mutex<GateState>,
     changed: Condvar,
 }
 
 impl Gate {
+    /// The worker side: says it is here, then waits for the release.
     fn wait(&self) {
-        let mut released = self.released.lock().unwrap();
-        while !*released {
-            released = self.changed.wait(released).unwrap();
+        let mut state = self.state.lock().unwrap();
+        state.reached = true;
+        self.changed.notify_all();
+        while !state.released {
+            state = self.changed.wait(state).unwrap();
         }
     }
 
     fn release(&self) {
-        *self.released.lock().unwrap() = true;
+        self.state.lock().unwrap().released = true;
         self.changed.notify_all();
+    }
+
+    /// Blocks until the worker is at the gate, for at most `limit`.
+    fn wait_reached(&self, limit: Duration) -> bool {
+        let state = self.state.lock().unwrap();
+        let (state, _) = self
+            .changed
+            .wait_timeout_while(state, limit, |state| !state.reached)
+            .unwrap();
+        state.reached
     }
 }
 
 /// A held job. The worker thread blocks before the job's library call
 /// until `release` is called or the gate is dropped, so a failed test
 /// cannot leave the worker waiting.
+#[must_use = "dropping the handle releases the hold"]
 pub(crate) struct JobGate(Arc<Gate>);
 
 impl JobGate {
-    #[allow(dead_code)] // The worker arrives with Task 3.
     pub(crate) fn release(&self) {
         self.0.release();
+    }
+
+    /// Blocks the test until the worker thread has reached this gate, so
+    /// the job is running and not yet accepted. Panics after ten seconds,
+    /// inside the scheduler's fifteen.
+    pub(crate) fn wait_reached(&self) {
+        assert!(
+            self.0.wait_reached(Duration::from_secs(10)),
+            "the worker did not reach the held job"
+        );
     }
 }
 

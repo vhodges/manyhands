@@ -58,7 +58,10 @@ pub(crate) fn run() {
 /// open, the startup failure window.
 fn start(opener: Opener, cx: &mut App) -> WindowHandle<Root> {
     match opener() {
-        Ok(service) => open_main_window(library_services(service), cx),
+        Ok(service) => {
+            let services = library_services(service, cx);
+            open_main_window(services, cx)
+        }
         Err(error) => open_startup_failure_window(StartupFailure::from(&error), opener, cx),
     }
 }
@@ -77,13 +80,14 @@ fn window_options(cx: &App) -> WindowOptions {
 /// Builds `Root` over a new workspace. `Root`'s entity is reserved before
 /// this runs, so the workspace's comes after it.
 fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context<Root>) -> Root {
-    let workspace = cx.new(|_| Workspace::new(services));
+    let workspace = cx.new(|cx| Workspace::new(services, window, cx));
     Root::new(workspace, window, cx)
 }
 
-/// The production services: the library, with no delays.
-fn library_services(service: RepositoryService) -> Services {
-    Services::new(Arc::new(LibraryBackend::new(service)))
+/// The production services: the library, with no delays, and its
+/// worker.
+fn library_services(service: RepositoryService, cx: &mut App) -> Services {
+    Services::start(Arc::new(LibraryBackend::new(service)), cx)
 }
 
 fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {
@@ -100,7 +104,11 @@ fn open_startup_failure_window(
 ) -> WindowHandle<Root> {
     cx.open_window(window_options(cx), |window, cx| {
         cx.new(|cx| {
-            let view = cx.new(|_| StartupFailureView { failure, opener });
+            let view = cx.new(|_| StartupFailureView {
+                failure,
+                opener,
+                opened: false,
+            });
             Root::new(view, window, cx)
         })
     })
@@ -135,6 +143,9 @@ impl StartupFailure {
 pub(crate) struct StartupFailureView {
     failure: StartupFailure,
     opener: Opener,
+    /// The service opened and the workspace is about to replace this
+    /// view: a second Retry would open it, and start a worker, again.
+    opened: bool,
 }
 
 impl StartupFailureView {
@@ -146,9 +157,13 @@ impl StartupFailureView {
     /// Opens again; on success the window's Root is replaced by one over
     /// the workspace, created before the workspace as at startup.
     fn retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.opened {
+            return;
+        }
         match (self.opener)() {
             Ok(service) => {
-                let services = library_services(service);
+                self.opened = true;
+                let services = library_services(service, cx);
                 window.defer(cx, move |window, cx| {
                     window.replace_root(cx, |window, cx| root_over_workspace(services, window, cx));
                 })
@@ -212,9 +227,25 @@ impl gpui_kit::Global for TestFixtures {}
 #[cfg(all(test, feature = "desktop-test-support"))]
 fn open_test_window(cx: &mut App) -> WindowHandle<Root> {
     let fixture = test_support::fixtures::Fixture::new();
-    let services = Services::new(fixture.delaying_backend());
+    let (window, _) = open_test_window_with(&fixture, cx);
     cx.default_global::<TestFixtures>().0.push(fixture);
-    open_main_window(services, cx)
+    window
+}
+
+/// Opens the main window over a delaying backend that shares `fixture`'s
+/// service, and gives the backend so a test can hold its reads and jobs.
+/// The test keeps the fixture.
+#[cfg(all(test, feature = "desktop-test-support"))]
+fn open_test_window_with(
+    fixture: &test_support::fixtures::Fixture,
+    cx: &mut App,
+) -> (
+    WindowHandle<Root>,
+    Arc<test_support::delaying::DelayingBackend>,
+) {
+    let backend = fixture.delaying_backend();
+    let services = Services::start(backend.clone(), cx);
+    (open_main_window(services, cx), backend)
 }
 
 #[cfg(test)]

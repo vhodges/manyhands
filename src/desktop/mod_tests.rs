@@ -191,6 +191,36 @@ mod view {
         assert!(root_id < workspace_id);
     }
 
+    /// Two Retry presses before the window's root is replaced open the
+    /// service, and start its worker, once.
+    #[gpui_kit::test]
+    fn a_second_retry_before_the_workspace_opens_does_nothing(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let parent = tempfile::tempdir().unwrap();
+        let data = parent.path().join("data");
+        fs::write(&data, b"not a directory").unwrap();
+        let calls = Rc::new(Cell::new(0));
+        let opener = counting_opener(data.clone(), calls.clone());
+        let window = cx.update(|cx| start(opener, cx));
+        assert_eq!(calls.get(), 1);
+
+        fs::remove_file(&data).unwrap();
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| {
+            window.render_frame(cx);
+            window.click("startup-retry", cx);
+            window.click("startup-retry", cx);
+        });
+        visual.run_until_parked();
+        assert_eq!(calls.get(), 2);
+        let is_workspace = window
+            .update(cx, |root, _, _| {
+                root.view().clone().downcast::<Workspace>().is_ok()
+            })
+            .unwrap();
+        assert!(is_workspace);
+    }
+
     enum WorkerEvent {
         Finished(Box<Envelope<MutationDataDto>>),
     }

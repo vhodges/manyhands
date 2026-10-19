@@ -81,7 +81,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_prepare_delivers_its_envelope_after_its_gate(cx: &mut TestAppContext) {
-        let (_fixture, backend, services, _root) = setup();
+        let (_fixture, backend, services, _root) = setup(cx);
         let parent = tempfile::tempdir().unwrap();
         let root = parent.path().canonicalize().unwrap().join("new-repository");
         let probe = cx.new(|_| PrepareProbe::default());
@@ -157,11 +157,11 @@ mod view {
 
     /// A fixture with one repository, and services over its delaying
     /// backend.
-    fn setup() -> (Fixture, Arc<DelayingBackend>, Services, PathBuf) {
+    fn setup(cx: &mut TestAppContext) -> (Fixture, Arc<DelayingBackend>, Services, PathBuf) {
         let fixture = Fixture::new();
         let root = fixture.create_repository("a");
         let backend = fixture.delaying_backend();
-        let services = Services::new(backend.clone());
+        let services = cx.update(|cx| Services::start(backend.clone(), cx));
         (fixture, backend, services, root)
     }
 
@@ -174,7 +174,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_read_delivers_the_repository_list(cx: &mut TestAppContext) {
-        let (_fixture, _backend, services, root) = setup();
+        let (_fixture, _backend, services, root) = setup(cx);
         let probe = cx.new(|_| Probe::default());
         let calls = Arc::new(AtomicUsize::new(0));
 
@@ -194,7 +194,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_read_that_fails_delivers_its_code_and_nothing_else(cx: &mut TestAppContext) {
-        let (_fixture, _backend, services, _root) = setup();
+        let (_fixture, _backend, services, _root) = setup(cx);
         let parent = tempfile::tempdir().unwrap();
         // A Git repository that was never registered.
         git2::Repository::init(parent.path()).unwrap();
@@ -236,7 +236,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_read_that_stays_busy_delivers_busy_after_three_retries(cx: &mut TestAppContext) {
-        let (fixture, _backend, services, root) = setup();
+        let (fixture, _backend, services, root) = setup(cx);
         let _held = hold_cache_write(&root, fixture.data_dir());
         let probe = cx.new(|_| Probe::default());
         let calls = Arc::new(AtomicUsize::new(0));
@@ -272,7 +272,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_read_released_before_its_second_retry_delivers_ok(cx: &mut TestAppContext) {
-        let (fixture, _backend, services, root) = setup();
+        let (fixture, _backend, services, root) = setup(cx);
         let held = hold_cache_write(&root, fixture.data_dir());
         let probe = cx.new(|_| Probe::default());
         let calls = Arc::new(AtomicUsize::new(0));
@@ -293,7 +293,7 @@ mod view {
 
     #[gpui_kit::test]
     fn a_read_that_completes_after_a_newer_one_is_dropped(cx: &mut TestAppContext) {
-        let (_fixture, backend, services, root) = setup();
+        let (_fixture, backend, services, root) = setup(cx);
         let probe = cx.new(|_| Probe::default());
         let calls = Arc::new(AtomicUsize::new(0));
 

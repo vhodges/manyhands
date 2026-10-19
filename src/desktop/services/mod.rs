@@ -7,10 +7,17 @@
 //! own failure points and hooks.
 
 mod reads;
+pub(crate) mod requests;
+pub(crate) mod worker;
 
 use std::sync::Arc;
 
+use futures::StreamExt;
+use gpui_kit::{App, AppContext, Entity};
 use manyhands::repository::{RepositoryService, keys::KeyStore};
+
+use crate::desktop::model::operations::Operations;
+use worker::WorkerHandle;
 
 pub(crate) use reads::{ReadFailure, ReadResult};
 
@@ -44,7 +51,6 @@ pub(crate) enum ReadKind {
 
 /// What a worker job does, so the seam can hold one kind and not another.
 /// One per desktop intent, and the host observation.
-#[allow(dead_code)] // The worker that runs jobs arrives with Task 3.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum JobKind {
     RepoCreate,
@@ -71,7 +77,6 @@ pub(crate) enum JobKind {
 
 /// The key store could not be found. The Keys page shows
 /// `KEY_STORE_UNAVAILABLE`; the error itself is never shown.
-#[allow(dead_code)] // The Keys page arrives with Task 15.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct KeyStoreUnavailable;
 
@@ -84,7 +89,6 @@ pub(crate) trait Backend: Send + Sync + 'static {
 
     /// The current user's key store in production; the fixture home's in
     /// tests.
-    #[allow(dead_code)] // The Keys page arrives with Task 15.
     fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable>;
 
     /// Awaited inside the read's future, before the blocking library call.
@@ -93,7 +97,6 @@ pub(crate) trait Backend: Send + Sync + 'static {
     }
 
     /// Called on the worker thread before a job's library call.
-    #[allow(dead_code)] // The worker arrives with Task 3.
     fn before_job(&self, _kind: JobKind) {}
 }
 
@@ -118,15 +121,49 @@ impl Backend for LibraryBackend {
     }
 }
 
-/// The handle views hold. Cloning it shares the backend.
+/// The handle views hold. Cloning it shares the backend, the worker
+/// and the request model.
 #[derive(Clone)]
 pub(crate) struct Services {
     backend: Arc<dyn Backend>,
+    worker: WorkerHandle,
+    operations: Entity<Operations>,
 }
 
 impl Services {
-    pub(crate) fn new(backend: Arc<dyn Backend>) -> Self {
-        Self { backend }
+    /// Starts the mutation worker over `backend`, and the foreground task
+    /// that applies its events to the request model. The task ends when
+    /// the worker does, after the last handle is dropped.
+    pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
+        let (worker, mut events) = WorkerHandle::spawn(backend.clone());
+        let operations = cx.new(|_| Operations::default());
+        let model = operations.downgrade();
+        cx.spawn(async move |cx| {
+            while let Some(event) = events.next().await {
+                let applied = model.update(cx, |operations, cx| {
+                    operations.apply(event);
+                    cx.notify();
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+        Self {
+            backend,
+            worker,
+            operations,
+        }
+    }
+
+    pub(crate) fn worker(&self) -> &WorkerHandle {
+        &self.worker
+    }
+
+    /// This session's requests, as the worker's events left them.
+    pub(crate) fn operations(&self) -> &Entity<Operations> {
+        &self.operations
     }
 
     #[cfg(test)]
