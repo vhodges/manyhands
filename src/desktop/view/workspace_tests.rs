@@ -28,7 +28,7 @@ use crate::desktop::{
     },
     test_support::{
         delaying::DelayingBackend,
-        fixtures::{Fixture, remove_registration},
+        fixtures::{Fixture, refresh_through, remove_registration},
         snapshot::RepositorySnapshot,
     },
     view::sidebar::configuration_label,
@@ -519,4 +519,48 @@ fn selecting_and_browsing_leave_the_repositories_untouched(cx: &mut TestAppConte
         RepositorySnapshot::take(&shell.b),
     ];
     assert_eq!(before, after);
+}
+
+/// Track rule 4: a configuration the selected repository's index has not
+/// seen is committed, and a second service refreshes the index. Selecting
+/// it again, or Retry, re-reads the list, so the configuration shown is
+/// the library's current one, not the one read at startup.
+#[gpui_kit::test]
+fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    let second = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    let valid = Some(configuration_label(ConfigurationState::Valid));
+    let invalid = Some(configuration_label(ConfigurationState::Invalid));
+
+    for (index, root) in [(0, &shell.a), (1, &shell.b)] {
+        shell.click(row(index), cx);
+        assert_eq!(shell.label("selection-configuration", cx).as_deref(), valid);
+
+        shell
+            .fixture
+            .commit_file(root, ".manyhands/config.toml", b"format_version = 99\n");
+        refresh_through(&second, root);
+        let summary = second.list_repositories().unwrap().items.remove(index);
+        assert_eq!(summary.configuration.state, ConfigurationState::Invalid);
+        // Until the desktop reads again it still shows what it read.
+        assert_eq!(shell.label("selection-configuration", cx).as_deref(), valid);
+
+        if index == 0 {
+            shell.click(row(0), cx);
+        } else {
+            shell.workspace.update(cx, |workspace, cx| {
+                workspace.retry_resolution(key(root), cx)
+            });
+            shell.visual(cx).run_until_parked();
+        }
+        assert_eq!(shell.selected(cx), Some(key(root)));
+        assert_eq!(
+            shell.label("selection-configuration", cx).as_deref(),
+            invalid
+        );
+        assert_eq!(
+            shell.label("selection-index", cx).as_deref(),
+            Some(index_label(&summary.index))
+        );
+    }
 }

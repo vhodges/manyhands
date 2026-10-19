@@ -192,3 +192,21 @@ pub(crate) fn remove_registration(service: &RepositoryService, root: &Path) {
     );
     assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
 }
+
+/// Refreshes the index of `root` through `service`: a second actor's
+/// refresh, on a service other than the desktop's.
+pub(crate) fn refresh_through(service: &RepositoryService, root: &Path) {
+    let refreshed = service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: None,
+            mutation: Mutation::IndexRefresh(IndexRefreshInput {
+                root: root.to_owned(),
+            }),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(refreshed.code, ResultCode::Ok, "{}", refreshed.message);
+}

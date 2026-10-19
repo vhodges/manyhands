@@ -89,6 +89,10 @@ pub(crate) enum Pane {
 pub(crate) struct Navigation {
     repositories: ListState<Vec<RepositoryEntry>>,
     selected: Option<RepoKey>,
+    /// The selected entry, when the last list read did not give it: kept,
+    /// out of the list, so its resolution can still say why it is gone.
+    /// Selecting another entry lets it go.
+    kept: Option<RepositoryEntry>,
     pane: Pane,
     generations: Generations,
 }
@@ -98,6 +102,7 @@ impl Default for Navigation {
         Self {
             repositories: ListState::Loading,
             selected: None,
+            kept: None,
             pane: Pane::default(),
             generations: Generations::default(),
         }
@@ -122,11 +127,12 @@ impl Navigation {
         self.pane = pane;
     }
 
+    /// The listed entry for `key`, or the kept selection.
     pub(crate) fn entry(&self, key: &str) -> Option<&RepositoryEntry> {
         self.repositories
-            .rows()?
-            .iter()
-            .find(|entry| entry.key() == key)
+            .rows()
+            .and_then(|rows| rows.iter().find(|entry| entry.key() == key))
+            .or(self.kept.as_ref().filter(|entry| entry.key() == key))
     }
 
     pub(crate) fn selected_entry(&self) -> Option<&RepositoryEntry> {
@@ -134,10 +140,11 @@ impl Navigation {
     }
 
     fn entry_mut(&mut self, key: &str) -> Option<&mut RepositoryEntry> {
-        match &mut self.repositories {
+        let listed = match &mut self.repositories {
             ListState::Ready { rows, .. } => rows.iter_mut().find(|entry| entry.key() == key),
             _ => None,
-        }
+        };
+        listed.or(self.kept.as_mut().filter(|entry| entry.key() == key))
     }
 
     /// Starts reading the list; any earlier list read is dropped when it
@@ -147,8 +154,9 @@ impl Navigation {
     }
 
     /// A list read completed. Each entry still listed keeps what it last
-    /// resolved to; a selection no longer listed is cleared. False when the
-    /// read is no longer wanted.
+    /// resolved to. A selection the read did not give is kept out of the
+    /// list, or cleared when there is no entry to keep. False when the read
+    /// is no longer wanted.
     pub(crate) fn apply_repositories(
         &mut self,
         stamp: Stamp,
@@ -162,6 +170,7 @@ impl Navigation {
             ListState::Ready { rows, .. } => rows,
             _ => Vec::new(),
         };
+        previous.extend(self.kept.take());
         self.repositories = ListState::from_read(result, |list| ListState::Ready {
             rows: list
                 .items
@@ -181,12 +190,15 @@ impl Navigation {
             complete: list.complete,
             index: None,
         });
-        if let (Some(key), Some(_)) = (&self.selected, self.repositories.rows())
-            && self.entry(key).is_none()
+        if let Some(key) = self.selected.clone()
+            && self.entry(&key).is_none()
         {
-            self.selected = None;
-            // A resolution still running is for an entry no longer here.
-            self.generations.next(ViewScope::Selection);
+            self.kept = previous.into_iter().find(|entry| *entry.key() == key);
+            if self.kept.is_none() {
+                self.selected = None;
+                // A resolution still running is for an entry not here.
+                self.generations.next(ViewScope::Selection);
+            }
         }
         true
     }
@@ -194,6 +206,9 @@ impl Navigation {
     /// Selects `key` and starts resolving it. A resolution started for an
     /// earlier selection is dropped when it completes.
     pub(crate) fn select(&mut self, key: RepoKey) -> Stamp {
+        if self.kept.as_ref().is_some_and(|kept| *kept.key() != key) {
+            self.kept = None;
+        }
         if let Some(entry) = self.entry_mut(&key) {
             entry.resolution = Resolution::Unknown;
         }

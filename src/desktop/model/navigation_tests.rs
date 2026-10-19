@@ -228,10 +228,11 @@ fn a_real_resolution_is_kept_as_resolved() {
     ));
 }
 
-/// A new list keeps what each still-listed entry resolved to, and a
-/// selection that is no longer listed is cleared.
+/// A new list keeps what each still-listed entry resolved to. A selection
+/// that is no longer listed stays selected, out of the list, so its
+/// resolution can still say why; selecting another lets it go.
 #[test]
-fn a_new_list_keeps_resolutions_and_drops_a_vanished_selection() {
+fn a_new_list_keeps_resolutions_and_a_vanished_selection_until_another_is_selected() {
     let mut navigation = loaded(&["/r/a", "/r/b"]);
     let stamp = navigation.select("/r/a".to_owned());
     assert!(navigation.apply_resolution(stamp, failure(ResultCode::InvalidPath)));
@@ -246,6 +247,32 @@ fn a_new_list_keeps_resolutions_and_drops_a_vanished_selection() {
 
     let stamp = navigation.load_repositories();
     assert!(navigation.apply_repositories(stamp, list(&["/r/c"])));
+    assert_eq!(navigation.selected(), Some(&"/r/a".to_owned()));
+    let rows = navigation.repositories().rows().unwrap();
+    assert!(rows.iter().all(|entry| entry.key() != "/r/a"), "not listed");
+    assert!(matches!(
+        navigation.selected_entry().map(|entry| &entry.resolution),
+        Some(Resolution::Unavailable(ResultCode::InvalidPath))
+    ));
+    // A failed list read keeps the selection the same way.
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, ReadResult::Busy));
+    assert!(navigation.selected_entry().is_some());
+
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/c"])));
+    navigation.select("/r/c".to_owned());
+    assert!(navigation.entry("/r/a").is_none());
+    assert_eq!(navigation.selected(), Some(&"/r/c".to_owned()));
+}
+
+/// A selection with no entry, listed or kept, is cleared by the next list.
+#[test]
+fn a_selection_never_listed_is_cleared_by_the_next_list() {
+    let mut navigation = loaded(&["/r/a"]);
+    navigation.select("/r/x".to_owned());
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/a"])));
     assert_eq!(navigation.selected(), None);
 }
 

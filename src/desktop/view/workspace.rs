@@ -179,16 +179,21 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Selects the repository `key` and resolves it.
+    /// Selects the repository `key` and resolves it. The list is read
+    /// again too, so the configuration and index shown are the current
+    /// ones (track rule 4); the new list keeps the selection.
     pub(crate) fn select_repository(&mut self, key: String, cx: &mut Context<Self>) {
         let stamp = self.navigation.select(key.clone());
         self.resolve(key, stamp, cx);
+        self.load_repositories(cx);
     }
 
-    /// Resolves `key` again: Retry on an unavailable or failed entry.
+    /// Resolves `key` again: Retry on an unavailable or failed entry. As
+    /// on selection, the list is read again.
     pub(crate) fn retry_resolution(&mut self, key: String, cx: &mut Context<Self>) {
         let stamp = self.navigation.retry_resolution(key.clone());
         self.resolve(key, stamp, cx);
+        self.load_repositories(cx);
     }
 
     #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
