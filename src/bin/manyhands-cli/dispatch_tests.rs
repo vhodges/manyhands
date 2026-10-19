@@ -7,17 +7,17 @@ use manyhands::results::{Effects, Scope};
 use serde_json::Value;
 
 #[test]
-fn placeholders_are_exactly_the_27_remaining_available_verbs() {
+fn placeholders_are_exactly_the_14_content_and_relationship_verbs() {
     let expected: Vec<_> = catalog::COMMANDS
         .iter()
         .filter(|spec| {
             spec.availability == Availability::Available
-                && (spec.resource, spec.verb) != ("id", "new")
+                && matches!(spec.resource, "document" | "folder" | "ticket" | "comment")
         })
         .map(|spec| format!("{} {}", spec.resource, spec.verb))
         .collect();
     let actual = placeholder_verbs();
-    assert_eq!(actual.len(), 27);
+    assert_eq!(actual.len(), 14);
     assert_eq!(actual, expected);
 }
 
@@ -58,7 +58,8 @@ fn each_other_available_verb_is_an_explicit_placeholder_failure() {
     let directory = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(directory.path()).unwrap();
     for spec in catalog::COMMANDS.iter().filter(|spec| {
-        spec.availability == Availability::Available && (spec.resource, spec.verb) != ("id", "new")
+        spec.availability == Availability::Available
+            && matches!(spec.resource, "document" | "folder" | "ticket" | "comment")
     }) {
         for json in [false, true] {
             let output = dispatch(spec, &ArgMatches::default(), json, &service);
@@ -81,6 +82,72 @@ fn each_other_available_verb_is_an_explicit_placeholder_failure() {
                     .as_bytes()
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn item_id_helper_uses_canonical_ids_and_repository_scope() {
+    let directory = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(directory.path()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let repository = git2::Repository::init(root.path()).unwrap();
+    let mut config = repository.config().unwrap();
+    config.set_str("user.name", "Test").unwrap();
+    config
+        .set_str("user.email", "test@example.invalid")
+        .unwrap();
+    // Resolve an actual registered repository, with the minimum enable fixture.
+    let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+    let tree_id = repository.index().unwrap().write_tree().unwrap();
+    let tree = repository.find_tree(tree_id).unwrap();
+    repository
+        .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+        .unwrap();
+    let branch = repository.head().unwrap().shorthand().unwrap().to_owned();
+    service
+        .enable(manyhands::repository::EnableRepositoryRequest {
+            root: root.path().to_owned(),
+            primary_branch: branch,
+            identity: None,
+            operation_id: manyhands::repository::OperationId::new(),
+        })
+        .unwrap();
+    let repo = service.resolve_repository(root.path()).unwrap();
+    for id in [
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "01arz3ndektsv4rrffq69g5fav",
+        "mh-vh-k9x2b",
+    ] {
+        let invocation = crate::parse::parse(
+            [
+                "manyhands-cli",
+                "ticket",
+                "show",
+                "--repo",
+                root.path().to_str().unwrap(),
+                "--id",
+                id,
+            ]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        );
+        let crate::parse::Action::Run { args, .. } = invocation.action else {
+            panic!("expected Run")
+        };
+        let result = item_id(&args, &repo);
+        if id == "01ARZ3NDEKTSV4RRFFQ69G5FAV" {
+            assert_eq!(result.unwrap().to_string(), id);
+        } else {
+            let envelope =
+                serde_json::to_value(result.unwrap_err().to_envelope::<Value>("ticket show"))
+                    .unwrap();
+            assert_eq!(envelope["code"], "invalid_id");
+            assert_eq!(
+                envelope["scope"],
+                serde_json::to_value(repo.scope()).unwrap()
+            );
         }
     }
 }

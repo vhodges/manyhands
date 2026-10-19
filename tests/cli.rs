@@ -12,6 +12,9 @@ use support::cli::{CLI_CASES, CLI_TEXT_CASES, cli_fixture_directory};
 
 mod support;
 
+#[path = "cli/admin.rs"]
+mod admin;
+
 #[path = "cli/help.rs"]
 mod help;
 

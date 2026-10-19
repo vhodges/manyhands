@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–3 have been executed. For each later task, record its actual starting
+Tasks 0–4 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -204,8 +204,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 0 — Baseline, audit refresh and ledger | Complete; both controller reviews passed | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → `2aa71e7a1c4895c1e62c65d37fc81116902642c9` | Spec and quality reviews passed, no findings (controller handoff for Task 1) | Five baseline commands above; 183 targeted tests; documentation checks |
 | 1 — Clap, catalog and parsing | Complete; controller reviews passed | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` → `371c294195c48d8357146136bd1782db2daf2538` | Spec PASS; important authority-validation finding fixed; quality re-review PASS (Task 2 controller handoff) | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
 | 2 — Startup, rendering and main | Complete; controller reviews passed | `371c294195c48d8357146136bd1782db2daf2538` → `447c28dc85130f39b45ec89cf9a0fe40aee58831` | Spec PASS and quality PASS, no findings (Task 3 controller handoff) | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
-| 3 — Codes, schemas, harness and first goldens | Implemented and self-reviewed; controller reviews pending | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → checkpoint introducing this entry, `feat: usage_error and command_unavailable, CLI test harness and help goldens` | Spec/quality self-review PASS; no unresolved findings; no independent review claimed | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
-| 4 — Repository, credential, status and utility verbs | Not started | Not established | Not requested | Not run |
+| 3 — Codes, schemas, harness and first goldens | Complete; controller reviews passed | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → `2e3849f31c0d7abd39b559ea15edce7312c2df03` | Spec PASS and quality PASS, no findings (Task 4 controller handoff) | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
+| 4 — Repository, credential, status and utility verbs | Implemented and self-reviewed; controller reviews pending | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → checkpoint introducing this entry, `feat: CLI repository, credential and status reads` | Spec/quality self-review PASS; fixture normalization finding corrected; no unresolved findings | 13 verb REDs; 13 renderer REDs; scoped ID helper RED/GREEN; 138 targeted tests; 28 new JSON fixtures generated/read/verified; scoped clippy; fmt |
 | 5 — Content verbs | Not started | Not established | Not requested | Not run |
 | 6 — Relationship verbs | Not started | Not established | Not requested | Not run |
 | 7 — Boundaries, workflow and amendments | Not started | Not established | Not requested | Not run |
@@ -542,3 +542,129 @@ Canonical checkpoint comment:
 Endpoint is the commit introducing this entry, returned after creation. Task 4
 remains unstarted, the ticket stays open, and the full suite remains reserved
 for Task 8. No subagents, push, PR, merge into main, rebase, closure or cleanup.
+
+### Task 4 checkpoint — 2026-10-19
+
+**Authorization and base.** The controller dispatched only Task 4, with the
+owner's task-checkpoint commit approval, inline TDD/apply_patch and self-review.
+Initial HEAD was `2e3849f31c0d7abd39b559ea15edce7312c2df03`, clean on
+`manyhands/ticket/01M4CC0VMSZ7BRS740C8VSQ5ZK` in its existing ticket worktree.
+Read AGENTS, the canonical ticket and Task 3 comment, approved Cycle/design/plan
+and this ledger. The required AGENTS preflight fetched main and ran the
+already-up-to-date merge: no base or commit change. `origin/main` remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+**Task 3 review handoff.** The controller reports **spec PASS, quality PASS,
+no findings, 323 targeted tests** at `2e3849f`. This supersedes the pending
+review status in the historical Task 3 checkpoint. Its tests were not rerun
+outside Task 4's three authorized targets.
+
+**Implementation and acceptance mapping.**
+
+- Added one typed dispatch function per new verb: `repo list/inspect/identity`,
+  `remote list`, `key list/show/public`, `host list/inspect`, `index status`,
+  `poll status`, and `operation list/show`. Each calls its existing F1 read;
+  errors go through `ReadError::to_envelope` and successes through
+  `Envelope::read_success`. Only the 14 content/relationship placeholders
+  remain; their Task 2 tests now pin that exact set.
+- `repo inspect` calls `inspect_repository(path)` without registration-required
+  resolution; the real-binary unregistered inspection test succeeds. All other
+  repository verbs call public `resolve(service, args)` first. Relative repo
+  paths join the invocation cwd. Key IDs use `SharedKeyId::parse` with default
+  failure scope; operation IDs use `OperationId::parse` after resolution with
+  `repo.scope()`. The unregistered-plus-bad-operation-ID case proves precedence.
+- Public `item_id(args, repo)` uses the canonical parser and scoped invalid-ID
+  error. A bin test covers a canonical ID, lowercase ULID and short code. Its
+  sole temporary dead-code allow is explicitly for Tasks 5–6 dispatch; those
+  tasks remove it when wiring. `parse::authority`'s old allow is removed.
+- Host inspection reuses the already-validated authority parser, stripping IPv6
+  brackets before constructing `SshAuthority`. Real pins cover `[::1]:2222`,
+  hostname case normalization and default port 22.
+- Added 13 DTO human renderers and one unit test per renderer. Tests cover
+  metadata, fixed enum/code strings, optional fields, stored times, empty lists,
+  incomplete/stale/never-refreshed notes and host reapproval. `key public`
+  remains exactly public text plus newline; `id new` remains exactly ULID plus
+  newline. Binary tests cover every Task 4 verb in both modes, one line per
+  repository registration, empty global lists and stderr-only failure with
+  `error:`, `code:` and `next: repo.inspect root=…`.
+- `tests/cli/admin.rs` checks success status, envelope/data schemas, canonical
+  command and full scope for all 13 reads plus utility `id new`. Goldens use
+  F1 names prefixed `cli_`. Scope follows `read_contract.rs`: repo list,
+  credentials, hosts and ID generation use default scope; inspection uses
+  DTO.root; identity/remotes/status/operations use the resolved repository scope.
+- Failure goldens cover `invalid_path`, `not_repository`, `not_repository_root`,
+  `bare_repository`, `repository_not_registered` (also before a bad ID),
+  `invalid_id` for both key and operation selectors, `key_not_found`,
+  `authority_not_found`, `operation_not_found`, `public_key_unavailable`,
+  `repository_inaccessible` and `index_unavailable`. Blocked results exit 3;
+  input results exit 2. The public-key case uses `keys.without_public`.
+- The Unix mode-000 configuration route **does reach**
+  `repository_inaccessible` through `remote list`, exit 3, with repository
+  scope. Permissions applied in this Linux run; the test restores them before
+  assertions and returns early only when they are bypassed (root/capability).
+- R-2 is preserved: degraded-service data gives `index_unavailable` from
+  resolution, null data and `index.rebuild` recovery. There is deliberately no
+  CLI `index_status_unavailable` success golden. The exclusive cache-write
+  lease child gives `busy`, exit 5; only code/status are pinned because opening
+  and resolution can encounter the lock with different scopes.
+- Path review covers trailing slash, `.` from root, `..` from root/docs,
+  canonical path beneath `with space é`, and a linked item worktree created
+  by `items::create_document_context`. Every `repo identity --json` result has
+  the exact canonical owner scope, with no branch/worktree/item scope added.
+
+**RED/GREEN and verification.** All Rust commands ran in this worktree through
+Devenv, locked except fmt. No test target beyond bin/CLI/mutation_contract ran.
+
+| Command / stage | Evidence |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test cli admin::` before dispatch | All **13 new verbs failed with `command_unavailable`**. The already-implemented ID test reached its missing new golden. Initial run: 14 failures, 10 filtered. |
+| Same command after adding failure/path tests, before dispatch | 22 failed, 1 passed, 10 filtered. The lease test already passed because startup can return `busy` before dispatch. Remaining new tests failed at unavailable dispatch; ID still needed its fixture. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli human::` against renderer scaffolding | **13 failed**, existing ID renderer passed, 47 filtered. Every new renderer failed at its unimplemented entry point. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli dispatch::` before wiring | **2 failed**, 2 passed, 58 filtered: new helper failed at scaffolding; placeholder count was still 27 instead of 14. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` after implementation | **62 passed**, no failures/ignored/filtered. |
+| `MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --locked --test cli admin::` | **23 passed**, 10 filtered; generated 28 new JSON fixtures. |
+| `devenv shell -- cargo test --locked --test cli admin::repository_failures_and_resolution_precedence -- --exact` | Golden-review finding reproduced: **1 failed**, 32 filtered, solely because bare-repository scope retained the temporary path. |
+| Same exact filter with `MANYHANDS_UPDATE_GOLDEN=1`, after placeholder correction | **1 passed**, 32 filtered; regenerated the six failure-case goldens in that test, with the bare root now normalized. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test mutation_contract` (update variable absent) | **62 + 33 + 43 = 138 passed**, zero failures/ignored/filtered. CLI includes 23 admin tests, the fixture-directory check and inactive lease-child helper. |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --test cli --test mutation_contract -- -D warnings` | Initial test-only lint required octal permission notation; corrected `0` to `0o000`. Final **PASS**. |
+| `devenv shell -- cargo fmt --check` | Formatting-only differences corrected via apply_patch; final **PASS**. |
+| `git diff --check` | **PASS**. |
+| `git merge-tree --write-tree HEAD origin/main` | Exit 0, tree `708e2e34b2acb41e6dd8cc104460b8472d2f4809`; this precommit check covers committed Task 3 HEAD. |
+
+Read all **28** generated JSON files before verification. Fixture review found
+the bare-root normalization omission; its focused reproduction identified the
+test placeholder selection, not production scope, as the cause. Corrected only
+that test's root mapping, read the corrected golden, then verified all three
+authorized targets without the update variable. CLI fixtures now total
+**36 JSON + 2 text**. Existing goldens are unchanged.
+
+**Design codes with no C1 envelope route.** These are Cycle-wide exclusions,
+not missing Task 4 implementations. Content failures `item_not_found` and
+`path_not_found` remain reachable through Task 5 and are not exclusions.
+
+| Code(s) | Why C1 cannot produce them |
+| --- | --- |
+| `repository_not_enabled` | F1's resolver returns `repository_not_registered` for an unregistered root; it does not use the mutation gate. |
+| `relationship_cycle`, `invalid_relationship` | Rejection results belong to `ticket check`/authoring, moved to C3. Relationship read DTOs report stored problems without returning these envelope failures. |
+| Transport-start `internal_error` route | Cannot arrange libgit2 rejecting its own timeout options through the binary (R-4); Task 2 fake-startup test is evidence. The code itself **is reachable**, as Task 3's regular-file data-directory test proves. |
+| `invalid_input`, `request_mismatch`, `request_not_found`, `confirmation_mismatch`, `not_confirmable`, `confirmation_required`, `confirmation_expired`, `confirmation_not_found`, `confirmation_used`, `already_applied` | Request parsing/replay and prepare/confirm/execute flows are absent. CLI grammar errors are `usage_error`; planned verbs are `command_unavailable`. |
+| `slug_already_assigned`, `occupied_path`, `not_repairable`, `external_change`, `recovery_required`, `original_request_required`, `identity_required`, `initials_required`, `invalid_slug_configuration`, `identity_ambiguous`, `ticket_closed`, `wrong_branch`, `worktree_not_clean`, `worktree_conflicted`, `invalid_configuration` | Authoring/configuration mutation gates and recovery do not run. Reads report stored/configuration/identity state in DTOs. |
+| `remote_name_conflict`, `invalid_remote`, `publication_remote_required`, `publication_remote_in_use`, `merge_required`, `remote_branch_deleted`, `push_rejected` | Remote configuration, synchronization and publication mutations do not run; C1 makes no network attempt. |
+| `key_not_deletable`, `no_selected_key`, `key_unavailable`, `key_rejected`, `selected_key_in_use`, `unlock_required`, `unlock_failed`, `host_approval_required`, `host_replacement_required`, `host_mismatch` | Key mutation/unlock and transport trust/authentication gates do not run. Public-key reading has its separate `public_key_unavailable` code. Stored operation/poll outcomes can contain similar names as data, not envelope failures. |
+| `discovery_pending`, `registration_pending`, `poll_yielding`, `remote_unavailable`, `transport_unavailable`, `cancelled` | No mutation hand-off, poll scheduler, transport attempt or cancellable mutation runs. Thus C1 produces neither incomplete nor cancelled exit classes (mapping remains unit-tested). |
+
+**Self-review.** Compared actual source/test changes with Task 4 Steps 1–6,
+the design Dispatch/scope tables and the F1 golden scopes. Reviewed every new
+golden, path/ID precedence, error conversion, human stream behavior and the
+remaining placeholder set. No SQL, backend error text, Debug rendering, key-file
+read or domain implementation is added to the bin. All implementation changes
+are in the approved bin/tests files; no library, repository, schema, dependency,
+lockfile or pre-C1 semantic test changes. No library gap was found. Spec/quality
+self-review PASS with no unresolved findings; independent controller review
+remains pending. Native platform behavior is not claimed.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A3JMZCNDJB7EA6WJQJTZB1.md`.
+Endpoint is the commit introducing this entry and is returned after creation.
+Task 5 remains unstarted; the ticket remains open. No subagents, rebase, push,
+PR, merge into main, closure or cleanup. Full-suite verification stays in Task 8.

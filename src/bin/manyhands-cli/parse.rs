@@ -250,7 +250,6 @@ fn flag_requested(args: &[OsString], flag: &str) -> bool {
         .any(|arg| arg == flag)
 }
 
-#[allow(dead_code)] // used by host inspect in Task 4
 pub fn authority(text: &str) -> Result<(String, u16), String> {
     let invalid = || {
         "--authority must be host[:port] or [IPv6][:port], with a port from 1 to 65535.".to_owned()
