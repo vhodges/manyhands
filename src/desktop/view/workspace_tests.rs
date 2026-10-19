@@ -31,7 +31,10 @@ use crate::desktop::{
         fixtures::{Fixture, refresh_through, remove_registration},
         snapshot::RepositorySnapshot,
     },
-    view::{harness::wait_until, sidebar::configuration_label},
+    view::{
+        harness::wait_until,
+        sidebar::{SELECTED, configuration_label},
+    },
 };
 
 struct Setup {
@@ -531,6 +534,41 @@ fn f6_cycles_the_regions_and_secondary_digits_focus_each(cx: &mut TestAppContext
         shell.keys(keystroke, cx);
         assert_eq!(focused_region(&shell, cx), expected, "{keystroke}");
     }
+}
+
+/// The repository selector works from the keyboard: `secondary-1` focuses
+/// it, the arrows move and Enter selects and resolves the row. The
+/// selected row says so in text, not by color alone.
+#[gpui_kit::test]
+fn the_repository_selector_selects_with_arrows_and_enter(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.keys("secondary-3", cx);
+    shell.keys("secondary-1", cx);
+    assert_eq!(focused_region(&shell, cx), Region::Repositories);
+
+    shell.keys("down", cx);
+    shell.keys("down", cx);
+    assert_eq!(shell.selected(cx), None, "moving does not select");
+    shell.keys("enter", cx);
+
+    assert_eq!(shell.selected(cx), Some(key(&shell.b)));
+    assert!(matches!(
+        shell.resolution(&shell.b, cx),
+        Resolution::Resolved(_)
+    ));
+    assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
+    assert_eq!(
+        shell.label(("repo-selected", 1usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 0usize), cx));
+    assert_eq!(focused_region(&shell, cx), Region::Repositories);
+
+    shell.keys("up", cx);
+    shell.keys("enter", cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    assert!(shell.present(("repo-selected", 0usize), cx));
+    assert!(!shell.present(("repo-selected", 1usize), cx));
 }
 
 /// Selecting and browsing reads only: refs, worktrees, status and the

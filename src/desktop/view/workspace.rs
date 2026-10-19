@@ -37,7 +37,7 @@ use super::{
     confirm::{confirm, prepare_again},
     documents::DocumentsPane,
     item::ItemPane,
-    sidebar,
+    sidebar::{self, RepositoriesPane, RepositoryRow},
     tickets::{CLOSURE_FILTERS, TicketsPane},
 };
 use crate::desktop::{
@@ -159,6 +159,8 @@ pub(crate) struct Workspace {
     abandon_drawn: HashSet<(RepoKey, String)>,
     _operations: Subscription,
     _ticket_events: Subscription,
+    repositories_pane: RepositoriesPane,
+    _repository_events: Subscription,
 }
 
 impl Workspace {
@@ -194,6 +196,16 @@ impl Workspace {
                 }
             }
         });
+        let repositories_pane = RepositoriesPane::new(window, cx);
+        let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
+            // A click or Enter on a row selects it.
+            if let ListEvent::Confirm(ix) = event {
+                let key = list.read(cx).delegate().row(*ix).map(|row| row.key.clone());
+                if let Some(key) = key {
+                    this.select_repository(key, cx);
+                }
+            }
+        });
         let mut workspace = Self {
             services,
             regions,
@@ -216,6 +228,8 @@ impl Workspace {
             abandon_drawn: HashSet::new(),
             _operations: operations,
             _ticket_events: ticket_events,
+            repositories_pane,
+            _repository_events: repository_events,
         };
         workspace.load_repositories(cx);
         workspace
@@ -567,11 +581,21 @@ impl Workspace {
             .find(|region| self.regions[region.index()].contains_focused(window, cx))
     }
 
-    /// Focuses `region`. The navigation region gives its focus to the
-    /// shown pane's tree or list, whose arrow keys then work, when a
-    /// repository's lists are shown.
+    /// Focuses `region`. The repositories region gives its focus to the
+    /// selector's list when it has rows, and the navigation region to the
+    /// shown pane's tree or list when a repository's lists are shown, so
+    /// their arrow keys and Enter work.
     fn focus_region(&mut self, region: Region, window: &mut Window, cx: &mut Context<Self>) {
         match (region, self.navigation.pane()) {
+            (Region::Repositories, _)
+                if self
+                    .navigation
+                    .repositories()
+                    .rows()
+                    .is_some_and(|rows| !rows.is_empty()) =>
+            {
+                self.repositories_pane.focus(window, cx)
+            }
             (Region::Navigation, Pane::Documents) if self.documents.repo().is_some() => {
                 self.documents_pane.focus(window, cx)
             }
@@ -1060,7 +1084,9 @@ impl Render for Workspace {
                     ),
                 )
         });
-        let repositories = sidebar::repositories(&self.navigation, cx);
+        self.repositories_pane
+            .set(RepositoryRow::rows(&self.navigation), window, cx);
+        let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
         let selection = sidebar::selection(&self.navigation, cx);
         let navigation = self.navigation_pane(cx);
         let content = v_flex()
