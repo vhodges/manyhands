@@ -162,6 +162,13 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "cli_document_list",
+    "cli_document_show",
+    "cli_document_show_nonconforming",
+    "cli_document_folder_list",
+    "cli_ticket_list",
+    "cli_ticket_show",
+    "cli_comment_list",
     "cli_repo_list",
     "cli_repo_inspect",
     "cli_repo_identity",
@@ -199,7 +206,12 @@ pub const CLI_CASES: &[&str] = &[
     "usage_unknown_option",
     "version",
 ];
-pub const CLI_TEXT_CASES: &[&str] = &["help_root_text", "version_text"];
+pub const CLI_TEXT_CASES: &[&str] = &[
+    "help_root_text",
+    "version_text",
+    "ticket_list_text",
+    "item_not_found_text",
+];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 
 pub fn cli_fixture_directory() -> PathBuf {

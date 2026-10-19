@@ -1,7 +1,8 @@
 use super::render::Human;
 use manyhands::repository::{
-    HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, KeyDto, KeyListDto, NewIdDto,
-    OperationDto, OperationListDto, PollingStatusDto, PublicKeyDto, RemoteDto, RemoteListDto,
+    CommentListDto, DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto,
+    ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto, NewIdDto, OperationDto,
+    OperationListDto, PollingStatusDto, ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto,
     RepositoryInspectionDto, RepositoryListDto,
 };
 
@@ -280,6 +281,145 @@ pub fn new_id(data: &NewIdDto) -> Human {
         stdout: format!("{}\n", data.id),
         notes: Vec::new(),
     }
+}
+
+fn nonconforming(path: &str, problems: &[ProblemDto]) -> String {
+    format!(
+        "nonconforming  {}  {}\n",
+        field(path),
+        problems
+            .iter()
+            .map(|problem| problem.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+pub fn item_list(data: &ItemListDto) -> Human {
+    let mut output = text(String::new());
+    for item in &data.items {
+        if let Some(id) = &item.id {
+            let closure = if item.kind == ItemDtoKind::Ticket {
+                format!(
+                    "{}  ",
+                    optional(item.closure.as_ref().map(|closure| closure.state.as_str()))
+                )
+            } else {
+                String::new()
+            };
+            output.stdout.push_str(&format!(
+                "{}  {}  {}{}  {}\n",
+                field(id),
+                optional(item.slug.as_deref()),
+                closure,
+                optional(item.status.as_deref()),
+                optional(item.title.as_deref())
+            ));
+        } else {
+            output
+                .stdout
+                .push_str(&nonconforming(&item.path, &item.problems));
+        }
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+pub fn item_show(data: &ItemDto) -> Human {
+    let mut output = text(format!(
+        "ID: {}\nKind: {}\nPath: {}\nTitle: {}\nSlug: {}\nType: {}\nStatus: {}\nProject: {}\nTeam: {}\n",
+        optional(data.id.as_deref()),
+        data.kind.as_str(),
+        field(&data.path),
+        optional(data.title.as_deref()),
+        optional(data.slug.as_deref()),
+        optional(data.ticket_type.as_deref()),
+        optional(data.status.as_deref()),
+        optional(data.project.as_deref()),
+        optional(data.team.as_deref())
+    ));
+    if let Some(closure) = &data.closure {
+        output.stdout.push_str(&format!(
+            "Closure: {}\nClosed at: {}\nClosed by: {}\n",
+            closure.state.as_str(),
+            optional(closure.closed_at.as_deref()),
+            optional(closure.closed_by.as_deref())
+        ));
+    }
+    output.stdout.push_str(&format!(
+        "Context: {}\nBranch: {}\nWorktree: {}\nChanged at: {}\nIndex: {}\n",
+        data.context.kind.as_str(),
+        optional(data.context.branch.as_deref()),
+        field(&data.context.worktree),
+        optional(data.changed_at.as_deref()),
+        data.index.state.as_str()
+    ));
+    if data.id.is_none() {
+        output.stdout.push_str("State: nonconforming\n");
+    }
+    for problem in &data.problems {
+        output.stdout.push_str(&format!(
+            "Problem: {} {}\n",
+            problem.code.as_str(),
+            optional(problem.path.as_deref())
+        ));
+    }
+    output.stdout.push('\n');
+    // This is the explicitly requested content: preserve it byte-for-byte,
+    // including control characters and the presence/absence of a final newline.
+    let content = if data.id.is_some() {
+        &data.body
+    } else {
+        &data.source
+    };
+    output
+        .stdout
+        .push_str(content.as_deref().unwrap_or_default());
+    index_note(&mut output, data.index.state.as_str());
+    output
+}
+
+pub fn folder_list(data: &DocumentFolderListDto) -> Human {
+    let mut output = text(
+        data.items
+            .iter()
+            .map(|folder| {
+                format!(
+                    "{}{}\n",
+                    field(&folder.path),
+                    if folder.empty { "  empty" } else { "" }
+                )
+            })
+            .collect(),
+    );
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+pub fn comment_list(data: &CommentListDto) -> Human {
+    let mut output = text(String::new());
+    for comment in &data.items {
+        for _ in 0..comment.depth {
+            output.stdout.push_str("  ");
+        }
+        if let Some(id) = &comment.id {
+            output.stdout.push_str(&format!(
+                "{}  {}  {}\n",
+                field(id),
+                optional(comment.author.as_deref()),
+                optional(comment.created_at.as_deref())
+            ));
+        } else {
+            output
+                .stdout
+                .push_str(&nonconforming(&comment.path, &comment.problems));
+        }
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
 }
 
 #[cfg(test)]

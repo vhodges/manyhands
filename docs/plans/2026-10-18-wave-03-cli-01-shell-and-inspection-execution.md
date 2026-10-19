@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–4 have been executed. For each later task, record its actual starting
+Tasks 0–5 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -205,8 +205,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 1 — Clap, catalog and parsing | Complete; controller reviews passed | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` → `371c294195c48d8357146136bd1782db2daf2538` | Spec PASS; important authority-validation finding fixed; quality re-review PASS (Task 2 controller handoff) | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
 | 2 — Startup, rendering and main | Complete; controller reviews passed | `371c294195c48d8357146136bd1782db2daf2538` → `447c28dc85130f39b45ec89cf9a0fe40aee58831` | Spec PASS and quality PASS, no findings (Task 3 controller handoff) | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
 | 3 — Codes, schemas, harness and first goldens | Complete; controller reviews passed | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → `2e3849f31c0d7abd39b559ea15edce7312c2df03` | Spec PASS and quality PASS, no findings (Task 4 controller handoff) | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
-| 4 — Repository, credential, status and utility verbs | Implemented; spec PASS; quality fix awaiting re-review | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → review-fix checkpoint below | Controller spec PASS; important/P2 raw-control-character finding verified and fixed; quality re-review pending | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
-| 5 — Content verbs | Not started | Not established | Not requested | Not run |
+| 4 — Repository, credential, status and utility verbs | Complete; controller reviews passed | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` | Spec PASS; quality re-review PASS after metadata-escaping fix (Task 5 handoff) | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
+| 5 — Content verbs | Implemented; self-review PASS; controller review pending | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → checkpoint introducing the Task 5 entry below | Spec/quality self-review PASS; no library gap or unresolved finding | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
 | 6 — Relationship verbs | Not started | Not established | Not requested | Not run |
 | 7 — Boundaries, workflow and amendments | Not started | Not established | Not requested | Not run |
 | 8 — Full verification, review and handoff | Not started | Not established | Not requested | Full suite reserved here |
@@ -736,3 +736,98 @@ Canonical comment:
 Task 5 remains unstarted. No subagents, rebase, push, PR, merge into main,
 closure or cleanup; ticket remains open and full-suite verification stays in
 Task 8.
+
+### Task 5 checkpoint — 2026-10-19
+
+**Authorization and base.** Only Task 5 was dispatched, with owner approval for
+the checkpoint commit, inline TDD/apply_patch and self-review. Initial HEAD was
+`4fb690cb70f5f43566838dc26e1a7ea9ea3794a1`, clean on the specified ticket branch
+in its existing worktree. Read current AGENTS, the canonical ticket and latest
+comment, approved Cycle/design/plan and ledger. The required AGENTS preflight
+fetched main and ran `git merge origin/main`: **Already up to date**, no base
+or commit change. Main remains `f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+**Task 4 review handoff.** The controller reports **spec PASS and quality PASS**,
+including fix `4fb690c` for field-owned control escaping, with **66 bin + 33 CLI
+tests passing**. This supersedes the pending quality re-review recorded in the
+historical Task 4 entry. The shared `field`/`optional` helpers are reused by
+Task 5 for metadata, paths and titles; requested body/source bytes bypass them.
+
+**Implementation and acceptance mapping.**
+
+- Added the six content dispatches: `document list/show`, `folder list`,
+  `ticket list/show` and `comment list`. Each uses the existing F1 service and
+  DTO unchanged; all repository resolution precedes ID parsing. Removed only
+  these six placeholders, leaving the exact eight relationship verbs for Task 6.
+- Both show verbs use the shared selector/kind-check helper. ID success and
+  kind-mismatch scopes contain the item ID; by-path scopes are repository-only,
+  even with an explicit context. F1 read failures retain their own scopes.
+  Tests cover both successful selector paths, primary and linked explicit
+  contexts, both directions of ID/path kind mismatch, short-code invalid ID,
+  absent path, parent-component invalid path and absent ticket. Unregistered
+  repositories beat bad item IDs for document, ticket and comment reads.
+- `ticket_filter` forwards all exact-text options, defaults closure to All and
+  maps ready/blocked flags. It uses `try_get_one`, so the narrower future
+  relationship argument sets do not panic on undeclared closure/slug/flags.
+  A helper-only unit test exercises those argument sets without implementing
+  or dispatching Task 6. Twelve real-binary filter cases compare ordered IDs
+  with in-process F1 `list_tickets` using the same `TicketFilter`; conflicting
+  readiness flags return `usage_error`, exit 2, empty scope.
+- Human lists have one line per entry, IDs and slug-or-dash, ticket lifecycle
+  closure distinct from status, and titles. Nonconforming entries show their
+  escaped path and fixed problem codes. Folder lines mark empty directories;
+  comments indent two spaces per depth and show metadata, not bodies.
+- Show renders field-escaped metadata, a blank line, then the requested body
+  or nonconforming source exactly, without adding a final newline or escaping
+  its controls. DTO unit tests cover multiline/control metadata, ordinary
+  Unicode, exact requested content, missing source, empty lists, thread depth,
+  lifecycle/status disagreement, and separate stale/never-refreshed/incomplete
+  notes. Real-binary stale tests use `refresh_required = 1` and a document mtime
+  moved 30 seconds ahead; both remain successful reads.
+- Added `tests/cli/content.rs`, registered it in `tests/cli.rs`, and registered
+  all nine new fixtures in `CLI_CASES`/`CLI_TEXT_CASES`. Every content JSON
+  result checks canonical command, full scope, exit/code and envelope/data
+  schemas. Fixtures use `items::contract_repository`, comment helpers and the
+  existing isolated CLI harness. The seven success JSON files mirror F1 exactly;
+  text fixtures pin `ticket_list_text` and absent-ticket `item_not_found_text`.
+
+**RED/GREEN and verification.** All Rust commands ran through Devenv, locked
+except fmt. Only the three authorized targets ran; the full suite stays in Task 8.
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test cli content::` before dispatch | **RED: 11 failed**, 33 filtered; all failures reported `command_unavailable` |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` with new unit tests and scaffolding | **RED: 8 failed, 65 passed**: six renderer tests and filter helper at unimplemented entry points, plus placeholder count 14 instead of 8. An initial test DTO field typo (`item_id` instead of `target_id`) was corrected before this behavioral RED run. |
+| Same bin command after implementation | **GREEN: 73 passed** |
+| Content filter after implementation, before fixture generation | **5 passed, 6 failed** solely on missing new fixture files |
+| `MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --locked --test cli content::` | **11 passed**, 33 filtered; generated **7 JSON + 2 text** fixtures once |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test mutation_contract`, update variable absent | **73 + 44 + 43 = 160 passed**, zero failed/ignored/filtered |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --test cli --test mutation_contract -- -D warnings` | **PASS** |
+| `devenv shell -- cargo fmt --check` | Formatting-only differences corrected via apply_patch; final **PASS** |
+| `git diff --no-index` for each new JSON fixture against its corresponding `read_v1` file | All **7 byte-identical**, exit 0 |
+| `git diff --check` | **PASS** |
+| `git merge-tree --write-tree HEAD origin/main` before checkpoint | Exit 0, tree `9c36360e1a8e64ea585de3717a3a730cdb478e39`; covers committed base before the Task 5 additions |
+
+Read every generated fixture, then verified without update mode. CLI fixtures
+now total **43 JSON + 4 text**. Existing goldens are unchanged. An intermediate
+parallel Devenv invocation reported a `.devenv/load-exports` cleanup/startup
+race; Cargo still ran, but subsequent Devenv runs were serialized and all final
+commands completed cleanly. No source change was needed for that harness issue.
+
+**Self-review.** Reviewed the complete Task 5 production/test diff against all
+four plan steps and the controller's additional constraints, including exact
+F1 scopes, repository-first precedence, narrow-filter safety, body/source
+preservation and metadata escaping. The only existing-test behavior changes
+are the C1-authored placeholder tests shrinking to eight, as the plan requires.
+No library, `src/repository/`, schema, dependency, lockfile or pre-C1 semantic
+test change; no library gap. Spec/quality self-review **PASS**, no unresolved
+findings. Independent controller review remains pending; native platform
+behavior is not claimed.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A4ZYP8BF57QZCFQ5XXVJWF.md`.
+Endpoint is the commit introducing this entry, returned after creation to avoid
+a self-referential SHA. Commit subject: `feat: CLI document, ticket and comment
+reads`, with the owner-required co-author trailer. Task 6 remains unstarted;
+ticket stays open. No subagents, rebase, push, PR, merge into main, closure or
+cleanup.

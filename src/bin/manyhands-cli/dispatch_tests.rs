@@ -7,17 +7,18 @@ use manyhands::results::{Effects, Scope};
 use serde_json::Value;
 
 #[test]
-fn placeholders_are_exactly_the_14_content_and_relationship_verbs() {
+fn placeholders_are_exactly_the_eight_relationship_verbs() {
     let expected: Vec<_> = catalog::COMMANDS
         .iter()
         .filter(|spec| {
             spec.availability == Availability::Available
-                && matches!(spec.resource, "document" | "folder" | "ticket" | "comment")
+                && spec.resource == "ticket"
+                && !matches!(spec.verb, "list" | "show")
         })
         .map(|spec| format!("{} {}", spec.resource, spec.verb))
         .collect();
     let actual = placeholder_verbs();
-    assert_eq!(actual.len(), 14);
+    assert_eq!(actual.len(), 8);
     assert_eq!(actual, expected);
 }
 
@@ -59,7 +60,8 @@ fn each_other_available_verb_is_an_explicit_placeholder_failure() {
     let service = RepositoryService::open_at(directory.path()).unwrap();
     for spec in catalog::COMMANDS.iter().filter(|spec| {
         spec.availability == Availability::Available
-            && matches!(spec.resource, "document" | "folder" | "ticket" | "comment")
+            && spec.resource == "ticket"
+            && !matches!(spec.verb, "list" | "show")
     }) {
         for json in [false, true] {
             let output = dispatch(spec, &ArgMatches::default(), json, &service);
@@ -149,5 +151,41 @@ fn item_id_helper_uses_canonical_ids_and_repository_scope() {
                 serde_json::to_value(repo.scope()).unwrap()
             );
         }
+    }
+}
+
+#[test]
+fn ticket_filter_helper_accepts_the_narrower_future_relationship_options() {
+    for verb in ["ready", "blocked", "plan"] {
+        let invocation = crate::parse::parse(
+            [
+                "manyhands-cli",
+                "ticket",
+                verb,
+                "--repo",
+                "/repository",
+                "--status",
+                "open",
+                "--type",
+                "task",
+                "--project",
+                "manyhands",
+            ]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        );
+        let crate::parse::Action::Run { args, .. } = invocation.action else {
+            panic!("expected Run")
+        };
+        assert_eq!(
+            ticket_filter(&args),
+            manyhands::repository::TicketFilter {
+                status: Some("open".into()),
+                ticket_type: Some("task".into()),
+                project: Some("manyhands".into()),
+                ..Default::default()
+            }
+        );
     }
 }

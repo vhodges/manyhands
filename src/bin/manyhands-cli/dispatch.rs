@@ -6,15 +6,15 @@ use super::{
 use clap::ArgMatches;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, KeyDto, KeyListDto, OperationDto,
-    OperationId, OperationListDto, PollingStatusDto, PublicKeyDto, ReadError, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId,
-    transport::SshAuthority,
+    ClosureFilter, CommentListDto, DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto,
+    IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto, OperationDto,
+    OperationId, OperationListDto, PollingStatusDto, PublicKeyDto, ReadError, ReadinessFilter,
+    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositoryService,
+    ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
 };
 use manyhands::results::{Envelope, ResultCode, Scope};
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)] // Used by content/relationship dispatch in Tasks 5–6.
 pub fn item_id(args: &ArgMatches, repo: &ResolvedRepository) -> Result<ItemId, ReadError> {
     value(args, "id")?
         .parse()
@@ -25,6 +25,37 @@ fn value<'a>(args: &'a ArgMatches, name: &str) -> Result<&'a str, ReadError> {
     args.get_one::<String>(name)
         .map(String::as_str)
         .ok_or_else(|| ReadError::new(ResultCode::InternalError))
+}
+
+// Relationship verbs declare only a subset of these options. `try_get_one`
+// also handles an undeclared option, unlike `get_one`, which would panic.
+fn ticket_filter(args: &ArgMatches) -> TicketFilter {
+    let text = |name| args.try_get_one::<String>(name).ok().flatten().cloned();
+    let flag = |name| {
+        args.try_get_one::<bool>(name)
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false)
+    };
+    TicketFilter {
+        status: text("status"),
+        ticket_type: text("type"),
+        project: text("project"),
+        slug: text("slug"),
+        closure: match text("closure").as_deref() {
+            Some("open") => ClosureFilter::Open,
+            Some("closed") => ClosureFilter::Closed,
+            _ => ClosureFilter::All,
+        },
+        readiness: if flag("ready") {
+            Some(ReadinessFilter::Ready)
+        } else if flag("blocked") {
+            Some(ReadinessFilter::Blocked)
+        } else {
+            None
+        },
+    }
 }
 
 fn repository_path(args: &ArgMatches) -> Result<PathBuf, ReadError> {
@@ -203,6 +234,95 @@ fn operation_show(
     ))
 }
 
+fn document_list(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "document list",
+        repo.scope(),
+        service.list_documents(&repo)?,
+    ))
+}
+
+fn folder_list(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<DocumentFolderListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "folder list",
+        repo.scope(),
+        service.list_document_folders(&repo)?,
+    ))
+}
+
+fn ticket_list(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "ticket list",
+        repo.scope(),
+        service.list_tickets(&repo, &ticket_filter(args))?,
+    ))
+}
+
+fn show(
+    service: &RepositoryService,
+    args: &ArgMatches,
+    name: &str,
+    kind: ItemDtoKind,
+) -> Result<Envelope<ItemDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let mut scope = repo.scope();
+    let data = if let Some(path) = args.get_one::<String>("path") {
+        let context = args.get_one::<String>("context").map(PathBuf::from);
+        service.show_path(&repo, context.as_deref(), Path::new(path))?
+    } else {
+        let id = item_id(args, &repo)?;
+        scope.item_id = Some(id.to_string());
+        service.show_item(&repo, &id)?
+    };
+    if data.kind != kind {
+        return Err(ReadError::new(ResultCode::ItemNotFound).with_scope(scope));
+    }
+    Ok(Envelope::read_success(name, scope, data))
+}
+
+fn document_show(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemDto>, ReadError> {
+    show(service, args, "document show", ItemDtoKind::Document)
+}
+
+fn ticket_show(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemDto>, ReadError> {
+    show(service, args, "ticket show", ItemDtoKind::Ticket)
+}
+
+fn comment_list(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<CommentListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let id = item_id(args, &repo)?;
+    let scope = Scope {
+        item_id: Some(id.to_string()),
+        ..repo.scope()
+    };
+    Ok(Envelope::read_success(
+        "comment list",
+        scope,
+        service.list_comments(&repo, &id)?,
+    ))
+}
+
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
@@ -211,6 +331,29 @@ pub fn dispatch(
 ) -> Output {
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "document list" => {
+            return read_output(&name, json, document_list(service, args), human::item_list);
+        }
+        "document show" => {
+            return read_output(&name, json, document_show(service, args), human::item_show);
+        }
+        "folder list" => {
+            return read_output(&name, json, folder_list(service, args), human::folder_list);
+        }
+        "ticket list" => {
+            return read_output(&name, json, ticket_list(service, args), human::item_list);
+        }
+        "ticket show" => {
+            return read_output(&name, json, ticket_show(service, args), human::item_show);
+        }
+        "comment list" => {
+            return read_output(
+                &name,
+                json,
+                comment_list(service, args),
+                human::comment_list,
+            );
+        }
         "repo list" => return read_output(&name, json, repo_list(service), human::repository_list),
         "repo inspect" => {
             return read_output(
@@ -293,11 +436,6 @@ pub fn dispatch(
 
 pub fn placeholder_verbs() -> Vec<&'static str> {
     vec![
-        "document list",
-        "document show",
-        "folder list",
-        "ticket list",
-        "ticket show",
         "ticket ready",
         "ticket blocked",
         "ticket deps",
@@ -306,7 +444,6 @@ pub fn placeholder_verbs() -> Vec<&'static str> {
         "ticket plan",
         "ticket critical-path",
         "ticket find",
-        "comment list",
     ]
 }
 

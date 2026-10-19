@@ -15,6 +15,9 @@ mod support;
 #[path = "cli/admin.rs"]
 mod admin;
 
+#[path = "cli/content.rs"]
+mod content;
+
 #[path = "cli/help.rs"]
 mod help;
 
