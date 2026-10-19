@@ -40,6 +40,7 @@ id: "01M58XQ5A2C0CEG8ZKW4YDR66J"
 - **No subagents.** Implementers never dispatch subagents.
 - **Commits.** Commit at the end of every task. Messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Authorization.** Never push, open a pull request, merge, close the ticket or clean up without separate owner authorization.
+- **Additional named test exception (owner, 2026-10-19; Cycle decision 14).** In `src/repository/closure/checkpoint_tests.rs`, only `existing_closure_writes_no_checkpoint` may reload its persisted baseline immediately after `f.record`, before the hook/resume. Preserve every assertion, including final whole-record equality and its `updated_at` check. This is the sole additional exception to the `src/repository/` restriction and named edits 1–6 above; no production or shared-fixture change is authorized. Verify with `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::existing_closure_writes_no_checkpoint -- --exact`, then `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::`, and `devenv shell -- cargo fmt --check`, with sufficient timeouts. Commit separately with the required trailer; the controller retains the full Task 8 gate.
 
 ## Review Focus
 

@@ -998,6 +998,8 @@ fn existing_closure_writes_no_checkpoint() {
     write(&f.context, &ticket(), closed);
     commit(&f.context);
     let r = f.record(ClosureKind::Existing);
+    // Saving the fixture can advance the persisted timestamp before either operation.
+    let r = f.reload(&r);
     let before = image(f.root.path(), &f.repo);
     assert_eq!(f.hook(&r).unwrap(), PreIntegration::None);
     assert_eq!(f.resume(&r).unwrap(), None);

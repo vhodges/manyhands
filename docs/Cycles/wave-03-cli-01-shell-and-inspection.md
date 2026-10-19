@@ -242,3 +242,22 @@ Authority, in order:
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing,
 merging, closing and worktree cleanup each need their own authorization.
+
+## Additional Product-Owner Decision (2026-10-19)
+
+14. **Narrow test-only Rule 5 exception for the Task 8 gate.** The owner
+    approved reloading the persisted record immediately after `f.record` in
+    `src/repository/closure/checkpoint_tests.rs`'s
+    `existing_closure_writes_no_checkpoint`, before the hook and resume. Keep
+    every assertion, including final whole-record equality checking
+    `updated_at`. This adds only this named test to the earlier repository
+    boundary and pre-existing-test exceptions; it permits no production change
+    or shared-fixture behavior change. Decisions 9 and 11 retain their original
+    scope and history.
+
+    Verify the exact test and the closure checkpoint test group with
+    all features and locked dependencies through Devenv, plus formatting,
+    using sufficient command timeouts. Commit this correction separately with
+    the required co-author trailer. The controller retains Task 8's full-gate
+    rerun; this follow-up does not run the full suite or authorize publishing,
+    merging, rebasing, ticket closure or subagents.

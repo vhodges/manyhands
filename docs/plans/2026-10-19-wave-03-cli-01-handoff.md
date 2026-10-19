@@ -131,3 +131,19 @@ resolved in the documents. Watch these areas closely in task reviews:
 2. Fetch, and merge `origin/main` if it moved.
 3. Start the subagent-driven-development ledger for the plan.
 4. Dispatch Task 0.
+
+## Task 8 Follow-Up Addendum (2026-10-19)
+
+The earlier planning handoff is historical. The owner has now approved Cycle
+decision 14: a test-only exception for
+`src/repository/closure/checkpoint_tests.rs::existing_closure_writes_no_checkpoint`.
+Reload its persisted baseline after `f.record` and before either operation,
+preserving all assertions and the final whole-record timestamp comparison.
+This exception does not extend to production code or shared-fixture behavior.
+The implementation plan's Global Constraints and execution ledger record the
+bounded approval and evidence. This follow-up starts at
+`2b84360a2fca123c37d09dd642b69b2afb368049`, uses no subagents, and commits
+separately with the required trailer. Only the exact test, checkpoint test
+group (all features, locked, Devenv), and formatting are its verification;
+the controller retains the full Task 8 rerun with sufficient time budget.
+No push, PR, merge, rebase or closure is authorized by this addendum.

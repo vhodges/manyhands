@@ -1147,3 +1147,73 @@ One new authorized checkpoint contains both fixes and their comments:
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The endpoint is the
 commit introducing this entry; its SHA is returned after creation. No push,
 PR, merge into main, closure, cleanup or native workflow.
+
+### Task 8 closure-test baseline exception — 2026-10-19
+
+**Owner approval and base.** The owner explicitly approved the narrow test-only
+C1 exception after the read-only diagnosis: reload the persisted record in
+`existing_closure_writes_no_checkpoint` after `f.record` and before either
+operation, preserving every assertion and final whole-record equality including
+`updated_at`. This is recorded as **Cycle decision 14**, an additional named
+exception in the implementation plan's Global Constraints, and a dated handoff
+addendum. It does not amend the history of decisions 9/11 or named edits 1–6,
+and grants no production or shared-fixture change. Work began at the requested
+clean HEAD `2b84360a2fca123c37d09dd642b69b2afb368049` on the ticket branch/worktree;
+no merge or rebase was performed in this bounded follow-up.
+
+**Diagnosis and confidence.** The original full-gate log
+`/tmp/opencode/manyhands-c1-task8-resume-test.log:1790–1802` reports the final
+record-equality failure at `checkpoint_tests.rs:1005` on `4cafe364`:
+1,195 library tests passed, one failed, in 739.08 seconds. The preceding
+Git-image equality assertion passed. `Fixture::record` (`checkpoint_tests.rs:137–156`)
+returns its in-memory record after `save_record`; that save can advance the
+persisted `updated_at` using whole Unix seconds (`closure/record.rs:514–559`,
+`promotion/lifecycle_record.rs:90–92`). Derived equality includes the timestamp,
+but custom Debug omits it (`closure/record.rs:165–222`). Both operations take
+early no-write paths for this fixture (`closure/checkpoint.rs:578–580,705–707`).
+This establishes the stale-baseline mechanism in unchanged pre-C1 code; the
+original differing timestamp values were **not observed**. Three isolated
+pre-fix runs of the exact all-features/locked library test with `--exact
+--nocapture` all passed, in **0.35 s, 0.34 s, 0.35 s**. They characterize an
+intermittent failure, not a reproduced RED or proof of the historical values.
+The intervening `4cafe364..2b84360` diff contains no closure-code change.
+
+The original 1,200-second global timeout is separate: compilation took 381 s,
+library tests 739.08 s, and subsequent completed targets 11.19 s, leaving at
+most 68.73 s before overhead for comment publication. Historical C10 evidence
+records that target's 41 cases taking 216–218 s. Twelve cases completed in the
+original log; no individual stalled case was established. Initial and final
+process checks in the read-only diagnosis found no remaining gate/test process.
+The controller retains this incomplete full-gate run and its sufficient-budget
+rerun; no integration target or full suite was run for this correction.
+
+**Implementation.** Added a local `let r = f.reload(&r);` and explanatory comment
+immediately after `f.record(ClosureKind::Existing)` in the named test. The
+baseline now comes from persistence before either `pre_integration` (via the
+hook) or `resume_written`. All four existing assertions remain byte-for-byte
+unchanged, so an operation changing `updated_at` still fails the final equality.
+No shared helper, production code, extra test, sleep or assertion normalization
+was introduced. Applied with `apply_patch`.
+
+**Scoped verification.** Both test commands received independent 600-second
+tool limits; formatting received 120 seconds. All exited 0 without timeout.
+
+| Exact command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::existing_closure_writes_no_checkpoint -- --exact` | **1 passed**, 1,195 filtered, 0 failed/ignored; 0.37 s test time, 5.29 s compilation |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::` | **46 passed**, 1,150 filtered, 0 failed/ignored; 10.64 s test time |
+| `devenv shell -- cargo fmt --check` | **PASS**; fmt has no `--locked` option |
+
+Comment metadata follows the canonical existing comment schema. A host
+`python3` ID-generation attempt was unavailable (command not found); the ID was
+instead generated successfully using `devenv shell -- cargo run --locked --bin
+manyhands-cli -- id new`. This was metadata generation, not additional test
+coverage.
+
+Canonical approval/verification comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A9DGR67AG4XSKE6179HA37.md`.
+The separate authorized commit is `fix: reload persisted closure test baseline`,
+with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`; the endpoint is
+returned after commit. Controller review and the full Task 8 gate remain pending;
+this scoped result does not establish full-suite success or final review readiness.
+No subagents, push, PR, main merge, rebase, closure, cleanup or native dispatch.
