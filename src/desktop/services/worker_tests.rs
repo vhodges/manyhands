@@ -475,6 +475,27 @@ fn quit_with_no_job_is_idle_and_admits_nothing_more() {
     assert!(matches!(harness.state(late), RequestState::Dismissed));
 }
 
+/// A retry after quitting is ignored: the finished request keeps its
+/// result rather than becoming Dismissed.
+#[test]
+fn a_retry_after_quitting_leaves_the_finished_request_alone() {
+    let mut harness = Harness::new();
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    harness.until_end_of(id);
+    assert!(matches!(harness.state(id), RequestState::Finished(..)));
+
+    assert!(matches!(harness.worker.quit(), QuitState::Idle));
+    harness.worker.retry(id, None);
+    // A retry sends its events before it returns, so none is coming.
+    assert!(matches!(
+        harness.events.try_recv(),
+        Err(TryRecvError::Empty)
+    ));
+    assert!(matches!(harness.state(id), RequestState::Finished(..)));
+}
+
 #[test]
 fn quit_while_a_job_is_held_is_finishing_then_idle() {
     let mut harness = Harness::new();

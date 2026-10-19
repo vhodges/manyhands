@@ -4,8 +4,7 @@
 //! created inside `Root`'s own `cx.new`, so its entity comes after.
 
 mod keys;
-// Until the views that read through these arrive (Task 4), only tests
-// use most of them.
+// Until the views of later tasks arrive, only tests use some of them.
 #[cfg_attr(not(test), allow(dead_code, unused_imports))]
 mod model;
 #[cfg_attr(not(test), allow(dead_code, unused_imports))]
@@ -15,8 +14,9 @@ mod view;
 use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
-    App, AppContext, Bounds, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, TestSupportExt, Window, WindowBounds, WindowHandle, WindowOptions,
+    App, AppContext, Bounds, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, TestSupportExt, Window, WindowBounds, WindowHandle,
+    WindowOptions,
     component::{
         Root,
         button::{Button, ButtonVariants},
@@ -26,6 +26,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{RepositoryError, RepositoryErrorKind, RepositoryService};
 
+use keys::Quit;
 use services::{LibraryBackend, Services};
 use view::workspace::Workspace;
 
@@ -104,10 +105,16 @@ fn open_startup_failure_window(
 ) -> WindowHandle<Root> {
     cx.open_window(window_options(cx), |window, cx| {
         cx.new(|cx| {
-            let view = cx.new(|_| StartupFailureView {
-                failure,
-                opener,
-                opened: false,
+            let view = cx.new(|cx| {
+                let focus = cx.focus_handle();
+                window.focus(&focus, cx);
+                StartupFailureView {
+                    failure,
+                    opener,
+                    opened: false,
+                    focus,
+                    quit_requested: false,
+                }
             });
             Root::new(view, window, cx)
         })
@@ -146,9 +153,24 @@ pub(crate) struct StartupFailureView {
     /// The service opened and the workspace is about to replace this
     /// view: a second Retry would open it, and start a worker, again.
     opened: bool,
+    /// Focused when the window opens, so Quit reaches this view.
+    focus: FocusHandle,
+    #[cfg_attr(not(test), allow(dead_code))] // Read by tests only.
+    quit_requested: bool,
 }
 
 impl StartupFailureView {
+    #[cfg(test)]
+    pub(crate) fn quit_requested(&self) -> bool {
+        self.quit_requested
+    }
+
+    /// With no service there is no worker to wait for: quit at once.
+    fn quit(&mut self, cx: &mut Context<Self>) {
+        self.quit_requested = true;
+        cx.quit();
+    }
+
     #[cfg(test)]
     pub(crate) fn message(&self) -> &'static str {
         self.failure.message()
@@ -180,6 +202,8 @@ impl Render for StartupFailureView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("startup-failure")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &Quit, _, cx| this.quit(cx)))
             .size_full()
             .items_center()
             .justify_center()
@@ -207,7 +231,7 @@ impl Render for StartupFailureView {
                         div().id("startup-quit").test_support().child(
                             Button::new("startup-quit-button")
                                 .label("Quit")
-                                .on_click(|_, _, cx| cx.quit()),
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.quit(cx))),
                         ),
                     ),
             )

@@ -15,7 +15,7 @@ use manyhands::{
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, IndexRefreshInput, Mutation,
         MutationCall, MutationDataDto, NoProgress, PrepareDataDto, RepoCreateInput,
-        RepositoryService, RequestId,
+        RepoRemoveInput, RepositoryService, RequestId,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -165,4 +165,30 @@ impl Fixture {
             &CancellationToken::new(),
         )
     }
+}
+
+/// Removes the registration of `root` through `service`'s own `prepare`
+/// and `execute` of `repo remove`: the second actor of a test, on a
+/// service other than the desktop's.
+pub(crate) fn remove_registration(service: &RepositoryService, root: &Path) {
+    let input = || RepoRemoveInput {
+        root: root.to_owned(),
+    };
+    let prepared = service.prepare(&Mutation::RepoRemove(input()));
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("repo remove gave no preview");
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let removed = service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: Some(confirmation),
+            mutation: Mutation::RepoRemove(input()),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
 }

@@ -30,6 +30,9 @@ pub(crate) enum SettingsPage {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum ViewScope {
     Repositories,
+    /// The selected repository's resolution. One scope for every
+    /// repository: selecting another drops the last one's resolution.
+    Selection,
     Documents(RepoKey),
     Tickets(RepoKey),
     Tab(TabId),

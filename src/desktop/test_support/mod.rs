@@ -6,6 +6,7 @@
 
 pub(crate) mod delaying;
 pub(crate) mod fixtures;
+pub(crate) mod snapshot;
 
 // The library tests' own isolation, shared rather than copied. Some of
 // its helpers (`own`, the file accessors) serve only library tests.

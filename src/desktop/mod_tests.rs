@@ -221,6 +221,33 @@ mod view {
         assert!(is_workspace);
     }
 
+    /// `secondary-q` quits from the startup failure window too, where no
+    /// workspace exists to hear it.
+    #[gpui_kit::test]
+    fn quit_reaches_the_startup_failure_window(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(super::super::keys::bind);
+        let parent = tempfile::tempdir().unwrap();
+        let data = parent.path().join("data");
+        fs::write(&data, b"not a directory").unwrap();
+        let opener = counting_opener(data, Rc::new(Cell::new(0)));
+        let window = cx.update(|cx| start(opener, cx));
+        let failure = window
+            .update(cx, |root, _, _| {
+                root.view()
+                    .clone()
+                    .downcast::<StartupFailureView>()
+                    .expect("the startup failure view")
+            })
+            .unwrap();
+        assert!(!failure.read_with(cx, |view, _| view.quit_requested()));
+
+        let mut visual = VisualTestContext::from_window(window.into(), cx);
+        visual.run_until_parked();
+        visual.simulate_keystrokes("secondary-q");
+        assert!(failure.read_with(&visual, |view, _| view.quit_requested()));
+    }
+
     enum WorkerEvent {
         Finished(Box<Envelope<MutationDataDto>>),
     }

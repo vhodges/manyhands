@@ -290,11 +290,14 @@ impl WorkerHandle {
 
     /// Queues the request `id` again, under its own request ID, so the
     /// library answers a finished one from its record. A request that is
-    /// queued or running, or that this worker never took, is left alone.
+    /// queued or running, or that this worker never took, is left alone,
+    /// and so is every request once quitting has closed the queue: its
+    /// last result stands.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) {
         let shared = self.shared();
         let mut state = shared.lock();
-        if state.queued(id)
+        if state.closed
+            || state.queued(id)
             || state
                 .running
                 .as_ref()
