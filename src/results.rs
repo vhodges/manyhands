@@ -574,6 +574,10 @@ result_codes! {
         "An internal error occurred.";
     InvalidInput => "invalid_input", Some(FailureClass::Input),
         "The request input is not valid.";
+    UsageError => "usage_error", Some(FailureClass::Input),
+        "The command line is not valid; see --help.";
+    CommandUnavailable => "command_unavailable", Some(FailureClass::Input),
+        "That command is not available in this version of the CLI.";
     RequestMismatch => "request_mismatch", Some(FailureClass::Input),
         "That request ID was already used for a different request.";
     RequestNotFound => "request_not_found", Some(FailureClass::Input),

@@ -1,0 +1,948 @@
+{
+  "code": "ok",
+  "command": "cli help",
+  "data": {
+    "commands": [
+      {
+        "available": true,
+        "command": "repo list",
+        "delivered_by": "C1",
+        "options": [],
+        "repository": "refused",
+        "summary": "List registered repositories."
+      },
+      {
+        "available": true,
+        "command": "repo inspect",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Inspect a repository, including an unregistered one."
+      },
+      {
+        "available": true,
+        "command": "repo identity",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show repository identity."
+      },
+      {
+        "available": true,
+        "command": "remote list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List redacted repository remotes."
+      },
+      {
+        "available": true,
+        "command": "key list",
+        "delivered_by": "C1",
+        "options": [],
+        "repository": "refused",
+        "summary": "List registered keys."
+      },
+      {
+        "available": true,
+        "command": "key show",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--key-id",
+            "required": true,
+            "summary": "Canonical key ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
+        "summary": "Show key metadata."
+      },
+      {
+        "available": true,
+        "command": "key public",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--key-id",
+            "required": true,
+            "summary": "Canonical key ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
+        "summary": "Print public key text."
+      },
+      {
+        "available": true,
+        "command": "host list",
+        "delivered_by": "C1",
+        "options": [],
+        "repository": "refused",
+        "summary": "List stored host pins."
+      },
+      {
+        "available": true,
+        "command": "host inspect",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--authority",
+            "required": true,
+            "summary": "Host or bracketed IPv6 address, with optional port (default: 22).",
+            "value": "host[:port]"
+          }
+        ],
+        "repository": "refused",
+        "summary": "Inspect a stored host pin."
+      },
+      {
+        "available": true,
+        "command": "document list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List documents."
+      },
+      {
+        "available": true,
+        "command": "document show",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": false,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--path",
+            "required": false,
+            "summary": "Repository-relative path; use exactly one of --id or --path.",
+            "value": "path"
+          },
+          {
+            "name": "--context",
+            "required": false,
+            "summary": "Context worktree path; requires --path.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a document by ID or path."
+      },
+      {
+        "available": true,
+        "command": "folder list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List document folders."
+      },
+      {
+        "available": true,
+        "command": "ticket list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          },
+          {
+            "name": "--closure",
+            "required": false,
+            "summary": "Filter by closure state (default: all).",
+            "value": "open|closed|all"
+          },
+          {
+            "name": "--slug",
+            "required": false,
+            "summary": "Filter by short code, passed through unchanged.",
+            "value": "code"
+          },
+          {
+            "name": "--ready",
+            "required": false,
+            "summary": "Only ready tickets; conflicts with --blocked.",
+            "value": null
+          },
+          {
+            "name": "--blocked",
+            "required": false,
+            "summary": "Only blocked tickets; conflicts with --ready.",
+            "value": null
+          }
+        ],
+        "repository": "required",
+        "summary": "List tickets, open and closed unless filtered."
+      },
+      {
+        "available": true,
+        "command": "ticket show",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": false,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--path",
+            "required": false,
+            "summary": "Repository-relative path; use exactly one of --id or --path.",
+            "value": "path"
+          },
+          {
+            "name": "--context",
+            "required": false,
+            "summary": "Context worktree path; requires --path.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a ticket by ID or path."
+      },
+      {
+        "available": true,
+        "command": "ticket ready",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "List ready tickets."
+      },
+      {
+        "available": true,
+        "command": "ticket blocked",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "List blocked tickets and their reasons."
+      },
+      {
+        "available": true,
+        "command": "ticket deps",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--direction",
+            "required": false,
+            "summary": "Dependency traversal direction (default: down).",
+            "value": "down|up|both"
+          },
+          {
+            "name": "--depth",
+            "required": false,
+            "summary": "Maximum traversal depth as an unsigned 32-bit integer.",
+            "value": "n"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show ticket dependencies."
+      },
+      {
+        "available": true,
+        "command": "ticket children",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "List child tickets."
+      },
+      {
+        "available": true,
+        "command": "ticket cycles",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List ticket relationship cycles."
+      },
+      {
+        "available": true,
+        "command": "ticket plan",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show ticket execution batches."
+      },
+      {
+        "available": true,
+        "command": "ticket critical-path",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show the ticket critical path."
+      },
+      {
+        "available": true,
+        "command": "ticket find",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--slug",
+            "required": true,
+            "summary": "Filter by short code, passed through unchanged.",
+            "value": "code"
+          }
+        ],
+        "repository": "required",
+        "summary": "Find tickets by short code."
+      },
+      {
+        "available": true,
+        "command": "comment list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "List comments for an item."
+      },
+      {
+        "available": true,
+        "command": "index status",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show index status."
+      },
+      {
+        "available": true,
+        "command": "poll status",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show polling status."
+      },
+      {
+        "available": true,
+        "command": "operation list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List repository operations."
+      },
+      {
+        "available": true,
+        "command": "operation show",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--operation-id",
+            "required": true,
+            "summary": "Canonical operation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a repository operation."
+      },
+      {
+        "available": true,
+        "command": "id new",
+        "delivered_by": "C1",
+        "options": [],
+        "repository": "refused",
+        "summary": "Generate a new item ID."
+      },
+      {
+        "available": false,
+        "command": "repo create",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Create a repository."
+      },
+      {
+        "available": false,
+        "command": "repo enable",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Enable Manyhands in a repository."
+      },
+      {
+        "available": false,
+        "command": "repo remove",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Remove a repository registration."
+      },
+      {
+        "available": false,
+        "command": "repo identity-set",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Set repository identity."
+      },
+      {
+        "available": false,
+        "command": "remote add",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Add a repository remote."
+      },
+      {
+        "available": false,
+        "command": "remote remove",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Remove a repository remote."
+      },
+      {
+        "available": false,
+        "command": "remote select",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Select a repository remote."
+      },
+      {
+        "available": false,
+        "command": "key generate",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Generate a key."
+      },
+      {
+        "available": false,
+        "command": "key import",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Import a key."
+      },
+      {
+        "available": false,
+        "command": "key select",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Select a key for a repository."
+      },
+      {
+        "available": false,
+        "command": "key clear",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Clear a repository's selected key."
+      },
+      {
+        "available": false,
+        "command": "key remove",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Remove a key registration."
+      },
+      {
+        "available": false,
+        "command": "key delete",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Delete a key."
+      },
+      {
+        "available": false,
+        "command": "host approve",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Approve a host pin."
+      },
+      {
+        "available": false,
+        "command": "host replace",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Replace a host pin."
+      },
+      {
+        "available": false,
+        "command": "host observe",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Observe a host key."
+      },
+      {
+        "available": false,
+        "command": "request show",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Show a request."
+      },
+      {
+        "available": false,
+        "command": "request cancel",
+        "delivered_by": "C2",
+        "options": [],
+        "repository": null,
+        "summary": "Cancel a request."
+      },
+      {
+        "available": false,
+        "command": "folder create",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Create a document folder."
+      },
+      {
+        "available": false,
+        "command": "document create",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Create a document."
+      },
+      {
+        "available": false,
+        "command": "document save",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Save a document."
+      },
+      {
+        "available": false,
+        "command": "document move",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Move a document."
+      },
+      {
+        "available": false,
+        "command": "document repair",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Repair a document."
+      },
+      {
+        "available": false,
+        "command": "ticket create",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Create a ticket."
+      },
+      {
+        "available": false,
+        "command": "ticket save",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Save a ticket."
+      },
+      {
+        "available": false,
+        "command": "ticket repair",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Repair a ticket."
+      },
+      {
+        "available": false,
+        "command": "ticket slug-assign",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Assign a ticket short code."
+      },
+      {
+        "available": false,
+        "command": "index refresh",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Refresh the index."
+      },
+      {
+        "available": false,
+        "command": "index rebuild",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Rebuild the index."
+      },
+      {
+        "available": false,
+        "command": "path observe",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Observe a path for authoring or repair."
+      },
+      {
+        "available": false,
+        "command": "ticket check",
+        "delivered_by": "C3",
+        "options": [],
+        "repository": null,
+        "summary": "Check ticket relationships."
+      },
+      {
+        "available": false,
+        "command": "comment add",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Add a comment."
+      },
+      {
+        "available": false,
+        "command": "item sync",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Synchronize an item."
+      },
+      {
+        "available": false,
+        "command": "repo sync",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Synchronize a repository."
+      },
+      {
+        "available": false,
+        "command": "conflict show",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Show a conflict."
+      },
+      {
+        "available": false,
+        "command": "conflict resolve",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Resolve a conflict."
+      },
+      {
+        "available": false,
+        "command": "operation resume",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Resume an operation."
+      },
+      {
+        "available": false,
+        "command": "operation abandon",
+        "delivered_by": "C4",
+        "options": [],
+        "repository": null,
+        "summary": "Abandon an operation."
+      },
+      {
+        "available": false,
+        "command": "document promote",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Promote a document."
+      },
+      {
+        "available": false,
+        "command": "ticket close",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Close a ticket."
+      },
+      {
+        "available": false,
+        "command": "poll once",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Poll a repository once."
+      },
+      {
+        "available": false,
+        "command": "poll configure",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Configure polling."
+      },
+      {
+        "available": false,
+        "command": "poll pause",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Pause polling."
+      },
+      {
+        "available": false,
+        "command": "poll resume",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Resume polling."
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

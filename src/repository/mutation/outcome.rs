@@ -842,6 +842,9 @@ fn recovery(
         // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
+        // A command line the CLI could not run: no action corrects it.
+        | ResultCode::UsageError
+        | ResultCode::CommandUnavailable
         | ResultCode::Cancelled
         | ResultCode::InternalError
         | ResultCode::InvalidInput
