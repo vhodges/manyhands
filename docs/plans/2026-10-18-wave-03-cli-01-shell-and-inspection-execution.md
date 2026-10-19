@@ -1015,3 +1015,40 @@ Canonical checkpoint comment:
 Endpoint is the commit introducing this entry, returned after creation to avoid
 a self-referential SHA. Commit subject: `test: CLI boundaries; docs: C1 contract
 amendments`, with the owner-required co-author trailer.
+
+### Task 8 lint blocker resolution — 2026-10-19
+
+Controller reports Task 6 **spec PASS and quality PASS** and has begun the
+Task 8 final gates. This bounded follow-up fixes only the lint found by that
+all-targets clippy run; the controller retains the rest of Task 8. Base:
+`9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa` (includes Task 7), initially clean
+on the ticket branch/worktree. Required main preflight returned **Already up
+to date**, leaving the base unchanged.
+
+Read `/tmp/opencode/manyhands-c1-task8-clippy.log`: lines 8–18 identify
+`clippy::chunks_exact_to_as_chunks` at `human_tests.rs:133`, denied by
+`-D warnings`, specifically in the **bin test** target. Task 6's earlier clippy
+command selected the ordinary bin and two integration targets, not the bin's
+`cfg(test)` code; its PASS did not cover this lint.
+
+Changed only `lines.chunks_exact(3)` to `lines.as_chunks::<3>().0` in the
+C1-authored blocked-renderer test. The preceding `lines.len() == 6` assertion
+guarantees two complete groups; every per-group and trailing assertion remains
+unchanged. This is a mechanical test-only lint fix, requiring no new test.
+
+| Verification | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli human::tests::relationship_blocked_places_each_reason_under_its_ticket_and_escapes_fields -- --exact` | **1 passed**, 77 filtered, zero failed/ignored |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --tests -- -D warnings` | **PASS**; `--tests` includes bin test code as well as other test targets, without executing them |
+| `devenv shell -- cargo fmt --check` | **PASS** |
+
+Self-review: the one-line Rust diff preserves grouping and all assertions;
+no production, library or pre-C1 test change. The lint blocker is resolved at
+the targeted gate. Full-suite and all-features/final-gate reruns remain with the
+controller; none was repeated here. No other Task 8 work was performed.
+
+Canonical comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A7AJK28RZ0K1EGVD9ZYXAX.md`.
+Owner-authorized new checkpoint commit: `fix: use array chunks in CLI renderer test`,
+with the required co-author trailer; endpoint returned after commit. Ticket stays
+open. No push, PR, rebase, merge into main, closure, cleanup or native workflow.

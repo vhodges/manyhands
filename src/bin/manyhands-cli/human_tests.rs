@@ -130,7 +130,7 @@ fn relationship_blocked_places_each_reason_under_its_ticket_and_escapes_fields()
     let output = ticket_blocked(&data);
     let lines: Vec<_> = output.stdout.lines().collect();
     assert_eq!(lines.len(), 6);
-    for group in lines.chunks_exact(3) {
+    for group in lines.as_chunks::<3>().0 {
         assert!(group[0].starts_with("01ARZ3NDEKTSV4RRFFQ69G5FD0  mh-vh-k9x2b  open"));
         assert_eq!(group[1], "  open_dependency: 01ARZ3NDEKTSV4RRFFQ69G5FR1");
         assert_eq!(
