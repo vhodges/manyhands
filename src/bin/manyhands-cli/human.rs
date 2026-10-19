@@ -1,9 +1,9 @@
 use super::render::Human;
 use manyhands::repository::{
-    CommentListDto, DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto,
-    ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto, NewIdDto, OperationDto,
-    OperationListDto, PollingStatusDto, ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto,
+    CommentListDto, CycleListDto, DependencyTreeDto, DependencyTreeNodeDto, DocumentFolderListDto,
+    HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto,
+    KeyDto, KeyListDto, NewIdDto, OperationDto, OperationListDto, PlanDto, PollingStatusDto,
+    ProblemDto, PublicKeyDto, RemoteDto, RemoteListDto, RepositoryInspectionDto, RepositoryListDto,
 };
 
 fn text(stdout: String) -> Human {
@@ -295,32 +295,31 @@ fn nonconforming(path: &str, problems: &[ProblemDto]) -> String {
     )
 }
 
-pub fn item_list(data: &ItemListDto) -> Human {
-    let mut output = text(String::new());
-    for item in &data.items {
-        if let Some(id) = &item.id {
-            let closure = if item.kind == ItemDtoKind::Ticket {
-                format!(
-                    "{}  ",
-                    optional(item.closure.as_ref().map(|closure| closure.state.as_str()))
-                )
-            } else {
-                String::new()
-            };
-            output.stdout.push_str(&format!(
-                "{}  {}  {}{}  {}\n",
-                field(id),
-                optional(item.slug.as_deref()),
-                closure,
-                optional(item.status.as_deref()),
-                optional(item.title.as_deref())
-            ));
+fn item_line(item: &ItemDto) -> String {
+    if let Some(id) = &item.id {
+        let closure = if item.kind == ItemDtoKind::Ticket {
+            format!(
+                "{}  ",
+                optional(item.closure.as_ref().map(|closure| closure.state.as_str()))
+            )
         } else {
-            output
-                .stdout
-                .push_str(&nonconforming(&item.path, &item.problems));
-        }
+            String::new()
+        };
+        format!(
+            "{}  {}  {}{}  {}\n",
+            field(id),
+            optional(item.slug.as_deref()),
+            closure,
+            optional(item.status.as_deref()),
+            optional(item.title.as_deref())
+        )
+    } else {
+        nonconforming(&item.path, &item.problems)
     }
+}
+
+pub fn item_list(data: &ItemListDto) -> Human {
+    let mut output = text(data.items.iter().map(item_line).collect());
     index_note(&mut output, data.index.state.as_str());
     incomplete(&mut output, data.complete);
     output
@@ -415,6 +414,121 @@ pub fn comment_list(data: &CommentListDto) -> Human {
             output
                 .stdout
                 .push_str(&nonconforming(&comment.path, &comment.problems));
+        }
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+fn reason_line(code: &str, ids: &[String], complete: bool) -> String {
+    format!(
+        "{code}: {}{}\n",
+        ids.iter()
+            .map(|id| field(id))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if complete { "" } else { " (incomplete)" },
+    )
+}
+
+pub fn ticket_blocked(data: &ItemListDto) -> Human {
+    let mut output = text(String::new());
+    for item in &data.items {
+        output.stdout.push_str(&item_line(item));
+        if let Some(readiness) = &item.readiness {
+            for reason in &readiness.reasons {
+                output.stdout.push_str("  ");
+                output.stdout.push_str(&reason_line(
+                    reason.code.as_str(),
+                    &reason.ids,
+                    reason.complete,
+                ));
+            }
+        }
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+fn dependency_line(node: &DependencyTreeNodeDto) -> String {
+    let mut line = String::new();
+    for _ in 0..node.depth {
+        line.push_str("  ");
+    }
+    line.push_str(&format!(
+        "{}  {}  {}  {}{}{}\n",
+        field(&node.id),
+        optional(node.slug.as_deref()),
+        node.state.as_str(),
+        optional(node.title.as_deref()),
+        if node.repeated { " (repeated)" } else { "" },
+        if node.truncated { " (truncated)" } else { "" },
+    ));
+    line
+}
+
+pub fn ticket_deps(data: &DependencyTreeDto) -> Human {
+    let mut output = text(dependency_line(&data.ticket));
+    for (heading, nodes) in [
+        ("Dependencies:", &data.dependencies),
+        ("Dependents:", &data.dependents),
+    ] {
+        if !nodes.is_empty() {
+            output.stdout.push_str(heading);
+            output.stdout.push('\n');
+            for node in nodes {
+                output.stdout.push_str(&dependency_line(node));
+            }
+        }
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+pub fn ticket_cycles(data: &CycleListDto) -> Human {
+    let mut output = text(String::new());
+    for cycle in &data.items {
+        output.stdout.push_str(&format!(
+            "{}: {}\n",
+            cycle.kind.as_str(),
+            cycle
+                .ids
+                .iter()
+                .map(|id| field(id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    index_note(&mut output, data.index.state.as_str());
+    incomplete(&mut output, data.complete);
+    output
+}
+
+pub fn ticket_plan(data: &PlanDto) -> Human {
+    let mut output = text(String::new());
+    for batch in &data.batches {
+        output.stdout.push_str(&format!("Batch {}:\n", batch.batch));
+        for item in &batch.items {
+            output.stdout.push_str("  ");
+            output.stdout.push_str(&item_line(item));
+        }
+    }
+    if !data.unplannable.is_empty() {
+        output.stdout.push_str("Unplannable:\n");
+        for item in &data.unplannable {
+            output.stdout.push_str("  ");
+            output.stdout.push_str(&item_line(&item.ticket));
+            for reason in &item.reasons {
+                output.stdout.push_str("    ");
+                output.stdout.push_str(&reason_line(
+                    reason.code.as_str(),
+                    &reason.ids,
+                    reason.complete,
+                ));
+            }
         }
     }
     index_note(&mut output, data.index.state.as_str());

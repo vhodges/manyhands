@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–5 have been executed. For each later task, record its actual starting
+Tasks 0–6 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -206,8 +206,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 2 — Startup, rendering and main | Complete; controller reviews passed | `371c294195c48d8357146136bd1782db2daf2538` → `447c28dc85130f39b45ec89cf9a0fe40aee58831` | Spec PASS and quality PASS, no findings (Task 3 controller handoff) | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
 | 3 — Codes, schemas, harness and first goldens | Complete; controller reviews passed | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → `2e3849f31c0d7abd39b559ea15edce7312c2df03` | Spec PASS and quality PASS, no findings (Task 4 controller handoff) | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
 | 4 — Repository, credential, status and utility verbs | Complete; controller reviews passed | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` | Spec PASS; quality re-review PASS after metadata-escaping fix (Task 5 handoff) | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
-| 5 — Content verbs | Implemented; self-review PASS; controller review pending | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → checkpoint introducing the Task 5 entry below | Spec/quality self-review PASS; no library gap or unresolved finding | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
-| 6 — Relationship verbs | Not started | Not established | Not requested | Not run |
+| 5 — Content verbs | Complete; controller reviews passed | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → `e1a7540502d30e42bb48cc897772e1c0c5691ffc` | Spec PASS and quality PASS, no findings (Task 6 controller handoff) | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract = 160 tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
+| 6 — Relationship verbs | Implemented; self-review PASS; controller review pending | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → checkpoint introducing the Task 6 entry below | Spec/quality self-review PASS; no library gap or unresolved finding | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
 | 7 — Boundaries, workflow and amendments | Not started | Not established | Not requested | Not run |
 | 8 — Full verification, review and handoff | Not started | Not established | Not requested | Full suite reserved here |
 
@@ -831,3 +831,85 @@ a self-referential SHA. Commit subject: `feat: CLI document, ticket and comment
 reads`, with the owner-required co-author trailer. Task 6 remains unstarted;
 ticket stays open. No subagents, rebase, push, PR, merge into main, closure or
 cleanup.
+
+### Task 6 checkpoint — 2026-10-19
+
+**Authorization and base.** The controller dispatched only Task 6, with the
+owner's checkpoint-commit approval, inline TDD/apply_patch and self-review.
+Initial HEAD was `e1a7540502d30e42bb48cc897772e1c0c5691ffc`, clean on the
+expected ticket branch/worktree. Read AGENTS, the canonical ticket/latest
+comment, approved Cycle/design/Task 6 plan and this ledger. The required main
+preflight fetched main and returned **Already up to date** from
+`git merge origin/main`; no base or commit change. Main remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+**Task 5 review handoff.** Controller reports **spec PASS, quality PASS, no
+findings**, with **73 bin + 44 CLI + 43 mutation-contract = 160 tests** at
+`e1a7540`. This supersedes the pending review status in the historical Task 5
+checkpoint and comment.
+
+**Implementation and acceptance mapping.**
+
+- Added one dispatch function for each of `ticket ready`, `blocked`, `deps`,
+  `children`, `cycles`, `plan`, `critical-path` and `find`, calling only the
+  approved F1 methods. Ready/blocked reuse the safe `try_get_one` filter helper
+  with the appropriate readiness selection; plan passes the same filters.
+- Repository resolution precedes strict canonical `item_id` parsing. Deps and
+  children success scopes include the requested ID; all other relationship
+  success scopes are `repo.scope()`, exactly as in `read_contract.rs`.
+- Added four DTO human renderers. Deps indents by depth, separates directions
+  and marks repeated/truncated nodes. Blocked puts reason codes and IDs under
+  each ticket. Plan preserves the DTO's batch numbers (including gaps left by
+  filters), then lists unplannable tickets and reasons. Cycles prints one line
+  per cycle. Shared item lines retain ULID/slug/closure/status/title and existing
+  field-owned control escaping. No body/source is printed by these reads.
+- Five new renderer tests cover grouping, repetition, truncation, reason
+  completeness, escaping, filtered batch numbering, empty output and every
+  current/stale/never-refreshed × complete/incomplete combination. Ready,
+  children, critical-path and find reuse the already-tested item-list renderer.
+- Fourteen new real-binary tests cover every verb in both modes; envelope/data
+  schemas and status; all three directions at unlimited/0/1 depth; defaults;
+  negative depth and invalid direction; document IDs via `contract_repository`;
+  strict IDs and repository-first errors; uppercase shared-slug matches and
+  unknown/empty/malformed slugs; and 18 matching/nonmatching status/type/project
+  cases across ready, blocked and plan with full DTO parity against F1.
+- Eight `cli_` JSON goldens mirror all eight F1 relationship goldens, including
+  exact scopes. The new tests also compare normalized bytes directly to F1,
+  even in update mode. Read all eight generated fixtures. CLI now has
+  **51 JSON + 4 text** fixtures; no existing golden was changed.
+- `placeholder_verbs()` is empty. Its assertion is paired with a catalog-driven
+  test that actually dispatches all **28 available verbs** and rejects both
+  unavailable and internal-routing fallback results; an empty list cannot hide
+  an unwired available command.
+
+**RED/GREEN and verification.** Every Rust command ran through Devenv, locked
+except fmt; only bin/CLI/mutation-contract test targets ran.
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test cli relationships::` before dispatch | **13 failed**, all at `command_unavailable`; the existing-parser usage-error case passed; 44 filtered |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` with renderer scaffolding | **7 failed**, 71 passed: five new renderer tests and both updated dispatch/placeholder tests |
+| Same bin command after implementation | **78 passed**, zero failures/ignored/filtered |
+| `MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --locked --test cli relationships::` | Generated all eight fixtures; **13 passed, 1 failed**, 44 filtered. The new default-direction assertion incorrectly expected `up`; design line 186 and parser line 82 both specify `down`. Corrected only the new test and added full F1 default-result parity; no production change. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test mutation_contract` without update mode, after formatting | **78 + 58 + 43 = 179 passed**, zero failures/ignored/filtered |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --test cli --test mutation_contract -- -D warnings` | **PASS** |
+| `devenv shell -- cargo fmt --check` | Formatting-only differences corrected via apply_patch; final **PASS** |
+| `git diff --check` | **PASS** |
+| `git merge-tree --write-tree HEAD origin/main` before checkpoint | Exit 0, tree `edae48a81cbfca4c1da45ac4ad4ad8979eaaa064`; covers committed Task 5 base before the Task 6 additions |
+
+**Self-review.** Compared actual production/test changes and all eight generated
+goldens against every Task 6 step and the controller's constraints. Verified
+one F1 call per verb, exact scopes, no graph/domain logic, existing filter reuse,
+no hidden unavailable dispatch, field escaping and snapshot notes. Spec/quality
+self-review **PASS**, no unresolved findings or library gap. No library,
+`src/repository/`, schema, dependency, lockfile or pre-C1 semantic-test edits.
+Independent controller review remains pending; this is Task 6 review-ready,
+not the full Cycle gate or native evidence.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A5Z699X8DZQWBZFN1M4J94.md`.
+Endpoint is the commit introducing this entry, returned after creation to avoid
+a self-referential SHA. Commit subject: `feat: CLI relationship reads`, with the
+owner-required co-author trailer. Task 7 remains unstarted; full-suite gates
+remain reserved for Task 8. Ticket stays open. No subagents, rebase, push, PR,
+merge into main, closure, cleanup or native workflow.

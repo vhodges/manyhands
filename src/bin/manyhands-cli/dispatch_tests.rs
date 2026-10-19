@@ -1,25 +1,11 @@
 use super::*;
-use crate::{
-    catalog::{self, Availability},
-    render::UNAVAILABLE_CODE,
-};
+use crate::catalog::{self, Availability};
 use manyhands::results::{Effects, Scope};
 use serde_json::Value;
 
 #[test]
-fn placeholders_are_exactly_the_eight_relationship_verbs() {
-    let expected: Vec<_> = catalog::COMMANDS
-        .iter()
-        .filter(|spec| {
-            spec.availability == Availability::Available
-                && spec.resource == "ticket"
-                && !matches!(spec.verb, "list" | "show")
-        })
-        .map(|spec| format!("{} {}", spec.resource, spec.verb))
-        .collect();
-    let actual = placeholder_verbs();
-    assert_eq!(actual.len(), 8);
-    assert_eq!(actual, expected);
+fn no_available_verb_is_a_placeholder() {
+    assert!(placeholder_verbs().is_empty());
 }
 
 #[test]
@@ -55,37 +41,44 @@ fn id_new_dispatches_a_canonical_id_in_both_modes() {
 }
 
 #[test]
-fn each_other_available_verb_is_an_explicit_placeholder_failure() {
+fn all_28_available_verbs_reach_a_real_dispatch_arm() {
     let directory = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(directory.path()).unwrap();
-    for spec in catalog::COMMANDS.iter().filter(|spec| {
-        spec.availability == Availability::Available
-            && spec.resource == "ticket"
-            && !matches!(spec.verb, "list" | "show")
-    }) {
-        for json in [false, true] {
-            let output = dispatch(spec, &ArgMatches::default(), json, &service);
-            assert_eq!(output.status, 2);
-            if json {
-                assert!(output.stderr.is_empty());
-                let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-                assert_eq!(value["command"], format!("{} {}", spec.resource, spec.verb));
-                assert_eq!(value["code"], UNAVAILABLE_CODE.as_str());
-                assert!(value["data"].is_null());
-            } else {
-                assert!(output.stdout.is_empty());
-                assert_eq!(
-                    output.stderr,
-                    format!(
-                        "error: {}\ncode: {}\n",
-                        UNAVAILABLE_CODE.message(),
-                        UNAVAILABLE_CODE.as_str()
-                    )
-                    .as_bytes()
-                );
-            }
+    let missing = directory.path().join("missing-repository");
+    let mut count = 0;
+    for spec in catalog::COMMANDS
+        .iter()
+        .filter(|spec| spec.availability == Availability::Available)
+    {
+        let mut argv = vec!["manyhands-cli", spec.resource, spec.verb];
+        for option in spec.options.iter().filter(|option| option.required) {
+            argv.extend([
+                option.name,
+                match option.name {
+                    "--repo" => missing.to_str().unwrap(),
+                    "--authority" => "example.invalid",
+                    "--slug" => "mh-vh-k9x2b",
+                    _ => "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                },
+            ]);
         }
+        if matches!((spec.resource, spec.verb), ("document" | "ticket", "show")) {
+            argv.extend(["--id", "01ARZ3NDEKTSV4RRFFQ69G5FAV"]);
+        }
+        let invocation = parse::parse(argv.into_iter().map(Into::into).collect());
+        let parse::Action::Run { args, .. } = invocation.action else {
+            panic!("expected Run for {spec:?}")
+        };
+        let output = dispatch(spec, &args, true, &service);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["command"], format!("{} {}", spec.resource, spec.verb));
+        // An empty placeholder list cannot hide a missing dispatch arm behind
+        // the internal-routing fallback. Each arm must reach its actual read.
+        assert_ne!(value["code"], "command_unavailable", "{spec:?}");
+        assert_ne!(value["code"], "internal_error", "{spec:?}");
+        count += 1;
     }
+    assert_eq!(count, 28);
 }
 
 #[test]

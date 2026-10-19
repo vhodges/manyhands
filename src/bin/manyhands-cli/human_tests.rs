@@ -80,6 +80,230 @@ fn nonconforming_item() -> ItemDto {
     }
 }
 
+fn relationship_ticket() -> ItemDto {
+    ItemDto {
+        kind: ItemDtoKind::Ticket,
+        slug: Some("mh-vh-k9x2b".into()),
+        closure: Some(ClosureDto {
+            state: ClosureState::Open,
+            closed_at: None,
+            closed_by: None,
+        }),
+        readiness: Some(ReadinessDto {
+            state: ReadinessState::Blocked,
+            reasons: vec![
+                ReadinessReasonDto {
+                    code: ReadinessReasonCode::OpenDependency,
+                    ids: vec!["01ARZ3NDEKTSV4RRFFQ69G5FR1".into()],
+                    complete: true,
+                },
+                ReadinessReasonDto {
+                    code: ReadinessReasonCode::DependencyCycle,
+                    ids: vec![CONTROL_FIELD.into()],
+                    complete: false,
+                },
+            ],
+        }),
+        ..content_item()
+    }
+}
+
+fn dependency_node(depth: u32, repeated: bool) -> DependencyTreeNodeDto {
+    DependencyTreeNodeDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FR1".into(),
+        state: DependencyState::Closed,
+        slug: Some("mh-vh-k9x2b".into()),
+        title: Some(CONTROL_FIELD.into()),
+        depth,
+        repeated,
+        truncated: false,
+    }
+}
+
+#[test]
+fn relationship_blocked_places_each_reason_under_its_ticket_and_escapes_fields() {
+    let data = ItemListDto {
+        items: vec![relationship_ticket(), relationship_ticket()],
+        complete: true,
+        index: content_index(IndexState::Current),
+    };
+    let output = ticket_blocked(&data);
+    let lines: Vec<_> = output.stdout.lines().collect();
+    assert_eq!(lines.len(), 6);
+    for group in lines.chunks_exact(3) {
+        assert!(group[0].starts_with("01ARZ3NDEKTSV4RRFFQ69G5FD0  mh-vh-k9x2b  open"));
+        assert_eq!(group[1], "  open_dependency: 01ARZ3NDEKTSV4RRFFQ69G5FR1");
+        assert_eq!(
+            group[2],
+            format!("  dependency_cycle: {ESCAPED_FIELD} (incomplete)")
+        );
+    }
+    assert!(output.notes.is_empty());
+    assert!(!output.stdout.contains("Requested"));
+}
+
+#[test]
+fn relationship_deps_indents_both_directions_and_marks_repetition_and_truncation() {
+    let mut data = DependencyTreeDto {
+        ticket: dependency_node(0, false),
+        direction: DependencyDirection::Both,
+        depth: Some(2),
+        dependencies: vec![dependency_node(1, false), dependency_node(2, true)],
+        dependents: vec![dependency_node(1, false)],
+        complete: true,
+        index: content_index(IndexState::Current),
+    };
+    data.dependents[0].truncated = true;
+    let output = ticket_deps(&data);
+    let lines: Vec<_> = output.stdout.lines().collect();
+    assert_eq!(lines.len(), 6);
+    assert!(lines[0].starts_with("01ARZ3NDEKTSV4RRFFQ69G5FR1  mh-vh-k9x2b  closed"));
+    assert_eq!(lines[1], "Dependencies:");
+    assert!(lines[2].starts_with("  01ARZ3NDEKTSV4RRFFQ69G5FR1"));
+    assert!(lines[3].starts_with("    01ARZ3NDEKTSV4RRFFQ69G5FR1"));
+    assert!(lines[3].ends_with(" (repeated)"));
+    assert_eq!(lines[4], "Dependents:");
+    assert!(lines[5].ends_with(" (truncated)"));
+    assert_eq!(output.stdout.matches(ESCAPED_FIELD).count(), 4);
+    assert_eq!(output.stdout.matches("(repeated)").count(), 1);
+    assert!(output.notes.is_empty());
+}
+
+#[test]
+fn relationship_cycles_prints_one_line_per_set_and_escapes_ids() {
+    let data = CycleListDto {
+        items: vec![
+            CycleDto {
+                kind: CycleKind::Deps,
+                ids: vec!["01ARZ3NDEKTSV4RRFFQ69G5FR1".into(), CONTROL_FIELD.into()],
+            },
+            CycleDto {
+                kind: CycleKind::Parent,
+                ids: vec!["01ARZ3NDEKTSV4RRFFQ69G5FR2".into()],
+            },
+        ],
+        complete: true,
+        index: content_index(IndexState::Current),
+    };
+    let output = ticket_cycles(&data);
+    assert_eq!(
+        output.stdout,
+        format!(
+            "deps: 01ARZ3NDEKTSV4RRFFQ69G5FR1, {ESCAPED_FIELD}\nparent: 01ARZ3NDEKTSV4RRFFQ69G5FR2\n"
+        )
+    );
+    assert!(output.notes.is_empty());
+}
+
+#[test]
+fn relationship_plan_preserves_filtered_batch_numbers_and_places_unplannable_reasons_last() {
+    let data = PlanDto {
+        batches: vec![
+            PlanBatchDto {
+                batch: 2,
+                items: vec![relationship_ticket()],
+            },
+            PlanBatchDto {
+                batch: 4,
+                items: vec![relationship_ticket()],
+            },
+        ],
+        unplannable: vec![UnplannableTicketDto {
+            ticket: relationship_ticket(),
+            reasons: vec![
+                UnplannableReasonDto {
+                    code: UnplannableReasonCode::UnresolvedDependency,
+                    ids: vec!["01ARZ3NDEKTSV4RRFFQ69G5FR1".into()],
+                    complete: true,
+                },
+                UnplannableReasonDto {
+                    code: UnplannableReasonCode::UnplannableDependency,
+                    ids: vec![CONTROL_FIELD.into()],
+                    complete: false,
+                },
+            ],
+        }],
+        complete: true,
+        index: content_index(IndexState::Current),
+    };
+    let output = ticket_plan(&data);
+    let lines: Vec<_> = output.stdout.lines().collect();
+    assert_eq!(lines.len(), 8);
+    assert_eq!(
+        [lines[0], lines[2], lines[4]],
+        ["Batch 2:", "Batch 4:", "Unplannable:"]
+    );
+    for position in [1, 3, 5] {
+        assert!(lines[position].starts_with("  01ARZ3NDEKTSV4RRFFQ69G5FD0  mh-vh-k9x2b"));
+        assert!(lines[position].contains("Title\\nforged"));
+    }
+    assert_eq!(
+        lines[6],
+        "    unresolved_dependency: 01ARZ3NDEKTSV4RRFFQ69G5FR1"
+    );
+    assert_eq!(
+        lines[7],
+        format!("    unplannable_dependency: {ESCAPED_FIELD} (incomplete)")
+    );
+    assert!(!output.stdout.contains("open_dependency"));
+    assert!(!output.stdout.contains("Requested"));
+    assert!(output.notes.is_empty());
+}
+
+#[test]
+fn relationship_renderers_keep_empty_lists_empty_and_report_each_snapshot_condition() {
+    for state in [
+        IndexState::Current,
+        IndexState::Stale,
+        IndexState::NeverRefreshed,
+    ] {
+        for complete in [true, false] {
+            let list = ItemListDto {
+                items: vec![],
+                complete,
+                index: content_index(state),
+            };
+            let outputs = [
+                item_list(&list), // ready, children, critical-path and find
+                ticket_blocked(&list),
+                ticket_cycles(&CycleListDto {
+                    items: vec![],
+                    complete,
+                    index: content_index(state),
+                }),
+                ticket_plan(&PlanDto {
+                    batches: vec![],
+                    unplannable: vec![],
+                    complete,
+                    index: content_index(state),
+                }),
+            ];
+            let mut expected = vec![];
+            if state != IndexState::Current {
+                expected.push(format!("Index is {}.", state.as_str()));
+            }
+            if !complete {
+                expected.push("The list is incomplete.".into());
+            }
+            for output in outputs {
+                assert!(output.stdout.is_empty());
+                assert_eq!(output.notes, expected);
+            }
+            let deps = ticket_deps(&DependencyTreeDto {
+                ticket: dependency_node(0, false),
+                direction: DependencyDirection::Up,
+                depth: Some(0),
+                dependencies: vec![],
+                dependents: vec![],
+                complete,
+                index: content_index(state),
+            });
+            assert_eq!(deps.stdout.lines().count(), 1);
+            assert_eq!(deps.notes, expected);
+        }
+    }
+}
+
 #[test]
 fn content_item_lists_keep_one_line_per_entry_and_mark_lifecycle_and_nonconforming() {
     let document = content_item();

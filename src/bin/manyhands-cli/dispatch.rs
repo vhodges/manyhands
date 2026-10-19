@@ -6,11 +6,12 @@ use super::{
 use clap::ArgMatches;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    ClosureFilter, CommentListDto, DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto,
-    IndexStatusDto, ItemDto, ItemDtoKind, ItemListDto, KeyDto, KeyListDto, OperationDto,
-    OperationId, OperationListDto, PollingStatusDto, PublicKeyDto, ReadError, ReadinessFilter,
-    RemoteListDto, RepositoryInspectionDto, RepositoryListDto, RepositoryService,
-    ResolvedRepository, SharedKeyId, TicketFilter, transport::SshAuthority,
+    ClosureFilter, CommentListDto, CycleListDto, DependencyDirection, DependencyTreeDto,
+    DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto,
+    ItemDtoKind, ItemListDto, KeyDto, KeyListDto, OperationDto, OperationId, OperationListDto,
+    PlanDto, PollingStatusDto, PublicKeyDto, ReadError, ReadinessFilter, RemoteListDto,
+    RepositoryInspectionDto, RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId,
+    TicketFilter, transport::SshAuthority,
 };
 use manyhands::results::{Envelope, ResultCode, Scope};
 use std::path::{Path, PathBuf};
@@ -323,6 +324,128 @@ fn comment_list(
     ))
 }
 
+fn ticket_ready(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let filter = TicketFilter {
+        readiness: Some(ReadinessFilter::Ready),
+        ..ticket_filter(args)
+    };
+    Ok(Envelope::read_success(
+        "ticket ready",
+        repo.scope(),
+        service.ticket_readiness(&repo, &filter)?,
+    ))
+}
+
+fn ticket_blocked(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let filter = TicketFilter {
+        readiness: Some(ReadinessFilter::Blocked),
+        ..ticket_filter(args)
+    };
+    Ok(Envelope::read_success(
+        "ticket blocked",
+        repo.scope(),
+        service.ticket_readiness(&repo, &filter)?,
+    ))
+}
+
+fn ticket_deps(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<DependencyTreeDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let id = item_id(args, &repo)?;
+    let direction = match value(args, "direction")? {
+        "up" => DependencyDirection::Up,
+        "down" => DependencyDirection::Down,
+        "both" => DependencyDirection::Both,
+        // The parser's value list guarantees these are the only directions.
+        _ => return Err(ReadError::new(ResultCode::InternalError).with_scope(repo.scope())),
+    };
+    let depth = args.get_one::<u32>("depth").copied();
+    let scope = Scope {
+        item_id: Some(id.to_string()),
+        ..repo.scope()
+    };
+    Ok(Envelope::read_success(
+        "ticket deps",
+        scope,
+        service.ticket_dependencies(&repo, &id, direction, depth)?,
+    ))
+}
+
+fn ticket_children(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let id = item_id(args, &repo)?;
+    let scope = Scope {
+        item_id: Some(id.to_string()),
+        ..repo.scope()
+    };
+    Ok(Envelope::read_success(
+        "ticket children",
+        scope,
+        service.ticket_children(&repo, &id)?,
+    ))
+}
+
+fn ticket_cycles(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<CycleListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "ticket cycles",
+        repo.scope(),
+        service.ticket_cycles(&repo)?,
+    ))
+}
+
+fn ticket_plan(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<PlanDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "ticket plan",
+        repo.scope(),
+        service.ticket_plan(&repo, &ticket_filter(args))?,
+    ))
+}
+
+fn ticket_critical_path(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "ticket critical-path",
+        repo.scope(),
+        service.ticket_critical_path(&repo)?,
+    ))
+}
+
+fn ticket_find(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<ItemListDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    Ok(Envelope::read_success(
+        "ticket find",
+        repo.scope(),
+        service.find_tickets_by_slug(&repo, value(args, "slug")?)?,
+    ))
+}
+
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
@@ -331,6 +454,50 @@ pub fn dispatch(
 ) -> Output {
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "ticket ready" => {
+            return read_output(&name, json, ticket_ready(service, args), human::item_list);
+        }
+        "ticket blocked" => {
+            return read_output(
+                &name,
+                json,
+                ticket_blocked(service, args),
+                human::ticket_blocked,
+            );
+        }
+        "ticket deps" => {
+            return read_output(&name, json, ticket_deps(service, args), human::ticket_deps);
+        }
+        "ticket children" => {
+            return read_output(
+                &name,
+                json,
+                ticket_children(service, args),
+                human::item_list,
+            );
+        }
+        "ticket cycles" => {
+            return read_output(
+                &name,
+                json,
+                ticket_cycles(service, args),
+                human::ticket_cycles,
+            );
+        }
+        "ticket plan" => {
+            return read_output(&name, json, ticket_plan(service, args), human::ticket_plan);
+        }
+        "ticket critical-path" => {
+            return read_output(
+                &name,
+                json,
+                ticket_critical_path(service, args),
+                human::item_list,
+            );
+        }
+        "ticket find" => {
+            return read_output(&name, json, ticket_find(service, args), human::item_list);
+        }
         "document list" => {
             return read_output(&name, json, document_list(service, args), human::item_list);
         }
@@ -435,16 +602,7 @@ pub fn dispatch(
 }
 
 pub fn placeholder_verbs() -> Vec<&'static str> {
-    vec![
-        "ticket ready",
-        "ticket blocked",
-        "ticket deps",
-        "ticket children",
-        "ticket cycles",
-        "ticket plan",
-        "ticket critical-path",
-        "ticket find",
-    ]
+    vec![]
 }
 
 #[cfg(test)]

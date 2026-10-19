@@ -21,6 +21,9 @@ mod content;
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/relationships.rs"]
+mod relationships;
+
 #[test]
 fn fixture_directory_is_exactly_the_registered_cases() {
     let actual: BTreeSet<_> = fs::read_dir(cli_fixture_directory())
