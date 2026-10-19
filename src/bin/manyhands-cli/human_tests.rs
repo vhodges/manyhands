@@ -379,3 +379,173 @@ fn new_id_is_only_id_and_newline_without_notes() {
     assert_eq!(output.stdout, "01M4CC0VMSZ7BRS740C8VSQ5ZK\n");
     assert!(output.notes.is_empty());
 }
+
+// Ordinary Unicode survives; field-owned LF/CR/ESC cannot create metadata
+// lines or terminal sequences. Tabs and C1 controls follow the same rule.
+const CONTROL_FIELD: &str = "é 中文\nLabel: forged\r\u{1b}[31m\t\u{85}";
+const ESCAPED_FIELD: &str = "é 中文\\nLabel: forged\\r\\u{1b}[31m\\t\\u{85}";
+
+fn escaped_metadata(output: Human, lines: usize, fields: usize) {
+    assert_eq!(output.stdout.lines().count(), lines, "{}", output.stdout);
+    assert_eq!(output.stdout.matches(ESCAPED_FIELD).count(), fields);
+    assert!(output.stdout.ends_with('\n'));
+    assert!(output.stdout.chars().all(|c| c == '\n' || !c.is_control()));
+    assert!(
+        output
+            .notes
+            .iter()
+            .all(|note| !note.chars().any(char::is_control))
+    );
+}
+
+#[test]
+fn identity_metadata_escapes_controls_without_escaping_unicode_or_layout() {
+    escaped_metadata(
+        identity(&IdentityDto {
+            name: Some(CONTROL_FIELD.into()),
+            email: Some(CONTROL_FIELD.into()),
+            source: IdentitySource::Repository,
+            initials: Some("é".into()),
+            initials_source: InitialsSource::Derived,
+        }),
+        5,
+        2,
+    );
+}
+
+#[test]
+fn key_metadata_escapes_controls_in_labels_and_paths() {
+    let mut data = key();
+    data.label = CONTROL_FIELD.into();
+    data.private_key_path = CONTROL_FIELD.into();
+    data.public_key_path = Some(CONTROL_FIELD.into());
+    escaped_metadata(key_show(&data), 9, 3);
+    escaped_metadata(
+        key_list(&KeyListDto {
+            items: vec![data.clone(), data],
+            complete: true,
+        }),
+        2,
+        2,
+    );
+}
+
+#[test]
+fn repository_and_remote_metadata_escape_controls_at_field_boundaries() {
+    escaped_metadata(
+        repository_list(&RepositoryListDto {
+            items: vec![RepositorySummaryDto {
+                root: CONTROL_FIELD.into(),
+                enabled_at: None,
+                accessibility: Accessibility::Accessible,
+                configuration: configuration(),
+                index: IndexStateDto {
+                    state: IndexState::Current,
+                    refreshed_at: None,
+                },
+                problem_count: 0,
+            }],
+            complete: true,
+        }),
+        1,
+        1,
+    );
+    let mut remote = remote();
+    remote.name = CONTROL_FIELD.into();
+    remote.fetch_location = CONTROL_FIELD.into();
+    remote.push_location = CONTROL_FIELD.into();
+    escaped_metadata(
+        remote_list(&RemoteListDto {
+            items: vec![remote.clone()],
+            complete: true,
+        }),
+        1,
+        3,
+    );
+    let mut configuration = configuration();
+    configuration.primary_branch = Some(CONTROL_FIELD.into());
+    configuration.publication_remote = Some(CONTROL_FIELD.into());
+    configuration.problems.push(ProblemDto {
+        code: ProblemCode::RetryRequired,
+        path: Some(CONTROL_FIELD.into()),
+        target_id: None,
+    });
+    escaped_metadata(
+        repository_inspection(&RepositoryInspectionDto {
+            root: CONTROL_FIELD.into(),
+            selected_path: CONTROL_FIELD.into(),
+            registered: true,
+            head_branch: Some(CONTROL_FIELD.into()),
+            local_branches: vec![CONTROL_FIELD.into(), "普通".into()],
+            configuration,
+            identity_state: IdentityAvailability::Available,
+            remotes: vec![remote],
+        }),
+        11,
+        10,
+    );
+}
+
+#[test]
+fn host_and_status_metadata_escape_controls_consistently() {
+    let mut pin = pin();
+    pin.host = CONTROL_FIELD.into();
+    pin.pinned_algorithm = CONTROL_FIELD.into();
+    pin.pinned_fingerprint = CONTROL_FIELD.into();
+    escaped_metadata(host_inspect(&pin), 4, 3);
+    escaped_metadata(
+        host_list(&HostPinListDto {
+            items: vec![pin],
+            complete: true,
+            reapproval_required: false,
+        }),
+        1,
+        3,
+    );
+    let mut operation = operation();
+    operation.state = CONTROL_FIELD.into();
+    operation.completed_step = Some(CONTROL_FIELD.into());
+    operation.worktree = Some(CONTROL_FIELD.into());
+    operation.updated_at = Some(CONTROL_FIELD.into());
+    escaped_metadata(operation_show(&operation), 12, 4);
+    escaped_metadata(
+        operation_list(&OperationListDto {
+            items: vec![operation.clone()],
+            complete: true,
+        }),
+        1,
+        1,
+    );
+    escaped_metadata(
+        index_status(&IndexStatusDto {
+            state: IndexStatusState::Stale,
+            refreshed_at: Some(CONTROL_FIELD.into()),
+            context_count: Some(1),
+            item_count: Some(0),
+            problem_count: Some(1),
+            problems: vec![IndexProblemDto {
+                code: ProblemCode::RetryRequired,
+                path: Some(CONTROL_FIELD.into()),
+                worktree: Some(CONTROL_FIELD.into()),
+            }],
+            pending_operations: vec![operation],
+        }),
+        7,
+        4,
+    );
+    escaped_metadata(
+        polling_status(&PollingStatusDto {
+            enabled: true,
+            paused: false,
+            interval_seconds: 300,
+            backoff_seconds: None,
+            recovery_suspended: false,
+            latest_outcome: None,
+            latest_observed_at: Some(CONTROL_FIELD.into()),
+            active_operation_id: None,
+            next_eligible_at: Some(CONTROL_FIELD.into()),
+        }),
+        9,
+        2,
+    );
+}

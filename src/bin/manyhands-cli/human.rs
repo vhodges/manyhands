@@ -12,8 +12,22 @@ fn text(stdout: String) -> Human {
     }
 }
 
-fn optional(value: Option<&str>) -> &str {
-    value.unwrap_or("-")
+/// Escape only field-owned controls, preserving ordinary Unicode and paths.
+/// Never apply this to layout, canonical public-key text or requested bodies/sources.
+fn field(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped
+}
+
+fn optional(value: Option<&str>) -> String {
+    field(value.unwrap_or("-"))
 }
 
 fn count(value: Option<u64>) -> String {
@@ -37,7 +51,7 @@ pub fn repository_list(data: &RepositoryListDto) -> Human {
     for item in &data.items {
         output.stdout.push_str(&format!(
             "{}  {}  configuration={}  index={}  problems={}\n",
-            item.root,
+            field(&item.root),
             item.accessibility.as_str(),
             item.configuration.state.as_str(),
             item.index.state.as_str(),
@@ -52,9 +66,9 @@ pub fn repository_list(data: &RepositoryListDto) -> Human {
 fn remote_line(data: &RemoteDto) -> String {
     format!(
         "{}  fetch={}  push={}  eligible={}  selected={}\n",
-        data.name,
-        data.fetch_location,
-        data.push_location,
+        field(&data.name),
+        field(&data.fetch_location),
+        field(&data.push_location),
         data.publication_eligible,
         data.selected_for_publication
     )
@@ -63,11 +77,15 @@ fn remote_line(data: &RemoteDto) -> String {
 pub fn repository_inspection(data: &RepositoryInspectionDto) -> Human {
     let mut output = text(format!(
         "Root: {}\nSelected path: {}\nRegistered: {}\nHead branch: {}\nLocal branches: {}\nConfiguration: {}\nPrimary branch: {}\nPublication remote: {}\nIdentity: {}\n",
-        data.root,
-        data.selected_path,
+        field(&data.root),
+        field(&data.selected_path),
         data.registered,
         optional(data.head_branch.as_deref()),
-        data.local_branches.join(", "),
+        data.local_branches
+            .iter()
+            .map(|branch| field(branch))
+            .collect::<Vec<_>>()
+            .join(", "),
         data.configuration.state.as_str(),
         optional(data.configuration.primary_branch.as_deref()),
         optional(data.configuration.publication_remote.as_deref()),
@@ -110,8 +128,8 @@ pub fn key_list(data: &KeyListDto) -> Human {
             .map(|key| {
                 format!(
                     "{}  {}  {}  {}  {}\n",
-                    key.id,
-                    key.label,
+                    field(&key.id),
+                    field(&key.label),
                     key.ownership.as_str(),
                     if key.selected { "selected" } else { "-" },
                     optional(key.fingerprint.as_deref())
@@ -126,14 +144,14 @@ pub fn key_list(data: &KeyListDto) -> Human {
 pub fn key_show(data: &KeyDto) -> Human {
     text(format!(
         "ID: {}\nLabel: {}\nOwnership: {}\nSelected: {}\nFingerprint: {}\nPrivate source: {}\nPublic metadata: {}\nPrivate key path: {}\nPublic key path: {}\n",
-        data.id,
-        data.label,
+        field(&data.id),
+        field(&data.label),
         data.ownership.as_str(),
         data.selected,
         optional(data.fingerprint.as_deref()),
         data.private_source_state.as_str(),
         data.public_metadata_state.as_str(),
-        data.private_key_path,
+        field(&data.private_key_path),
         optional(data.public_key_path.as_deref())
     ))
 }
@@ -144,9 +162,9 @@ pub fn public_key(data: &PublicKeyDto) -> Human {
 
 fn authority(data: &HostPinDto) -> String {
     if data.host.contains(':') {
-        format!("[{}]:{}", data.host, data.port)
+        format!("[{}]:{}", field(&data.host), data.port)
     } else {
-        format!("{}:{}", data.host, data.port)
+        format!("{}:{}", field(&data.host), data.port)
     }
 }
 
@@ -158,8 +176,8 @@ pub fn host_list(data: &HostPinListDto) -> Human {
                 format!(
                     "{}  {}  {}\n",
                     authority(pin),
-                    pin.pinned_algorithm,
-                    pin.pinned_fingerprint
+                    field(&pin.pinned_algorithm),
+                    field(&pin.pinned_fingerprint)
                 )
             })
             .collect(),
@@ -177,8 +195,8 @@ pub fn host_inspect(data: &HostPinDto) -> Human {
     text(format!(
         "Authority: {}\nPinned algorithm: {}\nPinned fingerprint: {}\nReapproval required: {}\n",
         authority(data),
-        data.pinned_algorithm,
-        data.pinned_fingerprint,
+        field(&data.pinned_algorithm),
+        field(&data.pinned_fingerprint),
         data.reapproval_required
     ))
 }
@@ -228,7 +246,7 @@ fn operation_line(data: &OperationDto) -> String {
         optional(data.operation_id.as_deref()),
         data.family.as_str(),
         data.action.as_str(),
-        data.state,
+        field(&data.state),
         optional(data.next_action.map(|value| value.as_str()))
     )
 }
@@ -246,7 +264,7 @@ pub fn operation_show(data: &OperationDto) -> Human {
         data.family.as_str(),
         data.owner.as_str(),
         data.action.as_str(),
-        data.state,
+        field(&data.state),
         optional(data.completed_step.as_deref()),
         optional(data.next_action.map(|value| value.as_str())),
         optional(data.item_id.as_deref()),

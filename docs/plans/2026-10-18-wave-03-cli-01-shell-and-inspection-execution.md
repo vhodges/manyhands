@@ -205,7 +205,7 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 1 — Clap, catalog and parsing | Complete; controller reviews passed | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` → `371c294195c48d8357146136bd1782db2daf2538` | Spec PASS; important authority-validation finding fixed; quality re-review PASS (Task 2 controller handoff) | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
 | 2 — Startup, rendering and main | Complete; controller reviews passed | `371c294195c48d8357146136bd1782db2daf2538` → `447c28dc85130f39b45ec89cf9a0fe40aee58831` | Spec PASS and quality PASS, no findings (Task 3 controller handoff) | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
 | 3 — Codes, schemas, harness and first goldens | Complete; controller reviews passed | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → `2e3849f31c0d7abd39b559ea15edce7312c2df03` | Spec PASS and quality PASS, no findings (Task 4 controller handoff) | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
-| 4 — Repository, credential, status and utility verbs | Implemented and self-reviewed; controller reviews pending | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → checkpoint introducing this entry, `feat: CLI repository, credential and status reads` | Spec/quality self-review PASS; fixture normalization finding corrected; no unresolved findings | 13 verb REDs; 13 renderer REDs; scoped ID helper RED/GREEN; 138 targeted tests; 28 new JSON fixtures generated/read/verified; scoped clippy; fmt |
+| 4 — Repository, credential, status and utility verbs | Implemented; spec PASS; quality fix awaiting re-review | `2e3849f31c0d7abd39b559ea15edce7312c2df03` → `a45d99cb9ef0369cf1602bd9971f9b8799a58166` → review-fix checkpoint below | Controller spec PASS; important/P2 raw-control-character finding verified and fixed; quality re-review pending | Initial 138 targeted tests and 28 new JSON fixtures; fix: 4 regressions RED/GREEN, 66 bin + 33 CLI tests; scoped clippy/fmt PASS |
 | 5 — Content verbs | Not started | Not established | Not requested | Not run |
 | 6 — Relationship verbs | Not started | Not established | Not requested | Not run |
 | 7 — Boundaries, workflow and amendments | Not started | Not established | Not requested | Not run |
@@ -668,3 +668,71 @@ Canonical checkpoint comment:
 Endpoint is the commit introducing this entry and is returned after creation.
 Task 5 remains unstarted; the ticket remains open. No subagents, rebase, push,
 PR, merge into main, closure or cleanup. Full-suite verification stays in Task 8.
+
+### Task 4 quality-review fix — 2026-10-19
+
+**Review and technical judgment.** The controller reports **Task 4 spec PASS**
+and an **important/P2 quality finding** at
+`a45d99cb9ef0369cf1602bd9971f9b8799a58166`: raw control characters in human
+metadata can add forged lines or terminal sequences, and break one-line-per-
+registration output. This supersedes the original self-review's no-findings
+assessment. Initial worktree was clean on the ticket branch; required main
+preflight again returned Already up to date with no base change.
+
+Verified the finding against unchanged domain sources:
+
+- `src/repository/keys/registry.rs:124–126` and `1059–1061` reject only
+  `label.trim().is_empty()`, allowing embedded newline, CR and ESC. The read
+  DTO copies `registration.label` at `read/credentials.rs:49`.
+- `src/repository.rs:10525–10528` accepts nonempty Git name/email strings
+  (strictly nonempty, not a control-character or whitespace validator).
+  `read/admin.rs:174–180` copies those strings into the identity DTO.
+- The original `human.rs` directly interpolated roots, labels, identity
+  optionals and other metadata. No domain guarantee justified treating them
+  as single-line display text.
+
+This is a CLI display-boundary defect within Task 4, not a library gap or a
+domain-validation change. Added one shared field-level helper that preserves
+ordinary Unicode and escapes characters satisfying `char::is_control()` via
+`escape_default()`: LF as `\n`, CR as `\r`, ESC as `\u{1b}`, and similarly
+tab/C1 controls. Required metadata strings use it directly; optional metadata
+uses it through `optional`. Branch-list elements are escaped before the
+renderer joins them. Fixed enum strings, numbers and booleans remain literal.
+
+Applied consistently across repository roots/selection/configuration/problem
+paths, identities, remote names/locations, key metadata/paths, host metadata,
+and index/poll/operation metadata. Layout is never escaped as a whole.
+`key public` and `id new` retain exact output; the helper explicitly excludes
+canonical public-key text and future requested bodies/sources. No Task 5
+behavior or domain/library edit was introduced.
+
+**Test-first evidence and checks.**
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli metadata_escape` before production edit | **RED: 4 failed**, 62 filtered. Raw field newlines added metadata lines: identity 7 rather than 5, key show 12 rather than 9, repository list 2 rather than 1, host inspect 7 rather than 4. |
+| Same filter after field-level escaping | **GREEN: 4 passed**, 62 filtered. Tests also require literal escaped LF/CR/ESC/tab/C1 values, preserved `é 中文`, renderer-owned newlines and no residual field controls. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli` | **66 + 33 = 99 passed**, zero failed/ignored/filtered. Includes unchanged exact public-key/ID unit and binary tests; golden update variable absent. |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli --test cli -- -D warnings` | **PASS** |
+| `devenv shell -- cargo fmt --check` | Initial two formatting differences corrected via apply_patch; final **PASS** |
+| `git diff --check` | **PASS** |
+
+Only human rendering and its unit tests change in code. CLI integration is
+affected because it exercises those human outputs; it was rerun. JSON dispatch,
+schemas and all goldens are unchanged, so mutation-contract tests were not
+affected and were not rerun. No full suite or native workflow ran.
+
+**Self-review and checkpoint.** Checked every dynamic string interpolation in
+the Task 4 renderers: metadata passes through the helper, while canonical
+public key/ID output and renderer layout bypass it. The four new tests exercise
+all 12 metadata renderers; the thirteenth Task 4 renderer is exact public-key
+text. The P2 finding is fixed; independent quality
+re-review remains pending. New commit subject:
+`fix: escape control characters in CLI metadata` with the required co-author
+trailer. Its SHA is returned after creation; no amend.
+
+Canonical comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A44MX856GSKHZA76TQ1F49.md`.
+Task 5 remains unstarted. No subagents, rebase, push, PR, merge into main,
+closure or cleanup; ticket remains open and full-suite verification stays in
+Task 8.
