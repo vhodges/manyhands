@@ -18,7 +18,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use futures::channel::{mpsc, oneshot};
@@ -36,7 +36,7 @@ use manyhands::{
 };
 
 use super::{
-    Backend, JobKind,
+    BUSY_RETRY_DELAYS, Backend, JobKind,
     requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
 };
 
@@ -618,13 +618,6 @@ fn take(shared: &Shared) -> Option<Job> {
         };
     }
 }
-
-/// The waits before a background job answered `busy` is taken again.
-const BUSY_RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_millis(100),
-    Duration::from_millis(200),
-    Duration::from_millis(400),
-];
 
 fn finish(shared: &Shared) {
     shared.lock().running = None;

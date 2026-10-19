@@ -57,7 +57,7 @@ mod view {
     use manyhands::{
         repository::{
             LeaseHolderForTesting, LeaseKind, Mutation, PrepareDataDto, RepoCreateInput,
-            RepositoryService,
+            RepoRemoveInput, RepositoryService,
         },
         results::ResultCode,
     };
@@ -117,6 +117,71 @@ mod view {
             assert_eq!(*code, ResultCode::Ok);
             assert!(preview);
         });
+    }
+
+    impl PrepareProbe {
+        /// Prepares the removal of `root`.
+        fn remove(&mut self, services: &Services, root: &Path, cx: &mut Context<Self>) {
+            let stamp = self
+                .generations
+                .next(ViewScope::Settings(SettingsPage::Repositories));
+            let mutation = Mutation::RepoRemove(RepoRemoveInput {
+                root: root.to_owned(),
+            });
+            self.task = Some(
+                services.prepare(stamp, mutation, cx, |probe, stamp, envelope, _| {
+                    let preview = matches!(envelope.data, Some(PrepareDataDto::Preview(_)));
+                    probe.prepared.push((stamp, envelope.code, preview));
+                }),
+            );
+        }
+    }
+
+    fn prepared(probe: &Entity<PrepareProbe>, cx: &mut TestAppContext) -> Vec<(ResultCode, bool)> {
+        probe.read_with(cx, |probe, _| {
+            probe
+                .prepared
+                .iter()
+                .map(|(_, code, preview)| (*code, *preview))
+                .collect()
+        })
+    }
+
+    /// Ruling R-A1: a prepare answered `busy` is retried as a read is. The
+    /// lease is let go before the second retry: the preview is delivered.
+    #[gpui_kit::test]
+    fn a_prepare_released_before_its_second_retry_gives_a_preview(cx: &mut TestAppContext) {
+        let (fixture, _backend, services, root) = setup(cx);
+        let held = hold_cache_write(&root, fixture.data_dir());
+        let probe = cx.new(|_| PrepareProbe::default());
+
+        probe.update(cx, |probe, cx| probe.remove(&services, &root, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(100));
+        assert!(prepared(&probe, cx).is_empty());
+
+        drop(held);
+        cx.executor().advance_clock(Duration::from_millis(200));
+        cx.run_until_parked();
+        assert_eq!(prepared(&probe, cx), [(ResultCode::Ok, true)]);
+    }
+
+    /// Held throughout, the prepare is retried at 100, 200 and 400 ms and
+    /// then delivers `busy`.
+    #[gpui_kit::test]
+    fn a_prepare_that_stays_busy_delivers_busy_after_three_retries(cx: &mut TestAppContext) {
+        let (fixture, _backend, services, root) = setup(cx);
+        let _held = hold_cache_write(&root, fixture.data_dir());
+        let probe = cx.new(|_| PrepareProbe::default());
+
+        probe.update(cx, |probe, cx| probe.remove(&services, &root, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(699));
+        assert!(prepared(&probe, cx).is_empty());
+
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert_eq!(prepared(&probe, cx), [(ResultCode::Busy, false)]);
     }
 
     /// A view that asks for the repository list and records what it is

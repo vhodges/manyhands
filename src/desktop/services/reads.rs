@@ -1,13 +1,11 @@
 //! Reads and previews on the background executor, returned to the asking
 //! entity with the stamp they were asked under.
 //!
-//! A busy read is retried after 100, 200 and 400 ms on the executor's
-//! timer, then delivered as `Busy` for the view to offer Retry. The
+//! A busy read or prepare is retried after 100, 200 and 400 ms on the
+//! executor's timer, then delivered as busy for the view to offer Retry. The
 //! returned `Task` belongs in the asking model's slot, so replacing a
 //! request drops the previous one; `apply` still checks the stamp, because
 //! a dropped task's blocking library call cannot be interrupted.
-
-use std::time::Duration;
 
 use gpui_kit::{Context, Task};
 use manyhands::{
@@ -15,15 +13,8 @@ use manyhands::{
     results::{Envelope, RecoveryAction, ResultCode},
 };
 
-use super::{ReadKind, Services};
+use super::{BUSY_RETRY_DELAYS, ReadKind, Services};
 use crate::desktop::model::stamp::Stamp;
-
-/// The waits before each retry of a busy read.
-const BUSY_RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_millis(100),
-    Duration::from_millis(200),
-    Duration::from_millis(400),
-];
 
 /// What a read gave the view.
 #[derive(Debug)]
@@ -94,8 +85,10 @@ impl Services {
 
     /// Prepares `mutation` on the background executor and hands its
     /// envelope to `apply` on the asking entity, with `stamp`. A prepare
-    /// answers with an envelope, not a `ReadError`, so it is not a `read`
-    /// and is not retried; the envelope's code says what happened.
+    /// answers with an envelope, not a `ReadError`, so it is not a `read`;
+    /// like a read, one answered `busy` is retried after each of
+    /// `BUSY_RETRY_DELAYS`, and the last answer, `busy` included, is
+    /// delivered (ruling R-A1).
     pub(crate) fn prepare<V: 'static>(
         &self,
         stamp: Stamp,
@@ -105,11 +98,20 @@ impl Services {
     ) -> Task<()> {
         let backend = self.backend.clone();
         let gate = backend.read_gate(ReadKind::Prepare);
-        let prepare = cx.background_executor().spawn(async move {
+        let executor = cx.background_executor().clone();
+        let timers = executor.clone();
+        let prepare = executor.spawn(async move {
             if let Some(gate) = gate {
                 let _ = gate.await;
             }
-            backend.service().prepare(&mutation)
+            let mut delays = BUSY_RETRY_DELAYS.iter();
+            loop {
+                let envelope = backend.service().prepare(&mutation);
+                match delays.next() {
+                    Some(delay) if envelope.code == ResultCode::Busy => timers.timer(*delay).await,
+                    _ => return envelope,
+                }
+            }
         });
         cx.spawn(async move |view, cx| {
             let envelope = prepare.await;

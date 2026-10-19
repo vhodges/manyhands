@@ -2,7 +2,7 @@
 //! for two presses of Enter, Escape with nothing asked and focus given
 //! back, and a stale preview that offers Prepare again.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use gpui_kit::{TestAppContext, component::dialog::Confirm};
 use manyhands::{
@@ -10,7 +10,7 @@ use manyhands::{
     results::{Outcome, ResultCode},
 };
 
-use super::{PREPARE_AGAIN, STALE_CODES, SUBMITTED, local_time, prepare_again};
+use super::{CLOSE, PREPARE_AGAIN, RETRY, STALE_CODES, SUBMITTED, local_time, prepare_again};
 use crate::desktop::{
     services::{
         JobKind,
@@ -145,6 +145,38 @@ async fn a_stale_preview_is_shown_with_prepare_again(cx: &mut TestAppContext) {
         .expect("the new preview's answer");
     assert_ne!(code, ResultCode::Ok.as_str());
     assert_eq!(abandons(&shell, cx), [id]);
+}
+
+/// Ruling R-A1: a prepare that stays busy through its retries is shown
+/// as busy with Retry and Close. Retry, once the lease is let go, takes
+/// the preview, and Confirm is offered.
+#[gpui_kit::test]
+fn a_busy_preview_offers_retry_which_prepares_again(cx: &mut TestAppContext) {
+    let (shell, root, _) = stranded(cx);
+    let lease = RepositoryService::hold_lease_for_testing(
+        &root,
+        shell.fixture.data_dir(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    shell.click(("pending-abandon", 0usize), cx);
+    cx.executor().advance_clock(Duration::from_secs(1));
+    shell.run(cx);
+
+    assert_eq!(
+        shell.label("confirm-code", cx).as_deref(),
+        Some(ResultCode::Busy.as_str())
+    );
+    assert_eq!(shell.label("confirm-retry", cx).as_deref(), Some(RETRY));
+    assert_eq!(shell.label("confirm-cancel", cx).as_deref(), Some(CLOSE));
+    assert!(!shell.present("confirm-ok", cx));
+
+    drop(lease);
+    shell.click("confirm-retry", cx);
+    assert!(shell.present("confirm-ok", cx));
+    assert!(shell.present("confirm-command-name", cx));
+    assert!(!shell.present("confirm-retry", cx));
+    assert!(shell.requests(cx, |_| true).is_empty());
 }
 
 /// The expiry is shown as a wall-clock time; an unreadable one as given.

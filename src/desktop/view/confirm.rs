@@ -7,7 +7,9 @@
 //! click or Enter, submits the request once with the preview's
 //! confirmation and is then unavailable; a second press does nothing.
 //! Escape or Cancel closes the dialog with nothing asked of the worker,
-//! and focus goes back where the dialog was opened from.
+//! and focus goes back where the dialog was opened from. A prepare still
+//! busy after its retries is shown as busy with Retry, which prepares
+//! again under the same request, and Close.
 //!
 //! If the request is answered with a stale confirmation, or the state the
 //! preview showed has changed, the dialog shows that answer and Prepare
@@ -46,6 +48,7 @@ pub(crate) const CONFIRM: &str = "Confirm";
 pub(crate) const CANCEL: &str = "Cancel";
 pub(crate) const CLOSE: &str = "Close";
 pub(crate) const PREPARE_AGAIN: &str = "Prepare again";
+pub(crate) const RETRY: &str = "Retry";
 pub(crate) const PREPARING: &str = "Preparing the preview";
 pub(crate) const SUBMITTED: &str = "Submitted";
 pub(crate) const NOT_QUEUED: &str = "The request cannot be submitted again now: it is still queued or running, or Manyhands is quitting.";
@@ -269,8 +272,11 @@ impl ConfirmDialog {
                     replacement,
                 };
                 // What the row offered may be gone: the views that show
-                // the repository read it again.
-                if let Some(root) = self.intent.root().and_then(|root| root.to_str()) {
+                // the repository read it again. A busy answer says nothing
+                // changed: Retry prepares again.
+                if code != ResultCode::Busy
+                    && let Some(root) = self.intent.root().and_then(|root| root.to_str())
+                {
                     let root = root.to_owned();
                     self.services.operations().update(cx, |operations, cx| {
                         operations.mark_changed(root);
@@ -316,6 +322,20 @@ impl ConfirmDialog {
     /// Prepare again: a fresh preview under the same request.
     fn prepare_again(&mut self, cx: &mut Context<Self>) {
         if matches!(self.phase, Phase::Stale { .. }) {
+            self.prepare(cx);
+        }
+    }
+
+    /// Retry on a prepare that stayed busy: the same preview is asked for
+    /// again, under the same request.
+    fn retry(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            self.phase,
+            Phase::Answered {
+                code: ResultCode::Busy,
+                ..
+            }
+        ) {
             self.prepare(cx);
         }
     }
@@ -615,8 +635,14 @@ impl Render for ConfirmDialog {
                 let _ = entity.update(cx, |dialog, cx| dialog.confirm(cx));
             }
         };
-        let again = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            let _ = entity.update(cx, |dialog, cx| dialog.prepare_again(cx));
+        let again = {
+            let entity = entity.clone();
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                let _ = entity.update(cx, |dialog, cx| dialog.prepare_again(cx));
+            }
+        };
+        let retry = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let _ = entity.update(cx, |dialog, cx| dialog.retry(cx));
         };
         let mut body = v_flex()
             .id("confirm-dialog")
@@ -691,6 +717,11 @@ impl Render for ConfirmDialog {
                                 replacement.pinned_algorithm, replacement.pinned_fingerprint
                             ),
                         ));
+                }
+                // Still busy after every retry: Retry prepares again.
+                if *code == ResultCode::Busy {
+                    buttons =
+                        buttons.child(Self::button("confirm-retry", RETRY, true, false, retry));
                 }
                 buttons =
                     buttons.child(Self::button("confirm-cancel", CLOSE, false, false, cancel));

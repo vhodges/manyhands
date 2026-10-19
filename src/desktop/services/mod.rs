@@ -10,7 +10,7 @@ mod reads;
 pub(crate) mod requests;
 pub(crate) mod worker;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
@@ -20,6 +20,14 @@ use crate::desktop::model::operations::Operations;
 use worker::WorkerHandle;
 
 pub(crate) use reads::{ReadFailure, ReadResult};
+
+/// The waits before each retry of a call answered `busy`: a read, a
+/// prepare, or a background job (ruling R6).
+pub(crate) const BUSY_RETRY_DELAYS: [Duration; 3] = [
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+    Duration::from_millis(400),
+];
 
 /// A read's delay: awaited inside the read's future, before the blocking
 /// library call. It must never block: under `#[gpui_kit::test]` the
