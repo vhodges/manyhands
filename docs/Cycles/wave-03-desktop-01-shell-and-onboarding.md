@@ -174,28 +174,6 @@ the work review-ready.
     primary is not reported. Provenance shows which copy is read, nothing more.
   - `01M4PB7WZN9WNAQ3KXZ19J28KM`: removing some remotes is refused by the F2
     binding. D1 shows the refusal and its reason.
-  - `01M5B163PQTE9C1T6NMHATR3KX` (filed 2026-10-19, found by Task 6): item
-    reads never report an item's context problems. For a duplicated or
-    mismatched context, `show_item` answers `item_not_found` and the entry
-    leaves the lists; only `index_status` reports the `context_problem`.
-    - D1 shows "not found" with Refresh, and never offers a choice of context.
-    - The recovery view exists, but only a model test covers it (ruling
-      R-T6a).
-    - The acceptance row for the duplicate-context recovery view therefore
-      depends on this ticket. Until it merges, that row is **not met**.
-    - The view test pins the library's current answer, so it fails once the
-      library is fixed. That is the signal to enable the real test.
-  - `01M5B0Z6PNP7X4WH4JV3N0VQJ6` (filed 2026-10-19, found by Task 5):
-    `repo create` and `repo enable` commit `.manyhands/config.toml` without
-    updating the worktree's Git index.
-    - After onboarding (Part C, Task 12), Git status shows the file as deleted
-      from the index and untracked.
-    - The next authoring command in that repository, such as a CLI
-      `ticket create`, answers `worktree_not_clean`.
-    - D1's test fixtures reset the index after creating a repository. D1's
-      production code does not.
-    - The product owner decides at the Part A checkpoint whether Task 12 waits
-      for this ticket or records the limitation.
 - **Native evidence on Windows and macOS** is an obligation carried to G1
   (decision 3).
 
