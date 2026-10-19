@@ -1,9 +1,59 @@
 # Wave 03 C1: Fresh-Session Handoff
 
-Brief for a new session that implements Wave 03 Cycle C1, "CLI Shell And
-Inspection". Read this first, then the three documents it names.
+Completion handoff for Wave 03 Cycle C1, "CLI Shell And Inspection". The
+current status below supersedes the original planning brief, retained afterward
+as dated history rather than instructions to restart completed work.
 
-## Status
+## Current Completion Status — 2026-10-19
+
+**Tasks 0–8 complete; implemented, review-ready; independent final reviews
+approved.** Ticket `01M4CC0VMSZ7BRS740C8VSQ5ZK` remains **open**. Worktree:
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMSZ7BRS740C8VSQ5ZK`,
+branch `manyhands/ticket/01M4CC0VMSZ7BRS740C8VSQ5ZK`.
+
+- **Verified/reviewed code HEAD:** `309c9e071994f55eb0b1fa9f44546cc2722d0398`.
+- **Verification/documentation checkpoint:**
+  `7d45c5013a4eebc49ca804dbc3d847ebf825b8c4` (`docs: mark C1 review-ready`).
+  Subsequent approval recording is documentation-only; code is unchanged.
+- **Independent reviews, reported by the controller:** whole-branch spec
+  re-review PASS at `2b84360a2fca123c37d09dd642b69b2afb368049`; whole-branch
+  quality PASS on `309c9e0`, **Critical/Important/Minor NONE**. The reviewer
+  separately confirmed spec PASS for decision 14's owner-approved baseline
+  reload in the one pre-existing closure test: all four assertions unchanged,
+  no production changes. No outstanding review findings remain.
+- **Final gates:** Devenv check/all-features/locked, fmt, clippy/all-targets/
+  all-features/locked with `-D warnings`, and test/all-features/locked/
+  `--no-fail-fast` all exited **0**. **3,468 passed, 0 failed, 1 intentionally
+  ignored**, including **11 doc tests** and **621 SSH cases**. The ignored
+  case is the existing opt-in thousand-item read characterization. The
+  controller confirmed these logs. No tests are rerun for approval recording.
+- **Delivered coverage:** **28 available verbs / 72 cataloged**, **79 bin +
+  64 CLI integration tests**, **51 JSON + 4 text = 55 CLI fixtures**. All
+  11 acceptance criteria have evidence in the execution ledger.
+- **Smoke checks:** bare CLI help exits 0; the normal no-default-features
+  dependency graph prints 0 GPUI matches (Cargo 0, grep's expected no-hit 1).
+  Active-Wayland desktop launch created/configured a toplevel and submitted
+  rendered buffers; deliberately stopped after 15 seconds (124), with no
+  matching process remaining. This is bounded launch evidence, **not manual
+  visual or interaction approval**.
+- **Logs:** `/tmp/opencode/manyhands-c1-task8-final-{check,fmt,clippy,test}.log`,
+  `manyhands-c1-task8-final-cli-smoke.log`,
+  `manyhands-c1-task8-final-dependency-tree.log`, and
+  `manyhands-c1-task8-final-desktop-{smoke,build,launch}.log` in the same
+  directory. Earlier failed attempts are preserved and resolved in the ledger.
+- **Limits:** native CI is **post-merge on main**, unrun here; Windows/macOS
+  and Linux-aarch64 native results are not established. R-3 leaves Windows
+  default location inspection-only and macOS default redirection unrun here;
+  R-4 uses fake transport-start failure; R-5 retains the child libgit2 system-
+  configuration isolation limitation.
+- **Delivery:** the controller handles authorized delivery. These independent
+  code-review approvals do not authorize owner merge/closure actions. This
+  docs-only session does not push, open a PR, merge, close or clean up.
+
+Authoritative [final verification and acceptance mapping](2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#task-8-final-verification-and-review-ready-checkpoint--2026-10-19)
+and [final independent approvals](2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#final-independent-review-approvals--2026-10-19).
+
+## Historical Planning Status — 2026-10-19
 
 - **Approved by the owner on 2026-10-19:** the Cycle doc, the design and the
   implementation plan.

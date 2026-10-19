@@ -18,10 +18,15 @@ id: "01M58XQ59NBC37ENGH0BA9X40Q"
 Wayland desktop launch evidence, every acceptance criterion, prior gate
 resolutions and platform limitations are recorded in the
 [execution ledger](../plans/2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#task-8-final-verification-and-review-ready-checkpoint--2026-10-19).
-The controller reports whole-branch spec re-review **PASS** after the P2/P3
-fixes. Independent whole-branch quality review remains pending; this status
-does not claim final approval. The ticket remains **open**. Native CI is
-post-merge on main and has not been dispatched.
+**Independent final reviews approved (controller handoff, 2026-10-19):**
+whole-branch spec re-review **PASS** at `2b84360` after P2/P3; whole-branch
+quality **PASS** on `309c9e0`, with **no Critical, Important or Minor findings**.
+The reviewer also confirmed spec PASS for decision 14's test-only baseline
+reload, with all four assertions unchanged and no production change. See the
+[final approval record](../plans/2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#final-independent-review-approvals--2026-10-19).
+Task 8 is complete. The ticket remains **open**; these code-review approvals
+do not authorize merge or closure. Native CI is post-merge on main and has
+not been dispatched.
 
 **Approved by the owner on 2026-10-19**, together with the design and the
 implementation plan, for subagent-driven execution. The owner answered the planning questions on

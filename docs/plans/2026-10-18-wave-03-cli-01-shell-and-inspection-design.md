@@ -18,10 +18,14 @@ with **3,468 tests/cases passed, 0 failed, 1 intentionally ignored**, including
 11 doc tests. The [execution ledger](2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#task-8-final-verification-and-review-ready-checkpoint--2026-10-19)
 maps every Cycle acceptance criterion to evidence and records the baseline
 corrections, review fixes, decision 14's narrow test exception, smoke checks
-and R-3/R-4/R-5 limits. The controller reports whole-branch spec re-review
-PASS after P2/P3; independent whole-branch quality review remains pending.
-Review-ready is not final approval or ticket closure. Native CI remains
-post-merge on main, not dispatched here.
+and R-3/R-4/R-5 limits. Independent final reviews are **approved**: the
+controller reports whole-branch spec re-review **PASS** at `2b84360`, quality
+**PASS** on `309c9e0` with no Critical/Important/Minor findings, and spec PASS
+for decision 14's narrow test-only exception. All four assertions remain;
+that correction makes no production change. The
+[final approval record](2026-10-18-wave-03-cli-01-shell-and-inspection-execution.md#final-independent-review-approvals--2026-10-19)
+completes Task 8. The ticket stays **open**; review approval does not authorize
+merge or closure. Native CI remains post-merge on main, not dispatched here.
 
 ## Intent And Approval Boundary
 

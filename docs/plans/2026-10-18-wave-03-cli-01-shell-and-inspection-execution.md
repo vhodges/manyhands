@@ -193,8 +193,10 @@ review was dispatched by this implementer.
 ### Durable task ledger
 
 Tasks 0–8 have been executed, including the authorized follow-ups below.
-Independent whole-branch quality review remains with the controller. The ledger
-records actual task bases, checkpoint ranges, review dispositions and checks.
+Independent whole-branch spec and quality reviews are approved; Task 8 is
+complete. The final approval record below supersedes pending-review statements
+in the dated historical checkpoints and comments. The ledger records actual
+task bases, checkpoint ranges, review dispositions and checks.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
 (`docs: record C1 baseline and refresh the API audit`); its SHA is reported
 to the controller after creation rather than embedding a self-referential SHA.
@@ -209,7 +211,7 @@ to the controller after creation rather than embedding a self-referential SHA.
 | 5 — Content verbs | Complete; controller reviews passed | `4fb690cb70f5f43566838dc26e1a7ea9ea3794a1` → `e1a7540502d30e42bb48cc897772e1c0c5691ffc` | Spec PASS and quality PASS, no findings (Task 6 controller handoff) | Binary and renderer/helper RED/GREEN; 73 bin + 44 CLI + 43 mutation-contract = 160 tests; 7 JSON + 2 text new goldens; scoped clippy/fmt PASS |
 | 6 — Relationship verbs | Complete; controller reviews passed | `e1a7540502d30e42bb48cc897772e1c0c5691ffc` → `e9b71527bb4177f5c862e61efaa7ac5a66d30148` | Spec PASS and quality PASS, no findings (Task 7 controller handoff) | Binary and renderer/dispatch RED/GREEN; 78 bin + 58 CLI + 43 mutation-contract = 179 tests; 8 JSON goldens identical to F1; scoped clippy/fmt PASS |
 | 7 — Boundaries, workflow and amendments | Complete; controller reviews passed | `e9b71527bb4177f5c862e61efaa7ac5a66d30148` → `9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa` | Spec PASS and quality PASS, no findings (Task 8 controller handoff) | 4 new boundary tests; fresh 62 CLI tests, scoped bin/CLI clippy and fmt PASS reported by controller; workflow/amendment diff review |
-| 8 — Full verification, review and handoff | Local verification/documentation complete; review-ready; final quality review pending | Initial `9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa`; final checked Rust HEAD `309c9e071994f55eb0b1fa9f44546cc2722d0398` → checkpoint introducing the final entry below | Whole-branch spec re-review PASS after P2/P3 (controller report); independent whole-branch quality review pending | All four final gates PASS; 3,468 passed, 0 failed, 1 ignored including 11 doc tests; CLI smoke, no-GPUI graph, bounded Wayland launch and clean merge-tree |
+| 8 — Full verification, review and handoff | Complete; independent final reviews approved; implemented, review-ready; ticket open | Initial `9f65977acb54df8bd66b9dd9024ac3f97e5cb4fa`; checked Rust HEAD `309c9e071994f55eb0b1fa9f44546cc2722d0398`; verification/docs `7d45c5013a4eebc49ca804dbc3d847ebf825b8c4`; final approvals in this checkpoint | Whole-branch spec PASS at `2b84360`; quality PASS on `309c9e0`, no Critical/Important/Minor findings; spec PASS for decision 14 (controller handoff) | All four final gates PASS; 3,468 passed, 0 failed, 1 ignored including 11 doc tests; CLI smoke, no-GPUI graph, bounded Wayland launch and clean merge-tree; no Rust/test rerun for approval bookkeeping |
 
 ### Task 0 checkpoint — 2026-10-19
 
@@ -1259,9 +1261,10 @@ files have no change from the checked HEAD in this documentation checkpoint.
   Its 79 bin + 64 CLI = 143 targeted passes and scoped clippy/fmt stand as
   historical evidence. The actual production and test changes justify this
   final full-gate retry. No broad tests were repeated after final success.
-- **Independent whole-branch quality review remains pending with the
-  controller.** No unknown approval is inferred from local checks, the spec
-  result, or earlier per-task reviews. The ticket remains **open**.
+- **Historical status at `7d45c50` (2026-10-19):** independent whole-branch
+  quality review was pending with the controller. The later
+  [final independent approval record](#final-independent-review-approvals--2026-10-19)
+  supersedes that status; the ticket remains **open**.
 
 #### Final full gate
 
@@ -1395,10 +1398,11 @@ These are test/fixture inventories, not measured line or branch coverage.
   and `--test cli`. Native matrix execution is **after merge on main**, requires
   owner dispatch approval, and was **not dispatched**. Linux-local success and
   a workflow edit do not establish Windows/macOS/Linux-aarch64 results.
-- **Review:** all local verification is complete; the Cycle and design are
-  **implemented, review-ready**, with independent whole-branch quality review
-  still pending. The controller retains review disposition and any follow-up.
-  No final approval or ticket closure is claimed.
+- **Review:** all local verification and independent final reviews are complete;
+  the Cycle and design are **implemented, review-ready**. Whole-branch spec and
+  quality PASS, including decision 14's spec check, are recorded in the final
+  approval addendum below. The controller retains delivery; ticket closure and
+  merge still require their own authorization.
 
 Only the Cycle, design, this ledger and the final canonical comment are changed
 by this checkpoint. The six originally named pre-existing-test edits remain
@@ -1419,3 +1423,59 @@ Its ID came from the supported CLI `id new` with an isolated `/tmp/opencode`
 data directory; comment creation remains a filesystem operation because
 `comment add` is planned for C4. Ticket stays **open**. No subagents, rebase,
 push, PR, merge into main, closure, worktree cleanup or native dispatch.
+
+### Final independent review approvals — 2026-10-19
+
+**Controller handoff received after the verification checkpoint.** Independent
+whole-branch **quality PASS** on code HEAD
+`309c9e071994f55eb0b1fa9f44546cc2722d0398`: **Critical NONE, Important NONE,
+Minor NONE**. Whole-branch **spec re-review PASS** was already received at
+`2b84360a2fca123c37d09dd642b69b2afb368049` after the P2/P3 fixes. The final
+reviewer additionally confirmed **spec PASS** for the owner-approved decision
+14 exception in `309c9e0`: only the named test reloads its persisted baseline,
+all four assertions are unchanged, and no production code changes.
+
+The controller independently read the final gate/smoke logs and confirmed
+**3,468 passed, 0 failed, 1 intentionally ignored**, including **11 doc tests**,
+and the recorded smoke results. Code remains exactly the verified/reviewed
+`309c9e0` tree. Verification/documentation checkpoint
+`7d45c5013a4eebc49ca804dbc3d847ebf825b8c4` added only documentation and its
+canonical comment; this approval checkpoint is also documentation-only. No
+tests, full gates or smoke runs are repeated for this bookkeeping. CLI `id new`
+is used only to generate the new comment's ID in the isolated temporary data
+directory, not as a new verification claim.
+
+**Task 8 is complete; independent final reviews are approved.** C1 remains
+**implemented, review-ready**, with **28 available verbs out of 72 cataloged**
+and **55 CLI fixtures (51 JSON + 4 text)**. All 11 acceptance criteria and all
+41 result-group counts remain in the final verification entry above. The
+[completion handoff](2026-10-19-wave-03-cli-01-handoff.md#current-completion-status--2026-10-19)
+now supersedes the original planning handoff's not-started instructions.
+
+The earlier pending-review statements and comment
+`01M5AF9ADW9QFY9DH7DYC252V2` are historical snapshots, superseded by this dated
+record and canonical approval comment
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5AFS8W54FXJ4RNWCCMZMGY4.md`.
+Fresh `git merge-tree --write-tree HEAD origin/main` at approval-record base
+`7d45c50` exited 0, tree `885582e08c15855edd787ad49451d0125a304484`;
+`origin/main` remains `f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+Limits remain unchanged: R-3 Windows default-location inspection and unrun
+macOS default redirection; R-4 fake transport-start failure; R-5 child libgit2
+system-config isolation limits. Native matrix results are not claimed: CI is
+post-merge on main and unrun here. The bounded active-Wayland smoke proves
+launch/render submission, not manual visual or interaction approval.
+
+The ticket stays **open**. Code-review approval does not grant owner approval
+to merge or close. The controller handles delivery under its authorization;
+this checkpoint performs no push, PR, merge, rebase, closure or cleanup.
+Documentation validation **PASS**: final approval statuses and complete Task 8,
+handoff commit/count references, local links and destination anchors, comment
+metadata, open-ticket status, all 41 log-to-ledger counts, 11 acceptance rows
+and 55 registered fixtures. Log:
+`/tmp/opencode/manyhands-c1-task8-final-approval-validation.log`.
+`git diff --check` passes; comparison against `309c9e0` confirms no change to
+source, tests, Cargo files, schemas or the native workflow.
+Commit: `docs: record C1 final review approvals`, with the required co-author
+trailer. Its SHA is returned after creation; the actual checked code and prior
+documentation SHAs above are fixed references, not a self-referential commit ID.
