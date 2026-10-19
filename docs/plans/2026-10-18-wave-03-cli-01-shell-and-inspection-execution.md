@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Tasks 0–2 have been executed. For each later task, record its actual starting
+Tasks 0–3 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -203,8 +203,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 | --- | --- | --- | --- | --- |
 | 0 — Baseline, audit refresh and ledger | Complete; both controller reviews passed | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → `2aa71e7a1c4895c1e62c65d37fc81116902642c9` | Spec and quality reviews passed, no findings (controller handoff for Task 1) | Five baseline commands above; 183 targeted tests; documentation checks |
 | 1 — Clap, catalog and parsing | Complete; controller reviews passed | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → `bd01cce30dd70ea161c37b01ea3cf0e0c7f98747` → `371c294195c48d8357146136bd1782db2daf2538` | Spec PASS; important authority-validation finding fixed; quality re-review PASS (Task 2 controller handoff) | Catalog/parser RED/GREEN; authority regression RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
-| 2 — Startup, rendering and main | Implemented and self-reviewed; controller reviews pending | `371c294195c48d8357146136bd1782db2daf2538` → checkpoint introducing this entry, `feat: CLI startup, rendering, help and version` | Spec/quality self-review PASS; no unresolved findings; no independent review claimed | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
-| 3 — Codes, schemas, harness and first goldens | Not started | Not established | Not requested | Not run |
+| 2 — Startup, rendering and main | Complete; controller reviews passed | `371c294195c48d8357146136bd1782db2daf2538` → `447c28dc85130f39b45ec89cf9a0fe40aee58831` | Spec PASS and quality PASS, no findings (Task 3 controller handoff) | Render RED/GREEN, startup/dispatch/human RED/GREEN; 48 bin tests; bare-call smoke; bin clippy; fmt |
+| 3 — Codes, schemas, harness and first goldens | Implemented and self-reviewed; controller reviews pending | `447c28dc85130f39b45ec89cf9a0fe40aee58831` → checkpoint introducing this entry, `feat: usage_error and command_unavailable, CLI test harness and help goldens` | Spec/quality self-review PASS; no unresolved findings; no independent review claimed | Result-code and binary RED/GREEN; exhaustive-match RED; 323 targeted tests; 10 generated/read/verified fixtures; scoped clippy; fmt |
 | 4 — Repository, credential, status and utility verbs | Not started | Not established | Not requested | Not run |
 | 5 — Content verbs | Not started | Not established | Not requested | Not run |
 | 6 — Relationship verbs | Not started | Not established | Not requested | Not run |
@@ -452,3 +452,93 @@ Canonical checkpoint comment:
 `.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A1FZQYZV2DNHRTBJT9B8MV.md`.
 The endpoint is the commit introducing this entry; its SHA is returned after
 creation to avoid a self-referential commit ID.
+
+### Task 3 checkpoint — 2026-10-19
+
+**Authorization and base.** Only Task 3 was dispatched, with owner approval for
+the checkpoint commit, TDD/apply_patch and inline self-review. Initial HEAD:
+`447c28dc85130f39b45ec89cf9a0fe40aee58831`, clean on the ticket branch in the
+ticket worktree. Read local AGENTS, the canonical ticket and latest comment,
+approved Cycle/design/plan and this ledger. Required main preflight fetched
+`origin/main`, verified it is an ancestor of HEAD and ran the already-up-to-date
+merge; no commit or base change. Main remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`.
+
+**Task 2 review handoff.** The controller reports **spec PASS** and **quality
+PASS**, **no findings**, with **48 bin tests passing** at `447c28d`. This
+supersedes the pending controller-review status in the historical Task 2 entry.
+
+**Implementation.**
+
+- Added `UsageError` and `CommandUnavailable` directly after `InvalidInput`,
+  with the approved Input classes, fixed messages and schema enum ordering.
+  The two rendering constants now name them. The only `src/repository/` edit
+  is the approved comment and two patterns in the no-action recovery arm.
+- Added four closed, all-properties-required help/version schemas; command
+  and option entries are reached by `$ref`. The help repository enum is
+  `required`, `refused`, null, tied to the test registry and real binary output.
+- Added the CLI harness with an owned temporary home, configurable data/cwd,
+  explicit override removal, all seven redirected home/config/data variables,
+  inherited Git/SSH/GCM removal and isolated Git configuration variables.
+  Default cwd is the temporary home. R-5 is documented at the environment
+  boundary; the repository factory sets fixture-local identity and LF policy.
+- Child stdin is closed. Two test-process threads drain output concurrently;
+  `try_wait` reaps the child with a 30-second bound (kill/wait on timeout),
+  then both readers must report EOF within a shared one-second deadline.
+  JSON checking requires exactly one newline-terminated object and no stderr.
+- Added the separate JSON/text golden registry and helpers reusing
+  `golden::render` and `update_requested`; `golden.rs` is unchanged. Added
+  exact-directory membership checking and the entire top-level lease-child
+  function copied from `read_boundary.rs:34–59` for later tasks.
+- Real-binary coverage checks root/resource/available/planned help, version,
+  the bare invocation, unknown commands/options, all four mutation-only options
+  on a read in both modes, planned-command trailing JSON and C5 human detail,
+  repeated JSON around `id new`, and a data-directory regular-file failure.
+  Every JSON result is schema checked, with its data schema when present;
+  service-free paths leave the requested data directory absent.
+- Applied exactly named existing-test edits 1–6. Counts are now **70** design
+  codes, **46** data roots and **6** mutation-golden exceptions. The shared
+  golden scanner includes only CLI JSON cases under the `cli_v1` label.
+
+**RED/GREEN and verification.** Every Rust command ran through Devenv, locked
+except fmt. Only Task 3's named filters and targets ran.
+
+| Command / stage | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --lib results::tests`, after named test edits and before codes | RED: **2 failed**, **47 passed**, 1147 filtered; exactly the code table and fixed-message tests |
+| `devenv shell -- cargo check --locked --lib`, after codes and before recovery-arm edit | Expected RED: E0004 at `mutation/outcome.rs:719`, naming both new variants |
+| `devenv shell -- cargo test --locked --test cli mutation_only_options_on_reads_are_usage_errors_in_both_modes`, before rendering constants changed | RED: **1 failed**, 9 filtered; human code was still the temporary `invalid_input` |
+| `devenv shell -- cargo test --locked --test cli planned_command_recognizes_trailing_json_and_names_its_cycle_in_human_mode`, before constants changed | RED: **1 failed**, 9 filtered; unavailable fixed message was still the temporary alias |
+| `MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --locked --test cli help::` | GREEN: **8 passed**, 2 filtered; single fixture-generation run |
+| `devenv shell -- cargo test --locked --lib results::tests` | **49 passed**, 1147 filtered |
+| `devenv shell -- cargo test --locked --lib read::` | **65 passed**, 1131 filtered |
+| `devenv shell -- cargo test --locked --lib mutation::outcome` | **37 passed**, 1159 filtered |
+| `devenv shell -- cargo test --locked --test read_contract --test mutation_contract --bin manyhands-cli --test cli` | **71 + 43 + 48 + 10 passed**; golden update variable absent |
+| `devenv shell -- cargo clippy --locked --lib --bin manyhands-cli --test read_contract --test mutation_contract --test cli -- -D warnings` | PASS |
+| `devenv shell -- cargo fmt --check` | Initial new-file formatting differences corrected via apply_patch; final PASS |
+| `git merge-tree --write-tree HEAD origin/main` before checkpoint | PASS; tree `56f6512c05d6fefe98ef7f8d99f9260f71052c05` (committed base, before Task 3 additions) |
+
+Final scoped total: **323 passed**, zero failures/ignored. The CLI count
+includes the exact-directory test and inactive lease-child helper. Generated
+**8 JSON + 2 text** fixtures once, read every generated file, then verified
+without the update variable. Root text deliberately preserves clap's literal
+padding spaces in its resource list; fixtures are byte contracts, marked
+`-text`, not hand-trimmed output.
+The staged `git diff --cached --check` reports exactly those 16 generated
+resource-list lines; the check excluding only `help_root_text.txt` passes.
+
+**Self-review.** Inspected the actual source/test/schema diff against Task 3
+Steps 1–9, reviewed all new harness/test files and all generated fixtures.
+Confirmed the only existing semantic test changes are the six named edits,
+the repository exception is exactly the approved no-action addition, and no
+additional library gap was found. All required interfaces and isolation
+variables are present; planned help retains null repository and empty options;
+fixed failure messages, empty scope/data/recovery and stream/exit behavior
+match the design. Spec/quality self-review PASS, no unresolved findings.
+Independent controller review is pending; native behavior is not claimed.
+
+Canonical checkpoint comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A29F5AVHDZNAHG3NAV62AS.md`.
+Endpoint is the commit introducing this entry, returned after creation. Task 4
+remains unstarted, the ticket stays open, and the full suite remains reserved
+for Task 8. No subagents, push, PR, merge into main, rebase, closure or cleanup.

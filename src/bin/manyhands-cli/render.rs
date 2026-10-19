@@ -3,8 +3,8 @@ use std::io::{self, Write};
 use manyhands::results::{Envelope, FailureClass, ResultCode};
 use serde::Serialize;
 
-pub const USAGE_CODE: ResultCode = ResultCode::InvalidInput; // Task 3 changes it.
-pub const UNAVAILABLE_CODE: ResultCode = ResultCode::InvalidInput; // Task 3 changes it.
+pub const USAGE_CODE: ResultCode = ResultCode::UsageError;
+pub const UNAVAILABLE_CODE: ResultCode = ResultCode::CommandUnavailable;
 
 pub struct Human {
     pub stdout: String,
