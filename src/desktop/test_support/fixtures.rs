@@ -15,9 +15,9 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        IndexRefreshInput, Mutation, MutationCall, MutationDataDto, NoProgress, PrepareDataDto,
-        RepoCreateInput, RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput,
-        TicketDraft,
+        FolderCreateInput, IndexRefreshInput, Mutation, MutationCall, MutationDataDto, NoProgress,
+        PrepareDataDto, RepoCreateInput, RepoRemoveInput, RepositoryService, RequestId,
+        TicketCreateInput, TicketDraft,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -189,6 +189,20 @@ impl Fixture {
                     title: title.to_owned(),
                     body: format!("# {title}\n"),
                 },
+            }),
+        );
+        assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    }
+
+    /// Makes the folder `path`, below `docs/`, in `root`'s primary
+    /// worktree through `execute` of `folder create`, which also refreshes
+    /// the index.
+    pub(crate) fn create_folder(&self, root: &Path, path: &str) {
+        let created = self.execute(
+            None,
+            Mutation::FolderCreate(FolderCreateInput {
+                root: root.to_owned(),
+                path: path.to_owned(),
             }),
         );
         assert_eq!(created.code, ResultCode::Ok, "{}", created.message);

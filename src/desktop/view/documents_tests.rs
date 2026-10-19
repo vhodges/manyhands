@@ -1,10 +1,7 @@
 //! The document tree: what the two library reads give, and nothing else;
 //! arrows move and Enter opens; folder creation is visibly unavailable.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use gpui_kit::TestAppContext;
 use manyhands::repository::ItemDtoKind;
@@ -35,8 +32,7 @@ fn documents(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     fixture.create_document(&root, TOP, "docs/top.md", "Top");
     fixture.create_document(&root, NESTED, "docs/guides/deep/nested.md", "Nested");
     fixture.commit_nonconforming_document(&root, MARKER);
-    // Git keeps no empty folder: the refresh sees it on disk.
-    fs::create_dir_all(root.join("docs/empty")).unwrap();
+    fixture.create_folder(&root, "docs/empty");
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
     shell.click(("repo-row", 0usize), cx);
