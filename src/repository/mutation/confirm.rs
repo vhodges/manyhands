@@ -299,7 +299,11 @@ impl RepositoryService {
                 Answer::stopped(ResultCode::NotConfirmable),
             );
         };
-        let scope_key = scope_key(binding.place());
+        let resolved = binding.resolve_scope(self, None);
+        let (scope_key, failure) = match resolved {
+            Ok(key) => (key, None),
+            Err(answer) => (None, Some(answer)),
+        };
         let repository = match (&scope_key, binding.place()) {
             (Some(key), _) => key.repository().map(str::to_owned),
             (None, Place::Repository(root) | Place::NewRepository(root)) => {
@@ -308,6 +312,9 @@ impl RepositoryService {
             (None, Place::Application) => None,
         };
         let scope = binding.scope(repository, None);
+        if let Some(answer) = failure {
+            return without_preview(command, scope, answer);
+        }
         let call = CallContext {
             service: self,
             session: &NoSession,
@@ -322,7 +329,7 @@ impl RepositoryService {
             Err(answer) => return without_preview(command, scope, answer),
         };
         let failed = |code| without_preview(command, scope.clone(), Answer::stopped(code));
-        // `preview` resolved the root, so the place has a scope key.
+        // A successful preview must have a resolved scope, live or stored.
         let Some(scope_key) = scope_key else {
             return failed(ResultCode::InternalError);
         };

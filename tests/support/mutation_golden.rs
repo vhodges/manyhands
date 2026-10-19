@@ -127,6 +127,8 @@ pub const CASES: &[&str] = &[
     "repo_identity_set_preview",
     "repo_identity_set_preview_noop",
     "repo_remove",
+    "repo_remove_missing",
+    "repo_remove_missing_preview",
     "repo_remove_preview",
     "repo_remove_preview_noop",
     "repo_sync_host_approval_required",
