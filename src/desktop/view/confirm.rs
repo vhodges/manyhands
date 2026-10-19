@@ -358,7 +358,7 @@ impl ConfirmDialog {
 }
 
 /// A piece of text a test reads by `id`.
-type Text = gpui_kit::base::test_support::Observed<gpui_kit::Stateful<gpui_kit::Div>>;
+type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
 
 fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
     let value = value.into();

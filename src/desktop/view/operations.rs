@@ -145,7 +145,7 @@ pub(crate) fn recovery_id(id: DesktopRequestId, n: usize) -> String {
     format!("request-{}-recovery-{n}", id.0)
 }
 
-type Text = gpui_kit::base::test_support::Observed<gpui_kit::Stateful<gpui_kit::Div>>;
+type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
 
 fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
     let value = value.into();
