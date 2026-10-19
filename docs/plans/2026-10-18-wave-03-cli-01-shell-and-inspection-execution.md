@@ -192,7 +192,7 @@ review was dispatched by this implementer.
 
 ### Durable task ledger
 
-Only Task 0 has been executed. For each later task, record its actual starting
+Tasks 0 and 1 have been executed. For each later task, record its actual starting
 HEAD, ending commit/range, controller review disposition and targeted checks
 when dispatched. Unstarted rows deliberately have no invented base or result.
 The Task 0 endpoint is the checkpoint commit that introduces this ledger
@@ -201,8 +201,8 @@ to the controller after creation rather than embedding a self-referential SHA.
 
 | Task | Status | Base / endpoint | Reviews | Verification |
 | --- | --- | --- | --- | --- |
-| 0 — Baseline, audit refresh and ledger | Complete; current controller checkpoint | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → introducing checkpoint commit | Implementer self-review; controller review pending | Five baseline commands above; 183 targeted tests; documentation checks |
-| 1 — Clap, catalog and parsing | Not started | Not established | Not requested | Not run |
+| 0 — Baseline, audit refresh and ledger | Complete; both controller reviews passed | `de28ab0512fefee8e0b0e987c9d7a98a3ab0ef20` → `2aa71e7a1c4895c1e62c65d37fc81116902642c9` | Spec and quality reviews passed, no findings (controller handoff for Task 1) | Five baseline commands above; 183 targeted tests; documentation checks |
+| 1 — Clap, catalog and parsing | Complete; current controller checkpoint | `2aa71e7a1c4895c1e62c65d37fc81116902642c9` → checkpoint `feat: CLI command catalog and parser` introducing this entry | Implementer self-review passed; controller review pending | Catalog and parser RED/GREEN; 24 bin tests; bin clippy; fmt; dependency/lock inspection |
 | 2 — Startup, rendering and main | Not started | Not established | Not requested | Not run |
 | 3 — Codes, schemas, harness and first goldens | Not started | Not established | Not requested | Not run |
 | 4 — Repository, credential, status and utility verbs | Not started | Not established | Not requested | Not run |
@@ -238,3 +238,81 @@ to the controller after creation rather than embedding a self-referential SHA.
 - Remaining evidence belongs to later tasks: real CLI acceptance, the full
   Task 8 gate, controller reviews and post-merge authorized native CI. No
   Task 1 work, push, PR, merge to main, closure or cleanup was performed.
+
+### Task 1 checkpoint — 2026-10-19
+
+**Authorization and base.** The controller dispatched only Task 1 with the
+owner's checkpoint-commit approval. Initial HEAD was
+`2aa71e7a1c4895c1e62c65d37fc81116902642c9`, on the expected ticket branch, with
+a clean worktree. No subagents were dispatched. Main synchronization remains
+the controller's recorded baseline; no fetch, merge or rebase was performed in
+this bounded task. `origin/main` remains
+`f6a4c06300f4be80eb18f843a9e4fcbde847e47e`. The read-only
+`git merge-tree --write-tree HEAD origin/main` check exited 0 with tree
+`728ec6a67819a28f23e8ebc1858b9ef552ba1324` before the checkpoint commit.
+
+**Task 0 review handoff.** The controller reports that both Task 0 spec and
+quality reviews passed with no findings. The 183 baseline targeted tests,
+check, fmt and clippy evidence above stands; it was not rerun. Carry forward
+the two baseline corrections: `new_item_id` returns its DTO infallibly, and
+the complete lease-child helper ends at line 59.
+
+**Implementation.**
+
+- Added clap with defaults disabled and only `std`, `help`, `usage` and
+  `error-context`. Resolved **clap 4.6.7**, **clap_builder 4.6.7** and
+  **clap_lex 1.1.1**. Lock diff adds only those packages and the root clap
+  dependency; `anstyle` was already locked and no existing version changed.
+- Added the catalog's exact **72 commands**: **28 C1**, **18 C2**, **13 C3**,
+  **7 C4**, **6 C5**, with summaries, availability, repository rules and
+  per-verb option metadata. Planned commands publish no rules or options.
+- Added a clap builder derived from that catalog and the agreed `Invocation`,
+  `Action`, `HelpTarget`, scans and `authority` interfaces. `parse::command()`
+  exposes the same tree for Task 2's help rendering. IDs remain strings;
+  closure/direction have the approved lists/defaults, depth is `u32`, and
+  authority validation strips IPv6 brackets in its returned tuple.
+- Help/error precedence, planned catch-all handling, exact raw scans up to
+  `--`, last repeated values, UTF-8 validation and per-verb validation are
+  covered by bin-private tests. Tests exercise each C1 minimum invocation,
+  remove each required input, refuse mutation-only options on every C1 verb,
+  and check planned options/help across all later-Cycle commands.
+- Preserved the original seven-line `main` body. Added the exact
+  `result_large_err` rationale from `src/repository/read/mod.rs` and the
+  specified temporary dead-code annotations. No library, repository,
+  pre-existing test, schema or later-task module was edited.
+
+**Mechanical correction.** The design's module-resolution sentence assumes
+bare `mod catalog; mod parse;` beneath `src/bin/manyhands-cli.rs` locates the
+approved directory. Explicit `#[path = "manyhands-cli/catalog.rs"]` and
+`#[path = "manyhands-cli/parse.rs"]` on those declarations preserve that exact
+layout and crate-private module names. Test modules use the required
+`#[cfg(test)] #[path = "…_tests.rs"]` layout. No behavior or scope change.
+
+**Verification (all Rust commands through Devenv).**
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check` | PASS; the single unlocked dependency-update command |
+| `git diff -- Cargo.lock` | Reviewed: three new packages only; no existing version changes |
+| `devenv shell -- cargo tree --locked -e normal --no-default-features -i clap` | PASS; `clap v4.6.7` has the single reverse edge `manyhands v0.1.0` |
+| `devenv shell -- cargo test --locked --bin manyhands-cli catalog` | RED: 4 failed against the empty catalog/lookup scaffolding; GREEN: 4 passed after the catalog implementation |
+| `devenv shell -- cargo test --locked --bin manyhands-cli parse` | RED: 20 failed at the unimplemented parser/scan/authority scaffolding; 4 catalog tests filtered out |
+| `devenv shell -- cargo test --locked --bin manyhands-cli` | GREEN: 24 passed, 0 failed/ignored/filtered; also 24 passed after formatting patches |
+| `devenv shell -- cargo clippy --locked --bin manyhands-cli -- -D warnings` | PASS before and after formatting |
+| `devenv shell -- cargo fmt --check` | Initial formatting-only differences in the four new files corrected via `apply_patch`; final PASS |
+| `git diff --check` | PASS |
+
+**Self-review.** Compared the catalog and parser against the approved five-row
+catalog, options, per-verb and action-order tables. All specified public
+interfaces are present; command/option discovery has one production catalog;
+no clap-required inputs or color APIs are used. The main body is unchanged,
+the lock additions are isolated, and the tests invoke only parsing (no
+transport, service, repository, key or filesystem access). No unresolved
+findings or task-altering contradictions. Independent Task 1 controller
+reviews remain pending.
+
+Canonical completion comment:
+`.manyhands/comments/01M4CC0VMSZ7BRS740C8VSQ5ZK/01M5A0CB7E189YBKPMZF96NGPR.md`.
+The endpoint SHA is returned to the controller after committing, avoiding a
+self-referential commit ID here. Task 2 remains unstarted. The full suite is
+reserved for Task 8; no native workflow, push, PR, closure or cleanup occurred.
