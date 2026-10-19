@@ -92,7 +92,7 @@ are cataloged as planned; their delivering Cycles publish their input rules.
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
 | `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
 | `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
-| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. |
+| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. |
 | `repo identity` | Inspect effective name/email and source. |
 | `repo identity-set` | Input `name`, `email`; explicitly writes repository-local Git config, never global config. Confirmation required. |
 | `remote list` | Names, redacted locations and publication selection; never echo embedded credentials. |
@@ -130,6 +130,47 @@ are cataloged as planned; their delivering Cycles publish their input rules.
 | `request show`, `request cancel` | Planned for C2: inspect or cancel through F2's request boundary. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
+
+### Registration removal targeting
+
+Amended 2026-10-19 by defect ticket `01M4R19P943QZKHHKRXV2D2TP2`. This is the
+library mutation contract that CLI C2 will expose; the executable verb remains
+planned until that Cycle delivers it.
+
+`repo remove` selects a registration before requiring a live Git repository.
+When the root is missing or its directory no longer contains `.git`, callers
+use the exact stored absolute root returned by `repo list` or a prior preview.
+This includes the stored Windows canonical prefix. Live relative paths and
+resolvable aliases retain normal canonicalization; a missing alias's former
+target is not guessed. An interior directory or linked worktree does not select
+its owner's registration for removal. Unknown missing paths retain
+`invalid_path`; permissions, broken Git indirection and corrupt metadata are
+errors, not evidence that a repository is absent.
+
+The same explicit confirmation is required for an unmounted and a deleted
+root. The preview identifies the stored root and registration time and lists
+registration, index, operation-record and remote-state removal. Repository
+files, Git state, recoverable drafts, shared keys and host trust are preserved.
+Cached accessibility from `repo list` is not used to authorize removal.
+
+A matching persisted request can replay after both the directory and the
+registration have gone. An accepted request whose removal completed but whose
+result was lost reconciles to `already_applied`; its own pending removal can
+retry under the same operation ID. Command, scope, target and digest checks
+still reject reuse of an ID for another request. Fresh execution compares the
+previewed registration again under the deletion guard. Registration stamps
+retain their existing ID/time semantics, including the separately documented
+same-second replacement limitation in the
+[implementation plan](../plans/2026-10-19-missing-repository-registration-removal-implementation.md).
+
+The registry-only path preserves unrelated unfinished local/remote operations,
+promotion/closure recovery and accepted requests. It returns `recovery_required`
+for those blockers, or the existing retryable busy result while an active poll
+is asked to yield. It never implicitly abandons that work. A live repository
+continues to require its Git lease. A root or lease replacement detected while
+acquiring guards produces a retryable busy result.
+
+### List ordering
 
 List ordering is deterministic: repositories by normalized root, documents by
 relative path then ID, tickets by latest content-change time descending then ID,

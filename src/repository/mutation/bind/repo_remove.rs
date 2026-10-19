@@ -9,14 +9,15 @@ use crate::results::{ResultCode, Scope, timestamp_string};
 use super::{
     super::{
         super::{
-            OperationFamily, RemoveRegistrationRequest, RepositoryOperation, RepositoryService,
+            OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             canonical_repository_root,
             recovery::{FinalKind, JournalRow, PendingOperation},
+            registration_removal::{RegistrationStamp, RemovalTarget, repository_at},
         },
         command::Command,
         dto::{PreviewDetailsDto, PreviewEffect, RepositoryRemovalPreviewDto},
         evidence::Position,
-        identity::IntentDigestBuilder,
+        identity::{IntentDigestBuilder, ScopeKey},
         observe::{Observation, ObservationDigest},
         outcome,
     },
@@ -47,6 +48,8 @@ pub struct RepoRemoveInput {
 /// the root is not registered. A row that is there has done nothing.
 pub(crate) struct RepoRemoveBinding {
     root: PathBuf,
+    selected_root: Option<PathBuf>,
+    observed: Option<RemovalTarget>,
 }
 
 impl From<RepoRemoveInput> for RepoRemoveBinding {
@@ -54,49 +57,67 @@ impl From<RepoRemoveInput> for RepoRemoveBinding {
         // Every field is named: one added to the input does not compile
         // until it is taken into the binding or left out here.
         let RepoRemoveInput { root } = input;
-        Self { root }
+        Self {
+            root,
+            selected_root: None,
+            observed: None,
+        }
     }
 }
 
-/// What a preview of `repo remove` covers.
-struct Registered {
-    /// The repository's root, as a registration of it holds it.
-    root: PathBuf,
-    /// The registration's ID and the time it was made. `None` when the
-    /// root is not registered.
-    registration: Option<(i64, i64)>,
-}
-
 impl RepoRemoveBinding {
-    /// Reads what a preview covers. Nothing is written and no lease is
-    /// taken. An `Err` is a root that is no repository's, or a read that
-    /// failed. A repository that is not registered is no error here: it
-    /// is what the command leaves.
-    fn observe(&self, service: &RepositoryService) -> Result<Registered, Answer> {
-        let root = match resolve_root(service, &self.root) {
-            Ok(resolved) => resolved.root().to_owned(),
-            // Whether it was ever enabled is not asked: the end state
-            // is the same.
-            Err(answer)
-                if answer.code == ResultCode::RepositoryNotRegistered
-                    || answer.code == ResultCode::RepositoryNotEnabled =>
-            {
-                canonical_repository_root(&self.root, RepositoryOperation::RemoveRegistration)
-                    .map_err(refused)?
-                    .1
+    /// Reads the registration without a lease. Fresh selection validates the
+    /// path, allowing a registered root to be absent. A consent/request-bound
+    /// observation reads only the registry: its absent row is the end state,
+    /// while an unknown missing path is still an error for fresh selection.
+    fn observe(
+        &mut self,
+        service: &RepositoryService,
+        bound: bool,
+    ) -> Result<RemovalTarget, Answer> {
+        self.observed = None;
+        let selected = self.selected_root.as_ref().unwrap_or(&self.root);
+        let registration = service
+            .registration(selected)
+            .map_err(|error| Answer::of_read(&error))?;
+        let root = if bound {
+            selected.clone()
+        } else if registration.is_some() {
+            // Preview/first selection must distinguish absence from damaged or
+            // inaccessible Git. A bound re-entry observes only its registration.
+            repository_at(selected).map_err(refused)?;
+            selected.clone()
+        } else {
+            match resolve_root(service, selected) {
+                Ok(resolved) => resolved.root().to_owned(),
+                // Whether it was ever enabled is not asked: the end state
+                // is the same.
+                Err(answer)
+                    if answer.code == ResultCode::RepositoryNotRegistered
+                        || answer.code == ResultCode::RepositoryNotEnabled =>
+                {
+                    canonical_repository_root(selected, RepositoryOperation::RemoveRegistration)
+                        .map_err(refused)?
+                        .1
+                }
+                Err(answer) => return Err(answer),
             }
-            Err(answer) => return Err(answer),
         };
         let registration = service
             .registration(&root)
             .map_err(|error| Answer::of_read(&error))?;
-        Ok(Registered { root, registration })
+        let found = RemovalTarget {
+            root,
+            registration: registration.map(|(id, enabled_at)| RegistrationStamp { id, enabled_at }),
+        };
+        self.observed = Some(found.clone());
+        Ok(found)
     }
 
     /// The digest of what was observed: what a confirmation stores, and
     /// what a later observation is compared with.
-    fn digest(registered: &Registered) -> ObservationDigest {
-        let Registered {
+    fn digest(registered: &RemovalTarget) -> ObservationDigest {
+        let RemovalTarget {
             // The request's scope.
             root: _,
             registration,
@@ -104,7 +125,7 @@ impl RepoRemoveBinding {
         let command = Command::RepoRemove.name();
         let observation = Observation::of(command);
         let observation = match registration {
-            Some((id, enabled_at)) => observation
+            Some(RegistrationStamp { id, enabled_at }) => observation
                 .text("registration", &id.to_string())
                 .text("enabled_at", &enabled_at.to_string()),
             None => observation.absent("registration").absent("enabled_at"),
@@ -115,16 +136,48 @@ impl RepoRemoveBinding {
     /// The one domain call, under the recorded operation ID, and what it
     /// came to. A removal is one transaction: it happened or it did not,
     /// and nothing of it is ever in flight but its row.
-    fn call(service: &RepositoryService, accepted: &Accepted) -> Ran {
-        let result = service.remove_registration(RemoveRegistrationRequest {
-            root: accepted.root(),
-            operation_id: accepted.operation_id,
-        });
+    fn call(&self, service: &RepositoryService, accepted: &Accepted) -> Ran {
+        let Some(target) = self
+            .observed
+            .as_ref()
+            .filter(|target| target.root == accepted.root())
+        else {
+            return Ran {
+                answer: Answer::stopped(ResultCode::InternalError),
+                standing: Standing::Stopped {
+                    journal: accepted.journal_row(service),
+                },
+            };
+        };
+        let result = service.remove_registration_checked(target.clone(), accepted.operation_id);
         match result {
             Ok(outcome) => Ran {
                 answer: Answer::stopped(outcome::remove_registration_outcome_code(&outcome)),
                 standing: Standing::Final,
             },
+            Err(error) if error.kind == RepositoryErrorKind::ExternalChange => {
+                let journal = accepted.journal_row(service);
+                // Another attempt can remove the consented registration after
+                // this retry observed it. Successful removal deletes its own
+                // journal, so absence is the accepted request's end state, not
+                // proof that the request never ran. Keep a durable no-op receipt
+                // and leave any replacement registration alone. A fresh call
+                // still refuses a registration changed before its first effect.
+                if accepted.attempt > 1 && journal == Some(JournalRow::Absent) {
+                    return Ran {
+                        answer: Answer::stopped(ResultCode::AlreadyApplied),
+                        standing: Standing::Final,
+                    };
+                }
+                let standing = match journal {
+                    Some(journal) => Standing::NotRun { journal },
+                    None => Standing::Stopped { journal: None },
+                };
+                Ran {
+                    answer: refused(error),
+                    standing,
+                }
+            }
             // Only the kind is read.
             Err(error) => Ran {
                 answer: refused(error),
@@ -148,12 +201,42 @@ impl Binding for RepoRemoveBinding {
         EndedWithoutCheckpoint::SaysNothing
     }
 
-    /// The repository the request removes the registration of. Its
-    /// scope key is made from the root on disk, which the command leaves
-    /// as it is: a request that removed the registration is still found
-    /// under it.
+    /// The original selection, used to place failures before resolution.
     fn place(&self) -> Place<'_> {
         Place::Repository(&self.root)
+    }
+
+    fn resolve_scope(
+        &mut self,
+        service: &RepositoryService,
+        persisted: Option<&ScopeKey>,
+    ) -> Result<Option<ScopeKey>, Answer> {
+        self.selected_root = None;
+        self.observed = None;
+        let exact_stored = self.root.is_absolute()
+            && persisted
+                .and_then(ScopeKey::repository)
+                .is_some_and(|root| self.root.to_str() == Some(root));
+        let key = if exact_stored {
+            // Command, target, digest and consent are checked by the boundary.
+            persisted.cloned()
+        } else if self.root.is_absolute()
+            && service
+                .registration(&self.root)
+                .map_err(|error| Answer::of_read(&error))?
+                .is_some()
+        {
+            self.root.to_str().map(ScopeKey::from_stored)
+        } else {
+            // A live alias can resolve. An unavailable alias cannot be guessed.
+            // Detailed invalid-path/Git errors belong to observation, not identity.
+            ScopeKey::for_repository(&self.root)
+        };
+        self.selected_root = key
+            .as_ref()
+            .and_then(ScopeKey::repository)
+            .map(PathBuf::from);
+        Ok(key)
     }
 
     /// The repository as a whole: the command names nothing within it.
@@ -166,6 +249,8 @@ impl Binding for RepoRemoveBinding {
             // What the digest is begun with. The request holds nothing
             // else.
             root: _,
+            selected_root: _,
+            observed: _,
         } = self;
         builder
     }
@@ -181,7 +266,7 @@ impl Binding for RepoRemoveBinding {
     /// boundary compares the digest with the confirmation's, and refuses
     /// a request whose preview is stale as `external_change`.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        let registered = self.observe(call.service)?;
+        let registered = self.observe(call.service, call.confirmation.is_some())?;
         Ok(Prepared {
             family: Some(OperationFamily::Local),
             // Nothing is committed, so there is no branch to bound.
@@ -195,7 +280,7 @@ impl Binding for RepoRemoveBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        Self::call(call.service, accepted)
+        self.call(call.service, accepted)
     }
 
     /// The registration is asked first, whatever the row says:
@@ -228,7 +313,7 @@ impl Binding for RepoRemoveBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        Self::call(call.service, accepted)
+        self.call(call.service, accepted)
     }
 }
 
@@ -255,10 +340,11 @@ impl Confirmed for RepoRemoveBinding {
     fn observe_again(
         &mut self,
         call: &CallContext<'_>,
-        _accepted: &Accepted,
+        accepted: &Accepted,
         journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        let registered = self.observe(call.service).map_err(|answer| Ran {
+        self.selected_root = Some(accepted.root());
+        let registered = self.observe(call.service, true).map_err(|answer| Ran {
             answer,
             standing: Standing::NotRun {
                 journal: journal.clone(),
@@ -300,8 +386,8 @@ impl Confirmed for RepoRemoveBinding {
     }
 
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
-        let registered = self.observe(call.service)?;
-        let Some((_, enabled_at)) = registered.registration else {
+        let registered = self.observe(call.service, false)?;
+        let Some(RegistrationStamp { enabled_at, .. }) = registered.registration else {
             // The command's end state holds.
             return Err(Answer::stopped(ResultCode::AlreadyApplied));
         };
