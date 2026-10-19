@@ -40,6 +40,7 @@ pub(crate) const LATER_NOTE: &str = "Available in a later release";
 
 /// The problems that make the header a recovery view: the item's branch
 /// or worktree needs repair, and no context is offered in its place.
+/// The library does not yet report context problems on items (ticket 01M5B163PQTE9C1T6NMHATR3KX).
 pub(crate) const CONTEXT_PROBLEMS: [ProblemCode; 2] =
     [ProblemCode::ContextProblem, ProblemCode::BranchProblem];
 

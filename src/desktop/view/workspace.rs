@@ -218,6 +218,12 @@ impl Workspace {
         &self.documents
     }
 
+    /// The item view in the content region.
+    #[cfg(test)]
+    pub(crate) fn item_pane(&self) -> Option<Entity<ItemPane>> {
+        self.item.clone()
+    }
+
     /// What the last activated row opened.
     #[cfg(test)]
     pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {

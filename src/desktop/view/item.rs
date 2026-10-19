@@ -20,13 +20,15 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, ElementId, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
-    TestSupportExt, Window,
+    AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, ElementId, Entity,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
-        h_flex, v_flex,
+        h_flex,
+        input::{Textarea, TextareaState},
+        v_flex,
     },
     div, px,
 };
@@ -59,6 +61,7 @@ pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =
     "This file is not valid UTF-8, so its text cannot be shown.";
 pub(crate) const REFRESH: &str = "Refresh";
+pub(crate) const SOURCE: &str = "Source";
 pub(crate) const REFRESHING: &str = "Refreshing the index";
 pub(crate) const RECOVERY: &str = "This item's context needs repair before it can be read from it.";
 pub(crate) const COPY_ID: &str = "Copy ID";
@@ -76,6 +79,9 @@ pub(crate) struct ItemPane {
     /// The index refresh Refresh asked for; the item is read again when it
     /// ends.
     refreshing: Option<DesktopRequestId>,
+    /// The read-only text the source is shown in, and the source it was
+    /// last given. Made at the next frame, which has the window it needs.
+    source: Option<(String, Entity<TextareaState>)>,
     _operations: Subscription,
 }
 
@@ -97,6 +103,7 @@ impl ItemPane {
             item_read: None,
             comments_read: None,
             refreshing: None,
+            source: None,
             _operations: operations,
         };
         pane.load(cx);
@@ -557,20 +564,67 @@ impl ItemPane {
         )
     }
 
-    /// The file's text, monospaced and never rendered, or why there is
-    /// none.
-    fn source(&self, item: &ItemDto, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    /// Gives the read-only text the source the last read gave, making it
+    /// when there is none yet. Nothing the user does there reaches the
+    /// item: the text rejects every edit, and the view never writes.
+    fn sync_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let source = self
+            .model
+            .item()
+            .rows()
+            .and_then(|item| item.source.clone());
+        let Some(source) = source else {
+            self.source = None;
+            return;
+        };
+        match &mut self.source {
+            Some((shown, _)) if *shown == source => {}
+            Some((shown, state)) => {
+                state.update(cx, |state, cx| state.set_value(source.clone(), window, cx));
+                *shown = source;
+            }
+            None => {
+                let value = source.clone();
+                let state = cx.new(|cx| {
+                    let mut state = TextareaState::new(window, cx).default_value(value);
+                    state.set_readonly(true, cx);
+                    state
+                });
+                self.source = Some((source, state));
+            }
+        }
+    }
+
+    /// The text the source is shown in, for tests.
+    #[cfg(test)]
+    pub(crate) fn source_state(&self) -> Option<&Entity<TextareaState>> {
+        self.source.as_ref().map(|(_, state)| state)
+    }
+
+    /// The file's text in a read-only, selectable, monospaced plain-text
+    /// field: never rendered, so nothing is loaded and no link is
+    /// followed. Or why there is none.
+    fn source(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        match &item.source {
-            Some(source) => text("item-source", source.clone())
-                .font_family(theme.mono_font_family.clone())
+        match (&item.source, &self.source) {
+            (Some(_), Some((_, state))) => div()
+                .id("item-source")
+                .test_support()
+                .child(
+                    Textarea::new(state)
+                        .readonly(true)
+                        .aria_label(SOURCE)
+                        .font_family(theme.mono_font_family.clone())
+                        .text_sm()
+                        .h(px(320.)),
+                )
+                .into_any_element(),
+            // The text is made at the next frame.
+            (Some(_), None) => div().into_any_element(),
+            (None, _) => text("item-source-missing", SOURCE_NOT_UTF8.to_owned())
                 .text_sm()
-                .p_2()
-                .border_1()
-                .border_color(theme.border),
-            None => text("item-source-missing", SOURCE_NOT_UTF8.to_owned())
-                .text_sm()
-                .text_color(theme.muted_foreground),
+                .text_color(theme.muted_foreground)
+                .into_any_element(),
         }
     }
 
@@ -661,7 +715,8 @@ impl ItemPane {
 }
 
 impl Render for ItemPane {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_source(window, cx);
         let item = self.model.item().rows().cloned();
         let identity = self.identity(item.as_ref(), cx);
         let status = self.status("item", self.model.item(), cx);

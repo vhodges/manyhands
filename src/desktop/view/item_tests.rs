@@ -195,7 +195,8 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
     open(&shell, ticket(&root, PRIMARY), cx);
     let item = shown(&shell, &root, PRIMARY);
     assert!(item.source.as_deref().unwrap().contains("extra: kept\n"));
-    assert_eq!(shell.label("item-source", cx), item.source);
+    assert!(present(&shell, "item-source", cx));
+    assert_eq!(source_value(&shell, cx), item.source);
     assert!(!present(&shell, "item-source-missing", cx));
 
     shell.fixture.write_non_utf8(&root, &ticket_path(PRIMARY));
@@ -206,6 +207,65 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
         Some(SOURCE_NOT_UTF8)
     );
     assert!(!present(&shell, "item-source", cx));
+}
+
+/// The text the item view shows the source in, after a frame.
+fn source_value(shell: &Shell, cx: &mut TestAppContext) -> Option<String> {
+    shell.frame(cx, |_, _| ());
+    shell.workspace.read_with(cx, |workspace, cx| {
+        let pane = workspace.item_pane()?;
+        let state = pane.read(cx).source_state()?.clone();
+        Some(state.read(cx).value().to_string())
+    })
+}
+
+/// The source is read-only: it can take focus, but typing, deleting,
+/// cutting and pasting into it change neither the text shown nor the
+/// file, and nothing in the repository.
+#[gpui_kit::test]
+fn the_source_rejects_every_edit(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PRIMARY, "Kept", "");
+    });
+    open(&shell, ticket(&root, PRIMARY), cx);
+    let source = shown(&shell, &root, PRIMARY).source.unwrap();
+    assert_eq!(source_value(&shell, cx).as_deref(), Some(source.as_str()));
+    let before = RepositorySnapshot::take(&root);
+    let file = std::fs::read(root.join(ticket_path(PRIMARY))).unwrap();
+
+    let state = shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .unwrap()
+            .read(cx)
+            .source_state()
+            .unwrap()
+            .clone()
+    });
+    let mut visual = shell.visual(cx);
+    visual.update(|window, cx| state.update(cx, |state, cx| state.focus(window, cx)));
+    visual.run_until_parked();
+    assert!(visual.update(|window, cx| {
+        gpui_kit::Focusable::focus_handle(state.read(cx), cx).is_focused(window)
+    }));
+    assert!(!visual.update(|_, cx| state.read(cx).is_editable()));
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("pasted".to_owned()));
+    shell.keys(
+        "x y z enter backspace delete secondary-a secondary-x secondary-v",
+        cx,
+    );
+
+    assert_eq!(source_value(&shell, cx).as_deref(), Some(source.as_str()));
+    assert_eq!(
+        std::fs::read(root.join(ticket_path(PRIMARY))).unwrap(),
+        file
+    );
+    assert_eq!(RepositorySnapshot::take(&root), before);
+    // Read again, the item is as it was.
+    assert_eq!(
+        shown(&shell, &root, PRIMARY).source.as_deref(),
+        Some(source.as_str())
+    );
 }
 
 /// Comments are in the library's order, each indented by its depth, with
