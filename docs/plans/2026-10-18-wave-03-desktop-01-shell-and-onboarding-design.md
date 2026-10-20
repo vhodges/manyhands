@@ -402,7 +402,9 @@ Linux and Windows, Cmd on macOS); they are defined once in
 | Open selected row | `enter`; lists and the tree also use the Kit's arrow bindings |
 | Cancel dialog | `escape` |
 
-Tab and shift-Tab move within a region (Kit `Root` focus cycling). Every
+Tab and shift-Tab move through every control of the window in order, from
+one region into the next (Kit `Root` focus cycling is window-wide, ruling
+R-T17a); the region keys move between regions directly. Every
 dialog traps focus and on close focuses the control recorded when it opened,
 or the region's first control if that control is gone. State is never shown
 by color alone: stale, unavailable, nonconforming, closed and failed each
@@ -772,3 +774,4 @@ was checked against source before it was applied.
 | Independent review 9 | Startup failure offered Rebuild with no service. | Settled | Message, Retry open, Quit. | Task 1. |
 | Independent review 10–13 | Glob import shadows `#[test]`; masked-input builder and no mask toggle; `prepare` returns an envelope; NUL in passphrase; one test filter per `cargo test`; key store through the backend; `repository_inaccessible`; tabs closed on removal; duplicate-context recovery view; rename rather than delete; `futures` still conditional. | Settled | Applied in the design and plan. | As cited in each section. |
 | R16, Wave D1 "viewing does not provision a context" | Copy to clipboard and opening are the only effects of browsing. | Settled | No browse path calls the mutation boundary. | No-side-effect test: before/after snapshot of the fixture repository while browsing. |
+| R-T17a, Kit `Root` Tab cycling (Task 17, 2026-10-20) | This section said Tab and shift-Tab move within a region; the Kit cycles focus over the whole window. | Ruling | The design is amended to what is built: Tab moves window-wide in layout order, and `F6`, `shift-F6` and `secondary-1` to `secondary-4` move between regions. A region-bounded Tab would need a focus trap per region, which the Kit keeps for dialogs — cost if wrong: a keyboard user Tabs out of a region at its last control. | `keyboard_tests.rs`; `tabs_tests.rs::the_tab_keys_work_from_inside_the_source`. |
