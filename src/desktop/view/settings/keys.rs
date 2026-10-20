@@ -261,8 +261,8 @@ impl KeysPage {
         .into_iter()
         .map(|id| (id.to_owned(), cx.focus_handle()))
         .collect();
-        let operations = cx.observe(services.operations(), |this, _, cx| {
-            this.operations_changed(cx)
+        let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
+            this.operations_changed(window, cx)
         });
         // What finished before the page was made is already in what it
         // reads now. A generation waiting for its passphrase is not: the
@@ -295,7 +295,7 @@ impl KeysPage {
             _inputs: subscriptions,
             _operations: operations,
         };
-        page.operations_changed(cx);
+        page.operations_changed(window, cx);
         page.load(cx);
         page
     }
@@ -676,7 +676,7 @@ impl KeysPage {
     /// A request ended: a key request reads the keys again; a protected
     /// generation not sent for want of its passphrase has the page ask
     /// for it again.
-    fn operations_changed(&mut self, cx: &mut Context<Self>) {
+    fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut reload = false;
         let mut ask = None;
         let operations = self.services.operations().clone();
@@ -705,6 +705,9 @@ impl KeysPage {
             }
         }
         if let Some(ask) = ask {
+            // Ruling R-T15b: what was typed for a new key is never sent
+            // as the passphrase of the request asked for again.
+            self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
             self.submitted = Some(ask.id);
             self.generate_message = None;
             self.retrying = Some(ask);

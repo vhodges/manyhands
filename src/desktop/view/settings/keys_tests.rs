@@ -25,7 +25,7 @@ use super::{
 };
 use crate::desktop::{
     services::{
-        KEY_STORE_UNAVAILABLE,
+        KEY_STORE_UNAVAILABLE, ReadKind,
         requests::{DesktopRequestId, Intent, NotSent, RequestState},
     },
     test_support::fixtures::{
@@ -855,4 +855,108 @@ async fn the_operation_area_retry_of_a_protected_generation_asks_on_the_page(
         .await;
     assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
     assert_eq!(request_id_of(&shell, id, cx).0, request_id);
+}
+
+/// Typed failures of Select, Unregister and Clear selection, each shown
+/// on the page with its code. A second actor unregisters two keys the
+/// page still lists, since it has not read them again: Select of one and
+/// Unregister of the other reach the library and are answered with its
+/// typed failure. A held registry lease makes Clear selection answer
+/// `busy`. The reads that follow each answer are held, so the rows stay.
+#[gpui_kit::test]
+async fn select_unregister_and_clear_show_their_typed_failures(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let a = fixture.generate_key("a");
+    let b = fixture.generate_key("b");
+    let shell = keys(fixture, cx);
+    assert_eq!(shell.rows("key-label", cx), ["a", "b"]);
+    let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    unregister_key_through(&other, a);
+    unregister_key_through(&other, b);
+    let _held = [
+        shell.backend.hold_read(ReadKind::Keys),
+        shell.backend.hold_read(ReadKind::Keys),
+        shell.backend.hold_read(ReadKind::Keys),
+    ];
+
+    let shown_code = |shell: &Shell, id, cx: &mut TestAppContext| {
+        let (outcome, code) = finished(shell, id, cx);
+        assert_ne!(outcome, Outcome::Success, "{}", code.as_str());
+        assert_eq!(
+            shell.label("keys-result-code", cx).as_deref(),
+            Some(code.as_str())
+        );
+        code
+    };
+
+    shell.click(("key-select", 0usize), cx);
+    let select = of(&shell, cx, |intent| {
+        matches!(intent, Intent::KeySelect { .. })
+    })[0];
+    shell.until_ended(select, cx).await;
+    assert_eq!(shown_code(&shell, select, cx), ResultCode::KeyNotFound);
+
+    assert_eq!(shell.rows("key-label", cx), ["a", "b"]);
+    shell.click(("key-unregister", 1usize), cx);
+    let remove = of(&shell, cx, |intent| {
+        matches!(intent, Intent::KeyRemove { .. })
+    })[0];
+    shell.until_ended(remove, cx).await;
+    assert_eq!(shown_code(&shell, remove, cx), ResultCode::KeyNotFound);
+
+    let lease = hold_registry(&shell);
+    shell.click("keys-clear", cx);
+    let clear = of(&shell, cx, |intent| matches!(intent, Intent::KeyClear))[0];
+    shell.until_ended(clear, cx).await;
+    assert_eq!(shown_code(&shell, clear, cx), ResultCode::Busy);
+    drop(lease);
+}
+
+/// Ruling R-T15b: a passphrase typed for a new key is never carried into
+/// the retry of an earlier one. A `NotSent(SecretRequired)` arriving for
+/// an earlier protected generation switches the form to its retry and
+/// empties both masked fields, so a submit asks for the passphrase and
+/// sends nothing.
+#[gpui_kit::test]
+async fn retry_mode_entered_by_the_observer_drops_what_was_typed(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let shell = keys(fixture, cx);
+    let lease = hold_registry(&shell);
+    generate(&shell, "earlier", SENTINEL, SENTINEL, cx);
+    let id = generations(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    drop(lease);
+
+    set(&shell, LABEL, "newer", cx);
+    type_into(&shell, PASSPHRASE, "typed-for-the-newer-key", cx);
+    type_into(&shell, CONFIRMATION, "typed-for-the-newer-key", cx);
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    worker.retry(id, None);
+    let page = page(&shell, cx);
+    wait_until(cx, &page, move |page, _| page.retrying() == Some(id)).await;
+    assert_eq!(value(&shell, PASSPHRASE, cx), "");
+    assert_eq!(value(&shell, CONFIRMATION, cx), "");
+
+    shell.click("key-generate-submit", cx);
+    assert_eq!(
+        shell.label("key-generate-message", cx).as_deref(),
+        Some(super::NEED_PASSPHRASE)
+    );
+    // Attempt 2 was the one not sent; nothing more was queued.
+    assert_eq!(request_id_of(&shell, id, cx).1, 2);
+    assert!(matches!(
+        shell
+            .operations(cx)
+            .read_with(cx, |operations, _| operations
+                .request(id)
+                .unwrap()
+                .state
+                .clone()),
+        RequestState::NotSent(NotSent::SecretRequired)
+    ));
+    assert_eq!(generations(&shell, cx), [id]);
 }
