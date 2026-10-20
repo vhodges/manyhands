@@ -30,7 +30,9 @@ use gpui_kit::{
     div,
 };
 
-use super::{item::ItemPane, relationships::OpenRelated, workspace::Workspace};
+use super::{
+    item::ItemPane, relationships::OpenRelated, scroll::ContentScroll, workspace::Workspace,
+};
 use crate::desktop::model::{
     navigation::OpenTarget,
     stamp::{RepoKey, TabId, ViewScope},
@@ -49,6 +51,8 @@ pub(crate) struct Content {
     focus: HashMap<TabId, FocusHandle>,
     /// Each tab's subscription to its relationship rows.
     related: HashMap<TabId, Subscription>,
+    /// The region's scrolling, shared with each tab's item view.
+    pub(super) scroll: ContentScroll,
 }
 
 impl Content {
@@ -100,7 +104,8 @@ impl Workspace {
         let (id, opened) = self.content.tabs.open(TabKey::for_target(&target));
         if opened {
             let services = self.services.clone();
-            let pane = cx.new(|cx| ItemPane::new(target, ViewScope::Tab(id), services, cx));
+            let scroll = self.content.scroll.clone();
+            let pane = cx.new(|cx| ItemPane::new(target, ViewScope::Tab(id), services, scroll, cx));
             // A relationship row opens its ticket in a tab of its own.
             let related = cx.subscribe(&pane, |this, _, event: &OpenRelated, cx| {
                 this.open_item(event.0.clone(), cx)
@@ -225,6 +230,9 @@ impl Workspace {
                 );
             if focused {
                 tab = tab.border_2().border_color(ring);
+            }
+            if let Some(focus) = &focus {
+                tab = tab.relative().child(self.content.scroll.marker(focus));
             }
             strip = strip.child(
                 h_flex().gap_0p5().child(tab).child(

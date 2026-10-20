@@ -39,12 +39,25 @@ gpui_kit::actions!(
         /// Open the selected row of the document tree. The ticket list is
         /// the Kit's, whose own `enter` binding opens its row.
         OpenSelected,
+        /// Scroll the content region up by a page.
+        ScrollPageUp,
+        /// Scroll the content region down by a page.
+        ScrollPageDown,
+        /// Scroll the content region to its top.
+        ScrollToTop,
+        /// Scroll the content region to its bottom.
+        ScrollToBottom,
     ]
 );
 
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
 pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
+
+/// The key context of the content region, where PageUp, PageDown, Home
+/// and End scroll it. A focused control that binds them itself, such as
+/// a text field, takes them first.
+pub(crate) const CONTENT_CONTEXT: &str = "Content";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -65,6 +78,10 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
+        KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("home", ScrollToTop, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("end", ScrollToBottom, Some(CONTENT_CONTEXT)),
     ]);
 }
 

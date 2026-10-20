@@ -276,6 +276,8 @@ impl ItemPane {
                     element = element.border_2().border_color(ring);
                 }
                 element
+                    .relative()
+                    .child(self.scroll.marker(&focus))
                     .role(Role::Button)
                     .track_focus(&focus)
                     .cursor_pointer()

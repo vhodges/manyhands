@@ -47,6 +47,7 @@ use manyhands::{
 
 use super::{
     relationships::RowKey,
+    scroll::ContentScroll,
     sidebar::RETRY,
     tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
 };
@@ -99,6 +100,9 @@ pub(crate) struct ItemPane {
     /// The read-only text the source is shown in, and the source it was
     /// last given. Made at the next frame, which has the window it needs.
     source: Option<(String, Entity<TextareaState>)>,
+    /// The content region's scrolling, which brings a control of this
+    /// view into view when it takes focus.
+    pub(super) scroll: ContentScroll,
     _operations: Subscription,
 }
 
@@ -196,6 +200,7 @@ impl ItemPane {
         target: OpenTarget,
         scope: ViewScope,
         services: Services,
+        scroll: ContentScroll,
         cx: &mut Context<Self>,
     ) -> Self {
         let operations = cx.observe(services.operations(), |this, _, cx| {
@@ -208,6 +213,7 @@ impl ItemPane {
             row_focus: HashMap::new(),
             refreshing: None,
             source: None,
+            scroll,
             _operations: operations,
         };
         let stamp = pane.model.load();
@@ -744,6 +750,11 @@ impl ItemPane {
                         .font_family(theme.mono_font_family.clone())
                         .text_sm()
                         .h(px(320.)),
+                )
+                .relative()
+                .child(
+                    self.scroll
+                        .marker(&gpui_kit::Focusable::focus_handle(state.read(cx), cx)),
                 )
                 .into_any_element(),
             // The text is made at the next frame.

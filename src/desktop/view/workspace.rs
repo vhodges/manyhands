@@ -30,6 +30,7 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     confirm::{confirm, prepare_again},
     documents::DocumentsPane,
+    scroll::ContentScroll,
     sidebar::{self, RepositoriesPane, RepositoryRow},
     tabs::Content,
     tickets::TicketsPane,
@@ -38,7 +39,7 @@ use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
         FocusRepositories, NextRegion, NextTab, OpenSelected, PreviousRegion, PreviousTab, Quit,
-        QuitNow, Rebuild, Refresh,
+        QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
     },
     model::{
         documents::Documents,
@@ -100,7 +101,7 @@ impl Region {
         match self {
             Self::Repositories => "Repositories",
             Self::Navigation => "Navigation",
-            Self::Content => "Content",
+            Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
         }
     }
@@ -715,12 +716,28 @@ impl Workspace {
     }
 }
 
+impl Workspace {
+    /// PageUp, PageDown, Home or End in the content region: `scroll`
+    /// moves it, and a frame draws it where it moved.
+    fn scroll_content(&mut self, scroll: impl Fn(&ContentScroll) -> bool, cx: &mut Context<Self>) {
+        if scroll(&self.content.scroll) {
+            cx.notify();
+        }
+    }
+
+    /// The content region's vertical offset: negative once scrolled down.
+    #[cfg(test)]
+    pub(crate) fn content_offset(&self) -> gpui_kit::Pixels {
+        self.content.scroll.handle().offset().y
+    }
+}
+
 /// A workspace action's handler that does nothing while a dialog is open.
 /// The dialog layer is drawn inside the workspace, so its keys reach these
 /// handlers, and the Kit's focus trap holds only Tab and shift-Tab. Every
 /// dialog traps focus (design, Layout And Keyboard): a region key would
 /// focus behind it, out of Escape's reach, and Refresh would submit.
-fn unless_dialog<A: 'static>(
+pub(super) fn unless_dialog<A: 'static>(
     cx: &mut Context<Workspace>,
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
@@ -743,11 +760,16 @@ impl Render for Workspace {
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
         let selection = sidebar::selection(&self.navigation, cx);
         let navigation = self.navigation_pane(cx);
+        // A control that took focus since the last frame is scrolled into
+        // view as it is drawn.
+        self.content.scroll.note_focus(window.focused(cx).as_ref());
         let content = v_flex()
             .id("content")
+            .test_support()
             .gap_3()
             .size_full()
             .overflow_y_scroll()
+            .track_scroll(self.content.scroll.handle())
             .children(self.content(window, cx))
             .child(selection);
         let top = h_flex()
@@ -851,6 +873,18 @@ impl Render for Workspace {
                     this.focus_region(Region::Operations, window, cx)
                 },
             ))
+            .on_action(unless_dialog(cx, |this, _: &ScrollPageUp, _, cx| {
+                this.scroll_content(|scroll| scroll.page(-1.), cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ScrollPageDown, _, cx| {
+                this.scroll_content(|scroll| scroll.page(1.), cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ScrollToTop, _, cx| {
+                this.scroll_content(ContentScroll::to_top, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &ScrollToBottom, _, cx| {
+                this.scroll_content(ContentScroll::to_bottom, cx)
+            }))
             .relative()
             .size_full()
             .bg(cx.theme().background)
