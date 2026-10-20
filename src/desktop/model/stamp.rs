@@ -36,6 +36,8 @@ pub(crate) enum ViewScope {
     Documents(RepoKey),
     Tickets(RepoKey),
     Tab(TabId),
+    /// The Find input's search. One scope: a new search drops the last.
+    Find,
     Settings(SettingsPage),
     Operations(RepoKey),
     /// A confirmation dialog's preview. Each dialog keeps its own

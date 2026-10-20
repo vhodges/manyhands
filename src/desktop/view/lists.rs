@@ -8,14 +8,19 @@ use gpui_kit::{
     component::{ActiveTheme, Selectable, button::Button, h_flex, v_flex},
     div,
 };
-use manyhands::repository::{ClosureFilter, ResolvedRepository};
+use manyhands::repository::{ClosureFilter, ReadinessFilter, ResolvedRepository};
 
-use super::{sidebar, tickets::CLOSURE_FILTERS, workspace::Workspace};
+use super::{
+    sidebar,
+    tickets::{CLOSURE_FILTERS, READINESS_FILTERS},
+    workspace::Workspace,
+};
 use crate::desktop::{
     model::{
         list_state::{ListState, Rows},
         navigation::{Pane, Resolution},
         stamp::{RepoKey, Stamp},
+        tickets::TicketRead,
     },
     services::ReadKind,
 };
@@ -69,6 +74,7 @@ impl Workspace {
         self.tickets.clear();
         self.ticket_read = None;
         self.tickets_changed = true;
+        self.clear_find(cx);
         cx.notify();
     }
 
@@ -141,12 +147,21 @@ impl Workspace {
         clear: bool,
         cx: &mut Context<Self>,
     ) {
-        let filter = self.tickets.query().to_filter();
+        let query = self.tickets.query();
+        let (filter, names) = (query.to_filter(), query.names_filter());
         self.tickets_changed |= clear;
         self.ticket_read = Some(self.services.read(
             ReadKind::Tickets,
             stamp,
-            move |service| service.list_tickets(&resolved, &filter),
+            // Under Blocked, the open tickets too, to name the blockers by.
+            move |service| {
+                let list = service.list_tickets(&resolved, &filter)?;
+                let names = match &names {
+                    Some(names) => Some(service.list_tickets(&resolved, names)?),
+                    None => None,
+                };
+                Ok(TicketRead { list, names })
+            },
             cx,
             |this: &mut Self, stamp, result, cx| {
                 if this.tickets.apply(stamp, result) {
@@ -162,6 +177,20 @@ impl Workspace {
     /// dropped when it completes.
     pub(crate) fn set_closure(&mut self, closure: ClosureFilter, cx: &mut Context<Self>) {
         let stamp = self.tickets.set_closure(closure);
+        match (stamp, self.resolved_selection()) {
+            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
+            _ => cx.notify(),
+        }
+    }
+
+    /// Lists the tickets of `readiness` from now on. A read under the last
+    /// readiness is dropped when it completes.
+    pub(crate) fn set_readiness(
+        &mut self,
+        readiness: Option<ReadinessFilter>,
+        cx: &mut Context<Self>,
+    ) {
+        let stamp = self.tickets.set_readiness(readiness);
         match (stamp, self.resolved_selection()) {
             (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
             _ => cx.notify(),
@@ -219,17 +248,38 @@ impl Workspace {
                     .iter()
                     .find(|(.., filter)| *filter == closure)
                     .map(|(_, _, showing, _)| *showing);
+                let readiness = self.tickets.query().readiness;
+                let readiness_filters =
+                    h_flex()
+                        .gap_1()
+                        .children(READINESS_FILTERS.map(|(id, label, _, filter)| {
+                            let workspace = cx.entity().downgrade();
+                            choice(id, label, readiness == filter, move |_, _, cx| {
+                                let _ =
+                                    workspace.update(cx, |this, cx| this.set_readiness(filter, cx));
+                            })
+                        }));
+                let readiness_showing = READINESS_FILTERS
+                    .iter()
+                    .find(|(.., filter)| *filter == readiness)
+                    .map(|(_, _, showing, _)| *showing);
+                let showing_text = |id: &'static str, text: &'static str| {
+                    div()
+                        .id(id)
+                        .test_support()
+                        .aria_label(text)
+                        .text_xs()
+                        .child(text)
+                };
                 let header = v_flex()
                     .gap_1()
                     .child(filters)
-                    .children(showing.map(|text| {
-                        div()
-                            .id("tickets-showing")
-                            .test_support()
-                            .aria_label(text)
-                            .text_xs()
-                            .child(text)
-                    }));
+                    .children(showing.map(|text| showing_text("tickets-showing", text)))
+                    .child(readiness_filters)
+                    .children(
+                        readiness_showing
+                            .map(|text| showing_text("tickets-readiness-showing", text)),
+                    );
                 match self.tickets.repo() {
                     None => v_flex()
                         .gap_1()
@@ -250,6 +300,7 @@ impl Workspace {
             .test_support()
             .gap_2()
             .size_full()
+            .child(self.find_bar(cx))
             .child(choices)
             .child(body)
     }

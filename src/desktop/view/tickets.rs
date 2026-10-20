@@ -8,7 +8,7 @@
 //! Nonconforming and its problem code.
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, IndexPath, h_flex,
@@ -17,7 +17,7 @@ use gpui_kit::{
     },
     div,
 };
-use manyhands::repository::ClosureFilter;
+use manyhands::repository::{ClosureFilter, ReadinessFilter};
 
 use crate::desktop::model::tickets::{Lifecycle, TicketRow};
 
@@ -49,6 +49,30 @@ pub(crate) const CLOSURE_FILTERS: [(&str, &str, &str, ClosureFilter); 3] = [
     ),
 ];
 
+/// The readiness filters, in the order they are offered: their element
+/// id, label, what they show and the readiness they ask for. A filter
+/// never hides a nonconforming entry: the library keeps it under each.
+pub(crate) const READINESS_FILTERS: [(&str, &str, &str, Option<ReadinessFilter>); 3] = [
+    (
+        "filter-any-readiness",
+        "All",
+        "Showing tickets ready or not",
+        None,
+    ),
+    (
+        "filter-ready",
+        "Ready",
+        "Showing ready tickets",
+        Some(ReadinessFilter::Ready),
+    ),
+    (
+        "filter-blocked",
+        "Blocked",
+        "Showing blocked tickets and why",
+        Some(ReadinessFilter::Blocked),
+    ),
+];
+
 pub(crate) fn lifecycle_label(lifecycle: Lifecycle) -> &'static str {
     match lifecycle {
         Lifecycle::Open => LIFECYCLE_OPEN,
@@ -68,9 +92,31 @@ pub(crate) fn row_label(item: &manyhands::repository::ItemDto) -> String {
     label(&TicketRow::from_item(item))
 }
 
+/// The line of why the row at `index` is blocked: each reason in text,
+/// on one line, so every row keeps the height the list measured.
+fn reasons(row: &TicketRow, index: usize) -> impl IntoElement + use<> {
+    h_flex()
+        .gap_2()
+        .overflow_hidden()
+        .text_xs()
+        .whitespace_nowrap()
+        // A space keeps the line's height when there is no reason.
+        .child("\u{a0}")
+        .children(row.reasons.iter().enumerate().map(|(n, reason)| {
+            div()
+                .id(SharedString::from(format!("ticket-reason-{index}-{n}")))
+                .test_support()
+                .aria_label(reason.clone())
+                .child(reason.clone())
+        }))
+}
+
 /// The Kit list's delegate: the rows shown and the one selected.
 pub(crate) struct TicketDelegate {
     rows: Vec<TicketRow>,
+    /// Some row gives reasons. The Kit's list measures one row for all,
+    /// so then every row has a line for them, empty where it gives none.
+    reasons_shown: bool,
     selected: Option<IndexPath>,
 }
 
@@ -139,7 +185,8 @@ impl ListDelegate for TicketDelegate {
                     .aria_label(label(row))
                     .aria_selected(selected)
                     .child(div().text_sm().child(label(row)))
-                    .child(columns.text_color(muted)),
+                    .child(columns.text_color(muted))
+                    .children(self.reasons_shown.then(|| reasons(row, index))),
             ),
         )
     }
@@ -164,6 +211,7 @@ impl TicketsPane {
     pub(crate) fn new(window: &mut Window, cx: &mut App) -> Self {
         let delegate = TicketDelegate {
             rows: Vec::new(),
+            reasons_shown: false,
             selected: None,
         };
         Self {
@@ -188,6 +236,7 @@ impl TicketsPane {
                 rows.iter()
                     .position(|row| row.id == id && (id.is_some() || row.path == path))
             });
+            list.delegate_mut().reasons_shown = rows.iter().any(|row| !row.reasons.is_empty());
             list.delegate_mut().rows = rows;
             list.set_selected_index(at.map(IndexPath::new), window, cx);
             cx.notify();

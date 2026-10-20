@@ -5,11 +5,19 @@
 //! never removes a nonconforming entry; the library keeps it, and so does
 //! the list. A query change moves the scope's generation on, so a read
 //! made under the last query is dropped when it completes.
+//!
+//! Under Blocked each row carries why it is blocked, in text made from
+//! the library's reasons. A blocker is named by the short code and title
+//! of the row the library gave for it, and only by its ID when no row
+//! does: nothing is made up.
+
+use std::collections::HashMap;
 
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureFilter, ClosureState, ItemDto, ItemListDto, ReadinessFilter, TicketFilter,
+        ClosureFilter, ClosureState, ItemDto, ItemListDto, ReadinessFilter, ReadinessReasonCode,
+        TicketFilter,
     },
     results::ProblemCode,
 };
@@ -46,6 +54,80 @@ impl TicketQuery {
             ..TicketFilter::default()
         }
     }
+
+    /// The tickets read beside the list, under Blocked, to name the
+    /// blockers by: every open ticket, since only an open one blocks.
+    /// None under any other readiness, whose rows show no reasons.
+    pub(crate) fn names_filter(self) -> Option<TicketFilter> {
+        (self.readiness == Some(ReadinessFilter::Blocked)).then(|| TicketFilter {
+            closure: ClosureFilter::Open,
+            ..TicketFilter::default()
+        })
+    }
+}
+
+pub(crate) const OPEN_DEPENDENCY: &str = "Waits for open ticket";
+pub(crate) const UNRESOLVED_DEPENDENCY: &str = "Waits for a ticket not found";
+pub(crate) const DEPENDENCY_CYCLE: &str = "On a dependency cycle";
+pub(crate) const INCOMPLETE: &str = "incomplete";
+
+/// Why `item` is blocked, one line per reason the library gave, in its
+/// order: an open dependency by the blocker's short code and title, an
+/// unresolved one by the ID it names, and a cycle by the tickets on it.
+/// A ticket is named from `by_id`, the rows the library returned, keyed by
+/// ID; one not there is named by its ID alone. A reason the library marks
+/// incomplete says so. Empty for a ticket that is not blocked.
+pub(crate) fn blocked_reasons(item: &ItemDto, by_id: &HashMap<String, ItemDto>) -> Vec<String> {
+    let Some(readiness) = &item.readiness else {
+        return Vec::new();
+    };
+    let short = |id: &String| {
+        by_id
+            .get(id)
+            .and_then(|item| item.slug.clone())
+            .unwrap_or_else(|| id.clone())
+    };
+    let named = |id: &String| match by_id.get(id).and_then(|item| item.title.as_ref()) {
+        Some(title) => format!("{} {title}", short(id)),
+        None => id.clone(),
+    };
+    readiness
+        .reasons
+        .iter()
+        .map(|reason| {
+            let text = match reason.code {
+                ReadinessReasonCode::OpenDependency => format!(
+                    "{OPEN_DEPENDENCY}: {}",
+                    reason.ids.iter().map(named).collect::<Vec<_>>().join(", ")
+                ),
+                ReadinessReasonCode::UnresolvedDependency => {
+                    format!("{UNRESOLVED_DEPENDENCY}: {}", reason.ids.join(", "))
+                }
+                ReadinessReasonCode::DependencyCycle => format!(
+                    "{DEPENDENCY_CYCLE}: {}",
+                    reason.ids.iter().map(short).collect::<Vec<_>>().join(", ")
+                ),
+            };
+            if reason.complete {
+                text
+            } else {
+                format!("{text} ({INCOMPLETE})")
+            }
+        })
+        .collect()
+}
+
+/// What a ticket read gives: the list, and under Blocked the open tickets
+/// to name the blockers by.
+pub(crate) struct TicketRead {
+    pub list: ItemListDto,
+    pub names: Option<ItemListDto>,
+}
+
+impl From<ItemListDto> for TicketRead {
+    fn from(list: ItemListDto) -> Self {
+        Self { list, names: None }
+    }
 }
 
 /// Whether a ticket carries lifecycle closure metadata, whatever its
@@ -74,6 +156,9 @@ pub(crate) struct TicketRow {
     pub nonconforming: Option<ProblemCode>,
     pub path: String,
     pub worktree: String,
+    /// Why it is blocked, when it was read under Blocked: see
+    /// `blocked_reasons`. Empty otherwise.
+    pub reasons: Vec<String>,
 }
 
 impl TicketRow {
@@ -96,6 +181,7 @@ impl TicketRow {
             changed_at: item.changed_at.clone(),
             path: item.path.clone(),
             worktree: item.context.worktree.clone(),
+            reasons: Vec::new(),
         }
     }
 
@@ -170,6 +256,14 @@ impl Tickets {
         Some(self.load(repo))
     }
 
+    /// Lists the tickets of `readiness` from now on, or ready or not with
+    /// none. The stamp to read under, when a repository is loaded.
+    pub(crate) fn set_readiness(&mut self, readiness: Option<ReadinessFilter>) -> Option<Stamp> {
+        self.query.readiness = readiness;
+        let repo = self.repo.clone()?;
+        Some(self.load(repo))
+    }
+
     fn forget(&mut self) {
         if let Some(repo) = self.repo.take() {
             self.generations.next(ViewScope::Tickets(repo));
@@ -177,8 +271,13 @@ impl Tickets {
         self.list = ListState::Loading;
     }
 
-    /// A read completed. False when it is no longer wanted.
-    pub(crate) fn apply(&mut self, stamp: Stamp, result: ReadResult<ItemListDto>) -> bool {
+    /// A read completed. False when it is no longer wanted. Under Blocked
+    /// each row carries its reasons, named from the rows the read gave.
+    pub(crate) fn apply(
+        &mut self,
+        stamp: Stamp,
+        result: ReadResult<impl Into<TicketRead>>,
+    ) -> bool {
         let wanted = self.generations.is_current(&stamp)
             && self
                 .repo
@@ -187,10 +286,31 @@ impl Tickets {
         if !wanted {
             return false;
         }
-        self.list = ListState::from_read(result, |list| ListState::Ready {
-            rows: list.items.iter().map(TicketRow::from_item).collect(),
-            complete: list.complete,
-            index: Some(list.index),
+        let blocked = self.query.readiness == Some(ReadinessFilter::Blocked);
+        self.list = ListState::from_read(result, |read| {
+            let TicketRead { list, names } = read.into();
+            let by_id: HashMap<String, ItemDto> = names
+                .iter()
+                .flat_map(|names| &names.items)
+                .chain(&list.items)
+                .filter_map(|item| Some((item.id.clone()?, item.clone())))
+                .collect();
+            ListState::Ready {
+                rows: list
+                    .items
+                    .iter()
+                    .map(|item| TicketRow {
+                        reasons: if blocked {
+                            blocked_reasons(item, &by_id)
+                        } else {
+                            Vec::new()
+                        },
+                        ..TicketRow::from_item(item)
+                    })
+                    .collect(),
+                complete: list.complete,
+                index: Some(list.index),
+            }
         });
         true
     }

@@ -535,6 +535,37 @@ fn copy_writes_the_id_to_the_clipboard(cx: &mut TestAppContext) {
     );
 }
 
+/// Each copy action leaves exactly its own value on the clipboard: the
+/// short code, then the ULID, then the short code again.
+#[gpui_kit::test]
+fn each_copy_leaves_exactly_the_short_code_or_the_ulid(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PRIMARY, "Copied", "slug: ae-k9x2b\n");
+    });
+    open(&shell, ticket(&root, PRIMARY), cx);
+    let clipboard = |cx: &mut TestAppContext| cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(shell.label("item-slug", cx).as_deref(), Some("ae-k9x2b"));
+    for (button, wanted) in [
+        ("copy-slug", "ae-k9x2b"),
+        ("copy-id", PRIMARY),
+        ("copy-slug", "ae-k9x2b"),
+    ] {
+        shell.click(button, cx);
+        assert_eq!(clipboard(cx).as_deref(), Some(wanted), "{button}");
+    }
+}
+
+/// A ticket with no short code offers no short code to copy.
+#[gpui_kit::test]
+fn a_ticket_without_a_short_code_offers_none_to_copy(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PRIMARY, "Uncoded", "");
+    });
+    open(&shell, ticket(&root, PRIMARY), cx);
+    assert!(!present(&shell, "copy-slug", cx));
+    assert!(present(&shell, "copy-id", cx));
+}
+
 /// Opening a ticket with comments, a document in its own worktree and a
 /// nonconforming entry changes nothing in the repository.
 #[gpui_kit::test]

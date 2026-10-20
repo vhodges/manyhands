@@ -14,9 +14,14 @@ use std::{
 };
 
 use gpui_kit::{
-    App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
-    component::{ActiveTheme, Root, WindowExt, h_flex, list::ListEvent, v_flex},
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
+    component::{
+        ActiveTheme, Root, WindowExt, h_flex,
+        input::{InputEvent, InputState},
+        list::ListEvent,
+        v_flex,
+    },
     div, px,
 };
 use manyhands::repository::OperationId;
@@ -31,11 +36,13 @@ use super::{
 };
 use crate::desktop::{
     keys::{
-        CloseTab, FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion,
-        NextTab, OpenSelected, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
+        CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
+        FocusRepositories, NextRegion, NextTab, OpenSelected, PreviousRegion, PreviousTab, Quit,
+        QuitNow, Rebuild, Refresh,
     },
     model::{
         documents::Documents,
+        find::Find,
         navigation::{Navigation, Pane},
         operations::RecoveryStep,
         stamp::{RepoKey, Stamp},
@@ -119,6 +126,11 @@ pub(crate) struct Workspace {
     /// The ticket rows changed and go to the Kit's list at the next frame,
     /// which has the window its selection needs.
     pub(super) tickets_changed: bool,
+    /// The Find input, what it found, and its search in flight.
+    pub(super) find_input: Entity<InputState>,
+    pub(super) find: Find,
+    pub(super) find_read: Option<Task<()>>,
+    _find_events: Subscription,
     /// The open tabs.
     pub(super) content: Content,
     /// The region that last held focus, where focus goes back to when the
@@ -176,6 +188,13 @@ impl Workspace {
                 }
             }
         });
+        let find_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder(super::find::FIND_LABEL));
+        let find_events = cx.subscribe(&find_input, |this, _, event: &InputEvent, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                this.submit_find(cx);
+            }
+        });
         let repositories_pane = RepositoriesPane::new(window, cx);
         let repository_events = cx.subscribe(repositories_pane.list(), |this, list, event, cx| {
             // A click or Enter on a row selects it.
@@ -200,6 +219,10 @@ impl Workspace {
             tickets_pane,
             ticket_read: None,
             tickets_changed: false,
+            find_input,
+            find: Find::default(),
+            find_read: None,
+            _find_events: find_events,
             content: Content::default(),
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
@@ -804,6 +827,9 @@ impl Render for Workspace {
             ))
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &FindKey, window, cx| {
+                this.focus_find(window, cx)
             }))
             .on_action(unless_dialog(cx, |this, _: &NextTab, window, cx| {
                 this.step_tab(1, window, cx)

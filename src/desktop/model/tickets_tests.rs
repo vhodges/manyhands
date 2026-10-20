@@ -10,7 +10,10 @@ use manyhands::{
     results::ProblemCode,
 };
 
-use super::{Lifecycle, TicketQuery, TicketRow, Tickets};
+use super::{
+    DEPENDENCY_CYCLE, INCOMPLETE, Lifecycle, OPEN_DEPENDENCY, TicketQuery, TicketRead, TicketRow,
+    Tickets, UNRESOLVED_DEPENDENCY, blocked_reasons,
+};
 use crate::desktop::{
     model::{list_state::ListState, navigation::OpenTarget},
     services::ReadResult,
@@ -163,4 +166,186 @@ fn a_filter_change_drops_the_last_filters_read() {
     // With nothing loaded, a filter change reads nothing, and is kept.
     assert_eq!(model.set_closure(ClosureFilter::All), None);
     assert_eq!(model.query().closure, ClosureFilter::All);
+}
+
+const BLOCKER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
+const WAITS: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
+const MISSING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";
+const DANGLING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD3";
+const CYCLE_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD4";
+const CYCLE_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD5";
+const DONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD6";
+const AFTER_DONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD7";
+
+/// A ticket waiting for an open one, one waiting for a ticket no context
+/// holds, two waiting for each other, and one whose only dependency is
+/// closed.
+fn related(fixture: &Fixture) -> std::path::PathBuf {
+    let root = fixture.create_repository("related");
+    fixture.create_ticket(&root, BLOCKER, "Blocker", "open");
+    fixture.create_ticket_with_deps(&root, WAITS, "Waits", "open", &[BLOCKER]);
+    fixture.create_ticket_with_deps(&root, DANGLING, "Dangling", "open", &[MISSING]);
+    fixture.commit_dependency_cycle(&root, (CYCLE_A, "Cycle A"), (CYCLE_B, "Cycle B"));
+    fixture.commit_closed_ticket(&root, DONE, "Done");
+    fixture.refresh(&root);
+    fixture.create_ticket_with_deps(&root, AFTER_DONE, "After done", "open", &[DONE]);
+    fixture.refresh(&root);
+    root
+}
+
+fn listed(
+    fixture: &Fixture,
+    root: &std::path::Path,
+    filter: &TicketFilter,
+) -> (
+    ItemListDto,
+    std::collections::HashMap<String, manyhands::repository::ItemDto>,
+) {
+    let service = fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    let list = service.list_tickets(&repo, filter).unwrap();
+    let all = service
+        .list_tickets(&repo, &TicketFilter::default())
+        .unwrap();
+    let by_id = all
+        .items
+        .into_iter()
+        .filter_map(|item| Some((item.id.clone()?, item)))
+        .collect();
+    (list, by_id)
+}
+
+fn item<'a>(list: &'a ItemListDto, id: &str) -> &'a manyhands::repository::ItemDto {
+    list.items
+        .iter()
+        .find(|item| item.id.as_deref() == Some(id))
+        .unwrap_or_else(|| panic!("{id} is not listed: {list:?}"))
+}
+
+/// Each reason in text: an open dependency by the blocker's short code
+/// and title, an unresolved one by the ID it names, and the cycle.
+#[test]
+fn blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle() {
+    let fixture = Fixture::new();
+    let root = related(&fixture);
+    let (blocked, by_id) = listed(
+        &fixture,
+        &root,
+        &TicketQuery {
+            closure: ClosureFilter::Open,
+            readiness: Some(ReadinessFilter::Blocked),
+        }
+        .to_filter(),
+    );
+    let blocker = by_id.get(BLOCKER).unwrap();
+    let slug = blocker.slug.clone().expect("create gives a short code");
+
+    assert_eq!(
+        blocked_reasons(item(&blocked, WAITS), &by_id),
+        [format!("{OPEN_DEPENDENCY}: {slug} Blocker")]
+    );
+    assert_eq!(
+        blocked_reasons(item(&blocked, DANGLING), &by_id),
+        [format!("{UNRESOLVED_DEPENDENCY}: {MISSING}")]
+    );
+    // A cycle reason names the tickets on it, by short code when they
+    // have one (these have none) and otherwise by ID.
+    let cycle = [
+        format!("{OPEN_DEPENDENCY}: {CYCLE_B} Cycle B"),
+        format!("{DEPENDENCY_CYCLE}: {CYCLE_A}, {CYCLE_B}"),
+    ];
+    assert_eq!(blocked_reasons(item(&blocked, CYCLE_A), &by_id), cycle);
+
+    // A blocker the rows do not hold is named by its ID alone; no title
+    // is made up.
+    let mut without = by_id.clone();
+    without.remove(BLOCKER);
+    assert_eq!(
+        blocked_reasons(item(&blocked, WAITS), &without),
+        [format!("{OPEN_DEPENDENCY}: {BLOCKER}")]
+    );
+    // A ready ticket has no reasons.
+    assert!(blocked_reasons(by_id.get(AFTER_DONE).unwrap(), &by_id).is_empty());
+}
+
+/// A reason the library marks incomplete says so.
+#[test]
+fn an_incomplete_reason_is_labeled_incomplete() {
+    let fixture = Fixture::new();
+    let root = related(&fixture);
+    let (blocked, by_id) = listed(
+        &fixture,
+        &root,
+        &TicketFilter {
+            readiness: Some(ReadinessFilter::Blocked),
+            ..TicketFilter::default()
+        },
+    );
+    let mut cycle = item(&blocked, CYCLE_A).clone();
+    let readiness = cycle.readiness.as_mut().unwrap();
+    for reason in &mut readiness.reasons {
+        reason.complete = false;
+    }
+    let reasons = blocked_reasons(&cycle, &by_id);
+    assert_eq!(reasons.len(), 2);
+    for reason in reasons {
+        assert!(reason.ends_with(&format!(" ({INCOMPLETE})")), "{reason}");
+    }
+}
+
+/// Rows read under Blocked carry their reasons; under any other
+/// readiness they carry none.
+#[test]
+fn rows_read_under_blocked_carry_their_reasons() {
+    let fixture = Fixture::new();
+    let root = related(&fixture);
+    let (blocked, by_id) = listed(
+        &fixture,
+        &root,
+        &TicketFilter {
+            closure: ClosureFilter::Open,
+            readiness: Some(ReadinessFilter::Blocked),
+            ..TicketFilter::default()
+        },
+    );
+    let names = TicketFilter::default();
+    let (all, _) = listed(&fixture, &root, &names);
+    let mut model = Tickets::default();
+    model.load("/related".to_owned());
+    let stamp = model.set_readiness(Some(ReadinessFilter::Blocked)).unwrap();
+    assert_eq!(model.query().readiness, Some(ReadinessFilter::Blocked));
+    assert!(model.apply(
+        stamp,
+        ReadResult::Ok(TicketRead {
+            list: blocked.clone(),
+            names: Some(all.clone()),
+        })
+    ));
+    let rows = model.state().rows().unwrap();
+    assert_eq!(rows.len(), blocked.items.len());
+    for (row, item) in rows.iter().zip(&blocked.items) {
+        assert_eq!(row.reasons, blocked_reasons(item, &by_id));
+        assert!(!row.reasons.is_empty());
+    }
+
+    let stamp = model.set_readiness(None).unwrap();
+    assert!(model.apply(stamp, ReadResult::Ok(all)));
+    let rows = model.state().rows().unwrap();
+    assert!(rows.iter().all(|row| row.reasons.is_empty()));
+}
+
+/// Review Focus 1: a read under the last readiness is dropped.
+#[test]
+fn a_readiness_change_drops_the_last_readinesss_read() {
+    let fixture = Fixture::new();
+    let list = empty(&fixture);
+    let mut model = Tickets::default();
+    let any = model.load("/a".to_owned());
+    let ready = model.set_readiness(Some(ReadinessFilter::Ready)).unwrap();
+    assert!(!model.apply(any, ReadResult::Ok(list.clone())));
+    assert!(matches!(model.state(), ListState::Loading));
+    assert!(model.apply(ready, ReadResult::Ok(list)));
+    model.clear();
+    assert_eq!(model.set_readiness(Some(ReadinessFilter::Blocked)), None);
+    assert_eq!(model.query().readiness, Some(ReadinessFilter::Blocked));
 }

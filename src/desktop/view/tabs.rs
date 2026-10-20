@@ -78,6 +78,17 @@ impl Workspace {
             .map(|item| item.read(cx).target().clone())
     }
 
+    /// The open tabs' keys, in strip order.
+    #[cfg(test)]
+    pub(crate) fn tab_keys(&self) -> Vec<TabKey> {
+        self.content
+            .tabs
+            .tabs()
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect()
+    }
+
     /// Shows `target`'s tab, opening it and reading its item when it is
     /// not open yet. Selection does not change.
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {

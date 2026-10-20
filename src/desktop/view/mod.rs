@@ -2,6 +2,7 @@
 
 pub(crate) mod confirm;
 pub(crate) mod documents;
+pub(crate) mod find;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod harness;
 pub(crate) mod item;

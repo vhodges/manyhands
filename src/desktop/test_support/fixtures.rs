@@ -159,6 +159,21 @@ impl Fixture {
     /// in `root` through `execute` of `ticket create`. It is open: no
     /// local operation closes a ticket.
     pub(crate) fn create_ticket(&self, root: &Path, id: &str, title: &str, status: &str) {
+        self.create_ticket_with_deps(root, id, title, status, &[]);
+    }
+
+    /// Creates a ticket as `create_ticket` does, depending on `deps`
+    /// through the create's own `deps`. The library accepts a dependency
+    /// no context holds, which it reports unresolved, and refuses one
+    /// that would close a cycle: `commit_dependency_cycle` makes that.
+    pub(crate) fn create_ticket_with_deps(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        status: &str,
+        deps: &[&str],
+    ) {
         let created = self.execute(
             None,
             Mutation::TicketCreate(TicketCreateInput {
@@ -172,12 +187,38 @@ impl Fixture {
                     team: None,
                     body: format!("Body of {title}.\n"),
                 },
-                deps: Vec::new(),
+                deps: deps.iter().map(|dep| (*dep).to_owned()).collect(),
                 parent: None,
                 initials: None,
             }),
         );
         assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
+    }
+
+    /// Commits two open tickets, `a` and `b`, to `root`'s primary branch
+    /// carrying the same short code `slug`, as `tests/read_relationships.rs`
+    /// makes a shared one: `ticket slug assign` refuses a code another
+    /// ticket has, and create derives its own. Refresh to index them.
+    pub(crate) fn commit_duplicate_slug(
+        &self,
+        root: &Path,
+        a: (&str, &str),
+        b: (&str, &str),
+        slug: &str,
+    ) {
+        for (id, title) in [a, b] {
+            self.commit_ticket(root, id, title, &format!("slug: {slug}\n"));
+        }
+    }
+
+    /// Commits two open tickets, `a` and `b`, each depending on the other,
+    /// to `root`'s primary branch, as `tests/read_relationships.rs` makes a
+    /// cycle: create and save refuse a write that closes one. Refresh to
+    /// index them.
+    pub(crate) fn commit_dependency_cycle(&self, root: &Path, a: (&str, &str), b: (&str, &str)) {
+        for ((id, title), (other, _)) in [(a, b), (b, a)] {
+            self.commit_ticket(root, id, title, &format!("deps:\n  - {other}\n"));
+        }
     }
 
     /// Creates a document with `id` and `title` at `path`, below `docs/`,
