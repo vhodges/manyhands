@@ -620,8 +620,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings
-            .update(cx, |settings, cx| settings.open(page, window, cx));
+        let selection = self.navigation.selected().map(PathBuf::from);
+        self.settings.update(cx, |settings, cx| {
+            settings.set_selection(selection);
+            settings.open(page, window, cx)
+        });
         self.focus_region(Region::Content, window, cx);
     }
 

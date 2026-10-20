@@ -12,7 +12,12 @@
 //! one that takes focus below the fold is brought into view (`scroll`).
 //!
 //! A page arrives by adding it to `PAGES`, a field and an arm in `page`.
+//! The host keeps the repository selected when the settings were last
+//! opened, for a page that works on one repository (Remotes).
 
+use std::path::PathBuf;
+
+mod remotes;
 mod repositories;
 
 use gpui_kit::{
@@ -23,6 +28,7 @@ use gpui_kit::{
     div,
 };
 
+pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::RepositoriesPage;
 
 use super::{scroll::ContentScroll, tabs::SHOWN};
@@ -32,7 +38,7 @@ pub(crate) const SETTINGS_HEADING: &str = "Settings";
 pub(crate) const BACK_TO_TABS: &str = "Back to tabs";
 
 /// The pages there are, in the order the page list shows them.
-pub(crate) const PAGES: [SettingsPage; 1] = [SettingsPage::Repositories];
+pub(crate) const PAGES: [SettingsPage; 2] = [SettingsPage::Repositories, SettingsPage::Remotes];
 
 /// A page's name in the page list.
 pub(crate) fn page_title(page: SettingsPage) -> &'static str {
@@ -66,6 +72,10 @@ pub(crate) struct SettingsHost {
     /// Around Back to tabs, whose own focus is the Kit's.
     close: FocusHandle,
     repositories: Option<Entity<RepositoriesPage>>,
+    remotes: Option<Entity<RemotesPage>>,
+    /// The repository selected when the settings were last opened: the
+    /// one the Remotes page works on until another is chosen there.
+    selection: Option<PathBuf>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsHost {}
@@ -82,6 +92,8 @@ impl SettingsHost {
                 .collect(),
             close: cx.focus_handle(),
             repositories: None,
+            remotes: None,
+            selection: None,
         }
     }
 
@@ -99,7 +111,18 @@ impl SettingsHost {
     pub(crate) fn open(&mut self, page: SettingsPage, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Shown::Settings(page);
         self.page(page, window, cx);
+        if page == SettingsPage::Remotes {
+            let selection = self.selection.clone();
+            self.remotes(window, cx)
+                .update(cx, |page, cx| page.opened(selection, cx));
+        }
         cx.notify();
+    }
+
+    /// The repository selected in the main window: a page that works on
+    /// one repository starts on it.
+    pub(crate) fn set_selection(&mut self, selection: Option<PathBuf>) {
+        self.selection = selection;
     }
 
     /// Shows the tabs again. The pages are kept, with what they hold.
@@ -132,6 +155,22 @@ impl SettingsHost {
             .clone()
     }
 
+    /// The Remotes page, made the first time it is asked for, on the
+    /// selected repository.
+    pub(crate) fn remotes(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<RemotesPage> {
+        let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        let selection = self.selection.clone();
+        self.remotes
+            .get_or_insert_with(|| {
+                cx.new(|cx| RemotesPage::new(services, scroll, selection, window, cx))
+            })
+            .clone()
+    }
+
     /// The view of `page`, made the first time it is asked for. A view,
     /// not an element: `open` asks for it outside a frame.
     fn page(
@@ -142,8 +181,9 @@ impl SettingsHost {
     ) -> Option<AnyView> {
         match page {
             SettingsPage::Repositories => Some(self.repositories(window, cx).into()),
-            // Tasks 14 to 16 add these; `PAGES` does not list them yet.
-            SettingsPage::Remotes | SettingsPage::Keys | SettingsPage::Hosts => None,
+            SettingsPage::Remotes => Some(self.remotes(window, cx).into()),
+            // Tasks 15 and 16 add these; `PAGES` does not list them yet.
+            SettingsPage::Keys | SettingsPage::Hosts => None,
         }
     }
 

@@ -17,9 +17,9 @@ use manyhands::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, Mutation, MutationCall,
         MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
-        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput,
-        RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput, TicketDraft,
-        TicketSaveInput,
+        PrepareDataDto, RelationshipWrite, RemoteRemoveInput, RepoCreateInput, RepoEnableInput,
+        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput,
+        TicketDraft, TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -592,6 +592,81 @@ pub(crate) fn set_identity_through(
     let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
     let set = execute_through(service, Some(confirmation), input());
     assert_eq!(set.code, ResultCode::Ok, "{}", set.message);
+}
+
+impl Fixture {
+    /// Adds the remote `name` fetching from `url` to `root` with `git2`,
+    /// as the user's own `git remote add` would: a remote the desktop did
+    /// not add. Nothing is contacted.
+    pub(crate) fn add_remote(&self, root: &Path, name: &str, url: &str) {
+        git2::Repository::open(root)
+            .unwrap()
+            .remote(name, url)
+            .unwrap();
+    }
+
+    /// Points `root`'s remote `name` at `url` with `git2`: a second
+    /// actor's change to a remote the desktop shows.
+    pub(crate) fn set_remote_url(&self, root: &Path, name: &str, url: &str) {
+        git2::Repository::open(root)
+            .unwrap()
+            .remote_set_url(name, url)
+            .unwrap();
+    }
+
+    /// `origin` and its sibling `origin.bak`, the configuration of ticket
+    /// `01M4PB7WZN9WNAQ3KXZ19J28KM`: libgit2's removal of `origin` would
+    /// delete `origin.bak`'s entries too, so `remote remove` refuses it at
+    /// its preview. Both fetch over HTTPS from `example.invalid`.
+    pub(crate) fn add_sibling_remotes(&self, root: &Path) {
+        self.add_remote(root, "origin", "https://example.invalid/team/repo.git");
+        self.add_remote(
+            root,
+            "origin.bak",
+            "https://example.invalid/team/repo-backup.git",
+        );
+    }
+}
+
+/// The names of `root`'s remotes, as Git holds them, in name order.
+pub(crate) fn remote_names(root: &Path) -> Vec<String> {
+    let mut names: Vec<String> = git2::Repository::open(root)
+        .unwrap()
+        .remotes()
+        .unwrap()
+        .iter()
+        .flatten()
+        .map(str::to_owned)
+        .collect();
+    names.sort();
+    names
+}
+
+/// The fetch location Git holds for `root`'s remote `name`, unredacted.
+pub(crate) fn remote_url(root: &Path, name: &str) -> Option<String> {
+    let repository = git2::Repository::open(root).unwrap();
+    let remote = repository.find_remote(name).ok()?;
+    remote.url().map(str::to_owned)
+}
+
+/// Removes `root`'s remote `name` through `service`'s own `prepare` and
+/// `execute` of `remote remove`: a second actor, on a service other than
+/// the desktop's.
+pub(crate) fn remove_remote_through(service: &RepositoryService, root: &Path, name: &str) {
+    let input = || {
+        Mutation::RemoteRemove(RemoteRemoveInput {
+            root: root.to_owned(),
+            name: name.to_owned(),
+        })
+    };
+    let prepared = service.prepare(&input());
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("remote remove gave no preview");
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let removed = execute_through(service, Some(confirmation), input());
+    assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
 }
 
 /// Refreshes the index of `root` through `service`: a second actor's
