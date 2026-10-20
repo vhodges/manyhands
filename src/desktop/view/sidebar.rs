@@ -25,7 +25,7 @@ use super::workspace::Workspace;
 use crate::desktop::model::{
     list_state::{ListState, index_label},
     navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
-    stamp::RepoKey,
+    stamp::{RepoKey, SettingsPage},
 };
 
 pub(crate) const REPOSITORIES_HEADING: &str = "Repositories";
@@ -34,6 +34,8 @@ pub(crate) const RESOLVING: &str = "Opening";
 pub(crate) const NOTHING_SELECTED: &str = "Select a repository.";
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const REMOVE: &str = "Remove";
+/// The sidebar's entry to the settings.
+pub(crate) const SETTINGS: &str = "Settings";
 /// The selected repository's row says so in text.
 pub(crate) const SELECTED: &str = "Selected";
 /// The rows shown are those of an earlier read: the last one failed or
@@ -125,6 +127,20 @@ pub(crate) fn repositories(
         .child(pane.render())
         .children(state)
         .children(failure)
+        .child(
+            div()
+                .id("sidebar-settings")
+                .test_support()
+                .aria_label(SETTINGS)
+                .child(
+                    Button::new("sidebar-settings-button")
+                        .ghost()
+                        .label(SETTINGS)
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.open_settings(SettingsPage::Repositories, window, cx)
+                        })),
+                ),
+        )
 }
 
 /// One row of the selector, as drawn.

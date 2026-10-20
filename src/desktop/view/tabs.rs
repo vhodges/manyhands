@@ -100,8 +100,10 @@ impl Workspace {
     }
 
     /// Shows `target`'s tab, opening it and reading its item when it is
-    /// not open yet. Selection does not change.
+    /// not open yet, in place of the settings if they are shown. Selection
+    /// does not change.
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        self.settings.update(cx, |settings, cx| settings.hide(cx));
         let (id, opened) = self.content.tabs.open(TabKey::for_target(&target));
         if opened {
             let services = self.services.clone();
@@ -144,8 +146,10 @@ impl Workspace {
     }
 
     /// `ctrl-tab` (`step` 1) or `ctrl-shift-tab` (-1): shows the next or
-    /// previous tab, and focuses it.
+    /// previous tab, and focuses it. With the settings shown, the tabs are
+    /// shown again first.
     pub(super) fn step_tab(&mut self, step: isize, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings.update(cx, |settings, cx| settings.hide(cx));
         let moved = if step > 0 {
             self.content.tabs.next()
         } else {
@@ -157,8 +161,12 @@ impl Workspace {
     }
 
     /// `secondary-w`: closes the shown tab and focuses the one shown in
-    /// its place, or the content region when none is left.
+    /// its place, or the content region when none is left. With the
+    /// settings shown, no tab is shown to close.
     pub(super) fn close_shown_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.read(cx).is_shown() {
+            return;
+        }
         let Some(id) = self.content.tabs.active() else {
             return;
         };

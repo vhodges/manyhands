@@ -97,10 +97,22 @@ impl ContentScroll {
     /// the control is scrolled into view when focus moves to it. The
     /// control must be `relative()`: the marker fills it.
     pub(crate) fn marker(&self, focus: &FocusHandle) -> impl IntoElement + use<> {
+        self.marker_for(focus, false)
+    }
+
+    /// An empty canvas to lay over a wrapper that tracks `focus` around a
+    /// control whose own focus is private, as a Kit button's is: the
+    /// wrapper is scrolled into view when focus moves to anything inside
+    /// it. The wrapper must be `relative()`.
+    pub(crate) fn marker_within(&self, focus: &FocusHandle) -> impl IntoElement + use<> {
+        self.marker_for(focus, true)
+    }
+
+    fn marker_for(&self, focus: &FocusHandle, within: bool) -> impl IntoElement + use<> {
         let this = self.clone();
         let focus = focus.clone();
         canvas(
-            move |bounds, window, cx| this.prepainted(&focus, bounds, window, cx),
+            move |bounds, window, cx| this.prepainted(&focus, within, bounds, window, cx),
             |_, _, _, _| {},
         )
         .absolute()
@@ -108,17 +120,24 @@ impl ContentScroll {
     }
 
     /// The marker of `focus` was laid out at `bounds`, in the window, the
-    /// region's offset applied.
+    /// region's offset applied. With `within`, focus anywhere inside the
+    /// element that tracks `focus` counts.
     fn prepainted(
         &self,
         focus: &FocusHandle,
+        within: bool,
         bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut gpui_kit::App,
     ) {
         {
             let mut reveal = self.reveal.borrow_mut();
-            if !reveal.pending || !focus.is_focused(window) {
+            let focused = if within {
+                focus.contains_focused(window, cx)
+            } else {
+                focus.is_focused(window)
+            };
+            if !reveal.pending || !focused {
                 return;
             }
             reveal.pending = false;

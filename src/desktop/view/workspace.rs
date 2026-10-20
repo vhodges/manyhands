@@ -33,6 +33,7 @@ use super::{
     documents::DocumentsPane,
     passphrase::PassphraseDialog,
     scroll::ContentScroll,
+    settings::{SettingsEvent, SettingsHost},
     sidebar::{self, RepositoriesPane, RepositoryRow},
     tabs::Content,
     tickets::TicketsPane,
@@ -40,15 +41,16 @@ use super::{
 use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, NextRegion, NextTab, OpenSelected, PreviousRegion, PreviousTab, Quit,
-        QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
+        FocusRepositories, NextRegion, NextTab, OpenSelected, OpenSettings, PreviousRegion,
+        PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom,
+        ScrollToTop,
     },
     model::{
         documents::Documents,
         find::Find,
         navigation::{Navigation, Pane},
         operations::RecoveryStep,
-        stamp::{RepoKey, Stamp},
+        stamp::{RepoKey, SettingsPage, Stamp},
         tickets::Tickets,
     },
     services::{
@@ -136,6 +138,9 @@ pub(crate) struct Workspace {
     _find_events: Subscription,
     /// The open tabs.
     pub(super) content: Content,
+    /// The settings, shown in the content region in place of the tabs.
+    pub(super) settings: Entity<SettingsHost>,
+    _settings_events: Subscription,
     /// The region that last held focus, where focus goes back to when the
     /// control holding it is no longer drawn.
     last_region: Option<Region>,
@@ -213,6 +218,19 @@ impl Workspace {
                 }
             }
         });
+        let content = Content::default();
+        let settings = {
+            let services = services.clone();
+            let scroll = content.scroll.clone();
+            cx.new(|cx| SettingsHost::new(services, scroll, cx))
+        };
+        let settings_events = cx.subscribe_in(
+            &settings,
+            window,
+            |this, _, event: &SettingsEvent, window, cx| match event {
+                SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
+            },
+        );
         let mut workspace = Self {
             services,
             regions,
@@ -231,7 +249,9 @@ impl Workspace {
             find: Find::default(),
             find_read: None,
             _find_events: find_events,
-            content: Content::default(),
+            content,
+            settings,
+            _settings_events: settings_events,
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
             passphrase: None,
@@ -436,7 +456,8 @@ impl Workspace {
     /// selector's list when it has rows, and the navigation region to the
     /// shown pane's tree or list when a repository's lists are shown, so
     /// their arrow keys and Enter work. The content region gives it to
-    /// the shown tab, its first control, when a tab is open.
+    /// the shown settings page, or else the shown tab, its first control,
+    /// when a tab is open.
     pub(super) fn focus_region(
         &mut self,
         region: Region,
@@ -458,6 +479,11 @@ impl Workspace {
             }
             (Region::Navigation, Pane::Tickets) if self.tickets.repo().is_some() => {
                 self.tickets_pane.focus(window, cx)
+            }
+            (Region::Content, _) if self.settings.read(cx).is_shown() => {
+                if let Some(focus) = self.settings.read(cx).first_focus() {
+                    window.focus(&focus, cx)
+                }
             }
             (Region::Content, _) if self.content.shown_focus().is_some() => {
                 if let Some(focus) = self.content.shown_focus() {
@@ -564,6 +590,25 @@ impl Workspace {
             .submit(intent, Lane::User, None, None);
         cx.notify();
         Some(id)
+    }
+
+    /// `secondary-,` or the sidebar's Settings entry: shows `page` in the
+    /// content region, in place of the tabs, and focuses it.
+    pub(super) fn open_settings(
+        &mut self,
+        page: SettingsPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings
+            .update(cx, |settings, cx| settings.open(page, window, cx));
+        self.focus_region(Region::Content, window, cx);
+    }
+
+    /// What the content region shows.
+    #[cfg(test)]
+    pub(crate) fn settings_shown(&self, cx: &App) -> super::settings::Shown {
+        self.settings.read(cx).shown()
     }
 
     pub(super) fn cancel_request(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) {
@@ -783,9 +828,13 @@ impl Render for Workspace {
             .gap_3()
             .size_full()
             .overflow_y_scroll()
-            .track_scroll(self.content.scroll.handle())
-            .children(self.content(window, cx))
-            .child(selection);
+            .track_scroll(self.content.scroll.handle());
+        // The settings, or the tabs and the selected repository.
+        let content = if self.settings.read(cx).is_shown() {
+            content.child(self.settings.clone())
+        } else {
+            content.children(self.content(window, cx)).child(selection)
+        };
         let top = h_flex()
             .flex_1()
             .min_h_0()
@@ -868,6 +917,9 @@ impl Render for Workspace {
             ))
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &OpenSettings, window, cx| {
+                this.open_settings(SettingsPage::Repositories, window, cx)
             }))
             .on_action(unless_dialog(cx, |this, _: &FindKey, window, cx| {
                 this.focus_find(window, cx)
