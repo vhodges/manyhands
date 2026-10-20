@@ -15,10 +15,11 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        FailurePoint, FolderCreateInput, IndexRefreshInput, Mutation, MutationCall,
+        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, Mutation, MutationCall,
         MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
-        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
-        RepositoryService, RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
+        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput,
+        RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput, TicketDraft,
+        TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -564,6 +565,32 @@ pub(crate) fn remove_registration(service: &RepositoryService, root: &Path) {
         &CancellationToken::new(),
     );
     assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
+}
+
+/// Sets `root`'s own identity to `identity`, its initials left as they
+/// are, through `service`'s own `prepare` and `execute` of `repo
+/// identity-set`: a second actor, on a service other than the desktop's.
+pub(crate) fn set_identity_through(
+    service: &RepositoryService,
+    root: &Path,
+    identity: &CommitIdentity,
+) {
+    let input = || {
+        Mutation::RepoIdentitySet(RepoIdentitySetInput {
+            root: root.to_owned(),
+            name: identity.name.clone(),
+            email: identity.email.clone(),
+            initials: InitialsChange::Unchanged,
+        })
+    };
+    let prepared = service.prepare(&input());
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("repo identity-set gave no preview");
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let set = execute_through(service, Some(confirmation), input());
+    assert_eq!(set.code, ResultCode::Ok, "{}", set.message);
 }
 
 /// Refreshes the index of `root` through `service`: a second actor's

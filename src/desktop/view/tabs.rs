@@ -137,7 +137,6 @@ impl Workspace {
 
     /// Closes every tab of `root`, as the removal of its registration
     /// does, so a later registration there inherits none of them.
-    #[cfg_attr(not(test), allow(dead_code))] // Repository removal calls it (Task 13).
     pub(crate) fn close_repository(&mut self, root: &str, cx: &mut Context<Self>) {
         for id in self.content.tabs.close_repository(root) {
             self.content.forget(id);

@@ -1,5 +1,6 @@
-//! The Repositories settings page (design, Settings / Repositories): Add
-//! an existing repository and Create a repository.
+//! The Repositories settings page (design, Settings / Repositories): the
+//! registered repositories, with a chosen one's identity and Remove
+//! (`manage`), then Add an existing repository and Create a repository.
 //!
 //! **Add existing** takes the folder of a Git repository that is not yet
 //! a Manyhands repository, its primary branch and an optional short code
@@ -54,6 +55,8 @@ use manyhands::{
     repository::{ConfigurationState, IdentityAvailability, RepositoryInspectionDto},
     results::ResultCode,
 };
+
+mod manage;
 
 use super::wrapped;
 use crate::desktop::{
@@ -228,7 +231,11 @@ pub(crate) struct RepositoriesPage {
     /// The window the page is in, for going on with a submit once a read
     /// lands.
     window: AnyWindowHandle,
+    /// The registered repositories, their identity and their removal
+    /// (`manage`).
+    managed: manage::Managed,
     _inputs: Vec<Subscription>,
+    _operations: Subscription,
 }
 
 impl RepositoriesPage {
@@ -270,7 +277,27 @@ impl RepositoriesPage {
                 focus.insert(id, cx.focus_handle());
             }
         }
-        Self {
+        for id in manage::FIELDS {
+            let input = cx.new(|cx| InputState::new(window, cx));
+            subscriptions.push(cx.subscribe_in(
+                &input,
+                window,
+                |this, _, event: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = event {
+                        this.submit_identity(window, cx)
+                    }
+                },
+            ));
+            inputs.insert(id, input);
+        }
+        for id in manage::FIELDS.into_iter().chain(manage::CONTROLS) {
+            focus.insert(id, cx.focus_handle());
+        }
+        let operations = cx.observe(services.operations(), |this, _, cx| {
+            this.operations_changed(cx)
+        });
+        let managed = manage::Managed::new(&services, cx);
+        let mut page = Self {
             services,
             scroll,
             inputs,
@@ -285,8 +312,12 @@ impl RepositoriesPage {
             browse_unavailable: None,
             submit_pending: false,
             window: window.window_handle(),
+            managed,
             _inputs: subscriptions,
-        }
+            _operations: operations,
+        };
+        page.load_registrations(cx);
+        page
     }
 
     #[cfg(test)]
@@ -747,6 +778,7 @@ impl Render for RepositoriesPage {
             self.inputs[Form::Add.branch()]
                 .update(cx, |input, cx| input.set_value(branch, window, cx));
         }
+        self.apply_prefill(window, cx);
         let unavailable = self
             .browse_unavailable
             .map(|why| text("browse-unavailable", why));
@@ -754,6 +786,7 @@ impl Render for RepositoriesPage {
             .id("settings-repositories")
             .test_support()
             .gap_4()
+            .child(self.managed_section(cx))
             .child(self.add_form(cx))
             .child(self.create_form(cx))
             .children(unavailable)
@@ -763,3 +796,7 @@ impl Render for RepositoriesPage {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "repositories_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "repositories_manage_tests.rs"]
+mod manage_tests;

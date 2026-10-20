@@ -160,6 +160,19 @@ impl SettingsHost {
             .update(cx, |page, cx| page.inspect_root(root, window, cx));
     }
 
+    /// The `repo.identity_set` recovery: the Repositories page, with the
+    /// identity form of `root` and focus in its name field.
+    pub(crate) fn identity(
+        &mut self,
+        root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(SettingsPage::Repositories, window, cx);
+        self.repositories(window, cx)
+            .update(cx, |page, cx| page.manage_root(root, true, window, cx));
+    }
+
     fn back(&mut self, cx: &mut Context<Self>) {
         self.hide(cx);
         cx.emit(SettingsEvent::Closed);
@@ -264,7 +277,7 @@ pub(crate) type Wrapped = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpu
 /// tracks `focus` and carries the scroll marker: focus on the control,
 /// whose own focus may be private, brings the wrapper into view.
 pub(crate) fn wrapped(
-    id: &'static str,
+    id: impl Into<gpui_kit::ElementId>,
     label: impl Into<gpui_kit::SharedString>,
     focus: &FocusHandle,
     scroll: &ContentScroll,

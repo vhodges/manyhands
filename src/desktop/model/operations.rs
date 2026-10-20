@@ -22,7 +22,7 @@ use manyhands::{
         OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
         OperationNextAction, ProgressStage,
     },
-    results::{RecoveryAction, RecoveryActionKind},
+    results::{Outcome, RecoveryAction, RecoveryActionKind},
 };
 
 use super::{
@@ -71,6 +71,9 @@ pub(crate) struct Changed {
     /// Those whose request could change items (`Intent::changes_items`,
     /// ruling R-B2): their open tabs are read again too.
     pub items: BTreeSet<RepoKey>,
+    /// Those whose registration a finished `repo remove` took out: their
+    /// tabs close and their selection goes (design, Repositories).
+    pub removed: BTreeSet<RepoKey>,
 }
 
 impl Changed {
@@ -126,9 +129,14 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                // Only a removal that succeeded took its registration out:
+                // a refused one left it, and one whose end state already
+                // held found it gone or another in its place.
+                let removed = envelope.outcome == Outcome::Success;
                 let root = self.request(id).and_then(|request| {
                     let root = request.intent.root()?.to_str()?.to_owned();
-                    Some((root, request.intent.changes_items()))
+                    let removed = removed && matches!(request.intent, Intent::RepoRemove { .. });
+                    Some((root, request.intent.changes_items(), removed))
                 });
                 self.set(
                     id,
@@ -140,7 +148,10 @@ impl Operations {
                         envelope.message,
                     ),
                 );
-                if let Some((root, items)) = root {
+                if let Some((root, items, removed)) = root {
+                    if removed {
+                        self.changed.removed.insert(root.clone());
+                    }
                     self.changed.insert(root, items);
                 }
             }
@@ -266,6 +277,8 @@ pub(crate) enum RecoveryStep {
     Cancel(DesktopRequestId),
     /// Open the Repositories page with this root checked.
     Inspect(PathBuf),
+    /// Open the identity form of this root.
+    IdentitySet(PathBuf),
 }
 
 impl Operations {
@@ -326,6 +339,7 @@ impl Operations {
                 operation_id: operation()?,
             }),
             RecoveryControl::Inspect => RecoveryStep::Inspect(root()?),
+            RecoveryControl::IdentitySet => RecoveryStep::IdentitySet(root()?),
             RecoveryControl::Unavailable => return None,
         })
     }
@@ -384,6 +398,8 @@ pub(crate) enum RecoveryControl {
     Abandon,
     /// Open the Repositories page with the root checked.
     Inspect,
+    /// Open the identity form of the root.
+    IdentitySet,
     /// D1 does not offer it yet: shown as text, disabled.
     Unavailable,
 }
@@ -398,10 +414,11 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::OperationResume => RecoveryControl::Resume,
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
         RecoveryActionKind::RepoInspect => RecoveryControl::Inspect,
-        // The settings pages that run these arrive with Tasks 13 and 16.
-        RecoveryActionKind::RepoIdentitySet
-        | RecoveryActionKind::HostApprove
-        | RecoveryActionKind::HostReplace => RecoveryControl::Unavailable,
+        RecoveryActionKind::RepoIdentitySet => RecoveryControl::IdentitySet,
+        // The Hosts page that runs these arrives with Task 16.
+        RecoveryActionKind::HostApprove | RecoveryActionKind::HostReplace => {
+            RecoveryControl::Unavailable
+        }
     }
 }
 

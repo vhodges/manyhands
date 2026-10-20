@@ -5,7 +5,7 @@ use manyhands::{
         OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
         OperationOwner, ProgressEvent, ProgressStage, RequestId,
     },
-    results::{Effects, Envelope, RecoveryActionKind, ResultCode, Scope},
+    results::{Effects, Envelope, Outcome, RecoveryActionKind, ResultCode, Scope},
 };
 
 use super::{
@@ -264,6 +264,75 @@ fn a_finished_settings_request_does_not_mark_items_changed() {
     assert!(changed.items.is_empty());
 }
 
+/// A removal that succeeded names its root removed, so the workspace
+/// closes its tabs and lets its selection go. One that was refused, or
+/// found the registration already gone, does not.
+#[test]
+fn only_a_successful_removal_names_its_root_removed() {
+    let mut operations = Operations::default();
+    let removal = |id: u64, root: &str| {
+        let mut removal = request(id);
+        removal.intent = Intent::RepoRemove {
+            root: PathBuf::from(root),
+        };
+        removal
+    };
+    operations.apply(WorkerEvent::Queued(removal(1, "/fixture/a")));
+    operations.apply(WorkerEvent::Queued(removal(2, "/fixture/b")));
+    operations.apply(WorkerEvent::Queued(removal(3, "/fixture/c")));
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(1),
+        Box::new(Envelope::mutation(
+            "repo remove",
+            Scope::default(),
+            Outcome::Success,
+            ResultCode::Ok,
+        )),
+    ));
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(2),
+        Box::new(Envelope::failure(
+            "repo remove",
+            Scope::default(),
+            ResultCode::NotRepository,
+            vec![],
+        )),
+    ));
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(3),
+        Box::new(Envelope::mutation(
+            "repo remove",
+            Scope::default(),
+            Outcome::Noop,
+            ResultCode::AlreadyApplied,
+        )),
+    ));
+    let changed = operations.take_changed();
+    assert_eq!(
+        changed.removed.into_iter().collect::<Vec<_>>(),
+        ["/fixture/a".to_owned()]
+    );
+    assert_eq!(changed.roots.len(), 3);
+    assert!(changed.items.is_empty());
+}
+
+/// A refresh that succeeded names nothing removed.
+#[test]
+fn a_successful_refresh_names_nothing_removed() {
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(1),
+        Box::new(Envelope::mutation(
+            "index refresh",
+            Scope::default(),
+            Outcome::Success,
+            ResultCode::Ok,
+        )),
+    ));
+    assert!(operations.take_changed().removed.is_empty());
+}
+
 fn operation(
     family: OperationFamily,
     action: OperationAction,
@@ -389,7 +458,7 @@ fn recovery_actions_map_to_controls() {
         (Kind::RequestCancel, RecoveryControl::Cancel),
         (Kind::OperationResume, RecoveryControl::Resume),
         (Kind::OperationAbandon, RecoveryControl::Abandon),
-        (Kind::RepoIdentitySet, RecoveryControl::Unavailable),
+        (Kind::RepoIdentitySet, RecoveryControl::IdentitySet),
         (Kind::HostApprove, RecoveryControl::Unavailable),
         (Kind::HostReplace, RecoveryControl::Unavailable),
         (Kind::RepoInspect, RecoveryControl::Inspect),
@@ -425,6 +494,31 @@ fn the_inspect_recovery_names_the_root_to_check() {
     assert!(matches!(
         operations.recovery_step(id, &bare),
         Some(RecoveryStep::Inspect(root)) if root == std::path::Path::new("/fixture/a")
+    ));
+}
+
+/// `repo.identity_set` opens the identity form for the root it names, or
+/// for the request's own root when it names none.
+#[test]
+fn the_identity_recovery_names_the_root_to_set() {
+    use super::RecoveryStep;
+    use manyhands::results::RecoveryAction;
+
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    let named = RecoveryAction::new(
+        RecoveryActionKind::RepoIdentitySet,
+        [("root", "/fixture/elsewhere".into())],
+    );
+    let bare = RecoveryAction::new(RecoveryActionKind::RepoIdentitySet, []);
+    let id = DesktopRequestId(1);
+    assert!(matches!(
+        operations.recovery_step(id, &named),
+        Some(RecoveryStep::IdentitySet(root)) if root == std::path::Path::new("/fixture/elsewhere")
+    ));
+    assert!(matches!(
+        operations.recovery_step(id, &bare),
+        Some(RecoveryStep::IdentitySet(root)) if root == std::path::Path::new("/fixture/a")
     ));
 }
 

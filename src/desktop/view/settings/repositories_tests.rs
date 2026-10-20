@@ -38,14 +38,14 @@ use crate::desktop::{
 };
 
 /// The window over `fixture`, with the Repositories page shown.
-fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
+pub(super) fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
     let shell = Shell::open(fixture, cx);
     shell.keys("secondary-,", cx);
     assert!(shell.present("settings-repositories", cx));
     shell
 }
 
-fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
+pub(super) fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
     let host = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.settings.clone());
@@ -58,13 +58,13 @@ fn input(shell: &Shell, id: &str, cx: &mut TestAppContext) -> Entity<InputState>
     page.read_with(cx, |page, _| page.input(id))
 }
 
-fn value(shell: &Shell, id: &str, cx: &mut TestAppContext) -> String {
+pub(super) fn value(shell: &Shell, id: &str, cx: &mut TestAppContext) -> String {
     let input = input(shell, id, cx);
     input.read_with(cx, |input, _| input.value().to_string())
 }
 
 /// Sets the field `id` to `text`, as typing it would.
-fn set(shell: &Shell, id: &str, text: &str, cx: &mut TestAppContext) {
+pub(super) fn set(shell: &Shell, id: &str, text: &str, cx: &mut TestAppContext) {
     let input = input(shell, id, cx);
     shell.visual(cx).update(|window, cx| {
         input.update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
@@ -100,7 +100,7 @@ fn entries(path: &Path) -> Vec<PathBuf> {
     entries
 }
 
-fn registered(shell: &Shell) -> Vec<String> {
+pub(super) fn registered(shell: &Shell) -> Vec<String> {
     shell
         .fixture
         .service()
@@ -155,7 +155,11 @@ fn background_refreshes(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> 
     })
 }
 
-fn finished(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> (Outcome, ResultCode) {
+pub(super) fn finished(
+    shell: &Shell,
+    id: DesktopRequestId,
+    cx: &mut TestAppContext,
+) -> (Outcome, ResultCode) {
     let operations = shell.operations(cx);
     operations.read_with(cx, |operations, _| {
         match &operations.request(id).unwrap().state {
@@ -631,7 +635,7 @@ fn browse_fills_the_field_and_a_dismissal_leaves_it_unchanged(cx: &mut TestAppCo
     shell.run(cx);
 }
 
-fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandle {
+pub(super) fn control_focus(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandle {
     let page = page(shell, cx);
     page.read_with(cx, |page, _| page.control_focus(id))
 }

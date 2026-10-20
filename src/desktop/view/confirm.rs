@@ -55,6 +55,9 @@ pub(crate) const NOT_QUEUED: &str = "The request cannot be submitted again now: 
 pub(crate) const SECRET_REQUIRED: &str = "The passphrase is needed again.";
 pub(crate) const REQUESTED_KEY: &str = "Requested key";
 pub(crate) const PINNED_KEY: &str = "Pinned key";
+/// A repository removal's preview, which says it changes no file and
+/// nothing Git holds, says so in words too (design, Repositories).
+pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
 
 /// The answers that mean the preview no longer stands: the dialog offers
 /// Prepare again.
@@ -596,6 +599,14 @@ impl ConfirmDialog {
     fn preview_body(&self, cx: &App) -> Option<impl IntoElement + use<>> {
         let (preview, _) = self.preview.as_ref()?;
         let muted = cx.theme().muted_foreground;
+        let note = match &preview.details {
+            PreviewDetailsDto::RepositoryRemoval(removal)
+                if !removal.files_changed && !removal.git_state_changed =>
+            {
+                Some(text("confirm-note", FILES_REMAIN).text_sm())
+            }
+            _ => None,
+        };
         Some(
             v_flex()
                 .gap_1()
@@ -616,6 +627,7 @@ impl ConfirmDialog {
                         .enumerate()
                         .map(|(ix, (name, value))| named(("confirm-detail", ix), name, &value)),
                 )
+                .children(note)
                 .child(
                     text(
                         "confirm-expires",

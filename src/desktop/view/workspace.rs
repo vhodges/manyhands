@@ -162,6 +162,9 @@ pub(crate) struct Workspace {
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
+    /// Around the Unavailable selection's Remove, so its dialog can give
+    /// focus back.
+    remove_focus: FocusHandle,
 }
 
 impl Workspace {
@@ -264,6 +267,7 @@ impl Workspace {
             _ticket_events: ticket_events,
             repositories_pane,
             _repository_events: repository_events,
+            remove_focus: cx.focus_handle(),
         };
         workspace.load_repositories(cx);
         workspace
@@ -552,6 +556,16 @@ impl Workspace {
         if changed.is_empty() {
             return;
         }
+        // A removal that succeeded closes every tab of its root, so a
+        // later registration there inherits none, and lets its selection
+        // go. One started from the settings, the sidebar or a recovery
+        // action all end here; a refused one changes neither.
+        for root in &changed.removed {
+            self.close_repository(root, cx);
+            if self.navigation.forget(root) {
+                self.clear_lists(cx);
+            }
+        }
         let listed = self.listed().unwrap_or_default();
         for root in &changed.roots {
             if listed.contains(root) {
@@ -616,6 +630,50 @@ impl Workspace {
         self.settings
             .update(cx, |settings, cx| settings.inspect(root, window, cx));
         self.focus_region(Region::Content, window, cx);
+    }
+
+    /// The `repo.identity_set` recovery: the Repositories page's identity
+    /// form for `root`, with focus in its name field.
+    pub(crate) fn identity_in_settings(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.last_region = Some(Region::Content);
+        self.settings
+            .update(cx, |settings, cx| settings.identity(root, window, cx));
+    }
+
+    /// Remove on an Unavailable selection: the confirmation dialog for
+    /// `repo remove` of its root, which gives focus back to Remove.
+    pub(super) fn remove_repository(
+        &mut self,
+        root: RepoKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let origin = self.remove_focus.clone();
+        // The dialog takes focus at once, before a frame shows it here.
+        self.last_region = Some(Region::Content);
+        confirm(
+            Intent::RepoRemove {
+                root: PathBuf::from(root),
+            },
+            origin,
+            &self.services,
+            window,
+            cx,
+        );
+    }
+
+    /// Around the selection's Remove, whose own focus is the Kit's.
+    #[cfg(test)]
+    pub(crate) fn remove_focus(&self) -> FocusHandle {
+        self.remove_focus.clone()
     }
 
     /// What the content region shows.
@@ -750,6 +808,7 @@ impl Workspace {
                 self.services.worker().cancel(id);
             }
             Some(RecoveryStep::Inspect(root)) => self.inspect_in_settings(root, window, cx),
+            Some(RecoveryStep::IdentitySet(root)) => self.identity_in_settings(root, window, cx),
             None => {}
         }
         cx.notify();
@@ -831,7 +890,12 @@ impl Render for Workspace {
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
-        let selection = sidebar::selection(&self.navigation, cx);
+        let selection = sidebar::selection(
+            &self.navigation,
+            &self.remove_focus,
+            &self.content.scroll,
+            cx,
+        );
         let navigation = self.navigation_pane(cx);
         // A control that took focus since the last frame is scrolled into
         // view as it is drawn.

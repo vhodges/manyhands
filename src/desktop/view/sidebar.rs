@@ -8,10 +8,10 @@
 //! `ResultCode::message()`; no error is ever formatted into it.
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, IndexPath,
+        ActiveTheme, IndexPath,
         button::{Button, ButtonVariants},
         h_flex,
         list::{List, ListDelegate, ListItem, ListState as KitListState},
@@ -21,7 +21,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{ConfigurationDto, ConfigurationState};
 
-use super::workspace::Workspace;
+use super::{scroll::ContentScroll, workspace::Workspace};
 use crate::desktop::model::{
     list_state::{ListState, index_label},
     navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
@@ -318,9 +318,12 @@ impl RepositoriesPane {
 }
 
 /// The selected repository: its configuration and index, or why it is
-/// unavailable with Retry and Remove.
+/// unavailable with Retry and Remove. `remove_focus` is the focus Remove's
+/// wrapper tracks, and `scroll` the content region's.
 pub(crate) fn selection(
     navigation: &Navigation,
+    remove_focus: &FocusHandle,
+    scroll: &ContentScroll,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement + use<> {
     let Some(entry) = navigation.selected_entry() else {
@@ -372,18 +375,12 @@ pub(crate) fn selection(
                     .child(code.message()),
             )
             .child(div().text_xs().text_color(muted).child(code.as_str()))
-            .child(
-                h_flex().gap_2().child(retry(key, cx)).child(
-                    // Task 13 prepares `RepoRemove` for this root; until
-                    // then the control is shown and does nothing.
-                    div().id("selection-remove").test_support().child(
-                        Button::new("selection-remove-button")
-                            .danger()
-                            .label(REMOVE)
-                            .disabled(true),
-                    ),
-                ),
-            ),
+            .child(h_flex().gap_2().child(retry(key.clone(), cx)).child(remove(
+                key,
+                remove_focus,
+                scroll,
+                cx,
+            ))),
         Resolution::Busy => v_flex()
             .gap_2()
             .child(
@@ -419,6 +416,30 @@ fn retry(key: String, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
         Button::new("selection-retry-button").label(RETRY).on_click(
             cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_resolution(key.clone(), cx)),
         ),
+    )
+}
+
+/// Remove on an Unavailable entry: prepares `repo remove` of its root in
+/// the confirmation dialog. A Kit button, so Tab reaches it and Enter
+/// presses it; its wrapper tracks a focus of the workspace's, which the
+/// dialog gives back, and carries the scroll marker.
+fn remove(
+    key: String,
+    focus: &FocusHandle,
+    scroll: &ContentScroll,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement + use<> {
+    super::settings::wrapped(
+        "selection-remove",
+        REMOVE,
+        focus,
+        scroll,
+        Button::new("selection-remove-button")
+            .danger()
+            .label(REMOVE)
+            .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.remove_repository(key.clone(), window, cx)
+            })),
     )
 }
 

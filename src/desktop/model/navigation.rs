@@ -314,6 +314,21 @@ impl Navigation {
         self.generations.next(ViewScope::Selection)
     }
 
+    /// The registration of `key` was removed: when it is the selection,
+    /// the selection goes, with its kept entry and any resolution still
+    /// running, so the next list, which no longer gives it, leaves nothing
+    /// to resolve again. True when the selection went.
+    pub(crate) fn forget(&mut self, key: &str) -> bool {
+        if self.selected.as_deref() != Some(key) {
+            return false;
+        }
+        self.selected = None;
+        self.kept = None;
+        self.vanished = false;
+        self.generations.next(ViewScope::Selection);
+        true
+    }
+
     /// Resolves `key` again: Retry. It is selected as well.
     pub(crate) fn retry_resolution(&mut self, key: RepoKey) -> Stamp {
         self.select(key)

@@ -344,3 +344,24 @@ fn the_pane_can_be_switched() {
     navigation.set_pane(Pane::Tickets);
     assert_eq!(navigation.pane(), Pane::Tickets);
 }
+
+/// A removed registration lets the selection go when it was the one
+/// selected: its resolution still running is dropped, and the next list,
+/// which no longer gives it, keeps nothing and resolves nothing again.
+/// Another removed root leaves the selection as it is.
+#[test]
+fn forgetting_the_selected_root_clears_the_selection() {
+    let mut navigation = loaded(&["/r/a", "/r/b"]);
+    let resolving = navigation.select("/r/a".to_owned());
+    assert!(!navigation.forget("/r/b"));
+    assert_eq!(navigation.selected().map(String::as_str), Some("/r/a"));
+
+    assert!(navigation.forget("/r/a"));
+    assert_eq!(navigation.selected(), None);
+    assert!(!navigation.apply_resolution(resolving, failure(ResultCode::InvalidPath)));
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/b"])));
+    assert_eq!(navigation.selected(), None);
+    assert_eq!(navigation.take_vanished(), None);
+    assert!(navigation.entry("/r/a").is_none());
+}
