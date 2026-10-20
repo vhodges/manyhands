@@ -461,3 +461,28 @@ fn the_tab_keys_do_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     assert_eq!(strip(&shell, cx).len(), 2);
     assert_eq!(shown(&shell, cx), Some(1));
 }
+
+/// Ruling R-B2: a finished request whose intent cannot change items
+/// reads no open tab again; the tab keeps what it shows.
+#[gpui_kit::test]
+async fn a_finished_request_that_cannot_change_items_reads_no_tab(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    let reads = item_reads(&shell);
+    let id = shell.workspace.update(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::RemoteSelect {
+                root: a.clone(),
+                name: None,
+            },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    shell.until_ended(id, cx).await;
+    shell.run(cx);
+    assert_eq!(item_reads(&shell), reads, "no tab is read again");
+    assert_eq!(title(&shell, cx).as_deref(), Some("One"));
+}

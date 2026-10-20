@@ -217,3 +217,23 @@ fn a_key_command_without_a_key_store_is_not_built() {
     let intent = Intent::KeyClear;
     assert!(intent.build(None, || panic!("no store")).is_ok());
 }
+
+/// Ruling R-B2: only the intents that can change items make open tabs
+/// read again. Every variant is named.
+#[test]
+fn changes_items_names_the_intents_that_can_change_items() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    for intent in every_intent(&root) {
+        let expected = match variant(&intent) {
+            // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
+            // OperationResume, OperationAbandon.
+            0 | 1 | 7 | 8 | 17 | 18 => true,
+            // RepoRemove closes the tabs instead; the rest change
+            // settings, keys or hosts, never an item.
+            2..=6 | 9..=16 => false,
+            other => unreachable!("variant {other}"),
+        };
+        assert_eq!(intent.changes_items(), expected, "{}", intent.label());
+    }
+}

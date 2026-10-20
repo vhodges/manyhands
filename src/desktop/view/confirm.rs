@@ -295,8 +295,9 @@ impl ConfirmDialog {
                     && let Some(root) = self.intent.root().and_then(|root| root.to_str())
                 {
                     let root = root.to_owned();
+                    let items = self.intent.changes_items();
                     self.services.operations().update(cx, |operations, cx| {
-                        operations.mark_changed(root);
+                        operations.mark_changed(root, items);
                         cx.notify();
                     });
                 }

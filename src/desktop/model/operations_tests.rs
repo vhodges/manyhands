@@ -205,7 +205,8 @@ fn a_removed_request_is_not_a_dismissed_one_and_can_be_dismissed() {
 }
 
 /// A finished request says its repository may have changed, once; a
-/// request that never ran says nothing.
+/// request that never ran says nothing. A refresh can change items, so
+/// it names the repository's items changed too.
 #[test]
 fn a_finished_request_marks_its_repository_changed() {
     let mut operations = Operations::default();
@@ -218,16 +219,49 @@ fn a_finished_request_marks_its_repository_changed() {
         DesktopRequestId(1),
         Box::new(envelope),
     ));
+    let changed = operations.take_changed();
     assert_eq!(
-        operations.take_changed().into_iter().collect::<Vec<_>>(),
+        changed.roots.into_iter().collect::<Vec<_>>(),
+        ["/fixture/a".to_owned()]
+    );
+    assert_eq!(
+        changed.items.into_iter().collect::<Vec<_>>(),
         ["/fixture/a".to_owned()]
     );
     assert!(operations.take_changed().is_empty());
-    operations.mark_changed("/fixture/b".to_owned());
+    operations.mark_changed("/fixture/b".to_owned(), false);
+    let changed = operations.take_changed();
     assert_eq!(
-        operations.take_changed().into_iter().collect::<Vec<_>>(),
+        changed.roots.into_iter().collect::<Vec<_>>(),
         ["/fixture/b".to_owned()]
     );
+    assert!(changed.items.is_empty());
+}
+
+/// Ruling R-B2: a finished request whose intent cannot change items
+/// marks its repository changed, for its lists and pending operations,
+/// but not its items, so no open tab reads again.
+#[test]
+fn a_finished_settings_request_does_not_mark_items_changed() {
+    let mut operations = Operations::default();
+    let mut remote = request(1);
+    remote.intent = Intent::RemoteAdd {
+        root: PathBuf::from("/fixture/a"),
+        name: "origin".to_owned(),
+        url: "ssh://git.example.invalid/a.git".to_owned(),
+    };
+    operations.apply(WorkerEvent::Queued(remote));
+    let envelope = Envelope::failure("remote add", Scope::default(), ResultCode::Busy, vec![]);
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(1),
+        Box::new(envelope),
+    ));
+    let changed = operations.take_changed();
+    assert_eq!(
+        changed.roots.into_iter().collect::<Vec<_>>(),
+        ["/fixture/a".to_owned()]
+    );
+    assert!(changed.items.is_empty());
 }
 
 fn operation(

@@ -497,8 +497,9 @@ impl Workspace {
     /// A worker event arrived: if quitting waits for a job that has now
     /// returned, quit. A repository a finished request may have changed
     /// is read again: its pending operations, its lists when it is
-    /// selected, its open tabs, and the repository list, whose index state
-    /// it shows. Each is read once, however many requests changed it.
+    /// selected, its open tabs when the request could change items, and
+    /// the repository list, whose index state it shows. Each is read once,
+    /// however many requests changed it.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         // The operation area shows the model.
         cx.notify();
@@ -511,7 +512,7 @@ impl Workspace {
             return;
         }
         let listed = self.listed().unwrap_or_default();
-        for root in &changed {
+        for root in &changed.roots {
             if listed.contains(root) {
                 self.load_pending(root.clone(), cx);
             }
@@ -519,11 +520,13 @@ impl Workspace {
         if self
             .navigation
             .selected()
-            .is_some_and(|selected| changed.contains(selected))
+            .is_some_and(|selected| changed.roots.contains(selected))
         {
             self.reload_lists(cx);
         }
-        self.reload_tabs(&changed, cx);
+        // Only a request that can change items reads the tabs again
+        // (ruling R-B2).
+        self.reload_tabs(&changed.items, cx);
         self.load_repositories(cx);
     }
 

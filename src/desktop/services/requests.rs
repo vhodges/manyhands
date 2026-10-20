@@ -358,6 +358,34 @@ impl Intent {
         }
     }
 
+    /// Whether the command can change the items of its repository, so
+    /// that its open tabs read their items again once it has finished
+    /// (ruling R-B2). Repository removal closes the tabs instead; the
+    /// identity, remote, key and host commands change no item.
+    pub(crate) fn changes_items(&self) -> bool {
+        match self {
+            Self::IndexRefresh { .. }
+            | Self::IndexRebuild { .. }
+            | Self::OperationResume { .. }
+            | Self::OperationAbandon { .. }
+            | Self::RepoCreate { .. }
+            | Self::RepoEnable { .. } => true,
+            Self::RepoRemove { .. }
+            | Self::RepoIdentitySet { .. }
+            | Self::RemoteAdd { .. }
+            | Self::RemoteRemove { .. }
+            | Self::RemoteSelect { .. }
+            | Self::KeyGenerate { .. }
+            | Self::KeyImport { .. }
+            | Self::KeySelect { .. }
+            | Self::KeyClear
+            | Self::KeyRemove { .. }
+            | Self::KeyDelete { .. }
+            | Self::HostApprove { .. }
+            | Self::HostReplace { .. } => false,
+        }
+    }
+
     /// The kind the backend's seam knows the job by.
     pub(crate) fn job_kind(&self) -> JobKind {
         match self {

@@ -5,6 +5,8 @@
 //! A finished request marks its repository changed, so the views that
 //! show it read it again: its lists, its pending operations and the
 //! repository list. A preview that found nothing to confirm marks it too.
+//! Only a request whose intent can change items marks its items changed,
+//! so that its open tabs read again (ruling R-B2).
 //!
 //! The recovery actions an envelope offers map to the controls the
 //! operation area shows; an action D1 does not offer yet is shown as
@@ -53,7 +55,31 @@ pub(crate) struct Operations {
     generations: Generations,
     /// Repositories a finished request may have changed, not yet read
     /// again.
-    changed: BTreeSet<RepoKey>,
+    changed: Changed,
+}
+
+/// What finished requests may have changed since the views last read.
+#[derive(Default, Debug, PartialEq, Eq)]
+pub(crate) struct Changed {
+    /// Every repository a finished request named: its lists, pending
+    /// operations and place in the repository list are read again.
+    pub roots: BTreeSet<RepoKey>,
+    /// Those whose request could change items (`Intent::changes_items`,
+    /// ruling R-B2): their open tabs are read again too.
+    pub items: BTreeSet<RepoKey>,
+}
+
+impl Changed {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+
+    fn insert(&mut self, root: RepoKey, items: bool) {
+        if items {
+            self.items.insert(root.clone());
+        }
+        self.roots.insert(root);
+    }
 }
 
 impl Operations {
@@ -96,11 +122,10 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
-                let root = self
-                    .request(id)
-                    .and_then(|request| request.intent.root())
-                    .and_then(|root| root.to_str())
-                    .map(str::to_owned);
+                let root = self.request(id).and_then(|request| {
+                    let root = request.intent.root()?.to_str()?.to_owned();
+                    Some((root, request.intent.changes_items()))
+                });
                 self.set(
                     id,
                     RequestState::Finished(
@@ -111,8 +136,8 @@ impl Operations {
                         envelope.message,
                     ),
                 );
-                if let Some(root) = root {
-                    self.changed.insert(root);
+                if let Some((root, items)) = root {
+                    self.changed.insert(root, items);
                 }
             }
             WorkerEvent::Removed(id) => self.set(id, RequestState::Removed),
@@ -144,13 +169,13 @@ impl Operations {
     }
 
     /// Says `root` may have changed, so the views that show it read it
-    /// again.
-    pub(crate) fn mark_changed(&mut self, root: RepoKey) {
-        self.changed.insert(root);
+    /// again; with `items`, its open tabs too.
+    pub(crate) fn mark_changed(&mut self, root: RepoKey, items: bool) {
+        self.changed.insert(root, items);
     }
 
-    /// The repositories marked changed since the last call.
-    pub(crate) fn take_changed(&mut self) -> BTreeSet<RepoKey> {
+    /// What was marked changed since the last call.
+    pub(crate) fn take_changed(&mut self) -> Changed {
         std::mem::take(&mut self.changed)
     }
 
