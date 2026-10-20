@@ -2079,6 +2079,43 @@ fn repo_enable_registers_a_repository_enabled_elsewhere_and_commits_nothing() {
     assert_eq!(plain.initializations(), 1);
 }
 
+/// A repository enabled in Git whose configuration names a publication
+/// remote this clone does not have: the domain refuses to register it,
+/// and so does its preview, before anything is written or confirmed.
+#[test]
+fn a_registration_whose_publication_remote_is_missing_is_refused_at_its_preview() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    support::commit_tracked_configuration(
+        &plain.fixture,
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"missing\"\n",
+    );
+    let before = desk.surroundings(&plain.root);
+
+    let refused = desk.prepare(&plain.enable());
+
+    assert_eq!(
+        refused.code,
+        ResultCode::InvalidRemote,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.data, None);
+    assert_eq!(desk.confirmation_rows(), 0);
+    assert!(!desk.registered(&plain.root));
+    assert_eq!(desk.surroundings(&plain.root), before);
+    // The domain refuses it the same way.
+    let error = desk
+        .service
+        .enable(support::enable_request(&plain.root))
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        manyhands::repository::RepositoryErrorKind::UnavailablePublicationRemote
+    );
+    assert!(!desk.registered(&plain.root));
+}
+
 /// The answer of a registration is lost before it is stored. The same
 /// request, sent again, is given the registration as its own.
 #[test]

@@ -51,7 +51,7 @@ use super::{
             EnableRepositoryOutcome, EnableRepositoryRequest, INITIALIZATION_MESSAGE,
             OperationFamily, RepositoryErrorKind, RepositoryOperation, RepositoryService,
             WorktreeState, canonical_configuration, canonical_repository_root, checked_out_branch,
-            read_configuration_for,
+            publication_remote_eligible, read_configuration_for,
             recovery::{FinalKind, JournalRow, LocalStep, PendingOperation},
             resolve_identity, validate_identity, worktree_state,
         },
@@ -202,6 +202,10 @@ enum State {
         configuration: ConfigurationInspection,
         /// Whether this data directory's registry holds the root.
         registered: bool,
+        /// Whether the publication remote a valid configuration names
+        /// can be published to from this clone. True when it names none,
+        /// or there is no valid configuration.
+        remote_eligible: bool,
     },
 }
 
@@ -422,6 +426,14 @@ fn is_registered(service: &RepositoryService, root: &Path) -> Result<bool, Answe
 /// directory did not hold, or that took up its own row, hands off there;
 /// one that wrote the configuration keeps that step as its last. `Err`
 /// when the journal could not be read.
+///
+/// One case is not told apart. A request whose own pending row has no
+/// step recorded, because it stopped before it registered, takes that
+/// row up on its retry and hands off. If another actor registered the
+/// root in this data directory meanwhile, the request answers `ok` with
+/// a local change where `already_applied` would be right. Nothing in the
+/// journal separates the two. The answer is harmless: the registration
+/// is made once whichever answer is given.
 fn registered_by_request(service: &RepositoryService, accepted: &Accepted) -> Result<bool, ()> {
     Ok(accepted
         .recorded_local_step(service)?
@@ -549,6 +561,15 @@ impl RepoBinding {
         let worktree = worktree_state(&repository, &root).map_err(refused)?;
         let configuration = read_configuration_for(&root, operation).map_err(refused)?;
         let registered = is_registered(service, &root)?;
+        let remote_eligible = match &configuration {
+            ConfigurationInspection::Valid(config) => match &config.publication_remote {
+                Some(remote) => {
+                    publication_remote_eligible(&repository, &root, remote).map_err(refused)?
+                }
+                None => true,
+            },
+            ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => true,
+        };
         let effective = match &self.identity {
             Some(_) => None,
             None => {
@@ -563,6 +584,7 @@ impl RepoBinding {
                 worktree,
                 configuration,
                 registered,
+                remote_eligible,
             },
             effective,
         })
@@ -606,6 +628,7 @@ impl RepoBinding {
                 worktree,
                 configuration,
                 registered,
+                remote_eligible,
             } => {
                 let observation = match head {
                     Head::Unborn {
@@ -647,6 +670,14 @@ impl RepoBinding {
                     // A registration made by another between the preview
                     // and the request changes what the request would do.
                     .text("registered", if *registered { "yes" } else { "no" })
+                    .text(
+                        "publication_remote",
+                        if *remote_eligible {
+                            "eligible"
+                        } else {
+                            "ineligible"
+                        },
+                    )
             }
         };
         observation.finish()
@@ -694,6 +725,13 @@ impl RepoBinding {
     /// whose configuration is the one the request asks for, which this
     /// data directory's registry holds. A registry that cannot be read
     /// is not known to hold it.
+    ///
+    /// The registration is required for a create as for an enable. So a
+    /// create whose repository is there but not registered here does not
+    /// hold its end state in two places: `observe_again` with no journal
+    /// row compares what it observes instead of finishing as a no-op, and
+    /// `ended`, for a lost answer with no commit of the request's, does
+    /// not answer `already_applied`.
     fn end_state_holds(&self, service: &RepositoryService, root: &Path) -> bool {
         is_repository_root(root)
             && read_configuration_for(root, self.operation())
@@ -711,6 +749,7 @@ impl RepoBinding {
                 worktree: _,
                 configuration,
                 registered,
+                remote_eligible: _,
             } => !registered && self.is_as_requested(configuration),
             State::Create { target: _ } => false,
         }
@@ -736,6 +775,7 @@ impl RepoBinding {
                 worktree,
                 configuration,
                 registered,
+                remote_eligible,
             } => {
                 let on_primary = match head {
                     Head::Unborn {
@@ -769,6 +809,11 @@ impl RepoBinding {
                         }
                         if *registered {
                             return Err(enabled(None));
+                        }
+                        // The domain refuses a publication remote this
+                        // clone cannot publish to before it registers.
+                        if !remote_eligible {
+                            return stopped(ResultCode::InvalidRemote);
                         }
                         return Ok(());
                     }
@@ -834,6 +879,7 @@ impl RepoBinding {
                     worktree: _,
                     configuration: _,
                     registered: _,
+                    remote_eligible: _,
                 } => Some(*commit),
                 State::Enable {
                     head:
@@ -845,6 +891,7 @@ impl RepoBinding {
                     worktree: _,
                     configuration: _,
                     registered: _,
+                    remote_eligible: _,
                 }
                 | State::Create { target: _ } => None,
             },
@@ -1410,6 +1457,7 @@ impl Confirmed for RepoBinding {
             worktree: _,
             configuration: _,
             registered: _,
+            remote_eligible: _,
         } = &observed.state
             && *name != self.primary_branch
         {
