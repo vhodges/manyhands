@@ -14,8 +14,9 @@
 //! If the request is answered with a stale confirmation, or the state the
 //! preview showed has changed and the library offers a new preview, the
 //! dialog shows that answer and Prepare again, which takes a fresh
-//! preview under the same desktop request and request ID. Any other answer closes the dialog: the operation area
-//! holds it. Text is the envelope's message, the code and fixed strings.
+//! preview under the same desktop request and request ID. Any other
+//! answer closes the dialog: the operation area holds it. Text is the
+//! envelope's message, the code and fixed strings.
 
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement,

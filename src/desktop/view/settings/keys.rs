@@ -375,6 +375,17 @@ impl KeysPage {
         self.load(cx);
     }
 
+    /// The page is no longer shown: empties both masked inputs, and with
+    /// them their undo history, if they hold anything.
+    pub(crate) fn forget_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let held = [PASSPHRASE_FIELD, CONFIRMATION_FIELD]
+            .iter()
+            .any(|id| !self.inputs[id].read(cx).value().is_empty());
+        if held {
+            self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
+        }
+    }
+
     fn focus(&mut self, id: String, cx: &mut Context<Self>) -> FocusHandle {
         self.focus
             .entry(id)

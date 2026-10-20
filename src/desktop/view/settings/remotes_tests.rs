@@ -407,6 +407,44 @@ async fn adding_a_remote_whose_name_is_taken_shows_its_typed_failure(cx: &mut Te
     assert_eq!(remote_url(&root, "origin").as_deref(), Some(HTTPS_URL));
 }
 
+/// A refused add of a URL with a password: the library answers
+/// `remote_name_conflict`, and the password is in no request field, no
+/// operation-area text and nothing the window shows.
+#[gpui_kit::test]
+async fn a_refused_add_of_a_url_with_a_password_keeps_it_out_of_everything_shown(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.add_remote(&root, "origin", HTTPS_URL);
+    let shell = remotes(fixture, &root, cx);
+
+    add(&shell, "origin", &with_password(), cx);
+    let id = adds(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    let (outcome, code) = finished(&shell, id, cx);
+    assert_ne!(outcome, Outcome::Success);
+    assert_eq!(code, ResultCode::RemoteNameConflict);
+    assert_eq!(remote_url(&root, "origin").as_deref(), Some(HTTPS_URL));
+
+    let fields = request_fields(&shell, cx);
+    assert!(!fields.is_empty());
+    assert!(
+        fields.iter().all(|field| !field.contains(SENTINEL)),
+        "{fields:?}"
+    );
+    shell.keys("secondary-4", cx);
+    let shown = window_text(&shell, cx);
+    assert!(!shown.is_empty());
+    assert!(
+        shown.iter().all(|text| !text.contains(SENTINEL)),
+        "{shown:?}"
+    );
+    let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
+    assert_eq!(notifications, 0);
+}
+
 /// Add with no name, or no location, says so and asks nothing.
 #[gpui_kit::test]
 fn adding_with_an_empty_field_says_so(cx: &mut TestAppContext) {

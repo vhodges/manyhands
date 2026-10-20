@@ -601,8 +601,9 @@ impl Workspace {
         }
         // A removal that succeeded, or found the registration already
         // gone, closes every tab of its root, so a later registration
-        // there inherits none, and lets its selection go. One started from the settings, the sidebar or a recovery
-        // action all end here; a refused one changes neither.
+        // there inherits none, and lets its selection go. One started from
+        // the settings, the sidebar or a recovery action all end here; a
+        // refused one changes neither.
         for root in &changed.removed {
             self.close_repository(root, cx);
             if self.navigation.forget(root) {
@@ -1022,6 +1023,8 @@ impl Render for Workspace {
         let content = if self.settings.read(cx).is_shown() {
             content.child(self.settings.clone())
         } else {
+            self.settings
+                .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
             content.children(self.content(window, cx)).child(selection)
         };
         let top = h_flex()

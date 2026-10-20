@@ -152,7 +152,19 @@ impl SettingsHost {
         self.selection = selection;
     }
 
-    /// Shows the tabs again. The pages are kept, with what they hold.
+    /// Empties the Keys page's masked inputs unless that page is the shown
+    /// one: a typed passphrase does not outlive the page being shown.
+    pub(crate) fn forget_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shown != Shown::Settings(SettingsPage::Keys)
+            && let Some(keys) = self.keys.clone()
+        {
+            keys.update(cx, |page, cx| page.forget_passphrase(window, cx));
+        }
+    }
+
+    /// Shows the tabs again. The pages are kept, with what they hold,
+    /// except the Keys page's typed passphrase, which the next draw of
+    /// the workspace empties (`forget_passphrase`).
     pub(crate) fn hide(&mut self, cx: &mut Context<Self>) {
         if self.is_shown() {
             self.shown = Shown::Tabs;
@@ -347,6 +359,7 @@ impl SettingsHost {
 
 impl Render for SettingsHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.forget_passphrase(window, cx);
         let Shown::Settings(shown) = self.shown else {
             return div().id("settings-hidden").into_any_element();
         };

@@ -343,6 +343,29 @@ fn a_mismatched_confirmation_is_refused_before_any_job(cx: &mut TestAppContext) 
     assert!(listed(&shell).is_empty());
 }
 
+/// A typed passphrase does not outlive the page being shown: switching to
+/// another settings page, or closing the settings, empties both masked
+/// inputs.
+#[gpui_kit::test]
+fn a_typed_passphrase_is_emptied_when_the_page_is_hidden(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let shell = keys(Fixture::new(), cx);
+
+    type_into(&shell, PASSPHRASE, SENTINEL, cx);
+    type_into(&shell, CONFIRMATION, SENTINEL, cx);
+    assert_eq!(value(&shell, PASSPHRASE, cx), SENTINEL);
+    shell.click(("settings-page", 0usize), cx);
+    assert_eq!(value(&shell, PASSPHRASE, cx), "");
+    assert_eq!(value(&shell, CONFIRMATION, cx), "");
+    shell.click(("settings-page", 2usize), cx);
+
+    type_into(&shell, PASSPHRASE, SENTINEL, cx);
+    type_into(&shell, CONFIRMATION, SENTINEL, cx);
+    shell.click("settings-close", cx);
+    assert_eq!(value(&shell, PASSPHRASE, cx), "");
+    assert_eq!(value(&shell, CONFIRMATION, cx), "");
+}
+
 /// Holds the key registry's write lease, as another call would: a key
 /// generation answers `busy`.
 fn hold_registry(shell: &Shell) -> manyhands::repository::LeaseHolderForTesting {
