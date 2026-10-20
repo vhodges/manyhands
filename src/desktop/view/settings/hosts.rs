@@ -290,6 +290,17 @@ impl HostsPage {
 
     /// The code of the answer to the page's latest Check host, once it has
     /// one and it is of the repository the page works on.
+    /// The focus the wrapper `id` tracks.
+    #[cfg(test)]
+    pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
+        self.focus[id].clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn observing_id(&self) -> Option<DesktopRequestId> {
+        self.observing.as_ref().map(|observing| observing.id)
+    }
+
     #[cfg(test)]
     pub(crate) fn observed_code(&self) -> Option<manyhands::results::ResultCode> {
         self.current()?.answer.as_ref().map(|answer| answer.code)
@@ -488,8 +499,8 @@ impl HostsPage {
         }
     }
 
-    /// The confirmation dialog for `trust`. Focus goes back to what held
-    /// it when the dialog closes, else to Check host.
+    /// The confirmation dialog for `trust`. Focus goes to Check host when
+    /// the dialog closes.
     pub(crate) fn confirm_trust(
         &mut self,
         trust: Trust,
@@ -501,9 +512,10 @@ impl HostsPage {
         }
         let intent = trust.intent();
         debug_assert!(intent.confirmed());
-        let origin = window
-            .focused(cx)
-            .unwrap_or_else(|| self.focus[CHECK_ID].clone());
+        // Focus goes back to Check host, never to Approve or Replace: a
+        // successful request lets the answer that drew them go, and focus
+        // put back on a control no longer drawn would be lost.
+        let origin = self.focus[CHECK_ID].clone();
         confirm(intent, origin, &self.services, window, cx);
     }
 

@@ -20,22 +20,22 @@ use std::{fs, path::Path, sync::mpsc, thread, time::Duration};
 use gpui_kit::{Entity, FocusHandle, TestAppContext, component::WindowExt};
 use manyhands::{
     repository::{
-        HostPinDto, SharedKeyId,
+        HostObservationDto, HostPinDto, SharedKeyId,
         keys::{
             KeySourceToken, PassphraseResponse, SessionCredentialProvider, SessionCredentials,
             UnlockReason, UnlockRequest,
         },
         transport::SshAuthority,
     },
-    results::ResultCode,
+    results::{Envelope, Outcome, ResultCode, Scope},
 };
 
 use super::{
-    CANCEL_UNAVAILABLE, CONNECTING, HostsPage, NO_PINS, NO_REPOSITORY, NO_SSH_PUBLICATION, Trust,
-    authority_line, chosen_line, key_line,
+    CANCEL_UNAVAILABLE, CONNECTING, DIFFERENT, HostsPage, MATCHES, NO_PINS, NO_REPOSITORY,
+    NO_SSH_PUBLICATION, NOT_PINNED, PINNED, Trust, authority_line, chosen_line, key_line,
 };
 use crate::desktop::{
-    services::JobKind,
+    services::{JobKind, requests::Intent, worker::WorkerEvent},
     test_support::fixtures::{Fixture, NoPassphrase, SSH_HOST, SSH_PORT},
     view::{
         confirm::{CONFIRM, PINNED_KEY, REQUESTED_KEY},
@@ -505,4 +505,231 @@ async fn focus_returns_to_check_host_after_a_prompt(cx: &mut TestAppContext) {
     assert!(shell.frame(cx, |window, _| check.is_focused(window)));
     held.release();
     until_observed(&shell, cx).await;
+}
+
+/// What a host observation answers when it connected: built here as test
+/// input to the desktop's own model (ruling R-T16b), since no desktop test
+/// can connect. Production code never builds one.
+fn observed(pinned: Option<&str>, presented: &str) -> HostObservationDto {
+    HostObservationDto {
+        host: SSH_HOST.to_owned(),
+        port: SSH_PORT,
+        fetch: true,
+        push: true,
+        presented_algorithm: ALGORITHM.to_owned(),
+        presented_fingerprint: presented.to_owned(),
+        pinned_algorithm: pinned.map(|_| ALGORITHM.to_owned()),
+        pinned_fingerprint: pinned.map(str::to_owned),
+        reapproval_required: false,
+    }
+}
+
+/// The page's verdict on what a host presented, beside its pin.
+#[test]
+fn the_verdict_compares_the_presented_key_with_the_pin() {
+    assert!(matches!(
+        super::verdict(&observed(None, NEW)),
+        super::Verdict::NotPinned
+    ));
+    assert!(matches!(
+        super::verdict(&observed(Some(NEW), NEW)),
+        super::Verdict::Matches
+    ));
+    assert!(matches!(
+        super::verdict(&observed(Some(OLD), NEW)),
+        super::Verdict::Different {
+            algorithm: ALGORITHM,
+            fingerprint: OLD
+        }
+    ));
+    let mut other_algorithm = observed(Some(NEW), NEW);
+    other_algorithm.pinned_algorithm = Some("ssh-rsa".to_owned());
+    assert!(matches!(
+        super::verdict(&other_algorithm),
+        super::Verdict::Different { .. }
+    ));
+}
+
+/// Starts Check host with the worker's observation held, and answers it
+/// with `answer` through the request model, as the worker's event would.
+/// Gives the hold, which the test keeps until it ends.
+fn answer_check(
+    shell: &Shell,
+    answer: HostObservationDto,
+    cx: &mut TestAppContext,
+) -> crate::desktop::test_support::delaying::JobGate {
+    let held = shell.backend.hold_job(JobKind::ObserveHost);
+    shell.click("hosts-check", cx);
+    held.wait_reached();
+    let id = page(shell, cx)
+        .read_with(cx, |page, _| page.observing_id())
+        .expect("Check host started");
+    let envelope = Envelope::read_success("host observe", Scope::default(), answer);
+    shell.operations(cx).update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::HostObserved(id, envelope));
+        cx.notify();
+    });
+    shell.run(cx);
+    held
+}
+
+/// An unpinned host shows its key and Approve, whose preview is of
+/// `host approve` with the key presented.
+#[gpui_kit::test]
+async fn an_unpinned_host_offers_approve_of_the_presented_key(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = hosts(fixture, Some(&root), cx);
+    let _held = answer_check(&shell, observed(None, NEW), cx);
+    assert_eq!(
+        shell.label("hosts-observed-verdict", cx).as_deref(),
+        Some(NOT_PINNED)
+    );
+    assert_eq!(
+        shell.label("hosts-observed-fingerprint", cx),
+        Some(format!("Fingerprint: {NEW}"))
+    );
+    assert!(!shell.present("hosts-replace", cx));
+    shell.click("hosts-approve", cx);
+    assert_eq!(
+        shell.label("confirm-command", cx).as_deref(),
+        Some(
+            Intent::HostApprove {
+                root: root.clone(),
+                authority: authority(),
+                algorithm: String::new(),
+                fingerprint: String::new(),
+            }
+            .label()
+        )
+    );
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    let details = shell.rows("confirm-detail", cx);
+    assert!(
+        details.contains(&format!("{REQUESTED_KEY}: {}", key_line(ALGORITHM, NEW))),
+        "{details:?}"
+    );
+    shell.keys("escape", cx);
+    assert!(pins(&shell).is_empty());
+}
+
+/// A host pinned to another key shows the pin and Replace, whose preview
+/// is of `host replace` with the pin as the old key.
+#[gpui_kit::test]
+async fn a_host_pinned_to_another_key_offers_replace_of_that_pin(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    fixture.pin_host(ALGORITHM, OLD);
+    let shell = hosts(fixture, Some(&root), cx);
+    let _held = answer_check(&shell, observed(Some(OLD), NEW), cx);
+    assert_eq!(
+        shell.label("hosts-observed-verdict", cx).as_deref(),
+        Some(DIFFERENT)
+    );
+    assert_eq!(
+        shell.label("hosts-observed-pinned", cx),
+        Some(format!("{PINNED}: {}", key_line(ALGORITHM, OLD)))
+    );
+    assert!(!shell.present("hosts-approve", cx));
+    shell.click("hosts-replace", cx);
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    let details = shell.rows("confirm-detail", cx);
+    assert!(
+        details.contains(&format!("{REQUESTED_KEY}: {}", key_line(ALGORITHM, NEW))),
+        "{details:?}"
+    );
+    assert!(
+        details.contains(&format!("{PINNED_KEY}: {}", key_line(ALGORITHM, OLD))),
+        "{details:?}"
+    );
+    shell.keys("escape", cx);
+    assert_eq!(pins(&shell)[0].pinned_fingerprint, OLD);
+}
+
+/// A host that presents its pin says so and offers neither control.
+#[gpui_kit::test]
+async fn a_host_that_presents_its_pin_offers_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    fixture.pin_host(ALGORITHM, OLD);
+    let shell = hosts(fixture, Some(&root), cx);
+    let _held = answer_check(&shell, observed(Some(OLD), OLD), cx);
+    assert_eq!(
+        shell.label("hosts-observed-verdict", cx).as_deref(),
+        Some(MATCHES)
+    );
+    assert!(!shell.present("hosts-approve", cx));
+    assert!(!shell.present("hosts-replace", cx));
+}
+
+/// After a successful approval the answer that offered it goes, with its
+/// Approve, and focus lands on Check host, which is drawn. The approval's
+/// success is delivered to the request model as its worker event would
+/// be (ruling R-T16b): a real one needs a host.
+#[gpui_kit::test]
+async fn a_successful_approval_clears_the_answer_and_focuses_check_host(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = hosts(fixture, Some(&root), cx);
+    let observing = answer_check(&shell, observed(None, NEW), cx);
+    // The worker's own answer, which comes after, is not taken: the page
+    // keeps the first answer to its Check host.
+    observing.release();
+    let operations = shell.operations(cx);
+    wait_until(cx, &operations, |operations, _| {
+        operations.observed_any() && !shell_observed_is_success(operations)
+    })
+    .await;
+    assert_eq!(
+        shell.label("hosts-observed-verdict", cx).as_deref(),
+        Some(NOT_PINNED)
+    );
+    let approving = shell.backend.hold_job(JobKind::HostApprove);
+    // As a keyboard user has it: focus on Approve when it is pressed.
+    let approve = page(&shell, cx).read_with(cx, |page, _| page.control_focus("hosts-approve"));
+    shell
+        .visual(cx)
+        .update(|window, cx| window.focus(&approve, cx));
+    shell.click("hosts-approve", cx);
+    shell.click("confirm-ok", cx);
+    approving.wait_reached();
+    shell.run(cx);
+    let id = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::HostApprove { .. })
+    })[0];
+    shell.operations(cx).update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Finished(
+            id,
+            Box::new(Envelope::mutation(
+                "host approve",
+                Scope::default(),
+                Outcome::Success,
+                ResultCode::Ok,
+            )),
+        ));
+        cx.notify();
+    });
+    shell.run(cx);
+
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(!shell.present("hosts-approve", cx));
+    assert!(!shell.present("hosts-observed-verdict", cx));
+    let check = check_focus(&shell, cx);
+    assert!(shell.present("hosts-check", cx));
+    assert!(shell.frame(cx, |window, _| check.is_focused(window)));
+}
+
+/// Whether the last observation the model holds is a success: false once
+/// the worker's own answer, which cannot connect, has replaced the one the
+/// test delivered.
+fn shell_observed_is_success(operations: &crate::desktop::model::operations::Operations) -> bool {
+    operations.last_observation_succeeded()
 }

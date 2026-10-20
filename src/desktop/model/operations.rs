@@ -194,6 +194,14 @@ impl Operations {
         self.observed.is_some()
     }
 
+    /// Whether the last host observation answered is a success.
+    #[cfg(test)]
+    pub(crate) fn last_observation_succeeded(&self) -> bool {
+        self.observed
+            .as_ref()
+            .is_some_and(|(_, envelope)| envelope.outcome == Outcome::Success)
+    }
+
     /// Whether a prompt waits to be shown.
     #[cfg(test)]
     pub(crate) fn has_prompt(&self) -> bool {
