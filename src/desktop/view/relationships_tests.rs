@@ -407,3 +407,58 @@ async fn a_refresh_reads_the_relationships_again_in_place(cx: &mut TestAppContex
     dependents.sort();
     assert_eq!(dependents, [DEPENDENT, LATE]);
 }
+
+/// A focused row's focus follows its ticket, not its place: a reload that
+/// reorders its group leaves the same ticket's row focused, and Enter
+/// opens that ticket.
+#[gpui_kit::test]
+fn a_focused_row_keeps_its_ticket_when_a_reload_reorders_its_group(cx: &mut TestAppContext) {
+    let deps = |first: &str, second: &str| format!("deps:\n  - {first}\n  - {second}\n");
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, DEP_OPEN, "First", "");
+        fixture.commit_ticket(root, LATE, "Second", "");
+        fixture.commit_ticket(root, MAIN, "Main", &deps(DEP_OPEN, LATE));
+    });
+    open(&shell, ticket(&root, MAIN), cx);
+    let focused = |shell: &Shell, ix: usize, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| {
+            window
+                .try_find(("rel-dependency", ix))
+                .and_then(|row| row.focused())
+                == Some(true)
+        })
+    };
+    shell.keys("secondary-3", cx);
+    let mut presses = 0;
+    while !focused(&shell, 0, cx) {
+        presses += 1;
+        assert!(presses < 60, "Tab never reached the first dependency");
+        shell.keys("tab", cx);
+    }
+    assert_eq!(
+        shell.label(cell("dependency", 0, "id"), cx).as_deref(),
+        Some(DEP_OPEN)
+    );
+
+    shell
+        .fixture
+        .commit_ticket(&root, MAIN, "Main", &deps(LATE, DEP_OPEN));
+    shell.fixture.refresh(&root);
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .unwrap();
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+    assert_eq!(
+        shell.label(cell("dependency", 0, "id"), cx).as_deref(),
+        Some(LATE)
+    );
+    assert!(focused(&shell, 1, cx), "focus moved with its ticket");
+    assert!(!focused(&shell, 0, cx));
+
+    shell.press("enter", cx);
+    assert_eq!(opened(&shell, cx), Some(ticket(&root, DEP_OPEN)));
+}

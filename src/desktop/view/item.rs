@@ -46,6 +46,7 @@ use manyhands::{
 };
 
 use super::{
+    relationships::RowKey,
     sidebar::RETRY,
     tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
 };
@@ -87,9 +88,11 @@ pub(crate) struct ItemPane {
     /// The tab's load: one read job, its calls one after another under one
     /// stamp. Replacing it drops the last.
     read: Option<Task<()>>,
-    /// The focus of each relationship row that can be opened, by its row
-    /// name and position.
-    pub(super) row_focus: HashMap<(&'static str, usize), FocusHandle>,
+    /// The focus of each relationship row that can be opened, by its
+    /// group's row name, its ticket's ID and which row of that ID in the
+    /// group it is, so it follows its ticket when a reload reorders the
+    /// group. Only the rows drawn in the last frame keep theirs.
+    pub(super) row_focus: HashMap<RowKey, FocusHandle>,
     /// The index refresh Refresh asked for; the item is read again when it
     /// ends.
     refreshing: Option<DesktopRequestId>,
@@ -850,6 +853,10 @@ impl Render for ItemPane {
             Some(_) => self.relationships_panel(window, cx),
             None => None,
         };
+        if relationships.is_none() {
+            // No row is drawn, so none keeps its focus.
+            self.row_focus.clear();
+        }
         let body = item.as_ref().map(|item| {
             v_flex()
                 .gap_3()

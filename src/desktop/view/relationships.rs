@@ -11,6 +11,8 @@
 //! offers no action and no focus. A document's tab, and a nonconforming
 //! entry's, have no panel.
 
+use std::collections::{HashMap, HashSet};
+
 use gpui_kit::{
     AnyElement, ClickEvent, Context, EventEmitter, InteractiveElement, IntoElement, ParentElement,
     Role, StatefulInteractiveElement, Styled, TestSupportExt, Window,
@@ -30,6 +32,10 @@ use crate::desktop::model::{
         RelatedRow, resolution_label,
     },
 };
+
+/// A relationship row's focus key: its group's row name, its ticket's ID
+/// and which row of that ID in the group it is.
+pub(crate) type RowKey = (&'static str, String, usize);
 
 /// A row of the panel was activated: open its ticket, by ID, in a tab.
 pub(crate) struct OpenRelated(pub OpenTarget);
@@ -88,7 +94,8 @@ fn summary(row: &RelatedRow) -> String {
 
 impl ItemPane {
     /// The panel, for a ticket whose item read has landed; `None` for a
-    /// document or a nonconforming entry.
+    /// document or a nonconforming entry. The focus of a row not drawn
+    /// in this frame is dropped.
     pub(super) fn relationships_panel(
         &mut self,
         window: &Window,
@@ -110,24 +117,44 @@ impl ItemPane {
         let children_status = self
             .status("children", relationships.children(), cx)
             .into_any_element();
-        let dependencies = self.group(&DEPENDENCY_GROUP, None, &dependency_rows, true, window, cx);
+        let mut drawn = HashSet::new();
+        let dependencies = self.group(
+            &DEPENDENCY_GROUP,
+            None,
+            &dependency_rows,
+            true,
+            &mut drawn,
+            window,
+            cx,
+        );
         let dependents = self.group(
             &DEPENDENT_GROUP,
             Some(dependents_status),
             &dependent_rows,
             dependents_known,
+            &mut drawn,
             window,
             cx,
         );
-        let parent = self.group(&PARENT_GROUP, None, &parent_rows, true, window, cx);
+        let parent = self.group(
+            &PARENT_GROUP,
+            None,
+            &parent_rows,
+            true,
+            &mut drawn,
+            window,
+            cx,
+        );
         let children = self.group(
             &CHILD_GROUP,
             Some(children_status),
             &child_rows,
             children_known,
+            &mut drawn,
             window,
             cx,
         );
+        self.row_focus.retain(|key, _| drawn.contains(key));
         Some(
             v_flex()
                 .id("relationships")
@@ -145,13 +172,17 @@ impl ItemPane {
     }
 
     /// One group: its name, the state of its read when it has one, then
-    /// its rows, or None once it is known to have none.
+    /// its rows, or None once it is known to have none. Each row that can
+    /// be opened is keyed by its ticket's ID and which row of that ID in
+    /// the group it is, and recorded in `drawn`.
+    #[allow(clippy::too_many_arguments)]
     fn group(
         &mut self,
         group: &Group,
         status: Option<AnyElement>,
         rows: &[RelatedRow],
         known: bool,
+        drawn: &mut HashSet<RowKey>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -161,10 +192,16 @@ impl ItemPane {
                 .text_xs()
                 .text_color(muted)
         });
+        let mut seen: HashMap<&str, usize> = HashMap::new();
         let rows: Vec<AnyElement> = rows
             .iter()
             .enumerate()
-            .map(|(ix, row)| self.related_row(group, ix, row, window, cx))
+            .map(|(ix, row)| {
+                let nth = seen.entry(row.id.as_str()).or_default();
+                let key = (group.row, row.id.clone(), *nth);
+                *nth += 1;
+                self.related_row(group, ix, key, row, drawn, window, cx)
+            })
             .collect();
         v_flex()
             .id(group.group)
@@ -177,13 +214,17 @@ impl ItemPane {
             .children(empty)
     }
 
-    /// One related ticket. A resolved one is a tab stop and opens its
-    /// ticket when activated; the focused one is outlined.
+    /// One related ticket, drawn at `ix`. A resolved one is a tab stop,
+    /// its focus kept under `key`, and opens its ticket when activated;
+    /// the focused one is outlined.
+    #[allow(clippy::too_many_arguments)]
     fn related_row(
         &mut self,
         group: &Group,
         ix: usize,
+        key: RowKey,
         row: &RelatedRow,
+        drawn: &mut HashSet<RowKey>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -224,9 +265,10 @@ impl ItemPane {
             .child(text(cell("id"), row.id.clone()).text_xs().text_color(muted));
         match row.target(&self.repo().to_owned()) {
             Some(target) => {
+                drawn.insert(key.clone());
                 let focus = self
                     .row_focus
-                    .entry((group.row, ix))
+                    .entry(key)
                     // A handle of its own is a tab stop only when it says so.
                     .or_insert_with(|| cx.focus_handle().tab_stop(true))
                     .clone();
