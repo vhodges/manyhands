@@ -2116,6 +2116,48 @@ fn a_registration_whose_publication_remote_is_missing_is_refused_at_its_preview(
     assert!(!desk.registered(&plain.root));
 }
 
+/// A repository enabled and registered here whose configuration comes to
+/// name a publication remote this clone does not have. The domain
+/// refuses it before it asks whether the root is registered, and so
+/// does the preview: it is no no-op.
+#[test]
+fn a_registered_repository_whose_publication_remote_is_missing_is_refused_at_its_preview() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    assert_enabled(
+        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+    support::commit_tracked_configuration(
+        &plain.fixture,
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"missing\"\n",
+    );
+    assert!(desk.registered(&plain.root));
+    let before = desk.surroundings(&plain.root);
+
+    let refused = desk.prepare(&plain.enable());
+
+    assert_eq!(
+        refused.code,
+        ResultCode::InvalidRemote,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.data, None);
+    assert_eq!(desk.confirmation_rows(), 1, "only the first preview's");
+    assert_eq!(desk.surroundings(&plain.root), before);
+    let error = desk
+        .service
+        .enable(support::enable_request(&plain.root))
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        manyhands::repository::RepositoryErrorKind::UnavailablePublicationRemote
+    );
+    assert_eq!(registrations(&desk), 1);
+}
+
 /// The answer of a registration is lost before it is stored. The same
 /// request, sent again, is given the registration as its own.
 #[test]

@@ -760,6 +760,10 @@ impl RepoBinding {
     /// rejection, or a no-op when the repository is enabled as requested
     /// and registered here.
     ///
+    /// For a valid configuration the order is the domain's: the primary
+    /// branch it holds, then the prefix asked for, then the publication
+    /// remote it names, and only then whether the root is registered.
+    ///
     /// A repository enabled as requested that is not registered here is
     /// registered by the request, which commits nothing: the domain asks
     /// for no identity then, and neither does this.
@@ -807,13 +811,15 @@ impl RepoBinding {
                         if !self.is_as_requested(configuration) {
                             return stopped(ResultCode::InvalidInput);
                         }
-                        if *registered {
-                            return Err(enabled(None));
-                        }
                         // The domain refuses a publication remote this
-                        // clone cannot publish to before it registers.
+                        // clone cannot publish to before anything else it
+                        // does for an enabled repository, registered here
+                        // or not.
                         if !remote_eligible {
                             return stopped(ResultCode::InvalidRemote);
+                        }
+                        if *registered {
+                            return Err(enabled(None));
                         }
                         return Ok(());
                     }
