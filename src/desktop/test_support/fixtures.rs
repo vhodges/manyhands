@@ -174,6 +174,21 @@ impl Fixture {
         status: &str,
         deps: &[&str],
     ) {
+        self.create_related_ticket(root, id, title, status, deps, None);
+    }
+
+    /// Creates a ticket as `create_ticket_with_deps` does, with `parent`
+    /// through the create's own `parent`. Its short code is the one the
+    /// create derives.
+    pub(crate) fn create_related_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        status: &str,
+        deps: &[&str],
+        parent: Option<&str>,
+    ) {
         let created = self.execute(
             None,
             Mutation::TicketCreate(TicketCreateInput {
@@ -188,7 +203,7 @@ impl Fixture {
                     body: format!("Body of {title}.\n"),
                 },
                 deps: deps.iter().map(|dep| (*dep).to_owned()).collect(),
-                parent: None,
+                parent: parent.map(str::to_owned),
                 initials: None,
             }),
         );

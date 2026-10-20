@@ -19,7 +19,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use gpui_kit::{
     AnyElement, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled, Subscription,
+    TestSupportExt, Window,
     component::{
         ActiveTheme,
         button::{Button, ButtonVariants},
@@ -28,7 +29,7 @@ use gpui_kit::{
     div,
 };
 
-use super::{item::ItemPane, workspace::Workspace};
+use super::{item::ItemPane, relationships::OpenRelated, workspace::Workspace};
 use crate::desktop::model::{
     navigation::OpenTarget,
     stamp::{RepoKey, TabId, ViewScope},
@@ -45,6 +46,8 @@ pub(crate) struct Content {
     tabs: Tabs,
     panes: HashMap<TabId, Entity<ItemPane>>,
     focus: HashMap<TabId, FocusHandle>,
+    /// Each tab's subscription to its relationship rows.
+    related: HashMap<TabId, Subscription>,
 }
 
 impl Content {
@@ -60,6 +63,7 @@ impl Content {
     fn forget(&mut self, id: TabId) {
         self.panes.remove(&id);
         self.focus.remove(&id);
+        self.related.remove(&id);
     }
 }
 
@@ -96,6 +100,11 @@ impl Workspace {
         if opened {
             let services = self.services.clone();
             let pane = cx.new(|cx| ItemPane::new(target, ViewScope::Tab(id), services, cx));
+            // A relationship row opens its ticket in a tab of its own.
+            let related = cx.subscribe(&pane, |this, _, event: &OpenRelated, cx| {
+                this.open_item(event.0.clone(), cx)
+            });
+            self.content.related.insert(id, related);
             self.content.panes.insert(id, pane);
             self.content.focus.insert(id, cx.focus_handle());
         }

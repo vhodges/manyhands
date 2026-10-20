@@ -8,8 +8,8 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, TestAppContext, VisualTestContext, Window, WindowHandle,
-    component::Root, px, size, test::TestWindowExt,
+    App, ElementId, Entity, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext,
+    Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
 
 use super::workspace::Workspace;
@@ -145,6 +145,21 @@ impl Shell {
     pub(crate) fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
         let mut visual = self.visual(cx);
         visual.simulate_keystrokes(keystrokes);
+        visual.run_until_parked();
+    }
+
+    /// Presses and releases `key`, as a keyboard does. `keys` only presses:
+    /// GPUI clicks a focused element on Enter or Space when the key is
+    /// released.
+    pub(crate) fn press(&self, key: &str, cx: &mut TestAppContext) {
+        let keystroke = Keystroke::parse(key).unwrap();
+        let mut visual = self.visual(cx);
+        visual.simulate_event(KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        visual.simulate_event(KeyUpEvent { keystroke });
         visual.run_until_parked();
     }
 

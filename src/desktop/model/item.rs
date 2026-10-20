@@ -1,12 +1,15 @@
 //! The read-only item view's state: the item, read by ID or, for a
-//! nonconforming entry, by path, and its comments.
+//! nonconforming entry, by path, its comments and, for a ticket, its
+//! relationships.
 //!
 //! Its stamps are under the scope of the tab that shows it. Every text
 //! here is fixed or the library's own; nothing is formatted with `Debug`.
 
 use manyhands::{
+    canonical::ItemId,
     repository::{
-        CommentDto, CommentListDto, ItemContextDto, ItemContextKind, ItemDto, ProblemDto,
+        CommentDto, CommentListDto, DependencyTreeDto, ItemContextDto, ItemContextKind, ItemDto,
+        ItemDtoKind, ItemListDto, ProblemDto,
     },
     results::ProblemCode,
 };
@@ -15,6 +18,7 @@ use serde_json::Value;
 use super::{
     list_state::{ListState, Rows},
     navigation::OpenTarget,
+    relationships::Relationships,
     stamp::{Generations, Stamp, ViewScope},
 };
 use crate::desktop::services::ReadResult;
@@ -107,6 +111,8 @@ pub(crate) struct ItemView {
     /// `None` for a nonconforming entry, which has no ID to list comments
     /// of.
     comments: Option<ListState<CommentListDto>>,
+    /// `None` for anything but a ticket by ID.
+    relationships: Option<Relationships>,
     generations: Generations,
 }
 
@@ -114,11 +120,13 @@ impl ItemView {
     /// The view of `target`, whose reads are stamped under `scope`.
     pub(crate) fn new(target: OpenTarget, scope: ViewScope) -> Self {
         let comments = Self::comments_for(&target);
+        let relationships = Self::relationships_for(&target);
         Self {
             target,
             scope,
             item: ListState::Loading,
             comments,
+            relationships,
             generations: Generations::default(),
         }
     }
@@ -128,6 +136,68 @@ impl ItemView {
             OpenTarget::Item { .. } => Some(ListState::Loading),
             OpenTarget::Inspect { .. } => None,
         }
+    }
+
+    fn relationships_for(target: &OpenTarget) -> Option<Relationships> {
+        match target {
+            OpenTarget::Item {
+                kind: ItemDtoKind::Ticket,
+                ..
+            } => Some(Relationships::default()),
+            _ => None,
+        }
+    }
+
+    /// A ticket's relationships; `None` for a document or a nonconforming
+    /// entry.
+    pub(crate) fn relationships(&self) -> Option<&Relationships> {
+        self.relationships.as_ref()
+    }
+
+    /// The ticket's parent to read for its name, once the item read gave a
+    /// resolved one.
+    pub(crate) fn parent_to_read(&self) -> Option<ItemId> {
+        self.relationships.as_ref()?.parent_to_read()
+    }
+
+    /// Applies a relationship read when `stamp` is current and the view
+    /// has relationships. False when it is no longer wanted.
+    fn apply_relationship(
+        &mut self,
+        stamp: &Stamp,
+        apply: impl FnOnce(&mut Relationships),
+    ) -> bool {
+        if !self.generations.is_current(stamp) {
+            return false;
+        }
+        match &mut self.relationships {
+            Some(relationships) => {
+                apply(relationships);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The dependency tree read completed.
+    pub(crate) fn apply_dependents(
+        &mut self,
+        stamp: Stamp,
+        result: ReadResult<DependencyTreeDto>,
+    ) -> bool {
+        self.apply_relationship(&stamp, |relationships| {
+            relationships.apply_dependents(result)
+        })
+    }
+
+    /// The children read completed.
+    pub(crate) fn apply_children(&mut self, stamp: Stamp, result: ReadResult<ItemListDto>) -> bool {
+        self.apply_relationship(&stamp, |relationships| relationships.apply_children(result))
+    }
+
+    /// The parent's read completed.
+    pub(crate) fn apply_parent(&mut self, stamp: Stamp, result: ReadResult<ItemDto>) -> bool {
+        self.apply_relationship(&stamp, |relationships| relationships.apply_parent(result))
     }
 
     pub(crate) fn target(&self) -> &OpenTarget {
@@ -147,6 +217,7 @@ impl ItemView {
     pub(crate) fn load(&mut self) -> Stamp {
         self.item = ListState::Loading;
         self.comments = Self::comments_for(&self.target);
+        self.relationships = Self::relationships_for(&self.target);
         self.generations.next(self.scope.clone())
     }
 
@@ -162,6 +233,9 @@ impl ItemView {
     pub(crate) fn apply_item(&mut self, stamp: Stamp, result: ReadResult<ItemDto>) -> bool {
         if !self.generations.is_current(&stamp) {
             return false;
+        }
+        if let (ReadResult::Ok(item), Some(relationships)) = (&result, &mut self.relationships) {
+            relationships.set_item(item);
         }
         self.item = ListState::from_read(result, |item| {
             let index = Some(item.index.clone());

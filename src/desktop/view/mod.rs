@@ -9,6 +9,7 @@ pub(crate) mod item;
 pub(crate) mod lists;
 pub(crate) mod operations;
 pub(crate) mod quit;
+pub(crate) mod relationships;
 pub(crate) mod sidebar;
 pub(crate) mod tabs;
 pub(crate) mod tickets;

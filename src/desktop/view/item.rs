@@ -3,7 +3,8 @@
 //!
 //! The header gives the kind, title, short code and ID, with separate
 //! copy actions, then the lifecycle closure and the project status as
-//! separate fields. Provenance names the context kind, branch, worktree
+//! separate fields; a ticket's relationships panel follows them
+//! (`relationships.rs`). Provenance names the context kind, branch, worktree
 //! and head; nothing claims the copy equals or differs from the primary.
 //! An item with a context or branch problem shows a recovery view in its
 //! place: the problem codes, their guidance and paths, and no choice of
@@ -17,12 +18,12 @@
 //! reads the item again. Every failure is shown by its code's message and
 //! the code; no error is formatted.
 
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, ClipboardItem, Context, ElementId, Entity,
-    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
-    Subscription, Task, TestSupportExt, Window,
+    FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -33,7 +34,8 @@ use gpui_kit::{
     div, px,
 };
 use manyhands::{
-    repository::{ClosureState, CommentListDto, ItemDto, ItemDtoKind},
+    canonical::ItemId,
+    repository::{ClosureState, CommentListDto, DependencyDirection, ItemDto, ItemDtoKind},
     results::ResultCode,
 };
 
@@ -49,6 +51,7 @@ use crate::desktop::{
         },
         list_state::{ListState, Rows},
         navigation::OpenTarget,
+        relationships::RELATIONSHIP_PROBLEMS,
         stamp::{Stamp, ViewScope},
     },
     services::{
@@ -70,12 +73,21 @@ pub(crate) const COPY_SLUG: &str = "Copy short code";
 const COMMENT_INDENT: f32 = 16.;
 
 pub(crate) struct ItemPane {
-    model: ItemView,
+    pub(super) model: ItemView,
     services: Services,
     /// The item and comment reads, in parallel under one stamp; replacing
     /// them drops the last.
     item_read: Option<Task<()>>,
     comments_read: Option<Task<()>>,
+    /// A ticket's relationship reads, under the same stamp: its dependency
+    /// tree and its children beside the item, and its parent once the
+    /// item read names one.
+    dependents_read: Option<Task<()>>,
+    children_read: Option<Task<()>>,
+    parent_read: Option<Task<()>>,
+    /// The focus of each relationship row that can be opened, by its row
+    /// name and position.
+    pub(super) row_focus: HashMap<(&'static str, usize), FocusHandle>,
     /// The index refresh Refresh asked for; the item is read again when it
     /// ends.
     refreshing: Option<DesktopRequestId>,
@@ -102,6 +114,10 @@ impl ItemPane {
             services,
             item_read: None,
             comments_read: None,
+            dependents_read: None,
+            children_read: None,
+            parent_read: None,
+            row_focus: HashMap::new(),
             refreshing: None,
             source: None,
             _operations: operations,
@@ -137,8 +153,14 @@ impl ItemPane {
     #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
     fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
         self.comments_read = None;
+        self.dependents_read = None;
+        self.children_read = None;
+        self.parent_read = None;
         match self.model.target().clone() {
             OpenTarget::Item { repo, id, .. } => {
+                if self.model.relationships().is_some() {
+                    self.read_relationships(&repo, &id, stamp.clone(), cx);
+                }
                 let root = PathBuf::from(&repo);
                 let item = id.clone();
                 self.item_read = Some(self.services.read(
@@ -196,12 +218,82 @@ impl ItemPane {
         result: crate::desktop::services::ReadResult<ItemDto>,
         cx: &mut Context<Self>,
     ) {
-        if self.model.apply_item(stamp, result) {
+        if self.model.apply_item(stamp.clone(), result) {
+            self.read_parent(stamp, cx);
             cx.notify();
         }
     }
 
-    fn repo(&self) -> &str {
+    /// Reads a ticket's dependency tree and its children beside its item.
+    /// The tree is asked for in both directions to depth 1: `up` gives
+    /// the tickets that depend on it, and `down` the short code and title
+    /// of each it depends on, from the same snapshot.
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    fn read_relationships(
+        &mut self,
+        repo: &str,
+        id: &ItemId,
+        stamp: Stamp,
+        cx: &mut Context<Self>,
+    ) {
+        let (root, ticket) = (PathBuf::from(repo), id.clone());
+        self.dependents_read = Some(self.services.read(
+            ReadKind::Dependencies,
+            stamp.clone(),
+            move |service| {
+                let repo = service.resolve_repository(&root)?;
+                service.ticket_dependencies(&repo, &ticket, DependencyDirection::Both, Some(1))
+            },
+            cx,
+            |this: &mut Self, stamp, result, cx| {
+                if this.model.apply_dependents(stamp, result) {
+                    cx.notify();
+                }
+            },
+        ));
+        let (root, ticket) = (PathBuf::from(repo), id.clone());
+        self.children_read = Some(self.services.read(
+            ReadKind::Children,
+            stamp,
+            move |service| {
+                let repo = service.resolve_repository(&root)?;
+                service.ticket_children(&repo, &ticket)
+            },
+            cx,
+            |this: &mut Self, stamp, result, cx| {
+                if this.model.apply_children(stamp, result) {
+                    cx.notify();
+                }
+            },
+        ));
+    }
+
+    /// Reads the parent the item read named, when it is resolved, for its
+    /// short code and title.
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    fn read_parent(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
+        self.parent_read = None;
+        let Some(parent) = self.model.parent_to_read() else {
+            return;
+        };
+        let root = PathBuf::from(self.repo());
+        self.parent_read = Some(self.services.read(
+            ReadKind::Item,
+            stamp,
+            move |service| {
+                let repo = service.resolve_repository(&root)?;
+                service.show_item(&repo, &parent)
+            },
+            cx,
+            |this: &mut Self, stamp, result, cx| {
+                if this.model.apply_parent(stamp, result) {
+                    cx.notify();
+                }
+            },
+        ));
+    }
+
+    pub(super) fn repo(&self) -> &str {
         match self.model.target() {
             OpenTarget::Item { repo, .. } | OpenTarget::Inspect { repo, .. } => repo,
         }
@@ -267,7 +359,7 @@ impl ItemPane {
 }
 
 /// A piece of text a test reads by `id`.
-fn text(
+pub(super) fn text(
     id: impl Into<ElementId>,
     value: impl Into<String>,
 ) -> impl IntoElement + Styled + InteractiveElement {
@@ -309,7 +401,7 @@ impl ItemPane {
     /// A state that is not simply ready, in text; a failure by its code's
     /// message and its code, with Refresh for an item that is gone and
     /// Retry otherwise.
-    fn status<T: Rows>(
+    pub(super) fn status<T: Rows>(
         &self,
         name: &'static str,
         state: &ListState<T>,
@@ -544,13 +636,19 @@ impl ItemPane {
     }
 
     /// Every problem but the context ones the recovery view shows, with
-    /// its guidance and path.
+    /// its guidance and path, and for a ticket but its relationship
+    /// problems, which its panel lists.
     fn problems(&self, item: &ItemDto, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         v_flex().gap_1().children(
             item.problems
                 .iter()
                 .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code))
+                // A ticket's panel lists these under its groups.
+                .filter(|problem| {
+                    self.model.relationships().is_none()
+                        || !RELATIONSHIP_PROBLEMS.contains(&problem.code)
+                })
                 .enumerate()
                 .map(|(ix, problem)| {
                     v_flex()
@@ -756,11 +854,17 @@ impl Render for ItemPane {
         let item = self.model.item().rows().cloned();
         let identity = self.identity(item.as_ref(), cx);
         let status = self.status("item", self.model.item(), cx);
+        // A ticket's relationships, beside its fields once it is read.
+        let relationships = match &item {
+            Some(_) => self.relationships_panel(window, cx),
+            None => None,
+        };
         let body = item.as_ref().map(|item| {
             v_flex()
                 .gap_3()
                 .child(self.provenance(item, cx))
                 .child(self.fields(item, cx))
+                .children(relationships)
                 .child(self.problems(item, cx))
                 .child(self.metadata(item, cx))
                 .child(self.source(item, cx))
