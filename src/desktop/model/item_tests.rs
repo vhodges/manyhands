@@ -220,3 +220,32 @@ fn a_read_from_before_a_reload_is_dropped() {
     assert!(view.apply_item(second, ReadResult::Busy));
     assert!(matches!(view.item(), ListState::Busy));
 }
+
+/// A reload after the repository changed keeps what is shown until its
+/// reads land, so the source and its selection stay; a read from before
+/// it is still dropped, and what it reads replaces what was shown.
+#[test]
+fn a_reload_keeps_what_is_shown_until_its_reads_land() {
+    let (_fixture, item) = shown_ticket();
+    let mut view = ItemView::new(ticket_target(), ViewScope::Tab(TabId(1)));
+    let first = view.load();
+    assert!(view.apply_item(first.clone(), ReadResult::Ok(item.clone())));
+    assert!(view.apply_comments(first.clone(), ReadResult::Busy));
+
+    let second = view.reload();
+    assert_eq!(second.scope, ViewScope::Tab(TabId(1)));
+    assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
+    assert!(matches!(view.comments(), Some(ListState::Busy)));
+    assert!(!view.apply_item(first, ReadResult::Busy));
+    assert!(matches!(view.item(), ListState::Ready { .. }));
+
+    let failure = ReadFailure {
+        code: ResultCode::InvalidPath,
+        recovery: Vec::new(),
+    };
+    assert!(view.apply_item(second, ReadResult::Failed(failure)));
+    assert!(matches!(
+        view.item(),
+        ListState::Failed(failure) if failure.code == ResultCode::InvalidPath
+    ));
+}

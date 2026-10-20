@@ -1,9 +1,8 @@
 //! The read-only item view's state: the item, read by ID or, for a
 //! nonconforming entry, by path, and its comments.
 //!
-//! Where the stamps' scope comes from is the owner's choice: the single
-//! content item now, a tab later. Every text here is fixed or the
-//! library's own; nothing is formatted with `Debug`.
+//! Its stamps are under the scope of the tab that shows it. Every text
+//! here is fixed or the library's own; nothing is formatted with `Debug`.
 
 use manyhands::{
     repository::{
@@ -148,6 +147,14 @@ impl ItemView {
     pub(crate) fn load(&mut self) -> Stamp {
         self.item = ListState::Loading;
         self.comments = Self::comments_for(&self.target);
+        self.generations.next(self.scope.clone())
+    }
+
+    /// Starts reading the item and its comments again after its
+    /// repository changed, under the returned stamp. What is shown stays
+    /// until the reads land, so the source keeps its selection and focus;
+    /// a read asked before is dropped when it completes.
+    pub(crate) fn reload(&mut self) -> Stamp {
         self.generations.next(self.scope.clone())
     }
 

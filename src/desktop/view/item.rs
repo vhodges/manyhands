@@ -125,6 +125,15 @@ impl ItemPane {
         stamp
     }
 
+    /// Reads the item and its comments again after its repository may
+    /// have changed. What is shown, and the source's text field with its
+    /// selection and focus, stay until the reads land.
+    pub(crate) fn reload(&mut self, cx: &mut Context<Self>) -> Stamp {
+        let stamp = self.model.reload();
+        self.read(stamp.clone(), cx);
+        stamp
+    }
+
     #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
     fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
         self.comments_read = None;
@@ -591,13 +600,16 @@ impl ItemPane {
     /// Gives the read-only text the source the last read gave, making it
     /// when there is none yet. Nothing the user does there reaches the
     /// item: the text rejects every edit, and the view never writes.
+    ///
+    /// Only a read that gave the item changes it: while a read is in
+    /// flight, or after one that failed, the text field and its selection
+    /// stay, for the read that next gives the item. One whose file is not
+    /// UTF-8 has no text to keep.
     fn sync_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let source = self
-            .model
-            .item()
-            .rows()
-            .and_then(|item| item.source.clone());
-        let Some(source) = source else {
+        let Some(item) = self.model.item().rows() else {
+            return;
+        };
+        let Some(source) = item.source.clone() else {
             self.source = None;
             return;
         };

@@ -152,7 +152,7 @@ impl Workspace {
             }
             if let Some(pane) = self.content.panes.get(id) {
                 pane.update(cx, |pane, cx| {
-                    pane.load(cx);
+                    pane.reload(cx);
                 });
             }
         }

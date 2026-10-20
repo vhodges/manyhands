@@ -4,7 +4,7 @@
 
 use std::{fs, path::PathBuf};
 
-use gpui_kit::{TestAppContext, test::TestWindowExt};
+use gpui_kit::{Entity, TestAppContext, component::input::TextareaState, test::TestWindowExt};
 use manyhands::{repository::ItemDtoKind, results::ResultCode};
 
 use super::{CLOSE_TAB, SHOWN};
@@ -128,6 +128,13 @@ fn submit_refresh(
     })
 }
 
+fn source_state(shell: &Shell, cx: &mut TestAppContext) -> Option<Entity<TextareaState>> {
+    shell.frame(cx, |_, _| ());
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace.item_pane()?.read(cx).source_state().cloned()
+    })
+}
+
 #[gpui_kit::test]
 fn opening_an_open_item_shows_its_tab_and_opens_no_second(cx: &mut TestAppContext) {
     let Two { shell, a, .. } = two(cx);
@@ -173,8 +180,9 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
     assert_eq!(shell.label("selection-name", cx).as_deref(), Some("b"));
 }
 
-/// Refresh of `a` reads every open tab of `a` again, once: the
-/// strip keeps its order and the shown tab, and `b`'s tab is not read.
+/// Refresh of `a` reads every open tab of `a` again, once, in place: the
+/// strip keeps its order and the shown tab, `b`'s tab is not read, and the
+/// shown tab's source keeps its text field and its focus.
 #[gpui_kit::test]
 async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -184,6 +192,11 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     open(&shell, ticket(&a, TWO), cx);
     shell.click(("tab", 0usize), cx);
     assert_eq!(strip(&shell, cx), ["One", "Other", "Two"]);
+
+    let source = source_state(&shell, cx).expect("the source is shown");
+    let mut visual = shell.visual(cx);
+    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
+    visual.run_until_parked();
 
     shell.fixture.commit_ticket(&a, ONE, "One again", "");
     shell.fixture.commit_ticket(&a, TWO, "Two again", "");
@@ -199,6 +212,47 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     assert_eq!(shown(&shell, cx), Some(0));
     assert_eq!(title(&shell, cx).as_deref(), Some("One again"));
     assert_eq!(item_reads(&shell) - reads, 2, "one read per tab of a");
+    let after = source_state(&shell, cx).expect("the source is shown");
+    assert_eq!(after, source, "the same text field");
+    assert!(shell.visual(cx).update(|window, cx| {
+        gpui_kit::Focusable::focus_handle(after.read(cx), cx).is_focused(window)
+    }));
+}
+
+/// Review Focus 1 (jobs): a job for `a` finishes while `b` is selected.
+/// `b`'s lists and its open tab are not read again; `a`'s tab is.
+#[gpui_kit::test]
+async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Two { shell, a, b } = two(cx);
+    shell.click("pane-tickets", cx);
+    shell.select(&b, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&b, ONE), cx);
+    let tickets = shell.rows("ticket-row", cx);
+    assert!(!tickets.is_empty());
+    let lists = |shell: &Shell| {
+        [ReadKind::Tickets, ReadKind::Documents, ReadKind::Folders]
+            .map(|kind| shell.backend.reads_seen(kind))
+    };
+    let lists_before = lists(&shell);
+    let reads = item_reads(&shell);
+
+    shell.fixture.commit_ticket(&a, ONE, "One again", "");
+    let refresh = submit_refresh(&shell, &a, cx);
+    shell.until_ended(refresh, cx).await;
+    shell.run(cx);
+
+    let selected = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.navigation().selected().cloned()
+    });
+    assert_eq!(selected, Some(key(&b)));
+    assert_eq!(lists(&shell), lists_before, "b's lists are not read again");
+    assert_eq!(shell.rows("ticket-row", cx), tickets);
+    assert_eq!(item_reads(&shell) - reads, 1, "only a's tab is read");
+    assert_eq!(strip(&shell, cx), ["One again", "Other"]);
+    assert_eq!(shown(&shell, cx), Some(1));
+    assert_eq!(title(&shell, cx).as_deref(), Some("Other"));
 }
 
 /// Review Focus 2: `a`'s folder goes away while it has a tab open. Once
@@ -307,6 +361,36 @@ fn the_tab_keys_move_and_close_and_focus_follows(cx: &mut TestAppContext) {
     // With no tab, the keys do nothing.
     shell.keys("ctrl-tab secondary-w", cx);
     assert_eq!(ring(&shell, cx), [Region::Content]);
+}
+
+/// `secondary-3` focuses the shown tab, the content region's first
+/// control. When that tab goes, closed with its repository's, focus goes
+/// to the tab shown in its place; with none, to the region itself.
+#[gpui_kit::test]
+fn a_closed_tab_that_held_focus_gives_it_to_the_content_region(cx: &mut TestAppContext) {
+    let Two { shell, a, b } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&b, ONE), cx);
+    shell.keys("secondary-3", cx);
+    assert!(tab_focused(&shell, 1, cx));
+
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.close_repository(&key(&b), cx));
+    shell.run(cx);
+    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(ring(&shell, cx), [Region::Content]);
+    assert!(tab_focused(&shell, 0, cx));
+
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.close_repository(&key(&a), cx));
+    shell.run(cx);
+    assert!(strip(&shell, cx).is_empty());
+    assert_eq!(ring(&shell, cx), [Region::Content]);
+    assert!(shell.frame(cx, |window, _| {
+        window.find(Region::Content.id()).focused() == Some(true)
+    }));
 }
 
 /// `close_repository` closes every tab of that root and no other; a later

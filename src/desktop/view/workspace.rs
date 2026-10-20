@@ -121,6 +121,9 @@ pub(crate) struct Workspace {
     pub(super) tickets_changed: bool,
     /// The open tabs.
     pub(super) content: Content,
+    /// The region that last held focus, where focus goes back to when the
+    /// control holding it is no longer drawn.
+    last_region: Option<Region>,
     pub(super) quit: QuitPhase,
     /// The launch refreshes were submitted: once, after the repository
     /// list first loads.
@@ -133,6 +136,7 @@ pub(crate) struct Workspace {
     /// The Abandon controls the frame being drawn shows.
     abandon_drawn: HashSet<(RepoKey, String)>,
     _operations: Subscription,
+    _focus_lost: Subscription,
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
@@ -150,6 +154,7 @@ impl Workspace {
         let operations = cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
         });
+        let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |_, cx| {
             workspace
@@ -196,12 +201,14 @@ impl Workspace {
             ticket_read: None,
             tickets_changed: false,
             content: Content::default(),
+            last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),
             abandon_drawn: HashSet::new(),
             _operations: operations,
+            _focus_lost: focus_lost,
             _ticket_events: ticket_events,
             repositories_pane,
             _repository_events: repository_events,
@@ -421,7 +428,32 @@ impl Workspace {
             }
             _ => window.focus(&self.regions[region.index()], cx),
         }
+        self.last_region = Some(region);
         cx.notify();
+    }
+
+    /// The control holding focus is no longer drawn: a closed tab, a
+    /// dismissed or retried request, a Retry or Refresh its result
+    /// replaced, an Abandon whose row went while its dialog was open.
+    /// Focus goes to the first control of the region it was in, or the
+    /// region itself (design, Layout And Keyboard). That region is the
+    /// one around the closest focusable ancestor still drawn, or else the
+    /// one that last held focus. An open dialog keeps its own focus.
+    fn focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let region = window
+            .focus_lost_restore_target(cx)
+            .and_then(|target| {
+                REGIONS
+                    .into_iter()
+                    .find(|region| self.regions[region.index()].contains(&target, window))
+            })
+            .or(self.last_region);
+        if let Some(region) = region {
+            self.focus_region(region, window, cx);
+        }
     }
 
     /// Focuses the region `step` places after the focused one, wrapping;
@@ -534,6 +566,8 @@ impl Workspace {
             return;
         };
         window.focus(&origin, cx);
+        // The dialog takes focus at once, before a frame shows it here.
+        self.last_region = Some(Region::Operations);
         confirm(
             Intent::OperationAbandon {
                 root: PathBuf::from(root),
@@ -562,22 +596,12 @@ impl Workspace {
             .clone()
     }
 
-    /// Lets go of the focus of every Abandon this frame does not draw. If
-    /// one of them held focus, its row is gone (abandoned, resumed, or
-    /// read again without it): focus goes to the operation area itself,
-    /// the region the control was in (design, Layout And Keyboard).
-    fn prune_abandon_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Lets go of the focus of every Abandon this frame does not draw. One
+    /// that held focus, its row gone (abandoned, resumed, or read again
+    /// without it), gives focus back through `focus_lost`.
+    fn prune_abandon_focus(&mut self) {
         let drawn = std::mem::take(&mut self.abandon_drawn);
-        let mut lost = false;
-        self.abandon_focus.retain(|key, focus| {
-            let kept = drawn.contains(key);
-            lost |= !kept && focus.is_focused(window);
-            kept
-        });
-        if lost {
-            let fallback = self.regions[Region::Operations.index()].clone();
-            window.defer(cx, move |window, cx| window.focus(&fallback, cx));
-        }
+        self.abandon_focus.retain(|key, _| drawn.contains(key));
     }
 
     #[cfg(test)]
@@ -682,6 +706,9 @@ fn unless_dialog<A: 'static>(
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tickets(window, cx);
+        if let Some(region) = self.focused_region(window, cx) {
+            self.last_region = Some(region);
+        }
         let finishing = self.finishing(cx);
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
@@ -716,7 +743,7 @@ impl Render for Workspace {
             );
         let session = self.session_section(cx);
         let pending = self.pending_section(window, cx);
-        self.prune_abandon_focus(window, cx);
+        self.prune_abandon_focus();
         let operations = self
             .region(
                 Region::Operations,
