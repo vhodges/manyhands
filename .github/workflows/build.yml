@@ -97,7 +97,7 @@ jobs:
           cache-on-failure: true
 
       - name: Build release binaries
-        run: cargo build --locked --release --all-features --bins --target ${{ matrix.target }}
+        run: cargo build --locked --release --features desktop,editor-probe --bins --target ${{ matrix.target }}
 
       - name: Verify release binaries
         shell: pwsh
