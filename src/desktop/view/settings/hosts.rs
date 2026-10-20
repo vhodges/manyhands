@@ -249,8 +249,8 @@ impl HostsPage {
             .into_iter()
             .map(|id| (id, cx.focus_handle()))
             .collect();
-        let operations = cx.observe_in(services.operations(), window, |this, _, _, cx| {
-            this.operations_changed(cx)
+        let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
+            this.operations_changed(window, cx)
         });
         // What finished before the page was made is already in what it
         // reads now.
@@ -288,19 +288,20 @@ impl HostsPage {
         self.focus[CHECK_ID].clone()
     }
 
-    /// The code of the answer to the page's latest Check host, once it has
-    /// one and it is of the repository the page works on.
     /// The focus the wrapper `id` tracks.
     #[cfg(test)]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
 
+    /// The request of the page's latest Check host, answered or not.
     #[cfg(test)]
     pub(crate) fn observing_id(&self) -> Option<DesktopRequestId> {
         self.observing.as_ref().map(|observing| observing.id)
     }
 
+    /// The code of the answer to the page's latest Check host, once it has
+    /// one and it is of the repository the page works on.
     #[cfg(test)]
     pub(crate) fn observed_code(&self) -> Option<manyhands::results::ResultCode> {
         self.current()?.answer.as_ref().map(|answer| answer.code)
@@ -499,8 +500,8 @@ impl HostsPage {
         }
     }
 
-    /// The confirmation dialog for `trust`. Focus goes to Check host when
-    /// the dialog closes.
+    /// The confirmation dialog for `trust`. Focus goes back to what held
+    /// it when the dialog closes, else to Check host.
     pub(crate) fn confirm_trust(
         &mut self,
         trust: Trust,
@@ -512,10 +513,13 @@ impl HostsPage {
         }
         let intent = trust.intent();
         debug_assert!(intent.confirmed());
-        // Focus goes back to Check host, never to Approve or Replace: a
-        // successful request lets the answer that drew them go, and focus
-        // put back on a control no longer drawn would be lost.
-        let origin = self.focus[CHECK_ID].clone();
+        // Closing gives focus back to the control the dialog was opened
+        // from. A successful request lets go of the answer that drew
+        // Approve or Replace; `operations_changed` then moves focus left
+        // on either to Check host.
+        let origin = window
+            .focused(cx)
+            .unwrap_or_else(|| self.focus[CHECK_ID].clone());
         confirm(intent, origin, &self.services, window, cx);
     }
 
@@ -524,7 +528,7 @@ impl HostsPage {
     /// pinned the host the answer shows lets that answer go, since what it
     /// offered is done; a remote request of the repository worked on reads
     /// its publication again.
-    fn operations_changed(&mut self, cx: &mut Context<Self>) {
+    fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let operations = self.services.operations().clone();
         let operations = operations.read(cx);
         if let Some(observing) = &mut self.observing
@@ -551,6 +555,10 @@ impl HostsPage {
         }
         if done {
             self.observing = None;
+            // The dialog that submitted the request closes onto its origin
+            // in this same batch; once it has, focus left on Approve or
+            // Replace, no longer drawn, goes to Check host.
+            cx.defer_in(window, |this, window, cx| this.refocus_gone(window, cx));
         }
         if pins {
             self.load_pins(cx);
@@ -559,6 +567,22 @@ impl HostsPage {
             self.load_publication(cx);
         }
         cx.notify();
+    }
+
+    /// Focus on Approve or Replace, or on nothing, once the answer that
+    /// drew them is gone: Check host takes it, the region's first control
+    /// left in its place.
+    fn refocus_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.observing.is_some() || window.has_active_dialog(cx) {
+            return;
+        }
+        let gone = window.focused(cx).is_none()
+            || [APPROVE_ID, REPLACE_ID]
+                .iter()
+                .any(|id| self.focus[id].is_focused(window));
+        if gone {
+            window.focus(&self.focus[CHECK_ID], cx);
+        }
     }
 
     /// Whether `intent` pinned the host the page's answer shows, for the

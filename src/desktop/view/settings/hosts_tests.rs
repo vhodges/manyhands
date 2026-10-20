@@ -574,7 +574,8 @@ fn answer_check(
 }
 
 /// An unpinned host shows its key and Approve, whose preview is of
-/// `host approve` with the key presented.
+/// `host approve` with the key presented. Escape gives focus back to
+/// Approve.
 #[gpui_kit::test]
 async fn an_unpinned_host_offers_approve_of_the_presented_key(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -592,6 +593,7 @@ async fn an_unpinned_host_offers_approve_of_the_presented_key(cx: &mut TestAppCo
         Some(format!("Fingerprint: {NEW}"))
     );
     assert!(!shell.present("hosts-replace", cx));
+    let approve = focus_control(&shell, "hosts-approve", cx);
     shell.click("hosts-approve", cx);
     assert_eq!(
         shell.label("confirm-command", cx).as_deref(),
@@ -613,10 +615,13 @@ async fn an_unpinned_host_offers_approve_of_the_presented_key(cx: &mut TestAppCo
     );
     shell.keys("escape", cx);
     assert!(pins(&shell).is_empty());
+    // Escape closes onto the control the dialog opened from, still drawn.
+    assert!(shell.frame(cx, |window, _| approve.is_focused(window)));
 }
 
 /// A host pinned to another key shows the pin and Replace, whose preview
-/// is of `host replace` with the pin as the old key.
+/// is of `host replace` with the pin as the old key. Escape gives focus
+/// back to Replace.
 #[gpui_kit::test]
 async fn a_host_pinned_to_another_key_offers_replace_of_that_pin(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -635,6 +640,7 @@ async fn a_host_pinned_to_another_key_offers_replace_of_that_pin(cx: &mut TestAp
         Some(format!("{PINNED}: {}", key_line(ALGORITHM, OLD)))
     );
     assert!(!shell.present("hosts-approve", cx));
+    let replace = focus_control(&shell, "hosts-replace", cx);
     shell.click("hosts-replace", cx);
     assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
     let details = shell.rows("confirm-detail", cx);
@@ -648,6 +654,7 @@ async fn a_host_pinned_to_another_key_offers_replace_of_that_pin(cx: &mut TestAp
     );
     shell.keys("escape", cx);
     assert_eq!(pins(&shell)[0].pinned_fingerprint, OLD);
+    assert!(shell.frame(cx, |window, _| replace.is_focused(window)));
 }
 
 /// A host that presents its pin says so and offers neither control.
@@ -732,4 +739,14 @@ async fn a_successful_approval_clears_the_answer_and_focuses_check_host(cx: &mut
 /// test delivered.
 fn shell_observed_is_success(operations: &crate::desktop::model::operations::Operations) -> bool {
     operations.last_observation_succeeded()
+}
+
+/// Puts focus on the page's control `id`, as a keyboard user has it before
+/// pressing it, and gives its focus.
+fn focus_control(shell: &Shell, id: &str, cx: &mut TestAppContext) -> FocusHandle {
+    let focus = page(shell, cx).read_with(cx, |page, _| page.control_focus(id));
+    shell
+        .visual(cx)
+        .update(|window, cx| window.focus(&focus, cx));
+    focus
 }
