@@ -268,6 +268,31 @@ fn blocked_reasons_name_the_blocker_the_missing_id_and_the_cycle() {
     assert!(blocked_reasons(by_id.get(AFTER_DONE).unwrap(), &by_id).is_empty());
 }
 
+/// A blocker whose row has a short code but no title is named by its
+/// short code, never by its ULID; nothing stands in for the title.
+#[test]
+fn an_untitled_blocker_is_named_by_its_short_code() {
+    let fixture = Fixture::new();
+    let root = related(&fixture);
+    let (blocked, mut by_id) = listed(
+        &fixture,
+        &root,
+        &TicketQuery {
+            closure: ClosureFilter::Open,
+            readiness: Some(ReadinessFilter::Blocked),
+        }
+        .to_filter(),
+    );
+    let blocker = by_id.get_mut(BLOCKER).unwrap();
+    let slug = blocker.slug.clone().expect("create gives a short code");
+    // The library's row for a ticket whose file has no title.
+    blocker.title = None;
+    assert_eq!(
+        blocked_reasons(item(&blocked, WAITS), &by_id),
+        [format!("{OPEN_DEPENDENCY}: {slug}")]
+    );
+}
+
 /// A reason the library marks incomplete says so.
 #[test]
 fn an_incomplete_reason_is_labeled_incomplete() {

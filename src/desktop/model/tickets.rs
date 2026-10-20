@@ -75,7 +75,8 @@ pub(crate) const INCOMPLETE: &str = "incomplete";
 /// order: an open dependency by the blocker's short code and title, an
 /// unresolved one by the ID it names, and a cycle by the tickets on it.
 /// A ticket is named from `by_id`, the rows the library returned, keyed by
-/// ID; one not there is named by its ID alone. A reason the library marks
+/// ID; one not there is named by its ID alone, and one with no title by
+/// its short code when it has one. A reason the library marks
 /// incomplete says so. Empty for a ticket that is not blocked.
 pub(crate) fn blocked_reasons(item: &ItemDto, by_id: &HashMap<String, ItemDto>) -> Vec<String> {
     let Some(readiness) = &item.readiness else {
@@ -89,7 +90,7 @@ pub(crate) fn blocked_reasons(item: &ItemDto, by_id: &HashMap<String, ItemDto>) 
     };
     let named = |id: &String| match by_id.get(id).and_then(|item| item.title.as_ref()) {
         Some(title) => format!("{} {title}", short(id)),
-        None => id.clone(),
+        None => short(id),
     };
     readiness
         .reasons
