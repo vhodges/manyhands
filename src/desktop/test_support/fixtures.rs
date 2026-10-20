@@ -17,8 +17,8 @@ use manyhands::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FailurePoint, FolderCreateInput, IndexRefreshInput, Mutation, MutationCall,
         MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
-        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoRemoveInput, RepositoryService,
-        RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
+        PrepareDataDto, RelationshipWrite, RepoCreateInput, RepoEnableInput, RepoRemoveInput,
+        RepositoryService, RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
     },
     results::{Envelope, ResultCode},
@@ -516,6 +516,28 @@ pub(crate) fn ticket_source(id: &str, title: &str, extra: &str) -> String {
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
          type: task\nstatus: open\n{extra}---\nBody of {title}.\n"
     )
+}
+
+/// Enables the plain repository `root`, which has an identity, on `main`
+/// through `service`'s own `prepare` and `execute` of `repo enable`: a
+/// second actor, on a service other than the desktop's.
+pub(crate) fn enable_through(service: &RepositoryService, root: &Path) {
+    let input = || {
+        Mutation::RepoEnable(RepoEnableInput {
+            root: root.to_owned(),
+            primary_branch: "main".to_owned(),
+            identity: None,
+            slug_prefix: None,
+        })
+    };
+    let prepared = service.prepare(&input());
+    assert_eq!(prepared.code, ResultCode::Ok, "{}", prepared.message);
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("repo enable gave no preview");
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let enabled = execute_through(service, Some(confirmation), input());
+    assert_eq!(enabled.code, ResultCode::Ok, "{}", enabled.message);
 }
 
 /// Removes the registration of `root` through `service`'s own `prepare`

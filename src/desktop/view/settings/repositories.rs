@@ -9,6 +9,10 @@
 //! configuration and the branch checked out, which fills an empty primary
 //! branch. Only when the check reports that Git finds no identity for it
 //! are name and email asked for, and written to its own configuration.
+//! Add confirms only a folder whose current text was checked: pressed
+//! before, it checks first, then shows the identity fields with focus in
+//! the first when they are needed, or goes on to the preview (ruling
+//! R-T12b).
 //!
 //! **Create** takes an empty or absent folder, its primary branch, an
 //! optional identity and an optional prefix.
@@ -34,9 +38,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use gpui_kit::{
-    AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, PathPromptOptions, Render, StatefulInteractiveElement, Styled, Subscription,
-    Task, TestSupportExt, Window,
+    AnyWindowHandle, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, PathPromptOptions, Render, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -218,6 +222,12 @@ pub(crate) struct RepositoriesPage {
     browsing: Option<Task<()>>,
     /// Why Browse is unavailable, once the platform failed.
     browse_unavailable: Option<&'static str>,
+    /// Add was pressed before its folder's text was checked: once the
+    /// check lands, the submit goes on (ruling R-T12b).
+    submit_pending: bool,
+    /// The window the page is in, for going on with a submit once a read
+    /// lands.
+    window: AnyWindowHandle,
     _inputs: Vec<Subscription>,
 }
 
@@ -273,6 +283,8 @@ impl RepositoriesPage {
             messages: HashMap::new(),
             browsing: None,
             browse_unavailable: None,
+            submit_pending: false,
+            window: window.window_handle(),
             _inputs: subscriptions,
         }
     }
@@ -326,6 +338,7 @@ impl RepositoriesPage {
 
     fn forget_inspection(&mut self, cx: &mut Context<Self>) {
         self.inspection = Inspection::None;
+        self.submit_pending = false;
         self.failed_path = None;
         self.inspect_read = None;
         self.generations
@@ -373,6 +386,15 @@ impl RepositoriesPage {
                         Inspection::Failed(failure.code)
                     }
                 };
+                if this.submit_pending {
+                    let window = this.window;
+                    cx.spawn(async move |this, cx| {
+                        let _ = cx.update_window(window, |_, window, cx| {
+                            let _ = this.update(cx, |this, cx| this.resume_submit(window, cx));
+                        });
+                    })
+                    .detach();
+                }
                 cx.notify();
             },
         ));
@@ -394,10 +416,49 @@ impl RepositoriesPage {
         self.inspect(cx);
     }
 
+    /// Whether the Add folder's current text has been checked: what was
+    /// found, or that the check failed.
+    fn add_checked(&self, path: &str) -> bool {
+        matches!(&self.inspection, Inspection::Checked { path: checked, .. } if checked == path)
+            || self.failed_path.as_deref() == Some(path)
+    }
+
+    /// The check Add waited for landed (ruling R-T12b). If Git has no
+    /// identity for the folder, its fields appear with focus in the first,
+    /// and nothing is confirmed yet; otherwise the submit goes on. A check
+    /// whose text changed meanwhile was dropped, and the wait with it.
+    fn resume_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.submit_pending) {
+            return;
+        }
+        if let Some(branch) = self.pending_branch.take() {
+            self.inputs[Form::Add.branch()]
+                .update(cx, |input, cx| input.set_value(branch, window, cx));
+        }
+        let path = self.text(Form::Add.path(), cx);
+        if !self.add_checked(&path) {
+            return;
+        }
+        if self.inspection.identity_required(&path) {
+            self.inputs[Form::Add.name()].update(cx, |input, cx| input.focus(window, cx));
+            cx.notify();
+            return;
+        }
+        self.submit(Form::Add, window, cx);
+    }
+
     /// Submit: the form's intent, in the confirmation dialog. Focus goes
     /// back to what held it when the dialog closes.
     fn submit(&mut self, form: Form, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.text(form.path(), cx);
+        // Add confirms only a folder whose current text was checked: the
+        // check says whether it needs an identity (ruling R-T12b).
+        if form == Form::Add && !path.is_empty() && !self.add_checked(&path) {
+            self.submit_pending = true;
+            self.messages.remove(&form);
+            self.inspect(cx);
+            return;
+        }
         let branch = self.text(form.branch(), cx);
         let why = if path.is_empty() {
             Some(NEED_FOLDER)

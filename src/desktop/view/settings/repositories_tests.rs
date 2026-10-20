@@ -29,7 +29,7 @@ use crate::desktop::{
         JobKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
-    test_support::fixtures::{Fixture, identity},
+    test_support::fixtures::{Fixture, enable_through, identity},
     view::{
         confirm::{CONFIRM, PREPARE_AGAIN},
         harness::{Shell, key},
@@ -703,4 +703,115 @@ fn the_inspect_recovery_opens_the_page_with_its_root_checked(cx: &mut TestAppCon
     assert!(shell.frame(cx, |window, _| {
         window.find(("settings-page", 0usize)).focused() == Some(true)
     }));
+}
+
+/// A plain repository with an identity, its folder checked in Add.
+fn checked_add(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+    let fixture = Fixture::new();
+    let root = fixture.plain_repository("plain", Some(ada()));
+    let shell = settings(fixture, cx);
+    set(&shell, "add-path", text(&root), cx);
+    enter_in(&shell, "add-path", cx);
+    assert_eq!(
+        shell.label("add-inspection", cx).as_deref(),
+        Some(NOT_ADDED)
+    );
+    (shell, root)
+}
+
+/// Escape on an Add preview: nothing is registered, nothing is written
+/// to the repository, no request is made, and focus goes back.
+#[gpui_kit::test]
+fn escape_on_an_add_preview_makes_nothing(cx: &mut TestAppContext) {
+    let (shell, root) = checked_add(cx);
+    let submit = control_focus(&shell, "add-submit", cx);
+    shell
+        .visual(cx)
+        .update(|window, cx| window.focus(&submit, cx));
+    shell.click("add-submit", cx);
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(registered(&shell).is_empty());
+    assert!(!root.join(".manyhands").exists());
+    assert!(shell.requests(cx, |_| true).is_empty());
+    assert!(shell.frame(cx, |window, _| submit.is_focused(window)));
+}
+
+/// A stale Add preview: a second actor enables the same root after the
+/// preview. Confirm is answered with Prepare again, and the root is
+/// registered once.
+#[gpui_kit::test]
+async fn an_add_whose_repository_was_enabled_since_its_preview_offers_prepare_again(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, root) = checked_add(cx);
+    shell.click("add-submit", cx);
+    assert!(shell.present("confirm-ok", cx));
+    let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    enable_through(&other, &root);
+
+    shell.click("confirm-ok", cx);
+    let id = enables(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    let (_, code) = finished(&shell, id, cx);
+    assert_ne!(code, ResultCode::Ok);
+    assert_eq!(
+        shell.label("confirm-prepare-again", cx).as_deref(),
+        Some(PREPARE_AGAIN),
+        "{}",
+        code.as_str()
+    );
+    assert_eq!(registered(&shell), [key(&root)]);
+    assert_eq!(enables(&shell, cx), [id]);
+}
+
+/// Ruling R-T12b: Add pressed at once after typing the folder of a
+/// repository Git has no identity for checks it first. The identity
+/// fields appear with focus in the first, and no preview opens; filled,
+/// Add opens the preview.
+#[gpui_kit::test]
+fn add_pressed_at_once_checks_first_and_asks_for_the_identity(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.plain_repository("plain", None);
+    let shell = settings(fixture, cx);
+    set(&shell, "add-path", text(&root), cx);
+    assert!(!shell.present("add-inspection", cx));
+
+    shell.click("add-submit", cx);
+    assert_eq!(
+        shell.label("add-identity-required", cx).as_deref(),
+        Some(IDENTITY_REQUIRED)
+    );
+    assert!(!shell.present("confirm-dialog", cx));
+    let name = control_focus(&shell, "add-name", cx);
+    assert!(shell.frame(cx, |window, cx| name.contains_focused(window, cx)));
+    assert_eq!(value(&shell, "add-branch", cx), "main");
+    assert!(shell.requests(cx, |_| true).is_empty());
+
+    set(&shell, "add-name", &ada().name, cx);
+    set(&shell, "add-email", &ada().email, cx);
+    shell.click("add-submit", cx);
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    let details = details(&shell, cx);
+    assert!(
+        details.contains(&format!("Name: {}", ada().name)),
+        "{details:?}"
+    );
+}
+
+/// The same immediate Add on a repository Git has an identity for goes
+/// straight on to the preview, the primary branch filled from the check.
+#[gpui_kit::test]
+fn add_pressed_at_once_on_a_repository_with_an_identity_opens_the_preview(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.plain_repository("plain", Some(ada()));
+    let shell = settings(fixture, cx);
+    set(&shell, "add-path", text(&root), cx);
+    shell.click("add-submit", cx);
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    assert!(!shell.present("add-identity-required", cx));
+    assert!(details(&shell, cx).contains(&"Primary branch: main".to_owned()));
 }
