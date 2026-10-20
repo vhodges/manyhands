@@ -682,6 +682,15 @@ comment.
 10. Delete a repository's folder; see it unavailable; remove the registration.
 11. Make an operation pending; resume or abandon it from the operation area.
 12. Confirm visible focus at every step and focus return after each dialog.
+13. Browse with the platform folder chooser unavailable or failing (for
+    example, a session with no file-chooser portal). Browse shows "The
+    folder chooser could not be opened. Type the folder's path instead.",
+    and the path field stays usable: type the path, and Add or Create
+    goes on. Step 6 covers Create with a working chooser only.
+14. Run the steps above at the default window size, 1280×840, as well as
+    maximized: every region, the operation area and each settings page
+    fit and scroll by keyboard. The automated view tests use 1440×1400,
+    so they do not prove this layout.
 
 Windows and macOS runs of the same list are G1 obligations (decision 3).
 
