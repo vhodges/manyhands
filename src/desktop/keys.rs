@@ -59,6 +59,10 @@ pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
 /// a text field, takes them first.
 pub(crate) const CONTENT_CONTEXT: &str = "Content";
 
+/// The key context of the Why blocked panel, where PageUp, PageDown, Home
+/// and End scroll it.
+pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
+
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
 pub(crate) fn bind(cx: &mut App) {
@@ -82,6 +86,10 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),
         KeyBinding::new("home", ScrollToTop, Some(CONTENT_CONTEXT)),
         KeyBinding::new("end", ScrollToBottom, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("pageup", ScrollPageUp, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("home", ScrollToTop, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("end", ScrollToBottom, Some(WHY_BLOCKED_CONTEXT)),
     ]);
 }
 

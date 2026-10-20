@@ -22,7 +22,7 @@
 use std::path::Path;
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement, IntoElement,
+    AnyElement, App, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
@@ -155,16 +155,21 @@ fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
         .child(value)
 }
 
+/// A Kit button in a wrapper a test reads by `id`. With `focus`, the
+/// wrapper tracks it, so a dialog the button opens can give focus back
+/// there, and a test can see the button hold it.
 fn button(
     id: impl Into<ElementId>,
     label: &'static str,
+    focus: Option<&FocusHandle>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let id = id.into();
-    div()
-        .id(id.clone())
-        .test_support()
-        .aria_label(label)
+    let mut wrapper = div().id(id.clone()).test_support().aria_label(label);
+    if let Some(focus) = focus {
+        wrapper = wrapper.track_focus(focus);
+    }
+    wrapper
         .child(
             Button::new(ElementId::NamedChild(
                 std::sync::Arc::new(id),
@@ -187,7 +192,7 @@ fn unavailable(id: impl Into<ElementId>, label: &str, why: &str, cx: &App) -> Te
 impl Workspace {
     /// One request of this session.
     fn session_entry(
-        &self,
+        &mut self,
         request: &DesktopRequest,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -213,9 +218,11 @@ impl Workspace {
             | RequestState::Running {
                 accepted: false, ..
             } => {
+                let focus = self.control_focus_for(request_id(id, "cancel"), cx);
                 controls = controls.child(button(
                     request_id(id, "cancel"),
                     CANCEL,
+                    Some(&focus),
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.cancel_request(id, cx)),
                 ));
             }
@@ -261,10 +268,12 @@ impl Workspace {
         entry.child(controls)
     }
 
-    fn dismiss(&self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
+    fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
+        let focus = self.control_focus_for(request_id(id, "dismiss"), cx);
         button(
             request_id(id, "dismiss"),
             DISMISS,
+            Some(&focus),
             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_request(id, cx)),
         )
     }
@@ -272,7 +281,7 @@ impl Workspace {
     /// A recovery action's control: it runs when it names something this
     /// session can act on, and is text, unavailable, when not.
     fn recovery(
-        &self,
+        &mut self,
         id: DesktopRequestId,
         n: usize,
         action: &RecoveryAction,
@@ -286,9 +295,11 @@ impl Workspace {
             .recovery_step(id, action)
             .is_some();
         if runnable {
+            let focus = self.control_focus_for(recovery_id(id, n), cx);
             button(
                 recovery_id(id, n),
                 label,
+                Some(&focus),
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.run_recovery(id, n, window, cx)
                 }),
@@ -301,7 +312,7 @@ impl Workspace {
 
     /// The "This session" section.
     pub(super) fn session_section(
-        &self,
+        &mut self,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let requests: Vec<_> = self
@@ -376,6 +387,7 @@ impl Workspace {
                                         button(
                                             ("pending-repository-retry", n),
                                             super::sidebar::RETRY,
+                                            None,
                                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                                 this.load_pending(reload.clone(), cx)
                                             }),
@@ -444,6 +456,7 @@ impl Workspace {
                         controls = controls.child(button(
                             ("pending-resume", index),
                             RESUME,
+                            None,
                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Some(operation_id) = &operation_id {
                                     this.resume(root.clone(), operation_id, cx);

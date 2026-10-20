@@ -389,6 +389,11 @@ impl WorkerHandle {
         id
     }
 
+    /// Whether quitting has begun: no job is admitted any more.
+    pub(crate) fn quitting(&self) -> bool {
+        self.shared().lock().closed
+    }
+
     /// Stops admitting jobs, empties the queue and cancels the running
     /// job's token. Quitting may go ahead when no job is running;
     /// otherwise once that job returns.

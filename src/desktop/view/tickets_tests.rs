@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::repository::{
     ClosureFilter, ItemDto, ItemDtoKind, ItemListDto, ReadinessFilter, TicketFilter,
 };
@@ -559,4 +559,113 @@ fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
         shown.iter().any(|line| line.ends_with(" (incomplete)")),
         "{shown:?}"
     );
+}
+
+/// No two choices of the navigation region share a label, so a screen
+/// reader tells them apart, and each row of choices says in text which
+/// is chosen: the pane, the closure and the readiness.
+#[gpui_kit::test]
+fn every_choice_has_its_own_label_and_the_chosen_one_is_said_in_text(cx: &mut TestAppContext) {
+    let (shell, _) = four_tickets(cx);
+    let ids = [
+        "pane-documents",
+        "pane-tickets",
+        "filter-open",
+        "filter-closed",
+        "filter-all",
+        "filter-any-readiness",
+        "filter-ready",
+        "filter-blocked",
+    ];
+    let labels: Vec<String> = ids
+        .iter()
+        .map(|id| shell.label(*id, cx).expect("the choice is drawn"))
+        .collect();
+    let mut unique = labels.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), labels.len(), "{labels:?}");
+    assert_eq!(
+        shell.label("filter-any-readiness", cx).as_deref(),
+        Some(super::ANY_READINESS)
+    );
+
+    assert_eq!(
+        shell.label("pane-showing", cx).as_deref(),
+        Some(super::super::lists::SHOWING_TICKETS)
+    );
+    shell.click("pane-documents", cx);
+    assert_eq!(
+        shell.label("pane-showing", cx).as_deref(),
+        Some(super::super::lists::SHOWING_DOCUMENTS)
+    );
+}
+
+const WAITER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJZ";
+
+/// A ticket waiting for more open tickets than the Why blocked panel has
+/// room for: the panel keeps its height and scrolls. Tab reaches it, it
+/// shows that it holds focus, and End and Home scroll it to its last and
+/// first reason.
+#[gpui_kit::test]
+fn a_long_why_blocked_panel_scrolls_by_keyboard(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let blockers: Vec<String> = "0123456789ABCDEFGHJKMNPQ"
+        .chars()
+        .map(|digit| format!("01ARZ3NDEKTSV4RRFFQ69G5FH{digit}"))
+        .collect();
+    let mut deps = String::from("deps:\n");
+    for (n, id) in blockers.iter().enumerate() {
+        fixture.commit_ticket(&root, id, &format!("Blocker {n}"), "");
+        deps.push_str(&format!("  - {id}\n"));
+    }
+    fixture.commit_ticket(&root, WAITER, "Waits for many", &deps);
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    shell.click(("repo-row", 0usize), cx);
+    shell.click("pane-tickets", cx);
+    shell.click("filter-blocked", cx);
+    shell.keys("secondary-2 down", cx);
+    let reasons = panel(&shell, cx);
+    assert_eq!(reasons.len(), blockers.len());
+    let last = ("why-blocked-reason", reasons.len() - 1);
+    let first = ("why-blocked-reason", 0usize);
+
+    let height = shell.frame(cx, |window, _| {
+        window.find("why-blocked").bounds().size.height
+    });
+    assert!(
+        // Its border is drawn outside the scrolled part.
+        height <= super::WHY_BLOCKED_MAX_HEIGHT + gpui_kit::px(2.),
+        "the panel keeps its height: {height:?}"
+    );
+    let visible = |shell: &Shell, id: (&'static str, usize), cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| window.find(id).visible())
+    };
+    assert!(visible(&shell, first, cx));
+    assert!(
+        !visible(&shell, last, cx),
+        "the last reason is scrolled away"
+    );
+
+    let panel_focused = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| {
+            window.find("why-blocked").focused() == Some(true)
+        })
+    };
+    let mut presses = 0;
+    while !panel_focused(&shell, cx) {
+        presses += 1;
+        assert!(presses < 20, "Tab never reached the Why blocked panel");
+        shell.keys("tab", cx);
+    }
+    assert!(shell.present("why-blocked-focus-ring", cx));
+    shell.keys("end", cx);
+    assert!(visible(&shell, last, cx), "End shows the last reason");
+    assert!(!visible(&shell, first, cx));
+    shell.keys("home", cx);
+    assert!(visible(&shell, first, cx), "Home shows the first again");
+    shell.keys("pagedown", cx);
+    assert!(!visible(&shell, first, cx), "PageDown moves it on");
 }

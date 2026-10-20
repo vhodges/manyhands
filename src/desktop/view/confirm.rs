@@ -127,6 +127,11 @@ fn open(
     window: &mut Window,
     cx: &mut App,
 ) {
+    // Quitting waits for a job with "Finishing" and Quit now in view:
+    // nothing opens in front of them, and no request could be sent.
+    if services.worker().quitting() {
+        return;
+    }
     let title = intent.label();
     let dialog = cx.new(|cx| {
         ConfirmDialog::new(

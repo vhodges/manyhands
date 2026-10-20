@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::{
     repository::{ItemDtoKind, LeaseKind, OperationNextAction, RepositoryService},
     results::{Outcome, RecoveryActionKind, ResultCode},
@@ -756,4 +756,99 @@ async fn a_refresh_keeps_the_selected_document(cx: &mut TestAppContext) {
         .map(|ix| shell.selected(("doc-node", ix as usize), cx))
         .collect();
     assert_eq!(after, selected);
+}
+
+/// Whether the control wrapped as `id` holds focus.
+fn control_focused(shell: &Shell, id: &str, cx: &mut TestAppContext) -> bool {
+    let id = id.to_owned();
+    shell.frame(cx, |window, _| {
+        window
+            .try_find(gpui_kit::ElementId::Name(id.into()))
+            .and_then(|control| control.focused())
+            == Some(true)
+    })
+}
+
+/// From the operation area, Tab until the control `id` holds focus.
+fn tab_to(shell: &Shell, id: &str, cx: &mut TestAppContext) {
+    shell.keys("secondary-4", cx);
+    let mut presses = 0;
+    while !control_focused(shell, id, cx) {
+        presses += 1;
+        assert!(presses < 30, "Tab never reached {id}");
+        shell.keys("tab", cx);
+    }
+}
+
+/// The operation area holds focus on a drawn control, and rings it.
+fn operations_keep_focus(shell: &Shell, cx: &mut TestAppContext) {
+    assert!(shell.frame(cx, |window, cx| window.focused(cx).is_some()));
+    assert!(shell.frame(cx, |window, _| {
+        window.find(Region::Operations.id()).focused() == Some(true)
+    }));
+    assert!(shell.present(Region::Operations.ring_id(), cx));
+}
+
+/// Dismiss and Retry, pressed from the keyboard, take their control away
+/// with the request's state: focus falls back to the operation area,
+/// never nowhere.
+#[gpui_kit::test]
+async fn dismiss_and_retry_from_the_keyboard_leave_focus_in_the_operation_area(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, _) = with_an_unindexed_ticket(cx);
+    failing(&shell);
+    shell.keys("secondary-r", cx);
+    let refresh = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRefresh { .. })
+    })[0];
+    shell.until_ended(refresh, cx).await;
+
+    let retry = recovery_of(&shell, refresh, RecoveryActionKind::RequestRetry, cx);
+    tab_to(&shell, &retry, cx);
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    shell.press("enter", cx);
+    held.wait_reached();
+    assert!(
+        !shell.present(retry.clone(), cx),
+        "Retry went with the attempt"
+    );
+    operations_keep_focus(&shell, cx);
+    held.release();
+    shell.until_ended(refresh, cx).await;
+
+    let dismiss = request_id(refresh, "dismiss");
+    tab_to(&shell, &dismiss, cx);
+    shell.press("enter", cx);
+    assert!(!shell.present(request_id(refresh, "entry"), cx));
+    operations_keep_focus(&shell, cx);
+}
+
+/// A recovery action that opens the confirmation dialog, here Abandon of
+/// the operation a failed refresh left pending, gives focus back to that
+/// action's control when the dialog closes, not to the region.
+#[gpui_kit::test]
+async fn a_recovery_dialog_gives_focus_back_to_the_action_that_opened_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, _) = with_an_unindexed_ticket(cx);
+    failing(&shell);
+    shell.keys("secondary-r", cx);
+    let refresh = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRefresh { .. })
+    })[0];
+    shell.until_ended(refresh, cx).await;
+    reopened(&shell);
+
+    let abandon = recovery_of(&shell, refresh, RecoveryActionKind::OperationAbandon, cx);
+    tab_to(&shell, &abandon, cx);
+    shell.press("enter", cx);
+    assert!(shell.present("confirm-dialog", cx));
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(
+        control_focused(&shell, &abandon, cx),
+        "focus is back on the recovery action"
+    );
+    assert!(shell.present(Region::Operations.ring_id(), cx));
 }

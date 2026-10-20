@@ -8,8 +8,8 @@
 //! Nonconforming and its problem code.
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, IndexPath, h_flex,
         list::{List, ListDelegate, ListItem, ListState as KitListState},
@@ -19,7 +19,11 @@ use gpui_kit::{
 };
 use manyhands::repository::{ClosureFilter, ReadinessFilter};
 
-use crate::desktop::model::tickets::{Lifecycle, TicketRow};
+use super::scroll::ContentScroll;
+use crate::desktop::{
+    keys::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, WHY_BLOCKED_CONTEXT},
+    model::tickets::{Lifecycle, TicketRow},
+};
 
 pub(crate) const LIFECYCLE_OPEN: &str = "Open";
 pub(crate) const LIFECYCLE_CLOSED: &str = "Closed";
@@ -28,6 +32,10 @@ pub(crate) const NO_SHORT_CODE: &str = "No short code";
 pub(crate) const WHY_BLOCKED: &str = "Why blocked";
 pub(crate) const SELECT_BLOCKED: &str = "Select a ticket to see why it is blocked";
 pub(crate) const NO_REASONS: &str = "The library gives no reasons for this entry";
+/// The readiness choice that asks for none.
+pub(crate) const ANY_READINESS: &str = "Any readiness";
+/// The Why blocked panel grows to this height, then scrolls.
+pub(crate) const WHY_BLOCKED_MAX_HEIGHT: gpui_kit::Pixels = gpui_kit::px(160.);
 
 /// The closure filters, in the order they are offered: their element id,
 /// label and what they show.
@@ -58,7 +66,7 @@ pub(crate) const CLOSURE_FILTERS: [(&str, &str, &str, ClosureFilter); 3] = [
 pub(crate) const READINESS_FILTERS: [(&str, &str, &str, Option<ReadinessFilter>); 3] = [
     (
         "filter-any-readiness",
-        "All",
+        ANY_READINESS,
         "Showing tickets ready or not",
         None,
     ),
@@ -218,6 +226,9 @@ impl ListDelegate for TicketDelegate {
 /// The list's Kit state.
 pub(crate) struct TicketsPane {
     list: Entity<KitListState<TicketDelegate>>,
+    /// The Why blocked panel's focus, a tab stop, and its scrolling.
+    why_focus: FocusHandle,
+    why_scroll: ContentScroll,
 }
 
 impl TicketsPane {
@@ -229,6 +240,8 @@ impl TicketsPane {
         };
         Self {
             list: cx.new(|cx| KitListState::new(delegate, window, cx)),
+            why_focus: cx.focus_handle().tab_stop(true),
+            why_scroll: ContentScroll::default(),
         }
     }
 
@@ -273,8 +286,41 @@ impl TicketsPane {
     /// wrap: the selected row's reasons in full, one per line, as
     /// `blocked_reasons` gave them for this read; a fixed hint when no row
     /// is selected, or the selected one has none.
-    pub(crate) fn why_blocked(&self, cx: &App) -> impl IntoElement + use<> {
+    ///
+    /// It grows to `WHY_BLOCKED_MAX_HEIGHT` and then scrolls. It is a tab
+    /// stop, ringed while focused, and PageUp, PageDown, Home and End
+    /// scroll it.
+    pub(crate) fn why_blocked(&self, window: &Window, cx: &App) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
+        let focused = self.why_focus.is_focused(window);
+        let ring = focused.then(|| {
+            div()
+                .id("why-blocked-focus-ring")
+                .test_support()
+                .absolute()
+                .inset_0()
+                .border_2()
+                .border_color(cx.theme().ring)
+        });
+        let scroll = |pages: Option<f32>, end: bool| {
+            let scroll = self.why_scroll.clone();
+            move |window: &mut Window| {
+                let moved = match pages {
+                    Some(pages) => scroll.page(pages),
+                    None if end => scroll.to_bottom(),
+                    None => scroll.to_top(),
+                };
+                if moved {
+                    window.refresh();
+                }
+            }
+        };
+        let (up, down, top, bottom) = (
+            scroll(Some(-1.), false),
+            scroll(Some(1.), false),
+            scroll(None, false),
+            scroll(None, true),
+        );
         let selected = self.selected_row(cx);
         let hint = match &selected {
             None => Some(SELECT_BLOCKED),
@@ -282,13 +328,13 @@ impl TicketsPane {
             Some(_) => None,
         };
         let reasons = selected.map(|row| row.reasons).unwrap_or_default();
-        v_flex()
-            .id("why-blocked")
-            .test_support()
+        let body = v_flex()
+            .id("why-blocked-body")
             .gap_1()
             .p_1()
-            .border_1()
-            .border_color(cx.theme().border)
+            .max_h(WHY_BLOCKED_MAX_HEIGHT)
+            .overflow_y_scroll()
+            .track_scroll(self.why_scroll.handle())
             .child(
                 div()
                     .id("why-blocked-title")
@@ -314,7 +360,22 @@ impl TicketsPane {
                     .text_xs()
                     .whitespace_normal()
                     .child(reason)
-            }))
+            }));
+        div()
+            .id("why-blocked")
+            .test_support()
+            .aria_label(WHY_BLOCKED)
+            .track_focus(&self.why_focus)
+            .key_context(WHY_BLOCKED_CONTEXT)
+            .on_action(move |_: &ScrollPageUp, window, _| up(window))
+            .on_action(move |_: &ScrollPageDown, window, _| down(window))
+            .on_action(move |_: &ScrollToTop, window, _| top(window))
+            .on_action(move |_: &ScrollToBottom, window, _| bottom(window))
+            .relative()
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(body)
+            .children(ring)
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {

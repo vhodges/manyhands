@@ -3,7 +3,7 @@
 //! shows them.
 
 use gpui_kit::{
-    App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Selectable, button::Button, h_flex, v_flex},
     div,
@@ -25,10 +25,24 @@ use crate::desktop::{
     services::ReadKind,
 };
 
+/// Which pane is shown, in text.
+pub(crate) const SHOWING_DOCUMENTS: &str = "Showing documents";
+pub(crate) const SHOWING_TICKETS: &str = "Showing tickets";
+
 pub(crate) const PANES: [(&str, &str, Pane); 2] = [
     ("pane-documents", "Documents", Pane::Documents),
     ("pane-tickets", "Tickets", Pane::Tickets),
 ];
+
+/// The element ids of the navigation region's choices: the panes, then the
+/// closure and the readiness filters.
+pub(super) fn choice_ids() -> impl Iterator<Item = &'static str> {
+    PANES
+        .iter()
+        .map(|(id, ..)| *id)
+        .chain(CLOSURE_FILTERS.iter().map(|(id, ..)| *id))
+        .chain(READINESS_FILTERS.iter().map(|(id, ..)| *id))
+}
 
 impl Workspace {
     /// The selected repository, when it resolved.
@@ -214,13 +228,23 @@ impl Workspace {
     }
 
     /// The navigation region: the pane choice and the shown pane.
-    pub(super) fn navigation_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn navigation_pane(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let pane = self.navigation.pane();
         let choices = h_flex().gap_1().children(PANES.map(|(id, label, shown)| {
             let workspace = cx.entity().downgrade();
-            choice(id, label, pane == shown, move |_, window, cx| {
-                let _ = workspace.update(cx, |this, cx| this.show_pane(shown, window, cx));
-            })
+            choice(
+                id,
+                label,
+                pane == shown,
+                self.choice_focus.get(id),
+                move |_, window, cx| {
+                    let _ = workspace.update(cx, |this, cx| this.show_pane(shown, window, cx));
+                },
+            )
         }));
         let body = match pane {
             Pane::Documents => match self.documents.repo() {
@@ -239,10 +263,16 @@ impl Workspace {
                         .gap_1()
                         .children(CLOSURE_FILTERS.map(|(id, label, _, filter)| {
                             let workspace = cx.entity().downgrade();
-                            choice(id, label, closure == filter, move |_, _, cx| {
-                                let _ =
-                                    workspace.update(cx, |this, cx| this.set_closure(filter, cx));
-                            })
+                            choice(
+                                id,
+                                label,
+                                closure == filter,
+                                self.choice_focus.get(id),
+                                move |_, _, cx| {
+                                    let _ = workspace
+                                        .update(cx, |this, cx| this.set_closure(filter, cx));
+                                },
+                            )
                         }));
                 let showing = CLOSURE_FILTERS
                     .iter()
@@ -254,10 +284,16 @@ impl Workspace {
                         .gap_1()
                         .children(READINESS_FILTERS.map(|(id, label, _, filter)| {
                             let workspace = cx.entity().downgrade();
-                            choice(id, label, readiness == filter, move |_, _, cx| {
-                                let _ =
-                                    workspace.update(cx, |this, cx| this.set_readiness(filter, cx));
-                            })
+                            choice(
+                                id,
+                                label,
+                                readiness == filter,
+                                self.choice_focus.get(id),
+                                move |_, _, cx| {
+                                    let _ = workspace
+                                        .update(cx, |this, cx| this.set_readiness(filter, cx));
+                                },
+                            )
                         }));
                 let readiness_showing = READINESS_FILTERS
                     .iter()
@@ -294,10 +330,14 @@ impl Workspace {
                         .child(self.tickets_pane.render())
                         .children(
                             (readiness == Some(ReadinessFilter::Blocked))
-                                .then(|| self.tickets_pane.why_blocked(cx)),
+                                .then(|| self.tickets_pane.why_blocked(window, cx)),
                         ),
                 }
             }
+        };
+        let showing = match pane {
+            Pane::Documents => SHOWING_DOCUMENTS,
+            Pane::Tickets => SHOWING_TICKETS,
         };
         v_flex()
             .id("navigation-pane")
@@ -306,6 +346,14 @@ impl Workspace {
             .size_full()
             .child(self.find_bar(cx))
             .child(choices)
+            .child(
+                div()
+                    .id("pane-showing")
+                    .test_support()
+                    .aria_label(showing)
+                    .text_xs()
+                    .child(showing),
+            )
             .child(body)
     }
 }
@@ -316,11 +364,16 @@ fn choice(
     id: &'static str,
     label: &'static str,
     chosen: bool,
+    focus: Option<&FocusHandle>,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    div()
-        .id(id)
-        .test_support()
+    let mut wrapper = div().id(id).test_support();
+    // Around the Kit button, whose own focus is private: a test sees it
+    // hold focus.
+    if let Some(focus) = focus {
+        wrapper = wrapper.track_focus(focus);
+    }
+    wrapper
         .role(Role::Tab)
         .aria_label(label)
         .aria_selected(chosen)

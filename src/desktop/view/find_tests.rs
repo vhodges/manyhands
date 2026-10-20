@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::{Focusable, TestAppContext};
+use gpui_kit::{Focusable, TestAppContext, test::TestWindowExt};
 use manyhands::repository::ItemDtoKind;
 
 use super::{FIND_NO_REPOSITORY, FIND_NONE, FIND_OPENED};
@@ -251,4 +251,31 @@ fn find_does_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     shell.keys("secondary-p", cx);
     assert!(!find_focused(&shell, cx));
     assert!(shell.present("confirm-dialog", cx));
+}
+
+/// Each match's Open is reachable by keyboard: from the Find input, Tab
+/// reaches the first match's Open, whose wrapper says it holds focus,
+/// then the second's; Enter there opens that match by its ID.
+#[gpui_kit::test]
+fn a_matchs_open_is_reached_by_tab_and_enter_opens_it(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx);
+    find(&shell, SHARED_SLUG, cx);
+    assert!(find_focused(&shell, cx));
+    let open_focused = |shell: &Shell, ix: usize, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| {
+            window.find(("find-match-open", ix)).focused() == Some(true)
+        })
+    };
+    shell.keys("tab", cx);
+    assert!(open_focused(&shell, 0, cx));
+    assert!(shell.present(Region::Navigation.ring_id(), cx));
+    shell.keys("tab", cx);
+    assert!(open_focused(&shell, 1, cx));
+
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let library = service.find_tickets_by_slug(&repo, SHARED_SLUG).unwrap();
+    let second = library.items[1].id.clone().unwrap();
+    shell.press("enter", cx);
+    assert_eq!(opened(&shell, cx), Some(ticket(&root, &second)));
 }

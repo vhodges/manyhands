@@ -682,3 +682,104 @@ fn reselecting_or_retry_shows_a_configuration_refreshed_by_a_second_actor(cx: &m
         );
     }
 }
+
+/// A repository row's "selected" has one meaning. The row the arrows are
+/// on is the Kit list's own cursor state; the chosen repository is the
+/// one whose row says Selected. The row itself claims neither, so a
+/// screen reader never hears two rows selected at once.
+#[gpui_kit::test]
+fn a_repository_rows_selected_state_has_one_meaning(cx: &mut TestAppContext) {
+    let shell = Shell::new(cx);
+    shell.keys("secondary-1 down enter", cx);
+    assert_eq!(shell.selected(cx), Some(key(&shell.a)));
+    shell.keys("down", cx);
+    assert_eq!(
+        shell.selected(cx),
+        Some(key(&shell.a)),
+        "moving chooses nothing"
+    );
+
+    let claims = |shell: &Shell, index: usize, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| window.find(row(index)).selected())
+    };
+    assert_eq!(claims(&shell, 0, cx), None, "the chosen row");
+    assert_eq!(claims(&shell, 1, cx), None, "the row the arrows are on");
+    assert_eq!(
+        shell.label(("repo-selected", 0usize), cx).as_deref(),
+        Some(SELECTED)
+    );
+    assert!(!shell.present(("repo-selected", 1usize), cx));
+}
+
+/// Quitting while a job runs and a dialog is open: the dialog closes,
+/// so nothing stands in front of "Finishing", and Quit now takes focus,
+/// ringed. No dialog opens while quitting waits. Enter on Quit now quits.
+#[gpui_kit::test]
+async fn finishing_closes_the_dialog_and_focuses_quit_now(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    cx.executor().allow_parking();
+    let setup = setup(cx);
+    let held = setup.backend.hold_job(JobKind::IndexRefresh);
+    let id = submit_refresh(&setup, cx);
+    held.wait_reached();
+    let mut visual = VisualTestContext::from_window(setup.window.into(), cx);
+    visual.update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog.title("Probe")));
+    visual.run_until_parked();
+    assert!(visual.update(|window, cx| window.has_active_dialog(cx)));
+
+    visual.simulate_keystrokes("secondary-q");
+    visual.run_until_parked();
+    assert_eq!(
+        phase(&setup.workspace, &mut visual),
+        QuitPhase::Finishing(id)
+    );
+    assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+    visual.update(|window, cx| {
+        window.render_frame(cx);
+        let quit_now = window.find("quit-now");
+        assert_eq!(quit_now.focused(), Some(true), "Quit now holds focus");
+        assert!(quit_now.visible());
+        assert!(window.try_find("quit-now-focus-ring").is_some());
+        assert!(window.find(Region::Operations.ring_id()).visible());
+    });
+
+    // Nothing opens a dialog over it while quitting waits.
+    let services = setup
+        .workspace
+        .read_with(&visual, |workspace, _| workspace.services().clone());
+    let origin = visual.update(|_, cx| cx.focus_handle());
+    let root = setup.root.clone();
+    visual.update(|window, cx| {
+        crate::desktop::view::confirm::confirm(
+            Intent::RepoRemove { root },
+            origin,
+            &services,
+            window,
+            cx,
+        )
+    });
+    visual.run_until_parked();
+    assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+
+    visual.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    visual.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("enter").unwrap(),
+    });
+    visual.run_until_parked();
+    assert_eq!(phase(&setup.workspace, &mut visual), QuitPhase::Quit);
+    held.release();
+    let operations = setup.workspace.read_with(&visual, |workspace, _| {
+        workspace.services().operations().clone()
+    });
+    wait_until(&visual, &operations, move |operations, _| {
+        matches!(
+            operations.request(id).map(|request| &request.state),
+            Some(RequestState::Finished(..))
+        )
+    })
+    .await;
+}

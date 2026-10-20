@@ -92,6 +92,13 @@ impl Workspace {
                 cx,
                 |this: &mut Self, stamp, result, cx| {
                     if this.find.apply_matches(stamp, result) {
+                        let count = match this.find.state() {
+                            FindState::Done(FindResult::Matches(items)) => items.len(),
+                            _ => 0,
+                        };
+                        while this.find_focus.len() < count {
+                            this.find_focus.push(cx.focus_handle());
+                        }
                         cx.notify();
                     }
                 },
@@ -185,6 +192,21 @@ impl Workspace {
             .or_else(|| item.id.clone())
             .unwrap_or_else(|| item.path.clone());
         let workspace = cx.entity().downgrade();
+        let mut open = div()
+            .id(("find-match-open", ix))
+            .test_support()
+            .aria_label(FIND_OPEN);
+        if let Some(focus) = self.find_focus.get(ix) {
+            open = open.track_focus(focus);
+        }
+        let open = open.child(
+            Button::new(("find-match-open-button", ix))
+                .ghost()
+                .label(FIND_OPEN)
+                .on_click(move |_: &ClickEvent, _, cx| {
+                    let _ = workspace.update(cx, |this, cx| this.open_match(ix, cx));
+                }),
+        );
         v_flex()
             .id(("find-match", ix))
             .test_support()
@@ -195,16 +217,10 @@ impl Workspace {
             .border_color(cx.theme().border)
             .rounded_sm()
             .child(
-                h_flex().gap_2().child(div().text_sm().child(label)).child(
-                    div().id(("find-match-open", ix)).test_support().child(
-                        Button::new(("find-match-open-button", ix))
-                            .ghost()
-                            .label(FIND_OPEN)
-                            .on_click(move |_: &ClickEvent, _, cx| {
-                                let _ = workspace.update(cx, |this, cx| this.open_match(ix, cx));
-                            }),
-                    ),
-                ),
+                h_flex()
+                    .gap_2()
+                    .child(div().text_sm().child(label))
+                    .child(open),
             )
             .child(
                 h_flex()

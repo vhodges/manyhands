@@ -36,7 +36,7 @@ use gpui_kit::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
         h_flex,
-        input::{Textarea, TextareaState},
+        input::{IndentInline, OutdentInline, Textarea, TextareaState},
         v_flex,
     },
     div, px,
@@ -744,6 +744,16 @@ impl ItemPane {
             (Some(_), Some((_, state))) => div()
                 .id("item-source")
                 .test_support()
+                // Tab and shift-Tab move focus on, as from any other
+                // control: the text takes no indent, being read-only.
+                .capture_action(|_: &IndentInline, window, cx| {
+                    window.focus_next(cx);
+                    cx.stop_propagation();
+                })
+                .capture_action(|_: &OutdentInline, window, cx| {
+                    window.focus_prev(cx);
+                    cx.stop_propagation();
+                })
                 .child(
                     Textarea::new(state)
                         .readonly(true)

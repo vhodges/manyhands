@@ -223,13 +223,19 @@ impl ListDelegate for RepositoryDelegate {
                 .font_weight(gpui_kit::FontWeight::BOLD)
                 .child(SELECTED)
         });
+        // "Selected" has one meaning here. The Kit's wrapper marks the row
+        // the arrows are on as its own cursor state; the chosen repository
+        // says Selected, in text and in its description.
+        let mut entry = v_flex()
+            .id(("repo-row", index))
+            .test_support()
+            .aria_label(row.name.clone());
+        if row.selected {
+            entry = entry.aria_description(SELECTED);
+        }
         Some(
             ListItem::new(("repo-item", index)).child(
-                v_flex()
-                    .id(("repo-row", index))
-                    .test_support()
-                    .aria_label(row.name.clone())
-                    .aria_selected(row.selected)
+                entry
                     .child(
                         h_flex()
                             .gap_2()

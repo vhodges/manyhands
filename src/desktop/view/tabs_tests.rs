@@ -10,7 +10,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{CLOSE_TAB, SHOWN};
+use super::SHOWN;
 use crate::desktop::{
     model::navigation::OpenTarget,
     services::{
@@ -330,8 +330,8 @@ fn closing_the_shown_tab_shows_its_neighbor_and_the_last_empties_the_content(
     open(&shell, ticket(&a, THREE), cx);
     shell.click(("tab", 1usize), cx);
     assert_eq!(
-        shell.label(("tab-close", 1usize), cx).as_deref(),
-        Some(CLOSE_TAB)
+        shell.label(("tab-close", 1usize), cx),
+        Some(super::close_label("Two"))
     );
 
     shell.click(("tab-close", 1usize), cx);
@@ -624,4 +624,114 @@ fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext
     assert!(!shell.present("item-not-refreshed", cx));
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
     assert_eq!(source_state(&shell, cx), Some(source));
+}
+
+/// Focuses the shown tab's source text field, as a click into it does.
+fn focus_source(shell: &Shell, cx: &mut TestAppContext) -> Entity<TextareaState> {
+    let source = source_state(shell, cx).expect("the source is shown");
+    let mut visual = shell.visual(cx);
+    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
+    visual.run_until_parked();
+    assert!(source_focused(shell, &source, cx));
+    source
+}
+
+fn source_focused(shell: &Shell, source: &Entity<TextareaState>, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, cx| {
+        gpui_kit::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+    })
+}
+
+/// The tab keys work with focus in the shown item's read-only source:
+/// `ctrl-tab` and `ctrl-shift-tab` move to the next and previous tab and
+/// `secondary-w` closes the shown one, each with focus following. Tab
+/// and shift-Tab leave the source, which takes no indent.
+#[gpui_kit::test]
+fn the_tab_keys_work_from_inside_the_source(cx: &mut TestAppContext) {
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+    open(&shell, ticket(&a, THREE), cx);
+    shell.click(("tab", 1usize), cx);
+    assert_eq!(title(&shell, cx).as_deref(), Some("Two"));
+
+    focus_source(&shell, cx);
+    shell.keys("ctrl-tab", cx);
+    assert_eq!(shown(&shell, cx), Some(2));
+    assert!(tab_focused(&shell, 2, cx));
+
+    focus_source(&shell, cx);
+    shell.keys("ctrl-shift-tab", cx);
+    assert_eq!(shown(&shell, cx), Some(1));
+    assert!(tab_focused(&shell, 1, cx));
+
+    focus_source(&shell, cx);
+    shell.keys("secondary-w", cx);
+    assert_eq!(strip(&shell, cx), ["One", "Three"]);
+    assert_eq!(shown(&shell, cx), Some(1));
+    assert!(tab_focused(&shell, 1, cx));
+
+    let source = focus_source(&shell, cx);
+    let text = source.read_with(cx, |state, _| state.value().to_string());
+    shell.keys("tab", cx);
+    assert!(
+        !source_focused(&shell, &source, cx),
+        "Tab leaves the source"
+    );
+    assert!(
+        shell.frame(cx, |window, cx| window.focused(cx).is_some()),
+        "for the next control"
+    );
+    focus_source(&shell, cx);
+    shell.keys("shift-tab", cx);
+    assert!(
+        !source_focused(&shell, &source, cx),
+        "shift-Tab leaves the source"
+    );
+    assert_eq!(
+        source.read_with(cx, |state, _| state.value().to_string()),
+        text,
+        "no indent was made"
+    );
+}
+
+/// The strip is a tab list. Each tab is a tab stop, and its close
+/// control follows it, labeled with the tab it closes: from the shown
+/// tab, Tab reaches its own close control, and Enter closes that tab.
+#[gpui_kit::test]
+fn each_close_control_follows_its_tab_and_names_it(cx: &mut TestAppContext) {
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+    open(&shell, ticket(&a, THREE), cx);
+    shell.click(("tab", 1usize), cx);
+    assert_eq!(
+        shell.frame(cx, |window, _| window.find("tab-strip").role()),
+        Some(gpui_kit::Role::TabList)
+    );
+    for (ix, name) in ["One", "Two", "Three"].into_iter().enumerate() {
+        assert_eq!(
+            shell.label(("tab-close", ix), cx),
+            Some(super::close_label(name))
+        );
+    }
+
+    shell.keys("secondary-3", cx);
+    assert!(tab_focused(&shell, 1, cx));
+    shell.keys("tab", cx);
+    assert!(shell.frame(cx, |window, _| {
+        window.find(("tab-close", 1usize)).focused() == Some(true)
+    }));
+    shell.press("enter", cx);
+    assert_eq!(strip(&shell, cx), ["One", "Three"], "the shown tab closed");
+    assert_eq!(shown(&shell, cx), Some(1));
+    assert!(shell.present(Region::Content.ring_id(), cx));
+
+    // Tab moves from a tab to the next tab's entry past its close control,
+    // and Enter there shows it.
+    shell.keys("secondary-3", cx);
+    shell.keys("shift-tab shift-tab", cx);
+    assert!(tab_focused(&shell, 0, cx));
+    shell.press("enter", cx);
+    assert_eq!(shown(&shell, cx), Some(0));
 }

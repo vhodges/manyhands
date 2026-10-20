@@ -135,6 +135,10 @@ pub(crate) struct Workspace {
     pub(super) find_input: Entity<InputState>,
     pub(super) find: Find,
     pub(super) find_read: Option<Task<()>>,
+    /// Around each match's Open, whose own focus is the Kit's.
+    pub(super) find_focus: Vec<FocusHandle>,
+    /// Around each pane and filter choice, by its element id.
+    pub(super) choice_focus: HashMap<&'static str, FocusHandle>,
     _find_events: Subscription,
     /// The open tabs.
     pub(super) content: Content,
@@ -143,8 +147,10 @@ pub(crate) struct Workspace {
     _settings_events: Subscription,
     /// The region that last held focus, where focus goes back to when the
     /// control holding it is no longer drawn.
-    last_region: Option<Region>,
+    pub(super) last_region: Option<Region>,
     pub(super) quit: QuitPhase,
+    /// Quit now's focus: a tab stop, focused when quitting starts to wait.
+    pub(super) quit_focus: FocusHandle,
     /// The passphrase dialog, while it is open. The dialog layer owns it.
     pub(super) passphrase: Option<WeakEntity<PassphraseDialog>>,
     /// The launch refreshes were submitted: once, after the repository
@@ -157,6 +163,11 @@ pub(crate) struct Workspace {
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
     /// The Abandon controls the frame being drawn shows.
     abandon_drawn: HashSet<(RepoKey, String)>,
+    /// The focus around each control of this session's requests, by its
+    /// element id, so a dialog one opens can give focus back to it.
+    control_focus: HashMap<String, FocusHandle>,
+    /// The request controls the frame being drawn shows.
+    control_drawn: HashSet<String>,
     _operations: Subscription,
     _focus_lost: Subscription,
     _ticket_events: Subscription,
@@ -251,17 +262,24 @@ impl Workspace {
             find_input,
             find: Find::default(),
             find_read: None,
+            find_focus: Vec::new(),
+            choice_focus: super::lists::choice_ids()
+                .map(|id| (id, cx.focus_handle()))
+                .collect(),
             _find_events: find_events,
             content,
             settings,
             _settings_events: settings_events,
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
+            quit_focus: cx.focus_handle().tab_stop(true),
             passphrase: None,
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),
             abandon_drawn: HashSet::new(),
+            control_focus: HashMap::new(),
+            control_drawn: HashSet::new(),
             _operations: operations,
             _focus_lost: focus_lost,
             _ticket_events: ticket_events,
@@ -297,6 +315,18 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents
+    }
+
+    /// The focus of the repository selector's Kit list.
+    #[cfg(test)]
+    pub(crate) fn repositories_list_focus(&self, cx: &App) -> FocusHandle {
+        gpui_kit::Focusable::focus_handle(self.repositories_pane.list().read(cx), cx)
+    }
+
+    /// The focus of the ticket list's Kit list.
+    #[cfg(test)]
+    pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
+        gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
 
     /// Reads the repository list again.
@@ -783,12 +813,25 @@ impl Workspace {
             .clone()
     }
 
-    /// Lets go of the focus of every Abandon this frame does not draw. One
-    /// that held focus, its row gone (abandoned, resumed, or read again
-    /// without it), gives focus back through `focus_lost`.
+    /// The focus around the request control `id`, made the first time it
+    /// is drawn.
+    pub(super) fn control_focus_for(&mut self, id: String, cx: &mut Context<Self>) -> FocusHandle {
+        self.control_drawn.insert(id.clone());
+        self.control_focus
+            .entry(id)
+            .or_insert_with(|| cx.focus_handle())
+            .clone()
+    }
+
+    /// Lets go of the focus of every Abandon and request control this frame
+    /// does not draw. One that held focus, its row gone (abandoned,
+    /// resumed, dismissed, retried, or read again without it), gives focus
+    /// back through `focus_lost`.
     fn prune_abandon_focus(&mut self) {
         let drawn = std::mem::take(&mut self.abandon_drawn);
         self.abandon_focus.retain(|key, _| drawn.contains(key));
+        let drawn = std::mem::take(&mut self.control_drawn);
+        self.control_focus.retain(|key, _| drawn.contains(key));
     }
 
     #[cfg(test)]
@@ -835,7 +878,16 @@ impl Workspace {
             };
             operations.recovery_step(id, action)
         };
-        let origin = self.regions[Region::Operations.index()].clone();
+        // A dialog the action opens gives focus back to the action's own
+        // control (design, Layout And Keyboard); the region's, when that
+        // control is not drawn.
+        let origin = self
+            .control_focus
+            .get(&super::operations::recovery_id(id, n))
+            .cloned()
+            .unwrap_or_else(|| self.regions[Region::Operations.index()].clone());
+        window.focus(&origin, cx);
+        self.last_region = Some(Region::Operations);
         match step {
             Some(RecoveryStep::Submit(intent)) => {
                 self.services
@@ -941,7 +993,7 @@ impl Render for Workspace {
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
         }
-        let finishing = self.finishing(cx);
+        let finishing = self.finishing(window, cx);
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
@@ -951,7 +1003,7 @@ impl Render for Workspace {
             &self.content.scroll,
             cx,
         );
-        let navigation = self.navigation_pane(cx);
+        let navigation = self.navigation_pane(window, cx);
         // A control that took focus since the last frame is scrolled into
         // view as it is drawn.
         self.content.scroll.note_focus(window.focused(cx).as_ref());

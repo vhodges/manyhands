@@ -15,7 +15,9 @@
 //!
 //! `ctrl-tab` and `ctrl-shift-tab` move through the tabs, `secondary-w`
 //! closes the shown one; focus follows to the shown tab. The shown tab
-//! says so in text, not by color alone.
+//! says so in text, not by color alone. The strip is a tab list: each
+//! tab is a tab stop, followed by its close control, which names the tab
+//! it closes.
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -42,7 +44,15 @@ use crate::desktop::model::{
 
 /// The shown tab's marker.
 pub(crate) const SHOWN: &str = "Shown";
-pub(crate) const CLOSE_TAB: &str = "Close tab";
+pub(crate) const CLOSE_TAB: &str = "Close";
+/// The tab strip's name.
+pub(crate) const OPEN_TABS: &str = "Open tabs";
+
+/// The label of the close control of the tab titled `title`: it names the
+/// tab it closes, which need not be the shown one.
+pub(crate) fn close_label(title: &str) -> String {
+    format!("{CLOSE_TAB} {title}")
+}
 
 /// The open tabs, each tab's item view and the focus of its strip entry.
 #[derive(Default)]
@@ -50,6 +60,8 @@ pub(crate) struct Content {
     tabs: Tabs,
     panes: HashMap<TabId, Entity<ItemPane>>,
     focus: HashMap<TabId, FocusHandle>,
+    /// Around each tab's close control, whose own focus is the Kit's.
+    close_focus: HashMap<TabId, FocusHandle>,
     /// Each tab's subscription to its relationship rows.
     related: HashMap<TabId, Subscription>,
     /// The region's scrolling, shared with each tab's item view.
@@ -69,6 +81,7 @@ impl Content {
     fn forget(&mut self, id: TabId) {
         self.panes.remove(&id);
         self.focus.remove(&id);
+        self.close_focus.remove(&id);
         self.related.remove(&id);
     }
 }
@@ -115,7 +128,11 @@ impl Workspace {
             });
             self.content.related.insert(id, related);
             self.content.panes.insert(id, pane);
-            self.content.focus.insert(id, cx.focus_handle());
+            // A tab stop: Tab reaches each tab, then its close control.
+            self.content
+                .focus
+                .insert(id, cx.focus_handle().tab_stop(true));
+            self.content.close_focus.insert(id, cx.focus_handle());
         }
         cx.notify();
     }
@@ -198,7 +215,13 @@ impl Workspace {
         let (ring, border) = (theme.ring, theme.border);
         let shown = self.content.tabs.active();
         let count = self.content.tabs.tabs().len();
-        let mut strip = h_flex().id("tab-strip").gap_1().flex_wrap();
+        let mut strip = h_flex()
+            .id("tab-strip")
+            .test_support()
+            .role(Role::TabList)
+            .aria_label(OPEN_TABS)
+            .gap_1()
+            .flex_wrap();
         for (ix, (id, _)) in self.content.tabs.tabs().iter().enumerate() {
             let id = *id;
             let active = shown == Some(id);
@@ -226,7 +249,7 @@ impl Workspace {
                 .child(
                     h_flex()
                         .gap_1()
-                        .child(div().text_sm().child(title))
+                        .child(div().text_sm().child(title.clone()))
                         .children(active.then(|| {
                             div()
                                 .id(("tab-shown", ix))
@@ -247,11 +270,13 @@ impl Workspace {
                     div()
                         .id(("tab-close", ix))
                         .test_support()
-                        .aria_label(CLOSE_TAB)
+                        .aria_label(close_label(&title))
+                        .when_some_focus(self.content.close_focus.get(&id))
                         .child(
                             Button::new(("tab-close-button", ix))
                                 .ghost()
                                 .label("×")
+                                .accessibility_label(close_label(&title))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     this.close_tab(id, cx)
                                 })),
