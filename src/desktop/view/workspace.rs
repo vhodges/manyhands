@@ -310,6 +310,12 @@ impl Workspace {
             cx,
             |this: &mut Self, stamp, result, cx| {
                 if this.navigation.apply_repositories(stamp, result) {
+                    // A root the new rows no longer give is no longer
+                    // registered: its tabs close (ruling R-T13a). A reload
+                    // that kept the old rows drops none.
+                    for root in this.navigation.take_dropped() {
+                        this.close_repository(&root, cx);
+                    }
                     // A selection the list no longer gives has no lists.
                     if this.navigation.selected().is_none() {
                         this.clear_lists(cx);
@@ -556,9 +562,9 @@ impl Workspace {
         if changed.is_empty() {
             return;
         }
-        // A removal that succeeded closes every tab of its root, so a
-        // later registration there inherits none, and lets its selection
-        // go. One started from the settings, the sidebar or a recovery
+        // A removal that succeeded, or found the registration already
+        // gone, closes every tab of its root, so a later registration
+        // there inherits none, and lets its selection go. One started from the settings, the sidebar or a recovery
         // action all end here; a refused one changes neither.
         for root in &changed.removed {
             self.close_repository(root, cx);

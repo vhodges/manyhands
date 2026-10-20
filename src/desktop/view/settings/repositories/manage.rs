@@ -14,10 +14,10 @@
 //!
 //! **Remove** builds `Intent::RepoRemove` for the chosen root and opens
 //! the confirmation dialog, which says local files remain. What a
-//! successful removal does to the tabs and the selection, the workspace
-//! does, for a removal started from anywhere (`Workspace::
-//! operations_changed`). Here the list is read again, and the removed
-//! root is no longer the chosen one.
+//! removal (succeeded, or `already_applied`) does to the tabs and the
+//! selection, the workspace does, for a removal started from anywhere
+//! (`Workspace::operations_changed`). Here the list is read again, and
+//! a chosen root the list no longer gives is let go.
 //!
 //! The list is read when the page is made and again whenever a request
 //! that registers, removes or sets an identity finishes, whoever started
@@ -67,6 +67,7 @@ pub(crate) const INITIALS_FIELD: &str = "Initials (two or three letters or digit
 pub(crate) const INITIALS_UNCHANGED: &str = "Leave initials as they are";
 pub(crate) const INITIALS_CLEAR: &str = "Clear initials";
 pub(crate) const INITIALS_SET: &str = "Set initials";
+pub(crate) const CHOSEN: &str = "Chosen";
 pub(crate) const SET_IDENTITY: &str = "Set identity";
 pub(crate) const REMOVE: &str = "Remove repository";
 pub(crate) const REMOVE_NOTE: &str =
@@ -105,6 +106,15 @@ impl Initials {
             Self::Unchanged => "identity-initials-unchanged",
             Self::Clear => "identity-initials-clear",
             Self::Set => "identity-initials-set",
+        }
+    }
+
+    /// The marker drawn beside the chosen one.
+    fn chosen_id(self) -> &'static str {
+        match self {
+            Self::Unchanged => "identity-initials-unchanged-chosen",
+            Self::Clear => "identity-initials-clear-chosen",
+            Self::Set => "identity-initials-set-chosen",
         }
     }
 
@@ -157,6 +167,9 @@ pub(super) struct Managed {
     rows: Vec<FocusHandle>,
     /// The finished requests already answered, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
+    /// The removals the session had recorded when the list was last read
+    /// for them (`Operations::removals`).
+    removals: u64,
 }
 
 /// The requests whose finishing can change what the section lists.
@@ -182,6 +195,7 @@ impl Managed {
             .filter(|request| matches!(request.state, RequestState::Finished(..)))
             .map(|request| (request.id, request.attempt))
             .collect();
+        let removals = services.operations().read(cx).removals();
         Self {
             registrations: Read::None,
             list_generations: Generations::default(),
@@ -195,6 +209,7 @@ impl Managed {
             pending: None,
             rows: Vec::new(),
             seen,
+            removals,
         }
     }
 }
@@ -209,6 +224,14 @@ impl RepositoriesPage {
             Read::Ready(roots) => roots.clone(),
             _ => Vec::new(),
         }
+    }
+
+    /// Lets the chosen root go.
+    fn forget_root(&mut self) {
+        self.managed.root = None;
+        self.managed.identity = Read::None;
+        self.managed.identity_read = None;
+        self.managed.identity_generations.next(SCOPE);
     }
 
     /// The shown identity's name line.
@@ -236,9 +259,19 @@ impl RepositoriesPage {
                 if !this.managed.list_generations.is_current(&stamp) {
                     return;
                 }
+                let listed = this.managed.listed_root();
                 this.managed.registrations = Read::from_result(result, |list| {
                     list.items.into_iter().map(|summary| summary.root).collect()
                 });
+                // A chosen root the list gave and gives no more is gone from
+                // the registry (ruling R-T13a). One never listed, as the
+                // `repo.identity_set` recovery may choose, stays.
+                if listed
+                    && matches!(this.managed.registrations, Read::Ready(_))
+                    && !this.managed.listed_root()
+                {
+                    this.forget_root();
+                }
                 cx.notify();
             },
         ));
@@ -372,7 +405,7 @@ impl RepositoriesPage {
         let mut removed = false;
         let operations = self.services.operations().clone();
         for request in operations.read(cx).requests() {
-            let RequestState::Finished(outcome, ..) = &request.state else {
+            let RequestState::Finished(outcome, code, ..) = &request.state else {
                 continue;
             };
             if !concerns(&request.intent)
@@ -384,17 +417,25 @@ impl RepositoriesPage {
             let chosen = request.intent.root() == self.managed.root.as_deref();
             match request.intent {
                 Intent::RepoIdentitySet { .. } if chosen => identity = true,
-                Intent::RepoRemove { .. } if chosen && *outcome == Outcome::Success => {
+                Intent::RepoRemove { .. }
+                    if chosen
+                        && (*outcome == Outcome::Success
+                            || *code == ResultCode::AlreadyApplied) =>
+                {
                     removed = true
                 }
                 _ => {}
             }
         }
+        // A removal this session recorded, a preview answered
+        // `already_applied` among them, changes the list.
+        let removals = operations.read(cx).removals();
+        if removals != self.managed.removals {
+            self.managed.removals = removals;
+            list = true;
+        }
         if removed {
-            self.managed.root = None;
-            self.managed.identity = Read::None;
-            self.managed.identity_read = None;
-            self.managed.identity_generations.next(SCOPE);
+            self.forget_root();
         } else if identity {
             self.load_identity(cx);
         }
@@ -509,18 +550,20 @@ impl RepositoriesPage {
         let mut choice = h_flex().gap_2().flex_wrap();
         for initials in Initials::ALL {
             let chosen = self.managed.initials == initials;
-            choice = choice.child(self.button(
-                initials.id(),
-                initials.label(),
-                chosen,
-                false,
-                move |this, _, cx| this.choose_initials(initials, cx),
-                cx,
-            ));
+            choice = choice
+                .child(self.button(
+                    initials.id(),
+                    initials.label(),
+                    chosen,
+                    false,
+                    move |this, _, cx| this.choose_initials(initials, cx),
+                    cx,
+                ))
+                .children(chosen.then(|| text(initials.chosen_id(), CHOSEN)));
         }
         v_flex().gap_1().child(choice).child(text(
             "identity-initials-chosen",
-            self.managed.initials.label(),
+            chosen(self.managed.initials.label()),
         ))
     }
 
@@ -573,5 +616,22 @@ impl RepositoriesPage {
                 .child(div().text_xs().text_color(muted).child(REMOVE_NOTE))
                 .child(remove),
         )
+    }
+}
+
+/// The line that says which initials choice is chosen.
+pub(crate) fn chosen(label: &str) -> String {
+    format!("{CHOSEN}: {label}")
+}
+
+impl Managed {
+    /// Whether the chosen root is among the listed registrations.
+    fn listed_root(&self) -> bool {
+        let (Read::Ready(roots), Some(root)) = (&self.registrations, &self.root) else {
+            return false;
+        };
+        roots
+            .iter()
+            .any(|listed| std::path::Path::new(listed) == root)
     }
 }

@@ -265,10 +265,10 @@ fn a_finished_settings_request_does_not_mark_items_changed() {
 }
 
 /// A removal that succeeded names its root removed, so the workspace
-/// closes its tabs and lets its selection go. One that was refused, or
-/// found the registration already gone, does not.
+/// closes its tabs and lets its selection go, and so does one that found
+/// the registration already gone (ruling R-T13a). A refused one does not.
 #[test]
-fn only_a_successful_removal_names_its_root_removed() {
+fn a_successful_or_already_applied_removal_names_its_root_removed() {
     let mut operations = Operations::default();
     let removal = |id: u64, root: &str| {
         let mut removal = request(id);
@@ -310,7 +310,7 @@ fn only_a_successful_removal_names_its_root_removed() {
     let changed = operations.take_changed();
     assert_eq!(
         changed.removed.into_iter().collect::<Vec<_>>(),
-        ["/fixture/a".to_owned()]
+        ["/fixture/a".to_owned(), "/fixture/c".to_owned()]
     );
     assert_eq!(changed.roots.len(), 3);
     assert!(changed.items.is_empty());
@@ -552,4 +552,43 @@ fn a_prompt_is_kept_until_taken_once() {
     ));
     // No request was listed for it.
     assert!(operations.requests().is_empty());
+}
+
+/// Ruling R-T13a: our own removal answered `already_applied` counts as
+/// removed, and so does marking a root removed.
+#[test]
+fn a_removal_already_applied_names_its_root_removed() {
+    let mut operations = Operations::default();
+    let mut removal = request(1);
+    removal.intent = Intent::RepoRemove {
+        root: PathBuf::from("/fixture/a"),
+    };
+    operations.apply(WorkerEvent::Queued(removal));
+    operations.apply(WorkerEvent::Finished(
+        DesktopRequestId(1),
+        Box::new(Envelope::mutation(
+            "repo remove",
+            Scope::default(),
+            Outcome::Noop,
+            ResultCode::AlreadyApplied,
+        )),
+    ));
+    assert_eq!(
+        operations
+            .take_changed()
+            .removed
+            .into_iter()
+            .collect::<Vec<_>>(),
+        ["/fixture/a".to_owned()]
+    );
+    operations.mark_removed("/fixture/b".to_owned());
+    let changed = operations.take_changed();
+    assert_eq!(
+        changed.removed.into_iter().collect::<Vec<_>>(),
+        ["/fixture/b".to_owned()]
+    );
+    assert_eq!(
+        changed.roots.into_iter().collect::<Vec<_>>(),
+        ["/fixture/b".to_owned()]
+    );
 }

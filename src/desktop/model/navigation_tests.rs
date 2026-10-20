@@ -365,3 +365,27 @@ fn forgetting_the_selected_root_clears_the_selection() {
     assert_eq!(navigation.take_vanished(), None);
     assert!(navigation.entry("/r/a").is_none());
 }
+
+/// Ruling R-T13a: a list read that replaces the rows names the roots it
+/// no longer gives, once; one that stays busy or fails names none.
+#[test]
+fn a_replacing_list_read_names_the_roots_it_dropped() {
+    let mut navigation = loaded(&["/r/a", "/r/b"]);
+    assert!(navigation.take_dropped().is_empty());
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, ReadResult::Busy));
+    assert!(navigation.take_dropped().is_empty());
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(
+        stamp,
+        ReadResult::Failed(ReadFailure {
+            code: ResultCode::InternalError,
+            recovery: Vec::new(),
+        })
+    ));
+    assert!(navigation.take_dropped().is_empty());
+    let stamp = navigation.load_repositories();
+    assert!(navigation.apply_repositories(stamp, list(&["/r/b", "/r/c"])));
+    assert_eq!(navigation.take_dropped(), ["/r/a".to_owned()]);
+    assert!(navigation.take_dropped().is_empty());
+}

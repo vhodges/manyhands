@@ -22,7 +22,7 @@ use manyhands::{
         OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
         OperationNextAction, ProgressStage,
     },
-    results::{Outcome, RecoveryAction, RecoveryActionKind},
+    results::{Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
 use super::{
@@ -60,6 +60,8 @@ pub(crate) struct Operations {
     /// The passphrase the running job asks for, until the workspace takes
     /// it to show. It holds no secret: only where the reply goes.
     prompt: Option<PromptRequest>,
+    /// How many removals were recorded (`removals`).
+    removals: u64,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -71,8 +73,9 @@ pub(crate) struct Changed {
     /// Those whose request could change items (`Intent::changes_items`,
     /// ruling R-B2): their open tabs are read again too.
     pub items: BTreeSet<RepoKey>,
-    /// Those whose registration a finished `repo remove` took out: their
-    /// tabs close and their selection goes (design, Repositories).
+    /// Those whose registration this session's `repo remove` took out, or
+    /// found already gone (ruling R-T13a): their tabs close and their
+    /// selection goes (design, Repositories).
     pub removed: BTreeSet<RepoKey>,
 }
 
@@ -129,10 +132,11 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
-                // Only a removal that succeeded took its registration out:
-                // a refused one left it, and one whose end state already
-                // held found it gone or another in its place.
-                let removed = envelope.outcome == Outcome::Success;
+                // A removal that succeeded took its registration out, and one
+                // answered `already_applied` found it gone (ruling R-T13a); a
+                // refused one left it.
+                let removed = envelope.outcome == Outcome::Success
+                    || envelope.code == ResultCode::AlreadyApplied;
                 let root = self.request(id).and_then(|request| {
                     let root = request.intent.root()?.to_str()?.to_owned();
                     let removed = removed && matches!(request.intent, Intent::RepoRemove { .. });
@@ -151,6 +155,7 @@ impl Operations {
                 if let Some((root, items, removed)) = root {
                     if removed {
                         self.changed.removed.insert(root.clone());
+                        self.removals += 1;
                     }
                     self.changed.insert(root, items);
                 }
@@ -198,6 +203,20 @@ impl Operations {
     /// again; with `items`, its open tabs too.
     pub(crate) fn mark_changed(&mut self, root: RepoKey, items: bool) {
         self.changed.insert(root, items);
+    }
+
+    /// Says `root`'s registration was removed by this session (ruling
+    /// R-T13a): its tabs close and its selection goes.
+    pub(crate) fn mark_removed(&mut self, root: RepoKey) {
+        self.changed.removed.insert(root.clone());
+        self.removals += 1;
+        self.changed.insert(root, false);
+    }
+
+    /// How many removals this session has recorded: a view that shows
+    /// registrations reads them again when it moves on.
+    pub(crate) fn removals(&self) -> u64 {
+        self.removals
     }
 
     /// What was marked changed since the last call.

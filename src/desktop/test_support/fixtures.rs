@@ -567,20 +567,21 @@ pub(crate) fn remove_registration(service: &RepositoryService, root: &Path) {
     assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
 }
 
-/// Sets `root`'s own identity to `identity`, its initials left as they
-/// are, through `service`'s own `prepare` and `execute` of `repo
+/// Sets `root`'s own identity to `identity` and its initials as
+/// `initials` says, through `service`'s own `prepare` and `execute` of `repo
 /// identity-set`: a second actor, on a service other than the desktop's.
 pub(crate) fn set_identity_through(
     service: &RepositoryService,
     root: &Path,
     identity: &CommitIdentity,
+    initials: InitialsChange,
 ) {
     let input = || {
         Mutation::RepoIdentitySet(RepoIdentitySetInput {
             root: root.to_owned(),
             name: identity.name.clone(),
             email: identity.email.clone(),
-            initials: InitialsChange::Unchanged,
+            initials: initials.clone(),
         })
     };
     let prepared = service.prepare(&input());

@@ -299,8 +299,17 @@ impl ConfirmDialog {
                 {
                     let root = root.to_owned();
                     let items = self.intent.changes_items();
+                    // A removal whose registration is already gone counts as
+                    // removed: its tabs close and its selection goes (ruling
+                    // R-T13a).
+                    let removed = code == ResultCode::AlreadyApplied
+                        && matches!(self.intent, Intent::RepoRemove { .. });
                     self.services.operations().update(cx, |operations, cx| {
-                        operations.mark_changed(root, items);
+                        if removed {
+                            operations.mark_removed(root);
+                        } else {
+                            operations.mark_changed(root, items);
+                        }
                         cx.notify();
                     });
                 }

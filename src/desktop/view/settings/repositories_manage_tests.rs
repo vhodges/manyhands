@@ -4,20 +4,20 @@
 //! command's typed failure, Escape and a stale preview, and the
 //! `repo.identity_set` recovery.
 
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Duration};
 
 use gpui_kit::TestAppContext;
 use manyhands::{
     canonical::CONFIG_PATH,
     repository::{
-        CommitIdentity, IdentityDto, InitialsChange, ItemDtoKind, Mutation, RepoIdentitySetInput,
-        RepoRemoveInput, RepositoryService,
+        CommitIdentity, IdentityDto, InitialsChange, ItemDtoKind, LeaseKind, Mutation,
+        RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
     },
     results::{Outcome, ResultCode},
 };
 
 use super::{
-    manage::{INITIALS_CLEAR, INITIALS_SET, INITIALS_UNCHANGED, NO_IDENTITY},
+    manage::{CHOSEN, INITIALS_CLEAR, INITIALS_SET, INITIALS_UNCHANGED, NO_IDENTITY, chosen},
     tests::{control_focus, finished, page, registered, set, settings, value},
 };
 use crate::desktop::{
@@ -150,8 +150,8 @@ fn the_page_lists_registrations_and_shows_the_chosen_ones_identity(cx: &mut Test
     assert_eq!(value(&shell, "identity-name", cx), identity().name);
     assert_eq!(value(&shell, "identity-email", cx), identity().email);
     assert_eq!(
-        shell.label("identity-initials-chosen", cx).as_deref(),
-        Some(INITIALS_UNCHANGED)
+        shell.label("identity-initials-chosen", cx),
+        Some(chosen(INITIALS_UNCHANGED))
     );
     assert!(!shell.present("identity-initials", cx));
 }
@@ -173,8 +173,8 @@ async fn setting_the_identity_with_initials_writes_it_and_shows_the_new_one(
     set(&shell, "identity-email", &grace().email, cx);
     shell.click("identity-initials-set", cx);
     assert_eq!(
-        shell.label("identity-initials-chosen", cx).as_deref(),
-        Some(INITIALS_SET)
+        shell.label("identity-initials-chosen", cx),
+        Some(chosen(INITIALS_SET))
     );
     set(&shell, "identity-initials", "GE", cx);
     let before = local(&root);
@@ -225,20 +225,33 @@ async fn setting_the_identity_with_initials_writes_it_and_shows_the_new_one(
     assert!(!shell.present("confirm-dialog", cx));
 }
 
-/// Clear initials maps to the library's `Clear`: the preview of a new
-/// name says the repository will hold no initials.
+/// Clear initials maps to the library's `Clear`: on a repository whose
+/// own configuration holds initials, the preview says it will hold none,
+/// and Confirm takes them out of its configuration.
 #[gpui_kit::test]
-fn clearing_initials_previews_none(cx: &mut TestAppContext) {
+async fn clearing_initials_takes_them_out_of_the_configuration(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
+    set_identity_through(
+        fixture.service(),
+        &root,
+        &identity(),
+        InitialsChange::Set("ae".to_owned()),
+    );
+    assert_eq!(local(&root).2.as_deref(), Some("ae"));
     let shell = settings(fixture, cx);
     manage(&shell, &root, cx);
-    set(&shell, "identity-name", &grace().name, cx);
     shell.click("identity-initials-clear", cx);
     assert_eq!(
-        shell.label("identity-initials-chosen", cx).as_deref(),
-        Some(INITIALS_CLEAR)
+        shell.label("identity-initials-chosen", cx),
+        Some(chosen(INITIALS_CLEAR))
     );
+    assert_eq!(
+        shell.label("identity-initials-clear-chosen", cx).as_deref(),
+        Some(CHOSEN)
+    );
+    assert!(!shell.present("identity-initials-unchanged-chosen", cx));
     shell.click("identity-submit", cx);
     assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
     let details = shell.rows("confirm-detail", cx);
@@ -246,6 +259,12 @@ fn clearing_initials_previews_none(cx: &mut TestAppContext) {
         !details.iter().any(|detail| detail.starts_with("Initials")),
         "{details:?}"
     );
+
+    shell.click("confirm-ok", cx);
+    let id = identities(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
+    assert_eq!(local(&root).2, None, "the initials are gone");
 }
 
 /// Initials that do not fit are refused by the preview with the
@@ -328,7 +347,7 @@ async fn an_identity_changed_since_its_preview_offers_prepare_again(cx: &mut Tes
         name: "Late Example".to_owned(),
         email: "late@example.invalid".to_owned(),
     };
-    set_identity_through(&other, &root, &late);
+    set_identity_through(&other, &root, &late, InitialsChange::Unchanged);
 
     shell.click("confirm-ok", cx);
     let id = identities(&shell, cx)[0];
@@ -466,9 +485,8 @@ fn escape_on_the_removal_preview_changes_nothing(cx: &mut TestAppContext) {
 /// A stale removal preview: a second actor removes the registration
 /// between the preview and Confirm. The answer, `external_change`, is
 /// shown with Prepare again; the fresh preview finds the command's end
-/// state already holds. The removal was not this request's, so its tabs
-/// are left, as for any registration a second actor removes (Review
-/// Focus 2), and the files stay.
+/// state already holds. The files stay; the tabs close once the list read
+/// after the answer no longer gives the root (ruling R-T13a).
 #[gpui_kit::test]
 async fn a_registration_removed_since_its_preview_offers_prepare_again(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -494,7 +512,7 @@ async fn a_registration_removed_since_its_preview_offers_prepare_again(cx: &mut 
     );
     assert!(registered(&shell).is_empty());
     assert!(root.join(CONFIG_PATH).is_file());
-    assert_eq!(tabs(&shell, cx), 1);
+    assert_eq!(tabs(&shell, cx), 0);
 
     // The fresh preview: nothing is left to remove.
     shell.click("confirm-prepare-again", cx);
@@ -503,7 +521,6 @@ async fn a_registration_removed_since_its_preview_offers_prepare_again(cx: &mut 
         Some(ResultCode::AlreadyApplied.as_str())
     );
     assert!(!shell.present("confirm-ok", cx));
-    assert_eq!(tabs(&shell, cx), 1);
 }
 
 /// The Part C gate (`01M4R19P94`): a registration whose folder was
@@ -602,4 +619,131 @@ fn a_repository_without_an_identity_says_so(cx: &mut TestAppContext) {
         shell.label("identity-current-name", cx).as_deref(),
         Some(NO_IDENTITY)
     );
+}
+
+fn reload_list(shell: &Shell, cx: &mut TestAppContext) {
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.run(cx);
+}
+
+fn resolution(shell: &Shell, cx: &mut TestAppContext) -> Option<Resolution> {
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .navigation()
+            .selected_entry()
+            .map(|entry| entry.resolution.clone())
+    })
+}
+
+/// Ruling R-T13a: a second actor removes the registration. A list reload
+/// that stays busy keeps the earlier rows, and the tabs with them; the
+/// reload that no longer lists the root closes its tabs. The selection
+/// stays, Unavailable as not registered (Task 4).
+#[gpui_kit::test]
+fn tabs_close_once_the_list_no_longer_gives_their_root(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    open_ticket(&shell, &root, cx);
+    let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&other, &root);
+
+    let lease = RepositoryService::hold_lease_for_testing(
+        &root,
+        shell.fixture.data_dir(),
+        LeaseKind::CacheWrite,
+    )
+    .unwrap();
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    cx.executor().advance_clock(Duration::from_secs(1));
+    shell.run(cx);
+    assert!(
+        shell.present("repositories-last-read", cx),
+        "the reload stayed busy"
+    );
+    assert_eq!(tabs(&shell, cx), 1, "a busy reload keeps the tabs");
+
+    drop(lease);
+    reload_list(&shell, cx);
+    assert_eq!(tabs(&shell, cx), 0);
+    assert_eq!(selected(&shell, cx), Some(key(&root)));
+    assert!(matches!(
+        resolution(&shell, cx),
+        Some(Resolution::Unavailable(ResultCode::RepositoryNotRegistered))
+    ));
+}
+
+/// A folder renamed away is still registered, so the list still gives it:
+/// its tabs stay, as the selection shows it Unavailable.
+#[gpui_kit::test]
+fn a_renamed_away_folder_keeps_its_tabs(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    open_ticket(&shell, &root, cx);
+    fs::rename(&root, root.with_file_name("a-away")).unwrap();
+    shell.select(&root, cx);
+    reload_list(&shell, cx);
+    assert!(matches!(
+        resolution(&shell, cx),
+        Some(Resolution::Unavailable(_))
+    ));
+    assert_eq!(tabs(&shell, cx), 1);
+}
+
+/// Ruling R-T13a: Remove on a registration a second actor already took
+/// out, while the desktop's list still gives it, is answered
+/// `already_applied`. That counts as removed: the tabs close and the
+/// selection goes.
+#[gpui_kit::test]
+fn removing_a_registration_already_gone_clears_its_tabs_and_selection(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    open_ticket(&shell, &root, cx);
+    shell.keys("secondary-,", cx);
+    manage(&shell, &root, cx);
+    let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&other, &root);
+
+    shell.click("remove-submit", cx);
+    assert_eq!(
+        shell.label("confirm-code", cx).as_deref(),
+        Some(ResultCode::AlreadyApplied.as_str())
+    );
+    assert_eq!(tabs(&shell, cx), 0);
+    assert_eq!(selected(&shell, cx), None);
+    assert!(!shell.present("managed-root", cx));
+}
+
+/// The dead end the review found: an Unavailable entry whose registration
+/// is gone. Its Remove is answered `already_applied`, and the entry goes.
+#[gpui_kit::test]
+fn the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    let other = RepositoryService::open_at(shell.fixture.data_dir()).unwrap();
+    remove_registration(&other, &root);
+    shell.select(&root, cx);
+    assert!(matches!(
+        resolution(&shell, cx),
+        Some(Resolution::Unavailable(ResultCode::RepositoryNotRegistered))
+    ));
+
+    shell.click("selection-remove", cx);
+    assert_eq!(
+        shell.label("confirm-code", cx).as_deref(),
+        Some(ResultCode::AlreadyApplied.as_str())
+    );
+    assert_eq!(selected(&shell, cx), None);
+    assert!(!shell.present("selection-unavailable", cx));
 }

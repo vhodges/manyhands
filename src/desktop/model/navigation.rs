@@ -136,6 +136,9 @@ pub(crate) struct Navigation {
     /// Why the rows shown are those of an earlier read: the last list
     /// read stayed busy or failed.
     not_reloaded: Option<NotReloaded>,
+    /// The roots the last list read that replaced the rows dropped, until
+    /// taken.
+    dropped: Vec<RepoKey>,
     pane: Pane,
     generations: Generations,
 }
@@ -157,6 +160,7 @@ impl Default for Navigation {
             kept: None,
             vanished: false,
             not_reloaded: None,
+            dropped: Vec::new(),
             pane: Pane::default(),
             generations: Generations::default(),
         }
@@ -241,6 +245,11 @@ impl Navigation {
             }
         }
         self.not_reloaded = None;
+        let listed: Vec<RepoKey> = self
+            .repositories
+            .rows()
+            .map(|rows| rows.iter().map(|entry| entry.key().clone()).collect())
+            .unwrap_or_default();
         let listed_before = self.selected.as_ref().is_some_and(|key| {
             self.repositories
                 .rows()
@@ -271,6 +280,15 @@ impl Navigation {
             complete: list.complete,
             index: None,
         });
+        // The rows were replaced: the roots they no longer give are gone
+        // from the registry (ruling R-T13a).
+        if let Some(rows) = self.repositories.rows() {
+            self.dropped.extend(
+                listed
+                    .into_iter()
+                    .filter(|root| !rows.iter().any(|entry| entry.key() == root)),
+            );
+        }
         if let Some(key) = self.selected.clone()
             && self.entry(&key).is_none()
         {
@@ -327,6 +345,12 @@ impl Navigation {
         self.vanished = false;
         self.generations.next(ViewScope::Selection);
         true
+    }
+
+    /// The roots the last list read that replaced the rows no longer
+    /// gives, taken once (ruling R-T13a).
+    pub(crate) fn take_dropped(&mut self) -> Vec<RepoKey> {
+        std::mem::take(&mut self.dropped)
     }
 
     /// Resolves `key` again: Retry. It is selected as well.
