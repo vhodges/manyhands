@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D1: Desktop Shell, Onboarding And Discovery"
 date: 2026-10-18
-status: approved
+status: "closed"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
