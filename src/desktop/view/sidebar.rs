@@ -329,6 +329,7 @@ impl RepositoriesPane {
 pub(crate) fn selection(
     navigation: &Navigation,
     remove_focus: &FocusHandle,
+    retry_focus: &FocusHandle,
     scroll: &ContentScroll,
     cx: &mut Context<Workspace>,
 ) -> impl IntoElement + use<> {
@@ -381,12 +382,12 @@ pub(crate) fn selection(
                     .child(code.message()),
             )
             .child(div().text_xs().text_color(muted).child(code.as_str()))
-            .child(h_flex().gap_2().child(retry(key.clone(), cx)).child(remove(
-                key,
-                remove_focus,
-                scroll,
-                cx,
-            ))),
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(retry(key.clone(), retry_focus, cx))
+                    .child(remove(key, remove_focus, scroll, cx)),
+            ),
         Resolution::Busy => v_flex()
             .gap_2()
             .child(
@@ -396,7 +397,7 @@ pub(crate) fn selection(
                     .aria_label(crate::desktop::model::list_state::LABEL_BUSY)
                     .child(crate::desktop::model::list_state::LABEL_BUSY),
             )
-            .child(retry(key, cx)),
+            .child(retry(key, retry_focus, cx)),
         Resolution::Failed(failure) => v_flex()
             .gap_2()
             .child(
@@ -412,17 +413,26 @@ pub(crate) fn selection(
                     .text_color(muted)
                     .child(failure.code.as_str()),
             )
-            .child(retry(key, cx)),
+            .child(retry(key, retry_focus, cx)),
     };
     v_flex().gap_3().child(heading).child(body)
 }
 
-fn retry(key: String, cx: &mut Context<Workspace>) -> impl IntoElement + use<> {
-    div().id("selection-retry").test_support().child(
-        Button::new("selection-retry-button").label(RETRY).on_click(
+/// Retry on the selection. Its wrapper tracks `focus`, around the Kit
+/// button's own, so a test sees it hold focus.
+fn retry(
+    key: String,
+    focus: &FocusHandle,
+    cx: &mut Context<Workspace>,
+) -> impl IntoElement + use<> {
+    div()
+        .id("selection-retry")
+        .test_support()
+        .aria_label(RETRY)
+        .track_focus(focus)
+        .child(Button::new("selection-retry-button").label(RETRY).on_click(
             cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_resolution(key.clone(), cx)),
-        ),
-    )
+        ))
 }
 
 /// Remove on an Unavailable entry: prepares `repo remove` of its root in

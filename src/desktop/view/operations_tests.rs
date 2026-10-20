@@ -40,6 +40,7 @@ const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
 const DOC_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG2";
 const DOC_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG3";
+const THIRD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG4";
 
 fn finished(operations: &Operations, id: DesktopRequestId) -> Option<(Outcome, ResultCode)> {
     match &operations.request(id)?.state {
@@ -390,7 +391,8 @@ async fn a_failed_refresh_and_rebuild_stay_until_dismissed_and_retry_succeeds(
 }
 
 /// A refresh held on the worker thread, as it persists, holds nothing
-/// else: the user switches repository and opens an item meanwhile. Once
+/// else: the user switches repository, opens two items and switches
+/// between their tabs meanwhile. Once
 /// it is released, the list shows what it indexed.
 #[gpui_kit::test]
 async fn a_delayed_refresh_leaves_the_user_going_on_and_the_list_updates_on_release(
@@ -401,6 +403,7 @@ async fn a_delayed_refresh_leaves_the_user_going_on_and_the_list_updates_on_rele
     let a = fixture.create_repository("a");
     let b = fixture.create_repository("b");
     fixture.commit_ticket(&a, FIRST, "In a", "");
+    fixture.commit_ticket(&a, THIRD, "Also in a", "");
     fixture.refresh(&a);
     fixture.refresh(&b);
     fixture.commit_ticket(&b, SECOND, "New in b", "");
@@ -426,19 +429,28 @@ async fn a_delayed_refresh_leaves_the_user_going_on_and_the_list_updates_on_rele
         .expect("the refresh reached its hook");
 
     shell.select(&a, cx);
-    assert_eq!(tickets(&shell, cx), ["In a"]);
-    shell.workspace.update(cx, |workspace, cx| {
-        workspace.open_item(
-            OpenTarget::Item {
-                repo: key(&a),
-                kind: ItemDtoKind::Ticket,
-                id: item_id(FIRST),
-            },
-            cx,
-        )
-    });
-    shell.run(cx);
+    let mut listed = tickets(&shell, cx);
+    listed.sort();
+    assert_eq!(listed, ["Also in a", "In a"]);
+    for id in [FIRST, THIRD] {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.open_item(
+                OpenTarget::Item {
+                    repo: key(&a),
+                    kind: ItemDtoKind::Ticket,
+                    id: item_id(id),
+                },
+                cx,
+            )
+        });
+        shell.run(cx);
+    }
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Also in a"));
+    // Tabs switch while the refresh is held.
+    shell.keys("ctrl-tab", cx);
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("In a"));
+    shell.keys("ctrl-shift-tab", cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Also in a"));
     shell.select(&b, cx);
     assert!(tickets(&shell, cx).is_empty());
     assert_eq!(state_of(&shell, refresh, cx), "running");

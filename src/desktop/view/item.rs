@@ -94,6 +94,8 @@ pub(crate) struct ItemPane {
     /// group it is, so it follows its ticket when a reload reorders the
     /// group. Only the rows drawn in the last frame keep theirs.
     pub(super) row_focus: HashMap<RowKey, FocusHandle>,
+    /// Around Copy short code and Copy ID, whose own focus is the Kit's.
+    copy_focus: [FocusHandle; 2],
     /// The index refresh Refresh asked for; the item is read again when it
     /// ends.
     refreshing: Option<DesktopRequestId>,
@@ -211,6 +213,7 @@ impl ItemPane {
             services,
             read: None,
             row_focus: HashMap::new(),
+            copy_focus: [cx.focus_handle(), cx.focus_handle()],
             refreshing: None,
             source: None,
             scroll,
@@ -500,14 +503,19 @@ impl ItemPane {
             codes = codes
                 .child(text("item-slug", slug.clone()).text_sm())
                 .child(
-                    div().id("copy-slug").test_support().child(
-                        Button::new("copy-slug-button")
-                            .ghost()
-                            .label(COPY_SLUG)
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(slug.clone()))
-                            }),
-                    ),
+                    div()
+                        .id("copy-slug")
+                        .test_support()
+                        .aria_label(COPY_SLUG)
+                        .track_focus(&self.copy_focus[0])
+                        .child(
+                            Button::new("copy-slug-button")
+                                .ghost()
+                                .label(COPY_SLUG)
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(slug.clone()))
+                                }),
+                        ),
                 );
         }
         if let Some(id) = id {
@@ -515,14 +523,19 @@ impl ItemPane {
             codes = codes
                 .child(text("item-id", id).text_sm().text_color(muted))
                 .child(
-                    div().id("copy-id").test_support().child(
-                        Button::new("copy-id-button")
-                            .ghost()
-                            .label(COPY_ID)
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                            }),
-                    ),
+                    div()
+                        .id("copy-id")
+                        .test_support()
+                        .aria_label(COPY_ID)
+                        .track_focus(&self.copy_focus[1])
+                        .child(
+                            Button::new("copy-id-button")
+                                .ghost()
+                                .label(COPY_ID)
+                                .on_click(move |_, _, cx| {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
+                                }),
+                        ),
                 );
         }
         header = header.child(codes);

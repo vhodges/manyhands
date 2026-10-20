@@ -176,6 +176,8 @@ pub(crate) struct Workspace {
     /// Around the Unavailable selection's Remove, so its dialog can give
     /// focus back.
     remove_focus: FocusHandle,
+    /// Around the selection's Retry.
+    retry_focus: FocusHandle,
 }
 
 impl Workspace {
@@ -286,6 +288,7 @@ impl Workspace {
             repositories_pane,
             _repository_events: repository_events,
             remove_focus: cx.focus_handle(),
+            retry_focus: cx.focus_handle(),
         };
         workspace.load_repositories(cx);
         workspace
@@ -1000,6 +1003,7 @@ impl Render for Workspace {
         let selection = sidebar::selection(
             &self.navigation,
             &self.remove_focus,
+            &self.retry_focus,
             &self.content.scroll,
             cx,
         );

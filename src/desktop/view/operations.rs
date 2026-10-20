@@ -452,11 +452,18 @@ impl Workspace {
                 let mut controls = h_flex().gap_2();
                 match resume_offer(&operation) {
                     ResumeOffer::Offered => {
+                        let focus = self.control_focus_for(
+                            format!(
+                                "resume:{root}:{}",
+                                operation_id.as_deref().unwrap_or_default()
+                            ),
+                            cx,
+                        );
                         let (root, operation_id) = (root.clone(), operation_id.clone());
                         controls = controls.child(button(
                             ("pending-resume", index),
                             RESUME,
-                            None,
+                            Some(&focus),
                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Some(operation_id) = &operation_id {
                                     this.resume(root.clone(), operation_id, cx);

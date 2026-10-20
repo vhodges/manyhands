@@ -73,6 +73,56 @@ impl Walk {
         }
     }
 
+    /// A walk over a window the caller opened, `a` its first repository.
+    fn over(shell: Shell, a: PathBuf) -> Self {
+        Self { shell, a }
+    }
+
+    /// Waits, with the worker running, until the request `pick` picks has
+    /// ended, and gives its outcome and code. The test allows parking.
+    async fn ended(
+        &self,
+        pick: impl Fn(&Intent) -> bool,
+        cx: &mut TestAppContext,
+    ) -> Option<(Outcome, ResultCode)> {
+        let id = *self
+            .shell
+            .requests(cx, |request| pick(&request.intent))
+            .first()
+            .expect("the request was made");
+        self.shell.until_ended(id, cx).await;
+        let operations = self.shell.operations(cx);
+        operations.read_with(cx, |operations, _| {
+            match &operations.request(id).unwrap().state {
+                RequestState::Finished(outcome, code, ..) => Some((*outcome, *code)),
+                _ => None,
+            }
+        })
+    }
+
+    /// Waits, with the worker running, until the element `id` is drawn.
+    async fn until_drawn(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let id = id.into();
+        let deadline = std::time::Instant::now() + super::harness::WAIT;
+        while !self.shell.present(id.clone(), cx) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{id:?} was never drawn"
+            );
+            cx.executor()
+                .timer(std::time::Duration::from_millis(10))
+                .await;
+            self.shell.run(cx);
+        }
+    }
+
+    /// Tab to the field `id`, in `region`, and type `text` into it.
+    fn type_into(&self, id: &'static str, text: &str, region: Region, cx: &mut TestAppContext) {
+        self.tab_to("tab", id, cx);
+        self.on(id, region, cx);
+        self.type_text(text, cx);
+    }
+
     fn keys(&self, keystrokes: &str, cx: &mut TestAppContext) {
         self.shell.keys(keystrokes, cx);
     }
@@ -531,3 +581,6 @@ fn ringed(window: &gpui_kit::Window, region: Region) {
         "the ring is visible"
     );
 }
+
+mod actions;
+mod settings;
