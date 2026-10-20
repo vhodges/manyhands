@@ -121,6 +121,14 @@ pub(crate) fn chosen_line(root: &str) -> String {
     format!("{REPOSITORY_HEADING}: {root}")
 }
 
+/// A repository's remotes, with the root they were read from: a row acts
+/// on that root only.
+#[derive(Clone)]
+struct Listed {
+    root: PathBuf,
+    items: Vec<RemoteDto>,
+}
+
 /// A read's state, as the page shows it.
 enum Read<T> {
     Loading,
@@ -166,7 +174,8 @@ pub(crate) struct RemotesPage {
     list_read: Option<Task<()>>,
     /// The repository the page works on.
     root: Option<PathBuf>,
-    remotes: Read<Vec<RemoteDto>>,
+    /// The remotes last read, with the root they were read from.
+    remotes: Read<Listed>,
     remote_generations: Generations,
     remote_read: Option<Task<()>>,
     inputs: HashMap<&'static str, Entity<InputState>>,
@@ -265,7 +274,11 @@ impl RemotesPage {
     #[cfg(test)]
     pub(crate) fn remote_names(&self) -> Vec<String> {
         match &self.remotes {
-            Read::Ready(remotes) => remotes.iter().map(|remote| remote.name.clone()).collect(),
+            Read::Ready(listed) => listed
+                .items
+                .iter()
+                .map(|remote| remote.name.clone())
+                .collect(),
             _ => Vec::new(),
         }
     }
@@ -274,7 +287,8 @@ impl RemotesPage {
     #[cfg(test)]
     pub(crate) fn selected(&self) -> Option<&str> {
         match &self.remotes {
-            Read::Ready(remotes) => remotes
+            Read::Ready(listed) => listed
+                .items
                 .iter()
                 .find(|remote| remote.selected_for_publication)
                 .map(|remote| remote.name.as_str()),
@@ -295,6 +309,12 @@ impl RemotesPage {
 
     /// Works on `root` from now on, and reads its remotes.
     fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
+        // Another repository's remotes are never left on show, not even
+        // while this one's are read: their rows would seem to be its own.
+        if root != self.root {
+            self.remotes = Read::Loading;
+            self.remote_read = None;
+        }
         self.root = root;
         self.submitted = None;
         self.load_remotes(cx);
@@ -360,22 +380,28 @@ impl RemotesPage {
             cx.notify();
             return;
         };
-        if !matches!(self.remotes, Read::Ready(_)) {
+        // The rows shown stay while the same root is read again; any
+        // other root's go.
+        if !matches!(&self.remotes, Read::Ready(listed) if listed.root == root) {
             self.remotes = Read::Loading;
         }
+        let read_root = root.clone();
         self.remote_read = Some(self.services.read(
             ReadKind::Remotes,
             stamp,
             move |service| {
-                let repo = service.resolve_repository(&root)?;
+                let repo = service.resolve_repository(&read_root)?;
                 service.list_remotes_redacted(&repo)
             },
             cx,
-            |this: &mut Self, stamp, result, cx| {
+            move |this: &mut Self, stamp, result, cx| {
                 if !this.remote_generations.is_current(&stamp) {
                     return;
                 }
-                this.remotes = Read::from_result(result, |list| list.items);
+                this.remotes = Read::from_result(result, |list| Listed {
+                    root,
+                    items: list.items,
+                });
                 cx.notify();
             },
         ));
@@ -414,15 +440,24 @@ impl RemotesPage {
         self.submit(intent, cx);
     }
 
-    /// Select for publication, or Select none with no `name`, as a user
-    /// job.
-    fn submit_select(&mut self, name: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
+    /// Whether `root`, the repository a row was read from, is still the
+    /// one the page works on: a row left from another never acts.
+    fn current(&self, root: &Path) -> bool {
+        self.root.as_deref() == Some(root)
+    }
+
+    /// Select for publication, or Select none with no `name`, of `root`,
+    /// the repository the row was read from, as a user job.
+    fn submit_select(
+        &mut self,
+        root: PathBuf,
+        name: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) || !self.current(&root) {
             return;
         }
-        let Some(root) = self.root.clone() else {
-            return;
-        };
         let intent = Intent::RemoteSelect { root, name };
         debug_assert!(!intent.confirmed());
         self.submit(intent, cx);
@@ -437,21 +472,20 @@ impl RemotesPage {
         cx.notify();
     }
 
-    /// Remove: `remote remove` of `name`, in the confirmation dialog.
-    /// Focus goes back to what held it when the dialog closes.
+    /// Remove: `remote remove` of `name` in `root`, the repository the row
+    /// was read from, in the confirmation dialog. Focus goes back to what
+    /// held it when the dialog closes.
     fn submit_remove(
         &mut self,
+        root: PathBuf,
         name: String,
         ix: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if window.has_active_dialog(cx) {
+        if window.has_active_dialog(cx) || !self.current(&root) {
             return;
         }
-        let Some(root) = self.root.clone() else {
-            return;
-        };
         let intent = Intent::RemoteRemove { root, name };
         debug_assert!(intent.confirmed());
         let origin = match window.focused(cx) {
@@ -633,19 +667,24 @@ impl RemotesPage {
     fn remote_row(
         &mut self,
         ix: usize,
+        root: &Path,
         remote: &RemoteDto,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let name = remote.name.clone();
+        let target = root.to_owned();
         let select = self.button(
             ("remote-select", ix),
             format!("remote-select-{ix}"),
             SELECT,
-            move |this, window, cx| this.submit_select(Some(name.clone()), window, cx),
+            move |this, window, cx| {
+                this.submit_select(target.clone(), Some(name.clone()), window, cx)
+            },
             cx,
         );
         let name = remote.name.clone();
+        let target = root.to_owned();
         let remove = {
             let id = format!("remote-remove-{ix}");
             let focus = self.focus(id.clone(), cx);
@@ -653,7 +692,7 @@ impl RemotesPage {
                 .danger()
                 .label(REMOVE)
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.submit_remove(name.clone(), ix, window, cx)
+                    this.submit_remove(target.clone(), name.clone(), ix, window, cx)
                 }));
             wrapped(("remote-remove", ix), REMOVE, &focus, &self.scroll, button)
         };
@@ -702,10 +741,17 @@ impl RemotesPage {
         if let Some(state) = Self::state_line("remotes-state", &self.remotes, READING_REMOTES, cx) {
             return body.child(state);
         }
-        let Read::Ready(remotes) = &self.remotes else {
+        let Read::Ready(listed) = &self.remotes else {
             return body;
         };
-        let remotes = remotes.clone();
+        // Rows read from another repository are never shown under this one.
+        if listed.root != root {
+            return body.child(text("remotes-state", READING_REMOTES));
+        }
+        let Listed {
+            root: read_from,
+            items: remotes,
+        } = listed.clone();
         let selection = match remotes
             .iter()
             .find(|remote| remote.selected_for_publication)
@@ -718,13 +764,13 @@ impl RemotesPage {
             body = body.child(text("remotes-state", NO_REMOTES));
         }
         for (ix, remote) in remotes.iter().enumerate() {
-            body = body.child(self.remote_row(ix, remote, cx));
+            body = body.child(self.remote_row(ix, &read_from, remote, cx));
         }
         let none = self.button(
             SELECT_NONE_ID,
             SELECT_NONE_ID.to_owned(),
             SELECT_NONE,
-            |this, window, cx| this.submit_select(None, window, cx),
+            move |this, window, cx| this.submit_select(read_from.clone(), None, window, cx),
             cx,
         );
         body.child(none)

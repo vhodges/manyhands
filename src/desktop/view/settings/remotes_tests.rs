@@ -22,7 +22,10 @@ use super::{
     location_line, selection_line,
 };
 use crate::desktop::{
-    services::requests::{DesktopRequestId, Intent, RequestState},
+    services::{
+        ReadKind,
+        requests::{DesktopRequestId, Intent, RequestState},
+    },
     test_support::fixtures::{Fixture, remote_names, remote_url, remove_remote_through},
     view::{
         confirm::{CONFIRM, PREPARE_AGAIN},
@@ -701,9 +704,9 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     shell.visual(cx).update(|window, cx| {
         page.update(cx, |page, cx| {
             page.submit_add(window, cx);
-            page.submit_select(Some("backup".to_owned()), window, cx);
-            page.submit_select(None, window, cx);
-            page.submit_remove("backup".to_owned(), 0, window, cx);
+            page.submit_select(root.clone(), Some("backup".to_owned()), window, cx);
+            page.submit_select(root.clone(), None, window, cx);
+            page.submit_remove(root.clone(), "backup".to_owned(), 0, window, cx);
             page.choose_root(b.clone(), window, cx);
         })
     });
@@ -717,5 +720,71 @@ fn the_page_acts_on_nothing_while_a_dialog_is_open(cx: &mut TestAppContext) {
     let dialogs = shell.frame(cx, |window, cx| window.has_active_dialog(cx));
     assert!(dialogs);
     shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+}
+
+/// Review fix: Choose another repository while its remotes are still
+/// read shows none of the last one's rows under it, and its own once the
+/// read lands.
+#[gpui_kit::test]
+fn choosing_another_repository_never_shows_the_last_ones_remotes(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.add_remote(&a, "origin", HTTPS_URL);
+    fixture.add_remote(&b, "upstream", SSH_URL);
+    let shell = remotes(fixture, &a, cx);
+    assert_eq!(shell.rows("remote-name", cx), ["origin"]);
+
+    let held = shell.backend.hold_read(ReadKind::Remotes);
+    let ix = shell
+        .rows("remotes-registration", cx)
+        .iter()
+        .position(|root| *root == key(&b))
+        .expect("b is listed");
+    shell.click(("remotes-choose", ix), cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+    assert!(!shell.present(("remote-select", 0usize), cx));
+    assert!(!shell.present(("remote-remove", 0usize), cx));
+    assert!(!shell.present("remotes-select-none", cx));
+    assert!(!shell.present("remotes-selection", cx));
+    assert!(shell.rows("remote-name", cx).is_empty());
+    assert_eq!(
+        shell.label("remotes-state", cx).as_deref(),
+        Some(super::READING_REMOTES)
+    );
+
+    let _ = held.send(());
+    shell.run(cx);
+    assert_eq!(shell.rows("remote-name", cx), ["upstream"]);
+}
+
+/// Review fix: a row's Select and Remove act only on the repository the
+/// row was read from. Once another is chosen, a row of the last one asks
+/// nothing: no selection, and no preview.
+#[gpui_kit::test]
+fn a_row_of_another_repository_acts_on_nothing(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.add_remote(&a, "origin", HTTPS_URL);
+    fixture.add_remote(&b, "origin", HTTPS_URL);
+    let shell = remotes(fixture, &a, cx);
+    let page = page(&shell, cx);
+    shell
+        .visual(cx)
+        .update(|window, cx| page.update(cx, |page, cx| page.choose_root(b.clone(), window, cx)));
+    shell.run(cx);
+    assert_eq!(shell.label("remotes-root", cx), Some(chosen_line(&key(&b))));
+
+    shell.visual(cx).update(|window, cx| {
+        page.update(cx, |page, cx| {
+            page.submit_select(a.clone(), Some("origin".to_owned()), window, cx);
+            page.submit_select(a.clone(), None, window, cx);
+            page.submit_remove(a.clone(), "origin".to_owned(), 0, window, cx);
+        })
+    });
+    shell.run(cx);
+    assert!(shell.requests(cx, |_| true).is_empty());
     assert!(!shell.present("confirm-dialog", cx));
 }
