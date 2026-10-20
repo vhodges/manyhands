@@ -5,7 +5,10 @@ pub(crate) mod documents;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod harness;
 pub(crate) mod item;
+pub(crate) mod lists;
 pub(crate) mod operations;
+pub(crate) mod quit;
 pub(crate) mod sidebar;
+pub(crate) mod tabs;
 pub(crate) mod tickets;
 pub(crate) mod workspace;

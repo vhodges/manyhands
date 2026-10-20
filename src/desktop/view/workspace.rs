@@ -1,17 +1,12 @@
-//! The main window's view: the shell of four focusable regions, the
-//! repository selector, and quitting.
+//! The main window's view: the shell of four focusable regions and the
+//! repository selector. The navigation lists live in `lists`, the
+//! content region in `tabs`, the operation area in `operations` and
+//! quitting in `quit`.
 //!
 //! The regions are focus groups: the repository list, the documents and
 //! tickets navigation, the content and the operation area. `F6` and
 //! `shift-F6` cycle them; `secondary-1` to `secondary-4` focus each. The
 //! focused region draws a focus ring, and is the only one that does.
-//!
-//! The Quit action and the window's close request go through one
-//! handler. With no job running it quits. With one running it refuses,
-//! stops the worker admitting jobs, shows "Finishing" and Quit now, and
-//! quits when the job returns. Quit now quits at once: the worker thread
-//! is not waited for, and the library's journals recover what it was
-//! doing.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -19,26 +14,20 @@ use std::{
 };
 
 use gpui_kit::{
-    App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, StatefulInteractiveElement, Styled, Subscription, Task,
-    TestSupportExt, Window,
-    component::{
-        ActiveTheme, Root, Selectable, WindowExt,
-        button::{Button, ButtonVariants},
-        h_flex,
-        list::ListEvent,
-        v_flex,
-    },
+    App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
+    component::{ActiveTheme, Root, WindowExt, h_flex, list::ListEvent, v_flex},
     div, px,
 };
-use manyhands::repository::{ClosureFilter, OperationId, ResolvedRepository};
+use manyhands::repository::OperationId;
 
+pub(crate) use super::quit::QuitPhase;
 use super::{
     confirm::{confirm, prepare_again},
     documents::DocumentsPane,
     item::ItemPane,
     sidebar::{self, RepositoriesPane, RepositoryRow},
-    tickets::{CLOSURE_FILTERS, TicketsPane},
+    tickets::TicketsPane,
 };
 use crate::desktop::{
     keys::{
@@ -47,29 +36,16 @@ use crate::desktop::{
     },
     model::{
         documents::Documents,
-        list_state::{ListState, Rows},
-        navigation::{Navigation, OpenTarget, Pane, Resolution},
+        navigation::{Navigation, Pane},
         operations::RecoveryStep,
-        stamp::{RepoKey, Stamp, TabId, ViewScope},
+        stamp::{RepoKey, Stamp},
         tickets::Tickets,
     },
     services::{
         ReadKind, Services,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
-        worker::QuitState,
     },
 };
-
-/// Where quitting stands.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum QuitPhase {
-    Running,
-    /// Asked to quit; waiting for this job to return.
-    Finishing(DesktopRequestId),
-    /// Quitting.
-    Quit,
-}
-
 /// A focus group of the shell, in `F6` order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Region {
@@ -87,7 +63,7 @@ pub(crate) const REGIONS: [Region; 4] = [
 ];
 
 impl Region {
-    fn index(self) -> usize {
+    pub(super) fn index(self) -> usize {
         REGIONS
             .iter()
             .position(|region| *region == self)
@@ -126,27 +102,27 @@ impl Region {
 pub(crate) struct Workspace {
     pub(super) services: Services,
     /// One handle per region, in `REGIONS` order.
-    regions: [FocusHandle; 4],
-    navigation: Navigation,
+    pub(super) regions: [FocusHandle; 4],
+    pub(super) navigation: Navigation,
     /// The repository list read in flight; replacing it drops the last.
     list_read: Option<Task<()>>,
     /// The selection's resolution in flight; replacing it drops the last.
     resolve_read: Option<Task<()>>,
-    documents: Documents,
-    documents_pane: DocumentsPane,
+    pub(super) documents: Documents,
+    pub(super) documents_pane: DocumentsPane,
     /// The folder and document reads, in parallel under one stamp.
-    folder_read: Option<Task<()>>,
-    document_read: Option<Task<()>>,
-    tickets: Tickets,
-    tickets_pane: TicketsPane,
-    ticket_read: Option<Task<()>>,
+    pub(super) folder_read: Option<Task<()>>,
+    pub(super) document_read: Option<Task<()>>,
+    pub(super) tickets: Tickets,
+    pub(super) tickets_pane: TicketsPane,
+    pub(super) ticket_read: Option<Task<()>>,
     /// The ticket rows changed and go to the Kit's list at the next frame,
     /// which has the window its selection needs.
-    tickets_changed: bool,
+    pub(super) tickets_changed: bool,
     /// The item the last activated row opened, in the content region (Task 8
     /// makes it a tab).
-    item: Option<Entity<ItemPane>>,
-    quit: QuitPhase,
+    pub(super) item: Option<Entity<ItemPane>>,
+    pub(super) quit: QuitPhase,
     /// The launch refreshes were submitted: once, after the repository
     /// list first loads.
     launched: bool,
@@ -253,20 +229,6 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents
-    }
-
-    /// The item view in the content region.
-    #[cfg(test)]
-    pub(crate) fn item_pane(&self) -> Option<Entity<ItemPane>> {
-        self.item.clone()
-    }
-
-    /// What the last activated row opened.
-    #[cfg(test)]
-    pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {
-        self.item
-            .as_ref()
-            .map(|item| item.read(cx).target().clone())
     }
 
     /// Reads the repository list again.
@@ -410,168 +372,9 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The selected repository, when it resolved.
-    fn resolved_selection(&self) -> Option<(RepoKey, ResolvedRepository)> {
-        let entry = self.navigation.selected_entry()?;
-        match &entry.resolution {
-            Resolution::Resolved(resolved) => Some((entry.key().clone(), resolved.clone())),
-            _ => None,
-        }
-    }
-
-    /// Loads the resolved selection's document tree and ticket list; with
-    /// none, shows neither. Also Retry on either.
-    pub(crate) fn load_lists(&mut self, cx: &mut Context<Self>) {
-        self.clear_lists(cx);
-        let Some((key, resolved)) = self.resolved_selection() else {
-            return;
-        };
-        self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, true, cx);
-    }
-
-    /// Reads the shown lists again after something changed them: the
-    /// rows stay, and so does the selected row where it still exists,
-    /// until the new reads land.
-    fn reload_lists(&mut self, cx: &mut Context<Self>) {
-        let Some((key, resolved)) = self.resolved_selection() else {
-            return;
-        };
-        if self.documents.repo() != Some(&key) {
-            return self.load_lists(cx);
-        }
-        self.load_documents(key.clone(), resolved.clone(), cx);
-        self.load_tickets(key, resolved, false, cx);
-    }
-
-    /// No repository's lists are shown; reads still running are dropped.
-    fn clear_lists(&mut self, cx: &mut Context<Self>) {
-        self.documents.clear();
-        self.documents_pane.clear(cx);
-        self.folder_read = None;
-        self.document_read = None;
-        self.tickets.clear();
-        self.ticket_read = None;
-        self.tickets_changed = true;
-        cx.notify();
-    }
-
-    /// The folder and document reads run in parallel under one stamp.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn load_documents(
-        &mut self,
-        key: RepoKey,
-        resolved: ResolvedRepository,
-        cx: &mut Context<Self>,
-    ) {
-        let stamp = self.documents.load(key);
-        let repo = resolved.clone();
-        self.folder_read = Some(self.services.read(
-            ReadKind::Folders,
-            stamp.clone(),
-            move |service| service.list_document_folders(&repo),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.documents.apply_folders(stamp, result) {
-                    this.documents_changed(cx);
-                }
-            },
-        ));
-        self.document_read = Some(self.services.read(
-            ReadKind::Documents,
-            stamp,
-            move |service| service.list_documents(&resolved),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.documents.apply_documents(stamp, result) {
-                    this.documents_changed(cx);
-                }
-            },
-        ));
-        cx.notify();
-    }
-
-    fn documents_changed(&mut self, cx: &mut Context<Self>) {
-        match (self.documents.repo(), self.documents.state()) {
-            (Some(repo), ListState::Ready { rows, .. }) => self.documents_pane.set(repo, rows, cx),
-            // One of the two reads has landed: a reload keeps the rows,
-            // and their selection, until the other does. A first load's
-            // pane is already empty.
-            (Some(_), ListState::Loading) => {}
-            _ => self.documents_pane.clear(cx),
-        }
-        cx.notify();
-    }
-
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn load_tickets(
-        &mut self,
-        key: RepoKey,
-        resolved: ResolvedRepository,
-        clear: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let stamp = self.tickets.load(key);
-        self.read_tickets(stamp, resolved, clear, cx);
-    }
-
-    /// Reads the tickets under `stamp`. With `clear`, the list is emptied
-    /// at once; without, its rows stay until the read lands.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn read_tickets(
-        &mut self,
-        stamp: Stamp,
-        resolved: ResolvedRepository,
-        clear: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let filter = self.tickets.query().to_filter();
-        self.tickets_changed |= clear;
-        self.ticket_read = Some(self.services.read(
-            ReadKind::Tickets,
-            stamp,
-            move |service| service.list_tickets(&resolved, &filter),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.tickets.apply(stamp, result) {
-                    this.tickets_changed = true;
-                    cx.notify();
-                }
-            },
-        ));
-        cx.notify();
-    }
-
-    /// Lists `closure` from now on. A read under the last filter is
-    /// dropped when it completes.
-    pub(crate) fn set_closure(&mut self, closure: ClosureFilter, cx: &mut Context<Self>) {
-        let stamp = self.tickets.set_closure(closure);
-        match (stamp, self.resolved_selection()) {
-            (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
-            _ => cx.notify(),
-        }
-    }
-
-    /// Opens `target` in the content region, in place of what was open,
-    /// and reads it. The single content item is stamped as tab 0 until
-    /// Task 8 gives each tab its own.
-    pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
-        let services = self.services.clone();
-        self.item =
-            Some(cx.new(|cx| ItemPane::new(target, ViewScope::Tab(CONTENT_TAB), services, cx)));
-        cx.notify();
-    }
-
-    /// Enter in the document tree: opens the selected document.
-    fn open_selected_document(&mut self, cx: &mut Context<Self>) {
-        if let Some(target) = self.documents_pane.selected_target(cx) {
-            self.open_item(target, cx);
-        }
-    }
-
     /// Shows `pane`. While the navigation region holds focus, the pane's
     /// tree or list takes it.
-    fn show_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn show_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation.set_pane(pane);
         if self.focused_region(window, cx) == Some(Region::Navigation) {
             self.focus_region(Region::Navigation, window, cx);
@@ -624,33 +427,6 @@ impl Workspace {
         self.focus_region(next, window, cx);
     }
 
-    /// The one quit handler, for the action and the close request. True
-    /// when quitting goes ahead now.
-    fn request_quit(&mut self, cx: &mut Context<Self>) -> bool {
-        match self.quit {
-            QuitPhase::Quit => return true,
-            QuitPhase::Finishing(_) => return false,
-            QuitPhase::Running => {}
-        }
-        match self.services.worker().quit() {
-            QuitState::Idle => {
-                self.quit_now(cx);
-                true
-            }
-            QuitState::Finishing(id) => {
-                self.quit = QuitPhase::Finishing(id);
-                cx.notify();
-                false
-            }
-        }
-    }
-
-    fn quit_now(&mut self, cx: &mut Context<Self>) {
-        self.quit = QuitPhase::Quit;
-        cx.notify();
-        cx.quit();
-    }
-
     /// A worker event arrived: if quitting waits for a job that has now
     /// returned, quit. A repository a finished request may have changed
     /// is read again: its pending operations, its lists when it is
@@ -658,11 +434,7 @@ impl Workspace {
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         // The operation area shows the model.
         cx.notify();
-        if matches!(self.quit, QuitPhase::Finishing(_))
-            && self.services.worker().quit() == QuitState::Idle
-        {
-            self.quit_now(cx);
-        }
+        self.quit_if_finished(cx);
         let changed = self
             .services
             .operations()
@@ -845,18 +617,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// "Finishing" and the command quitting waits for. Fixed text only.
-    pub(crate) fn finishing_text(&self, cx: &App) -> Option<String> {
-        let QuitPhase::Finishing(id) = self.quit else {
-            return None;
-        };
-        let operations = self.services.operations().read(cx);
-        Some(match operations.request(id) {
-            Some(request) => format!("Finishing {}", request.intent.label()),
-            None => "Finishing".to_owned(),
-        })
-    }
-
     /// A region: its focus handle, key context and, while it holds focus,
     /// its ring, drawn behind its content.
     fn region<C: IntoElement>(
@@ -907,187 +667,10 @@ fn unless_dialog<A: 'static>(
     })
 }
 
-/// The tab the single content item is stamped as, until Task 8 opens tabs.
-const CONTENT_TAB: TabId = TabId(0);
-
-pub(crate) const PANES: [(&str, &str, Pane); 2] = [
-    ("pane-documents", "Documents", Pane::Documents),
-    ("pane-tickets", "Tickets", Pane::Tickets),
-];
-
-/// One of a row of choices: its element says whether it is chosen, and
-/// so does its text, not color alone.
-fn choice(
-    id: &'static str,
-    label: &'static str,
-    chosen: bool,
-    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .test_support()
-        .role(Role::Tab)
-        .aria_label(label)
-        .aria_selected(chosen)
-        .child(
-            Button::new((id, 0usize))
-                .label(label)
-                .selected(chosen)
-                .on_click(on_click),
-        )
-}
-
-/// A list's state in text, when it is not simply ready, and its failure
-/// with Retry.
-fn list_status<T: Rows>(
-    name: &'static str,
-    list: &ListState<T>,
-    cx: &mut Context<Workspace>,
-) -> impl IntoElement + use<T> {
-    let muted = cx.theme().muted_foreground;
-    let state = match list {
-        ListState::Ready {
-            rows,
-            complete,
-            index,
-        } if !rows.is_empty()
-            && *complete
-            && index
-                .as_ref()
-                .is_none_or(|index| index.state == manyhands::repository::IndexState::Current) =>
-        {
-            None
-        }
-        _ => Some(
-            div()
-                .id((name, 0usize))
-                .test_support()
-                .aria_label(list.label())
-                .text_sm()
-                .text_color(muted)
-                .child(list.label()),
-        ),
-    };
-    let failure =
-        match list {
-            ListState::Busy | ListState::Failed(_) => Some(
-                v_flex()
-                    .gap_1()
-                    .children(match list {
-                        ListState::Failed(failure) => Some(
-                            div()
-                                .id((name, 1usize))
-                                .test_support()
-                                .aria_label(failure.code.message())
-                                .text_sm()
-                                .child(failure.code.message()),
-                        ),
-                        _ => None,
-                    })
-                    .child(div().id((name, 2usize)).test_support().child(
-                        Button::new((name, 3usize)).label(sidebar::RETRY).on_click(
-                            cx.listener(|this, _: &ClickEvent, _, cx| this.load_lists(cx)),
-                        ),
-                    )),
-            ),
-            _ => None,
-        };
-    v_flex().gap_1().children(state).children(failure)
-}
-
-impl Workspace {
-    /// The navigation region: the pane choice and the shown pane.
-    fn navigation_pane(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let pane = self.navigation.pane();
-        let choices = h_flex().gap_1().children(PANES.map(|(id, label, shown)| {
-            let workspace = cx.entity().downgrade();
-            choice(id, label, pane == shown, move |_, window, cx| {
-                let _ = workspace.update(cx, |this, cx| this.show_pane(shown, window, cx));
-            })
-        }));
-        let body = match pane {
-            Pane::Documents => match self.documents.repo() {
-                None => v_flex().child(div().text_sm().child(sidebar::NOTHING_SELECTED)),
-                Some(_) => v_flex()
-                    .gap_1()
-                    .flex_1()
-                    .min_h_0()
-                    .child(list_status("documents-state", self.documents.state(), cx))
-                    .child(self.documents_pane.render(cx.entity().downgrade(), cx)),
-            },
-            Pane::Tickets => {
-                let closure = self.tickets.query().closure;
-                let filters =
-                    h_flex()
-                        .gap_1()
-                        .children(CLOSURE_FILTERS.map(|(id, label, _, filter)| {
-                            let workspace = cx.entity().downgrade();
-                            choice(id, label, closure == filter, move |_, _, cx| {
-                                let _ =
-                                    workspace.update(cx, |this, cx| this.set_closure(filter, cx));
-                            })
-                        }));
-                let showing = CLOSURE_FILTERS
-                    .iter()
-                    .find(|(.., filter)| *filter == closure)
-                    .map(|(_, _, showing, _)| *showing);
-                let header = v_flex()
-                    .gap_1()
-                    .child(filters)
-                    .children(showing.map(|text| {
-                        div()
-                            .id("tickets-showing")
-                            .test_support()
-                            .aria_label(text)
-                            .text_xs()
-                            .child(text)
-                    }));
-                match self.tickets.repo() {
-                    None => v_flex()
-                        .gap_1()
-                        .child(header)
-                        .child(div().text_sm().child(sidebar::NOTHING_SELECTED)),
-                    Some(_) => v_flex()
-                        .gap_1()
-                        .flex_1()
-                        .min_h_0()
-                        .child(header)
-                        .child(list_status("tickets-state", self.tickets.state(), cx))
-                        .child(self.tickets_pane.render()),
-                }
-            }
-        };
-        v_flex()
-            .id("navigation-pane")
-            .test_support()
-            .gap_2()
-            .size_full()
-            .child(choices)
-            .child(body)
-    }
-}
-
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if std::mem::take(&mut self.tickets_changed) {
-            let rows = self.tickets.state().rows().cloned().unwrap_or_default();
-            self.tickets_pane.set(rows, window, cx);
-        }
-        let finishing = self.finishing_text(cx).map(|text| {
-            h_flex()
-                .gap_2()
-                .child(div().id("quit-finishing").test_support().child(text))
-                .child(
-                    div().id("quit-now").test_support().child(
-                        Button::new("quit-now-button")
-                            .danger()
-                            .label("Quit now")
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(QuitNow), cx)
-                            }),
-                    ),
-                )
-        });
+        self.sync_tickets(window, cx);
+        let finishing = self.finishing(cx);
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
@@ -1098,7 +681,7 @@ impl Render for Workspace {
             .gap_3()
             .size_full()
             .overflow_y_scroll()
-            .children(self.item.clone())
+            .children(self.content_item())
             .child(selection);
         let top = h_flex()
             .flex_1()
