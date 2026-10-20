@@ -14,7 +14,7 @@ use std::{
 };
 
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
+    App, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
     component::{ActiveTheme, Root, WindowExt, h_flex, list::ListEvent, v_flex},
     div, px,
@@ -25,14 +25,14 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     confirm::{confirm, prepare_again},
     documents::DocumentsPane,
-    item::ItemPane,
     sidebar::{self, RepositoriesPane, RepositoryRow},
+    tabs::Content,
     tickets::TicketsPane,
 };
 use crate::desktop::{
     keys::{
-        FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion,
-        OpenSelected, PreviousRegion, Quit, QuitNow, Rebuild, Refresh,
+        CloseTab, FocusContent, FocusNavigation, FocusOperations, FocusRepositories, NextRegion,
+        NextTab, OpenSelected, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
     },
     model::{
         documents::Documents,
@@ -119,9 +119,8 @@ pub(crate) struct Workspace {
     /// The ticket rows changed and go to the Kit's list at the next frame,
     /// which has the window its selection needs.
     pub(super) tickets_changed: bool,
-    /// The item the last activated row opened, in the content region (Task 8
-    /// makes it a tab).
-    pub(super) item: Option<Entity<ItemPane>>,
+    /// The open tabs.
+    pub(super) content: Content,
     pub(super) quit: QuitPhase,
     /// The launch refreshes were submitted: once, after the repository
     /// list first loads.
@@ -196,7 +195,7 @@ impl Workspace {
             tickets_pane,
             ticket_read: None,
             tickets_changed: false,
-            item: None,
+            content: Content::default(),
             quit: QuitPhase::Running,
             launched: false,
             pending_reads: HashMap::new(),
@@ -391,8 +390,14 @@ impl Workspace {
     /// Focuses `region`. The repositories region gives its focus to the
     /// selector's list when it has rows, and the navigation region to the
     /// shown pane's tree or list when a repository's lists are shown, so
-    /// their arrow keys and Enter work.
-    fn focus_region(&mut self, region: Region, window: &mut Window, cx: &mut Context<Self>) {
+    /// their arrow keys and Enter work. The content region gives it to
+    /// the shown tab, its first control, when a tab is open.
+    pub(super) fn focus_region(
+        &mut self,
+        region: Region,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match (region, self.navigation.pane()) {
             (Region::Repositories, _)
                 if self
@@ -408,6 +413,11 @@ impl Workspace {
             }
             (Region::Navigation, Pane::Tickets) if self.tickets.repo().is_some() => {
                 self.tickets_pane.focus(window, cx)
+            }
+            (Region::Content, _) if self.content.shown_focus().is_some() => {
+                if let Some(focus) = self.content.shown_focus() {
+                    window.focus(&focus, cx)
+                }
             }
             _ => window.focus(&self.regions[region.index()], cx),
         }
@@ -430,7 +440,8 @@ impl Workspace {
     /// A worker event arrived: if quitting waits for a job that has now
     /// returned, quit. A repository a finished request may have changed
     /// is read again: its pending operations, its lists when it is
-    /// selected, and the repository list, whose index state it shows.
+    /// selected, its open tabs, and the repository list, whose index state
+    /// it shows. Each is read once, however many requests changed it.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         // The operation area shows the model.
         cx.notify();
@@ -455,6 +466,7 @@ impl Workspace {
         {
             self.reload_lists(cx);
         }
+        self.reload_tabs(&changed, cx);
         self.load_repositories(cx);
     }
 
@@ -681,7 +693,7 @@ impl Render for Workspace {
             .gap_3()
             .size_full()
             .overflow_y_scroll()
-            .children(self.content_item())
+            .children(self.content(window, cx))
             .child(selection);
         let top = h_flex()
             .flex_1()
@@ -765,6 +777,15 @@ impl Render for Workspace {
             ))
             .on_action(unless_dialog(cx, |this, _: &FocusContent, window, cx| {
                 this.focus_region(Region::Content, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &NextTab, window, cx| {
+                this.step_tab(1, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &PreviousTab, window, cx| {
+                this.step_tab(-1, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &CloseTab, window, cx| {
+                this.close_shown_tab(window, cx)
             }))
             .on_action(unless_dialog(
                 cx,

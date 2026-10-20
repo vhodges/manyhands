@@ -59,6 +59,18 @@ fn open(shell: &Shell, target: OpenTarget, cx: &mut TestAppContext) {
     shell.run(cx);
 }
 
+/// Opens `target` in a new tab, as after closing it: an item already open
+/// would only have its tab shown, not be read again.
+fn reopen(shell: &Shell, target: OpenTarget, cx: &mut TestAppContext) {
+    let repo = match &target {
+        OpenTarget::Item { repo, .. } | OpenTarget::Inspect { repo, .. } => repo.clone(),
+    };
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.close_repository(&repo, cx));
+    open(shell, target, cx);
+}
+
 fn ticket(root: &Path, id: &str) -> OpenTarget {
     OpenTarget::Item {
         repo: key(root),
@@ -203,7 +215,7 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
     assert!(!present(&shell, "item-source-missing", cx));
 
     shell.fixture.write_non_utf8(&root, &ticket_path(PRIMARY));
-    open(&shell, ticket(&root, PRIMARY), cx);
+    reopen(&shell, ticket(&root, PRIMARY), cx);
     assert_eq!(shown(&shell, &root, PRIMARY).source, None);
     assert_eq!(
         shell.label("item-source-missing", cx).as_deref(),
@@ -428,7 +440,7 @@ fn an_item_whose_context_is_rejected_shows_the_librarys_answer_and_no_context_ch
         ResultCode::ItemNotFound
     );
 
-    open(&shell, target, cx);
+    reopen(&shell, target, cx);
     assert_eq!(
         shell.label("item-failure-code", cx).as_deref(),
         Some(ResultCode::ItemNotFound.as_str())
@@ -459,7 +471,7 @@ async fn a_deleted_item_shows_item_not_found_with_refresh(cx: &mut TestAppContex
 
     shell.fixture.commit_removal(&root, &ticket_path(PRIMARY));
     shell.fixture.refresh(&root);
-    open(&shell, ticket(&root, PRIMARY), cx);
+    reopen(&shell, ticket(&root, PRIMARY), cx);
     assert_eq!(
         shell.label("item-failure", cx).as_deref(),
         Some(ResultCode::ItemNotFound.message())

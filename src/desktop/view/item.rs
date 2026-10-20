@@ -110,7 +110,7 @@ impl ItemPane {
         pane
     }
 
-    /// What this view shows. Read by tests until Task 8's tabs key on it.
+    /// What this view shows.
     #[cfg(test)]
     pub(crate) fn target(&self) -> &OpenTarget {
         self.model.target()
@@ -119,9 +119,14 @@ impl ItemPane {
     /// Reads the item, and for an item by ID its comments, again. Each
     /// read resolves the repository first, so a repository that has gone
     /// shows its failure here.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) -> Stamp {
         let stamp = self.model.load();
+        self.read(stamp.clone(), cx);
+        stamp
+    }
+
+    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
         self.comments_read = None;
         match self.model.target().clone() {
             OpenTarget::Item { repo, id, .. } => {
@@ -174,7 +179,6 @@ impl ItemPane {
             }
         }
         cx.notify();
-        stamp
     }
 
     fn apply_item(
@@ -210,29 +214,45 @@ impl ItemPane {
     }
 
     /// A worker event arrived: once the refresh Refresh asked for has
-    /// ended, however it ended, read the item again: finished, not sent,
-    /// or removed from the queue, by a cancel or on quit. A request the
-    /// model does not hold yet has not ended: its `Queued` event comes
-    /// through the worker's channel after `submit` returns, and another
-    /// event can reach the model first.
+    /// ended, however it ended, the item is read again. A finished one
+    /// marked the repository changed, so the workspace reads every open
+    /// tab of it again, this one with them; one not sent, or removed from
+    /// the queue by a cancel or on quit, changed nothing, so this view
+    /// reads itself again. A request the model does not hold yet has not
+    /// ended: its `Queued` event comes through the worker's channel after
+    /// `submit` returns, and another event can reach the model first.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.refreshing else {
             return;
         };
-        let ended = self
+        let state = self
             .services
             .operations()
             .read(cx)
             .request(id)
-            .is_some_and(|request| {
-                !matches!(
-                    request.state,
-                    RequestState::Queued | RequestState::Running { .. }
-                )
-            });
-        if ended {
-            self.refreshing = None;
-            self.load(cx);
+            .map(|request| request.state.clone());
+        match state {
+            None | Some(RequestState::Queued | RequestState::Running { .. }) => {}
+            Some(RequestState::Finished(..)) => {
+                self.refreshing = None;
+                cx.notify();
+            }
+            Some(_) => {
+                self.refreshing = None;
+                self.load(cx);
+            }
+        }
+    }
+
+    /// The tab's label: the item's title once read, else its ID, or the
+    /// path of a nonconforming entry.
+    pub(crate) fn tab_title(&self) -> String {
+        if let Some(title) = self.model.item().rows().and_then(|item| item.title.clone()) {
+            return title;
+        }
+        match self.model.target() {
+            OpenTarget::Item { id, .. } => id.to_string(),
+            OpenTarget::Inspect { path, .. } => path.clone(),
         }
     }
 }
