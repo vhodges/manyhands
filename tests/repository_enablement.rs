@@ -2604,8 +2604,20 @@ fn remove_registration_without_git_does_not_open_the_ancestor_repository() {
         .unwrap();
     let nested = fixture.root.join("nested");
     drop(Repository::init(&nested).unwrap());
-    service.enable(support::enable_request(&nested)).unwrap();
+    let mut request = support::enable_request(&nested);
+    request.identity = Some(CommitIdentity {
+        name: "Manyhands Test".into(),
+        email: "manyhands-test@example.invalid".into(),
+    });
+    let outcome = service.enable(request).unwrap();
+    assert!(
+        matches!(outcome, EnableRepositoryOutcome::Enabled { .. }),
+        "nested fixture enablement failed: {outcome:?}"
+    );
     let nested = nested.canonicalize().unwrap();
+    assert_eq!(registry_row_count(data.path()), 2);
+    assert!(registry_row(data.path(), &fixture.root).is_some());
+    assert!(registry_row(data.path(), &nested).is_some());
     std::fs::remove_dir_all(nested.join(".git")).unwrap();
     let before = support::confirmation::tree(&fixture.root);
 
