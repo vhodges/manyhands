@@ -194,8 +194,10 @@ the work review-ready.
       `ticket create`, answers `worktree_not_clean`.
     - D1's test fixtures reset the index after creating a repository. D1's
       production code does not.
-    - The product owner decides at the Part A checkpoint whether Task 12 waits
-      for this ticket or records the limitation.
+    - **Owner decision, 2026-10-19 (Part A checkpoint):** Task 12 does not
+      wait for this ticket. The limitation is recorded. Until the ticket
+      merges, the workaround is to create and commit `.manyhands/config.toml`
+      by hand before adding the repository in Manyhands.
 - **Native evidence on Windows and macOS** is an obligation carried to G1
   (decision 3).
 
