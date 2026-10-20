@@ -8,9 +8,10 @@
 //! When a finished request may have changed a repository's items, every
 //! open tab of it reads its item again in place: the strip keeps its order
 //! and the shown tab, and each tab keeps what it shows, its title and its
-//! source's text field, until the new read lands. A tab whose repository
-//! has gone keeps them too, and says it could not refresh, with the
-//! failure and Retry; the other tabs are not touched.
+//! source's text field, until the new read lands. One that stays busy
+//! keeps them and says it could not refresh. A tab whose repository has
+//! gone shows the failure with Retry, as a first load does, and keeps its
+//! title (ruling R-B5); the other tabs are not touched.
 //!
 //! `ctrl-tab` and `ctrl-shift-tab` move through the tabs, `secondary-w`
 //! closes the shown one; focus follows to the shown tab. The shown tab

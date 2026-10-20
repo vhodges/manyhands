@@ -647,3 +647,42 @@ async fn a_refresh_removed_on_quit_ends_refreshing(cx: &mut TestAppContext) {
         })
         .await;
 }
+
+/// Ruling R-B5: an item shown, then deleted and the index refreshed, is
+/// read again in place: the reload shows `item_not_found` with Refresh,
+/// as a first load does, not the item it showed.
+#[gpui_kit::test]
+fn a_reload_after_the_item_is_deleted_shows_item_not_found_with_refresh(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PRIMARY, "Going", "");
+    });
+    open(&shell, ticket(&root, PRIMARY), cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Going"));
+
+    shell.fixture.commit_removal(&root, &ticket_path(PRIMARY));
+    shell.fixture.refresh(&root);
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .unwrap();
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+    assert_eq!(
+        shell.label("item-failure", cx).as_deref(),
+        Some(ResultCode::ItemNotFound.message())
+    );
+    assert_eq!(
+        shell.label("item-failure-code", cx).as_deref(),
+        Some(ResultCode::ItemNotFound.as_str())
+    );
+    assert!(present(&shell, "item-refresh", cx));
+    assert!(!present(&shell, "item-title", cx));
+    assert!(!present(&shell, "item-not-refreshed", cx));
+    assert_eq!(
+        shell.label(("tab", 0usize), cx).as_deref(),
+        Some("Going"),
+        "the tab keeps the last title read"
+    );
+}

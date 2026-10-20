@@ -259,46 +259,52 @@ async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppCon
     assert_eq!(title(&shell, cx).as_deref(), Some("Other"));
 }
 
-/// Review Focus 2: `a`'s folder goes away while it has a tab open. Once
-/// `a` is read again its tab keeps what it showed and says it could not
-/// refresh, with the failure and Retry; `b`'s tab is unaffected. With the
-/// folder back, Retry reads it in place.
+/// Review Focus 2 (ruling R-B5): `a`'s folder goes away while it has a
+/// tab open. The tab was read before; once `a` is read again, the reload
+/// shows its failure with Retry, as a first load would, not the stale
+/// item. The tab keeps its title; `b`'s tab is unaffected. With the folder
+/// back, Retry reads it.
 #[gpui_kit::test]
 async fn a_tab_whose_repository_goes_away_shows_its_failure_with_retry(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let Two { shell, a, b } = two(cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&b, ONE), cx);
+    shell.click(("tab", 0usize), cx);
+    assert_eq!(title(&shell, cx).as_deref(), Some("One"), "read before");
+    shell.click(("tab", 1usize), cx);
 
     let away = a.with_file_name("a-away");
     fs::rename(&a, &away).unwrap();
+    let reads = item_reads(&shell);
     let refresh = submit_refresh(&shell, &a, cx);
     shell.until_ended(refresh, cx).await;
     shell.run(cx);
+    assert_eq!(
+        item_reads(&shell) - reads,
+        0,
+        "the reload stops at its resolution"
+    );
 
     assert_eq!(shown(&shell, cx), Some(1));
     assert_eq!(title(&shell, cx).as_deref(), Some("Other"));
-    assert!(!shell.present("item-not-refreshed", cx));
+    assert!(!shell.present("item-failure", cx));
 
     shell.click(("tab", 0usize), cx);
     assert_eq!(
-        shell.label("item-not-refreshed", cx).as_deref(),
-        Some(NOT_REFRESHED)
-    );
-    assert_eq!(
-        shell.label("item-not-refreshed-failure", cx).as_deref(),
+        shell.label("item-failure", cx).as_deref(),
         Some(ResultCode::InvalidPath.message())
     );
     assert_eq!(
-        shell.label("item-not-refreshed-code", cx).as_deref(),
+        shell.label("item-failure-code", cx).as_deref(),
         Some(ResultCode::InvalidPath.as_str())
     );
-    assert!(shell.present("item-not-refreshed-retry", cx));
-    assert_eq!(
-        title(&shell, cx).as_deref(),
-        Some("One"),
-        "what it showed stays"
+    assert!(shell.present("item-retry", cx));
+    assert!(
+        !shell.present("item-title", cx),
+        "the stale item is not shown"
     );
+    assert!(!shell.present("item-not-refreshed", cx));
     assert_eq!(
         strip(&shell, cx),
         ["One", "Other"],
@@ -306,8 +312,7 @@ async fn a_tab_whose_repository_goes_away_shows_its_failure_with_retry(cx: &mut 
     );
 
     fs::rename(&away, &a).unwrap();
-    shell.click("item-not-refreshed-retry-button", cx);
-    assert!(!shell.present("item-not-refreshed", cx));
+    shell.click("item-retry-button", cx);
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
     shell.click(("tab", 1usize), cx);
     assert_eq!(title(&shell, cx).as_deref(), Some("Other"));

@@ -16,9 +16,10 @@
 //! A tab loads in one read job: the repository is resolved once, then the
 //! item, its comments and, for a ticket, its relationships are read one
 //! after another, in the design's order. A load after the first keeps
-//! what is shown until it lands; one that stays busy or fails keeps it
-//! still, and says "Could not refresh" with the answer and Retry, which
-//! loads again in place.
+//! what is shown until it lands. One that stays busy keeps it still, and
+//! says "Could not refresh" with Busy's message and Retry, which loads
+//! again in place; one that fails shows the failure as a first load does,
+//! and the tab keeps its last title (ruling R-B5).
 //!
 //! An item the library no longer finds shows `item_not_found` with
 //! Refresh, which refreshes the repository's index through the worker and
@@ -77,8 +78,7 @@ pub(crate) const REFRESHING: &str = "Refreshing the index";
 pub(crate) const RECOVERY: &str = "This item's context needs repair before it can be read from it.";
 pub(crate) const COPY_ID: &str = "Copy ID";
 pub(crate) const COPY_SLUG: &str = "Copy short code";
-/// What is shown is from an earlier load: the last one stayed busy or
-/// failed.
+/// What is shown is from an earlier load: the last one stayed busy.
 pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
 /// How far each level of a reply is indented.
 const COMMENT_INDENT: f32 = 16.;
@@ -307,11 +307,12 @@ impl ItemPane {
         }
     }
 
-    /// The tab's label: the item's title once read, else its ID, or the
-    /// path of a nonconforming entry.
+    /// The tab's label: the title the item was last read with, kept when
+    /// a later load fails, else its ID, or the path of a nonconforming
+    /// entry.
     pub(crate) fn tab_title(&self) -> String {
-        if let Some(title) = self.model.item().rows().and_then(|item| item.title.clone()) {
-            return title;
+        if let Some(title) = self.model.last_title() {
+            return title.to_owned();
         }
         match self.model.target() {
             OpenTarget::Item { id, .. } => id.to_string(),

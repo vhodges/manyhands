@@ -246,53 +246,70 @@ fn a_read_from_before_a_reload_is_dropped() {
     assert!(view.not_refreshed().is_none());
 }
 
-/// A reload keeps what is shown until its load lands; a load from before
-/// it is still dropped. One that fails or stays busy keeps the rows shown
-/// and says why; a part that showed no rows shows its answer. The next
-/// load that gives the item replaces it and clears the reason.
+/// Ruling R-B5: a reload keeps what is shown until its load lands; a load
+/// from before it is still dropped. One that stays busy keeps the rows
+/// shown and says so, since busy passes; one that fails shows its failure,
+/// as a first load does. The next load that gives the item replaces it
+/// and clears the reason. The last title read stays either way.
 #[test]
-fn a_reload_that_gives_nothing_keeps_what_is_shown_and_says_why() {
+fn a_busy_reload_keeps_what_is_shown_and_a_failed_one_shows_its_failure() {
     let (_fixture, item) = shown_ticket();
     let mut view = ItemView::new(ticket_target(), ViewScope::Tab(TabId(1)));
     let first = view.load();
     assert!(view.apply_reads(
         first.clone(),
-        item_reads(ReadResult::Ok(item.clone()), Some(ReadResult::Busy))
+        item_reads(
+            ReadResult::Ok(item.clone()),
+            Some(ReadResult::Ok(comments(&item)))
+        )
     ));
 
     let second = view.reload();
     assert_eq!(second.scope, ViewScope::Tab(TabId(1)));
     assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
-    assert!(matches!(view.comments(), Some(ListState::Busy)));
     assert!(!view.apply_reads(first, item_reads(ReadResult::Busy, None)));
     assert!(matches!(view.item(), ListState::Ready { .. }));
 
+    assert!(view.apply_reads(second, item_reads(ReadResult::Busy, Some(ReadResult::Busy))));
+    assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
+    assert!(matches!(view.comments(), Some(ListState::Ready { .. })));
+    assert!(matches!(view.not_refreshed(), Some(NotReloaded::Busy)));
+
     let failure = ReadFailure {
-        code: ResultCode::InvalidPath,
+        code: ResultCode::ItemNotFound,
         recovery: Vec::new(),
     };
+    let third = view.reload();
     assert!(view.apply_reads(
-        second,
+        third,
         item_reads(
             ReadResult::Failed(failure.clone()),
-            Some(ReadResult::Failed(failure.clone()))
+            Some(ReadResult::Failed(failure))
         ),
     ));
-    assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
     assert!(matches!(
-        view.not_refreshed(),
-        Some(NotReloaded::Failed(why)) if why.code == ResultCode::InvalidPath
+        view.item(),
+        ListState::Failed(why) if why.code == ResultCode::ItemNotFound
     ));
-    // The comments showed no rows, so they show the answer.
     assert!(matches!(
         view.comments(),
-        Some(ListState::Failed(why)) if why.code == ResultCode::InvalidPath
+        Some(ListState::Failed(why)) if why.code == ResultCode::ItemNotFound
     ));
+    assert!(view.not_refreshed().is_none());
+    assert_eq!(view.last_title(), Some("Shown"));
 
-    let third = view.reload();
-    assert!(view.apply_reads(third, item_reads(ReadResult::Busy, None)));
-    assert!(matches!(view.not_refreshed(), Some(NotReloaded::Busy)));
     let fourth = view.reload();
     assert!(view.apply_reads(fourth, item_reads(ReadResult::Ok(item.clone()), None)));
+    assert!(matches!(view.item(), ListState::Ready { .. }));
     assert!(view.not_refreshed().is_none());
+}
+
+/// The comments of `item`'s read, as the library lists them.
+fn comments(item: &ItemDto) -> CommentListDto {
+    CommentListDto {
+        items: Vec::new(),
+        complete: true,
+        context: item.context.clone(),
+        index: item.index.clone(),
+    }
 }

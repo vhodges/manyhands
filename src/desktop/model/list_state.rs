@@ -71,9 +71,10 @@ impl<T> ListState<T> {
     }
 
     /// Applies a finished read again over what is shown. One that gave its
-    /// value replaces the state; one that stayed busy or failed while
-    /// rows are shown keeps them and says why; any other replaces the
-    /// state with its answer.
+    /// value replaces the state. One that stayed busy while rows are shown
+    /// keeps them and says so, since busy passes. Any other, a failure
+    /// included, replaces the state with its answer, as a first read does
+    /// (ruling R-B5).
     pub(crate) fn apply_keeping<V>(
         &mut self,
         result: ReadResult<V>,
@@ -85,9 +86,6 @@ impl<T> ListState<T> {
                 None
             }
             ReadResult::Busy if self.rows().is_some() => Some(NotReloaded::Busy),
-            ReadResult::Failed(failure) if self.rows().is_some() => {
-                Some(NotReloaded::Failed(failure))
-            }
             ReadResult::Busy => {
                 *self = Self::Busy;
                 None

@@ -309,9 +309,9 @@ fn only_a_ticket_has_relationships() {
 
 /// Review Focus 1: the relationship reads are stamped to the tab. A load
 /// from before a reload is dropped; a reload keeps what is shown until its
-/// load lands, and one whose relationship reads give nothing keeps their
-/// rows and the parent's name, and says why. A first load starts again
-/// from loading.
+/// load lands. A relationship read that stays busy keeps its rows and the
+/// parent's name, and says so; one that fails shows its failure (ruling
+/// R-B5). A first load starts again from loading.
 #[test]
 fn a_relationship_read_from_before_a_reload_is_dropped() {
     let reads = reads(graph);
@@ -363,18 +363,21 @@ fn a_relationship_read_from_before_a_reload_is_dropped() {
             parent: Some(ReadResult::Busy),
         },
     ));
+    // Ruling R-B5: the failed group shows its failure; the busy one keeps
+    // its rows and says so.
     let relationships = view.relationships().unwrap();
-    assert_eq!(ids(&relationships.dependent_rows()), [DEPENDENT]);
+    assert!(matches!(
+        relationships.dependents(),
+        ListState::Failed(why) if why.code == ResultCode::ItemNotFound
+    ));
+    assert!(relationships.dependent_rows().is_empty());
     assert_eq!(relationships.child_rows().len(), 2);
     assert_eq!(
         relationships.parent_row().unwrap().title.as_deref(),
         Some("The parent"),
         "a busy parent read keeps the name while the ID is the same"
     );
-    assert!(matches!(
-        view.not_refreshed(),
-        Some(NotReloaded::Failed(why)) if why.code == ResultCode::ItemNotFound
-    ));
+    assert!(matches!(view.not_refreshed(), Some(NotReloaded::Busy)));
 
     view.load();
     let relationships = view.relationships().unwrap();

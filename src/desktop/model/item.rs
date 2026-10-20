@@ -144,8 +144,11 @@ pub(crate) struct ItemView {
     /// `None` for anything but a ticket by ID.
     relationships: Option<Relationships>,
     /// Why what is shown is from an earlier load: the last load stayed
-    /// busy or failed while rows were shown, and they were kept.
+    /// busy while rows were shown, and they were kept (ruling R-B5).
     not_refreshed: Option<NotReloaded>,
+    /// The title the last read that gave the item gave it, kept for the
+    /// tab when a later load fails.
+    last_title: Option<String>,
     generations: Generations,
 }
 
@@ -161,6 +164,7 @@ impl ItemView {
             comments,
             relationships,
             not_refreshed: None,
+            last_title: None,
             generations: Generations::default(),
         }
     }
@@ -207,6 +211,11 @@ impl ItemView {
         self.comments.as_ref()
     }
 
+    /// The title the last read that gave the item gave it.
+    pub(crate) fn last_title(&self) -> Option<&str> {
+        self.last_title.as_deref()
+    }
+
     /// Why what is shown is from an earlier load, when it is.
     pub(crate) fn not_refreshed(&self) -> Option<&NotReloaded> {
         self.not_refreshed.as_ref()
@@ -232,9 +241,9 @@ impl ItemView {
     }
 
     /// A load completed. Each read that gave its value replaces what was
-    /// shown; one that stayed busy or failed while rows were shown keeps
-    /// them, and `not_refreshed` gives the first such answer in the
-    /// design's order; any other shows its answer. A parent read that gave
+    /// shown; one that stayed busy while rows were shown keeps them, and
+    /// `not_refreshed` says so; any other, a failure included, shows its
+    /// answer as a first load does (ruling R-B5). A parent read that gave
     /// nothing keeps the parent's name while its ID is unchanged. False
     /// when the load is no longer wanted.
     pub(crate) fn apply_reads(&mut self, stamp: Stamp, reads: ItemReads) -> bool {
@@ -248,8 +257,11 @@ impl ItemView {
             children,
             parent,
         } = reads;
-        if let (ReadResult::Ok(item), Some(relationships)) = (&item, &mut self.relationships) {
-            relationships.set_item(item);
+        if let ReadResult::Ok(item) = &item {
+            self.last_title = item.title.clone();
+            if let Some(relationships) = &mut self.relationships {
+                relationships.set_item(item);
+            }
         }
         let mut why = self.item.apply_keeping(item, |item| {
             let index = Some(item.index.clone());
