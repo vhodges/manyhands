@@ -175,6 +175,8 @@ impl Workspace {
         });
         let tickets_pane = TicketsPane::new(window, cx);
         let ticket_events = cx.subscribe(tickets_pane.list(), |this, list, event, cx| {
+            // The Why blocked panel shows the selected row.
+            cx.notify();
             // A click or Enter on a row.
             if let ListEvent::Confirm(ix) = event {
                 let target = this.tickets.repo().and_then(|repo| {

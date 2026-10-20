@@ -291,7 +291,11 @@ impl Workspace {
                         .min_h_0()
                         .child(header)
                         .child(list_status("tickets-state", self.tickets.state(), cx))
-                        .child(self.tickets_pane.render()),
+                        .child(self.tickets_pane.render())
+                        .children(
+                            (readiness == Some(ReadinessFilter::Blocked))
+                                .then(|| self.tickets_pane.why_blocked(cx)),
+                        ),
                 }
             }
         };

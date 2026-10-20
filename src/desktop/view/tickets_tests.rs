@@ -9,7 +9,10 @@ use manyhands::repository::{
     ClosureFilter, ItemDto, ItemDtoKind, ItemListDto, ReadinessFilter, TicketFilter,
 };
 
-use super::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN, NONCONFORMING, READINESS_FILTERS, row_label};
+use super::{
+    LIFECYCLE_CLOSED, LIFECYCLE_OPEN, NO_REASONS, NONCONFORMING, READINESS_FILTERS, SELECT_BLOCKED,
+    WHY_BLOCKED, row_description, row_label,
+};
 use crate::desktop::{
     model::{
         navigation::OpenTarget,
@@ -410,4 +413,150 @@ fn a_readiness_change_drops_the_held_read_of_the_last_one(cx: &mut TestAppContex
     assert_eq!(visible(&shell, cx), ready);
     assert!(shell.selected("filter-ready", cx));
     assert!(!shell.selected("filter-blocked", cx));
+}
+
+/// The lines of the Why blocked panel.
+fn panel(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    shell.rows("why-blocked-reason", cx)
+}
+
+/// Every blocked ticket's name map, as `blocked_reasons` is given it.
+fn names(
+    shell: &Shell,
+    root: &Path,
+) -> std::collections::HashMap<String, manyhands::repository::ItemDto> {
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    service
+        .list_tickets(
+            &repo,
+            &TicketFilter {
+                closure: ClosureFilter::Open,
+                ..TicketFilter::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .filter_map(|item| Some((item.id.clone()?, item)))
+        .collect()
+}
+
+fn blocked_list(shell: &Shell, root: &Path) -> ItemListDto {
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    let query = TicketQuery {
+        closure: ClosureFilter::Open,
+        readiness: Some(ReadinessFilter::Blocked),
+    };
+    service.list_tickets(&repo, &query.to_filter()).unwrap()
+}
+
+/// Under Blocked, the panel below the list gives the selected row's
+/// reasons in full, one per line: every `blocked_reasons` line of the same
+/// read, as the arrows move the selection. With nothing selected it gives
+/// a hint, and for an entry with no reasons it says so. The row carries
+/// the same reasons as its accessible description.
+#[gpui_kit::test]
+fn the_why_blocked_panel_gives_the_selected_rows_reasons_in_full(cx: &mut TestAppContext) {
+    let (shell, root) = related(cx);
+    // Not under any other readiness.
+    assert!(!shell.present("why-blocked", cx));
+    shell.click("filter-blocked", cx);
+    assert_eq!(
+        shell.label("why-blocked-title", cx).as_deref(),
+        Some(WHY_BLOCKED)
+    );
+    assert_eq!(
+        shell.label("why-blocked-hint", cx).as_deref(),
+        Some(SELECT_BLOCKED)
+    );
+    assert!(panel(&shell, cx).is_empty());
+
+    let list = blocked_list(&shell, &root);
+    let by_id = names(&shell, &root);
+    let rows = shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.tickets_pane.rows(cx));
+    shell.keys("secondary-2", cx);
+    let mut shown = Vec::new();
+    for (index, item) in list.items.iter().enumerate() {
+        shell.keys("down", cx);
+        assert!(shell.selected(("ticket-row", index), cx), "{index}");
+        let wanted = blocked_reasons(item, &by_id);
+        shown.push(panel(&shell, cx));
+        assert_eq!(shown[index], wanted, "{index}");
+        assert_eq!(rows[index].reasons, wanted, "{index}");
+        if wanted.is_empty() {
+            assert_eq!(item.id, None, "only the nonconforming entry has none");
+            assert_eq!(
+                shell.label("why-blocked-hint", cx).as_deref(),
+                Some(NO_REASONS)
+            );
+            assert_eq!(row_description(&rows[index]), None);
+        } else {
+            assert_eq!(shell.label("why-blocked-hint", cx), None);
+            assert_eq!(row_description(&rows[index]), Some(wanted.join("; ")));
+        }
+    }
+
+    // Each kind in full: the missing ULID, the blocker's title, and a
+    // cycle row's two reasons, each on its own line.
+    let at = |id: &str| {
+        list.items
+            .iter()
+            .position(|item| item.id.as_deref() == Some(id))
+            .unwrap()
+    };
+    assert_eq!(
+        shown[at(DANGLING)],
+        [format!("Waits for a ticket not found: {MISSING}")]
+    );
+    assert_eq!(
+        shown[at(CYCLE_A)],
+        [
+            format!("Waits for open ticket: {CYCLE_B} Cycle B"),
+            format!("On a dependency cycle: {CYCLE_A}, {CYCLE_B}"),
+        ]
+    );
+}
+
+/// A cycle longer than the sixteen tickets a reason names: the panel says
+/// the reason is incomplete, as the library does.
+#[gpui_kit::test]
+fn the_panel_says_incomplete_where_the_library_does(cx: &mut TestAppContext) {
+    const DIGITS: &str = "0123456789ABCDEFG";
+    let ids: Vec<String> = DIGITS
+        .chars()
+        .map(|digit| format!("01ARZ3NDEKTSV4RRFFQ69G5FE{digit}"))
+        .collect();
+    let titles: Vec<String> = (0..ids.len()).map(|ix| format!("Ring {ix}")).collect();
+    let ring: Vec<(&str, &str)> = ids
+        .iter()
+        .zip(&titles)
+        .map(|(id, title)| (id.as_str(), title.as_str()))
+        .collect();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_dependency_ring(&root, &ring);
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    shell.click(("repo-row", 0usize), cx);
+    shell.click("pane-tickets", cx);
+    shell.click("filter-blocked", cx);
+
+    let list = blocked_list(&shell, &root);
+    let by_id = names(&shell, &root);
+    let first = &list.items[0];
+    let reasons = &first.readiness.as_ref().unwrap().reasons;
+    assert!(reasons.iter().any(|reason| !reason.complete), "{reasons:?}");
+
+    shell.keys("secondary-2", cx);
+    shell.keys("down", cx);
+    let shown = panel(&shell, cx);
+    assert_eq!(shown, blocked_reasons(first, &by_id));
+    assert!(
+        shown.iter().any(|line| line.ends_with(" (incomplete)")),
+        "{shown:?}"
+    );
 }

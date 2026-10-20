@@ -216,8 +216,17 @@ impl Fixture {
     /// cycle: create and save refuse a write that closes one. Refresh to
     /// index them.
     pub(crate) fn commit_dependency_cycle(&self, root: &Path, a: (&str, &str), b: (&str, &str)) {
-        for ((id, title), (other, _)) in [(a, b), (b, a)] {
-            self.commit_ticket(root, id, title, &format!("deps:\n  - {other}\n"));
+        self.commit_dependency_ring(root, &[a, b]);
+    }
+
+    /// Commits the open tickets `ring`, each depending on the next and the
+    /// last on the first, by the same recipe as `commit_dependency_cycle`.
+    /// A ring of more than sixteen gives a cycle reason the library marks
+    /// incomplete. Refresh to index them.
+    pub(crate) fn commit_dependency_ring(&self, root: &Path, ring: &[(&str, &str)]) {
+        for (ix, (id, title)) in ring.iter().enumerate() {
+            let (next, _) = ring[(ix + 1) % ring.len()];
+            self.commit_ticket(root, id, title, &format!("deps:\n  - {next}\n"));
         }
     }
 

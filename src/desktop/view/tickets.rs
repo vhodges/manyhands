@@ -25,6 +25,9 @@ pub(crate) const LIFECYCLE_OPEN: &str = "Open";
 pub(crate) const LIFECYCLE_CLOSED: &str = "Closed";
 pub(crate) const NONCONFORMING: &str = "Nonconforming";
 pub(crate) const NO_SHORT_CODE: &str = "No short code";
+pub(crate) const WHY_BLOCKED: &str = "Why blocked";
+pub(crate) const SELECT_BLOCKED: &str = "Select a ticket to see why it is blocked";
+pub(crate) const NO_REASONS: &str = "The library gives no reasons for this entry";
 
 /// The closure filters, in the order they are offered: their element id,
 /// label and what they show.
@@ -90,6 +93,12 @@ fn label(row: &TicketRow) -> String {
 #[cfg(test)]
 pub(crate) fn row_label(item: &manyhands::repository::ItemDto) -> String {
     label(&TicketRow::from_item(item))
+}
+
+/// The row's accessible description: its reasons, in full, so a screen
+/// reader hears them on landing on the row. None when it has none.
+pub(crate) fn row_description(row: &TicketRow) -> Option<String> {
+    (!row.reasons.is_empty()).then(|| row.reasons.join("; "))
 }
 
 /// The line of why the row at `index` is blocked: each reason in text,
@@ -177,13 +186,17 @@ impl ListDelegate for TicketDelegate {
                         .map(|text| cell("ticket-changed", text)),
                 ),
         };
+        let mut entry = v_flex()
+            .id(("ticket-row", index))
+            .test_support()
+            .aria_label(label(row))
+            .aria_selected(selected);
+        if let Some(description) = row_description(row) {
+            entry = entry.aria_description(description);
+        }
         Some(
             ListItem::new(("ticket-item", index)).child(
-                v_flex()
-                    .id(("ticket-row", index))
-                    .test_support()
-                    .aria_label(label(row))
-                    .aria_selected(selected)
+                entry
                     .child(div().text_sm().child(label(row)))
                     .child(columns.text_color(muted))
                     .children(self.reasons_shown.then(|| reasons(row, index))),
@@ -241,6 +254,67 @@ impl TicketsPane {
             list.set_selected_index(at.map(IndexPath::new), window, cx);
             cx.notify();
         });
+    }
+
+    /// The rows shown, for tests.
+    #[cfg(test)]
+    pub(crate) fn rows(&self, cx: &App) -> Vec<TicketRow> {
+        self.list.read(cx).delegate().rows.clone()
+    }
+
+    /// The selected row, if any.
+    pub(crate) fn selected_row(&self, cx: &App) -> Option<TicketRow> {
+        let list = self.list.read(cx);
+        let ix = list.selected_index()?;
+        list.delegate().row(ix).cloned()
+    }
+
+    /// The Why blocked panel, outside the Kit's virtual list so it can
+    /// wrap: the selected row's reasons in full, one per line, as
+    /// `blocked_reasons` gave them for this read; a fixed hint when no row
+    /// is selected, or the selected one has none.
+    pub(crate) fn why_blocked(&self, cx: &App) -> impl IntoElement + use<> {
+        let muted = cx.theme().muted_foreground;
+        let selected = self.selected_row(cx);
+        let hint = match &selected {
+            None => Some(SELECT_BLOCKED),
+            Some(row) if row.reasons.is_empty() => Some(NO_REASONS),
+            Some(_) => None,
+        };
+        let reasons = selected.map(|row| row.reasons).unwrap_or_default();
+        v_flex()
+            .id("why-blocked")
+            .test_support()
+            .gap_1()
+            .p_1()
+            .border_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .id("why-blocked-title")
+                    .test_support()
+                    .aria_label(WHY_BLOCKED)
+                    .text_sm()
+                    .child(WHY_BLOCKED),
+            )
+            .children(hint.map(|hint| {
+                div()
+                    .id("why-blocked-hint")
+                    .test_support()
+                    .aria_label(hint)
+                    .text_xs()
+                    .text_color(muted)
+                    .child(hint)
+            }))
+            .children(reasons.into_iter().enumerate().map(|(n, reason)| {
+                div()
+                    .id(("why-blocked-reason", n))
+                    .test_support()
+                    .aria_label(reason.clone())
+                    .text_xs()
+                    .whitespace_normal()
+                    .child(reason)
+            }))
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
