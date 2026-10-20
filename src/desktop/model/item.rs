@@ -6,7 +6,6 @@
 //! here is fixed or the library's own; nothing is formatted with `Debug`.
 
 use manyhands::{
-    canonical::ItemId,
     repository::{
         CommentDto, CommentListDto, DependencyTreeDto, ItemContextDto, ItemContextKind, ItemDto,
         ItemDtoKind, ItemListDto, ProblemDto,
@@ -195,7 +194,7 @@ impl ItemView {
     /// The ticket's parent to read for its name, once the item read gave a
     /// resolved one.
     #[cfg(test)]
-    pub(crate) fn parent_to_read(&self) -> Option<ItemId> {
+    pub(crate) fn parent_to_read(&self) -> Option<manyhands::canonical::ItemId> {
         self.relationships.as_ref()?.parent_to_read()
     }
 

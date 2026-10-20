@@ -15,7 +15,6 @@ pub(crate) type RepoKey = String;
 pub(crate) struct TabId(pub u64);
 
 /// A page of the settings window.
-#[allow(dead_code)] // The settings pages arrive with Tasks 12 to 16.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum SettingsPage {
     Repositories,

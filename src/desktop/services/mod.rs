@@ -36,7 +36,6 @@ pub(crate) const BUSY_RETRY_DELAYS: [Duration; 3] = [
 pub(crate) type ReadGate = futures::channel::oneshot::Receiver<()>;
 
 /// What a read asks for, so the seam can hold one kind and not another.
-#[allow(dead_code)] // Most kinds are read by the views of later tasks.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) enum ReadKind {
     Repositories,
@@ -50,7 +49,6 @@ pub(crate) enum ReadKind {
     Children,
     FindSlug,
     Operations,
-    IndexStatus,
     /// `inspect_repository`, of a folder the Repositories page checks.
     Inspect,
     Remotes,

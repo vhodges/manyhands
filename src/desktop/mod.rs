@@ -4,10 +4,7 @@
 //! created inside `Root`'s own `cx.new`, so its entity comes after.
 
 mod keys;
-// Until the views of later tasks arrive, only tests use some of them.
-#[cfg_attr(not(test), allow(dead_code, unused_imports))]
 mod model;
-#[cfg_attr(not(test), allow(dead_code, unused_imports))]
 mod services;
 mod view;
 

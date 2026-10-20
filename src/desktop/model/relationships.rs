@@ -232,7 +232,9 @@ impl Relationships {
         }
     }
 
-    /// The parent to read for its name: a resolved one only.
+    /// The parent to read for its name: a resolved one only. The view
+    /// reads it from the item read itself (`parent_to_read` above).
+    #[cfg(test)]
     pub(crate) fn parent_to_read(&self) -> Option<ItemId> {
         parent_to_read(self.parent.as_ref())
     }

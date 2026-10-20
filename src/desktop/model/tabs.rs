@@ -77,6 +77,7 @@ impl Tabs {
         self.active
     }
 
+    #[cfg(test)]
     pub(crate) fn key(&self, id: TabId) -> Option<&TabKey> {
         self.open
             .iter()

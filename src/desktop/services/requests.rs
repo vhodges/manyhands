@@ -451,7 +451,11 @@ pub(crate) struct DesktopRequest {
     /// The library's replay identity, kept for every attempt.
     pub request_id: RequestId,
     pub intent: Intent,
+    /// The confirmation and lane this attempt was queued with. No view
+    /// shows them; tests read them to check what an attempt carried.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub confirmation: Option<ConfirmationId>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub lane: Lane,
     /// Which submission of the request this is: 1, then one more for each
     /// retry or Prepare again. A `busy` background job taken again is
