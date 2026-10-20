@@ -264,6 +264,8 @@ pub(crate) enum RecoveryStep {
     /// Open the confirmation dialog for a fresh preview of the request.
     Prepare(DesktopRequestId),
     Cancel(DesktopRequestId),
+    /// Open the Repositories page with this root checked.
+    Inspect(PathBuf),
 }
 
 impl Operations {
@@ -323,6 +325,7 @@ impl Operations {
                 root: root()?,
                 operation_id: operation()?,
             }),
+            RecoveryControl::Inspect => RecoveryStep::Inspect(root()?),
             RecoveryControl::Unavailable => return None,
         })
     }
@@ -379,6 +382,8 @@ pub(crate) enum RecoveryControl {
     Cancel,
     Resume,
     Abandon,
+    /// Open the Repositories page with the root checked.
+    Inspect,
     /// D1 does not offer it yet: shown as text, disabled.
     Unavailable,
 }
@@ -392,11 +397,11 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::RequestCancel => RecoveryControl::Cancel,
         RecoveryActionKind::OperationResume => RecoveryControl::Resume,
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
-        // The settings pages that run these arrive with Tasks 12 to 16.
+        RecoveryActionKind::RepoInspect => RecoveryControl::Inspect,
+        // The settings pages that run these arrive with Tasks 13 and 16.
         RecoveryActionKind::RepoIdentitySet
         | RecoveryActionKind::HostApprove
-        | RecoveryActionKind::HostReplace
-        | RecoveryActionKind::RepoInspect => RecoveryControl::Unavailable,
+        | RecoveryActionKind::HostReplace => RecoveryControl::Unavailable,
     }
 }
 

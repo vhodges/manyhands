@@ -147,6 +147,19 @@ impl SettingsHost {
         }
     }
 
+    /// The `repo.inspect` recovery: the Repositories page, with `root`
+    /// checked in its Add folder.
+    pub(crate) fn inspect(
+        &mut self,
+        root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(SettingsPage::Repositories, window, cx);
+        self.repositories(window, cx)
+            .update(cx, |page, cx| page.inspect_root(root, window, cx));
+    }
+
     fn back(&mut self, cx: &mut Context<Self>) {
         self.hide(cx);
         cx.emit(SettingsEvent::Closed);

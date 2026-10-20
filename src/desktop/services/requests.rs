@@ -358,6 +358,15 @@ impl Intent {
         }
     }
 
+    /// The root a create or enable registers: once it succeeds, the worker
+    /// refreshes it in the background (decision 4).
+    pub(crate) fn onboarded_root(&self) -> Option<PathBuf> {
+        match self {
+            Self::RepoCreate { root, .. } | Self::RepoEnable { root, .. } => Some(root.clone()),
+            _ => None,
+        }
+    }
+
     /// Whether the command can change the items of its repository, so
     /// that its open tabs read their items again once it has finished
     /// (ruling R-B2). Repository removal closes the tabs instead; the

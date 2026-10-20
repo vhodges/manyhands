@@ -51,6 +51,8 @@ pub(crate) enum ReadKind {
     FindSlug,
     Operations,
     IndexStatus,
+    /// `inspect_repository`, of a folder the Repositories page checks.
+    Inspect,
     Remotes,
     Identity,
     Keys,

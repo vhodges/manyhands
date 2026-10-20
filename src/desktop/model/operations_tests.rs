@@ -392,13 +392,40 @@ fn recovery_actions_map_to_controls() {
         (Kind::RepoIdentitySet, RecoveryControl::Unavailable),
         (Kind::HostApprove, RecoveryControl::Unavailable),
         (Kind::HostReplace, RecoveryControl::Unavailable),
-        (Kind::RepoInspect, RecoveryControl::Unavailable),
+        (Kind::RepoInspect, RecoveryControl::Inspect),
     ];
     assert_eq!(expected.len(), Kind::ALL.len());
     for (kind, control) in expected {
         assert_eq!(recovery_control(kind), control, "{}", kind.as_str());
         assert!(!recovery_label(kind).is_empty());
     }
+}
+
+/// `repo.inspect` opens the Repositories page for the root it names, or
+/// for the request's own root when it names none. No local command D1
+/// runs offers it (only an interrupted synchronization does), so this is
+/// a model test over the envelope's recovery.
+#[test]
+fn the_inspect_recovery_names_the_root_to_check() {
+    use super::RecoveryStep;
+    use manyhands::results::RecoveryAction;
+
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    let named = RecoveryAction::new(
+        RecoveryActionKind::RepoInspect,
+        [("root", "/fixture/elsewhere".into())],
+    );
+    let bare = RecoveryAction::new(RecoveryActionKind::RepoInspect, []);
+    let id = DesktopRequestId(1);
+    assert!(matches!(
+        operations.recovery_step(id, &named),
+        Some(RecoveryStep::Inspect(root)) if root == std::path::Path::new("/fixture/elsewhere")
+    ));
+    assert!(matches!(
+        operations.recovery_step(id, &bare),
+        Some(RecoveryStep::Inspect(root)) if root == std::path::Path::new("/fixture/a")
+    ));
 }
 
 /// A prompt the worker sends is kept until the workspace takes it, and is

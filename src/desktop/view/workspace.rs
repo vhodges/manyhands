@@ -605,6 +605,19 @@ impl Workspace {
         self.focus_region(Region::Content, window, cx);
     }
 
+    /// The `repo.inspect` recovery: the Repositories page, with `root`
+    /// checked, focused.
+    pub(crate) fn inspect_in_settings(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings
+            .update(cx, |settings, cx| settings.inspect(root, window, cx));
+        self.focus_region(Region::Content, window, cx);
+    }
+
     /// What the content region shows.
     #[cfg(test)]
     pub(crate) fn settings_shown(&self, cx: &App) -> super::settings::Shown {
@@ -736,6 +749,7 @@ impl Workspace {
             Some(RecoveryStep::Cancel(id)) => {
                 self.services.worker().cancel(id);
             }
+            Some(RecoveryStep::Inspect(root)) => self.inspect_in_settings(root, window, cx),
             None => {}
         }
         cx.notify();

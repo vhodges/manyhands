@@ -250,38 +250,7 @@ impl WorkerHandle {
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
     ) -> DesktopRequestId {
-        let shared = self.shared();
-        let mut state = shared.lock();
-        let id = next_id(&mut state);
-        let request_id = RequestId::new();
-        state.submitted.insert(
-            id,
-            Submitted {
-                request_id,
-                intent: intent.clone(),
-                confirmation,
-                lane,
-                attempt: 1,
-            },
-        );
-        shared.send(WorkerEvent::Queued(DesktopRequest {
-            id,
-            request_id,
-            intent: intent.clone(),
-            confirmation,
-            lane,
-            attempt: 1,
-            state: RequestState::Queued,
-        }));
-        let work = Work::Execute {
-            request_id,
-            intent,
-            confirmation,
-            secret,
-            cancel: CancellationToken::new(),
-        };
-        admit(shared, &mut state, Job::new(id, work, lane));
-        id
+        submit(self.shared(), intent, lane, confirmation, secret)
     }
 
     /// Queues the request `id` again, under its own request ID, so the
@@ -441,6 +410,48 @@ impl WorkerHandle {
     }
 }
 
+/// Queues `intent` under a new request ID: `WorkerHandle::submit`, and the
+/// worker's own refresh after a repository is created or enabled.
+fn submit(
+    shared: &Shared,
+    intent: Intent,
+    lane: Lane,
+    confirmation: Option<ConfirmationId>,
+    secret: Option<SecretPassphrase>,
+) -> DesktopRequestId {
+    let mut state = shared.lock();
+    let id = next_id(&mut state);
+    let request_id = RequestId::new();
+    state.submitted.insert(
+        id,
+        Submitted {
+            request_id,
+            intent: intent.clone(),
+            confirmation,
+            lane,
+            attempt: 1,
+        },
+    );
+    shared.send(WorkerEvent::Queued(DesktopRequest {
+        id,
+        request_id,
+        intent: intent.clone(),
+        confirmation,
+        lane,
+        attempt: 1,
+        state: RequestState::Queued,
+    }));
+    let work = Work::Execute {
+        request_id,
+        intent,
+        confirmation,
+        secret,
+        cancel: CancellationToken::new(),
+    };
+    admit(shared, &mut state, Job::new(id, work, lane));
+    id
+}
+
 fn next_id(state: &mut State) -> DesktopRequestId {
     state.next_id += 1;
     DesktopRequestId(state.next_id)
@@ -560,7 +571,30 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                 // The job is over before the UI hears so, so a quit that
                 // hears it finds the worker idle.
                 finish(shared);
+                // The root as the library registered it, else as asked.
+                let onboarded = (envelope.code == ResultCode::Ok)
+                    .then(|| intent.onboarded_root())
+                    .flatten()
+                    .map(|asked| {
+                        envelope
+                            .scope
+                            .repository
+                            .clone()
+                            .map_or(asked, PathBuf::from)
+                    });
                 shared.send(WorkerEvent::Finished(id, Box::new(envelope)));
+                // A repository just created or enabled is refreshed once,
+                // in the background (design, Index Maintenance, decision
+                // 4). Quitting refuses it as it refuses every job.
+                if let Some(root) = onboarded {
+                    submit(
+                        shared,
+                        Intent::IndexRefresh { root },
+                        Lane::Background,
+                        None,
+                        None,
+                    );
+                }
             }
             Work::ObserveHost { root, authority } => {
                 shared.send(WorkerEvent::Started(id));

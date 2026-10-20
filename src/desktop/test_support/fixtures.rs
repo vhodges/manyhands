@@ -129,6 +129,54 @@ impl Fixture {
         root
     }
 
+    /// The canonical directory the fixture's repositories are made in.
+    pub(crate) fn parent(&self) -> PathBuf {
+        self.repositories.path().canonicalize().unwrap()
+    }
+
+    /// Makes the empty directory `name` in `parent()` and gives it.
+    pub(crate) fn empty_directory(&self, name: &str) -> PathBuf {
+        let path = self.parent().join(name);
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    /// Makes a Git repository `name` in `parent()` that is not a Manyhands
+    /// repository, as `tests/support` `born_repository` does: `main`
+    /// checked out, one commit of `fixture.txt`, made with `git2`. Its own
+    /// configuration holds `identity` when given, and no identity
+    /// otherwise; the isolated Git home holds none either.
+    pub(crate) fn plain_repository(&self, name: &str, identity: Option<CommitIdentity>) -> PathBuf {
+        let root = self.parent().join(name);
+        let mut options = git2::RepositoryInitOptions::new();
+        options.initial_head("main");
+        let repository = git2::Repository::init_opts(&root, &options).unwrap();
+        let mut config = git2::Config::open(&repository.path().join("config")).unwrap();
+        config.set_bool("core.autocrlf", false).unwrap();
+        if let Some(identity) = &identity {
+            config.set_str("user.name", &identity.name).unwrap();
+            config.set_str("user.email", &identity.email).unwrap();
+        }
+        fs::write(root.join("fixture.txt"), "fixture\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("fixture.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let author = self::identity();
+        let signature = git2::Signature::now(&author.name, &author.email).unwrap();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Initial fixture commit",
+                &tree,
+                &[],
+            )
+            .unwrap();
+        root
+    }
+
     /// Writes `bytes` at `rel_path` under `root` and commits it on the
     /// checked-out branch with `git2`, as no local operation would.
     pub(crate) fn commit_file(&self, root: &Path, rel_path: &str, bytes: &[u8]) {
