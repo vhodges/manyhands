@@ -103,6 +103,12 @@ impl DelayingBackend {
             .count()
     }
 
+    /// Every read kind asked for so far, in the order the reads reached
+    /// their gates: only observed.
+    pub(crate) fn reads_in_order(&self) -> Vec<ReadKind> {
+        self.reads_seen.lock().unwrap().clone()
+    }
+
     /// The job kinds the worker has asked to run, in order. A job that
     /// was removed or not sent never appears.
     pub(crate) fn jobs_seen(&self) -> Vec<JobKind> {

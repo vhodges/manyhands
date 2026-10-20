@@ -13,6 +13,13 @@
 //! indented by depth. The actions of later releases show, unavailable,
 //! in fixed text.
 //!
+//! A tab loads in one read job: the repository is resolved once, then the
+//! item, its comments and, for a ticket, its relationships are read one
+//! after another, in the design's order. A load after the first keeps
+//! what is shown until it lands; one that stays busy or fails keeps it
+//! still, and says "Could not refresh" with the answer and Retry, which
+//! loads again in place.
+//!
 //! An item the library no longer finds shows `item_not_found` with
 //! Refresh, which refreshes the repository's index through the worker and
 //! reads the item again. Every failure is shown by its code's message and
@@ -34,7 +41,6 @@ use gpui_kit::{
     div, px,
 };
 use manyhands::{
-    canonical::ItemId,
     repository::{ClosureState, CommentListDto, DependencyDirection, ItemDto, ItemDtoKind},
     results::ResultCode,
 };
@@ -46,16 +52,16 @@ use super::{
 use crate::desktop::{
     model::{
         item::{
-            CONTEXT_PROBLEMS, ItemView, LATER, LATER_NOTE, NOT_REPRESENTABLE, comment_author,
-            context_kind_label, context_problems, metadata_value, provenance_label,
+            CONTEXT_PROBLEMS, ItemReads, ItemView, LATER, LATER_NOTE, NOT_REPRESENTABLE,
+            comment_author, context_kind_label, context_problems, metadata_value, provenance_label,
         },
         list_state::{ListState, Rows},
-        navigation::OpenTarget,
-        relationships::RELATIONSHIP_PROBLEMS,
+        navigation::{NotReloaded, OpenTarget},
+        relationships::{RELATIONSHIP_PROBLEMS, parent_to_read},
         stamp::{Stamp, ViewScope},
     },
     services::{
-        ReadKind, Services,
+        ReadKind, ReadResult, Reader, Services,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
 };
@@ -69,22 +75,18 @@ pub(crate) const REFRESHING: &str = "Refreshing the index";
 pub(crate) const RECOVERY: &str = "This item's context needs repair before it can be read from it.";
 pub(crate) const COPY_ID: &str = "Copy ID";
 pub(crate) const COPY_SLUG: &str = "Copy short code";
+/// What is shown is from an earlier load: the last one stayed busy or
+/// failed.
+pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
 /// How far each level of a reply is indented.
 const COMMENT_INDENT: f32 = 16.;
 
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
     services: Services,
-    /// The item and comment reads, in parallel under one stamp; replacing
-    /// them drops the last.
-    item_read: Option<Task<()>>,
-    comments_read: Option<Task<()>>,
-    /// A ticket's relationship reads, under the same stamp: its dependency
-    /// tree and its children beside the item, and its parent once the
-    /// item read names one.
-    dependents_read: Option<Task<()>>,
-    children_read: Option<Task<()>>,
-    parent_read: Option<Task<()>>,
+    /// The tab's load: one read job, its calls one after another under one
+    /// stamp. Replacing it drops the last.
+    read: Option<Task<()>>,
     /// The focus of each relationship row that can be opened, by its row
     /// name and position.
     pub(super) row_focus: HashMap<(&'static str, usize), FocusHandle>,
@@ -95,6 +97,93 @@ pub(crate) struct ItemPane {
     /// last given. Made at the next frame, which has the window it needs.
     source: Option<(String, Entity<TextareaState>)>,
     _operations: Subscription,
+}
+
+/// One load of a tab, in the design's order: the repository is resolved
+/// once, then `show_item` (or `show_path` for a nonconforming entry),
+/// `list_comments`, and for a ticket `ticket_dependencies`,
+/// `ticket_children` and the parent's `show_item`. A load whose
+/// resolution or item read gives nothing stops there: the reads after it
+/// give the same answer, and the parent is not read.
+///
+/// The tree is asked for in both directions to depth 1: `up` gives the
+/// tickets that depend on the ticket, and `down` the short code and title
+/// of each it depends on, from the same snapshot.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+async fn read_tab(reader: Reader, target: OpenTarget) -> ItemReads {
+    let root = match &target {
+        OpenTarget::Item { repo, .. } | OpenTarget::Inspect { repo, .. } => PathBuf::from(repo),
+    };
+    let repo = match reader
+        .call(ReadKind::Resolve, |service| {
+            service.resolve_repository(&root)
+        })
+        .await
+    {
+        ReadResult::Ok(repo) => repo,
+        ReadResult::Busy => return ItemReads::stopped(&target, ReadResult::Busy),
+        ReadResult::Failed(failure) => {
+            return ItemReads::stopped(&target, ReadResult::Failed(failure));
+        }
+    };
+    let (kind, id) = match &target {
+        OpenTarget::Item { kind, id, .. } => (*kind, id),
+        OpenTarget::Inspect { worktree, path, .. } => {
+            let (worktree, path) = (PathBuf::from(worktree), PathBuf::from(path));
+            let item = reader
+                .call(ReadKind::Item, |service| {
+                    service.show_path(&repo, Some(&worktree), &path)
+                })
+                .await;
+            return ItemReads::stopped(&target, item);
+        }
+    };
+    let item = reader
+        .call(ReadKind::Item, |service| service.show_item(&repo, id))
+        .await;
+    let parent = match &item {
+        ReadResult::Ok(item) => parent_to_read(item.parent.as_ref()),
+        _ => return ItemReads::stopped(&target, item),
+    };
+    let comments = reader
+        .call(ReadKind::Comments, |service| {
+            service.list_comments(&repo, id)
+        })
+        .await;
+    if kind != ItemDtoKind::Ticket {
+        return ItemReads {
+            item,
+            comments: Some(comments),
+            dependents: None,
+            children: None,
+            parent: None,
+        };
+    }
+    let dependents = reader
+        .call(ReadKind::Dependencies, |service| {
+            service.ticket_dependencies(&repo, id, DependencyDirection::Both, Some(1))
+        })
+        .await;
+    let children = reader
+        .call(ReadKind::Children, |service| {
+            service.ticket_children(&repo, id)
+        })
+        .await;
+    let parent = match parent {
+        Some(parent) => Some(
+            reader
+                .call(ReadKind::Item, |service| service.show_item(&repo, &parent))
+                .await,
+        ),
+        None => None,
+    };
+    ItemReads {
+        item,
+        comments: Some(comments),
+        dependents: Some(dependents),
+        children: Some(children),
+        parent,
+    }
 }
 
 impl ItemPane {
@@ -112,17 +201,14 @@ impl ItemPane {
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
-            item_read: None,
-            comments_read: None,
-            dependents_read: None,
-            children_read: None,
-            parent_read: None,
+            read: None,
             row_focus: HashMap::new(),
             refreshing: None,
             source: None,
             _operations: operations,
         };
-        pane.load(cx);
+        let stamp = pane.model.load();
+        pane.read(stamp, cx);
         pane
     }
 
@@ -132,165 +218,31 @@ impl ItemPane {
         self.model.target()
     }
 
-    /// Reads the item, and for an item by ID its comments, again. Each
-    /// read resolves the repository first, so a repository that has gone
-    /// shows its failure here.
-    pub(crate) fn load(&mut self, cx: &mut Context<Self>) -> Stamp {
-        let stamp = self.model.load();
-        self.read(stamp.clone(), cx);
-        stamp
-    }
-
-    /// Reads the item and its comments again after its repository may
-    /// have changed. What is shown, and the source's text field with its
-    /// selection and focus, stay until the reads land.
+    /// Loads the tab again in place, after its repository may have
+    /// changed or on Retry. What is shown, and the source's text field
+    /// with its selection and focus, stay until the load lands; a load
+    /// that gives nothing keeps what is shown and says it could not
+    /// refresh.
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) -> Stamp {
         let stamp = self.model.reload();
         self.read(stamp.clone(), cx);
         stamp
     }
 
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+    /// Starts the tab's load under `stamp`, as one read job.
     fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
-        self.comments_read = None;
-        self.dependents_read = None;
-        self.children_read = None;
-        self.parent_read = None;
-        match self.model.target().clone() {
-            OpenTarget::Item { repo, id, .. } => {
-                if self.model.relationships().is_some() {
-                    self.read_relationships(&repo, &id, stamp.clone(), cx);
+        let target = self.model.target().clone();
+        self.read = Some(self.services.read_job(
+            stamp,
+            move |reader| read_tab(reader, target),
+            cx,
+            |this: &mut Self, stamp, reads, cx| {
+                if this.model.apply_reads(stamp, reads) {
+                    cx.notify();
                 }
-                let root = PathBuf::from(&repo);
-                let item = id.clone();
-                self.item_read = Some(self.services.read(
-                    ReadKind::Item,
-                    stamp.clone(),
-                    move |service| {
-                        let repo = service.resolve_repository(&root)?;
-                        service.show_item(&repo, &item)
-                    },
-                    cx,
-                    Self::apply_item,
-                ));
-                let root = PathBuf::from(&repo);
-                self.comments_read = Some(self.services.read(
-                    ReadKind::Comments,
-                    stamp.clone(),
-                    move |service| {
-                        let repo = service.resolve_repository(&root)?;
-                        service.list_comments(&repo, &id)
-                    },
-                    cx,
-                    |this: &mut Self, stamp, result, cx| {
-                        if this.model.apply_comments(stamp, result) {
-                            cx.notify();
-                        }
-                    },
-                ));
-            }
-            OpenTarget::Inspect {
-                repo,
-                worktree,
-                path,
-            } => {
-                let root = PathBuf::from(&repo);
-                let worktree = PathBuf::from(worktree);
-                let path = PathBuf::from(path);
-                self.item_read = Some(self.services.read(
-                    ReadKind::Item,
-                    stamp.clone(),
-                    move |service| {
-                        let repo = service.resolve_repository(&root)?;
-                        service.show_path(&repo, Some(&worktree), &path)
-                    },
-                    cx,
-                    Self::apply_item,
-                ));
-            }
-        }
+            },
+        ));
         cx.notify();
-    }
-
-    fn apply_item(
-        &mut self,
-        stamp: Stamp,
-        result: crate::desktop::services::ReadResult<ItemDto>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.model.apply_item(stamp.clone(), result) {
-            self.read_parent(stamp, cx);
-            cx.notify();
-        }
-    }
-
-    /// Reads a ticket's dependency tree and its children beside its item.
-    /// The tree is asked for in both directions to depth 1: `up` gives
-    /// the tickets that depend on it, and `down` the short code and title
-    /// of each it depends on, from the same snapshot.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn read_relationships(
-        &mut self,
-        repo: &str,
-        id: &ItemId,
-        stamp: Stamp,
-        cx: &mut Context<Self>,
-    ) {
-        let (root, ticket) = (PathBuf::from(repo), id.clone());
-        self.dependents_read = Some(self.services.read(
-            ReadKind::Dependencies,
-            stamp.clone(),
-            move |service| {
-                let repo = service.resolve_repository(&root)?;
-                service.ticket_dependencies(&repo, &ticket, DependencyDirection::Both, Some(1))
-            },
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.model.apply_dependents(stamp, result) {
-                    cx.notify();
-                }
-            },
-        ));
-        let (root, ticket) = (PathBuf::from(repo), id.clone());
-        self.children_read = Some(self.services.read(
-            ReadKind::Children,
-            stamp,
-            move |service| {
-                let repo = service.resolve_repository(&root)?;
-                service.ticket_children(&repo, &ticket)
-            },
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.model.apply_children(stamp, result) {
-                    cx.notify();
-                }
-            },
-        ));
-    }
-
-    /// Reads the parent the item read named, when it is resolved, for its
-    /// short code and title.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn read_parent(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
-        self.parent_read = None;
-        let Some(parent) = self.model.parent_to_read() else {
-            return;
-        };
-        let root = PathBuf::from(self.repo());
-        self.parent_read = Some(self.services.read(
-            ReadKind::Item,
-            stamp,
-            move |service| {
-                let repo = service.resolve_repository(&root)?;
-                service.show_item(&repo, &parent)
-            },
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if this.model.apply_parent(stamp, result) {
-                    cx.notify();
-                }
-            },
-        ));
     }
 
     pub(super) fn repo(&self) -> &str {
@@ -316,12 +268,13 @@ impl ItemPane {
 
     /// A worker event arrived: once the refresh Refresh asked for has
     /// ended, however it ended, the item is read again. A finished one
-    /// marked the repository changed, so the workspace reads every open
-    /// tab of it again, this one with them; one not sent, or removed from
-    /// the queue by a cancel or on quit, changed nothing, so this view
-    /// reads itself again. A request the model does not hold yet has not
-    /// ended: its `Queued` event comes through the worker's channel after
-    /// `submit` returns, and another event can reach the model first.
+    /// marked the repository's items changed, so the workspace reads every
+    /// open tab of it again, this one with them; one not sent, or removed
+    /// from the queue by a cancel or on quit, changed nothing, so this
+    /// view reads itself again, in place. A request the model does not
+    /// hold yet has not ended: its `Queued` event comes through the
+    /// worker's channel after `submit` returns, and another event can
+    /// reach the model first.
     fn operations_changed(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.refreshing else {
             return;
@@ -340,7 +293,7 @@ impl ItemPane {
             }
             Some(_) => {
                 self.refreshing = None;
-                self.load(cx);
+                self.reload(cx);
             }
         }
     }
@@ -455,7 +408,7 @@ impl ItemPane {
                     Button::new(format!("{name}-retry-button"))
                         .label(RETRY)
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            this.load(cx);
+                            this.reload(cx);
                         })),
                 ),
             ),
@@ -466,6 +419,43 @@ impl ItemPane {
             .children(label)
             .children(failed)
             .children(action)
+    }
+
+    /// A load that gave nothing while rows were shown: they stay, and
+    /// this says so, in fixed text, with the answer's message and code,
+    /// and Retry, which loads again in place.
+    fn not_refreshed(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let code = match self.model.not_refreshed()? {
+            NotReloaded::Busy => ResultCode::Busy,
+            NotReloaded::Failed(failure) => failure.code,
+        };
+        let muted = cx.theme().muted_foreground;
+        Some(
+            v_flex()
+                .id("item-not-refreshed")
+                .test_support()
+                .aria_label(NOT_REFRESHED)
+                .gap_1()
+                .p_2()
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(div().text_sm().child(NOT_REFRESHED))
+                .child(text("item-not-refreshed-failure", code.message()).text_sm())
+                .child(
+                    text("item-not-refreshed-code", code.as_str())
+                        .text_xs()
+                        .text_color(muted),
+                )
+                .child(
+                    div().id("item-not-refreshed-retry").test_support().child(
+                        Button::new("item-not-refreshed-retry-button")
+                            .label(RETRY)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                this.reload(cx);
+                            })),
+                    ),
+                ),
+        )
     }
 
     /// What was opened, from the target until the read gives more: the
@@ -854,6 +844,7 @@ impl Render for ItemPane {
         let item = self.model.item().rows().cloned();
         let identity = self.identity(item.as_ref(), cx);
         let status = self.status("item", self.model.item(), cx);
+        let not_refreshed = self.not_refreshed(cx);
         // A ticket's relationships, beside its fields once it is read.
         let relationships = match &item {
             Some(_) => self.relationships_panel(window, cx),
@@ -876,6 +867,7 @@ impl Render for ItemPane {
             .gap_3()
             .child(identity)
             .child(status)
+            .children(not_refreshed)
             .children(body)
             .children(discussion)
             .child(self.later(cx))

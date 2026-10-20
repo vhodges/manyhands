@@ -19,7 +19,7 @@ use manyhands::repository::{RepositoryService, keys::KeyStore};
 use crate::desktop::model::operations::Operations;
 use worker::WorkerHandle;
 
-pub(crate) use reads::{ReadFailure, ReadResult};
+pub(crate) use reads::{ReadFailure, ReadResult, Reader};
 
 /// The waits before each retry of a call answered `busy`: a read, a
 /// prepare, or a worker job of either lane (rulings R6, R-T7a, R-B3).

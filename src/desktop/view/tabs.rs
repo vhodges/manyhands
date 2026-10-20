@@ -5,11 +5,12 @@
 //! read that lands after the user moved to another tab only ever changes
 //! the tab that asked. Opening an item that is already open shows its tab.
 //!
-//! When a finished request may have changed a repository, every open tab
-//! of it reads its item again in place: the strip keeps its order and the
-//! shown tab, and each tab keeps what it shows, and its source's text
-//! field, until the new read lands. A tab whose repository has gone shows
-//! the item's failure with Retry; the other tabs are not touched.
+//! When a finished request may have changed a repository's items, every
+//! open tab of it reads its item again in place: the strip keeps its order
+//! and the shown tab, and each tab keeps what it shows, its title and its
+//! source's text field, until the new read lands. A tab whose repository
+//! has gone keeps them too, and says it could not refresh, with the
+//! failure and Retry; the other tabs are not touched.
 //!
 //! `ctrl-tab` and `ctrl-shift-tab` move through the tabs, `secondary-w`
 //! closes the shown one; focus follows to the shown tab. The shown tab
@@ -164,7 +165,7 @@ impl Workspace {
     }
 
     /// Every open tab of a repository in `changed` reads its item again,
-    /// in place: one read per tab, however many requests changed it.
+    /// in place: one load per tab, however many requests changed it.
     pub(super) fn reload_tabs(&mut self, changed: &BTreeSet<RepoKey>, cx: &mut Context<Self>) {
         for (id, key) in self.content.tabs.tabs() {
             if !changed.contains(key.repo()) {

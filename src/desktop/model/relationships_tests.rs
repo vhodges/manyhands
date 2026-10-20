@@ -14,9 +14,9 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        item::ItemView,
+        item::{ItemReads, ItemView},
         list_state::ListState,
-        navigation::OpenTarget,
+        navigation::{NotReloaded, OpenTarget},
         stamp::{TabId, ViewScope},
         tickets::Lifecycle,
     },
@@ -307,19 +307,27 @@ fn only_a_ticket_has_relationships() {
     assert!(inspect.relationships().is_none());
 }
 
-/// Review Focus 1: the relationship reads are stamped to the tab. One
+/// Review Focus 1: the relationship reads are stamped to the tab. A load
 /// from before a reload is dropped; a reload keeps what is shown until its
-/// reads land, and a load starts again from loading.
+/// load lands, and one whose relationship reads give nothing keeps their
+/// rows and the parent's name, and says why. A first load starts again
+/// from loading.
 #[test]
 fn a_relationship_read_from_before_a_reload_is_dropped() {
     let reads = reads(graph);
     let mut view = ItemView::new(ticket(&reads, MAIN), ViewScope::Tab(TabId(4)));
     let first = view.load();
-    assert!(view.apply_item(first.clone(), ReadResult::Ok(reads.main.clone())));
+    assert!(view.apply_reads(
+        first.clone(),
+        ItemReads {
+            item: ReadResult::Ok(reads.main.clone()),
+            comments: None,
+            dependents: Some(ReadResult::Ok(reads.tree.clone())),
+            children: Some(ReadResult::Ok(reads.children.clone())),
+            parent: Some(ReadResult::Ok(reads.parent.clone().unwrap())),
+        },
+    ));
     assert_eq!(view.parent_to_read(), Some(item_id(PARENT)));
-    assert!(view.apply_dependents(first.clone(), ReadResult::Ok(reads.tree.clone())));
-    assert!(view.apply_children(first.clone(), ReadResult::Ok(reads.children.clone())));
-    assert!(view.apply_parent(first.clone(), ReadResult::Ok(reads.parent.clone().unwrap())));
 
     let second = view.reload();
     assert_eq!(second.scope, ViewScope::Tab(TabId(4)));
@@ -331,24 +339,41 @@ fn a_relationship_read_from_before_a_reload_is_dropped() {
         Some("The parent")
     );
 
-    assert!(!view.apply_dependents(first.clone(), ReadResult::Busy));
-    assert!(!view.apply_children(first.clone(), ReadResult::Busy));
-    assert!(!view.apply_parent(first, ReadResult::Busy));
-    assert_eq!(view.relationships().unwrap().dependent_rows().len(), 1);
+    let busy = || ItemReads {
+        item: ReadResult::Busy,
+        comments: None,
+        dependents: Some(ReadResult::Busy),
+        children: Some(ReadResult::Busy),
+        parent: None,
+    };
+    assert!(!view.apply_reads(first, busy()));
+    assert!(view.not_refreshed().is_none());
 
     let failure = ReadFailure {
         code: ResultCode::ItemNotFound,
         recovery: Vec::new(),
     };
-    assert!(view.apply_dependents(second.clone(), ReadResult::Failed(failure)));
-    assert!(matches!(
-        view.relationships().unwrap().dependents(),
-        ListState::Failed(failure) if failure.code == ResultCode::ItemNotFound
+    assert!(view.apply_reads(
+        second,
+        ItemReads {
+            item: ReadResult::Ok(reads.main.clone()),
+            comments: None,
+            dependents: Some(ReadResult::Failed(failure)),
+            children: Some(ReadResult::Busy),
+            parent: Some(ReadResult::Busy),
+        },
     ));
-    assert!(view.apply_children(second, ReadResult::Busy));
+    let relationships = view.relationships().unwrap();
+    assert_eq!(ids(&relationships.dependent_rows()), [DEPENDENT]);
+    assert_eq!(relationships.child_rows().len(), 2);
+    assert_eq!(
+        relationships.parent_row().unwrap().title.as_deref(),
+        Some("The parent"),
+        "a busy parent read keeps the name while the ID is the same"
+    );
     assert!(matches!(
-        view.relationships().unwrap().children(),
-        ListState::Busy
+        view.not_refreshed(),
+        Some(NotReloaded::Failed(why)) if why.code == ResultCode::ItemNotFound
     ));
 
     view.load();
@@ -356,4 +381,5 @@ fn a_relationship_read_from_before_a_reload_is_dropped() {
     assert!(matches!(relationships.dependents(), ListState::Loading));
     assert!(matches!(relationships.children(), ListState::Loading));
     assert!(relationships.parent_row().is_none());
+    assert!(view.not_refreshed().is_none());
 }

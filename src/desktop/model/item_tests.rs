@@ -2,19 +2,22 @@
 //! recovery view, how unknown metadata is shown, and stale reads dropped.
 
 use manyhands::{
-    repository::{IndexState, ItemContextDto, ItemContextKind, ItemDtoKind, ProblemDto},
+    repository::{
+        CommentListDto, IndexState, ItemContextDto, ItemContextKind, ItemDto, ItemDtoKind,
+        ProblemDto,
+    },
     results::{ProblemCode, ResultCode},
 };
 use serde_json::json;
 
 use super::{
-    ItemView, KIND_ACTIVE, KIND_PRIMARY, KIND_UNVERIFIED, LATER, NO_BRANCH, comment_author,
-    context_problems, metadata_value, provenance_label,
+    ItemReads, ItemView, KIND_ACTIVE, KIND_PRIMARY, KIND_UNVERIFIED, LATER, NO_BRANCH,
+    comment_author, context_problems, metadata_value, provenance_label,
 };
 use crate::desktop::{
     model::{
         list_state::ListState,
-        navigation::OpenTarget,
+        navigation::{NotReloaded, OpenTarget},
         stamp::{TabId, ViewScope},
     },
     services::{ReadFailure, ReadResult},
@@ -170,13 +173,37 @@ fn only_an_item_by_id_has_a_discussion() {
     assert!(inspect.comments().is_none());
 }
 
+/// A load of the item and its comments only, as a test gives it.
+fn item_reads(
+    item: ReadResult<ItemDto>,
+    comments: Option<ReadResult<CommentListDto>>,
+) -> ItemReads {
+    ItemReads {
+        item,
+        comments,
+        dependents: None,
+        children: None,
+        parent: None,
+    }
+}
+
 #[test]
 fn a_finished_read_is_shown_with_its_index_state() {
     let (_fixture, item) = shown_ticket();
     let mut view = ItemView::new(ticket_target(), ViewScope::Tab(TabId(3)));
     let stamp = view.load();
     assert_eq!(stamp.scope, ViewScope::Tab(TabId(3)));
-    assert!(view.apply_item(stamp.clone(), ReadResult::Ok(item.clone())));
+    let failure = ReadFailure {
+        code: ResultCode::ItemNotFound,
+        recovery: Vec::new(),
+    };
+    assert!(view.apply_reads(
+        stamp,
+        item_reads(
+            ReadResult::Ok(item.clone()),
+            Some(ReadResult::Failed(failure))
+        ),
+    ));
     match view.item() {
         ListState::Ready {
             rows,
@@ -192,20 +219,15 @@ fn a_finished_read_is_shown_with_its_index_state() {
         }
         _ => panic!("not ready"),
     }
-    assert!(view.apply_comments(
-        stamp,
-        ReadResult::Failed(ReadFailure {
-            code: ResultCode::ItemNotFound,
-            recovery: Vec::new(),
-        }),
-    ));
     assert!(matches!(
         view.comments(),
         Some(ListState::Failed(failure)) if failure.code == ResultCode::ItemNotFound
     ));
+    // A first load shows its answer: nothing was shown to keep.
+    assert!(view.not_refreshed().is_none());
 }
 
-/// Review Focus 1: a read asked before the view loaded again never
+/// Review Focus 1: a load asked before the view loaded again never
 /// replaces what the later load shows.
 #[test]
 fn a_read_from_before_a_reload_is_dropped() {
@@ -213,39 +235,64 @@ fn a_read_from_before_a_reload_is_dropped() {
     let mut view = ItemView::new(ticket_target(), ViewScope::Tab(TabId(0)));
     let first = view.load();
     let second = view.load();
-    assert!(!view.apply_item(first.clone(), ReadResult::Ok(item.clone())));
-    assert!(!view.apply_comments(first, ReadResult::Busy));
+    assert!(!view.apply_reads(
+        first,
+        item_reads(ReadResult::Ok(item.clone()), Some(ReadResult::Busy))
+    ));
     assert!(matches!(view.item(), ListState::Loading));
     assert!(matches!(view.comments(), Some(ListState::Loading)));
-    assert!(view.apply_item(second, ReadResult::Busy));
+    assert!(view.apply_reads(second, item_reads(ReadResult::Busy, Some(ReadResult::Busy))));
     assert!(matches!(view.item(), ListState::Busy));
+    assert!(view.not_refreshed().is_none());
 }
 
-/// A reload after the repository changed keeps what is shown until its
-/// reads land, so the source and its selection stay; a read from before
-/// it is still dropped, and what it reads replaces what was shown.
+/// A reload keeps what is shown until its load lands; a load from before
+/// it is still dropped. One that fails or stays busy keeps the rows shown
+/// and says why; a part that showed no rows shows its answer. The next
+/// load that gives the item replaces it and clears the reason.
 #[test]
-fn a_reload_keeps_what_is_shown_until_its_reads_land() {
+fn a_reload_that_gives_nothing_keeps_what_is_shown_and_says_why() {
     let (_fixture, item) = shown_ticket();
     let mut view = ItemView::new(ticket_target(), ViewScope::Tab(TabId(1)));
     let first = view.load();
-    assert!(view.apply_item(first.clone(), ReadResult::Ok(item.clone())));
-    assert!(view.apply_comments(first.clone(), ReadResult::Busy));
+    assert!(view.apply_reads(
+        first.clone(),
+        item_reads(ReadResult::Ok(item.clone()), Some(ReadResult::Busy))
+    ));
 
     let second = view.reload();
     assert_eq!(second.scope, ViewScope::Tab(TabId(1)));
     assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
     assert!(matches!(view.comments(), Some(ListState::Busy)));
-    assert!(!view.apply_item(first, ReadResult::Busy));
+    assert!(!view.apply_reads(first, item_reads(ReadResult::Busy, None)));
     assert!(matches!(view.item(), ListState::Ready { .. }));
 
     let failure = ReadFailure {
         code: ResultCode::InvalidPath,
         recovery: Vec::new(),
     };
-    assert!(view.apply_item(second, ReadResult::Failed(failure)));
-    assert!(matches!(
-        view.item(),
-        ListState::Failed(failure) if failure.code == ResultCode::InvalidPath
+    assert!(view.apply_reads(
+        second,
+        item_reads(
+            ReadResult::Failed(failure.clone()),
+            Some(ReadResult::Failed(failure.clone()))
+        ),
     ));
+    assert!(matches!(view.item(), ListState::Ready { rows, .. } if rows.id == item.id));
+    assert!(matches!(
+        view.not_refreshed(),
+        Some(NotReloaded::Failed(why)) if why.code == ResultCode::InvalidPath
+    ));
+    // The comments showed no rows, so they show the answer.
+    assert!(matches!(
+        view.comments(),
+        Some(ListState::Failed(why)) if why.code == ResultCode::InvalidPath
+    ));
+
+    let third = view.reload();
+    assert!(view.apply_reads(third, item_reads(ReadResult::Busy, None)));
+    assert!(matches!(view.not_refreshed(), Some(NotReloaded::Busy)));
+    let fourth = view.reload();
+    assert!(view.apply_reads(fourth, item_reads(ReadResult::Ok(item.clone()), None)));
+    assert!(view.not_refreshed().is_none());
 }

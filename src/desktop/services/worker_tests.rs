@@ -742,10 +742,12 @@ fn a_backing_off_user_job_still_runs_before_a_background_job() {
         .submit(harness.refresh(), Lane::User, None, None);
     let mut seen = Vec::new();
     until_backing_off(&mut harness, &mut seen);
-    let background =
-        harness
-            .worker
-            .submit(Intent::IndexRefresh { root: other }, Lane::Background, None, None);
+    let background = harness.worker.submit(
+        Intent::IndexRefresh { root: other },
+        Lane::Background,
+        None,
+        None,
+    );
     // Long enough for the background job to have run, were it taken.
     std::thread::sleep(Duration::from_millis(300));
     drop(lease);

@@ -2,10 +2,13 @@
 //! keys, closing, reloading on refresh, a repository that goes away, and
 //! completions that land on a tab no longer shown.
 
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Duration};
 
 use gpui_kit::{Entity, TestAppContext, component::input::TextareaState, test::TestWindowExt};
-use manyhands::{repository::ItemDtoKind, results::ResultCode};
+use manyhands::{
+    repository::{ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
+    results::ResultCode,
+};
 
 use super::{CLOSE_TAB, SHOWN};
 use crate::desktop::{
@@ -17,6 +20,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, item_id},
     view::{
         harness::{Shell, key},
+        item::NOT_REFRESHED,
         workspace::{REGIONS, Region},
     },
 };
@@ -256,8 +260,9 @@ async fn a_job_for_a_while_b_is_selected_reloads_only_as_tab(cx: &mut TestAppCon
 }
 
 /// Review Focus 2: `a`'s folder goes away while it has a tab open. Once
-/// `a` is read again its tab shows the failure with Retry; `b`'s tab is
-/// unaffected. With the folder back, Retry reads it.
+/// `a` is read again its tab keeps what it showed and says it could not
+/// refresh, with the failure and Retry; `b`'s tab is unaffected. With the
+/// folder back, Retry reads it in place.
 #[gpui_kit::test]
 async fn a_tab_whose_repository_goes_away_shows_its_failure_with_retry(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -273,23 +278,36 @@ async fn a_tab_whose_repository_goes_away_shows_its_failure_with_retry(cx: &mut 
 
     assert_eq!(shown(&shell, cx), Some(1));
     assert_eq!(title(&shell, cx).as_deref(), Some("Other"));
-    assert!(!shell.present("item-failure", cx));
+    assert!(!shell.present("item-not-refreshed", cx));
 
     shell.click(("tab", 0usize), cx);
     assert_eq!(
-        shell.label("item-failure", cx).as_deref(),
+        shell.label("item-not-refreshed", cx).as_deref(),
+        Some(NOT_REFRESHED)
+    );
+    assert_eq!(
+        shell.label("item-not-refreshed-failure", cx).as_deref(),
         Some(ResultCode::InvalidPath.message())
     );
     assert_eq!(
-        shell.label("item-failure-code", cx).as_deref(),
+        shell.label("item-not-refreshed-code", cx).as_deref(),
         Some(ResultCode::InvalidPath.as_str())
     );
-    assert!(shell.present("item-retry", cx));
-    assert!(!shell.present("item-title", cx));
-    assert_eq!(strip(&shell, cx).len(), 2, "the tab stays");
+    assert!(shell.present("item-not-refreshed-retry", cx));
+    assert_eq!(
+        title(&shell, cx).as_deref(),
+        Some("One"),
+        "what it showed stays"
+    );
+    assert_eq!(
+        strip(&shell, cx),
+        ["One", "Other"],
+        "the tab keeps its title"
+    );
 
     fs::rename(&away, &a).unwrap();
-    shell.click("item-retry-button", cx);
+    shell.click("item-not-refreshed-retry-button", cx);
+    assert!(!shell.present("item-not-refreshed", cx));
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
     shell.click(("tab", 1usize), cx);
     assert_eq!(title(&shell, cx).as_deref(), Some("Other"));
@@ -485,4 +503,120 @@ async fn a_finished_request_that_cannot_change_items_reads_no_tab(cx: &mut TestA
     shell.run(cx);
     assert_eq!(item_reads(&shell), reads, "no tab is read again");
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
+}
+
+/// One load of a ticket's tab is one read job, its calls in the design's
+/// order: the resolution, the item, its comments, its dependency tree, its
+/// children, then its parent. A load whose item read fails makes no read
+/// after it, the parent's included.
+#[gpui_kit::test]
+fn one_tab_load_reads_in_the_designs_order(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.create_ticket(&a, TWO, "Parent", "open");
+    fixture.create_related_ticket(&a, ONE, "One", "open", &[], Some(TWO));
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+
+    let before = shell.backend.reads_in_order().len();
+    open(&shell, ticket(&a, ONE), cx);
+    assert_eq!(
+        shell.backend.reads_in_order()[before..],
+        [
+            ReadKind::Resolve,
+            ReadKind::Item,
+            ReadKind::Comments,
+            ReadKind::Dependencies,
+            ReadKind::Children,
+            ReadKind::Item,
+        ]
+    );
+    assert_eq!(title(&shell, cx).as_deref(), Some("One"));
+
+    let before = shell.backend.reads_in_order().len();
+    open(&shell, ticket(&a, THREE), cx);
+    assert_eq!(
+        shell.backend.reads_in_order()[before..],
+        [ReadKind::Resolve, ReadKind::Item]
+    );
+    assert_eq!(
+        shell.label("item-failure-code", cx).as_deref(),
+        Some(ResultCode::ItemNotFound.as_str())
+    );
+}
+
+/// Holds the registry's cache lease, as a refresh writing it would: every
+/// read answers `busy` while it is held.
+fn hold_cache_write(shell: &Shell, root: &std::path::Path) -> LeaseHolderForTesting {
+    RepositoryService::hold_lease_for_testing(root, shell.fixture.data_dir(), LeaseKind::CacheWrite)
+        .unwrap()
+}
+
+/// Lets a load's busy retries run out: each call waits at most
+/// 100 + 200 + 400 ms.
+fn past_the_retries(shell: &Shell, cx: &mut TestAppContext) {
+    for _ in 0..6 {
+        cx.executor().advance_clock(Duration::from_secs(1));
+        shell.run(cx);
+    }
+}
+
+/// A reload that stays busy keeps what the tab shows: the item, the
+/// source's text field with its focus, and the tab's title, and says it
+/// could not refresh, with Busy's message and Retry. Retry loads again in
+/// place: while its load is held, the item is still shown, not Loading.
+#[gpui_kit::test]
+fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext) {
+    let Two { shell, a, .. } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    let source = source_state(&shell, cx).expect("the source is shown");
+    let mut visual = shell.visual(cx);
+    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
+    visual.run_until_parked();
+
+    let lease = hold_cache_write(&shell, &a);
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .unwrap();
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    past_the_retries(&shell, cx);
+
+    assert_eq!(title(&shell, cx).as_deref(), Some("One"));
+    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(
+        shell.label("item-not-refreshed", cx).as_deref(),
+        Some(NOT_REFRESHED)
+    );
+    assert_eq!(
+        shell.label("item-not-refreshed-failure", cx).as_deref(),
+        Some(ResultCode::Busy.message())
+    );
+    assert_eq!(
+        shell.label("item-not-refreshed-code", cx).as_deref(),
+        Some(ResultCode::Busy.as_str())
+    );
+    assert!(shell.present("item-not-refreshed-retry", cx));
+    let kept = source_state(&shell, cx).expect("the source is still shown");
+    assert_eq!(kept, source, "the same text field");
+    assert!(shell.visual(cx).update(|window, cx| {
+        gpui_kit::Focusable::focus_handle(kept.read(cx), cx).is_focused(window)
+    }));
+
+    drop(lease);
+    let held = shell.backend.hold_read(ReadKind::Item);
+    shell.click("item-not-refreshed-retry-button", cx);
+    assert_eq!(
+        title(&shell, cx).as_deref(),
+        Some("One"),
+        "not reset to Loading"
+    );
+    assert!(!shell.present("item-state", cx));
+    held.send(()).unwrap();
+    shell.run(cx);
+    assert!(!shell.present("item-not-refreshed", cx));
+    assert_eq!(title(&shell, cx).as_deref(), Some("One"));
+    assert_eq!(source_state(&shell, cx), Some(source));
 }

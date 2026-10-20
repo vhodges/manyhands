@@ -10,6 +10,7 @@ use manyhands::{
     results::ResultCode,
 };
 
+use super::navigation::NotReloaded;
 use crate::desktop::services::{ReadFailure, ReadResult};
 
 pub(crate) const LABEL_LOADING: &str = "Loading";
@@ -66,6 +67,35 @@ impl<T> ListState<T> {
             ReadResult::Ok(value) => ready(value),
             ReadResult::Busy => Self::Busy,
             ReadResult::Failed(failure) => Self::Failed(failure),
+        }
+    }
+
+    /// Applies a finished read again over what is shown. One that gave its
+    /// value replaces the state; one that stayed busy or failed while
+    /// rows are shown keeps them and says why; any other replaces the
+    /// state with its answer.
+    pub(crate) fn apply_keeping<V>(
+        &mut self,
+        result: ReadResult<V>,
+        ready: impl FnOnce(V) -> Self,
+    ) -> Option<NotReloaded> {
+        match result {
+            ReadResult::Ok(value) => {
+                *self = ready(value);
+                None
+            }
+            ReadResult::Busy if self.rows().is_some() => Some(NotReloaded::Busy),
+            ReadResult::Failed(failure) if self.rows().is_some() => {
+                Some(NotReloaded::Failed(failure))
+            }
+            ReadResult::Busy => {
+                *self = Self::Busy;
+                None
+            }
+            ReadResult::Failed(failure) => {
+                *self = Self::Failed(failure);
+                None
+            }
         }
     }
 }

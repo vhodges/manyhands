@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use super::{
     list_state::{ListState, Rows},
-    navigation::OpenTarget,
+    navigation::{NotReloaded, OpenTarget},
     relationships::Relationships,
     stamp::{Generations, Stamp, ViewScope},
 };
@@ -104,6 +104,36 @@ impl Rows for CommentListDto {
     }
 }
 
+/// What one load of a tab read, in the design's order: the item, its
+/// comments, and for a ticket its dependency tree, its children and its
+/// parent. `None` for a read the target does not make, or one not made.
+pub(crate) struct ItemReads {
+    pub item: ReadResult<ItemDto>,
+    pub comments: Option<ReadResult<CommentListDto>>,
+    pub dependents: Option<ReadResult<DependencyTreeDto>>,
+    pub children: Option<ReadResult<ItemListDto>>,
+    pub parent: Option<ReadResult<ItemDto>>,
+}
+
+impl ItemReads {
+    /// A load that stopped at `item`, which gave nothing: every read the
+    /// target makes after it gives the same answer, and the parent is
+    /// not read.
+    pub(crate) fn stopped(target: &OpenTarget, item: ReadResult<ItemDto>) -> Self {
+        let (comments, ticket) = match target {
+            OpenTarget::Item { kind, .. } => (true, *kind == ItemDtoKind::Ticket),
+            OpenTarget::Inspect { .. } => (false, false),
+        };
+        Self {
+            comments: comments.then(|| item.stopped()).flatten(),
+            dependents: ticket.then(|| item.stopped()).flatten(),
+            children: ticket.then(|| item.stopped()).flatten(),
+            parent: None,
+            item,
+        }
+    }
+}
+
 pub(crate) struct ItemView {
     target: OpenTarget,
     scope: ViewScope,
@@ -113,6 +143,9 @@ pub(crate) struct ItemView {
     comments: Option<ListState<CommentListDto>>,
     /// `None` for anything but a ticket by ID.
     relationships: Option<Relationships>,
+    /// Why what is shown is from an earlier load: the last load stayed
+    /// busy or failed while rows were shown, and they were kept.
+    not_refreshed: Option<NotReloaded>,
     generations: Generations,
 }
 
@@ -127,6 +160,7 @@ impl ItemView {
             item: ListState::Loading,
             comments,
             relationships,
+            not_refreshed: None,
             generations: Generations::default(),
         }
     }
@@ -156,48 +190,9 @@ impl ItemView {
 
     /// The ticket's parent to read for its name, once the item read gave a
     /// resolved one.
+    #[cfg(test)]
     pub(crate) fn parent_to_read(&self) -> Option<ItemId> {
         self.relationships.as_ref()?.parent_to_read()
-    }
-
-    /// Applies a relationship read when `stamp` is current and the view
-    /// has relationships. False when it is no longer wanted.
-    fn apply_relationship(
-        &mut self,
-        stamp: &Stamp,
-        apply: impl FnOnce(&mut Relationships),
-    ) -> bool {
-        if !self.generations.is_current(stamp) {
-            return false;
-        }
-        match &mut self.relationships {
-            Some(relationships) => {
-                apply(relationships);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// The dependency tree read completed.
-    pub(crate) fn apply_dependents(
-        &mut self,
-        stamp: Stamp,
-        result: ReadResult<DependencyTreeDto>,
-    ) -> bool {
-        self.apply_relationship(&stamp, |relationships| {
-            relationships.apply_dependents(result)
-        })
-    }
-
-    /// The children read completed.
-    pub(crate) fn apply_children(&mut self, stamp: Stamp, result: ReadResult<ItemListDto>) -> bool {
-        self.apply_relationship(&stamp, |relationships| relationships.apply_children(result))
-    }
-
-    /// The parent's read completed.
-    pub(crate) fn apply_parent(&mut self, stamp: Stamp, result: ReadResult<ItemDto>) -> bool {
-        self.apply_relationship(&stamp, |relationships| relationships.apply_parent(result))
     }
 
     pub(crate) fn target(&self) -> &OpenTarget {
@@ -212,32 +207,51 @@ impl ItemView {
         self.comments.as_ref()
     }
 
-    /// Starts reading the item and its comments again, both under the
-    /// returned stamp. A read asked before is dropped when it completes.
+    /// Why what is shown is from an earlier load, when it is.
+    pub(crate) fn not_refreshed(&self) -> Option<&NotReloaded> {
+        self.not_refreshed.as_ref()
+    }
+
+    /// Starts the first load: everything shows Loading until the load
+    /// lands, under the returned stamp. A load asked before is dropped
+    /// when it completes.
     pub(crate) fn load(&mut self) -> Stamp {
         self.item = ListState::Loading;
         self.comments = Self::comments_for(&self.target);
         self.relationships = Self::relationships_for(&self.target);
+        self.not_refreshed = None;
         self.generations.next(self.scope.clone())
     }
 
-    /// Starts reading the item and its comments again after its
-    /// repository changed, under the returned stamp. What is shown stays
-    /// until the reads land, so the source keeps its selection and focus;
-    /// a read asked before is dropped when it completes.
+    /// Starts loading again, after the repository may have changed or on
+    /// Retry, under the returned stamp. What is shown stays until the load
+    /// lands, so the source keeps its selection and focus; a load asked
+    /// before is dropped when it completes.
     pub(crate) fn reload(&mut self) -> Stamp {
         self.generations.next(self.scope.clone())
     }
 
-    /// The item read completed. False when it is no longer wanted.
-    pub(crate) fn apply_item(&mut self, stamp: Stamp, result: ReadResult<ItemDto>) -> bool {
+    /// A load completed. Each read that gave its value replaces what was
+    /// shown; one that stayed busy or failed while rows were shown keeps
+    /// them, and `not_refreshed` gives the first such answer in the
+    /// design's order; any other shows its answer. A parent read that gave
+    /// nothing keeps the parent's name while its ID is unchanged. False
+    /// when the load is no longer wanted.
+    pub(crate) fn apply_reads(&mut self, stamp: Stamp, reads: ItemReads) -> bool {
         if !self.generations.is_current(&stamp) {
             return false;
         }
-        if let (ReadResult::Ok(item), Some(relationships)) = (&result, &mut self.relationships) {
+        let ItemReads {
+            item,
+            comments,
+            dependents,
+            children,
+            parent,
+        } = reads;
+        if let (ReadResult::Ok(item), Some(relationships)) = (&item, &mut self.relationships) {
             relationships.set_item(item);
         }
-        self.item = ListState::from_read(result, |item| {
+        let mut why = self.item.apply_keeping(item, |item| {
             let index = Some(item.index.clone());
             ListState::Ready {
                 rows: item,
@@ -245,27 +259,32 @@ impl ItemView {
                 index,
             }
         });
-        true
-    }
-
-    /// The comment read completed. False when it is no longer wanted.
-    pub(crate) fn apply_comments(
-        &mut self,
-        stamp: Stamp,
-        result: ReadResult<CommentListDto>,
-    ) -> bool {
-        if !self.generations.is_current(&stamp) || self.comments.is_none() {
-            return false;
+        if let (Some(state), Some(result)) = (&mut self.comments, comments) {
+            let kept = state.apply_keeping(result, |list| {
+                let complete = list.complete;
+                let index = Some(list.index.clone());
+                ListState::Ready {
+                    rows: list,
+                    complete,
+                    index,
+                }
+            });
+            why = why.or(kept);
         }
-        self.comments = Some(ListState::from_read(result, |list| {
-            let complete = list.complete;
-            let index = Some(list.index.clone());
-            ListState::Ready {
-                rows: list,
-                complete,
-                index,
+        if let Some(relationships) = &mut self.relationships {
+            if let Some(result) = dependents {
+                let kept = relationships.apply_dependents(result);
+                why = why.or(kept);
             }
-        }));
+            if let Some(result) = children {
+                let kept = relationships.apply_children(result);
+                why = why.or(kept);
+            }
+            if let Some(result) = parent {
+                relationships.apply_parent(result);
+            }
+        }
+        self.not_refreshed = why;
         true
     }
 }

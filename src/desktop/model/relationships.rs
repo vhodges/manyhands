@@ -27,7 +27,7 @@ use manyhands::{
 
 use super::{
     list_state::{ListState, Rows},
-    navigation::OpenTarget,
+    navigation::{NotReloaded, OpenTarget},
     stamp::RepoKey,
     tickets::Lifecycle,
 };
@@ -55,6 +55,16 @@ pub(crate) const RELATIONSHIP_PROBLEMS: [ProblemCode; 7] = [
     ProblemCode::DependencyCycle,
     ProblemCode::ParentCycle,
 ];
+
+/// The parent an item read named, to read for its name: a resolved one
+/// only.
+pub(crate) fn parent_to_read(parent: Option<&DependencyDto>) -> Option<ItemId> {
+    let parent = parent?;
+    if parent.state == DependencyState::Unresolved {
+        return None;
+    }
+    parent.id.parse().ok()
+}
 
 /// A resolution in text.
 pub(crate) fn resolution_label(resolved: bool) -> &'static str {
@@ -180,41 +190,51 @@ impl Relationships {
             .collect();
     }
 
-    pub(crate) fn apply_dependents(&mut self, result: ReadResult<DependencyTreeDto>) {
-        self.dependents = ListState::from_read(result, |tree| {
+    /// The dependency tree read completed. One that gave nothing while
+    /// rows are shown keeps them, and says why.
+    pub(crate) fn apply_dependents(
+        &mut self,
+        result: ReadResult<DependencyTreeDto>,
+    ) -> Option<NotReloaded> {
+        self.dependents.apply_keeping(result, |tree| {
             let (complete, index) = (tree.complete, tree.index.clone());
             ready(tree, complete, index)
-        });
+        })
     }
 
-    pub(crate) fn apply_children(&mut self, result: ReadResult<ItemListDto>) {
-        self.children = ListState::from_read(result, |list| {
+    /// The children read completed. One that gave nothing while rows are
+    /// shown keeps them, and says why.
+    pub(crate) fn apply_children(
+        &mut self,
+        result: ReadResult<ItemListDto>,
+    ) -> Option<NotReloaded> {
+        self.children.apply_keeping(result, |list| {
             let (complete, index) = (list.complete, list.index.clone());
             ready(list, complete, index)
-        });
+        })
     }
 
     /// The parent's read completed: it names the parent when it gave that
-    /// ticket. A failed one leaves the parent shown by its ID.
+    /// ticket, and one that gave another names it no more. One that stayed
+    /// busy or failed keeps the name shown, which `set_item` has already
+    /// dropped if the parent's ID changed; with none, the parent shows by
+    /// its ID.
     pub(crate) fn apply_parent(&mut self, result: ReadResult<ItemDto>) {
-        self.parent_item = match result {
+        match result {
             ReadResult::Ok(item)
                 if item.id.is_some()
                     && item.id.as_ref() == self.parent.as_ref().map(|parent| &parent.id) =>
             {
-                Some(item)
+                self.parent_item = Some(item);
             }
-            _ => None,
-        };
+            ReadResult::Ok(_) => self.parent_item = None,
+            ReadResult::Busy | ReadResult::Failed(_) => {}
+        }
     }
 
     /// The parent to read for its name: a resolved one only.
     pub(crate) fn parent_to_read(&self) -> Option<ItemId> {
-        let parent = self.parent.as_ref()?;
-        if parent.state == DependencyState::Unresolved {
-            return None;
-        }
-        parent.id.parse().ok()
+        parent_to_read(self.parent.as_ref())
     }
 
     pub(crate) fn dependents(&self) -> &ListState<DependencyTreeDto> {
