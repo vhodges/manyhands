@@ -15,7 +15,7 @@ use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use manyhands::{
     repository::{
         ConfirmationId, MutationDataDto, PrepareDataDto, ProgressEvent, ProgressStage,
-        ResolvedRepository,
+        ResolvedRepository, keys::SecretPassphrase,
     },
     results::{Envelope, Outcome, ResultCode},
 };
@@ -677,8 +677,29 @@ fn a_background_job_busy_through_every_retry_reports_busy_once() {
     assert_eq!(harness.backend.jobs_seen().len(), 4);
 }
 
+// Ruling R-B3: a user job answered `busy` is taken again the same way,
+// ahead of every background job, unless its attempt carried a secret.
+
 #[test]
-fn a_user_job_reports_busy_at_once() {
+fn a_busy_user_job_is_taken_again_and_finishes_once_the_lease_is_free() {
+    let mut harness = Harness::new();
+    let lease = hold_lease(&harness, &harness.root.clone());
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    let mut seen = Vec::new();
+    until_backing_off(&mut harness, &mut seen);
+    // Free before the second retry is due.
+    drop(lease);
+    seen.extend(harness.until_end_of(id));
+    assert_eq!(finished(&seen, id).code, ResultCode::Ok);
+    assert!(count(&seen, |event| matches!(event, Seen::Started(_))) >= 2);
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Queued(_))), 1);
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Finished(..))), 1);
+}
+
+#[test]
+fn a_user_job_busy_through_every_retry_reports_busy_once() {
     let mut harness = Harness::new();
     let _lease = hold_lease(&harness, &harness.root.clone());
     let id = harness
@@ -686,7 +707,91 @@ fn a_user_job_reports_busy_at_once() {
         .submit(harness.refresh(), Lane::User, None, None);
     let seen = harness.until_end_of(id);
     assert_eq!(finished(&seen, id).code, ResultCode::Busy);
+    // The first attempt and three retries.
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Started(_))), 4);
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Queued(_))), 1);
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Finished(..))), 1);
+}
+
+/// An attempt built with a secret gave it to its `Mutation`, so nothing
+/// is left to build another from: it reports `busy` at once.
+#[test]
+fn a_user_job_with_a_secret_reports_busy_at_once() {
+    let mut harness = Harness::new();
+    let _lease = hold_lease(&harness, &harness.root.clone());
+    let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, Some(secret));
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::Busy);
     assert_eq!(count(&seen, |event| matches!(event, Seen::Started(_))), 1);
+    assert_eq!(harness.worker.backing_off(), 0);
+}
+
+/// A user job backing off after `busy` keeps the user lane's place: a
+/// background job submitted meanwhile, for a repository that is free,
+/// waits until the user job has finished.
+#[test]
+fn a_backing_off_user_job_still_runs_before_a_background_job() {
+    let mut harness = Harness::new();
+    let other = harness.fixture.create_repository("b");
+    let lease = hold_lease(&harness, &harness.root.clone());
+    let user = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    let mut seen = Vec::new();
+    until_backing_off(&mut harness, &mut seen);
+    let background =
+        harness
+            .worker
+            .submit(Intent::IndexRefresh { root: other }, Lane::Background, None, None);
+    // Long enough for the background job to have run, were it taken.
+    std::thread::sleep(Duration::from_millis(300));
+    drop(lease);
+    seen.extend(harness.until_end_of(user));
+    seen.extend(harness.until_end_of(background));
+    let user_finished = position(
+        &seen,
+        |event| matches!(event, Seen::Finished(id, _) if *id == user),
+    );
+    let background_started = position(
+        &seen,
+        |event| matches!(event, Seen::Started(id) if *id == background),
+    );
+    assert!(user_finished < background_started);
+    assert_eq!(finished(&seen, user).code, ResultCode::Ok);
+    assert_eq!(finished(&seen, background).code, ResultCode::Ok);
+}
+
+#[test]
+fn cancelling_a_user_job_during_its_backoff_removes_it() {
+    let mut harness = Harness::new();
+    let _lease = hold_lease(&harness, &harness.root.clone());
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    let mut seen = Vec::new();
+    until_backing_off(&mut harness, &mut seen);
+    assert_eq!(harness.worker.cancel(id), CancelResult::Removed);
+    seen.extend(harness.until_end_of(id));
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Finished(..))), 0);
+    assert!(matches!(harness.state(id), RequestState::Removed));
+    assert_eq!(harness.worker.backing_off(), 0);
+}
+
+#[test]
+fn quitting_during_a_user_backoff_removes_the_job() {
+    let mut harness = Harness::new();
+    let _lease = hold_lease(&harness, &harness.root.clone());
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    let mut seen = Vec::new();
+    until_backing_off(&mut harness, &mut seen);
+    assert_eq!(harness.worker.quit(), QuitState::Idle);
+    seen.extend(harness.until_end_of(id));
+    assert!(matches!(harness.state(id), RequestState::Removed));
 }
 
 #[test]

@@ -8,6 +8,12 @@
 //! what happened over an unbounded `futures` channel, which a foreground
 //! task drains into the request model.
 //!
+//! A job answered `busy` is taken again after 100, 200 and 400 ms, in its
+//! own lane and with no new event (rulings R-T7a and R-B3). A user job
+//! waiting out that backoff keeps the head of the user lane, so no job is
+//! taken before it. An attempt that carried a secret reports `busy` at
+//! once: the secret went into its `Mutation` and is not kept for another.
+//!
 //! Cancellation follows the library: a queued job is removed and never
 //! runs; a running job's token is cancelled, which every command honors
 //! until it is accepted; after acceptance a local command cannot be
@@ -134,8 +140,7 @@ struct Job {
     id: DesktopRequestId,
     work: Work,
     lane: Lane,
-    /// How many times a background job answered `busy` has been
-    /// admitted again.
+    /// How many times a job answered `busy` has been admitted again.
     busy_retries: usize,
     /// A job admitted again after `busy` is not taken before this.
     not_before: Option<Instant>,
@@ -383,13 +388,14 @@ impl WorkerHandle {
         Some(attempt)
     }
 
-    /// How many background jobs wait to be taken again after `busy`.
+    /// How many jobs, of either lane, wait to be taken again after `busy`.
     #[cfg(test)]
     pub(crate) fn backing_off(&self) -> usize {
-        self.shared()
-            .lock()
-            .background
+        let state = self.shared().lock();
+        state
+            .user
             .iter()
+            .chain(&state.background)
             .filter(|job| job.not_before.is_some())
             .count()
     }
@@ -479,6 +485,22 @@ fn admit(shared: &Shared, state: &mut State, job: Job) {
     shared.changed.notify_all();
 }
 
+/// Queues a job answered `busy` again, unless quitting has closed the
+/// queue. A background job goes to the back of its lane; a user job to the
+/// front of its own, so it stays ahead of the user jobs submitted after it
+/// and of every background job while it waits.
+fn readmit(shared: &Shared, state: &mut State, job: Job) {
+    if state.closed {
+        shared.send(WorkerEvent::Removed(job.id));
+        return;
+    }
+    match job.lane {
+        Lane::User => state.user.push_front(job),
+        Lane::Background => state.background.push_back(job),
+    }
+    shared.changed.notify_all();
+}
+
 /// The worker thread: takes the next job, user lane first, until the last
 /// handle is dropped.
 fn run(shared: &Shared, backend: &dyn Backend) {
@@ -499,6 +521,9 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                 secret,
                 cancel,
             } => {
+                // The secret goes into this attempt's `Mutation` and is
+                // gone with it: an attempt that had one is never retried.
+                let had_secret = secret.is_some();
                 let mutation = match intent.build(secret, || backend.key_store()) {
                     Ok(mutation) => mutation,
                     Err(not_built) => {
@@ -520,11 +545,13 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                     &mut progress,
                     &cancel,
                 );
-                // A background job answered `busy` waits and is taken again,
-                // behind every user job, with no event: the UI sees one
-                // request that finishes once.
-                if lane == Lane::Background
-                    && envelope.code == ResultCode::Busy
+                // A job answered `busy` waits and is taken again in its own
+                // lane, with no event: the UI sees one request that finishes
+                // once. A background job waits behind every user job (ruling
+                // R-T7a); a user job keeps the head of the user lane, ahead
+                // of every background job (ruling R-B3).
+                if envelope.code == ResultCode::Busy
+                    && !had_secret
                     && let Some(delay) = BUSY_RETRY_DELAYS.get(busy_retries)
                 {
                     let mut state = shared.lock();
@@ -536,7 +563,7 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                         secret: None,
                         cancel,
                     };
-                    admit(
+                    readmit(
                         shared,
                         &mut state,
                         Job {
@@ -569,6 +596,10 @@ fn run(shared: &Shared, backend: &dyn Backend) {
 }
 
 /// The next job, marked running, or `None` once the worker is to end.
+///
+/// The user lane is taken in order: while its first job waits out a
+/// `busy` backoff, nothing is taken, background jobs included, so user
+/// priority holds across the wait.
 fn take(shared: &Shared) -> Option<Job> {
     let mut state = shared.lock();
     loop {
@@ -576,15 +607,17 @@ fn take(shared: &Shared) -> Option<Job> {
             return None;
         }
         let now = Instant::now();
-        let ready = state
-            .background
-            .iter()
-            .position(|job| job.not_before.is_none_or(|at| at <= now));
-        if let Some(job) = state
-            .user
-            .pop_front()
-            .or_else(|| ready.and_then(|at| state.background.remove(at)))
-        {
+        let due = |job: &Job| job.not_before.is_none_or(|at| at <= now);
+        let next = match state.user.front() {
+            Some(job) if due(job) => state.user.pop_front(),
+            Some(_) => None,
+            None => state
+                .background
+                .iter()
+                .position(due)
+                .and_then(|at| state.background.remove(at)),
+        };
+        if let Some(job) = next {
             let cancel = match &job.work {
                 Work::Execute { cancel, .. } => Some(cancel.clone()),
                 Work::ObserveHost { .. } => None,
@@ -598,11 +631,14 @@ fn take(shared: &Shared) -> Option<Job> {
         }
         // Nothing is ready: wait for a change, or for the first job
         // waiting after `busy` to be due.
-        let due = state
-            .background
-            .iter()
-            .filter_map(|job| job.not_before)
-            .min();
+        let due = match state.user.front() {
+            Some(job) => job.not_before,
+            None => state
+                .background
+                .iter()
+                .filter_map(|job| job.not_before)
+                .min(),
+        };
         state = match due {
             Some(due) => {
                 shared

@@ -22,7 +22,7 @@ use worker::WorkerHandle;
 pub(crate) use reads::{ReadFailure, ReadResult};
 
 /// The waits before each retry of a call answered `busy`: a read, a
-/// prepare, or a background job (ruling R6).
+/// prepare, or a worker job of either lane (rulings R6, R-T7a, R-B3).
 pub(crate) const BUSY_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(100),
     Duration::from_millis(200),
