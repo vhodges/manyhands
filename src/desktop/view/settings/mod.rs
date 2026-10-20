@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 
+mod keys;
 mod remotes;
 mod repositories;
 
@@ -28,17 +29,27 @@ use gpui_kit::{
     div,
 };
 
+use manyhands::results::ResultCode;
+
+pub(crate) use keys::KeysPage;
 pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::RepositoriesPage;
 
 use super::{scroll::ContentScroll, tabs::SHOWN};
-use crate::desktop::{model::stamp::SettingsPage, services::Services};
+use crate::desktop::{
+    model::stamp::SettingsPage,
+    services::{ReadResult, Services, requests::DesktopRequestId},
+};
 
 pub(crate) const SETTINGS_HEADING: &str = "Settings";
 pub(crate) const BACK_TO_TABS: &str = "Back to tabs";
 
 /// The pages there are, in the order the page list shows them.
-pub(crate) const PAGES: [SettingsPage; 2] = [SettingsPage::Repositories, SettingsPage::Remotes];
+pub(crate) const PAGES: [SettingsPage; 3] = [
+    SettingsPage::Repositories,
+    SettingsPage::Remotes,
+    SettingsPage::Keys,
+];
 
 /// A page's name in the page list.
 pub(crate) fn page_title(page: SettingsPage) -> &'static str {
@@ -73,6 +84,7 @@ pub(crate) struct SettingsHost {
     close: FocusHandle,
     repositories: Option<Entity<RepositoriesPage>>,
     remotes: Option<Entity<RemotesPage>>,
+    keys: Option<Entity<KeysPage>>,
     /// The repository selected when the settings were last opened: the
     /// one the Remotes page works on until another is chosen there.
     selection: Option<PathBuf>,
@@ -93,6 +105,7 @@ impl SettingsHost {
             close: cx.focus_handle(),
             repositories: None,
             remotes: None,
+            keys: None,
             selection: None,
         }
     }
@@ -115,6 +128,9 @@ impl SettingsHost {
             let selection = self.selection.clone();
             self.remotes(window, cx)
                 .update(cx, |page, cx| page.opened(selection, cx));
+        }
+        if page == SettingsPage::Keys {
+            self.keys(window, cx).update(cx, |page, cx| page.opened(cx));
         }
         cx.notify();
     }
@@ -171,6 +187,28 @@ impl SettingsHost {
             .clone()
     }
 
+    /// The Keys page, made the first time it is asked for.
+    pub(crate) fn keys(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<KeysPage> {
+        let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        self.keys
+            .get_or_insert_with(|| cx.new(|cx| KeysPage::new(services, scroll, window, cx)))
+            .clone()
+    }
+
+    /// The operation area's Retry of a protected key generation: the Keys
+    /// page, asking for the passphrase of the request `id` again, with
+    /// focus in its field.
+    pub(crate) fn retry_generation(
+        &mut self,
+        id: DesktopRequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(SettingsPage::Keys, window, cx);
+        self.keys(window, cx)
+            .update(cx, |page, cx| page.ask_again(id, window, cx));
+    }
+
     /// The view of `page`, made the first time it is asked for. A view,
     /// not an element: `open` asks for it outside a frame.
     fn page(
@@ -182,8 +220,9 @@ impl SettingsHost {
         match page {
             SettingsPage::Repositories => Some(self.repositories(window, cx).into()),
             SettingsPage::Remotes => Some(self.remotes(window, cx).into()),
-            // Tasks 15 and 16 add these; `PAGES` does not list them yet.
-            SettingsPage::Keys | SettingsPage::Hosts => None,
+            SettingsPage::Keys => Some(self.keys(window, cx).into()),
+            // Task 16 adds it; `PAGES` does not list it yet.
+            SettingsPage::Hosts => None,
         }
     }
 
@@ -307,6 +346,24 @@ impl Render for SettingsHost {
                     .children(page),
             )
             .into_any_element()
+    }
+}
+
+/// A read's state, as a page shows it.
+enum Read<T> {
+    Loading,
+    Ready(T),
+    Busy,
+    Failed(ResultCode),
+}
+
+impl<T> Read<T> {
+    fn from_result<U>(result: ReadResult<U>, f: impl FnOnce(U) -> T) -> Self {
+        match result {
+            ReadResult::Ok(value) => Self::Ready(f(value)),
+            ReadResult::Busy => Self::Busy,
+            ReadResult::Failed(failure) => Self::Failed(failure.code),
+        }
     }
 }
 

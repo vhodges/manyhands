@@ -54,19 +54,16 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::{
-    repository::RemoteDto,
-    results::{Outcome, ResultCode},
-};
+use manyhands::{repository::RemoteDto, results::Outcome};
 
-use super::{Wrapped, wrapped};
+use super::{Read, Wrapped, wrapped};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
         stamp::{Generations, SettingsPage, ViewScope},
     },
     services::{
-        ReadKind, ReadResult, Services,
+        ReadKind, Services,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
     view::{confirm::confirm, operations::outcome_label, scroll::ContentScroll},
@@ -127,24 +124,6 @@ pub(crate) fn chosen_line(root: &str) -> String {
 struct Listed {
     root: PathBuf,
     items: Vec<RemoteDto>,
-}
-
-/// A read's state, as the page shows it.
-enum Read<T> {
-    Loading,
-    Ready(T),
-    Busy,
-    Failed(ResultCode),
-}
-
-impl<T> Read<T> {
-    fn from_result<U>(result: ReadResult<U>, f: impl FnOnce(U) -> T) -> Self {
-        match result {
-            ReadResult::Ok(value) => Self::Ready(f(value)),
-            ReadResult::Busy => Self::Busy,
-            ReadResult::Failed(failure) => Self::Failed(failure.code),
-        }
-    }
 }
 
 /// The requests whose finishing can change the registrations listed.

@@ -146,7 +146,7 @@ impl PassphraseDialog {
         let Some(input) = &self.input else {
             return;
         };
-        let typed = input.read(cx).value().to_string();
+        let typed = input.read(cx).text().to_string();
         let Ok(passphrase) = SecretPassphrase::new(typed) else {
             self.refused = true;
             cx.notify();

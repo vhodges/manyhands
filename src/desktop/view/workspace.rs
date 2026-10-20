@@ -779,6 +779,23 @@ impl Workspace {
             .cloned()
     }
 
+    /// Whether the request `id` generates a key protected by a passphrase.
+    fn protected_generation(&self, id: DesktopRequestId, cx: &App) -> bool {
+        self.services
+            .operations()
+            .read(cx)
+            .request(id)
+            .is_some_and(|request| {
+                matches!(
+                    request.intent,
+                    Intent::KeyGenerate {
+                        protected: true,
+                        ..
+                    }
+                )
+            })
+    }
+
     /// Runs the recovery action `n` of the request `id`.
     pub(super) fn run_recovery(
         &mut self,
@@ -808,6 +825,13 @@ impl Workspace {
             }
             Some(RecoveryStep::Confirm(intent)) => {
                 confirm(intent, origin, &self.services, window, cx);
+            }
+            // A protected generation's passphrase went with its attempt:
+            // the Keys page asks for it again, and retries.
+            Some(RecoveryStep::Retry(id)) if self.protected_generation(id, cx) => {
+                self.last_region = Some(Region::Content);
+                self.settings
+                    .update(cx, |settings, cx| settings.retry_generation(id, window, cx));
             }
             Some(RecoveryStep::Retry(id)) => self.services.worker().retry(id, None),
             Some(RecoveryStep::Prepare(id)) => {

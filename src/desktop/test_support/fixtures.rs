@@ -15,12 +15,16 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
-        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, Mutation, MutationCall,
-        MutationDataDto, NoProgress, OperationAbandonInput, OperationId, OperationResumeInput,
-        PrepareDataDto, RelationshipWrite, RemoteRemoveInput, RepoCreateInput, RepoEnableInput,
-        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, TicketCreateInput,
-        TicketDraft, TicketSaveInput,
-        keys::{PassphraseResponse, SessionCredentialProvider, SessionCredentials, UnlockRequest},
+        FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
+        KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
+        OperationAbandonInput, OperationId, OperationResumeInput, PrepareDataDto,
+        RelationshipWrite, RemoteRemoveInput, RepoCreateInput, RepoEnableInput,
+        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
+        TicketCreateInput, TicketDraft, TicketSaveInput,
+        keys::{
+            KeyProtection, KeyStore, PassphraseResponse, SessionCredentialProvider,
+            SessionCredentials, UnlockRequest,
+        },
     },
     results::{Envelope, ResultCode},
 };
@@ -783,4 +787,72 @@ pub(crate) fn resume_through(service: &RepositoryService, root: &Path, operation
         }),
     );
     assert_eq!(resumed.code, ResultCode::Ok, "{}", resumed.message);
+}
+
+/// The marker inside `tests/shared_key_registry_private_fixture`: what no
+/// control may show or copy.
+pub(crate) const PRIVATE_KEY_SENTINEL: &str = "CYCLE01_PRIVATE_SENTINEL_DO_NOT_PERSIST";
+
+fn key_fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join(name)
+}
+
+impl Fixture {
+    /// Generates an unprotected key labeled `label` in this fixture's
+    /// home, through the library's `key generate`: a key the desktop did
+    /// not make. Gives its ID.
+    pub(crate) fn generate_key(&self, label: &str) -> SharedKeyId {
+        let generated = self.execute(
+            None,
+            Mutation::KeyGenerate(KeyGenerateInput {
+                store: KeyStore::for_home(self.home()).unwrap(),
+                label: label.to_owned(),
+                protection: KeyProtection::Unencrypted,
+            }),
+        );
+        assert_eq!(generated.code, ResultCode::Ok, "{}", generated.message);
+        let listed = self.service.list_keys().unwrap();
+        let key = listed
+            .items
+            .iter()
+            .rev()
+            .find(|key| key.label == label)
+            .expect("the generated key is listed");
+        SharedKeyId::parse(&key.id).unwrap()
+    }
+
+    /// A private key file and its public key, copies of the library's
+    /// test fixtures, outside the key store: files of the user's own, for
+    /// an import. The private one holds `PRIVATE_KEY_SENTINEL`.
+    pub(crate) fn external_key_files(&self, name: &str) -> (PathBuf, PathBuf) {
+        let directory = fs::canonicalize(self.repositories.path())
+            .unwrap()
+            .join("external-keys");
+        fs::create_dir_all(&directory).unwrap();
+        let private = directory.join(name);
+        let public = directory.join(format!("{name}.pub"));
+        fs::copy(key_fixture("shared_key_registry_private_fixture"), &private).unwrap();
+        fs::copy(
+            key_fixture("shared_key_registry_public_fixture.pub"),
+            &public,
+        )
+        .unwrap();
+        (private, public)
+    }
+}
+
+/// Selects the key `id` through `service`: a second actor's `key
+/// select`, on a service other than the desktop's.
+pub(crate) fn select_key_through(service: &RepositoryService, id: SharedKeyId) {
+    let selected = execute_through(service, None, Mutation::KeySelect(KeySelectInput { id }));
+    assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+}
+
+/// Unregisters the key `id` through `service`: a second actor's `key
+/// remove`.
+pub(crate) fn unregister_key_through(service: &RepositoryService, id: SharedKeyId) {
+    let removed = execute_through(service, None, Mutation::KeyRemove(KeyRemoveInput { id }));
+    assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
 }
