@@ -25,7 +25,7 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::OperationId;
+use manyhands::repository::{OperationId, transport::SshAuthority};
 
 pub(crate) use super::quit::QuitPhase;
 use super::{
@@ -553,7 +553,11 @@ impl Workspace {
     fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The operation area shows the model.
         cx.notify();
-        self.show_prompt(window, cx);
+        // A prompt is shown once every observer of this batch has run. The
+        // Kit closes the top dialog only, so a confirmation dialog whose
+        // request finished in the same batch must close before the prompt
+        // opens above it; otherwise its close would take the prompt.
+        cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
         self.quit_if_finished(cx);
         let changed = self
             .services
@@ -652,6 +656,21 @@ impl Workspace {
         self.last_region = Some(Region::Content);
         self.settings
             .update(cx, |settings, cx| settings.identity(root, window, cx));
+    }
+
+    /// The `host.approve` and `host.replace` recovery: the Hosts page on
+    /// `root`, checking the host `authority`, with focus on Check host.
+    pub(crate) fn check_host_in_settings(
+        &mut self,
+        root: PathBuf,
+        authority: SshAuthority,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.last_region = Some(Region::Content);
+        self.settings.update(cx, |settings, cx| {
+            settings.check_host(root, authority, window, cx)
+        });
     }
 
     /// Remove on an Unavailable selection: the confirmation dialog for
@@ -842,6 +861,9 @@ impl Workspace {
             }
             Some(RecoveryStep::Inspect(root)) => self.inspect_in_settings(root, window, cx),
             Some(RecoveryStep::IdentitySet(root)) => self.identity_in_settings(root, window, cx),
+            Some(RecoveryStep::CheckHost { root, authority }) => {
+                self.check_host_in_settings(root, authority, window, cx)
+            }
             None => {}
         }
         cx.notify();

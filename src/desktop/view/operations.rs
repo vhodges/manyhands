@@ -38,8 +38,7 @@ use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, recovery_control, recovery_label,
-            resume_offer,
+            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, recovery_label, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -270,8 +269,8 @@ impl Workspace {
         )
     }
 
-    /// A recovery action's control: it runs when D1 offers it, and is
-    /// text, unavailable, when not.
+    /// A recovery action's control: it runs when it names something this
+    /// session can act on, and is text, unavailable, when not.
     fn recovery(
         &self,
         id: DesktopRequestId,
@@ -280,14 +279,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let label = recovery_label(action.action);
-        let runnable = recovery_control(action.action)
-            != crate::desktop::model::operations::RecoveryControl::Unavailable
-            && self
-                .services
-                .operations()
-                .read(cx)
-                .recovery_step(id, action)
-                .is_some();
+        let runnable = self
+            .services
+            .operations()
+            .read(cx)
+            .recovery_step(id, action)
+            .is_some();
         if runnable {
             button(
                 recovery_id(id, n),

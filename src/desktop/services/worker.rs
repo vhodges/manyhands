@@ -332,6 +332,14 @@ impl WorkerHandle {
         DesktopProvider::new(self.shared().events.clone())
     }
 
+    /// Sends `prompt` to the UI over the worker's event channel, as the
+    /// provider does, without waiting for its reply: for a test that must
+    /// place a prompt in one drain batch with other events.
+    #[cfg(test)]
+    pub(crate) fn send_prompt(&self, prompt: PromptRequest) {
+        self.shared().send(WorkerEvent::Prompt(prompt));
+    }
+
     /// How many jobs, of either lane, wait to be taken again after `busy`.
     #[cfg(test)]
     pub(crate) fn backing_off(&self) -> usize {

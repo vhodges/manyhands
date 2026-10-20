@@ -445,8 +445,8 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
     assert!(!abandon_offered(&key));
 }
 
-/// Every recovery action maps to a control: the ones D1 offers run, the
-/// rest show as text, unavailable.
+/// Every recovery action maps to a control D1 offers; one that names
+/// nothing this session can act on shows as text, unavailable.
 #[test]
 fn recovery_actions_map_to_controls() {
     use RecoveryActionKind as Kind;
@@ -459,8 +459,8 @@ fn recovery_actions_map_to_controls() {
         (Kind::OperationResume, RecoveryControl::Resume),
         (Kind::OperationAbandon, RecoveryControl::Abandon),
         (Kind::RepoIdentitySet, RecoveryControl::IdentitySet),
-        (Kind::HostApprove, RecoveryControl::Unavailable),
-        (Kind::HostReplace, RecoveryControl::Unavailable),
+        (Kind::HostApprove, RecoveryControl::CheckHost),
+        (Kind::HostReplace, RecoveryControl::CheckHost),
         (Kind::RepoInspect, RecoveryControl::Inspect),
     ];
     assert_eq!(expected.len(), Kind::ALL.len());
@@ -591,4 +591,79 @@ fn a_removal_already_applied_names_its_root_removed() {
         changed.roots.into_iter().collect::<Vec<_>>(),
         ["/fixture/b".to_owned()]
     );
+}
+
+/// `host.approve` and `host.replace` open the Hosts page and check the
+/// host they name for the root they name: what the host presents decides
+/// which of the two is offered there. An authority the page cannot read,
+/// or none, offers nothing.
+#[test]
+fn the_host_recoveries_check_the_host_they_name() {
+    use super::RecoveryStep;
+    use manyhands::{repository::transport::SshAuthority, results::RecoveryAction};
+
+    let mut operations = Operations::default();
+    operations.apply(WorkerEvent::Queued(request(1)));
+    let id = DesktopRequestId(1);
+    let action = |kind, authority: &str| {
+        RecoveryAction::new(
+            kind,
+            [
+                ("authority", authority.into()),
+                ("root", "/fixture/elsewhere".into()),
+            ],
+        )
+    };
+    for kind in [
+        RecoveryActionKind::HostApprove,
+        RecoveryActionKind::HostReplace,
+    ] {
+        assert!(matches!(
+            operations.recovery_step(id, &action(kind, "git.example.com:2222")),
+            Some(RecoveryStep::CheckHost { root, authority })
+                if root == std::path::Path::new("/fixture/elsewhere")
+                    && authority == SshAuthority { host: "git.example.com".to_owned(), port: 2222 }
+        ));
+        assert!(matches!(
+            operations.recovery_step(id, &action(kind, "[2001:db8::1]:22")),
+            Some(RecoveryStep::CheckHost { authority, .. })
+                if authority == SshAuthority { host: "2001:db8::1".to_owned(), port: 22 }
+        ));
+        for unreadable in ["git.example.com", "git.example.com:port", ""] {
+            assert!(
+                operations
+                    .recovery_step(id, &action(kind, unreadable))
+                    .is_none(),
+                "{unreadable}"
+            );
+        }
+        // With no arguments it names no host.
+        let bare = RecoveryAction::new(kind, []);
+        assert!(operations.recovery_step(id, &bare).is_none());
+    }
+}
+
+/// A host observation's answer is kept for the page that asked, by its
+/// request: it is no request of the operation area, and changes nothing
+/// a view reads again.
+#[test]
+fn a_host_observation_is_kept_for_the_page_that_asked() {
+    let mut operations = Operations::default();
+    let id = DesktopRequestId(7);
+    assert!(operations.observation(id).is_none());
+    operations.apply(WorkerEvent::Started(id));
+    operations.apply(WorkerEvent::HostObserved(
+        id,
+        Envelope::failure(
+            "host observe",
+            Scope::default(),
+            ResultCode::InternalError,
+            Vec::new(),
+        ),
+    ));
+    let observed = operations.observation(id).expect("kept");
+    assert_eq!(observed.code, ResultCode::InternalError);
+    assert!(operations.observation(DesktopRequestId(8)).is_none());
+    assert!(operations.requests().is_empty());
+    assert!(operations.take_changed().is_empty());
 }

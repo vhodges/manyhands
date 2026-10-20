@@ -18,13 +18,14 @@ use manyhands::{
         FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
         KeyRemoveInput, KeySelectInput, Mutation, MutationCall, MutationDataDto, NoProgress,
         OperationAbandonInput, OperationId, OperationResumeInput, PrepareDataDto,
-        RelationshipWrite, RemoteRemoveInput, RepoCreateInput, RepoEnableInput,
+        RelationshipWrite, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
         RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
         TicketCreateInput, TicketDraft, TicketSaveInput,
         keys::{
             KeyProtection, KeyStore, PassphraseResponse, SessionCredentialProvider,
             SessionCredentials, UnlockRequest,
         },
+        transport::{HostKeyIdentity, SshAuthority},
     },
     results::{Envelope, ResultCode},
 };
@@ -855,4 +856,43 @@ pub(crate) fn select_key_through(service: &RepositoryService, id: SharedKeyId) {
 pub(crate) fn unregister_key_through(service: &RepositoryService, id: SharedKeyId) {
     let removed = execute_through(service, None, Mutation::KeyRemove(KeyRemoveInput { id }));
     assert_eq!(removed.code, ResultCode::Ok, "{}", removed.message);
+}
+
+/// The host an SSH publication remote of `publish_over_ssh` names.
+pub(crate) const SSH_HOST: &str = "example.invalid";
+pub(crate) const SSH_PORT: u16 = 22;
+
+impl Fixture {
+    /// Adds the remote `origin` fetching over SSH from `SSH_HOST` to
+    /// `root` and selects it for publication through the library's
+    /// `remote select`. Nothing is contacted.
+    pub(crate) fn publish_over_ssh(&self, root: &Path) {
+        self.add_remote(root, "origin", "ssh://git@example.invalid/team/repo.git");
+        let selected = self.execute(
+            None,
+            Mutation::RemoteSelect(RemoteSelectInput {
+                root: root.to_owned(),
+                name: Some("origin".to_owned()),
+            }),
+        );
+        assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+    }
+
+    /// Pins `SSH_HOST` to `algorithm` and `fingerprint` through the
+    /// library's own test entry point, which stores a pin as an exact
+    /// approval does and contacts no host.
+    pub(crate) fn pin_host(&self, algorithm: &str, fingerprint: &str) {
+        self.service
+            .approve_host_pin_for_testing(
+                &SshAuthority {
+                    host: SSH_HOST.to_owned(),
+                    port: SSH_PORT,
+                },
+                &HostKeyIdentity {
+                    algorithm: algorithm.to_owned(),
+                    sha256: fingerprint.to_owned(),
+                },
+            )
+            .expect("the pin is stored");
+    }
 }

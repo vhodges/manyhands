@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use futures::channel::oneshot;
 use gpui_kit::{
     FocusHandle, TestAppContext,
     component::{WindowExt, input::InputState},
@@ -23,6 +24,7 @@ use manyhands::repository::{
     keys::{
         KeySourceToken, PassphraseResponse, SessionCredentialProvider, UnlockReason, UnlockRequest,
     },
+    transport::SshAuthority,
 };
 
 use super::{CANCEL, REFUSED, UNLOCK, label_for};
@@ -30,14 +32,22 @@ use crate::desktop::{
     keys::Quit,
     services::{
         JobKind,
+        prompts::{PromptReply, PromptRequest},
         requests::{Intent, Lane, RequestState},
     },
-    test_support::{delaying::JobGate, fixtures::Fixture},
+    test_support::{
+        delaying::JobGate,
+        fixtures::{Fixture, SSH_HOST, SSH_PORT},
+    },
     view::{
+        confirm::{CONFIRM, confirm},
         harness::{Shell, wait_until},
         workspace::{QuitPhase, Region},
     },
 };
+
+/// A host key fingerprint in the one form a pin holds.
+const FINGERPRINT: &str = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 const SENTINEL: &str = "sentinel-passphrase-7f3a";
 const WAIT: Duration = Duration::from_secs(10);
@@ -503,4 +513,80 @@ async fn a_supplied_passphrase_is_shown_or_kept_nowhere(cx: &mut TestAppContext)
     );
     let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
     assert_eq!(notifications, 0);
+}
+
+/// Carried from Task 11: one drain batch holds the `Finished` of the
+/// confirmation dialog's own request and the prompt of the job after it.
+/// The confirmation dialog closes, and only it: the prompt is shown, stays
+/// open, and is answered from its own dialog. The prompt is placed in the
+/// worker's channel directly, as the provider places it, so that the two
+/// events are drained together; no transport is initialized, so the host
+/// approval fails at once and reaches no network (ruling R11).
+#[gpui_kit::test]
+async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confirmation(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let returned = shell.backend.hold_job_return(JobKind::HostApprove);
+    let next = shell.backend.hold_job(JobKind::IndexRefresh);
+    let origin = cx.update(|cx| cx.focus_handle());
+    let intent = Intent::HostApprove {
+        root: root.clone(),
+        authority: SshAuthority {
+            host: SSH_HOST.to_owned(),
+            port: SSH_PORT,
+        },
+        algorithm: "ssh-ed25519".to_owned(),
+        fingerprint: FINGERPRINT.to_owned(),
+    };
+    shell
+        .visual(cx)
+        .update(|window, cx| confirm(intent, origin, &services, window, cx));
+    shell.run(cx);
+    assert_eq!(shell.label("confirm-ok", cx).as_deref(), Some(CONFIRM));
+    shell.click("confirm-ok", cx);
+
+    // The approval has returned on the worker; its answer is not yet sent.
+    returned.wait_reached();
+    services.worker().submit(
+        Intent::IndexRefresh { root: root.clone() },
+        Lane::User,
+        None,
+        None,
+    );
+    let (reply, mut answer) = oneshot::channel();
+    services.worker().send_prompt(PromptRequest {
+        key_id: SharedKeyId::new(),
+        label: "next".to_owned(),
+        reason: UnlockReason::ProtectedKey,
+        reply,
+    });
+    returned.release();
+    // The worker has taken the next job, so the approval's `Finished` is
+    // in the channel behind the prompt; nothing has drained either.
+    next.wait_reached();
+    shell.run(cx);
+
+    assert!(!shell.present("confirm-dialog", cx));
+    assert!(shell.present("passphrase-dialog", cx));
+    assert_eq!(
+        shell.label("passphrase-label", cx).as_deref(),
+        Some(label_for("next").as_str())
+    );
+    assert!(matches!(answer.try_recv(), Ok(None)), "not yet answered");
+    type_text(&shell, SENTINEL, cx);
+    shell.keys("enter", cx);
+    assert!(matches!(
+        answer.try_recv(),
+        Ok(Some(PromptReply::Supplied(_)))
+    ));
+    assert!(!shell.present("passphrase-dialog", cx));
+    next.release();
 }

@@ -9,8 +9,9 @@
 //! so that its open tabs read again (ruling R-B2).
 //!
 //! The recovery actions an envelope offers map to the controls the
-//! operation area shows; an action D1 does not offer yet is shown as
-//! text, unavailable.
+//! operation area shows; an action that names nothing this session can
+//! act on (a request it does not hold, a root or host it cannot read) is
+//! shown as text, unavailable.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,10 +20,10 @@ use std::{
 
 use manyhands::{
     repository::{
-        OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
-        OperationNextAction, ProgressStage,
+        HostObservationDto, OperationAction, OperationDto, OperationFamily, OperationId,
+        OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
     },
-    results::{Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
+    results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
 use super::{
@@ -39,7 +40,8 @@ use crate::desktop::services::{
 
 /// Why a synchronization's Resume is unavailable.
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
-/// Why a recovery action D1 does not offer yet is unavailable.
+/// Why a recovery action that names nothing this session can act on is
+/// unavailable.
 pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
 
 impl Rows for OperationListDto {
@@ -62,6 +64,10 @@ pub(crate) struct Operations {
     prompt: Option<PromptRequest>,
     /// How many removals were recorded (`removals`).
     removals: u64,
+    /// The last host observation's answer, by its request: what the Hosts
+    /// page that asked reads. One worker observes one host at a time, and
+    /// the page waits only for its latest.
+    observed: Option<(DesktopRequestId, Envelope<HostObservationDto>)>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -162,12 +168,30 @@ impl Operations {
             }
             WorkerEvent::Removed(id) => self.set(id, RequestState::Removed),
             WorkerEvent::NotSent(id, why) => self.set(id, RequestState::NotSent(why)),
-            // The Hosts page reads observations (Task 16).
-            WorkerEvent::HostObserved(..) => {}
+            // The Hosts page reads it. An observation pins nothing, so no
+            // view has anything to read again.
+            WorkerEvent::HostObserved(id, envelope) => self.observed = Some((id, envelope)),
             // One worker asks one thing at a time: a prompt still kept
             // when the next comes is one its job no longer waits on.
             WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
         }
+    }
+
+    /// The answer of the host observation `id`, once it has one.
+    pub(crate) fn observation(
+        &self,
+        id: DesktopRequestId,
+    ) -> Option<&Envelope<HostObservationDto>> {
+        match &self.observed {
+            Some((observed, envelope)) if *observed == id => Some(envelope),
+            _ => None,
+        }
+    }
+
+    /// Whether any host observation has been answered.
+    #[cfg(test)]
+    pub(crate) fn observed_any(&self) -> bool {
+        self.observed.is_some()
     }
 
     /// Whether a prompt waits to be shown.
@@ -298,6 +322,32 @@ pub(crate) enum RecoveryStep {
     Inspect(PathBuf),
     /// Open the identity form of this root.
     IdentitySet(PathBuf),
+    /// Open the Hosts page on this root and check this host: what it
+    /// presents decides whether Approve or Replace is offered there
+    /// (`host.approve`, `host.replace`).
+    CheckHost {
+        root: PathBuf,
+        authority: SshAuthority,
+    },
+}
+
+/// The host a recovery action names: `host:port`, with an address that
+/// holds a colon in brackets, as the library writes it. `None` for text
+/// in any other form.
+pub(crate) fn parse_authority(text: &str) -> Option<SshAuthority> {
+    let (host, port) = text.rsplit_once(':')?;
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.strip_suffix(']')?,
+        None if host.contains(':') => return None,
+        None => host,
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some(SshAuthority {
+        host: host.to_owned(),
+        port: port.parse().ok()?,
+    })
 }
 
 impl Operations {
@@ -359,7 +409,10 @@ impl Operations {
             }),
             RecoveryControl::Inspect => RecoveryStep::Inspect(root()?),
             RecoveryControl::IdentitySet => RecoveryStep::IdentitySet(root()?),
-            RecoveryControl::Unavailable => return None,
+            RecoveryControl::CheckHost => RecoveryStep::CheckHost {
+                root: root()?,
+                authority: parse_authority(action.arguments.get("authority")?.as_str()?)?,
+            },
         })
     }
 }
@@ -419,8 +472,8 @@ pub(crate) enum RecoveryControl {
     Inspect,
     /// Open the identity form of the root.
     IdentitySet,
-    /// D1 does not offer it yet: shown as text, disabled.
-    Unavailable,
+    /// Open the Hosts page on the root and check the host named.
+    CheckHost,
 }
 
 pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
@@ -434,9 +487,11 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
         RecoveryActionKind::RepoInspect => RecoveryControl::Inspect,
         RecoveryActionKind::RepoIdentitySet => RecoveryControl::IdentitySet,
-        // The Hosts page that runs these arrives with Task 16.
+        // The action names the host but not the key to pin: the Hosts
+        // page checks the host, and offers Approve or Replace for the key
+        // it presents.
         RecoveryActionKind::HostApprove | RecoveryActionKind::HostReplace => {
-            RecoveryControl::Unavailable
+            RecoveryControl::CheckHost
         }
     }
 }

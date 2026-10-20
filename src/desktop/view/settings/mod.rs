@@ -17,6 +17,7 @@
 
 use std::path::PathBuf;
 
+mod hosts;
 mod keys;
 mod remotes;
 mod repositories;
@@ -29,8 +30,9 @@ use gpui_kit::{
     div,
 };
 
-use manyhands::results::ResultCode;
+use manyhands::{repository::transport::SshAuthority, results::ResultCode};
 
+pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
 pub(crate) use remotes::RemotesPage;
 pub(crate) use repositories::RepositoriesPage;
@@ -45,10 +47,11 @@ pub(crate) const SETTINGS_HEADING: &str = "Settings";
 pub(crate) const BACK_TO_TABS: &str = "Back to tabs";
 
 /// The pages there are, in the order the page list shows them.
-pub(crate) const PAGES: [SettingsPage; 3] = [
+pub(crate) const PAGES: [SettingsPage; 4] = [
     SettingsPage::Repositories,
     SettingsPage::Remotes,
     SettingsPage::Keys,
+    SettingsPage::Hosts,
 ];
 
 /// A page's name in the page list.
@@ -85,8 +88,10 @@ pub(crate) struct SettingsHost {
     repositories: Option<Entity<RepositoriesPage>>,
     remotes: Option<Entity<RemotesPage>>,
     keys: Option<Entity<KeysPage>>,
+    hosts: Option<Entity<HostsPage>>,
     /// The repository selected when the settings were last opened: the
-    /// one the Remotes page works on until another is chosen there.
+    /// one the Remotes page works on until another is chosen there, and
+    /// the one the Hosts page works on.
     selection: Option<PathBuf>,
 }
 
@@ -106,6 +111,7 @@ impl SettingsHost {
             repositories: None,
             remotes: None,
             keys: None,
+            hosts: None,
             selection: None,
         }
     }
@@ -131,6 +137,11 @@ impl SettingsHost {
         }
         if page == SettingsPage::Keys {
             self.keys(window, cx).update(cx, |page, cx| page.opened(cx));
+        }
+        if page == SettingsPage::Hosts {
+            let selection = self.selection.clone();
+            self.hosts(window, cx)
+                .update(cx, |page, cx| page.opened(selection, cx));
         }
         cx.notify();
     }
@@ -195,6 +206,36 @@ impl SettingsHost {
             .clone()
     }
 
+    /// The Hosts page, made the first time it is asked for, on the selected
+    /// repository.
+    pub(crate) fn hosts(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<HostsPage> {
+        let (services, scroll) = (self.services.clone(), self.scroll.clone());
+        let selection = self.selection.clone();
+        self.hosts
+            .get_or_insert_with(|| {
+                cx.new(|cx| HostsPage::new(services, scroll, selection, window, cx))
+            })
+            .clone()
+    }
+
+    /// The `host.approve` and `host.replace` recovery: the Hosts page on
+    /// `root`, checking the host `authority`, with focus on Check host.
+    pub(crate) fn check_host(
+        &mut self,
+        root: PathBuf,
+        authority: SshAuthority,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open(SettingsPage::Hosts, window, cx);
+        self.hosts(window, cx)
+            .update(cx, |page, cx| page.check_host(root, authority, window, cx));
+    }
+
     /// The operation area's Retry of a protected key generation: the Keys
     /// page, asking for the passphrase of the request `id` again, with
     /// focus in its field.
@@ -221,8 +262,7 @@ impl SettingsHost {
             SettingsPage::Repositories => Some(self.repositories(window, cx).into()),
             SettingsPage::Remotes => Some(self.remotes(window, cx).into()),
             SettingsPage::Keys => Some(self.keys(window, cx).into()),
-            // Task 16 adds it; `PAGES` does not list it yet.
-            SettingsPage::Hosts => None,
+            SettingsPage::Hosts => Some(self.hosts(window, cx).into()),
         }
     }
 
