@@ -867,3 +867,29 @@ fn quitting_during_a_backoff_removes_the_job() {
     seen.extend(harness.until_end_of(id));
     assert!(matches!(harness.state(id), RequestState::Removed));
 }
+
+/// Quitting cancels the running job's token whether or not it has been
+/// accepted. A job answered `busy` after that is not taken again, nor
+/// reported removed as if it never ran: it finishes with its answer.
+#[test]
+fn a_job_answered_busy_after_quit_finishes_with_its_answer() {
+    let mut harness = Harness::new();
+    let _lease = hold_lease(&harness, &harness.root.clone());
+    let returned = harness.backend.hold_job_return(JobKind::IndexRefresh);
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    returned.wait_reached();
+    assert_eq!(harness.worker.quit(), QuitState::Finishing(id));
+    returned.release();
+
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::Busy);
+    assert_eq!(count(&seen, |event| matches!(event, Seen::Started(_))), 1);
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, Seen::Removed(removed) if *removed == id))
+    );
+    assert_eq!(harness.worker.quit(), QuitState::Idle);
+}

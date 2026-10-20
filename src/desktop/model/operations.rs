@@ -32,6 +32,7 @@ use super::{
 };
 use crate::desktop::services::{
     ReadResult,
+    prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     worker::WorkerEvent,
 };
@@ -56,6 +57,9 @@ pub(crate) struct Operations {
     /// Repositories a finished request may have changed, not yet read
     /// again.
     changed: Changed,
+    /// The passphrase the running job asks for, until the workspace takes
+    /// it to show. It holds no secret: only where the reply goes.
+    prompt: Option<PromptRequest>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -144,10 +148,21 @@ impl Operations {
             WorkerEvent::NotSent(id, why) => self.set(id, RequestState::NotSent(why)),
             // The Hosts page reads observations (Task 16).
             WorkerEvent::HostObserved(..) => {}
-            // No prompt is shown until Task 11: the dropped reply answers
-            // `Unavailable`.
-            WorkerEvent::Prompt(_) => {}
+            // One worker asks one thing at a time: a prompt still kept
+            // when the next comes is one its job no longer waits on.
+            WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
         }
+    }
+
+    /// Whether a prompt waits to be shown.
+    #[cfg(test)]
+    pub(crate) fn has_prompt(&self) -> bool {
+        self.prompt.is_some()
+    }
+
+    /// The prompt waiting to be shown, taken: whoever takes it answers it.
+    pub(crate) fn take_prompt(&mut self) -> Option<PromptRequest> {
+        self.prompt.take()
     }
 
     /// Hides a request that is no longer queued or running.

@@ -27,15 +27,12 @@ use std::{
     time::Instant,
 };
 
-use futures::channel::{mpsc, oneshot};
+use futures::channel::mpsc;
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
-        ProgressEvent, ProgressSink, ProgressStage, RequestId, SharedKeyId,
-        keys::{
-            PassphraseResponse, SecretPassphrase, SessionCredentialProvider, SessionCredentials,
-            UnlockReason, UnlockRequest,
-        },
+        ProgressEvent, ProgressSink, ProgressStage, RequestId,
+        keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
     },
     results::{Envelope, ResultCode},
@@ -43,6 +40,7 @@ use manyhands::{
 
 use super::{
     BUSY_RETRY_DELAYS, Backend, JobKind,
+    prompts::{DesktopProvider, PromptRequest},
     requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
 };
 
@@ -66,28 +64,9 @@ pub(crate) enum WorkerEvent {
     Removed(DesktopRequestId),
     /// The job could not be built, and nothing was asked of the library.
     NotSent(DesktopRequestId, NotSent),
-    #[allow(dead_code)] // The prompt bridge sends prompts (Task 11).
+    /// The running job's library call asks for a passphrase, and the
+    /// worker waits for the reply (`prompts`).
     Prompt(PromptRequest),
-}
-
-/// A passphrase the library asks for while a job runs. The worker waits
-/// for `reply`; a dropped sender reads as `Unavailable`.
-///
-/// No `Debug`: the reply carries a passphrase.
-#[allow(dead_code)] // The prompt bridge sends prompts (Task 11).
-pub(crate) struct PromptRequest {
-    pub key_id: SharedKeyId,
-    pub label: String,
-    pub reason: UnlockReason,
-    pub reply: oneshot::Sender<PromptReply>,
-}
-
-/// The answer to a prompt. No `Debug`: it may carry the passphrase.
-#[allow(dead_code)] // The prompt bridge sends replies (Task 11).
-pub(crate) enum PromptReply {
-    Supplied(SecretPassphrase),
-    Cancelled,
-    Unavailable,
 }
 
 /// What cancelling a request did.
@@ -108,17 +87,6 @@ pub(crate) enum QuitState {
     Idle,
     /// This job is still running; quit when it returns.
     Finishing(DesktopRequestId),
-}
-
-/// The credential provider of the worker's session. Until the prompt
-/// bridge arrives (Task 11) nobody is there to ask, so every unlock is
-/// `Unavailable` and no prompt is sent.
-struct DesktopProvider;
-
-impl SessionCredentialProvider for DesktopProvider {
-    fn request_passphrase(&mut self, _request: &UnlockRequest) -> PassphraseResponse {
-        PassphraseResponse::Unavailable
-    }
 }
 
 /// What a job does.
@@ -388,6 +356,13 @@ impl WorkerHandle {
         Some(attempt)
     }
 
+    /// A provider that asks this worker's UI, as the worker's own does:
+    /// for a test that raises a prompt from a plain thread.
+    #[cfg(test)]
+    pub(crate) fn provider(&self) -> DesktopProvider {
+        DesktopProvider::new(self.shared().events.clone())
+    }
+
     /// How many jobs, of either lane, wait to be taken again after `busy`.
     #[cfg(test)]
     pub(crate) fn backing_off(&self) -> usize {
@@ -504,7 +479,8 @@ fn readmit(shared: &Shared, state: &mut State, job: Job) {
 /// The worker thread: takes the next job, user lane first, until the last
 /// handle is dropped.
 fn run(shared: &Shared, backend: &dyn Backend) {
-    let mut session = SessionCredentials::new(DesktopProvider);
+    // Its provider asks the UI over the channel every other event takes.
+    let mut session = SessionCredentials::new(DesktopProvider::new(shared.events.clone()));
     while let Some(job) = take(shared) {
         let Job {
             id,
@@ -545,13 +521,18 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                     &mut progress,
                     &cancel,
                 );
+                backend.after_job(intent.job_kind());
                 // A job answered `busy` waits and is taken again in its own
                 // lane, with no event: the UI sees one request that finishes
                 // once. A background job waits behind every user job (ruling
                 // R-T7a); a user job keeps the head of the user lane, ahead
-                // of every background job (ruling R-B3).
+                // of every background job (ruling R-B3). One whose token was
+                // cancelled meanwhile, by Cancel or by quitting, is not
+                // taken again: it ends with its answer, as a cancelled job
+                // ends.
                 if envelope.code == ResultCode::Busy
                     && !had_secret
+                    && !cancel.is_cancelled()
                     && let Some(delay) = BUSY_RETRY_DELAYS.get(busy_retries)
                 {
                     let mut state = shared.lock();

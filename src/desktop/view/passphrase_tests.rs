@@ -1,0 +1,506 @@
+//! The passphrase dialog over the real bridge. A plain thread calls the
+//! window's own provider, as the worker thread does inside a job; its
+//! prompt comes through the worker's event channel and the drain task to
+//! the workspace, which shows the dialog. No transport is initialized and
+//! nothing reaches a network (ruling R11): the library asks for a
+//! passphrase only over SSH, so the prompt is raised by the provider
+//! itself.
+
+use std::{
+    fs,
+    path::Path,
+    sync::mpsc::{self, Receiver, TryRecvError},
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+
+use gpui_kit::{
+    FocusHandle, TestAppContext,
+    component::{WindowExt, input::InputState},
+};
+use manyhands::repository::{
+    SharedKeyId,
+    keys::{
+        KeySourceToken, PassphraseResponse, SessionCredentialProvider, UnlockReason, UnlockRequest,
+    },
+};
+
+use super::{CANCEL, REFUSED, UNLOCK, label_for};
+use crate::desktop::{
+    keys::Quit,
+    services::{
+        JobKind,
+        requests::{Intent, Lane, RequestState},
+    },
+    test_support::{delaying::JobGate, fixtures::Fixture},
+    view::{
+        harness::{Shell, wait_until},
+        workspace::{QuitPhase, Region},
+    },
+};
+
+const SENTINEL: &str = "sentinel-passphrase-7f3a";
+const WAIT: Duration = Duration::from_secs(10);
+
+/// A provider call in flight on a plain thread.
+struct Asked {
+    answer: Receiver<&'static str>,
+    /// The answer, once a look found it.
+    got: Option<&'static str>,
+    caller: JoinHandle<()>,
+    _directory: tempfile::TempDir,
+}
+
+impl Asked {
+    /// What the call returned, once it has.
+    fn answered(self) -> &'static str {
+        let answer = match self.got {
+            Some(answer) => answer,
+            None => self
+                .answer
+                .recv_timeout(WAIT)
+                .expect("the provider returned"),
+        };
+        self.caller.join().unwrap();
+        answer
+    }
+
+    /// Whether the call is still waiting for its reply.
+    fn waiting(&mut self) -> bool {
+        if self.got.is_none() {
+            match self.answer.try_recv() {
+                Ok(answer) => self.got = Some(answer),
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => panic!("the provider call ended"),
+            }
+        }
+        self.got.is_none()
+    }
+}
+
+/// Asks the window's provider for the passphrase of the key labelled
+/// `label`, from a plain thread.
+fn ask(shell: &Shell, label: &str, cx: &mut TestAppContext) -> Asked {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("key");
+    fs::write(&path, b"opaque fixture bytes").unwrap();
+    let request = UnlockRequest {
+        key_id: SharedKeyId::new(),
+        label: label.to_owned(),
+        source: KeySourceToken::observe(&path).unwrap(),
+        reason: UnlockReason::ProtectedKey,
+    };
+    let mut provider = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().provider());
+    let (done, answer) = mpsc::channel();
+    let caller = thread::spawn(move || {
+        let answer = match provider.request_passphrase(&request) {
+            PassphraseResponse::Supplied(_) => "supplied",
+            PassphraseResponse::Cancelled => "cancelled",
+            PassphraseResponse::Unavailable => "unavailable",
+        };
+        let _ = done.send(answer);
+    });
+    Asked {
+        answer,
+        got: None,
+        caller,
+        _directory: directory,
+    }
+}
+
+/// Waits until the workspace shows the passphrase dialog.
+async fn until_shown(shell: &Shell, cx: &mut TestAppContext) {
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.passphrase().is_some()
+    })
+    .await;
+    shell.run(cx);
+}
+
+/// Types `text` into the dialog's input, which holds focus.
+fn type_text(shell: &Shell, text: &str, cx: &mut TestAppContext) {
+    shell.visual(cx).simulate_input(text);
+    shell.run(cx);
+}
+
+fn input(shell: &Shell, cx: &mut TestAppContext) -> gpui_kit::Entity<InputState> {
+    let dialog = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.passphrase())
+        .expect("the dialog is open");
+    dialog.read_with(cx, |dialog, _| dialog.input().expect("the input is held"))
+}
+
+fn focused(shell: &Shell, cx: &mut TestAppContext) -> Option<FocusHandle> {
+    shell.frame(cx, |window, cx| window.focused(cx))
+}
+
+/// The dialog shows "Passphrase for <label>" over a masked input; Enter
+/// supplies exactly one passphrase. The input is emptied and released,
+/// and the dialog with it.
+#[gpui_kit::test]
+async fn submit_supplies_the_passphrase_and_releases_the_input(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+
+    assert_eq!(
+        shell.label("passphrase-label", cx).as_deref(),
+        Some(label_for("primary").as_str())
+    );
+    assert_eq!(label_for("primary"), "Passphrase for primary");
+    assert_eq!(
+        shell.label("passphrase-reason", cx).as_deref(),
+        Some(UnlockReason::ProtectedKey.guidance())
+    );
+    assert_eq!(shell.label("passphrase-ok", cx).as_deref(), Some(UNLOCK));
+    assert_eq!(
+        shell.label("passphrase-cancel", cx).as_deref(),
+        Some(CANCEL)
+    );
+    // No mask toggle: the input offers nothing but its masked text.
+    assert!(!shell.present("passphrase-mask-toggle", cx));
+
+    // Only weak handles: the test must not keep them alive itself.
+    let input = input(&shell, cx).downgrade();
+    let dialog = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.passphrase())
+        .unwrap()
+        .downgrade();
+    type_text(&shell, SENTINEL, cx);
+    assert!(asked.waiting());
+    shell.keys("enter", cx);
+
+    assert_eq!(asked.answered(), "supplied");
+    assert!(!shell.present("passphrase-dialog", cx));
+    shell.run(cx);
+    assert!(input.upgrade().is_none(), "the input entity is released");
+    assert!(dialog.upgrade().is_none(), "the dialog entity is released");
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.passphrase())
+            .is_none()
+    );
+}
+
+/// The input is set empty before it is let go, whoever still holds it.
+#[gpui_kit::test]
+async fn submit_empties_the_input_before_letting_it_go(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    // The test keeps the input alive past the dialog, to read it.
+    let input = input(&shell, cx);
+    type_text(&shell, SENTINEL, cx);
+    shell.keys("enter", cx);
+
+    assert_eq!(asked.answered(), "supplied");
+    assert_eq!(
+        input.read_with(cx, |input, _| input.value().to_string()),
+        ""
+    );
+    let released = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.passphrase())
+        .is_none();
+    assert!(released);
+}
+
+/// An empty passphrase and one containing NUL are refused in the dialog,
+/// as `SecretPassphrase::new` would refuse them: nothing is replied, the
+/// dialog stays, and says why.
+#[gpui_kit::test]
+async fn empty_and_nul_passphrases_are_refused(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-refused", cx));
+
+    shell.keys("enter", cx);
+    assert!(shell.present("passphrase-dialog", cx));
+    assert_eq!(
+        shell.label("passphrase-refused", cx).as_deref(),
+        Some(REFUSED)
+    );
+    assert!(asked.waiting());
+
+    let input = input(&shell, cx);
+    shell.visual(cx).update(|window, cx| {
+        input.update(cx, |input, cx| input.set_value("bad\0pass", window, cx));
+    });
+    shell.click("passphrase-ok", cx);
+    assert!(shell.present("passphrase-dialog", cx));
+    assert_eq!(
+        shell.label("passphrase-refused", cx).as_deref(),
+        Some(REFUSED)
+    );
+    assert!(asked.waiting());
+
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+}
+
+/// Escape replies `Cancelled`, and focus goes back where it was when the
+/// prompt opened.
+#[gpui_kit::test]
+async fn escape_cancels_and_focus_returns(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    shell.keys("secondary-4", cx);
+    let before = focused(&shell, cx).expect("the operation area holds focus");
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert_ne!(focused(&shell, cx), Some(before.clone()));
+
+    shell.keys("escape", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert_eq!(focused(&shell, cx), Some(before));
+    assert!(shell.present(Region::Operations.ring_id(), cx));
+}
+
+/// Cancel replies `Cancelled` too.
+#[gpui_kit::test]
+async fn cancel_replies_cancelled(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    assert!(!shell.present("passphrase-dialog", cx));
+}
+
+/// A prompt that arrives while the confirmation dialog is open shows
+/// above it. Escape answers the prompt, and only the prompt: the
+/// confirmation dialog stays, and its own Escape then gives focus back to
+/// the control that started it.
+#[gpui_kit::test]
+async fn a_prompt_above_the_confirmation_dialog_is_answered_by_its_own_dialog(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let ticket = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
+    fixture.create_ticket(&root, ticket, "Stranded", "open");
+    let operation = fixture.strand_ticket_save(&root, ticket, "Edited");
+    let shell = Shell::open(fixture, cx);
+    shell.click(("pending-abandon", 0usize), cx);
+    assert!(shell.present("confirm-dialog", cx));
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(shell.present("passphrase-dialog", cx));
+    assert!(shell.present("confirm-dialog", cx));
+
+    shell.keys("escape", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(shell.present("confirm-dialog", cx));
+
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    let abandon = shell
+        .workspace
+        .read_with(cx, |workspace, _| {
+            workspace.abandon_focus(root.to_str().unwrap(), &operation)
+        })
+        .expect("the Abandon control has a focus");
+    assert!(shell.frame(cx, |window, _| abandon.is_focused(window)));
+    // Nothing was submitted by either dialog.
+    assert!(shell.requests(cx, |_| true).is_empty());
+}
+
+/// Holds a refresh of `root` on the worker, so quitting waits for it.
+fn hold_refresh(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> JobGate {
+    let root = root.to_owned();
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace
+            .services()
+            .worker()
+            .submit(Intent::IndexRefresh { root }, Lane::User, None, None)
+    });
+    held.wait_reached();
+    held
+}
+
+/// Quitting with a prompt open answers it `Unavailable` and closes it:
+/// "Finishing" shows, and the app quits once the job returns.
+#[gpui_kit::test]
+async fn quit_answers_an_open_prompt_unavailable(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let held = hold_refresh(&shell, &root, cx);
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    assert_eq!(asked.answered(), "unavailable");
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(shell.present("quit-finishing", cx));
+
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+}
+
+/// The window's close request goes through the same handler: it answers
+/// the open prompt `Unavailable`.
+#[gpui_kit::test]
+async fn closing_the_window_answers_an_open_prompt_unavailable(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let held = hold_refresh(&shell, &root, cx);
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+
+    assert!(!shell.visual(cx).simulate_close());
+    assert_eq!(asked.answered(), "unavailable");
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+}
+
+/// A prompt that arrives once quitting has begun is answered
+/// `Unavailable` at once, with no dialog.
+#[gpui_kit::test]
+async fn a_prompt_while_finishing_is_answered_unavailable(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    let held = hold_refresh(&shell, &root, cx);
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    assert!(shell.present("quit-finishing", cx));
+
+    let mut asked = ask(&shell, "primary", cx);
+    // The prompt reaches the window through the drain task, which the
+    // test runs while it waits.
+    let deadline = std::time::Instant::now() + WAIT;
+    while asked.waiting() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no answer in {WAIT:?}"
+        );
+        shell.run(cx);
+        cx.executor().timer(Duration::from_millis(10)).await;
+    }
+    assert_eq!(asked.answered(), "unavailable");
+    shell.run(cx);
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+}
+
+/// Every piece of text a test can read off the window: each observed
+/// element's label and accessibility value.
+fn window_text(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .flat_map(|snapshot| [snapshot.label(), snapshot.value()])
+            .flatten()
+            .map(str::to_owned)
+            .collect()
+    })
+}
+
+/// Review Focus 5: a supplied passphrase reaches no request field, no
+/// operation-area text, no notification and nothing the window shows,
+/// while it is typed and after it is supplied, with a job run alongside.
+#[gpui_kit::test]
+async fn a_supplied_passphrase_is_shown_or_kept_nowhere(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    let held = hold_refresh(&shell, &root, cx);
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    type_text(&shell, SENTINEL, cx);
+    // Masked: not even the input's accessibility value carries it.
+    let typed = window_text(&shell, cx);
+    assert!(
+        typed.iter().all(|text| !text.contains(SENTINEL)),
+        "{typed:?}"
+    );
+
+    shell.keys("enter", cx);
+    assert_eq!(asked.answered(), "supplied");
+    held.release();
+    let id = shell.requests(cx, |_| true)[0];
+    shell.until_ended(id, cx).await;
+
+    let operations = shell.operations(cx);
+    let fields = operations.read_with(cx, |operations, _| {
+        let mut fields = Vec::new();
+        for request in operations.requests() {
+            fields.push(format!("{:?}", request.id));
+            fields.push(request.request_id.to_string());
+            fields.push(request.intent.label().to_owned());
+            fields.extend(request.intent.root().map(|root| root.display().to_string()));
+            fields.extend(request.confirmation.map(|id| id.to_string()));
+            fields.push(format!("{:?} {}", request.lane, request.attempt));
+            match &request.state {
+                RequestState::Finished(outcome, code, effects, recovery, message) => {
+                    fields.push(format!("{outcome:?} {code:?} {effects:?} {recovery:?}"));
+                    fields.push(message.clone());
+                }
+                RequestState::NotSent(why) => fields.push(format!("{why:?}")),
+                _ => {}
+            }
+        }
+        fields
+    });
+    assert!(!fields.is_empty());
+    assert!(
+        fields.iter().all(|field| !field.contains(SENTINEL)),
+        "{fields:?}"
+    );
+
+    shell.keys("secondary-4", cx);
+    let shown = window_text(&shell, cx);
+    assert!(!shown.is_empty());
+    assert!(
+        shown.iter().all(|text| !text.contains(SENTINEL)),
+        "{shown:?}"
+    );
+    let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
+    assert_eq!(notifications, 0);
+}

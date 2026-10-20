@@ -29,6 +29,8 @@ pub(crate) struct DelayingBackend {
     home: PathBuf,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
+    /// Holds taken after a job's library call returns.
+    returned: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Every read kind a read or prepare asked its gate for, in order:
     /// only observed.
     reads_seen: Mutex<Vec<ReadKind>>,
@@ -45,6 +47,7 @@ impl DelayingBackend {
             home,
             reads: Mutex::default(),
             jobs: Mutex::default(),
+            returned: Mutex::default(),
             reads_seen: Mutex::default(),
             seen: Mutex::default(),
         }
@@ -70,6 +73,21 @@ impl DelayingBackend {
     pub(crate) fn hold_job(&self, kind: JobKind) -> JobGate {
         let gate = Arc::new(Gate::default());
         self.jobs
+            .lock()
+            .unwrap()
+            .entry(kind)
+            .or_default()
+            .push_back(gate.clone());
+        JobGate(gate)
+    }
+
+    /// Holds the next job of `kind` on the worker thread once its library
+    /// call has returned, before the worker acts on the answer, until the
+    /// gate is released or dropped.
+    #[must_use = "dropping the handle releases the hold"]
+    pub(crate) fn hold_job_return(&self, kind: JobKind) -> JobGate {
+        let gate = Arc::new(Gate::default());
+        self.returned
             .lock()
             .unwrap()
             .entry(kind)
@@ -138,6 +156,18 @@ impl Backend for DelayingBackend {
         self.seen.lock().unwrap().push(kind);
         let gate = self
             .jobs
+            .lock()
+            .unwrap()
+            .get_mut(&kind)
+            .and_then(VecDeque::pop_front);
+        if let Some(gate) = gate {
+            gate.wait();
+        }
+    }
+
+    fn after_job(&self, kind: JobKind) {
+        let gate = self
+            .returned
             .lock()
             .unwrap()
             .get_mut(&kind)

@@ -6,6 +6,7 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod prompts;
 mod reads;
 pub(crate) mod requests;
 pub(crate) mod worker;
@@ -105,6 +106,10 @@ pub(crate) trait Backend: Send + Sync + 'static {
 
     /// Called on the worker thread before a job's library call.
     fn before_job(&self, _kind: JobKind) {}
+
+    /// Called on the worker thread after a job's library call returns,
+    /// before the worker decides what follows it.
+    fn after_job(&self, _kind: JobKind) {}
 }
 
 /// The production backend: the library, with no delays.

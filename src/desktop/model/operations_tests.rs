@@ -400,3 +400,35 @@ fn recovery_actions_map_to_controls() {
         assert!(!recovery_label(kind).is_empty());
     }
 }
+
+/// A prompt the worker sends is kept until the workspace takes it, and is
+/// taken once. Its reply is untouched until then: the worker still waits.
+#[test]
+fn a_prompt_is_kept_until_taken_once() {
+    use crate::desktop::services::prompts::{PromptReply, PromptRequest};
+    use futures::channel::oneshot;
+    use manyhands::repository::{SharedKeyId, keys::UnlockReason};
+
+    let mut operations = Operations::default();
+    assert!(operations.take_prompt().is_none());
+    let (reply, mut answer) = oneshot::channel();
+    operations.apply(WorkerEvent::Prompt(PromptRequest {
+        key_id: SharedKeyId::new(),
+        label: "primary".to_owned(),
+        reason: UnlockReason::ProtectedKey,
+        reply,
+    }));
+    assert!(operations.has_prompt());
+    assert!(matches!(answer.try_recv(), Ok(None)));
+    let prompt = operations.take_prompt().expect("the prompt is kept");
+    assert_eq!(prompt.label, "primary");
+    assert!(!operations.has_prompt());
+    assert!(operations.take_prompt().is_none());
+    prompt.answer(PromptReply::Cancelled);
+    assert!(matches!(
+        answer.try_recv(),
+        Ok(Some(PromptReply::Cancelled))
+    ));
+    // No request was listed for it.
+    assert!(operations.requests().is_empty());
+}

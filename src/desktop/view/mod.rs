@@ -8,6 +8,7 @@ pub(crate) mod harness;
 pub(crate) mod item;
 pub(crate) mod lists;
 pub(crate) mod operations;
+pub(crate) mod passphrase;
 pub(crate) mod quit;
 pub(crate) mod relationships;
 pub(crate) mod scroll;

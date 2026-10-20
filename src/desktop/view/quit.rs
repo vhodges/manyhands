@@ -5,10 +5,11 @@
 //! stops the worker admitting jobs, shows "Finishing" and Quit now, and
 //! quits when the job returns. Quit now quits at once: the worker thread
 //! is not waited for, and the library's journals recover what it was
-//! doing.
+//! doing. Either way a prompt the running job waits on is answered
+//! `Unavailable` first, so the job can return.
 
 use gpui_kit::{
-    App, Context, InteractiveElement, IntoElement, ParentElement, Styled, TestSupportExt,
+    App, Context, InteractiveElement, IntoElement, ParentElement, Styled, TestSupportExt, Window,
     component::{
         button::{Button, ButtonVariants},
         h_flex,
@@ -35,7 +36,8 @@ pub(crate) enum QuitPhase {
 impl Workspace {
     /// The one quit handler, for the action and the close request. True
     /// when quitting goes ahead now.
-    pub(super) fn request_quit(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.prompt_unavailable(window, cx);
         match self.quit {
             QuitPhase::Quit => return true,
             QuitPhase::Finishing(_) => return false,
@@ -56,6 +58,7 @@ impl Workspace {
 
     pub(super) fn quit_now(&mut self, cx: &mut Context<Self>) {
         self.quit = QuitPhase::Quit;
+        self.prompt_unavailable_now(cx);
         cx.notify();
         cx.quit();
     }

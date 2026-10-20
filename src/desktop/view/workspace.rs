@@ -15,7 +15,8 @@ use std::{
 
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Render, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window,
+    Render, StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity,
+    Window,
     component::{
         ActiveTheme, Root, WindowExt, h_flex,
         input::{InputEvent, InputState},
@@ -30,6 +31,7 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     confirm::{confirm, prepare_again},
     documents::DocumentsPane,
+    passphrase::PassphraseDialog,
     scroll::ContentScroll,
     sidebar::{self, RepositoriesPane, RepositoryRow},
     tabs::Content,
@@ -138,6 +140,8 @@ pub(crate) struct Workspace {
     /// control holding it is no longer drawn.
     last_region: Option<Region>,
     pub(super) quit: QuitPhase,
+    /// The passphrase dialog, while it is open. The dialog layer owns it.
+    pub(super) passphrase: Option<WeakEntity<PassphraseDialog>>,
     /// The launch refreshes were submitted: once, after the repository
     /// list first loads.
     launched: bool,
@@ -164,14 +168,15 @@ impl Workspace {
             cx.focus_handle(),
         ];
         window.focus(&regions[Region::Repositories.index()], cx);
-        let operations = cx.observe(services.operations(), |this, _, cx| {
-            this.operations_changed(cx)
+        // In the window: a prompt the worker sends opens a dialog there.
+        let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
+            this.operations_changed(window, cx)
         });
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let workspace = cx.entity().downgrade();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
             workspace
-                .update(cx, |workspace, cx| workspace.request_quit(cx))
+                .update(cx, |workspace, cx| workspace.request_quit(window, cx))
                 .unwrap_or(true)
         });
         let tickets_pane = TicketsPane::new(window, cx);
@@ -229,6 +234,7 @@ impl Workspace {
             content: Content::default(),
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
+            passphrase: None,
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),
@@ -256,6 +262,12 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn quit_phase(&self) -> QuitPhase {
         self.quit
+    }
+
+    /// The passphrase dialog, while it is open.
+    #[cfg(test)]
+    pub(crate) fn passphrase(&self) -> Option<Entity<PassphraseDialog>> {
+        self.passphrase.as_ref().and_then(WeakEntity::upgrade)
     }
 
     #[cfg(test)]
@@ -495,15 +507,17 @@ impl Workspace {
         self.focus_region(next, window, cx);
     }
 
-    /// A worker event arrived: if quitting waits for a job that has now
-    /// returned, quit. A repository a finished request may have changed
-    /// is read again: its pending operations, its lists when it is
-    /// selected, its open tabs when the request could change items, and
-    /// the repository list, whose index state it shows. Each is read once,
-    /// however many requests changed it.
-    fn operations_changed(&mut self, cx: &mut Context<Self>) {
+    /// A worker event arrived: a prompt the running job asks is shown. If
+    /// quitting waits for a job that has now returned, quit. A repository
+    /// a finished request may have changed is read again: its pending
+    /// operations, its lists when it is selected, its open tabs when the
+    /// request could change items, and the repository list, whose index
+    /// state it shows. Each is read once, however many requests changed
+    /// it.
+    fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // The operation area shows the model.
         cx.notify();
+        self.show_prompt(window, cx);
         self.quit_if_finished(cx);
         let changed = self
             .services
@@ -821,8 +835,8 @@ impl Render for Workspace {
             .id("workspace")
             .key_context("Workspace")
             // Quit works with a dialog open; nothing else here does.
-            .on_action(cx.listener(|this, _: &Quit, _, cx| {
-                this.request_quit(cx);
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
             .on_action(unless_dialog(cx, |this, _: &OpenSelected, _, cx| {
