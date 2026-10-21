@@ -17,8 +17,8 @@ This design implements the
 where drafts are kept and how they are written, how the desktop flushes and
 retires them, how a draft is compared with an item that changed, what the
 recovery surface shows, and how each requirement is proved. The Cycle
-document owns scope, exclusions and the five product-owner decisions of
-2026-10-20; this document cites them by number.
+document owns scope, exclusions and the six product-owner decisions of
+2026-10-20 and 2026-10-21; this document cites them by number.
 
 It is proposed for approval. Approval does not authorize implementation.
 
@@ -26,6 +26,12 @@ It is proposed for approval. Approval does not authorize implementation.
 
 Read from source at `origin/main` `3bda743`. No Rust command was run. Line
 numbers are at that revision.
+
+Re-checked on 2026-10-21 at `d7962c3`. Since `3bda743` the library changed
+only `repository.rs`, `mutation/bind/repo.rs`, `mutation/outcome.rs` and
+`recovery.rs`, for the enablement-index and registration fixes. No entry
+point, type or code cited below changed. `open_default`'s directory is now
+at `repository.rs:7219`; every other cited line is unchanged.
 
 | Need | Library entry point | Finding |
 | --- | --- | --- |
@@ -61,16 +67,29 @@ of D19–D21, which are D3's.
 | `src/drafts/*_tests.rs` | Unit tests, the repository's convention. |
 | `tests/drafts.rs`, `tests/drafts/*.rs` | Integration tests over real files, child processes and real repositories. |
 | `examples/seed_draft.rs` | Development-only seeding for the native checklist. |
-| `src/desktop/model/drafts.rs` | GPUI-free session, flush schedule, save-completion transitions, restore policy, page rows. |
+| `src/desktop/model/drafts.rs` | GPUI-free session, flush schedule, save-completion transitions, page rows (`DraftRow`, `RowState`, `RowActions`). |
 | `src/desktop/services/drafts.rs` | The registry entity, store calls on the background executor, save submission and completion routing. |
-| `src/desktop/view/drafts.rs` | The Drafts page, Inspect panel, Export and Discard. |
+| `src/desktop/view/drafts.rs` | The Drafts page entity: its shown state, rows and composition. |
+| `src/desktop/view/drafts/{inspect,actions}.rs` | The Inspect panel; Restore, Export and Discard, shared by a row and the tab's restored-draft section. |
 | `src/desktop/view/draft_comparison.rs` | The comparison view the tab and the page share. |
-| `src/desktop/view/item.rs` and its split parts | The draft banner and restored-draft section of a tab. |
-| `src/desktop/view/{workspace,tabs,quit,operations}.rs` | Close-tab choices, quit flush, operation-area entries, `OpenDrafts`. |
+| `src/desktop/view/item/draft.rs` | The draft banner and restored-draft section of a tab, composed by `view/item.rs`; `view/item/reads.rs` recomputes the target state on reload. |
+| `src/desktop/view/workspace.rs` | `ContentArea` holds the cached Drafts page entity beside Settings. |
+| `src/desktop/view/workspace/content.rs` | `ContentPage::Drafts` and its routing; close-tab choices; releasing sessions when a repository's tabs close. |
+| `src/desktop/view/workspace/lifecycle.rs`, `view/quit.rs` | The quit flush phase; its status text and Quit now. |
+| `src/desktop/view/workspace/requests.rs`, `view/operations.rs`, `model/operations.rs` | Operation-area entries and the actions they call. |
+| `src/desktop/view/workspace/render.rs`, `src/desktop/keys.rs` | `OpenDrafts`, its binding and its handler. |
 
-The desktop paths are as they stand at `3bda743`. Parts B and C follow
-`01M5CS4MJ0`'s Structure split (decision 4); the plan's file map is
-rechecked once it merges.
+The desktop paths follow the Structure split merged at `d7962c3` (decision
+4), as its plan's
+[D2 handoff map](2026-10-21-desktop-structure.md#5-d2-handoff-map) places
+them. Shared helpers come from it too: `Read<T>` (`model/read_state.rs`),
+`TicketName` (`model/names.rs`) and `ItemLocator`
+(`model/navigation.rs`). Every `Workspace` field is private, so sibling
+views reach D2's state through named `Workspace` actions and queries, not
+fields. Each new desktop source file, and each file of the Structure split
+that D2 grows, stays below about 500 lines, the review target the
+Structure plan set. One that would pass it is split by responsibility
+behind its parent, as `view/item/` is. Test files are exempt.
 
 ## The Draft Store
 
@@ -534,7 +553,10 @@ launch classifies the draft `AlreadySaved`, and Discard loses nothing.
   of this item is kept", with **Restore** and **Review in Drafts**. Nothing
   is restored automatically.
 - **Restore** claims the draft in the background, creates the session,
-  attaches it to the tab (opening it if needed) and focuses the tab. If
+  attaches it to the tab (opening it if needed) and focuses the tab. The
+  tab is opened through `Workspace::open_item` with
+  `ItemLocator::Identified { kind, id }.in_repository(&repo)`, the one
+  place that builds an `OpenTarget` (ruling R25). If
   another session of this process is attached to the same target, Restore
   is refused with "Another draft of this item is open". A draft removed
   since the listing reads "This draft is no longer kept", and the listing
@@ -565,16 +587,24 @@ launch classifies the draft `AlreadySaved`, and Discard loses nothing.
 - **Close.** Closing a tab whose session is attached opens a dialog with
   **Keep draft** (the default: flush, then release), **Discard** (scoped to
   this draft), **Cancel**, and **Save** disabled with the D3 note. A flush
-  failure on Keep leaves the tab open with the failure shown.
+  failure on Keep leaves the tab open with the failure shown. The tab's
+  Close button and `secondary-w` both reach `Workspace::close_tab` in
+  `view/workspace/content.rs`, which asks the registry before closing.
 - **Repository removal.** D1's removal closes the repository's tabs. With a
-  session attached, it flushes and releases it; it never discards. The
+  session attached, it flushes and releases it; it never discards. Both
+  paths that close a repository's tabs, a removal's completion
+  (`workspace/requests.rs`) and a repository leaving the list
+  (`workspace/repositories.rs`), reach `Workspace::close_repository` in
+  `content.rs`, which does this before the tabs close. The
   removal confirmation (`view/confirm.rs`, shared by the settings, sidebar
   and recovery removal paths) adds a line: "Drafts of this repository's
   items stay in Drafts."
 
 ### Quit
 
-`request_quit` gains a phase before D1's: if any session has
+`request_quit` (`view/workspace/lifecycle.rs`) gains a phase before D1's,
+`QuitPhase::SavingDrafts` (`view/quit.rs`, which renders its status and
+Quit now): if any session has
 `revision > flushed` or a write in flight, quitting first flushes them
 all and shows "Saving drafts for recovery" with **Quit now**, so a hung
 write never traps the user. When all succeed, D1's quit proceeds. If any
@@ -590,6 +620,28 @@ replaces this path with its shutdown contract.
 in place of the tabs, as Settings is shown. The operation area's
 "Recovered drafts" entry and the tab banner open it too.
 
+**Routing (ruling R23).** The page joins the Structure split's content
+router in `view/workspace/content.rs`, not a new `Workspace` field:
+
+- `ContentPage` gains `Drafts`. `ContentArea` holds the cached
+  `Entity<DraftsPage>`, made with the workspace, as it holds Settings'.
+  The page owns its shown state, as `SettingsHost` does; no other flag
+  records it.
+- The selector is Settings when Settings is shown, else Drafts when the
+  page is shown, else Tabs. Every transition leaves at most one shown:
+  `open_drafts` hides Settings; each Settings entry point in `content.rs`
+  hides the page first; `show_tabs` hides both. So Back to tabs from
+  Settings opened over Drafts shows the tabs.
+- Leaving Keys for Drafts clears an unsent passphrase, as leaving it for
+  the tabs does: the Drafts arm of `content_body` calls
+  `forget_passphrase` too.
+- `secondary-w` does nothing while the page is shown, as with Settings.
+  Tab stepping and `open_item` already show the tabs.
+- `focus_content` focuses the page's first control.
+- The page scrolls with the content region's one `ContentScroll`, as
+  Settings does. Whether each page keeps its own offset is a question for
+  `01M5F3GVDYTH1Q5V5FCS9YF7V3`; D2 follows what main has when it lands.
+
 - **Rows** come from a `Drafts` read of the store. Each row's target state
   then comes from its own reads (`resolve_repository`, `show_item`, and for
   a comment `list_comments`) under that row's stamp, so a late answer never
@@ -597,6 +649,40 @@ in place of the tabs, as Settings is shown. The operation area's
   "Comment on <item title>"), the draft's title, the repository root, the
   time of its last recovery save, and its state as text, never by color
   alone.
+- **Row types (ruling R24)**, in `model/drafts.rs`:
+
+  ```rust
+  pub(crate) struct DraftRow {
+      id: DraftId,
+      kind_label: String,       // "Document", "Ticket", "Comment on <item title>"
+      title: String,            // the draft's own title, shown only in its row
+      repository: String,
+      flushed_at: String,       // local time of the last recovery save
+      state: RowState,
+      actions: RowActions,
+  }
+  pub(crate) enum RowState {
+      Readable { held: Held, target: Read<TargetState> },
+      Unreadable(UnreadableReason),
+  }
+  pub(crate) struct RowActions {
+      restore: bool,            // restore_policy allows it
+      show: bool,               // held here
+      inspect: bool,            // readable
+      discard: bool,            // not held elsewhere
+      retry: bool,              // target ReadFailed
+  }
+  pub(crate) fn row_actions(state: &RowState, restore: Option<Restore>) -> RowActions;
+  ```
+
+  `target` is `Read::Loading` until the row's reads land, reading
+  "Checking the item", and then `Ready`. Read errors are classified into
+  the target state (`ReadFailed`, `RepositoryUnavailable`,
+  `ItemNotFound`), so the page never assigns `None`, `Busy` or `Failed`,
+  and renders them as `Loading`. While `Loading`, a row offers Inspect,
+  Export… and Discard… only. Export is offered on every row: Export… for
+  a readable draft, Export raw… for an unreadable one. `Read<T>` derives
+  nothing, so a `DraftRow` holding draft text has no `Debug`.
 - **Unreadable rows** read "This draft cannot be read" with the reason
   ("saved by a newer Manyhands", "damaged", "not accessible", "owned by
   another user", "not a file") and offer Export raw… and Discard….
@@ -627,9 +713,15 @@ in place of the tabs, as Settings is shown. The operation area's
   later flush succeeds.
 - Save requests appear as D1's requests do.
 
+The entries' Review and Retry call named `Workspace` actions:
+`open_drafts` in `workspace/content.rs` and `retry_draft_flush` in
+`workspace/requests.rs`, beside D1's request actions.
+
 No entry, notification or message shows draft body text. A title shown
 outside the draft's own row and section is the item's title as read,
-never the draft's. A save's envelope `message`, which the operation area
+never the draft's. It is rendered as tab titles are, with
+`TicketName { slug: None, title }.title_or(id)` from `model/names.rs`,
+falling back to the item ID (ruling R25). A save's envelope `message`, which the operation area
 shows, is checked by the privacy sweep with a save the library refuses as
 `invalid_input`.
 
@@ -737,6 +829,10 @@ as D1's do (`desktop-test-support`).
   draft and the page lists it `RepositoryUnavailable`.
 - **Quit.** With a held write, quit waits, offering Quit now, then quits.
   With a failing write, the dialog offers Quit anyway and Cancel.
+- **Routing.** `secondary-shift-d` shows the page; Settings opened over it
+  and then Back to tabs shows the tabs; leaving Keys for Drafts clears an
+  unsent passphrase; `secondary-w` while the page is shown closes no tab;
+  Restore and Show hide the page and show the tab.
 - **Drafts page.** One test per state over real fixtures, rendering its
   label and its allowed actions. Inspect shows the comparison. Export
   through `simulate_new_path_selection` writes the Markdown; an export to a
@@ -815,8 +911,9 @@ to write a draft for an item of this project's repository:
 | Windows rename fails while another program (an antivirus) has the file open | The write fails with a typed kind and is retried on the next edit or Retry; the previous revision stays. Native CI after merge. |
 | Windows owner check rejects a legitimate profile, for example under folder redirection | Accept the token user or its default owner (ruling R4). A refusal is visible: the store is unavailable and editing in D3 must say crash recovery is off. Native CI and G1. |
 | A permission test run as root passes vacuously | The test detects root and fails with a message. |
-| Structure ticket `01M5CS4MJ0` reshapes `workspace.rs` and `item.rs` | Parts B and C start after it merges (decision 4); the file map is rechecked then. |
-| `01M5CS4MH2` edits `item.rs` at the same time | Merge main at work boundaries. |
+| Structure ticket `01M5CS4MJ0` reshapes `workspace.rs` and `item.rs` | Merged before Part B (decision 4, `d7962c3`); paths follow its handoff map (ruling R23–R25). |
+| `01M5CS4MH2` edits the item view, lists and tabs at the same time | Merge main at work boundaries. |
+| `01M5F3GV` changes the settings pages and perhaps the shared content scroll | Merge main at work boundaries; the Drafts page follows main's scroll policy. |
 | Flush on quit outlasts the user's patience, or hangs, on a slow disk | Quit now is offered while drafts are being saved; Quit anyway after a failure. |
 | The comparison is not enough to review a long body | D3 owns the editor's review; D2's side-by-side is for recovery. |
 | D2 grows too large | Three Parts with checkpoint reviews; the product owner may split a Part at its checkpoint. |
@@ -829,7 +926,10 @@ to write a draft for an item of this project's repository:
 
 Reviewed against the Wave, the governing RFCs and register item W3-03, the
 provisional API audit, the D1 Cycle, design and follow-up tickets, and the
-source at `3bda743`. Classifications follow `review-cycle-docs`.
+source at `3bda743`. Classifications follow `review-cycle-docs`. On
+2026-10-21 the desktop sections were remapped onto the Structure split at
+`d7962c3`, read from source and from the Structure plan's handoff map
+(rulings R23–R25).
 
 An independent reviewer then read all three documents against `AGENTS.md`,
 the Wave, the RFCs, the library and desktop source and the GPUI Kit, GPUI
@@ -842,9 +942,12 @@ source before it was applied. Rows naming a finding record the result.
 | Wave D2 scope; no editor before D3 | Nothing in production creates a draft in D2. What UI ships? | Decision | Cycle decision 1: recovery surface. | Drafts page tests; native checklist with the seeding example. |
 | Wave "all domain behavior in the library"; track rule 5; `AGENTS.md` | Where the store lives. | Decision | Cycle decision 2: `src/drafts/`, one line in `src/lib.rs`. | Module layout; CLI isolation. |
 | Desktop and index RFCs "owner-protected"; key store not reusable | Windows protection. | Decision | Cycle decision 3: inherit the profile ACL; refuse reparse points and other owners. Residual risk recorded. | Access tests; native CI. |
-| `01M5CS4MJ0` "before D2/D3 add pages" | Sequencing against the structure follow-up. | Decision | Cycle decision 4. | Plan's Part B gate. |
+| `01M5CS4MJ0` "before D2/D3 add pages" | Sequencing against the structure follow-up. | Decision | Cycle decision 4; satisfied on 2026-10-21 (`d7962c3`). | Cycle entry evidence. |
+| R23, Structure plan "D2 extends the private content boundary"; `workspace/content.rs` derives the page from `SettingsHost::is_shown()` | How a second page joins the router without a second flag that can disagree. | Ruling | `ContentPage::Drafts`; the page entity owns its shown state; every transition leaves at most one page shown; the Drafts arm clears the passphrase as the tabs do. If wrong, the router's one file changes. | Routing view tests. |
+| R24, plan Task 10's `RowState` and `RowActions` were named but not defined | The page's row types. | Ruling | Defined in the Drafts page section, with the target state as the Structure split's `Read<TargetState>`. If wrong, the model's row types change; the store is untouched. | Drafts page tests, one per state. |
+| R25, Structure split's `TicketName` and `ItemLocator` | How D2 names items outside a draft's own row and opens their tabs. | Ruling | Item titles as tab titles show them (`title_or(id)`, no short code); tabs opened through `ItemLocator::in_repository`. | Privacy sweep; Restore and Show tests. |
 | Ticket and track rule 3 say D2 consumes only F1 | D2 consumes D1 and F2 too. | Settled | All three are closed and merged; track rule 1 holds. | Cycle entry evidence. |
-| Local main ahead of `origin/main` | Planning base. | Settled | Planned on `origin/main` per `AGENTS.md`; merged at the next boundary once main is pushed. | Cycle entry evidence. |
+| Local main ahead of `origin/main` | Planning base. | Settled | Planned on `origin/main` per `AGENTS.md`. Main was published, and `d7962c3` was merged into the branch on 2026-10-21. | Cycle entry evidence. |
 | R1, desktop RFC "at most one second of inactivity" | Continuous typing never goes idle. | Ruling | Also flush at most five seconds after the first unflushed change. This strengthens the RFC's guarantee. If wrong, it costs one constant. | Schedule tests. |
 | R2, private `default_data_directory` | The store needs the data directory. | Ruling | Compute the same `ProjectDirs` path in `src/drafts/`; the service keeps `open_default`, so the desktop and CLI registries can never split. Divergence would only move drafts. If wrong, a shared-library change makes the function public. | Startup and fixture tests. |
 | R3, Unix permissions on an existing folder | Refuse or tighten looser modes. | Ruling | Clear group and other bits on our own `drafts/` (never add bits); refuse a link or another owner. The parent rule is decision 5. If wrong, refusing instead is one branch. | Access tests. |
@@ -868,4 +971,4 @@ source before it was applied. Rows naming a finding record the result.
 | R11, export overwrite | Truncating an existing file on failure. | Ruling | Write through a temporary file and rename; the platform dialog confirms replacement. | Export failure test. |
 | R12, "newly incompatible context" | Which contexts block restore. | Ruling | A closed ticket blocks. A changed context (a removed item worktree, a promoted document) is `Changed` with `context_changed`; restore is allowed and flagged. If wrong, refuse restore there too. | Targets tests. |
 | R13, `deps`/`parent` on save | `Set` would drop dependencies the library ignored. | Ruling | `Unchanged` when equal to the base. | Ticket save-completion test. |
-| R14, native checklist without an editor | How the owner sees a draft by hand. | Ruling, open question Q2 | Development example `seed_draft`. | Native checklist. |
+| R14, native checklist without an editor | How the owner sees a draft by hand. | Decision | Development example `seed_draft`; accepted by the product owner on 2026-10-21 (Cycle decision 6, formerly Q2). | Native checklist. |

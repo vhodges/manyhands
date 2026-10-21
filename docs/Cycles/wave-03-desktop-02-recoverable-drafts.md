@@ -47,11 +47,13 @@ accompany this document.
   `3bda743aff8ab8b82963ef35427583dd4ef73e13`. Merge `e8fb54b` brought it
   into the ticket branch without conflicts; `origin/main` is an ancestor of
   the result and the worktree is clean. No rebase was made.
-- **Local main is ahead of `origin/main`.** The main checkout holds seven
-  unpublished commits ending at `7d6dba4`, the merge of ticket
-  `01M5CVB2DTK8EQKG3FMYMWNTMX` (repo enable registers an enabled but
-  unregistered repository). This Cycle is planned on `origin/main`. Once
-  main is pushed, D2 merges it at its next work boundary.
+- On 2026-10-21 a fresh fetch observed `origin/main` at
+  `d7962c3615786ca663662b0debb9460769308a57`, the merge of the Structure
+  ticket `01M5CS4MJ0G7B0MPJD0KN0QMYA`. It also holds the merges of
+  `01M5CVB2DTK8EQKG3FMYMWNTMX` (`7d6dba4`) and `01M5B0Z6PNP7X4WH4JV3N0VQJ6`
+  (`0b23664`), which were unpublished on 2026-10-20. Merge `74fea8d`
+  brought it into the ticket branch without conflicts; `origin/main` is an
+  ancestor of the result. No rebase was made.
 - **Wave 02 dependency.** The Wave requires Cycles 01–04 on main for D2.
   All ten Wave 02 Cycles are closed and on main.
 - **Wave 03 dependency.** Under track rule 1, D2 depends on F1, F2 and D1,
@@ -63,27 +65,35 @@ accompany this document.
 - **Entry-gate item 3, the API audit.** The design's
   [library surface audit](../plans/2026-10-20-wave-03-desktop-02-recoverable-drafts-design.md#library-surface-audit-at-3bda743)
   refreshes the provisional audit's D16–D22 and D30 rows at `3bda743`, by
-  reading source. No Rust command was run for planning.
+  reading source. It was re-checked at `d7962c3`: the library changes
+  since then are enablement and registration fixes that touch no cited
+  entry point. No Rust command was run for planning.
 - **Entry-gate item 7.** The required checks at the implementation baseline
   are the plan's first step and have not been run.
 - **Entry-gate item 6, native testers.** D2 is planned and evidenced on
   Linux. Windows and macOS execution of the draft store's tests happens on
   the native Build workflow after merge (`AGENTS.md`, Native CI). Tester
   assignments remain the Release Owner's before G1.
-- **Sequencing (decision 4).** Ticket `01M5CS4MJ0G7B0MPJD0KN0QMYA`, "Desktop
-  follow-up: settings UX and structure from the D1 reviews", asks for its
-  Structure part before D2 adds pages. That part splits
-  `view/workspace.rs`, `view/item.rs` and `view/settings/keys.rs`, narrows
-  `Workspace`'s fields, keeps one `Read<T>` and adds one ticket-naming
-  helper. It is open and unstarted. D2's desktop work, Parts B and C, starts after that
-  part is merged to main. The plan's file map is rechecked against it then.
-  Part A changes no desktop file. Whether Part A may start before the
-  Structure part merges is open question Q1.
-- **Parallel work.** Ticket `01M5CS4MH25QQ769HV61ZRKHXG` (desktop tests and
-  polish from the D1 reviews) is open. It edits `view/item.rs` and other
-  desktop files. No order is required; D2 merges main at work boundaries.
-  C2 and C3 are on the CLI track and touch no file D2 changes, except
-  possibly `.github/workflows/build.yml`'s test list.
+- **Sequencing (decision 4), satisfied.** The Structure ticket
+  `01M5CS4MJ0G7B0MPJD0KN0QMYA` was closed and merged to main on 2026-10-21
+  (`d7962c3`). It split `view/workspace.rs`, `view/item.rs` and
+  `view/settings/keys.rs` into private responsibility modules, made every
+  `Workspace` field private, kept one `Read<T>` (`model/read_state.rs`),
+  added `TicketName` (`model/names.rs`) and `ItemLocator`
+  (`model/navigation.rs`), and routed the content region through one
+  router (`view/workspace/content.rs`). Its plan's
+  [D2 handoff map](../plans/2026-10-21-desktop-structure.md#5-d2-handoff-map)
+  says where D2's desktop work goes; the design's Module Layout and the
+  plan's File Map follow it.
+- **Parallel work.** The Structure ticket's other items moved to
+  `01M5F3GVDYTH1Q5V5FCS9YF7V3`, "Desktop follow-up: settings UX from the
+  D1 reviews", which is open. It changes the settings pages and may change
+  the shared content scroll offset, which D2's Drafts page uses too.
+  Ticket `01M5CS4MH25QQ769HV61ZRKHXG` (desktop tests and polish from the D1
+  reviews) is open and edits the item view, lists and tabs. No order is
+  required; D2 merges main at work boundaries and follows whatever has
+  landed. C2 and C3 are on the CLI track and touch no file D2 changes,
+  except possibly `.github/workflows/build.yml`'s test list.
 
 Before implementation, fetch and merge then-current main, repeat the
 ancestry check, and re-check the audit against any library change landed in
@@ -272,7 +282,7 @@ the work review-ready.
 | Native | `tests/drafts` is added to the Build workflow's headless test list. Its results on Windows and macOS come from the post-merge native run. |
 | Regression | The four required Devenv checks, `--features desktop` check and clippy, the CLI smoke test and the desktop smoke test pass. |
 
-## Product-Owner Decisions (2026-10-20)
+## Product-Owner Decisions (2026-10-20 and 2026-10-21)
 
 Decided during planning, each as recommended.
 
@@ -294,22 +304,22 @@ Decided during planning, each as recommended.
    repository's own files. Residual risk: an administrator or SYSTEM can read
    drafts, unlike shared keys.
 4. **Sequencing.** The Structure part of `01M5CS4MJ0` merges to main before
-   D2's desktop implementation starts.
+   D2's desktop implementation starts. Satisfied on 2026-10-21 (`d7962c3`).
 5. **Unix data directory.** The library creates the data directory with the
    user's umask, so it is commonly 0775 under umask 002. A group-writable
    data directory is accepted; one writable by others, or owned by another
    user, is refused. Every operation on the drafts folder is relative to a
    handle the store holds open, as the key store's are, so swapping a path
    cannot redirect a write. Decided after the independent review.
+6. **Seeding example (2026-10-21, formerly Q2).** The development example
+   `examples/seed_draft.rs` is how the native checklist creates a draft to
+   check the recovery surface by hand before D3. It is a development aid,
+   not a product feature.
 
 ## Open Questions
 
-- **Q1.** May Part A (library only, no desktop file) start before
-  `01M5CS4MJ0`'s Structure part merges? Recommended: yes. Part A cannot
-  conflict with it, and Parts B and C still wait.
-- **Q2.** Is the development seeding example acceptable as the way to check
-  the recovery surface by hand before D3? Recommended: yes. The
-  alternative is to leave the manual checklist to D3.
+None. Q1, whether Part A could start before the Structure part merged,
+was withdrawn on 2026-10-21 when it merged. Q2 became decision 6.
 
 ## Review Record
 

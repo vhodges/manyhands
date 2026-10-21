@@ -15,9 +15,9 @@ id: "01M5E48FZAGA44CWYWZY9SY63X"
 > use `implementing-a-cycle` and the selected execution method task by task,
 > re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VMZ21Z79B09YQRA0P7J`. Parts B and C
-> additionally wait for the Structure part of `01M5CS4MJ0G7B0MPJD0KN0QMYA`
-> to be merged to main (Cycle decision 4). Steps use checkbox (`- [ ]`)
-> syntax for tracking.
+> waited for the Structure part of `01M5CS4MJ0G7B0MPJD0KN0QMYA` (Cycle
+> decision 4); it merged on 2026-10-21 as `d7962c3`, and the desktop paths
+> below follow it. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Unsaved work that survives crashes, failed writes, removed
 repositories and changed items, with a desktop surface to inspect,
@@ -132,17 +132,23 @@ Executors read both. Section names below refer to the design.
 | `src/drafts/{compare,export}.rs` and tests, `tests/drafts/targets.rs` | 4 | Comparison, classification, export. |
 | `examples/seed_draft.rs`, `Cargo.toml` | 4 | Development seeding. |
 | `src/desktop/services/{mod,drafts}.rs`, `src/desktop/mod.rs`, `test_support/{fixtures,delaying}.rs` | 5 | Store in the backend, registry, launch listing, store-unavailable entry. |
-| `src/desktop/model/drafts.rs` and tests, `view/operations.rs` | 6 | Sessions, flush schedule, recovery state, flush-failure entry. |
+| `src/desktop/model/drafts.rs` and tests, `model/operations.rs`, `view/operations.rs`, `view/workspace/requests.rs` | 6 | Sessions, flush schedule, recovery state, flush-failure entry and its Retry action. |
 | `src/desktop/services/{requests,worker,drafts}.rs` | 7 | Save intents and completion. |
-| `src/desktop/view/item*.rs`, `view/tabs.rs`, `view/settings/repositories/manage.rs` | 8 | Banner, restore, restored-draft section, close choices, removal. |
-| `src/desktop/view/quit.rs` | 9 | Quit flush. |
-| `src/desktop/view/drafts.rs` and tests, `keys.rs`, `view/workspace*.rs`, `view/operations.rs` | 10 | Drafts page, `OpenDrafts`, Recovered drafts entry. |
-| `src/desktop/view/drafts.rs` (Inspect, Export, Discard) | 11 | Page actions, open elsewhere. |
-| `view/keyboard_tests.rs`, design checklist, Cycle acceptance table | 12 | Keyboard audit, privacy sweep, gate. |
+| `src/desktop/view/item.rs`, `view/item/{draft,reads}.rs`, `view/draft_comparison.rs`, `model/item.rs` | 8 | Banner, restore, restored-draft section, comparison, refresh. |
+| `src/desktop/view/workspace/content.rs`, `view/confirm.rs` | 8 | Close choices; releasing sessions when a repository's tabs close; removal text. |
+| `src/desktop/view/workspace/lifecycle.rs`, `view/quit.rs` | 9 | Quit flush phase and its status. |
+| `src/desktop/view/drafts.rs` and tests, `model/drafts.rs`, `view/workspace.rs`, `view/workspace/{content,render}.rs`, `keys.rs`, `model/operations.rs`, `view/operations.rs` | 10 | Drafts page, routing, `OpenDrafts`, Recovered drafts entry. |
+| `src/desktop/view/drafts/{inspect,actions}.rs`, `view/item/draft.rs` | 11 | Inspect, Restore, Export and Discard from the page and the tab. |
+| `view/keyboard_tests.rs` and `view/keyboard_tests/`, design checklist, Cycle acceptance table | 12 | Keyboard audit, privacy sweep, gate. |
 
-Desktop paths are as at `3bda743`. After `01M5CS4MJ0`'s Structure part
-merges, Task 5 begins by updating this table to the split files; the
-split changes only where code goes, not what it does.
+Desktop paths follow the Structure split merged at `d7962c3`, as its
+plan's [D2 handoff map](2026-10-21-desktop-structure.md#5-d2-handoff-map)
+places them; the design's Module Layout says what each file holds. Every
+`Workspace` field is private: a sibling view calls a named `Workspace`
+action or query, and D2 adds the ones it needs beside D1's in the
+`view/workspace/` module that owns the transition. Each new desktop source
+file, and each Structure-split file D2 grows, stays below about 500 lines
+(test files exempt).
 
 Tasks run in order. Each task's unit tests sit beside its module as
 `*_tests.rs`.
@@ -166,12 +172,15 @@ Record base, both heads and each result on the ticket. A failure here is
 resolved or explicitly accepted by the product owner before Task 1.
 
 Re-check the design's Library Surface Audit against every change since
-`3bda743`:
-`git diff --stat 3bda743 origin/main -- src/repository.rs src/repository src/results.rs src/lib.rs`.
+its last check at `d7962c3`:
+`git diff --stat d7962c3 origin/main -- src/repository.rs src/repository src/results.rs src/lib.rs`.
 Update the design before coding if a cited signature moved.
 
-Before Task 5, repeat the merge and ancestry check, confirm that the
-Structure part of `01M5CS4MJ0` is on main, and update the File Map.
+Before Task 5, repeat the merge and ancestry check, then compare the File
+Map with desktop changes landed since `d7962c3`
+(`git diff --stat d7962c3 origin/main -- src/desktop`), notably from
+`01M5CS4MH2` and `01M5F3GV`. Record any path that moved on the ticket and
+in this table before coding.
 
 ---
 
@@ -551,8 +560,8 @@ The product owner decides whether Part B proceeds as planned.
 
 # Part B: Desktop Sessions
 
-Starts only when the Structure part of `01M5CS4MJ0` is on main and merged
-into this branch (decision 4).
+The Structure part of `01M5CS4MJ0` is on main (`d7962c3`) and merged into
+this branch (`74fea8d`), as decision 4 required.
 
 ## Task 5: The Store In The Desktop
 
@@ -582,8 +591,6 @@ impl DraftRegistry {
 - `run()` passes `DraftStore::open_default()` to `LibraryBackend::new`; the
   fixture passes `DraftStore::open_in(data.path())`.
 
-- [ ] **Step 0:** Update the File Map to the post-Structure layout; commit
-  `docs: update the D2 file map after the structure split`.
 - [ ] **Step 1: Write the failing tests.** Launch lists the store once and
   the registry holds the listing. A `Drafts` read gate held, then a second
   listing requested and released first: the earlier result is dropped. A
@@ -607,7 +614,7 @@ impl DraftRegistry {
 
 **Files:**
 - Create: `src/desktop/model/drafts.rs`, `src/desktop/model/drafts_tests.rs`
-- Modify: `src/desktop/services/drafts.rs` and tests, `src/desktop/view/operations.rs`
+- Modify: `src/desktop/services/drafts.rs` and tests, `src/desktop/model/operations.rs`, `src/desktop/view/operations.rs` (the flush-failure entry), `src/desktop/view/workspace/requests.rs` (`Workspace::retry_draft_flush`, which the entry's Retry calls)
 
 **Interfaces:**
 - Consumes: Task 5 registry; Task 3 `DraftClaim::write`.
@@ -632,6 +639,9 @@ impl DraftRegistry {
     pub(crate) fn edit(&mut self, id: DraftId, current: DraftFields, cx: &mut Context<Self>); // schedules the timer
     pub(crate) fn flush_now(&mut self, id: DraftId, cx: &mut Context<Self>) -> Task<Result<(), DraftErrorKind>>;
     pub(crate) fn flush_all(&mut self, cx: &mut Context<Self>) -> Task<Vec<(DraftId, DraftErrorKind)>>;
+}
+impl Workspace {   // view/workspace/requests.rs
+    pub(in crate::desktop::view) fn retry_draft_flush(&mut self, id: DraftId, cx: &mut Context<Self>);
 }
 ```
 
@@ -661,7 +671,8 @@ impl DraftRegistry {
   `cx.background_executor().timer(due - now)` and, when it fires, takes
   `next_write` and spawns the blocking `write` on the background executor
   behind the `DraftWrite` gate; `write_landed` runs back on the entity.
-- [ ] **Step 5: Run them to see them pass.**
+- [ ] **Step 5: Run them to see them pass**, and D1's operation-area tests,
+  `… desktop::view::operations`.
 - [ ] **Step 6: Check and lint** as Task 5.
 - [ ] **Step 7: Commit** `feat: flush draft sessions on a schedule and report their recovery state`.
 
@@ -763,12 +774,16 @@ pub(crate) fn base_after_save(submitted: &DraftFields, read: Result<&ItemDto, Re
 ## Task 8: Drafts In Tabs
 
 **Files:**
-- Modify: the item view files after the split (`src/desktop/view/item*.rs`), `src/desktop/model/item.rs`, `src/desktop/view/tabs.rs`, the repository removal flow in `src/desktop/view/settings/repositories/manage.rs` and the removal confirmation text in `src/desktop/view/confirm.rs` (shared by the settings, sidebar and recovery removal paths); tests beside each
-- Create: `src/desktop/view/draft_comparison.rs` and tests
+- Create: `src/desktop/view/item/draft.rs` (the banner and the restored-draft section), `src/desktop/view/draft_comparison.rs` and `draft_comparison_tests.rs`
+- Modify: `src/desktop/view/item.rs` (declare `draft`, compose the banner and section above the item's fields, observe the registry), `src/desktop/view/item/reads.rs` (a reload recomputes an attached session's target state), `src/desktop/model/item.rs`
+- Modify: `src/desktop/view/workspace/content.rs` (`close_tab` asks the registry first; `close_repository` flushes and releases attached sessions before the tabs close), `src/desktop/view/confirm.rs` (the removal confirmation's line, shared by the settings, sidebar and recovery removal paths)
+- Tests: `src/desktop/view/item_tests.rs`, `src/desktop/view/tabs_tests.rs`, `src/desktop/view/settings/repositories_manage_tests.rs`, `src/desktop/view/draft_comparison_tests.rs`
+- Unchanged: `view/tabs.rs` (its Close button already calls `Workspace::close_tab`), `view/workspace/requests.rs` and `view/workspace/repositories.rs` (both already call `close_repository`), `view/settings/repositories/manage.rs` (its removal goes through `confirm`)
 
 **Interfaces:**
-- Consumes: Tasks 4–7.
-- Produces: `DraftRegistry::restore(id, tab, cx)`, `DraftRegistry::release(id, cx) -> Task<Result<(), DraftErrorKind>>`, `DraftRegistry::discard(id, cx)`; the close-tab dialog `CloseWithDraft { KeepDraft, Discard, Cancel }`; `fn target_label(&TargetState) -> &'static str` with the design's labels; `DraftComparisonView`, which Task 11's Inspect reuses.
+- Consumes: Tasks 4–7; `ItemLocator` and `OpenTarget` from `model/navigation.rs`; `Workspace::open_item`.
+- Produces: `DraftRegistry::restore(id, tab, cx)`, `DraftRegistry::release(id, cx) -> Task<Result<(), DraftErrorKind>>`, `DraftRegistry::discard(id, cx)`, `DraftRegistry::attached(&TabKey) -> Option<DraftId>`; the close-tab dialog `CloseWithDraft { KeepDraft, Discard, Cancel }`; `fn target_label(&TargetState) -> &'static str` with the design's labels; `DraftComparisonView`, which Task 11's Inspect reuses.
+- Restore opens the tab with `Workspace::open_item(ItemLocator::Identified { kind, id }.in_repository(&repo), cx)`; it never builds an `OpenTarget` itself (design ruling R25).
 - The banner's "Review in Drafts" and the section's Export… and Discard… are added in Tasks 10 and 11.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -791,29 +806,39 @@ pub(crate) fn base_after_save(submitted: &DraftFields, read: Result<&ItemDto, Re
     changed since this draft began"; Compare expands the comparison, which
     names the changed field as "The item now" only.
   - `target_label` gives a distinct text for every `TargetState`.
-  - Close: Keep draft releases the claim and the draft is listed again;
-    Discard deletes only that draft; Cancel keeps the tab; Save is disabled.
-    With `drafts/` read-only, Keep leaves the tab open with the failure.
+  - Close: the tab's Close button and `secondary-w` each open the dialog
+    for a tab with a draft attached, and close a tab without one at once,
+    as D1 does. Keep draft releases the claim and the draft is listed
+    again; Discard deletes only that draft; Cancel keeps the tab; Save is
+    disabled. With `drafts/` read-only, Keep leaves the tab open with the
+    failure.
   - Removal: removing the repository through Settings closes its tabs,
     keeps the draft, and the dialog shows "Drafts of this repository's
-    items stay in Drafts."
+    items stay in Drafts." A repository that leaves the list (unregistered
+    by a child process, then the list reloaded) releases its sessions the
+    same way.
 - [ ] **Step 2: Run them to see them fail.**
   `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::item`
-  and `… desktop::view::tabs`, `… desktop::view::settings`.
+  and `… desktop::view::tabs`, `… desktop::view::settings`,
+  `… desktop::view::draft_comparison`.
 - [ ] **Step 3: Implement** per the design's Tabs section.
-- [ ] **Step 4: Run them to see them pass.**
+- [ ] **Step 4: Run them to see them pass**, and D1's workspace and
+  keyboard tests, `… desktop::view::workspace` and
+  `… desktop::view::keyboard`.
 - [ ] **Step 5: Check and lint** as Task 5.
 - [ ] **Step 6: Commit** `feat: show, restore and keep drafts in their tabs`.
 
 ## Task 9: Flush On Quit
 
 **Files:**
-- Modify: `src/desktop/view/quit.rs`, `src/desktop/view/workspace*.rs`; tests in `src/desktop/view/quit_tests.rs` or the workspace tests D1 uses for quitting
+- Modify: `src/desktop/view/quit.rs` (`QuitPhase::SavingDrafts`, its status text and Quit now), `src/desktop/view/workspace/lifecycle.rs` (`request_quit`'s new first phase, and the dialog)
+- Tests: `src/desktop/view/workspace_tests.rs`, beside D1's quit tests (`quit_with_no_job_quits`, `quitting_with_a_held_job_waits_for_it`, `quit_now_quits_while_the_job_is_held`)
 
 **Interfaces:**
 - Consumes: Task 6 `flush_all`.
 - Produces: `QuitPhase::SavingDrafts` before D1's phases; dialog
-  `DraftsNotSaved { count }` with Quit anyway and Cancel.
+  `DraftsNotSaved { count }` with Quit anyway and Cancel. Every `match` on
+  `QuitPhase` in `lifecycle.rs` and `quit.rs` handles the new phase.
 
 - [ ] **Step 1: Write the failing tests.** With a session dirty and a
   `DraftWrite` gate held, `secondary-q` shows "Saving drafts for recovery"
@@ -824,10 +849,12 @@ pub(crate) fn base_after_save(submitted: &DraftFields, read: Result<&ItemDto, Re
   request takes the same path. With no dirty session, D1's quit tests pass
   unchanged.
 - [ ] **Step 2: Run them to see them fail.**
-  `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::quit`
-  (or the workspace module holding D1's quit tests, as found after the split).
+  `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::workspace`.
 - [ ] **Step 3: Implement** per the design's Quit section.
-- [ ] **Step 4: Run them to see them pass**, and D1's quit tests.
+- [ ] **Step 4: Run them to see them pass** (the same filter holds D1's
+  quit tests), and `… desktop::view::passphrase` and
+  `… desktop::view::confirm`, whose quit tests cover an open prompt and an
+  open dialog.
 - [ ] **Step 5: Check and lint** as Task 5.
 - [ ] **Step 6: Commit** `feat: save drafts for recovery before quitting`.
 
@@ -846,17 +873,57 @@ whether Part C proceeds as planned.
 ## Task 10: The Drafts Page
 
 **Files:**
-- Create: `src/desktop/view/drafts.rs`, `src/desktop/view/drafts_tests.rs`
-- Modify: `src/desktop/keys.rs`, `src/desktop/view/workspace*.rs`, `src/desktop/view/operations.rs`, `src/desktop/model/drafts.rs`
+- Create: `src/desktop/view/drafts.rs` (the `DraftsPage` entity: shown state, rows, composition), `src/desktop/view/drafts_tests.rs`
+- Modify: `src/desktop/model/drafts.rs` and tests (`DraftRow`, `RowState`, `RowActions`, `row_actions`)
+- Modify: `src/desktop/view/workspace.rs` (`ContentArea` gains `drafts: Entity<DraftsPage>`, made in `Workspace::new`), `src/desktop/view/workspace/content.rs` (`ContentPage::Drafts`, `open_drafts`, each Settings entry point hiding the page, `show_tabs` hiding both, the Drafts arms of `focus_content`, `content_body` and `close_shown_tab`), `src/desktop/view/workspace/render.rs` (the `OpenDrafts` handler, wrapped in `unless_dialog` as D1's are), `src/desktop/keys.rs` (`OpenDrafts` and its binding)
+- Modify: `src/desktop/model/operations.rs`, `src/desktop/view/operations.rs` (the Recovered drafts entry; Review calls `open_drafts`), `src/desktop/view/item/draft.rs` (the banner's Review in Drafts)
 
 **Interfaces:**
-- Consumes: Tasks 4–8.
-- Produces: action `OpenDrafts` bound to `secondary-shift-d`;
-  `DraftsPage` entity shown in the content region in place of the tabs;
-  `DraftRow { id, kind_label, title, repository, flushed_at, state: RowState, actions: RowActions }`;
-  the operation area's "Recovered drafts: N" entry with Review and Dismiss.
+- Consumes: Tasks 4–8; `Read<T>` from `model/read_state.rs`; `TicketName` from `model/names.rs`.
+- Produces:
 
-- [ ] **Step 1: Write the failing tests**, each over a real fixture made as
+```rust
+// keys.rs: a documented `OpenDrafts` in the existing action list, and
+// KeyBinding::new("secondary-shift-d", OpenDrafts, None)
+// model/drafts.rs, as the design's Drafts Page section defines them
+pub(crate) struct DraftRow { id, kind_label, title, repository, flushed_at, state: RowState, actions: RowActions }
+pub(crate) enum RowState { Readable { held: Held, target: Read<TargetState> }, Unreadable(UnreadableReason) }
+pub(crate) struct RowActions { restore: bool, show: bool, inspect: bool, discard: bool, retry: bool }
+pub(crate) fn row_actions(state: &RowState, restore: Option<Restore>) -> RowActions;
+// view/drafts.rs
+pub(crate) struct DraftsPage { /* shown, rows, row focus, per-row read stamps */ }
+impl DraftsPage {
+    pub(crate) fn is_shown(&self) -> bool;
+    pub(crate) fn show(&mut self, focus: Option<DraftId>, window: &mut Window, cx: &mut Context<Self>);
+    pub(crate) fn hide(&mut self, cx: &mut Context<Self>);
+    pub(crate) fn first_focus(&self) -> Option<FocusHandle>;
+}
+// view/workspace/content.rs
+impl Workspace {
+    pub(in crate::desktop::view) fn open_drafts(&mut self, focus: Option<DraftId>, window: &mut Window, cx: &mut Context<Self>);
+}
+```
+
+- The operation area's "Recovered drafts: N" entry has Review and Dismiss.
+- The selector and transitions follow the design's Routing paragraph
+  (ruling R23); no other file reads or changes the page's shown state.
+- A kind label "Comment on <item title>" and every item title outside a
+  draft's own row use `TicketName { slug: None, title }.title_or(id)`
+  (ruling R25).
+
+- [ ] **Step 1: Write the failing model tests.** `row_actions` over every
+  `RowState`: `Readable` with `Held::No` and each `Ready` target follows
+  the design's restore policy table; `Held::Here` gives Show, Inspect and
+  Discard, never Restore; `Held::Elsewhere` gives Inspect only, with no
+  Discard; `Loading` gives Inspect and Discard only; `Unreadable` gives
+  Discard only; Retry exactly for `ReadFailed`.
+- [ ] **Step 2: Write the failing routing tests.** `secondary-shift-d`
+  shows the page and focuses its first control. `secondary-,` (Open
+  Settings) from the page, then Back to tabs, shows the tabs, not the
+  page. With a passphrase typed on the Keys page, `secondary-shift-d`
+  empties it, as leaving Keys for the tabs does. `secondary-w` while the
+  page is shown closes no tab. Tab stepping from the page shows the tabs.
+- [ ] **Step 3: Write the failing page tests**, each over a real fixture made as
   in Task 4's targets tests: one row per state (`Current`, `Changed`,
   `AlreadySaved`, `Unverified`, `TicketClosed`, `ItemNotFound`,
   `Nonconforming`, `RepositoryUnavailable`, `ReadFailed` through a held
@@ -870,23 +937,30 @@ whether Part C proceeds as planned.
   "Review in Drafts", which opens the page with that draft's row focused. A row's held `Item` read never
   lands after the listing reloads. A newer-format file is byte-identical
   after the page has listed it and the app has restarted. Launch restores
-  nothing.
-- [ ] **Step 2: Run them to see them fail.**
-  `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::drafts`.
-- [ ] **Step 3: Implement** per the design's Drafts Page and Operation
-  Area sections.
-- [ ] **Step 4: Run them to see them pass**, and
-  `… desktop::view::operations`, `… desktop::view::workspace`.
-- [ ] **Step 5: Check and lint** as Task 5.
-- [ ] **Step 6: Commit** `feat: list kept drafts with their state`.
+  nothing. An operation entry naming a draft's item shows the item's
+  title as read, or its ID when the read failed, never the draft's title.
+- [ ] **Step 4: Run them to see them fail.**
+  `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::drafts`
+  and `… desktop::model::drafts`.
+- [ ] **Step 5: Implement** per the design's Drafts Page (with its Routing
+  paragraph) and Operation Area sections. Show lives in `view/drafts.rs`
+  and calls `Workspace::show_tab`; Restore, Export and Discard arrive in
+  Task 11.
+- [ ] **Step 6: Run them to see them pass**, and
+  `… desktop::view::operations`, `… desktop::view::workspace`,
+  `… desktop::view::settings` (Keys' passphrase and Settings' Back to
+  tabs) and `… desktop::view::keyboard`.
+- [ ] **Step 7: Check and lint** as Task 5.
+- [ ] **Step 8: Commit** `feat: list kept drafts with their state`.
 
 ## Task 11: Inspect, Restore, Export And Discard From The Page
 
 **Files:**
-- Modify: `src/desktop/view/drafts.rs` and tests, the restored-draft section of the item view (Task 8) and its tests
+- Create: `src/desktop/view/drafts/inspect.rs` (the Inspect panel), `src/desktop/view/drafts/actions.rs` (Restore, Export…, Export raw… and Discard…, shared with the tab)
+- Modify: `src/desktop/view/drafts.rs` (declare the children, wire the row buttons) and `drafts_tests.rs`; `src/desktop/view/item/draft.rs` (the restored-draft section's Export… and Discard…) and `src/desktop/view/item_tests.rs`
 
 **Interfaces:**
-- Consumes: Tasks 4, 8, 10; `cx.prompt_for_new_path`; Task 8's `DraftComparisonView`.
+- Consumes: Tasks 4, 8, 10; `cx.prompt_for_new_path`; Task 8's `DraftComparisonView`; `Workspace::open_item` with `ItemLocator::in_repository` for Restore (ruling R25).
 - Produces: the Inspect panel; `export_to(path, bytes) -> Result<(), DraftErrorKind>`
   (temporary file in the target folder, then rename); the Discard dialog.
   Export… and Discard… on page rows and in the tab's restored-draft
@@ -897,7 +971,8 @@ whether Part C proceeds as planned.
     as text; Escape closes it and focus returns to Inspect.
   - The tab's Export… and Discard… behave as the page's; Discard… from the
     tab ends the session and the section disappears.
-  - Restore from the page opens the item's tab with the draft attached.
+  - Restore from the page hides the page and opens the item's tab with the
+    draft attached.
   - Export: `simulate_new_path_selection` to a temporary path writes
     `markdown(draft)`; an unreadable row exports its raw bytes; exporting
     over an existing file into a read-only folder (Unix) shows the failure
@@ -908,7 +983,9 @@ whether Part C proceeds as planned.
   - Open elsewhere: a child process holds the claim (as Task 3's claims
     test); the row reads "Open in another Manyhands window" and offers
     Inspect and Export only.
-- [ ] **Step 2: Run them to see them fail**, as Task 10.
+- [ ] **Step 2: Run them to see them fail.**
+  `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands desktop::view::drafts`
+  and `… desktop::view::item`.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them to see them pass.**
 - [ ] **Step 5: Check and lint** as Task 5.
@@ -976,3 +1053,9 @@ merging, closing and cleanup each need their own authorization.
   `TargetState`, `restore_policy`, `save_verdict` and `base_after_save` are
   named the same in every task that uses them.
 - **Review Focus.** Each of the five lines has its test in the owning task.
+- **Structure remap (2026-10-21).** Tasks 5–12 were remapped onto the
+  Structure split at `d7962c3` against its handoff map and the source:
+  every desktop path in the File Map and in each task's Files exists on
+  this branch, except the files D2 creates. `RowState` and `RowActions`,
+  named but undefined before, are now defined (design ruling R24). The
+  former Step 0 of Task 5 is done by this revision.
