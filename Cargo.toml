@@ -8,7 +8,8 @@ autobins = false
 
 [features]
 default = []
-desktop = ["dep:gpui-kit"]
+desktop = ["dep:gpui-kit", "dep:futures"]
+desktop-test-support = ["desktop", "gpui-kit?/test-support"]
 editor-probe = ["desktop", "dep:zorite-editor"]
 
 [dependencies]
@@ -16,6 +17,7 @@ blake3 = "1"
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
 directories = "5"
 fs4 = "0.13"
+futures = { version = "0.3", optional = true }
 git2 = "0.20"
 gpui-kit = { version = "0.6", optional = true }
 libc = "0.2"
