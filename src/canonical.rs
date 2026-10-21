@@ -117,12 +117,292 @@ pub struct Ticket {
     pub unknown: Mapping,
 }
 
+/// The optional ticket front matter keys that relate one ticket to others
+/// and give it a short code. They are not fields of `Ticket`: they stay in
+/// `Ticket::unknown`, and `ticket_relationships` reads them from there. The
+/// serializer keeps their values as it keeps any key it does not define,
+/// except that it writes a `deps` with no problem sorted, and leaves out a
+/// `deps` or `parent` that is null and a `deps` that is empty.
+pub const RELATIONSHIP_KEYS: [&str; 3] = ["slug", "parent", "deps"];
+
+/// Why a relationship value was ignored.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelationshipProblemCode {
+    /// `deps` is not a sequence, or a `deps` entry or `parent` is not a
+    /// string.
+    WrongType,
+    /// A `deps` entry or `parent` is a string that is not an item ID.
+    InvalidId,
+    /// A `deps` entry or `parent` names the ticket itself.
+    SelfReference,
+    /// A `deps` entry repeats an earlier one.
+    DuplicateDependency,
+    /// `slug` is not a string that follows the short code grammar.
+    InvalidSlug,
+}
+
+impl RelationshipProblemCode {
+    pub const ALL: [Self; 5] = [
+        Self::WrongType,
+        Self::InvalidId,
+        Self::SelfReference,
+        Self::DuplicateDependency,
+        Self::InvalidSlug,
+    ];
+}
+
+/// One ignored relationship value. `detail` is the item ID the problem is
+/// about, when the value was one; it is never text taken from the file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RelationshipProblem {
+    pub code: RelationshipProblemCode,
+    pub detail: Option<ItemId>,
+}
+
+/// A ticket's `slug`, `parent` and `deps`, as far as they are valid.
+///
+/// `deps` is in the file's order, each ID once. A value that is not valid
+/// is left out of its field and listed in `problems`, in the order slug,
+/// parent, then each `deps` entry; none of them makes the ticket
+/// nonconforming. Whether a target exists, and whether it is a ticket,
+/// cannot be known from one file and is not checked here.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TicketRelationships {
+    pub slug: Option<String>,
+    pub parent: Option<ItemId>,
+    pub deps: Vec<ItemId>,
+    pub problems: Vec<RelationshipProblem>,
+}
+
+/// Reads the relationship keys from `ticket.unknown`, which is left as it
+/// is.
+///
+/// A key whose value is YAML null is read as an absent key. A short code
+/// written with uppercase letters is read in lowercase; the file keeps its
+/// own spelling.
+///
+/// A short code must be a YAML string. One a plain scalar would read as
+/// another type has to be quoted when it is written: `1e-12345` unquoted is
+/// a number, and is reported as an invalid slug.
+pub fn ticket_relationships(ticket: &Ticket) -> TicketRelationships {
+    let mut view = TicketRelationships::default();
+    let mut ignore = |code, detail| view.problems.push(RelationshipProblem { code, detail });
+    let value = |key: &str| ticket.unknown.get(key).filter(|value| !value.is_null());
+
+    let slug = value("slug").and_then(|value| {
+        let slug = value.as_str().and_then(normalized_slug);
+        if slug.is_none() {
+            ignore(RelationshipProblemCode::InvalidSlug, None);
+        }
+        slug
+    });
+    let parent = value("parent").and_then(|value| match relationship_target(&ticket.id, value) {
+        Ok(parent) => Some(parent),
+        Err((code, detail)) => {
+            ignore(code, detail);
+            None
+        }
+    });
+    let mut deps = Vec::new();
+    match value("deps") {
+        None => {}
+        Some(Value::Sequence(entries)) => {
+            for entry in entries {
+                match relationship_target(&ticket.id, entry) {
+                    Ok(dependency) if deps.contains(&dependency) => ignore(
+                        RelationshipProblemCode::DuplicateDependency,
+                        Some(dependency),
+                    ),
+                    Ok(dependency) => deps.push(dependency),
+                    Err((code, detail)) => ignore(code, detail),
+                }
+            }
+        }
+        Some(_) => ignore(RelationshipProblemCode::WrongType, None),
+    }
+
+    view.slug = slug;
+    view.parent = parent;
+    view.deps = deps;
+    view
+}
+
+/// The other ticket a `parent` value or a `deps` entry names, or why it
+/// names none.
+fn relationship_target(
+    ticket: &ItemId,
+    value: &Value,
+) -> Result<ItemId, (RelationshipProblemCode, Option<ItemId>)> {
+    let text = value
+        .as_str()
+        .ok_or((RelationshipProblemCode::WrongType, None))?;
+    let target: ItemId = text
+        .parse()
+        .map_err(|_| (RelationshipProblemCode::InvalidId, None))?;
+    if target == *ticket {
+        return Err((RelationshipProblemCode::SelfReference, Some(target)));
+    }
+    Ok(target)
+}
+
+/// Whether `value` is a short code: an optional prefix of one to eight
+/// lowercase letters or digits, initials of two or three, and a code of
+/// five to eight lowercase Crockford Base32 characters, joined by hyphens.
+///
+/// Only the lowercase spelling is one: it is how a short code is stored
+/// and displayed. `normalized_slug` gives it for a code written in any
+/// case.
+pub fn is_valid_slug(value: &str) -> bool {
+    const CROCKFORD_BASE32_LOWERCASE: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    let alphanumeric = |part: &str, lengths: std::ops::RangeInclusive<usize>| {
+        lengths.contains(&part.len())
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    };
+    let parts: Vec<&str> = value.split('-').collect();
+    let (prefix, initials, code) = match parts.as_slice() {
+        [initials, code] => (None, initials, code),
+        [prefix, initials, code] => (Some(prefix), initials, code),
+        _ => return false,
+    };
+    prefix.is_none_or(|prefix| alphanumeric(prefix, 1..=8))
+        && alphanumeric(initials, 2..=3)
+        && (5..=8).contains(&code.len())
+        && code
+            .bytes()
+            .all(|byte| CROCKFORD_BASE32_LOWERCASE.contains(&byte))
+}
+
+/// `value` in lowercase when that is a short code, so that a code is
+/// matched without regard to the case it was written in. Only ASCII
+/// letters change case; everything else about the grammar is as strict as
+/// `is_valid_slug`.
+pub fn normalized_slug(value: &str) -> Option<String> {
+    let slug = value.to_ascii_lowercase();
+    is_valid_slug(&slug).then_some(slug)
+}
+
+/// The key in `RepositoryConfig::unknown` that holds the short code prefix.
+pub const SLUG_PREFIX_KEY: &str = "ticket_slug_prefix";
+/// The key in `RepositoryConfig::unknown` that holds the code length.
+pub const SLUG_CODE_LENGTH_KEY: &str = "ticket_slug_code_length";
+/// The code length when the configuration sets none.
+pub const DEFAULT_SLUG_CODE_LENGTH: usize = 5;
+
+/// Why the repository's short code settings cannot be used.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SlugSettingsProblem {
+    /// `ticket_slug_prefix` is not a string of one to eight lowercase
+    /// letters or digits.
+    InvalidPrefix,
+    /// `ticket_slug_code_length` is not an integer from 5 to 8.
+    InvalidCodeLength,
+}
+
+/// Why a text is not usable as initials.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InitialsProblem {
+    /// Not two or three ASCII letters or digits.
+    Invalid,
+}
+
+/// The short code for a ticket: the leading `length * 5` bits of the BLAKE3
+/// hash of the ULID's 26 ASCII characters, most significant bit first, five
+/// bits per character, in the lowercase Crockford alphabet. A longer code
+/// begins with every shorter one. `length` is meant to be 5 to 8, as
+/// `slug_settings` returns it; the hash supplies at most 51 characters.
+pub fn short_code(ulid_text: &str, length: usize) -> String {
+    const ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    let hash = blake3::hash(ulid_text.as_bytes());
+    let bytes = hash.as_bytes();
+    (0..length.min(bytes.len() * 8 / 5))
+        .map(|index| {
+            let first = index * 5;
+            // Five bits starting at bit `first`, which span at most two bytes.
+            let window = u16::from(bytes[first / 8]) << 8
+                | bytes.get(first / 8 + 1).copied().map_or(0, u16::from);
+            let value = (window >> (11 - first % 8)) & 0x1f;
+            char::from(ALPHABET[usize::from(value)])
+        })
+        .collect()
+}
+
+/// Initials from a name: the first character of the first and of the last
+/// whitespace-separated word, or the first two characters of a one-word
+/// name, lowercased. `None` when that is not two ASCII letters or digits;
+/// nothing is transliterated.
+pub fn derive_initials(name: &str) -> Option<String> {
+    let mut words = name.split_whitespace();
+    let first = words.next()?;
+    let candidate: String = match words.next_back() {
+        Some(last) => [first.chars().next()?, last.chars().next()?]
+            .into_iter()
+            .collect(),
+        None => first.chars().take(2).collect(),
+    };
+    normalize_initials(&candidate).ok()
+}
+
+/// `text` lowercased when it is two or three ASCII letters or digits.
+pub fn normalize_initials(text: &str) -> Result<String, InitialsProblem> {
+    let valid =
+        (2..=3).contains(&text.len()) && text.bytes().all(|byte| byte.is_ascii_alphanumeric());
+    if valid {
+        Ok(text.to_ascii_lowercase())
+    } else {
+        Err(InitialsProblem::Invalid)
+    }
+}
+
+/// The short code prefix and code length a repository configures. An absent
+/// prefix is `None` and an absent length is 5. The values live in the
+/// configuration's unknown keys, so a bad one does not stop the
+/// configuration from parsing; it is reported here, when a slug is composed.
+pub fn slug_settings(
+    config: &RepositoryConfig,
+) -> Result<(Option<String>, usize), SlugSettingsProblem> {
+    let prefix = match config.unknown.get(SLUG_PREFIX_KEY) {
+        None => None,
+        Some(toml::Value::String(prefix))
+            if (1..=8).contains(&prefix.len())
+                && prefix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()) =>
+        {
+            Some(prefix.clone())
+        }
+        Some(_) => return Err(SlugSettingsProblem::InvalidPrefix),
+    };
+    let length = match config.unknown.get(SLUG_CODE_LENGTH_KEY) {
+        None => DEFAULT_SLUG_CODE_LENGTH,
+        Some(toml::Value::Integer(length @ 5..=8)) => *length as usize,
+        Some(_) => return Err(SlugSettingsProblem::InvalidCodeLength),
+    };
+    Ok((prefix, length))
+}
+
+/// Joins the parts of a short code with hyphens. The parts are expected to
+/// be valid already; `is_valid_slug` is the check.
+pub fn compose_slug(prefix: Option<&str>, initials: &str, code: &str) -> String {
+    match prefix {
+        Some(prefix) => format!("{prefix}-{initials}-{code}"),
+        None => format!("{initials}-{code}"),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: ItemId,
     pub item_id: ItemId,
     pub parent_id: Option<ItemId>,
     pub created_at: OffsetDateTime,
+    /// The identity that created the comment, as `Name <email>`. Set when
+    /// the comment is created and never rewritten; `None` when the file
+    /// names nobody.
+    pub created_by: Option<String>,
     pub body: String,
     pub unknown: Mapping,
 }
@@ -220,6 +500,7 @@ pub fn parse_item(path: &Path, source: &str) -> Result<CanonicalItem, Validation
             item_id: required_item_id(path, &mut values, "item_id")?,
             parent_id: optional_item_id(path, &mut values, "parent_id")?,
             created_at: required_time(path, &mut values, "created_at")?,
+            created_by: comment_author(&mut values),
             body: body.to_owned(),
             unknown: values,
         }),
@@ -231,6 +512,18 @@ pub fn parse_item(path: &Path, source: &str) -> Result<CanonicalItem, Validation
     };
     validate_item_path(path, &canonical_path, &item)?;
     Ok(item)
+}
+
+/// The front matter of `source` as a mapping, read without asking that the
+/// file be a conforming item: what a repair reads of a file that is not
+/// one. `None` when there is no front matter between its delimiters, or
+/// what is there is not a YAML mapping. No field is validated.
+pub(crate) fn front_matter(source: &str) -> Option<Mapping> {
+    let (front_matter, _) = split_front_matter(Path::new(""), source).ok()?;
+    serde_yaml::from_str::<Value>(front_matter)
+        .ok()?
+        .as_mapping()
+        .cloned()
 }
 
 pub fn validate_context(sources: impl IntoIterator<Item = (PathBuf, String)>) -> ValidatedContext {
@@ -554,6 +847,19 @@ fn classify_canonical_path(path: &Path) -> Result<CanonicalPath, ValidationProbl
     }
 }
 
+/// The kind of item a repository-relative path can hold, by the path alone:
+/// `docs/**/*.md`, `.manyhands/tickets/<id>/ticket.md` or
+/// `.manyhands/comments/<item id>/<id>.md`. Any other path, and any path
+/// that is absolute, empty or has a `.`, `..` or empty component, is
+/// `InvalidPath`. Nothing is read.
+pub fn item_path_kind(path: &Path) -> Result<ItemKind, ValidationProblem> {
+    Ok(match classify_canonical_path(path)? {
+        CanonicalPath::Document => ItemKind::Document,
+        CanonicalPath::Ticket(_) => ItemKind::Ticket,
+        CanonicalPath::Comment { .. } => ItemKind::Comment,
+    })
+}
+
 fn has_invalid_raw_path_segments(path: &str) -> bool {
     path.split('/')
         .any(|segment| segment.is_empty() || matches!(segment, "." | ".."))
@@ -625,6 +931,7 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
                 ));
             }
             let mut values = ticket.unknown.clone();
+            canonicalize_relationships(&ticket.id, &mut values);
             insert_known(&mut values, "id", ticket.id.to_string());
             insert_known(&mut values, "title", ticket.title.clone());
             insert_known(&mut values, "type", ticket.ticket_type.clone());
@@ -639,6 +946,7 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
             (values, &ticket.body)
         }
         CanonicalItem::Comment(comment) => {
+            validate_optional_text(&comment.created_by, "created_by")?;
             let mut values = comment.unknown.clone();
             insert_known(&mut values, "id", comment.id.to_string());
             insert_known(&mut values, "item_id", comment.item_id.to_string());
@@ -647,6 +955,10 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
                 insert_known(&mut values, "parent_id", parent_id.to_string());
             }
             insert_known(&mut values, "created_at", format_time(comment.created_at)?);
+            // A value that names nobody is in the unknown keys and stays there.
+            if let Some(created_by) = &comment.created_by {
+                insert_known(&mut values, "created_by", created_by.clone());
+            }
             (values, &comment.body)
         }
     };
@@ -666,6 +978,49 @@ pub fn serialize_item(item: &CanonicalItem) -> Result<String, ValidationProblem>
     })?;
     let yaml = yaml.strip_prefix("---\n").unwrap_or(&yaml);
     Ok(format!("---\n{yaml}---\n{body}"))
+}
+
+/// Puts a ticket's `deps` and `parent` in the form they are written in,
+/// where `ticket_relationships` reports no problem for them: `deps` sorted
+/// by ID text, and a key that holds no relationship, a null or an empty
+/// list, left out. A `deps` with a problem, a repeated entry included, is
+/// left as it was read, and so is `slug` in every case. The keys that stay
+/// keep their places.
+fn canonicalize_relationships(ticket: &ItemId, values: &mut Mapping) {
+    if values.get("parent").is_some_and(Value::is_null) {
+        values.shift_remove("parent");
+    }
+    let dependencies = match values.get("deps") {
+        Some(Value::Null) => Some(Vec::new()),
+        Some(Value::Sequence(entries)) => {
+            let mut dependencies = Vec::with_capacity(entries.len());
+            for entry in entries {
+                match relationship_target(ticket, entry) {
+                    Ok(dependency) if !dependencies.contains(&dependency) => {
+                        dependencies.push(dependency);
+                    }
+                    _ => return,
+                }
+            }
+            Some(dependencies)
+        }
+        _ => None,
+    };
+    let Some(dependencies) = dependencies else {
+        return;
+    };
+    if dependencies.is_empty() {
+        values.shift_remove("deps");
+        return;
+    }
+    let mut dependencies: Vec<String> = dependencies.iter().map(ItemId::to_string).collect();
+    dependencies.sort();
+    // Inserting over a key keeps its place.
+    insert_known(
+        values,
+        "deps",
+        Value::Sequence(dependencies.into_iter().map(Value::String).collect()),
+    );
 }
 
 fn split_front_matter<'a>(
@@ -765,6 +1120,20 @@ fn optional_item_string(
     })?;
     validate_item_text(path, value, name)?;
     Ok(Some(value.to_owned()))
+}
+
+/// Takes a comment's `created_by` when it is what `closed_by` may be, a
+/// non-empty string with no NUL. Any other value names nobody: it is left
+/// among the unknown keys, and the comment is conforming all the same.
+fn comment_author(values: &mut Mapping) -> Option<String> {
+    match values.get("created_by") {
+        Some(Value::String(author)) if !author.is_empty() && !author.contains('\0') => {
+            remove_known(values, "created_by")?
+                .as_str()
+                .map(str::to_owned)
+        }
+        _ => None,
+    }
 }
 
 fn required_item_id(

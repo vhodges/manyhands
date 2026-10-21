@@ -1,0 +1,51 @@
+{
+  "code": "ok",
+  "command": "repo inspect",
+  "data": {
+    "configuration": {
+      "primary_branch": "main",
+      "problems": [],
+      "publication_remote": null,
+      "state": "valid"
+    },
+    "head_branch": "main",
+    "identity_state": "available",
+    "local_branches": [
+      "main"
+    ],
+    "registered": true,
+    "remotes": [
+      {
+        "fetch_location": "ssh://git@example.invalid/team/repo.git",
+        "name": "origin",
+        "publication_eligible": true,
+        "push_location": "ssh://git@example.invalid/team/repo.git",
+        "selected_for_publication": false
+      }
+    ],
+    "root": "<repository>",
+    "selected_path": "<repository>"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

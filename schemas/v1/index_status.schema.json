@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 index status",
+  "description": "When state is unavailable the index cannot be read: the counts are null and both arrays are empty.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "state",
+    "refreshed_at",
+    "context_count",
+    "item_count",
+    "problem_count",
+    "problems",
+    "pending_operations"
+  ],
+  "properties": {
+    "state": {
+      "type": "string",
+      "enum": ["current", "stale", "never_refreshed", "unavailable"]
+    },
+    "refreshed_at": {
+      "type": ["string", "null"]
+    },
+    "context_count": {
+      "type": ["integer", "null"]
+    },
+    "item_count": {
+      "type": ["integer", "null"]
+    },
+    "problem_count": {
+      "type": ["integer", "null"]
+    },
+    "problems": {
+      "type": "array",
+      "items": {
+        "$ref": "index_problem.schema.json"
+      }
+    },
+    "pending_operations": {
+      "type": "array",
+      "items": {
+        "$ref": "operation.schema.json"
+      }
+    }
+  }
+}

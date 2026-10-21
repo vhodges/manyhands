@@ -26,7 +26,7 @@ pub(in super::super) fn configured_remote_endpoint(
         .map_err(|_| SshTransportErrorKind::ConfigurationInvalid)?;
     let configured_url = match direction {
         SshDirection::Fetch => fetch_url,
-        SshDirection::Push => {
+        SshDirection::Push | SshDirection::Delete => {
             let push_key = format!("remote.{remote_name}.pushurl");
             match config.get_string(&push_key) {
                 Ok(push_url) => push_url,
@@ -41,7 +41,9 @@ pub(in super::super) fn configured_remote_endpoint(
         .map_err(|_| SshTransportErrorKind::ConfigurationInvalid)?;
     let effective_url = match direction {
         SshDirection::Fetch => effective.url(),
-        SshDirection::Push => effective.pushurl().or_else(|| effective.url()),
+        SshDirection::Push | SshDirection::Delete => {
+            effective.pushurl().or_else(|| effective.url())
+        }
     }
     .ok_or(SshTransportErrorKind::ConfigurationInvalid)?;
     let effective = parse_ssh_endpoint(effective_url)?;

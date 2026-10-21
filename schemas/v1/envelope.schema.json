@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 result envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "command",
+    "request_id",
+    "operation_id",
+    "outcome",
+    "code",
+    "message",
+    "scope",
+    "effects",
+    "data",
+    "recovery"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "command": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": ["string", "null"]
+    },
+    "operation_id": {
+      "type": ["string", "null"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "noop", "partial", "blocked", "cancelled", "error"]
+    },
+    "code": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "invalid_path",
+        "not_repository",
+        "not_repository_root",
+        "bare_repository",
+        "repository_not_registered",
+        "repository_not_enabled",
+        "repository_inaccessible",
+        "invalid_id",
+        "item_not_found",
+        "path_not_found",
+        "key_not_found",
+        "public_key_unavailable",
+        "authority_not_found",
+        "operation_not_found",
+        "relationship_cycle",
+        "invalid_relationship",
+        "index_unavailable",
+        "busy",
+        "internal_error",
+        "invalid_input",
+        "usage_error",
+        "command_unavailable",
+        "request_mismatch",
+        "request_not_found",
+        "confirmation_mismatch",
+        "not_confirmable",
+        "slug_already_assigned",
+        "occupied_path",
+        "not_repairable",
+        "remote_name_conflict",
+        "invalid_remote",
+        "key_not_deletable",
+        "confirmation_required",
+        "confirmation_expired",
+        "confirmation_not_found",
+        "confirmation_used",
+        "external_change",
+        "recovery_required",
+        "original_request_required",
+        "identity_required",
+        "initials_required",
+        "invalid_slug_configuration",
+        "identity_ambiguous",
+        "ticket_closed",
+        "wrong_branch",
+        "worktree_not_clean",
+        "worktree_conflicted",
+        "invalid_configuration",
+        "publication_remote_required",
+        "publication_remote_in_use",
+        "merge_required",
+        "remote_branch_deleted",
+        "push_rejected",
+        "no_selected_key",
+        "key_unavailable",
+        "key_rejected",
+        "selected_key_in_use",
+        "unlock_required",
+        "unlock_failed",
+        "host_approval_required",
+        "host_replacement_required",
+        "host_mismatch",
+        "discovery_pending",
+        "registration_pending",
+        "poll_yielding",
+        "remote_unavailable",
+        "transport_unavailable",
+        "cancelled",
+        "already_applied"
+      ]
+    },
+    "message": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "$ref": "effects.schema.json"
+    },
+    "data": {
+      "type": ["object", "null"]
+    },
+    "recovery": {
+      "type": "array",
+      "items": {
+        "$ref": "recovery_action.schema.json"
+      }
+    }
+  }
+}

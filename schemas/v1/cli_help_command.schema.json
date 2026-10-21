@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 CLI help command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["command", "available", "delivered_by", "summary", "repository", "options"],
+  "properties": {
+    "command": {"type": "string"},
+    "available": {"type": "boolean"},
+    "delivered_by": {"type": "string"},
+    "summary": {"type": "string"},
+    "repository": {
+      "type": ["string", "null"],
+      "enum": ["required", "refused", null]
+    },
+    "options": {
+      "type": "array",
+      "items": {"$ref": "cli_help_option.schema.json"}
+    }
+  }
+}

@@ -51,6 +51,10 @@ fn main() {
         ("other_auth_denied", other_auth_denied),
         ("host_rotation_and_rejection", host_rotation_and_rejection),
         ("push_round_trip", push_round_trip),
+        ("context_delete_receipt", context_delete_receipt),
+        ("context_delete_rejection", context_delete_rejection),
+        ("context_delete_receive_race", context_delete_receive_race),
+        ("context_delete_proof_guards", context_delete_proof_guards),
         ("restricted_commands", restricted_commands),
         ("helper_eof_exit", helper_eof_exit),
         ("startup_failure", startup_failure),
@@ -315,6 +319,83 @@ fn push_round_trip() -> Result<(), FixtureError> {
         fixture.accepted_keys(),
         vec![fixture.allowed_client_public_key()]
     );
+    Ok(())
+}
+fn raw_context_delete(fixture: &SshRemoteFixture) -> Result<bool, FixtureError> {
+    let root = fixed(tempfile::tempdir())?;
+    let repo = fixed(git2::Repository::init(root.path()))?;
+    let mut remote = fixed(repo.remote_anonymous(&fixture.url()))?;
+    let rejected = std::cell::Cell::new(false);
+    let mut cb = callbacks(fixture.client_key_path(), None);
+    cb.push_update_reference(|_, status| {
+        rejected.set(status.is_some());
+        Ok(())
+    });
+    let mut options = git2::PushOptions::new();
+    options.remote_callbacks(cb);
+    fixed(remote.push(
+        &[&format!(
+            ":{}",
+            ssh_remote::ObservationRef::RemoteDocument.name()
+        )],
+        Some(&mut options),
+    ))?;
+    fixture.wait_for_helper_audits()?;
+    Ok(rejected.get())
+}
+fn context_delete_receipt() -> Result<(), FixtureError> {
+    let fixture = SshRemoteFixture::start()?;
+    fixture.set_observation_ref(ssh_remote::ObservationRef::RemoteDocument, true)?;
+    assert!(!raw_context_delete(&fixture)?);
+    let updates = fixture.receive_updates();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].old_oid, fixture.commit_id());
+    assert_eq!(updates[0].new_oid, git2::Oid::zero());
+    assert!(updates[0].accepted);
+    Ok(())
+}
+fn context_delete_proof_guards() -> Result<(), FixtureError> {
+    let fixture = SshRemoteFixture::start()?;
+    ssh_remote::deletion_effect_proof(fixture.repository_path(), fixture.commit_id())
+}
+fn context_delete_rejection() -> Result<(), FixtureError> {
+    let fixture = SshRemoteFixture::start()?;
+    fixture.set_observation_ref(ssh_remote::ObservationRef::RemoteDocument, true)?;
+    fixture.reject_context_deletion(true)?;
+    assert!(raw_context_delete(&fixture)?);
+    let updates = fixture.receive_updates();
+    assert_eq!(updates.len(), 1);
+    assert!(!updates[0].accepted);
+    let repo = fixed(git2::Repository::open_bare(fixture.repository_path()))?;
+    assert_eq!(
+        fixed(repo.refname_to_id(ssh_remote::ObservationRef::RemoteDocument.name()))?,
+        fixture.commit_id()
+    );
+    Ok(())
+}
+fn context_delete_receive_race() -> Result<(), FixtureError> {
+    let fixture = SshRemoteFixture::start()?;
+    let reference = ssh_remote::ObservationRef::RemoteDocument;
+    fixture.set_observation_ref(reference, true)?;
+    let repo = fixed(git2::Repository::open_bare(fixture.repository_path()))?;
+    let parent = fixed(repo.find_commit(fixture.commit_id()))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let competing = fixed(repo.commit(
+        None,
+        &signature,
+        &signature,
+        "competing",
+        &fixed(parent.tree())?,
+        &[&parent],
+    ))?;
+    fixture.race_context_update(reference, fixture.commit_id(), competing)?;
+    assert!(raw_context_delete(&fixture)?);
+    assert_eq!(fixed(repo.refname_to_id(reference.name()))?, competing);
+    let updates = fixture.receive_updates();
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].old_oid, fixture.commit_id());
+    assert_eq!(updates[0].new_oid, git2::Oid::zero());
+    assert!(!updates[0].accepted);
     Ok(())
 }
 fn push_to_fixture(fixture: &SshRemoteFixture) -> Result<(), FixtureError> {

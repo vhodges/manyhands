@@ -1,0 +1,46 @@
+[
+  {
+    "command": "ticket create",
+    "effects": {
+      "checkpoint": "not_requested",
+      "cleanup": "not_requested",
+      "commit_oid": null,
+      "discovery": "not_requested",
+      "integration": "not_requested",
+      "publication": "not_requested",
+      "write": "not_requested"
+    },
+    "operation_id": "<operation>",
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+    "scope": {
+      "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FCN",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FCN"
+    },
+    "stage": "accepted"
+  },
+  {
+    "command": "ticket create",
+    "effects": {
+      "checkpoint": "not_requested",
+      "cleanup": "not_requested",
+      "commit_oid": null,
+      "discovery": "not_requested",
+      "integration": "not_requested",
+      "publication": "not_requested",
+      "write": "not_requested"
+    },
+    "operation_id": "<operation>",
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+    "scope": {
+      "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FCN",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FCN"
+    },
+    "stage": "writing"
+  }
+]

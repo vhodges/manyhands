@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket dependency",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "state"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "state": {
+      "type": "string",
+      "enum": ["open", "closed", "unresolved"]
+    }
+  }
+}
