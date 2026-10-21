@@ -1949,6 +1949,279 @@ fn an_enablement_made_by_another_is_not_reported_as_the_request_s() {
 }
 
 // ---------------------------------------------------------------------
+// A repository enabled in Git and not registered in this data directory
+// ---------------------------------------------------------------------
+
+/// A repository enabled through another data directory: its
+/// configuration is committed, and this directory's registry does not
+/// hold it. The first desk is the one it was enabled through.
+fn enabled_elsewhere() -> (Desk, Plain) {
+    let elsewhere = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = elsewhere.preview(&plain.enable());
+    assert_enabled(
+        &elsewhere.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+    (elsewhere, plain)
+}
+
+/// A success that registered the repository and indexed it, and wrote
+/// and committed nothing.
+fn assert_registered_only(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.code, ResultCode::Ok, "{}", envelope.message);
+    assert_eq!(envelope.outcome, Outcome::Success);
+    assert_eq!(envelope.effects.write, WriteEffect::Unchanged);
+    assert_eq!(envelope.effects.checkpoint, CheckpointEffect::Unchanged);
+    assert_eq!(envelope.effects.discovery, DiscoveryEffect::Current);
+    assert_eq!(envelope.effects.commit_oid, None);
+    assert_eq!(envelope.data, None);
+    assert!(envelope.recovery.is_empty());
+}
+
+fn registrations(desk: &Desk) -> i64 {
+    desk.count("SELECT COUNT(*) FROM repositories")
+}
+
+/// What Git reports of the worktree and index at `root`, path by path.
+fn git_status(root: &Path) -> Vec<(String, git2::Status)> {
+    let repository = git2::Repository::open(root).unwrap();
+    let mut options = git2::StatusOptions::new();
+    options.include_untracked(true).include_ignored(true);
+    repository
+        .statuses(Some(&mut options))
+        .unwrap()
+        .iter()
+        .map(|entry| (entry.path().unwrap().to_owned(), entry.status()))
+        .collect()
+}
+
+/// Every reference at `root`, and what it points at.
+fn git_refs(root: &Path) -> BTreeMap<String, Option<git2::Oid>> {
+    let repository = git2::Repository::open(root).unwrap();
+    let references = repository.references().unwrap();
+    references
+        .map(|reference| {
+            let reference = reference.unwrap();
+            (reference.name().unwrap().to_owned(), reference.target())
+        })
+        .collect()
+}
+
+#[test]
+fn repo_enable_registers_a_repository_enabled_elsewhere_and_commits_nothing() {
+    let (_elsewhere, plain) = enabled_elsewhere();
+    let desk = Desk::new();
+    assert!(!desk.registered(&plain.root));
+    let head = plain.head();
+    let configuration = fs::read(plain.root.join(canonical::CONFIG_PATH)).unwrap();
+    let status = git_status(&plain.root);
+    let refs = git_refs(&plain.root);
+    let before = desk.surroundings(&plain.root);
+
+    let (confirmation, preview) = desk.preview(&plain.enable());
+
+    // The preview writes nothing, to Git or to the registry: every file
+    // under the root, `.git` with it, is as it was.
+    assert_eq!(desk.surroundings(&plain.root), before);
+    assert_eq!(git_status(&plain.root), status);
+    assert_eq!(git_refs(&plain.root), refs);
+    assert!(!desk.registered(&plain.root));
+    assert_eq!(desk.request_rows(), 0);
+    assert_eq!(
+        effects(&preview),
+        [
+            PreviewEffect::WorktreeExclusionWritten,
+            PreviewEffect::RepositoryRegistered,
+        ]
+    );
+    let details = repository_preview(&preview);
+    assert_eq!(details.root, plain.root.to_str().unwrap());
+    assert_eq!(details.primary_branch, "main");
+    // Nothing is committed and no identity is written.
+    assert!(!details.identity.written_locally);
+
+    let registered = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_registered_only(&registered);
+    assert!(desk.registered(&plain.root));
+    assert_eq!(registrations(&desk), 1);
+    assert_eq!(plain.head(), head);
+    assert_eq!(plain.initializations(), 1);
+    assert_eq!(
+        fs::read(plain.root.join(canonical::CONFIG_PATH)).unwrap(),
+        configuration
+    );
+    assert_eq!(git_status(&plain.root), status);
+    assert_eq!(git_refs(&plain.root), refs);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+    assert_eq!(desk.pending_journal_rows(), 0);
+
+    // The same request is answered from its record, whatever it presents.
+    desk.clock.set(START + 86_400);
+    assert_eq!(
+        desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        registered
+    );
+    assert_eq!(
+        execute_with(&desk.service, REQUEST_1, plain.enable()),
+        registered
+    );
+
+    // Now it is registered here: another enablement is a no-op.
+    let noop = desk.prepare(&plain.enable());
+    assert_eq!(noop.code, ResultCode::AlreadyApplied);
+    assert_eq!(noop.outcome, Outcome::Noop);
+    assert_eq!(registrations(&desk), 1);
+    assert_eq!(plain.initializations(), 1);
+}
+
+/// A repository enabled in Git whose configuration names a publication
+/// remote this clone does not have: the domain refuses to register it,
+/// and so does its preview, before anything is written or confirmed.
+#[test]
+fn a_registration_whose_publication_remote_is_missing_is_refused_at_its_preview() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    support::commit_tracked_configuration(
+        &plain.fixture,
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"missing\"\n",
+    );
+    let before = desk.surroundings(&plain.root);
+
+    let refused = desk.prepare(&plain.enable());
+
+    assert_eq!(
+        refused.code,
+        ResultCode::InvalidRemote,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.data, None);
+    assert_eq!(desk.confirmation_rows(), 0);
+    assert!(!desk.registered(&plain.root));
+    assert_eq!(desk.surroundings(&plain.root), before);
+    // The domain refuses it the same way.
+    let error = desk
+        .service
+        .enable(support::enable_request(&plain.root))
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        manyhands::repository::RepositoryErrorKind::UnavailablePublicationRemote
+    );
+    assert!(!desk.registered(&plain.root));
+}
+
+/// A repository enabled and registered here whose configuration comes to
+/// name a publication remote this clone does not have. The domain
+/// refuses it before it asks whether the root is registered, and so
+/// does the preview: it is no no-op.
+#[test]
+fn a_registered_repository_whose_publication_remote_is_missing_is_refused_at_its_preview() {
+    let desk = Desk::new();
+    let plain = Plain::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    assert_enabled(
+        &desk.execute(REQUEST_1, &confirmation, plain.enable()),
+        &plain.root,
+    );
+    support::commit_tracked_configuration(
+        &plain.fixture,
+        "format_version = 1\nprimary_branch = \"main\"\npublication_remote = \"missing\"\n",
+    );
+    assert!(desk.registered(&plain.root));
+    let before = desk.surroundings(&plain.root);
+
+    let refused = desk.prepare(&plain.enable());
+
+    assert_eq!(
+        refused.code,
+        ResultCode::InvalidRemote,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.data, None);
+    assert_eq!(desk.confirmation_rows(), 1, "only the first preview's");
+    assert_eq!(desk.surroundings(&plain.root), before);
+    let error = desk
+        .service
+        .enable(support::enable_request(&plain.root))
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        manyhands::repository::RepositoryErrorKind::UnavailablePublicationRemote
+    );
+    assert_eq!(registrations(&desk), 1);
+}
+
+/// The answer of a registration is lost before it is stored. The same
+/// request, sent again, is given the registration as its own.
+#[test]
+fn a_lost_answer_of_a_registration_is_given_again() {
+    let (_elsewhere, plain) = enabled_elsewhere();
+    let mut desk = Desk::new();
+    let (confirmation, _) = desk.preview(&plain.enable());
+    desk.fail_once_at(FailurePoint::BeforeRequestSettlement);
+    let lost = desk.execute(REQUEST_1, &confirmation, plain.enable());
+    assert_eq!(lost.code, ResultCode::InternalError);
+    assert!(desk.registered(&plain.root));
+
+    desk.reopen();
+    let again = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+    assert_registered_only(&again);
+    assert_eq!(registrations(&desk), 1);
+    assert_eq!(plain.initializations(), 1);
+    assert_eq!(
+        desk.record(REQUEST_1).map(|record| record.state),
+        Some(RequestState::Finished)
+    );
+}
+
+/// Another actor registers the repository in this data directory after
+/// the preview: before the request is sent, or after it is accepted and
+/// before its operation looks. The request never registers it twice.
+#[test]
+fn a_registration_made_by_another_is_not_made_again() {
+    for after_acceptance in [false, true] {
+        let (_elsewhere, plain) = enabled_elsewhere();
+        let desk = Desk::new();
+        let (confirmation, _) = desk.preview(&plain.enable());
+        let root = plain.root.clone();
+        let data = desk.data.path().to_owned();
+        let register = move || {
+            let other = RepositoryService::open_at(&data).unwrap();
+            other.enable(support::enable_request(&root)).unwrap();
+        };
+        if after_acceptance {
+            desk.service.set_request_hook_for_testing(register);
+        } else {
+            register();
+        }
+
+        let answered = desk.execute(REQUEST_1, &confirmation, plain.enable());
+
+        if after_acceptance {
+            assert_eq!(answered.code, ResultCode::AlreadyApplied);
+            assert_eq!(answered.outcome, Outcome::Noop);
+        } else {
+            // What was previewed is not what is there.
+            assert_eq!(answered.code, ResultCode::ExternalChange);
+            desk.assert_nothing_left(REQUEST_1);
+        }
+        assert_eq!(answered.effects.commit_oid, None);
+        assert!(!answered.effects.is_durable());
+        assert!(desk.registered(&plain.root));
+        assert_eq!(registrations(&desk), 1, "{after_acceptance}");
+        assert_eq!(plain.initializations(), 1);
+    }
+}
+
+// ---------------------------------------------------------------------
 // What a retry still compares once its operation has begun
 // ---------------------------------------------------------------------
 

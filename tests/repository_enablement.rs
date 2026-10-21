@@ -1381,6 +1381,36 @@ fn registration_retries_existing_configuration_without_another_commit_or_row() {
     assert!(registry_row(data.path(), &canonical_root).is_some());
 }
 
+/// A repository enabled through one data directory is enabled through a
+/// second: the second registers it and indexes it, and commits nothing.
+#[test]
+fn enabling_a_repository_enabled_elsewhere_registers_and_indexes_it() {
+    let first = tempfile::tempdir().unwrap();
+    let second = tempfile::tempdir().unwrap();
+    let fixture = support::born_repository();
+    let enabled = RepositoryService::open_at(first.path())
+        .unwrap()
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    assert!(matches!(enabled, EnableRepositoryOutcome::Enabled { .. }));
+    let head = support::head_commit(&fixture.repository);
+    let service = RepositoryService::open_at(second.path()).unwrap();
+    let root = std::fs::canonicalize(&fixture.root).unwrap();
+    assert_eq!(registry_row(second.path(), &root), None);
+
+    let outcome = service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+
+    assert_eq!(outcome, EnableRepositoryOutcome::AlreadyEnabled);
+    assert_eq!(support::head_commit(&fixture.repository), head);
+    let row = registry_row(second.path(), &root).expect("registered");
+    assert_eq!(registry_row_count(second.path()), 1);
+    assert_eq!(row.0, "accessible");
+    // Indexed: nothing is left for a refresh to do.
+    assert_eq!(row.2, 0);
+}
+
 #[test]
 fn registration_reconciliation_preserves_the_original_enabled_timestamp() {
     let data = tempfile::tempdir().unwrap();
