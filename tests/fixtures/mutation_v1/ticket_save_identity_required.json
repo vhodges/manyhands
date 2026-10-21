@@ -1,0 +1,41 @@
+{
+  "code": "identity_required",
+  "command": "ticket save",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
+    "rejected": [],
+    "slug": null,
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "A name and an email are required.",
+  "operation_id": "<operation>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.identity_set",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

@@ -51,7 +51,11 @@ abbreviations are never mutation selectors. Nonconforming resources without a
 valid ID are inspected/repaired by exact path plus observation token. Short IDs
 remain separate research; no lossy alias is introduced by this RFC.
 
-`--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
+Amended 2026-10-18 by C1: reads take their inputs as flags; `--input`,
+`--request-id`, `--prepare` and `--confirm` are mutation-only and are refused
+by C1 reads. `--non-interactive` is accepted but has no effect in C1.
+
+Mutation `--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
 `-` consumes stdin once. Mutations do not accept bodies/passphrases in command
 arguments and do not launch an implicit `$EDITOR`. A caller can edit files
 with its own tools, then submit them. Unknown input fields and invalid enum
@@ -59,20 +63,36 @@ values are rejected to catch mistakes. Missing and explicit `null` differ:
 missing optional update fields leave values unchanged; `null` clears only a
 documented nullable field. Empty strings do not mean clear.
 
+Amended 2026-10-18 by C1: `MANYHANDS_DATA_DIR` is an advanced/testing override
+for the application data directory. Unset uses the platform default; a nonempty
+absolute path is used directly, and a relative path resolves against the
+invocation directory. An empty value is `invalid_path`, exit 2. Opening services
+may create/migrate this directory; help, version, usage errors and unavailable
+commands do not open it or initialize the Git transport.
+
 ## Command taxonomy
 
-`--repo` is required except for `repo list`, `key` commands, `host list`,
+`--repo` is required except for `repo list`, `key` commands, `host list`, `host inspect`,
 `id new` and help/version operations. `--id` selects an item,
 `--key-id` selects a key, and `--operation-id` selects an operation; their names
 are not interchangeable. Every verb has human and JSON output. Each row lists command-specific inputs;
 IDs, request IDs, observation and consent rules below apply where relevant.
+
+Amended 2026-10-18 by C1: `host inspect --authority <host[:port]>` reads
+application-global pins and refuses `--repo`; bracketed IPv6 is accepted and
+the port defaults to 22. `folder list` joins the reads. `document show` and
+`ticket show` require exactly one of `--id` or repository-relative `--path`;
+only `--path` accepts an optional `--context` worktree path. `path observe`
+and `ticket check` move to C3. F2's `request show`, `request cancel` and
+`host observe` join C2, and `operation abandon` joins C4. These later verbs
+are cataloged as planned; their delivering Cycles publish their input rules.
 
 | Commands | Inputs and behavior |
 | --- | --- |
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
 | `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
 | `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
-| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. |
+| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. |
 | `repo identity` | Inspect effective name/email and source. |
 | `repo identity-set` | Input `name`, `email`; explicitly writes repository-local Git config, never global config. Confirmation required. |
 | `remote list` | Names, redacted locations and publication selection; never echo embedded credentials. |
@@ -85,26 +105,72 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `key select`, `key clear` | Explicit shared selection or clearing; never changes Git commit identity. |
 | `key remove`, `key delete` | Unregister only, or separately delete owned generated files. Delete requires exact effect confirmation and cleared selection. Imported deletion is rejected. |
 | `key public` | Return public-key text/fingerprint if available; never private contents. |
-| `host list`, `host inspect` | Non-secret pins; inspect input `authority`; `--repo` identifies the relevant repository for an observation. |
+| `host list`, `host inspect` | Non-secret application-global pins; inspect takes `--authority`, never `--repo`. No network observation. |
+| `host observe` | Planned for C2: F2's configured-host observation for the approval flow. |
 | `host approve`, `host replace` | Input exact authority and presented fingerprint; replacement also requires old fingerprint. Explicit confirmation and transport re-observation required. |
-| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. |
+| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. |
+| `folder list` | List indexed document folders under `docs/`; no scan or refresh. |
 | `folder create` | Input repository-relative `path` under `docs/`; local empty folder until content is added. |
 | `document create` | Input `item_id`, repository-relative `path`, `title`, `body`. Explicit IDs support safe automation retries. |
 | `document save` | Input `observation`, optional `title`, `body`; preserve unknown metadata. No implicit publication. |
 | `document move` | Input source `observation`, `destination_path`, `destination_observation`; preserve ID and checkpoint both paths. |
 | `document repair`, `ticket repair` | Input exact `path`, `observation`, corrected complete `source`; preview and explicit confirmation. Validate identity/schema and use an owned authoring context, never patch primary as a shortcut. |
-| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. |
+| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. Show takes `--id` or `--path` with optional `--context`. |
+| `path observe`, `ticket check` | Planned for C3: observations and relationship validation for repair/authoring flows. |
 | `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Closure metadata cannot be supplied; free-form status may be `closed` without making the ticket lifecycle-closed. |
 | `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Project status does not control closure; `ticket close` owns `closed_at`/`closed_by`. Reopening is outside MVP. |
-| `comment list` | `--id` selects the parent item; return ordered roots/replies with parent IDs and visible malformed entries. |
+| `comment list` | `--id` selects the parent item; return one flat, ordered list of roots and replies with parent IDs and depth, then visible malformed entries. Replies are not nested. |
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`. One checkpoint then immediate configured sync; no-remote means local pending. |
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization. Unsaved caller files are not implicitly submitted. |
 | `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
 | `index status`, `index refresh`, `index rebuild` | Inspect cache freshness, or local scan/rebuild. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
-| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. Resume never infers permission for a different target/action. |
+| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. |
+| `operation abandon` | Planned for C4: F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. |
+| `request show`, `request cancel` | Planned for C2: inspect or cancel through F2's request boundary. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
+
+### Registration removal targeting
+
+Amended 2026-10-19 by defect ticket `01M4R19P943QZKHHKRXV2D2TP2`. This is the
+library mutation contract that CLI C2 will expose; the executable verb remains
+planned until that Cycle delivers it.
+
+`repo remove` selects a registration before requiring a live Git repository.
+When the root is missing or its directory no longer contains `.git`, callers
+use the exact stored absolute root returned by `repo list` or a prior preview.
+This includes the stored Windows canonical prefix. Live relative paths and
+resolvable aliases retain normal canonicalization; a missing alias's former
+target is not guessed. An interior directory or linked worktree does not select
+its owner's registration for removal. Unknown missing paths retain
+`invalid_path`; permissions, broken Git indirection and corrupt metadata are
+errors, not evidence that a repository is absent.
+
+The same explicit confirmation is required for an unmounted and a deleted
+root. The preview identifies the stored root and registration time and lists
+registration, index, operation-record and remote-state removal. Repository
+files, Git state, recoverable drafts, shared keys and host trust are preserved.
+Cached accessibility from `repo list` is not used to authorize removal.
+
+A matching persisted request can replay after both the directory and the
+registration have gone. An accepted request whose removal completed but whose
+result was lost reconciles to `already_applied`; its own pending removal can
+retry under the same operation ID. Command, scope, target and digest checks
+still reject reuse of an ID for another request. Fresh execution compares the
+previewed registration again under the deletion guard. Registration stamps
+retain their existing ID/time semantics, including the separately documented
+same-second replacement limitation in the
+[implementation plan](../plans/2026-10-19-missing-repository-registration-removal-implementation.md).
+
+The registry-only path preserves unrelated unfinished local/remote operations,
+promotion/closure recovery and accepted requests. It returns `recovery_required`
+for those blockers, or the existing retryable busy result while an active poll
+is asked to yield. It never implicitly abandons that work. A live repository
+continues to require its Git lease. A root or lease replacement detected while
+acquiring guards produces a retryable busy result.
+
+### List ordering
 
 List ordering is deterministic: repositories by normalized root, documents by
 relative path then ID, tickets by latest content-change time descending then ID,
@@ -121,6 +187,14 @@ explicit adoption effect in the confirmation preview. Existing valid IDs remain
 unchanged. A document folder target resolves in the selected item's context
 when organizing an existing item, or in the documentation tree for an empty
 folder; creation never implies publication or a placeholder-file commit.
+
+The [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#cli)
+extends this taxonomy, as amended on 2026-10-07. It adds `ticket ready`,
+`ticket blocked`, `ticket deps`, `ticket children`, `ticket cycles`,
+`ticket plan`, `ticket critical-path`, `ticket find` and
+`ticket slug-assign`, and optional relationship, initials and prefix inputs
+on existing ticket, identity and repository verbs. `--id` still takes only a
+canonical ULID; a short code is a search key and is rejected as an item ID.
 
 ## Observations, request identity and retries
 
@@ -191,6 +265,22 @@ process termination/broken output streams may prevent a final object; clients
 must use their request ID to inspect recovery. Human mode is readable prose
 plus stable IDs and actionable next steps; its layout is not a parsing API.
 
+Amended 2026-10-18 by C1: human successes write results to stdout; stale,
+never-refreshed or incomplete-list notes go to stderr. Human failures write
+their message, code and recovery actions to stderr, leaving stdout empty.
+JSON always writes one compact envelope and newline to stdout, with empty
+stderr. An output write/flush failure, including a broken pipe, exits 1
+without a panic or further diagnostic.
+
+Amended 2026-10-18 by C1: JSON help and version are success envelopes named
+`cli help` and `cli version`, with empty scope and no requested effects.
+Help data lists commands, availability, delivering Cycle, summary, repository
+rule and options; planned commands have null repository and empty options.
+Version data contains `name` and package `version`; `schema_version` remains
+in the envelope. Usage errors name the recognized two-word command, or
+`cli usage` when no catalog command can be named. The bare invocation is root
+help and exits zero.
+
 All envelope fields below are required; nullable fields use JSON null. Version 1
 uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 
@@ -216,17 +306,38 @@ uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 (`not_requested`, `complete`, `pending`), and nullable string `commit_oid`.
 It describes the operation including effects observed from an earlier attempt.
 
+A recovery `action` is a dotted name from a closed, published registry. An
+action carries exactly its registered argument keys, or none when the result
+names no repository. Reads use `index.rebuild`, `index.refresh` and
+`repo.inspect`, each with the argument `root`. Mutation commands add theirs,
+such as `operation.resume`, with the Cycle that delivers them.
+
 Item DTOs include ID, kind, repository-relative path, required and optional
 canonical metadata, unknown metadata, body, observation, context/provenance,
 conformity problems and content-change timestamp. `show` additionally includes
 complete canonical `source`; list omits bodies/source. Malformed entries use
 nullable IDs/metadata plus exact path and problem code. Comment DTOs include
-ID, item ID, parent ID, author, created timestamp, body and conformity problems.
-List `data` is `{ "items": [...], "complete": true }`; it is never an unversioned
-top-level array. Read operations intentionally return requested source; mutation
+ID, item ID, parent ID, depth, author, created timestamp, body and conformity
+problems. List `data` is an object with `items` and a boolean `complete`, as in
+`{ "items": [...], "complete": true }`; it is never an unversioned top-level
+array. `complete` is false when a directory holding the listed kind could not
+be fully read, so entries may be missing. Lists read from the index also carry
+its state. Read operations intentionally return requested source; mutation
 outcomes, errors, polling logs and progress do not echo it.
 
-Other DTOs expose the table's named non-secret fields, plus problem codes.
+`comment list` returns one flat list; replies are not nested (product owner,
+2026-10-08). `items` is the depth-first flattening of the threads: each root
+comment in `created_at` then ID order, immediately followed by its replies in
+the same order, each followed by its own; then nonconforming entries in path
+order. `depth` is 0 for a root comment and for a nonconforming entry. For
+every entry `parent_id` is null exactly when `depth` is 0; otherwise it is the
+`id` of the nearest earlier entry one level up. The consumer builds and renders
+the tree. A nested chain's JSON depth would exceed default parser limits, and
+changing the shape after the CLI ships would be breaking.
+
+Other DTOs expose the table's named non-secret fields, plus problem codes. An
+operation's failure code comes from its own closed registry, separate from the
+envelope's result codes.
 Command-specific JSON Schemas and golden fixtures MUST be published alongside
 the CLI implementation before its Cycle can exit; they must follow this
 envelope and specify required/nullable fields for every command. This RFC does
@@ -268,13 +379,34 @@ Example: a comment checkpoint succeeded but configured publication failed:
 }
 ```
 
-Envelope breaking changes require a new schema version. Additive object fields
-are allowed; consumers ignore unknown fields. Outcome/effect enum changes and
-command input meaning changes are breaking. Recovery codes are extensible:
-clients handle an unknown code through outcome and exit class, retaining the
-structured result rather than retrying blindly.
+The version 1 JSON Schemas are closed: every object they define sets
+`additionalProperties: false` and requires all of its properties, except the
+free-form objects (the envelope's `data`, `unknown_metadata` and a recovery
+action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
+
+- A schema describes exactly what the build that ships it produces.
+- Adding a field, an enumeration value or a result or problem code is a
+  non-breaking change made in place within version 1. The envelope's outcome
+  and effect values are the exception: a client decides what happened from
+  them, so any change to those two sets is breaking.
+- Consumers MUST ignore fields they do not know and MUST tolerate codes and
+  enumeration values they do not know. A client handles an unknown code
+  through outcome and exit class, retaining the structured result rather than
+  retrying blindly.
+- Output from a newer build is therefore not guaranteed to validate against an
+  older build's schema. Validate output only against the schemas of the build
+  that produced it.
+- Removing, renaming or retyping a field, or changing the meaning of an
+  existing value, requires a new schema version. So does changing the outcome
+  or effect values, or the meaning of a command input.
 
 ## Exit statuses and partial completion
+
+Amended 2026-10-18 by C1: `usage_error` covers unknown commands/options,
+missing or conflicting inputs and malformed option values. An approved verb
+delivered by a later Cycle returns `command_unavailable`; human stderr names
+that Cycle. Both are input failures (exit 2), with empty scope, null data,
+no recovery actions and their fixed code messages in JSON.
 
 | Exit | Meaning |
 | --- | --- |
@@ -326,7 +458,10 @@ rollback. Platform-native stop handling follows the runtime RFC.
 
 ## Alternatives, risks and required evidence
 
-Structured file/stdin input is selected over large flag sets or an implicit
+Amended 2026-10-18 by C1: the structured-input rationale below applies to
+mutations; read inputs are flags.
+
+Structured file/stdin mutation input is selected over large flag sets or an implicit
 editor because it preserves multiline input and explicit concurrency tokens.
 One final JSON object is selected over streaming all commands because callers
 can inspect a single authoritative outcome.

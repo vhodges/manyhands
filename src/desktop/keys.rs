@@ -1,0 +1,98 @@
+//! Actions and key bindings, defined once here (design, Layout And
+//! Keyboard). `secondary` is Ctrl on Linux and Windows, Cmd on macOS.
+
+use gpui_kit::{App, KeyBinding};
+
+gpui_kit::actions!(
+    manyhands,
+    [
+        /// Focus the next region.
+        NextRegion,
+        /// Focus the previous region.
+        PreviousRegion,
+        /// Focus the repository selector.
+        FocusRepositories,
+        /// Focus the documents and tickets navigation.
+        FocusNavigation,
+        /// Focus the content: the open tabs.
+        FocusContent,
+        /// Focus the operation area.
+        FocusOperations,
+        /// Find an item by short code or ID.
+        Find,
+        /// Show the next tab.
+        NextTab,
+        /// Show the previous tab.
+        PreviousTab,
+        /// Close the active tab.
+        CloseTab,
+        /// Refresh the selected repository's index.
+        Refresh,
+        /// Rebuild the selected repository's index.
+        Rebuild,
+        /// Open the settings.
+        OpenSettings,
+        /// Quit, once the running job has returned.
+        Quit,
+        /// Quit at once, without waiting for the running job.
+        QuitNow,
+        /// Open the selected row of the document tree. The ticket list is
+        /// the Kit's, whose own `enter` binding opens its row.
+        OpenSelected,
+        /// Scroll the content region up by a page.
+        ScrollPageUp,
+        /// Scroll the content region down by a page.
+        ScrollPageDown,
+        /// Scroll the content region to its top.
+        ScrollToTop,
+        /// Scroll the content region to its bottom.
+        ScrollToBottom,
+    ]
+);
+
+/// The key context of the document tree's wrapper, where `enter` opens
+/// the selected row.
+pub(crate) const DOCUMENTS_CONTEXT: &str = "Documents";
+
+/// The key context of the content region, where PageUp, PageDown, Home
+/// and End scroll it. A focused control that binds them itself, such as
+/// a text field, takes them first.
+pub(crate) const CONTENT_CONTEXT: &str = "Content";
+
+/// The key context of the Why blocked panel, where PageUp, PageDown, Home
+/// and End scroll it.
+pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
+
+/// Binds the desktop's keys. Quit now has no key: it is the focused
+/// Quit now button while quitting waits.
+pub(crate) fn bind(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("f6", NextRegion, None),
+        KeyBinding::new("shift-f6", PreviousRegion, None),
+        KeyBinding::new("secondary-1", FocusRepositories, None),
+        KeyBinding::new("secondary-2", FocusNavigation, None),
+        KeyBinding::new("secondary-3", FocusContent, None),
+        KeyBinding::new("secondary-4", FocusOperations, None),
+        KeyBinding::new("secondary-p", Find, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
+        KeyBinding::new("secondary-w", CloseTab, None),
+        KeyBinding::new("secondary-r", Refresh, None),
+        KeyBinding::new("secondary-shift-r", Rebuild, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
+        KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("home", ScrollToTop, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("end", ScrollToBottom, Some(CONTENT_CONTEXT)),
+        KeyBinding::new("pageup", ScrollPageUp, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("home", ScrollToTop, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("end", ScrollToBottom, Some(WHY_BLOCKED_CONTEXT)),
+    ]);
+}
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "keys_tests.rs"]
+mod tests;
