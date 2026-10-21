@@ -37,7 +37,6 @@ use gpui_kit::{
 };
 use manyhands::repository::keys::SecretPassphrase;
 
-use super::workspace::{QuitPhase, Workspace};
 use crate::desktop::services::prompts::{PromptReply, PromptRequest};
 
 pub(crate) const TITLE: &str = "Unlock key";
@@ -130,7 +129,7 @@ impl PassphraseDialog {
     }
 
     /// Whether its prompt is still unanswered.
-    fn waiting(&self) -> bool {
+    pub(super) fn waiting(&self) -> bool {
         self.prompt.is_some()
     }
 
@@ -279,64 +278,6 @@ impl Render for PassphraseDialog {
                     .child(button("passphrase-ok", UNLOCK, true, unlock))
                     .child(button("passphrase-cancel", CANCEL, false, cancel)),
             )
-    }
-}
-
-impl Workspace {
-    /// Shows the prompt the running job asks, if one waits and no prompt
-    /// is open. One worker asks one thing at a time, so a prompt waits
-    /// only while the dialog of the last one is still being answered;
-    /// once it is, the next is shown. Once quitting has begun, a prompt
-    /// is answered `Unavailable` at once.
-    pub(super) fn show_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let open = self
-            .passphrase
-            .as_ref()
-            .and_then(WeakEntity::upgrade)
-            .is_some_and(|dialog| dialog.read(cx).waiting());
-        if open {
-            return;
-        }
-        let Some(prompt) = self
-            .services
-            .operations()
-            .update(cx, |operations, _| operations.take_prompt())
-        else {
-            return;
-        };
-        if self.quit != QuitPhase::Running {
-            prompt.answer(PromptReply::Unavailable);
-            return;
-        }
-        self.passphrase = Some(open_dialog(prompt, window, cx));
-        cx.notify();
-    }
-
-    /// Quitting, or the window closing: the open prompt, and one waiting
-    /// to be shown, are answered `Unavailable`, and the dialog closes.
-    pub(super) fn prompt_unavailable(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.passphrase.take().and_then(|dialog| dialog.upgrade()) {
-            dialog.update(cx, |dialog, cx| dialog.unavailable(window, cx));
-        }
-        self.prompt_waiting_unavailable(cx);
-    }
-
-    /// Quitting at once: as `prompt_unavailable`, with no window.
-    pub(super) fn prompt_unavailable_now(&mut self, cx: &mut Context<Self>) {
-        if let Some(dialog) = self.passphrase.take().and_then(|dialog| dialog.upgrade()) {
-            dialog.update(cx, |dialog, cx| dialog.unavailable_now(cx));
-        }
-        self.prompt_waiting_unavailable(cx);
-    }
-
-    fn prompt_waiting_unavailable(&mut self, cx: &mut Context<Self>) {
-        let waiting = self
-            .services
-            .operations()
-            .update(cx, |operations, _| operations.take_prompt());
-        if let Some(prompt) = waiting {
-            prompt.answer(PromptReply::Unavailable);
-        }
     }
 }
 

@@ -24,7 +24,8 @@ use manyhands::{
 
 use super::{
     list_state::ListState,
-    navigation::OpenTarget,
+    names::TicketName,
+    navigation::{ItemLocator, OpenTarget},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
 };
 use crate::desktop::services::ReadResult;
@@ -82,16 +83,15 @@ pub(crate) fn blocked_reasons(item: &ItemDto, by_id: &HashMap<String, ItemDto>) 
     let Some(readiness) = &item.readiness else {
         return Vec::new();
     };
-    let short = |id: &String| {
-        by_id
-            .get(id)
-            .and_then(|item| item.slug.clone())
-            .unwrap_or_else(|| id.clone())
+    let name = |id: &String| {
+        let item = by_id.get(id);
+        TicketName {
+            slug: item.and_then(|item| item.slug.as_deref()),
+            title: item.and_then(|item| item.title.as_deref()),
+        }
     };
-    let named = |id: &String| match by_id.get(id).and_then(|item| item.title.as_ref()) {
-        Some(title) => format!("{} {title}", short(id)),
-        None => short(id),
-    };
+    let short = |id: &String| name(id).short_or(id).to_owned();
+    let named = |id: &String| name(id).with_short(id);
     readiness
         .reasons
         .iter()
@@ -144,6 +144,7 @@ pub(crate) enum Lifecycle {
 /// path and its problem.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TicketRow {
+    locator: ItemLocator,
     /// `None` for a nonconforming entry.
     pub id: Option<ItemId>,
     pub slug: Option<String>,
@@ -166,6 +167,7 @@ impl TicketRow {
     pub(crate) fn from_item(item: &ItemDto) -> Self {
         let id = item.id.as_deref().and_then(|id| id.parse().ok());
         Self {
+            locator: ItemLocator::for_item(item),
             nonconforming: match id {
                 Some(_) => None,
                 None => item.problems.first().map(|problem| problem.code),
@@ -188,17 +190,13 @@ impl TicketRow {
 
     /// What activating the row opens.
     pub(crate) fn target(&self, repo: &RepoKey) -> OpenTarget {
-        match &self.id {
-            Some(id) => OpenTarget::Item {
-                repo: repo.clone(),
-                kind: manyhands::repository::ItemDtoKind::Ticket,
-                id: id.clone(),
-            },
-            None => OpenTarget::Inspect {
-                repo: repo.clone(),
-                worktree: self.worktree.clone(),
-                path: self.path.clone(),
-            },
+        self.locator.in_repository(repo)
+    }
+
+    pub(crate) fn name(&self) -> TicketName<'_> {
+        TicketName {
+            slug: self.slug.as_deref(),
+            title: self.title.as_deref(),
         }
     }
 }

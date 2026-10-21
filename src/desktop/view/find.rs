@@ -11,7 +11,7 @@
 
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    StatefulInteractiveElement, Styled, TestSupportExt,
     component::{
         ActiveTheme,
         button::{Button, ButtonVariants},
@@ -24,14 +24,11 @@ use gpui_kit::{
 use manyhands::repository::ItemDto;
 
 use super::{tickets::lifecycle_label, workspace::Workspace};
-use crate::desktop::{
-    model::{
-        find::{FindQuery, FindResult, FindState},
-        item::context_kind_label,
-        list_state::LABEL_BUSY,
-        tickets::TicketRow,
-    },
-    services::ReadKind,
+use crate::desktop::model::{
+    find::{FindResult, FindState},
+    item::context_kind_label,
+    list_state::LABEL_BUSY,
+    tickets::TicketRow,
 };
 
 pub(crate) const FIND_LABEL: &str = "Find by short code or ID";
@@ -43,95 +40,10 @@ pub(crate) const FIND_MATCHES: &str = "Tickets with this short code: choose one 
 pub(crate) const FIND_OPEN: &str = "Open";
 
 impl Workspace {
-    /// The Find input, for tests.
-    #[cfg(test)]
-    pub(crate) fn find_input(&self) -> &gpui_kit::Entity<gpui_kit::component::input::InputState> {
-        &self.find_input
-    }
-
-    /// `secondary-p`: focuses the Find input.
-    pub(super) fn focus_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.find_input
-            .update(cx, |input, cx| input.focus(window, cx));
-        cx.notify();
-    }
-
-    /// Enter in the Find input: searches the selected repository for its
-    /// text. Blank text searches nothing and clears what was found.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    pub(super) fn submit_find(&mut self, cx: &mut Context<Self>) {
-        let text = self.find_input.read(cx).value();
-        let Some(query) = FindQuery::parse(&text) else {
-            self.clear_find(cx);
-            return;
-        };
-        let Some((key, resolved)) = self.resolved_selection() else {
-            self.find.no_repository();
-            self.find_read = None;
-            cx.notify();
-            return;
-        };
-        let stamp = self.find.start(key);
-        self.find_read = Some(match query {
-            FindQuery::Id(id) => self.services.read(
-                ReadKind::Item,
-                stamp,
-                move |service| service.show_item(&resolved, &id),
-                cx,
-                |this: &mut Self, stamp, result, cx| {
-                    if let Some(target) = this.find.apply_item(stamp, result) {
-                        this.open_item(target, cx);
-                    }
-                    cx.notify();
-                },
-            ),
-            FindQuery::Slug(slug) => self.services.read(
-                ReadKind::FindSlug,
-                stamp,
-                move |service| service.find_tickets_by_slug(&resolved, &slug),
-                cx,
-                |this: &mut Self, stamp, result, cx| {
-                    if this.find.apply_matches(stamp, result) {
-                        let count = match this.find.state() {
-                            FindState::Done(FindResult::Matches(items)) => items.len(),
-                            _ => 0,
-                        };
-                        while this.find_focus.len() < count {
-                            this.find_focus.push(cx.focus_handle());
-                        }
-                        cx.notify();
-                    }
-                },
-            ),
-        });
-        cx.notify();
-    }
-
-    /// Nothing is searched: a search still running is dropped, and what
-    /// the last one found goes.
-    pub(super) fn clear_find(&mut self, cx: &mut Context<Self>) {
-        self.find.clear();
-        self.find_read = None;
-        cx.notify();
-    }
-
-    /// Open on the match at `ix`: opens it by its ID.
-    fn open_match(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let target = match self.find.state() {
-            FindState::Done(FindResult::Matches(items)) => {
-                items.get(ix).and_then(|item| self.find.target(item))
-            }
-            _ => None,
-        };
-        if let Some(target) = target {
-            self.open_item(target, cx);
-        }
-    }
-
     /// The input, where it is in text, and the matches.
     pub(super) fn find_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
-        let state = match self.find.state() {
+        let state = match self.find_state() {
             FindState::Idle => None,
             FindState::NoRepository => Some(FIND_NO_REPOSITORY),
             FindState::Searching => Some(FIND_SEARCHING),
@@ -142,7 +54,7 @@ impl Workspace {
             FindState::Failed(failure) => Some(failure.code.message()),
         };
         let mut matches = Vec::new();
-        if let FindState::Done(FindResult::Matches(items)) = self.find.state() {
+        if let FindState::Done(FindResult::Matches(items)) = self.find_state() {
             for (ix, item) in items.iter().enumerate() {
                 matches.push(self.match_row(ix, item, cx));
             }
@@ -155,7 +67,7 @@ impl Workspace {
                     .id("find-input")
                     .test_support()
                     .aria_label(FIND_LABEL)
-                    .child(Input::new(&self.find_input).aria_label(FIND_LABEL)),
+                    .child(Input::new(self.find_input()).aria_label(FIND_LABEL)),
             )
             .children(state.map(|text| {
                 div()
@@ -186,17 +98,17 @@ impl Workspace {
                 .aria_label(text.clone())
                 .child(text)
         };
-        let label = item
-            .title
-            .clone()
-            .or_else(|| item.id.clone())
-            .unwrap_or_else(|| item.path.clone());
+        let label = row
+            .name()
+            .title_or(item.id.as_deref().unwrap_or(&item.path))
+            .to_owned();
+        let slug = row.name().slug.map(str::to_owned);
         let workspace = cx.entity().downgrade();
         let mut open = div()
             .id(("find-match-open", ix))
             .test_support()
             .aria_label(FIND_OPEN);
-        if let Some(focus) = self.find_focus.get(ix) {
+        if let Some(focus) = self.find_match_focus(ix) {
             open = open.track_focus(focus);
         }
         let open = open.child(
@@ -228,7 +140,7 @@ impl Workspace {
                     .gap_2()
                     .text_xs()
                     .text_color(muted)
-                    .children(row.slug.map(|slug| cell("find-match-slug", slug)))
+                    .children(slug.map(|slug| cell("find-match-slug", slug)))
                     .children(row.ticket_type.map(|text| cell("find-match-type", text)))
                     .children(row.status.map(|text| cell("find-match-status", text)))
                     .children(row.lifecycle.map(|lifecycle| {
