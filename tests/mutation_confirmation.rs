@@ -27,6 +27,9 @@ use manyhands::{
 
 mod support;
 
+#[path = "mutation_confirmation/enablement_index.rs"]
+mod enablement_index;
+
 use support::mutation::Previewed as _;
 use support::{
     confirmation::*,
@@ -1325,22 +1328,6 @@ fn a_save_and_a_refresh_succeed_on_a_repository_whose_preview_is_outstanding() {
     desk.service
         .enable(support::enable_request(&plain.root))
         .unwrap();
-    // Enabling commits the configuration without refreshing Git's own
-    // index, and a context is not prepared while that path looks changed.
-    let mut index = plain.fixture.repository.index().unwrap();
-    index
-        .read_tree(
-            &plain
-                .fixture
-                .repository
-                .find_commit(plain.head())
-                .unwrap()
-                .tree()
-                .unwrap(),
-        )
-        .unwrap();
-    index.write().unwrap();
-
     let saved = execute_with(
         &desk.service,
         REQUEST_1,

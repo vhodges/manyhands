@@ -6545,6 +6545,8 @@ fn commit_source(fixture: &support::TestRepository, path: &str, source: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, source).unwrap();
     let mut index = fixture.repository.index().unwrap();
+    // The service writes through a separate handle and preserves index mtime.
+    index.read(true).unwrap();
     index
         .add_path(path.strip_prefix(&fixture.root).unwrap())
         .unwrap();
@@ -6574,11 +6576,14 @@ fn commit_source(fixture: &support::TestRepository, path: &str, source: &str) {
 }
 
 fn clean_configuration_index(fixture: &support::TestRepository) {
-    let mut index = fixture.repository.index().unwrap();
-    index
-        .add_path(std::path::Path::new(".manyhands/config.toml"))
-        .unwrap();
-    index.write().unwrap();
+    // Verify the enablement postcondition; do not repair it in the fixture.
+    let repository = Repository::open(&fixture.root).unwrap();
+    assert_eq!(
+        repository
+            .status_file(std::path::Path::new(".manyhands/config.toml"))
+            .unwrap(),
+        git2::Status::CURRENT,
+    );
 }
 
 #[derive(Debug, PartialEq)]
