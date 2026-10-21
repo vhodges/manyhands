@@ -19,8 +19,9 @@ existing desktop test support and Devenv. No new dependency.
 **Status:** Plan and design approved by the owner on 2026-10-21; the owner then
 explicitly authorized inline implementation in this session. The delivery split
 is also approved. Implementation and automated verification are complete;
-independent review found no actionable findings. Awaiting owner review and
-publication direction; the native interactive walkthrough remains unconfirmed.
+independent review found no actionable findings. The owner approved closure,
+local merge, publication and Structure branch/worktree cleanup on 2026-10-21.
+The native interactive walkthrough remains unconfirmed.
 See the execution ledger below for evidence and remaining lifecycle steps.
 
 ## 1. Scope, base and delivery
@@ -453,7 +454,8 @@ merge, cleanup and native CI remain subject to their applicable authorizations.
 ## 7. Execution ledger
 
 - Implementation authorized: 2026-10-21, owner answered Yes to beginning inline
-  implementation in this session. Commits/publication are not yet authorized.
+  implementation in this session. Commits/publication were authorized later,
+  at the delivery checkpoint below.
 - Task 1 complete: fetched main remained `0b23664`; ticket HEAD `8fd42e7` already
   includes it. Sibling `01M5CS4MH2` remains clean at `c116a1a`.
 - Baseline compiled and listed through the exact Task 1 command: **362 desktop
@@ -510,9 +512,28 @@ merge, cleanup and native CI remain subject to their applicable authorizations.
   SIGINT timeout. Verified no matching child remained. Native interactive
   Settings/tab/Find/focus/scroll walkthrough is not claimed; owner confirmation
   remains pending. Automated keyboard/tab/settings/scroll coverage passed.
-- Final evidence: comment `01M5FEZ8SR37B1AG8A0PME8PXJ`. The ticket remains open;
-  all implementation/planning changes are uncommitted. No push, PR, integration,
-  cleanup or native CI was performed. D2 is unblocked only once this lands on main.
+- Final verification evidence: comment `01M5FEZ8SR37B1AG8A0PME8PXJ`. At that
+  checkpoint the ticket was open and the changes uncommitted. Delivery approval
+  and the implementation checkpoint are recorded below.
+
+### Approved delivery (2026-10-21)
+
+The owner approved completion, ticket closure, commit, local merge to main,
+push to origin and removal of the Structure ticket's local/remote branches and
+worktree. The ticket is closed in the final pre-merge update.
+
+- Implementation and prior evidence committed as
+  `6c8bd121a4a00e7f5ebe2333fdd3afae46f8b517`.
+- Repeated `git merge-tree --write-tree HEAD origin/main` on that committed
+  implementation: conflict-free tree `14081599eb3e2a926afddec754678f91c521d878`.
+  Origin/main remains `0b23664`, already included. No Rust changes since testing.
+- UX follow-up `01M5F3GVDYTH1Q5V5FCS9YF7V3` committed and pushed on its own
+  branch as `64c231aeb310a162dfbaf437a626fdb5df59714c`; it remains open.
+- Close/approval comment: `01M5FF701TRWQCYNTYAE0Y1T2T`. Verify origin/main
+  contains the closure and exact tested source before removing the Structure
+  branch/worktree. D2 consumes the file map above after the merge.
+- Native CI remains separately authorized after merge. No native interactive
+  walkthrough is claimed by the bounded launch smoke.
 
 ### Task 3 test-interface exception (owner-approved, 2026-10-21)
 

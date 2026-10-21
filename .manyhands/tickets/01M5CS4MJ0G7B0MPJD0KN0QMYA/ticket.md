@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M5CS4MJ0G7B0MPJD0KN0QMYA"
 title: "Desktop follow-up: structure from the D1 reviews"
 type: "task"
-status: "open"
+status: "closed"
+closed_at: "2026-10-21T14:52:58Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 ---
@@ -78,3 +80,25 @@ boundary, ordered tasks, unchanged-behavior/test policy and D2 handoff map.
 The delivery split, design and plan are approved. The owner explicitly
 authorized inline implementation on 2026-10-21; progress is recorded in the
 plan's execution ledger and ticket comments.
+
+## Resolution and approved closure
+
+Implemented in `6c8bd121a4a00e7f5ebe2333fdd3afae46f8b517`. Shared Read,
+TicketName and ItemLocator helpers preserve existing presentation and targeting;
+Workspace state is private behind methods; tabs/Settings routing is centralized;
+Workspace, Keys and ItemPane are split by responsibility. The 362 desktop test
+names and assertions remain intact, with only the five approved accessor edits.
+
+Final build/lint gates, completed all-feature coverage across the authorized
+split runs, smoke evidence and independent review with no actionable findings
+are recorded in comment `01M5FEZ8SR37B1AG8A0PME8PXJ`. The desktop smoke proved
+bounded launch; a native interactive walkthrough was not claimed.
+
+On 2026-10-21 the owner approved completion and explicitly requested closure,
+commit, local merge to main, push to origin, deletion of this ticket's local and
+remote branches, and removal of its worktree. Approval and delivery evidence is
+in comment `01M5FF701TRWQCYNTYAE0Y1T2T`.
+
+The UX follow-up `01M5F3GVDYTH1Q5V5FCS9YF7V3` remains open and is committed
+and published separately as `64c231a`. Once this change is on main, D2 may
+consume the Structure prerequisite and remap its File Map using this plan.
