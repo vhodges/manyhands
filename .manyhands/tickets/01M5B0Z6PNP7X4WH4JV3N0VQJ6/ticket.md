@@ -4,7 +4,9 @@ manyhands_kind: ticket
 id: "01M5B0Z6PNP7X4WH4JV3N0VQJ6"
 title: "Enablement must leave the Git index current for the configuration it commits"
 type: "defect"
-status: "open"
+status: "closed"
+closed_at: "2026-10-21T11:16:03Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 project: "manyhands"
 team: "core"
 ---
@@ -69,3 +71,28 @@ unstaged user changes are preserved.
   test still needs it.
 - Shared-library change under Wave 03 track rule 5: reviewed and merged to main
   on its own. D1 then merges main and drops its fixture's index reset.
+
+## Resolution and approved closure
+
+Implemented in `a0e9a8d`; published main's registration fix `01M5CVB2` was
+merged into the ticket branch in `90da4e0`. Create and enable publish only the
+committed configuration blob/mode to the worktree index, preserving unrelated
+staging and worktree edits. Eligible retries repair a missing entry; finished
+F2 replay remains read-only. Post-commit index publication is best effort,
+matching save's outcome policy, as explicitly approved by the owner.
+
+Regression coverage includes immediate ticket creation and remote selection,
+unborn/missing indexes, HEAD movement, foreign locks, retry, replay and partial
+creation recovery. Obsolete fixture repairs were removed. The configuration
+staging in the comment-publication fixture was retained because it constructs
+the initial commit before enablement, rather than repairing enablement's index.
+
+Local gates and completed all-feature test coverage are recorded in comment
+`01M5EC248HTSH7YQ0MJ985G93Q`. The full test invocation hit the tool timeout;
+the owner authorized completing the interrupted and remaining targets, which
+passed, as did doc-tests. Independent implementation and integration reviews
+reported no actionable findings. Published contracts are unchanged.
+
+The owner approved the fix, closure, local merge to main, push to origin, and
+removal of this ticket's local/remote branches and worktree on 2026-10-21.
+Native CI remains a separately authorized post-merge run.
