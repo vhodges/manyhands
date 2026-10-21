@@ -78,18 +78,21 @@ const CHILD_GROUP: Group = Group {
 
 /// A row's text for assistive technology: what it shows, in order.
 fn summary(row: &RelatedRow) -> String {
-    [
-        row.slug.clone(),
-        row.title.clone(),
-        row.lifecycle
-            .map(|lifecycle| lifecycle_label(lifecycle).to_owned()),
-        Some(resolution_label(row.resolved).to_owned()),
-        Some(row.id.clone()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(", ")
+    row.name()
+        .parts()
+        .map(str::to_owned)
+        .chain(
+            [
+                row.lifecycle
+                    .map(|lifecycle| lifecycle_label(lifecycle).to_owned()),
+                Some(resolution_label(row.resolved).to_owned()),
+                Some(row.id.clone()),
+            ]
+            .into_iter()
+            .flatten(),
+        )
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl ItemPane {
@@ -243,13 +246,13 @@ impl ItemPane {
             .border_1()
             .border_color(border)
             .children(
-                row.slug
-                    .clone()
+                row.name()
+                    .slug
                     .map(|slug| text(cell("slug"), slug).text_sm()),
             )
             .children(
-                row.title
-                    .clone()
+                row.name()
+                    .title
                     .map(|title| text(cell("title"), title).text_sm()),
             )
             .children(row.lifecycle.map(|lifecycle| {

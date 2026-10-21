@@ -48,7 +48,7 @@ pub(super) fn settings(fixture: Fixture, cx: &mut TestAppContext) -> Shell {
 pub(super) fn page(shell: &Shell, cx: &mut TestAppContext) -> Entity<RepositoriesPage> {
     let host = shell
         .workspace
-        .read_with(cx, |workspace, _| workspace.settings.clone());
+        .read_with(cx, |workspace, _| workspace.settings().clone());
     host.read_with(cx, |host, _| host.repositories.clone())
         .expect("the Repositories page is made")
 }

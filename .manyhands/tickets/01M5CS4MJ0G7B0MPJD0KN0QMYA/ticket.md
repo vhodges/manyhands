@@ -2,7 +2,7 @@
 manyhands_managed: true
 manyhands_kind: ticket
 id: "01M5CS4MJ0G7B0MPJD0KN0QMYA"
-title: "Desktop follow-up: settings UX and structure from the D1 reviews"
+title: "Desktop follow-up: structure from the D1 reviews"
 type: "task"
 status: "open"
 project: "manyhands"
@@ -10,99 +10,71 @@ team: "core"
 ---
 
 The D1 desktop reviews (Wave 03 Cycle D1, ticket
-`01M4CC0VMY5RBMP70QVBXWXM6A`) left minor findings on the four settings pages
-(Repositories, Remotes, Keys, Hosts), plus structural cleanup the reviewers
-asked for before later desktop Cycles add more pages. None blocks merging D1.
+`01M4CC0VMY5RBMP70QVBXWXM6A`) requested structural cleanup before later
+desktop Cycles add more pages. On 2026-10-21 the owner approved splitting the
+non-Structure findings into ticket `01M5F3GVDYTH1Q5V5FCS9YF7V3`, "Desktop
+follow-up: settings UX from the D1 reviews". That ticket retains all the
+settings, keyboard/accessibility, test-gap and product-decision items.
 
-This is desktop-only work under `src/desktop/`, and no library change is
-expected. Do it after D1 merges and before D2/D3 add pages. Line references
-are to the D1 branch as reviewed at `ba89ea0`. The owner also plans UI changes
-after trying the desktop; this ticket can carry them or link to them.
+This ticket is now a desktop-only, behavior-preserving refactor under
+`src/desktop/`, with no shared-library change. It closes after review approval
+and lands as its own merge before the UX follow-up. Its completion on main
+unblocks the desktop work (Parts B and C) of D2, ticket
+`01M4CC0VMZ21Z79B09YQRA0P7J` (D2 decision 4). D2 remaps its File Map to the
+new layout when beginning Task 5. Do not implement D2 features here.
 
-## Structure (do first)
+The sibling tests-and-polish ticket `01M5CS4MH25QQ769HV61ZRKHXG` also touches
+item/list/tab views; coordinate if it starts in parallel. The line counts
+below describe main at `0b23664`, not the earlier D1 review snapshot.
+
+## Structure
 
 - `Read<T>` is defined twice (`view/settings/mod.rs` and
-  `view/settings/repositories/manage.rs`). Keep one shared definition.
+  `view/settings/repositories/manage.rs`). Keep one shared definition outside
+  `view/settings/`, usable by a non-Settings page such as D2's Drafts page.
 - Tickets are named by short code and title in slightly different ways in
   `TicketRow`, Find matches, relationship rows, tab titles and blocked
   reasons. `TicketRow::target` duplicates `OpenTarget::for_item`. Use one
-  helper.
-- `Workspace` exposes about 20 `pub(super)` fields that `lists`, `tabs`,
+  ticket-naming helper and one item-to-`OpenTarget` function at every site.
+  Keep them in GPUI-free `model/` code so D2's draft model can use them.
+- `Workspace` exposes 22 `pub(super)` fields that `lists`, `tabs`,
   `operations`, `sidebar` and `find` reach into. Narrow them to methods or
   events.
 - Split the large files:
-  - `view/workspace.rs` (about 1150 lines);
-  - `view/settings/keys.rs` (about 1080 lines);
-  - `view/item.rs` (about 920 lines).
-
-## Repositories page
-
-- Browse-unavailable reason:
-  - It is drawn once at the bottom of the page. Move it beside each Browse
-    control.
-  - While the folder chooser is pending, Browse is disabled with no text.
-    Add text.
-- A busy folder inspection offers no Retry. Add one.
-- A root that is not UTF-8 is silently ignored by `inspect_root`. Show a fixed
-  message instead.
-- Settings and tabs share one scroll offset. Reset the offset on a mode switch,
-  or keep one offset per mode.
-- Forms are not cleared after success. Decide whether they should be.
-- Tests:
-  - an absent-path Create preview;
-  - the effects rows of a Partial result;
-  - busy, failed and double-Add inspection paths;
-  - Escape on the sidebar Remove dialog;
-  - removing a repository and registering it again;
-  - where focus lands after a successful removal.
-- A slow identity read can overwrite text the user is typing. Prefill only
-  empty fields.
-- The "From:" line is hidden when no email is configured.
-
-## Remotes page
-
-- Reopening Settings ignores a sidebar selection made since the last open.
-- The first open reads the list twice.
-- `RemoteAdd`'s raw URL lives in two long-lived records (ruling R-T14a).
-  Optionally, have the UI-side `DesktopRequest.intent` hold a redacted URL.
-  Only the worker's record needs the raw one for Retry.
-
-## Keys page
-
-- Add a test that the operation area's Retry of a request that is not a
-  protected key generation still goes through `retry(id, None)`.
-- The focus fallback for Delete is keyed by row index. Key it by key ID.
-- No tests cover the key-source lines for a missing or unreadable file, or a
-  busy or failed Copy.
-- Add typed-failure tests for key delete and for a non-busy key generate
-  (named as gaps in the D1 acceptance table).
-
-## Hosts page
-
-- An Approve preview refused with `host_replacement_required` offers no
-  Replace. Show the envelope's `host.replace` recovery.
-- `NOT_AVAILABLE_YET` now means "nothing this session can act on". Reword it,
-  for example "Not available in this session".
-- A recovery that arrives while a check is connecting can start a second
-  `observe_host`.
-- "No SSH publication remote" can appear next to "Connecting".
-- Note for D6: the `defer_in` prompt fix relies on a single prompt source.
-
-## Keyboard and accessibility
-
-- A focus restore from the Kit's `defer_close_dialog` could take focus away
-  from Quit now. This is rare and untested.
-- The keyboard-test helper `on_handle` does not assert visibility, and
-  `open_a_document` asserts only the region.
-- The close buttons sit inside `Role::TabList`.
+  - `view/workspace.rs` (1159 lines);
+  - `view/settings/keys.rs` (1091 lines);
+  - `view/item.rs` (921 lines).
+- Keep switching between tabs and full-content pages in one small place.
+  Adding D2's Drafts page should need a module and a page variant, rather
+  than additional top-level `Workspace` fields. Do not add the Drafts page
+  or speculative D2 abstractions here.
 
 ## Acceptance
 
-- Do the structure items before adding any page.
-- Every other item is either fixed or dropped with a reason in a comment.
-- Each behavioural fix comes with a test that fails without it.
-- The desktop gate passes:
-  - `desktop::` tests;
-  - check and clippy with `--features desktop`;
-  - fmt;
-  - clippy with `--all-features`.
+- No user-visible behavior changes. Existing tests pass with only path/import
+  changes needed for the refactor; no test is deleted or weakened and the
+  number of `desktop::` tests stays the same.
+  On 2026-10-21 the owner additionally approved five mechanical field-to-accessor
+  changes in test helpers, enumerated in the plan's execution ledger. Assertions
+  and scenarios remain unchanged.
+- One shared `Read<T>`, one ticket-naming helper and one item-to-`OpenTarget`
+  function serve the sites above.
+- `lists`, `tabs`, `operations`, `sidebar` and `find` use `Workspace` methods
+  or events rather than reaching into its fields.
+- The three large files are split by responsibility.
+- The owner approves the target module layout and narrowed `Workspace` API
+  before implementation.
+- Relevant `desktop::` tests run between steps; the final gates include the
+  required all-feature check/fmt/clippy/tests and desktop-only check/clippy.
+- Record review-ready evidence and a conflict-free merge-tree check. Close
+  only after review approval; merge/publication require owner authorization.
+
+## Approved implementation plan
+
+The owner approved the plan on 2026-10-21:
+[`docs/plans/2026-10-21-desktop-structure.md`](../../../docs/plans/2026-10-21-desktop-structure.md).
+It records the target module layout, helper semantics, private Workspace
+boundary, ordered tasks, unchanged-behavior/test policy and D2 handoff map.
+The delivery split, design and plan are approved. The owner explicitly
+authorized inline implementation on 2026-10-21; progress is recorded in the
+plan's execution ledger and ticket comments.

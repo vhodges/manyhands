@@ -1,84 +1,37 @@
-//! The Keys settings page (design, Settings / Shared SSH keys): the
-//! shared SSH keys `list_keys` lists, with Generate, Import, Copy public
-//! key, Select, Clear selection, Unregister and, for a key Manyhands
-//! generated, Delete.
+//! Shared SSH keys: page state, construction and its stable interface.
 //!
-//! Each key shows its label, its fingerprint, whether Manyhands generated
-//! it or it was imported, and whether it is the selected key, each in
-//! words. Nothing on the page shows or copies private material: Copy
-//! public key puts on the clipboard exactly the public key text
-//! `public_key_text` gives, and nothing else is copied.
+//! Reads live in `reads`, commands and secret handling in `commands`, and the
+//! existing rows/forms in `render`. Each input, subscription and request keeps
+//! the same owner across those implementation modules.
 //!
-//! **Generate** takes a label and, optionally, a passphrase with its
-//! confirmation, both in masked inputs with no mask toggle. A confirmation
-//! that differs from the passphrase, or a passphrase `SecretPassphrase`
-//! refuses, is refused before any job. On every submit, refused or sent,
-//! both masked inputs are emptied. A sent passphrase is read once from
-//! the input's own text into the one `SecretPassphrase`, which goes to
-//! that attempt only; `Intent::KeyGenerate` holds only that the key is
-//! protected, and the page keeps no passphrase.
-//!
-//! **Retry** of a protected generation therefore asks for the passphrase
-//! again: the page shows its passphrase fields for that request, and
-//! their submit retries the same request, under its own request ID. The
-//! page asks so when its own protected generation ended in a way a retry
-//! can mend (`busy`, which an attempt that carried a passphrase reports at
-//! once, or a result offering `request.retry`), when the operation area's
-//! Retry is pressed on one, and when a retry that came without the
-//! passphrase was not sent for want of it (`NotSent(SecretRequired)`).
-//!
-//! **Import** registers a private key file, and optionally its public key
-//! file, where they are. **Unregister** (`KeyRemove`) removes a
-//! registration and leaves its files. **Delete** (`KeyDelete`, confirmed)
-//! is offered for a generated key only and deletes its files.
-//!
-//! A row acts only while the list last read still gives its key: a row
-//! left from an earlier read asks nothing. The keys are read again when a
-//! key request finishes, whoever started it, and when the page is shown
-//! again. Every handler does nothing while a dialog is open. Text is fixed
-//! strings, the library's non-secret values, and the envelope's message
-//! with its code.
+//! The page shows only non-secret key information. Generate uses masked inputs,
+//! clears both on every submit, and sends one SecretPassphrase to one attempt.
+//! Protected retries ask again under the same request ID; the page retains no
+//! passphrase. Import/unregister retain external files; generated-key deletion
+//! is confirmed. Every handler does nothing while a dialog is open.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+mod commands;
+mod reads;
+mod render;
+
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::{
-    AppContext, ClickEvent, ClipboardItem, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
-    TestSupportExt, Window,
-    component::{
-        ActiveTheme, WindowExt,
-        button::{Button, ButtonVariants},
-        h_flex,
-        input::{Input, InputEvent, InputState},
-        v_flex,
-    },
-    div, px,
+    AppContext, Context, Entity, FocusHandle, Subscription, Task, Window,
+    component::input::{InputEvent, InputState},
 };
-use manyhands::{
-    repository::{
-        KeyDto, KeyOwnership, KeyPrivateSourceState, SharedKeyId, keys::SecretPassphrase,
-    },
-    results::{Outcome, RecoveryActionKind, ResultCode},
-};
+use manyhands::{repository::KeyDto, results::ResultCode};
 
-use super::{Read, Wrapped, wrapped};
 use crate::desktop::{
     model::{
-        list_state::LABEL_BUSY,
+        read_state::Read,
         stamp::{Generations, SettingsPage, ViewScope},
     },
     services::{
-        KEY_STORE_UNAVAILABLE, ReadKind, ReadResult, Services,
-        requests::{DesktopRequestId, Intent, Lane, NotSent, RequestState},
+        Services,
+        requests::{DesktopRequestId, RequestState},
     },
-    view::{
-        confirm::confirm,
-        operations::{outcome_label, state_label},
-        scroll::ContentScroll,
-    },
+    view::scroll::ContentScroll,
 };
 
 pub(crate) const KEYS_HEADING: &str = "Shared SSH keys";
@@ -132,64 +85,29 @@ const IMPORT_SUBMIT: &str = "key-import-submit";
 const CLEAR_ID: &str = "keys-clear";
 const RETRY_OFFER_ID: &str = "keys-retry";
 
-/// The line that names the selected key.
 pub(crate) fn selection_line(label: &str) -> String {
     format!("Selected key: {label}")
 }
-
-/// What the Generate form says while it asks for a passphrase again.
 pub(crate) fn retrying_line(label: &str) -> String {
     format!("Enter the passphrase for {label} again to retry its generation.")
 }
 
-/// The requests whose finishing can change the keys listed.
-fn key_command(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::KeyGenerate { .. }
-            | Intent::KeyImport { .. }
-            | Intent::KeySelect { .. }
-            | Intent::KeyClear
-            | Intent::KeyRemove { .. }
-            | Intent::KeyDelete { .. }
-    )
-}
-
-/// The label of a protected key generation; `None` for any other intent.
-fn protected_generation(intent: &Intent) -> Option<&str> {
-    match intent {
-        Intent::KeyGenerate {
-            label,
-            protected: true,
-        } => Some(label),
-        _ => None,
-    }
-}
-
-/// A protected generation whose passphrase the page asks for again.
 struct Retrying {
     id: DesktopRequestId,
     label: String,
 }
-
-/// What became of the last Copy public key.
 enum Copied {
     Done,
     Busy,
     Failed(ResultCode),
 }
-
 const SCOPE: ViewScope = ViewScope::Settings(SettingsPage::Keys);
-
-/// What Enter in a field submits.
 type Submit = fn(&mut KeysPage, &mut Window, &mut Context<KeysPage>);
 
 pub(crate) struct KeysPage {
     services: Services,
     scroll: ContentScroll,
-    /// Whether the key store could be found when the page was last shown.
     store_available: bool,
-    /// The keys `list_keys` last gave.
     keys: Read<Vec<KeyDto>>,
     generations: Generations,
     read: Option<Task<()>>,
@@ -197,17 +115,13 @@ pub(crate) struct KeysPage {
     copy_read: Option<Task<()>>,
     copied: Option<Copied>,
     inputs: HashMap<&'static str, Entity<InputState>>,
-    /// The focus each control's wrapper tracks, by its ID; a row's are
-    /// made when it is first drawn.
+    /// Control wrappers keyed by element ID; row handles are created on drawing.
     focus: HashMap<String, FocusHandle>,
-    /// What the Generate form said when it asked nothing.
     generate_message: Option<&'static str>,
-    /// What the Import form said when it asked nothing.
     import_message: Option<&'static str>,
-    /// The page's latest request, answered under the forms.
     submitted: Option<DesktopRequestId>,
     retrying: Option<Retrying>,
-    /// The ended requests already answered, by attempt.
+    /// Ended requests already answered, by attempt.
     seen: HashSet<(DesktopRequestId, u32)>,
     _inputs: Vec<Subscription>,
     _operations: Subscription,
@@ -231,8 +145,7 @@ impl KeysPage {
             (PUBLIC_FIELD, false, Self::submit_import),
         ];
         for (id, masked, submit) in fields {
-            // A masked input refuses copy and hides its value from
-            // accessibility; no mask toggle is offered.
+            // Masked inputs refuse copy and hide their value from accessibility.
             let input = cx.new(|cx| InputState::new(window, cx).masked(masked));
             subscriptions.push(cx.subscribe_in(
                 &input,
@@ -264,9 +177,8 @@ impl KeysPage {
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
-        // What finished before the page was made is already in what it
-        // reads now. A generation waiting for its passphrase is not: the
-        // page asks for it.
+        // Finished requests are already in the read; a generation awaiting its
+        // passphrase still needs the page to ask for it.
         let seen = services
             .operations()
             .read(cx)
@@ -304,13 +216,10 @@ impl KeysPage {
     pub(crate) fn input(&self, id: &str) -> Entity<InputState> {
         self.inputs[id].clone()
     }
-
     #[cfg(test)]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
-
-    /// The labels of the keys shown.
     #[cfg(test)]
     pub(crate) fn key_labels(&self) -> Vec<String> {
         match &self.keys {
@@ -318,8 +227,6 @@ impl KeysPage {
             _ => Vec::new(),
         }
     }
-
-    /// The label of the key shown selected.
     #[cfg(test)]
     pub(crate) fn selected_label(&self) -> Option<&str> {
         match &self.keys {
@@ -330,15 +237,12 @@ impl KeysPage {
             _ => None,
         }
     }
-
-    /// The protected generation whose passphrase the page asks for again.
     #[cfg(test)]
     pub(crate) fn retrying(&self) -> Option<DesktopRequestId> {
         self.retrying.as_ref().map(|retrying| retrying.id)
     }
 
-    /// Every piece of text the page holds, the inputs' values included:
-    /// what a test searches for a secret, since nothing here is `Debug`.
+    /// Every held piece of text, including inputs, for the secret-retention test.
     #[cfg(test)]
     pub(crate) fn held_text(&self, cx: &gpui_kit::App) -> Vec<String> {
         let mut held: Vec<String> = Vec::new();
@@ -368,15 +272,12 @@ impl KeysPage {
         held
     }
 
-    /// The page is shown again: it looks for the key store and reads the
-    /// keys again.
     pub(crate) fn opened(&mut self, cx: &mut Context<Self>) {
         self.store_available = self.services.key_store().is_ok();
         self.load(cx);
     }
 
-    /// The page is no longer shown: empties both masked inputs, and with
-    /// them their undo history, if they hold anything.
+    /// A hidden page empties both masked inputs and their undo history.
     pub(crate) fn forget_passphrase(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let held = [PASSPHRASE_FIELD, CONFIRMATION_FIELD]
             .iter()
@@ -393,7 +294,7 @@ impl KeysPage {
             .clone()
     }
 
-    /// A field's text, trimmed. Never used for a masked field.
+    /// Trimmed non-secret field text. Never used for a masked field.
     fn text(&self, id: &str, cx: &Context<Self>) -> String {
         self.inputs[id].read(cx).value().trim().to_owned()
     }
@@ -402,687 +303,6 @@ impl KeysPage {
         for id in ids {
             self.inputs[id].update(cx, |input, cx| input.set_value("", window, cx));
         }
-    }
-
-    /// Reads the keys.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    fn load(&mut self, cx: &mut Context<Self>) {
-        let stamp = self.generations.next(SCOPE);
-        if !matches!(self.keys, Read::Ready(_)) {
-            self.keys = Read::Loading;
-        }
-        self.read = Some(self.services.read(
-            ReadKind::Keys,
-            stamp,
-            |service| service.list_keys(),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if !this.generations.is_current(&stamp) {
-                    return;
-                }
-                this.keys = Read::from_result(result, |list| list.items);
-                cx.notify();
-            },
-        ));
-        cx.notify();
-    }
-
-    /// The key `id` as the list last read gives it: a row whose key it no
-    /// longer gives acts on nothing.
-    fn listed(&self, id: SharedKeyId) -> Option<&KeyDto> {
-        let Read::Ready(keys) = &self.keys else {
-            return None;
-        };
-        let id = id.to_string();
-        keys.iter().find(|key| key.id == id)
-    }
-
-    /// Generate, or the retry of a protected generation: refuses a
-    /// mismatched or unacceptable passphrase before any job, and empties
-    /// both masked inputs whatever it does.
-    pub(crate) fn submit_generate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        let label = match &self.retrying {
-            Some(retrying) => retrying.label.clone(),
-            None => self.text(LABEL_FIELD, cx),
-        };
-        let secret = self.take_secret(window, cx);
-        let why = match (&self.retrying, &secret) {
-            (_, Err(why)) => Some(*why),
-            (Some(_), Ok(None)) => Some(NEED_PASSPHRASE),
-            (None, _) if label.is_empty() => Some(NEED_LABEL),
-            _ => None,
-        };
-        if let Some(why) = why {
-            self.generate_message = Some(why);
-            cx.notify();
-            return;
-        }
-        let Ok(secret) = secret else { return };
-        self.generate_message = None;
-        let worker = self.services.worker();
-        self.submitted = Some(match self.retrying.take() {
-            Some(retrying) => {
-                worker.retry(retrying.id, secret);
-                retrying.id
-            }
-            None => {
-                self.clear(&[LABEL_FIELD], window, cx);
-                let intent = Intent::KeyGenerate {
-                    label,
-                    protected: secret.is_some(),
-                };
-                debug_assert!(!intent.confirmed());
-                worker.submit(intent, Lane::User, None, secret)
-            }
-        });
-        cx.notify();
-    }
-
-    /// The passphrase typed, as the one `SecretPassphrase`, or `None` when
-    /// none was typed; `Err` with what to say when the confirmation
-    /// differs or `SecretPassphrase` refuses it. Both masked inputs are
-    /// emptied, whatever the answer.
-    fn take_secret(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Result<Option<SecretPassphrase>, &'static str> {
-        let (passphrase, confirmation) = (
-            self.inputs[PASSPHRASE_FIELD].read(cx).text(),
-            self.inputs[CONFIRMATION_FIELD].read(cx).text(),
-        );
-        // Compared where they are, with no copy of either.
-        let answer = if passphrase != confirmation {
-            Err(MISMATCH)
-        } else if passphrase.len() == 0 {
-            Ok(None)
-        } else {
-            // The input's own text, straight into the one zeroizing holder.
-            SecretPassphrase::new(passphrase.to_string())
-                .map(Some)
-                .map_err(|_| REFUSED)
-        };
-        self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
-        answer
-    }
-
-    /// Asks for the passphrase of the protected generation `id` again, in
-    /// the Generate form, with focus in its field.
-    pub(crate) fn ask_again(
-        &mut self,
-        id: DesktopRequestId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        let label = {
-            let operations = self.services.operations().read(cx);
-            let Some(label) = operations
-                .request(id)
-                .and_then(|request| protected_generation(&request.intent))
-            else {
-                return;
-            };
-            label.to_owned()
-        };
-        self.retrying = Some(Retrying { id, label });
-        self.submitted = Some(id);
-        self.generate_message = None;
-        self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
-        self.inputs[PASSPHRASE_FIELD].update(cx, |input, cx| input.focus(window, cx));
-        cx.notify();
-    }
-
-    /// Cancel on the retry: the form is the Generate form again.
-    fn cancel_retry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        self.retrying = None;
-        self.generate_message = None;
-        self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
-        cx.notify();
-    }
-
-    /// Import: registers the files named, as a user job. The form then
-    /// lets them go.
-    pub(crate) fn submit_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        let label = self.text(IMPORT_LABEL_FIELD, cx);
-        let private = self.text(PRIVATE_FIELD, cx);
-        let public = self.text(PUBLIC_FIELD, cx);
-        let why = if label.is_empty() {
-            Some(NEED_LABEL)
-        } else if private.is_empty() {
-            Some(NEED_PRIVATE)
-        } else {
-            None
-        };
-        if let Some(why) = why {
-            self.import_message = Some(why);
-            cx.notify();
-            return;
-        }
-        self.import_message = None;
-        self.clear(
-            &[IMPORT_LABEL_FIELD, PRIVATE_FIELD, PUBLIC_FIELD],
-            window,
-            cx,
-        );
-        let intent = Intent::KeyImport {
-            label,
-            private_key_path: PathBuf::from(private),
-            public_key_path: (!public.is_empty()).then(|| PathBuf::from(public)),
-        };
-        self.submit(intent, cx);
-    }
-
-    fn submit(&mut self, intent: Intent, cx: &mut Context<Self>) {
-        debug_assert!(!intent.confirmed());
-        self.submitted = Some(
-            self.services
-                .worker()
-                .submit(intent, Lane::User, None, None),
-        );
-        cx.notify();
-    }
-
-    /// Select the key `id`, of the row it was read for.
-    pub(crate) fn submit_select(
-        &mut self,
-        id: SharedKeyId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if window.has_active_dialog(cx) || self.listed(id).is_none() {
-            return;
-        }
-        self.submit(Intent::KeySelect { id }, cx);
-    }
-
-    /// Clear selection.
-    pub(crate) fn submit_clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) || !matches!(self.keys, Read::Ready(_)) {
-            return;
-        }
-        self.submit(Intent::KeyClear, cx);
-    }
-
-    /// Unregister the key `id`: its registration goes, its files stay.
-    pub(crate) fn submit_unregister(
-        &mut self,
-        id: SharedKeyId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if window.has_active_dialog(cx) || self.listed(id).is_none() {
-            return;
-        }
-        self.submit(Intent::KeyRemove { id }, cx);
-    }
-
-    /// Delete the generated key `id`, of row `ix`, in the confirmation
-    /// dialog. Focus goes back to what held it when the dialog closes.
-    pub(crate) fn submit_delete(
-        &mut self,
-        id: SharedKeyId,
-        ix: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let generated = self
-            .listed(id)
-            .is_some_and(|key| key.ownership == KeyOwnership::Generated);
-        if window.has_active_dialog(cx) || !generated {
-            return;
-        }
-        let intent = Intent::KeyDelete { id };
-        debug_assert!(intent.confirmed());
-        let origin = match window.focused(cx) {
-            Some(focused) => focused,
-            None => self.focus(format!("key-delete-{ix}"), cx),
-        };
-        confirm(intent, origin, &self.services, window, cx);
-    }
-
-    /// Copy public key: the public key text `public_key_text` gives, and
-    /// nothing else, onto the clipboard.
-    #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
-    pub(crate) fn copy(&mut self, id: SharedKeyId, window: &mut Window, cx: &mut Context<Self>) {
-        if window.has_active_dialog(cx) || self.listed(id).is_none() {
-            return;
-        }
-        let stamp = self.copy_generations.next(SCOPE);
-        self.copied = None;
-        self.copy_read = Some(self.services.read(
-            ReadKind::Keys,
-            stamp,
-            move |service| service.public_key_text(id),
-            cx,
-            |this: &mut Self, stamp, result, cx| {
-                if !this.copy_generations.is_current(&stamp) {
-                    return;
-                }
-                this.copied = Some(match result {
-                    ReadResult::Ok(public) => {
-                        cx.write_to_clipboard(ClipboardItem::new_string(public.public_key));
-                        Copied::Done
-                    }
-                    ReadResult::Busy => Copied::Busy,
-                    ReadResult::Failed(failure) => Copied::Failed(failure.code),
-                });
-                cx.notify();
-            },
-        ));
-        cx.notify();
-    }
-
-    /// A request ended: a key request reads the keys again; a protected
-    /// generation not sent for want of its passphrase has the page ask
-    /// for it again.
-    fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut reload = false;
-        let mut ask = None;
-        let operations = self.services.operations().clone();
-        // Newest first: the first generation found waiting is the one
-        // asked for.
-        for request in operations.read(cx).requests() {
-            if !key_command(&request.intent) {
-                continue;
-            }
-            match &request.state {
-                RequestState::Finished(..) => {
-                    reload |= self.seen.insert((request.id, request.attempt));
-                }
-                RequestState::NotSent(NotSent::SecretRequired) => {
-                    let Some(label) = protected_generation(&request.intent) else {
-                        continue;
-                    };
-                    if self.seen.insert((request.id, request.attempt)) && ask.is_none() {
-                        ask = Some(Retrying {
-                            id: request.id,
-                            label: label.to_owned(),
-                        });
-                    }
-                }
-                _ => {}
-            }
-        }
-        if let Some(ask) = ask {
-            // Ruling R-T15b: what was typed for a new key is never sent
-            // as the passphrase of the request asked for again.
-            self.clear(&[PASSPHRASE_FIELD, CONFIRMATION_FIELD], window, cx);
-            self.submitted = Some(ask.id);
-            self.generate_message = None;
-            self.retrying = Some(ask);
-        }
-        if reload {
-            self.load(cx);
-        }
-        // The page's own request may have moved on.
-        cx.notify();
-    }
-
-    /// Whether the page's latest request is a protected generation that a
-    /// retry can mend, and whose passphrase is not already asked for.
-    fn retry_offered(&self, cx: &Context<Self>) -> bool {
-        let Some(id) = self.submitted else {
-            return false;
-        };
-        if self.retrying.is_some() {
-            return false;
-        }
-        let operations = self.services.operations().read(cx);
-        let Some(request) = operations.request(id) else {
-            return false;
-        };
-        if protected_generation(&request.intent).is_none() {
-            return false;
-        }
-        match &request.state {
-            RequestState::Finished(outcome, code, _, recovery, _) => {
-                !matches!(outcome, Outcome::Success | Outcome::Noop)
-                    && (*code == ResultCode::Busy
-                        || recovery
-                            .iter()
-                            .any(|action| action.action == RecoveryActionKind::RequestRetry))
-            }
-            RequestState::NotSent(NotSent::SecretRequired) => true,
-            _ => false,
-        }
-    }
-}
-
-/// A piece of text a test reads by `id`.
-fn text(id: impl Into<gpui_kit::ElementId>, value: impl Into<String>) -> impl IntoElement {
-    let value = value.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(value.clone())
-        .text_sm()
-        .child(value)
-}
-
-fn heading(id: &'static str, label: &'static str) -> impl IntoElement {
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(label)
-        .text_base()
-        .font_weight(gpui_kit::FontWeight::BOLD)
-        .child(label)
-}
-
-impl KeysPage {
-    /// A button in its wrapper `id`, whose focus is kept under `key`.
-    fn button(
-        &mut self,
-        id: impl Into<gpui_kit::ElementId>,
-        key: String,
-        label: &'static str,
-        on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-        cx: &mut Context<Self>,
-    ) -> Wrapped {
-        let focus = self.focus(key.clone(), cx);
-        let button = Button::new(gpui_kit::ElementId::Name(format!("{key}-button").into()))
-            .label(label)
-            .on_click(
-                cx.listener(move |this, _: &ClickEvent, window, cx| on_click(this, window, cx)),
-            );
-        wrapped(id, label, &focus, &self.scroll, button)
-    }
-
-    fn field(&self, id: &'static str, label: &'static str, cx: &Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
-        v_flex()
-            .gap_0p5()
-            .child(div().text_xs().text_color(muted).child(label))
-            .child(
-                wrapped(
-                    id,
-                    label,
-                    &self.focus[id],
-                    &self.scroll,
-                    Input::new(&self.inputs[id]).aria_label(label),
-                )
-                .w(px(480.)),
-            )
-    }
-
-    /// One key: its label, fingerprint, kind and selection in words, with
-    /// its actions. Delete only for a key Manyhands generated.
-    fn key_row(&mut self, ix: usize, key: &KeyDto, cx: &mut Context<Self>) -> impl IntoElement {
-        let muted = cx.theme().muted_foreground;
-        let kind = match key.ownership {
-            KeyOwnership::Generated => KIND_GENERATED,
-            KeyOwnership::Imported => KIND_IMPORTED,
-        };
-        let source = match key.private_source_state {
-            KeyPrivateSourceState::Available => None,
-            KeyPrivateSourceState::Missing => Some(SOURCE_MISSING),
-            KeyPrivateSourceState::Unavailable => Some(SOURCE_UNAVAILABLE),
-        };
-        let mut actions = h_flex().gap_2().flex_wrap();
-        // A row whose ID the page cannot read offers nothing.
-        if let Ok(id) = SharedKeyId::parse(&key.id) {
-            if key.public_key_path.is_some() {
-                actions = actions.child(self.button(
-                    ("key-copy", ix),
-                    format!("key-copy-{ix}"),
-                    COPY,
-                    move |this, window, cx| this.copy(id, window, cx),
-                    cx,
-                ));
-            }
-            if !key.selected {
-                actions = actions.child(self.button(
-                    ("key-select", ix),
-                    format!("key-select-{ix}"),
-                    SELECT,
-                    move |this, window, cx| this.submit_select(id, window, cx),
-                    cx,
-                ));
-            }
-            actions = actions.child(self.button(
-                ("key-unregister", ix),
-                format!("key-unregister-{ix}"),
-                UNREGISTER,
-                move |this, window, cx| this.submit_unregister(id, window, cx),
-                cx,
-            ));
-            if key.ownership == KeyOwnership::Generated {
-                let focus = self.focus(format!("key-delete-{ix}"), cx);
-                let button = Button::new(("key-delete-button", ix))
-                    .danger()
-                    .label(DELETE)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.submit_delete(id, ix, window, cx)
-                    }));
-                actions = actions.child(wrapped(
-                    ("key-delete", ix),
-                    DELETE,
-                    &focus,
-                    &self.scroll,
-                    button,
-                ));
-            }
-        }
-        v_flex()
-            .gap_0p5()
-            .child(
-                div()
-                    .font_weight(gpui_kit::FontWeight::BOLD)
-                    .child(text(("key-label", ix), key.label.clone())),
-            )
-            .child(text(
-                ("key-fingerprint", ix),
-                key.fingerprint
-                    .clone()
-                    .unwrap_or_else(|| NO_FINGERPRINT.to_owned()),
-            ))
-            .child(div().text_color(muted).child(text(("key-kind", ix), kind)))
-            .children(key.selected.then(|| text(("key-selected", ix), SELECTED)))
-            .children(source.map(|source| text(("key-source", ix), source)))
-            .child(actions)
-    }
-
-    /// The keys, the selection and Clear selection.
-    fn key_rows(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
-        let muted = cx.theme().muted_foreground;
-        let body = v_flex()
-            .gap_2()
-            .child(heading("keys-heading", KEYS_HEADING));
-        let keys = match &self.keys {
-            Read::Loading => return body.child(text("keys-state", READING_KEYS)),
-            Read::Busy => return body.child(text("keys-state", LABEL_BUSY)),
-            Read::Failed(code) => {
-                return body
-                    .child(text("keys-state", code.message()))
-                    .child(div().text_xs().text_color(muted).child(code.as_str()));
-            }
-            Read::Ready(keys) => keys.clone(),
-        };
-        let selection = match keys.iter().find(|key| key.selected) {
-            Some(key) => selection_line(&key.label),
-            None => SELECTION_NONE.to_owned(),
-        };
-        let mut body = body.child(text("keys-selection", selection));
-        if keys.is_empty() {
-            body = body.child(text("keys-state", NO_KEYS));
-        }
-        for (ix, key) in keys.iter().enumerate() {
-            body = body.child(self.key_row(ix, key, cx));
-        }
-        let clear = self.button(
-            CLEAR_ID,
-            CLEAR_ID.to_owned(),
-            CLEAR,
-            |this, window, cx| this.submit_clear(window, cx),
-            cx,
-        );
-        body.child(clear).children(self.copied_line(cx))
-    }
-
-    fn copied_line(&self, cx: &Context<Self>) -> Option<impl IntoElement + use<>> {
-        let muted = cx.theme().muted_foreground;
-        let line = match self.copied.as_ref()? {
-            Copied::Done => v_flex().child(text("keys-copied", COPIED)),
-            Copied::Busy => v_flex().child(text("keys-copied", LABEL_BUSY)),
-            Copied::Failed(code) => v_flex().child(text("keys-copied", code.message())).child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(text("keys-copy-code", code.as_str())),
-            ),
-        };
-        Some(line)
-    }
-
-    /// The answer to the page's latest request, once it has one, with
-    /// Retry for a protected generation a retry can mend.
-    fn result(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let id = self.submitted?;
-        let muted = cx.theme().muted_foreground;
-        let (line, code) = {
-            let operations = self.services.operations().read(cx);
-            let state = &operations.request(id)?.state;
-            match state {
-                RequestState::Finished(outcome, code, _, _, message) => {
-                    let line = if *outcome == Outcome::Success {
-                        outcome_label(*outcome).to_owned()
-                    } else {
-                        format!("{}: {message}", outcome_label(*outcome))
-                    };
-                    (line, Some(code.as_str()))
-                }
-                RequestState::NotSent(_) => (state_label(state), None),
-                _ => return None,
-            }
-        };
-        let retry = self.retry_offered(cx).then(|| {
-            self.button(
-                RETRY_OFFER_ID,
-                RETRY_OFFER_ID.to_owned(),
-                RETRY_OFFER,
-                move |this, window, cx| this.ask_again(id, window, cx),
-                cx,
-            )
-        });
-        Some(
-            v_flex()
-                .gap_0p5()
-                .child(text("keys-result", line))
-                .children(code.map(|code| {
-                    div()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(text("keys-result-code", code))
-                }))
-                .children(retry),
-        )
-    }
-
-    fn generate_form(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        let retrying = self
-            .retrying
-            .as_ref()
-            .map(|retrying| retrying.label.clone());
-        let submit = {
-            let label = if retrying.is_some() { RETRY } else { GENERATE };
-            let button =
-                Button::new((GENERATE_SUBMIT, 0usize))
-                    .primary()
-                    .label(label)
-                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                        this.submit_generate(window, cx)
-                    }));
-            wrapped(
-                GENERATE_SUBMIT,
-                label,
-                &self.focus[GENERATE_SUBMIT],
-                &self.scroll,
-                button,
-            )
-        };
-        let cancel = retrying.is_some().then(|| {
-            self.button(
-                RETRY_CANCEL_ID,
-                RETRY_CANCEL_ID.to_owned(),
-                RETRY_CANCEL,
-                |this, window, cx| this.cancel_retry(window, cx),
-                cx,
-            )
-        });
-        let mut form = v_flex()
-            .gap_2()
-            .child(heading("key-generate-heading", GENERATE_HEADING));
-        form = match &retrying {
-            Some(label) => form.child(text("key-generate-retrying", retrying_line(label))),
-            None => form.child(self.field(LABEL_FIELD, LABEL, cx)),
-        };
-        form.child(self.field(PASSPHRASE_FIELD, PASSPHRASE, cx))
-            .child(self.field(CONFIRMATION_FIELD, CONFIRMATION, cx))
-            .child(div().text_xs().text_color(muted).child(GENERATE_NOTE))
-            .children(
-                self.generate_message
-                    .map(|why| text("key-generate-message", why)),
-            )
-            .child(h_flex().gap_2().child(submit).children(cancel))
-    }
-
-    fn import_form(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        let button = Button::new((IMPORT_SUBMIT, 0usize)).label(IMPORT).on_click(
-            cx.listener(|this, _: &ClickEvent, window, cx| this.submit_import(window, cx)),
-        );
-        v_flex()
-            .gap_2()
-            .child(heading("key-import-heading", IMPORT_HEADING))
-            .child(self.field(IMPORT_LABEL_FIELD, LABEL, cx))
-            .child(self.field(PRIVATE_FIELD, PRIVATE_PATH, cx))
-            .child(self.field(PUBLIC_FIELD, PUBLIC_PATH, cx))
-            .child(div().text_xs().text_color(muted).child(IMPORT_NOTE))
-            .children(
-                self.import_message
-                    .map(|why| text("key-import-message", why)),
-            )
-            .child(wrapped(
-                IMPORT_SUBMIT,
-                IMPORT,
-                &self.focus[IMPORT_SUBMIT],
-                &self.scroll,
-                button,
-            ))
-    }
-}
-
-impl Render for KeysPage {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let keys = self.key_rows(cx);
-        let generate = self.generate_form(cx);
-        let import = self.import_form(cx);
-        let result = self.result(cx);
-        v_flex()
-            .id("settings-keys")
-            .test_support()
-            .gap_4()
-            .children(
-                (!self.store_available)
-                    .then(|| text("keys-store-unavailable", KEY_STORE_UNAVAILABLE)),
-            )
-            .child(keys)
-            .child(generate)
-            .child(import)
-            .children(result)
     }
 }
 

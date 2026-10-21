@@ -94,7 +94,7 @@ pub(crate) fn lifecycle_label(lifecycle: Lifecycle) -> &'static str {
 /// What a row is labeled by: its title, or for a nonconforming entry,
 /// which has none, its path.
 fn label(row: &TicketRow) -> String {
-    row.title.clone().unwrap_or_else(|| row.path.clone())
+    row.name().title_or(&row.path).to_owned()
 }
 
 /// The label of the row `item` makes.
@@ -177,7 +177,7 @@ impl ListDelegate for TicketDelegate {
                 .gap_2()
                 .child(cell(
                     "ticket-slug",
-                    row.slug.clone().unwrap_or_else(|| NO_SHORT_CODE.to_owned()),
+                    row.name().short_or(NO_SHORT_CODE).to_owned(),
                 ))
                 .children(
                     row.ticket_type
