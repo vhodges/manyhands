@@ -13,10 +13,10 @@
 //! nothing stands in front of it; while it waits, no dialog opens.
 
 use gpui_kit::{
-    App, Context, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window,
+    App, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
+    TestSupportExt, Window,
     component::{
-        ActiveTheme, WindowExt,
+        ActiveTheme,
         button::{Button, ButtonVariants},
         h_flex,
     },
@@ -24,10 +24,7 @@ use gpui_kit::{
 };
 
 use super::workspace::Workspace;
-use crate::desktop::{
-    keys::QuitNow,
-    services::{requests::DesktopRequestId, worker::QuitState},
-};
+use crate::desktop::{keys::QuitNow, services::requests::DesktopRequestId};
 
 pub(crate) const QUIT_NOW: &str = "Quit now";
 
@@ -42,53 +39,12 @@ pub(crate) enum QuitPhase {
 }
 
 impl Workspace {
-    /// The one quit handler, for the action and the close request. True
-    /// when quitting goes ahead now.
-    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.prompt_unavailable(window, cx);
-        match self.quit {
-            QuitPhase::Quit => return true,
-            QuitPhase::Finishing(_) => return false,
-            QuitPhase::Running => {}
-        }
-        match self.services.worker().quit() {
-            QuitState::Idle => {
-                self.quit_now(cx);
-                true
-            }
-            QuitState::Finishing(id) => {
-                self.quit = QuitPhase::Finishing(id);
-                window.close_all_dialogs(cx);
-                window.focus(&self.quit_focus, cx);
-                self.last_region = Some(super::workspace::Region::Operations);
-                cx.notify();
-                false
-            }
-        }
-    }
-
-    pub(super) fn quit_now(&mut self, cx: &mut Context<Self>) {
-        self.quit = QuitPhase::Quit;
-        self.prompt_unavailable_now(cx);
-        cx.notify();
-        cx.quit();
-    }
-
-    /// Quitting waits for a job: once it has returned, quit.
-    pub(super) fn quit_if_finished(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.quit, QuitPhase::Finishing(_))
-            && self.services.worker().quit() == QuitState::Idle
-        {
-            self.quit_now(cx);
-        }
-    }
-
     /// "Finishing" and the command quitting waits for. Fixed text only.
     pub(crate) fn finishing_text(&self, cx: &App) -> Option<String> {
-        let QuitPhase::Finishing(id) = self.quit else {
+        let QuitPhase::Finishing(id) = self.quit_phase() else {
             return None;
         };
-        let operations = self.services.operations().read(cx);
+        let operations = self.services().operations().read(cx);
         Some(match operations.request(id) {
             Some(request) => format!("Finishing {}", request.intent.label()),
             None => "Finishing".to_owned(),
@@ -101,7 +57,7 @@ impl Workspace {
     /// only draws it.
     pub(super) fn finishing(&self, window: &Window, cx: &App) -> Option<impl IntoElement + use<>> {
         let ring = cx.theme().ring;
-        let focused = self.quit_focus.is_focused(window);
+        let focused = self.quit_focus().is_focused(window);
         self.finishing_text(cx).map(|text| {
             h_flex()
                 .gap_2()
@@ -111,7 +67,7 @@ impl Workspace {
                         .id("quit-now")
                         .test_support()
                         .aria_label(QUIT_NOW)
-                        .track_focus(&self.quit_focus)
+                        .track_focus(self.quit_focus())
                         .relative()
                         .rounded_sm()
                         .on_click(|_, window, cx| window.dispatch_action(Box::new(QuitNow), cx))

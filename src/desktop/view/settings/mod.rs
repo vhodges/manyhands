@@ -30,7 +30,7 @@ use gpui_kit::{
     div,
 };
 
-use manyhands::{repository::transport::SshAuthority, results::ResultCode};
+use manyhands::repository::transport::SshAuthority;
 
 pub(crate) use hosts::HostsPage;
 pub(crate) use keys::KeysPage;
@@ -40,7 +40,7 @@ pub(crate) use repositories::RepositoriesPage;
 use super::{scroll::ContentScroll, tabs::SHOWN};
 use crate::desktop::{
     model::stamp::SettingsPage,
-    services::{ReadResult, Services, requests::DesktopRequestId},
+    services::{Services, requests::DesktopRequestId},
 };
 
 pub(crate) const SETTINGS_HEADING: &str = "Settings";
@@ -399,24 +399,6 @@ impl Render for SettingsHost {
                     .children(page),
             )
             .into_any_element()
-    }
-}
-
-/// A read's state, as a page shows it.
-enum Read<T> {
-    Loading,
-    Ready(T),
-    Busy,
-    Failed(ResultCode),
-}
-
-impl<T> Read<T> {
-    fn from_result<U>(result: ReadResult<U>, f: impl FnOnce(U) -> T) -> Self {
-        match result {
-            ReadResult::Ok(value) => Self::Ready(f(value)),
-            ReadResult::Busy => Self::Busy,
-            ReadResult::Failed(failure) => Self::Failed(failure.code),
-        }
     }
 }
 

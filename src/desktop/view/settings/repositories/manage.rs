@@ -44,6 +44,7 @@ use super::{RepositoriesPage, text};
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
+        read_state::Read,
         stamp::{Generations, SettingsPage, ViewScope},
     },
     services::{
@@ -123,25 +124,6 @@ impl Initials {
             Self::Unchanged => INITIALS_UNCHANGED,
             Self::Clear => INITIALS_CLEAR,
             Self::Set => INITIALS_SET,
-        }
-    }
-}
-
-/// A read's state, as the section shows it.
-enum Read<T> {
-    None,
-    Loading,
-    Ready(T),
-    Busy,
-    Failed(ResultCode),
-}
-
-impl<T> Read<T> {
-    fn from_result<U>(result: ReadResult<U>, f: impl FnOnce(U) -> T) -> Self {
-        match result {
-            ReadResult::Ok(value) => Self::Ready(f(value)),
-            ReadResult::Busy => Self::Busy,
-            ReadResult::Failed(failure) => Self::Failed(failure.code),
         }
     }
 }
