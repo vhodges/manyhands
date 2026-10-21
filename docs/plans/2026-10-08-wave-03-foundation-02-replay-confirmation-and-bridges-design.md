@@ -2539,6 +2539,10 @@ retry, also when the root has been registered again since: the consented
 registration is gone, and the new one is left. A registration whose
 directory is gone cannot be removed: ticket `01M4R19P943QZKHHKRXV2D2TP2`.
 
+Follow-on: the [2026-10-19 defect plan](2026-10-19-missing-repository-registration-removal-implementation.md)
+addresses that historical limitation with exact stored-root selection and
+stable confirmation/request scope, while preserving unfinished recovery work.
+
 **Key deletion.** The existing review value cannot be persisted, and its
 evidence is private. `prepare` calls the read-only preflight and stores a
 digest of the registration it reports. `execute` calls

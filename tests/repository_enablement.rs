@@ -2541,6 +2541,196 @@ fn remove_registration_rejects_missing_and_file_roots_without_deleting_existing_
 }
 
 #[test]
+fn remove_registration_of_a_missing_root_preserves_the_displaced_repository() {
+    assert_displaced_registration_is_removed(false);
+}
+
+#[test]
+fn remove_registration_without_git_preserves_all_remaining_files() {
+    assert_displaced_registration_is_removed(true);
+}
+
+fn assert_displaced_registration_is_removed(git_only: bool) {
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let fixture = support::born_repository();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    let root = fixture.root.canonicalize().unwrap();
+    drop(fixture.repository);
+    let displaced = tempfile::tempdir().unwrap();
+    let moved = displaced.path().join("displaced");
+    std::fs::rename(
+        if git_only {
+            root.join(".git")
+        } else {
+            root.clone()
+        },
+        &moved,
+    )
+    .unwrap();
+    let before = support::confirmation::tree(displaced.path());
+    let remaining = git_only.then(|| support::confirmation::tree(&root));
+
+    assert_eq!(
+        service
+            .remove_registration(remove_registration_request(&root))
+            .unwrap(),
+        RemoveRegistrationOutcome::Removed
+    );
+    assert_eq!(registry_row_count(data.path()), 0);
+    assert_eq!(support::confirmation::tree(displaced.path()), before);
+    if let Some(remaining) = remaining {
+        assert_eq!(support::confirmation::tree(&root), remaining);
+    } else {
+        assert!(!root.exists());
+    }
+    // No durable request receipt exists at this lower-level API.
+    assert!(
+        service
+            .remove_registration(remove_registration_request(&root))
+            .is_err()
+    );
+}
+
+#[test]
+fn remove_registration_without_git_does_not_open_the_ancestor_repository() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    let nested = fixture.root.join("nested");
+    drop(Repository::init(&nested).unwrap());
+    let mut request = support::enable_request(&nested);
+    request.identity = Some(CommitIdentity {
+        name: "Manyhands Test".into(),
+        email: "manyhands-test@example.invalid".into(),
+    });
+    let outcome = service.enable(request).unwrap();
+    assert!(
+        matches!(outcome, EnableRepositoryOutcome::Enabled { .. }),
+        "nested fixture enablement failed: {outcome:?}"
+    );
+    let nested = nested.canonicalize().unwrap();
+    assert_eq!(registry_row_count(data.path()), 2);
+    assert!(registry_row(data.path(), &fixture.root).is_some());
+    assert!(registry_row(data.path(), &nested).is_some());
+    std::fs::remove_dir_all(nested.join(".git")).unwrap();
+    let before = support::confirmation::tree(&fixture.root);
+
+    assert_eq!(
+        service
+            .remove_registration(remove_registration_request(&nested))
+            .unwrap(),
+        RemoveRegistrationOutcome::Removed
+    );
+
+    assert_eq!(registry_row_count(data.path()), 1);
+    assert!(registry_row(data.path(), &fixture.root).is_some());
+    assert_eq!(support::confirmation::tree(&fixture.root), before);
+}
+
+#[test]
+fn remove_registration_rejects_damaged_git_metadata_and_replaced_file_roots() {
+    for damage in ["dangling-gitdir", "corrupt-config", "file-root"] {
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let fixture = support::born_repository();
+        service
+            .enable(enable_request(&fixture.root, "main"))
+            .unwrap();
+        let root = fixture.root.canonicalize().unwrap();
+        drop(fixture.repository);
+        let displaced = tempfile::tempdir().unwrap();
+        match damage {
+            "dangling-gitdir" => {
+                std::fs::rename(root.join(".git"), displaced.path().join("git")).unwrap();
+                std::fs::write(root.join(".git"), "gitdir: nowhere\n").unwrap();
+            }
+            "corrupt-config" => std::fs::write(root.join(".git/config"), "[broken\n").unwrap(),
+            "file-root" => {
+                std::fs::rename(&root, displaced.path().join("repository")).unwrap();
+                std::fs::write(&root, "not a directory").unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = root.is_dir().then(|| support::confirmation::tree(&root));
+        assert!(
+            service
+                .remove_registration(remove_registration_request(&root))
+                .is_err(),
+            "{damage}"
+        );
+        assert_eq!(registry_row_count(data.path()), 1, "{damage}");
+        if let Some(before) = before {
+            assert_eq!(support::confirmation::tree(&root), before, "{damage}");
+        } else {
+            assert_eq!(std::fs::read(&root).unwrap(), b"not a directory");
+            std::fs::remove_file(&root).unwrap();
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_registration_accepts_live_aliases_but_does_not_guess_a_lost_alias() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let aliases = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    let root = fixture.root.canonicalize().unwrap();
+    drop(fixture.repository);
+    let alias = aliases.path().join("alias");
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    let moved = aliases.path().join("moved");
+    std::fs::rename(&root, &moved).unwrap();
+    let error = service
+        .remove_registration(remove_registration_request(&alias))
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_eq!(registry_row_count(data.path()), 1);
+
+    std::fs::rename(&moved, &root).unwrap();
+    assert_eq!(
+        service
+            .remove_registration(remove_registration_request(&alias))
+            .unwrap(),
+        RemoveRegistrationOutcome::Removed
+    );
+}
+
+#[test]
+fn remove_registration_rejects_a_linked_worktree_as_a_registration_root() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let worktrees = tempfile::tempdir().unwrap();
+    let linked = worktrees.path().join("linked");
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(enable_request(&fixture.root, "main"))
+        .unwrap();
+    fixture
+        .repository
+        .worktree("linked", &linked, None)
+        .unwrap();
+    let before = support::repository_and_worktree_snapshot(&fixture);
+
+    let error = service
+        .remove_registration(remove_registration_request(&linked))
+        .unwrap_err();
+
+    assert_eq!(error.kind, RepositoryErrorKind::InvalidPath);
+    assert_eq!(registry_row_count(data.path()), 1);
+    assert_eq!(support::repository_and_worktree_snapshot(&fixture), before);
+}
+
+#[test]
 fn enable_unborn_head_main_ignores_a_different_initial_branch_default() {
     assert_enable_unborn_main_with_master_default("main");
 }

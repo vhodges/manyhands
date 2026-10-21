@@ -20,20 +20,28 @@ use super::{
 /// be the same request.
 pub(super) struct RequestIdentity {
     pub(super) request_id: RequestId,
-    /// `None` when the request names a repository whose root cannot be
-    /// resolved to a canonical path: no record can be of this request
-    /// then.
+    /// `None` when the call cannot establish its scope. Removal can recover
+    /// an exact persisted root without filesystem resolution; other repository
+    /// commands still require the live canonical path.
     pub(super) scope: Option<ScopeKey>,
     pub(super) digest: Option<IntentDigest>,
 }
 
 impl RequestIdentity {
     pub(super) fn of(request_id: RequestId, binding: &dyn Binding) -> Self {
-        let scope = match binding.place() {
-            Place::Repository(root) => ScopeKey::for_repository(root),
-            Place::NewRepository(root) => ScopeKey::for_new_repository(root),
-            Place::Application => Some(ScopeKey::application()),
-        };
+        Self::with_scope(
+            request_id,
+            binding,
+            super::confirm::scope_key(binding.place()),
+        )
+    }
+
+    /// The scope has already been resolved and frozen by the binding.
+    pub(super) fn with_scope(
+        request_id: RequestId,
+        binding: &dyn Binding,
+        scope: Option<ScopeKey>,
+    ) -> Self {
         let digest = scope.as_ref().map(|scope| {
             binding
                 .fields(IntentDigest::builder(

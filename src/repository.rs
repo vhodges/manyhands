@@ -49,6 +49,7 @@ mod native_resolution;
 mod promotion;
 mod read;
 mod recovery;
+mod registration_removal;
 mod remote;
 mod ticket_guard;
 pub mod transport;
@@ -5525,84 +5526,6 @@ impl RepositoryService {
             .lock()
             .expect("test owned-path hook lock")
             .push((Some(root), relative, boundary, Box::new(hook)));
-    }
-
-    pub fn remove_registration(
-        &self,
-        request: RemoveRegistrationRequest,
-    ) -> Result<RemoveRegistrationOutcome, RepositoryError> {
-        let root = &request.root;
-        self.require_index_available(RepositoryOperation::RemoveRegistration, Some(root))?;
-        let root = std::fs::canonicalize(root).map_err(|error| {
-            canonicalization_error(RepositoryOperation::RemoveRegistration, error)
-        })?;
-        if !root.is_dir() {
-            return Err(RepositoryError::new(
-                RepositoryOperation::RemoveRegistration,
-                None,
-                RepositoryErrorKind::InvalidPath,
-                "the selected path is not a directory",
-            ));
-        }
-        let root_path = registry_root_key(&root, RepositoryOperation::RemoveRegistration)?;
-        let repository = Repository::open(&root).map_err(|error| {
-            RepositoryError::git(
-                RepositoryOperation::RemoveRegistration,
-                Some(root.clone()),
-                error,
-            )
-        })?;
-        let _lease = repository_lease(&repository, &root, RepositoryOperation::RemoveRegistration)?;
-        let _cache_guard = cache_write_guard(
-            &self.registry_path,
-            &root,
-            RepositoryOperation::RemoveRegistration,
-        )?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        migrate_registry(&mut connection)
-            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        let _record = begin_or_reconcile_operation(
-            &mut connection,
-            &root,
-            RepositoryOperation::RemoveRegistration,
-            request.operation_id,
-            "",
-        )
-        .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        self.check_failure(
-            FailurePoint::BeforeRegistrationRemovalTransaction,
-            RepositoryOperation::RemoveRegistration,
-            &root,
-        )?;
-        let transaction = connection.transaction().map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RemoveRegistration, &root)
-        })?;
-        transaction
-            .execute(
-                "DELETE FROM operation_records WHERE root_path = ?1",
-                [root_path],
-            )
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RemoveRegistration, &root)
-            })?;
-        let deleted = transaction
-            .execute("DELETE FROM repositories WHERE root_path = ?1", [root_path])
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RemoveRegistration, &root)
-            })?;
-        transaction.commit().map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RemoveRegistration, &root)
-        })?;
-        Ok(if deleted == 0 {
-            RemoveRegistrationOutcome::NotRegistered
-        } else {
-            RemoveRegistrationOutcome::Removed
-        })
     }
 }
 

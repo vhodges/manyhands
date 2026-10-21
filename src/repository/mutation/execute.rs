@@ -17,6 +17,7 @@ use super::{
     },
     CancellationToken, MutationCall, ProgressSink,
     bind::{self, Accepted, Answer, Binding, CallContext, Place, Ran},
+    command::Command,
     confirm::Consent,
     dto::{MutationDataDto, RequestState},
     identity::ConfirmationId,
@@ -64,7 +65,14 @@ impl RepositoryService {
             mutation,
         } = call;
         let mut binding = mutation.into_binding();
-        let identity = RequestIdentity::of(request_id, binding.as_ref());
+        // Only removal can outlive both the registration and the filesystem.
+        // Other commands retain their original scope construction/order.
+        let removal = binding.command() == Command::RepoRemove;
+        let mut identity = if removal {
+            RequestIdentity::with_scope(request_id, binding.as_ref(), None)
+        } else {
+            RequestIdentity::of(request_id, binding.as_ref())
+        };
         // Two processes that submit the same new request ID race on the
         // record's key. The one that loses finds a record on its second
         // look and is answered from it. A record released on re-entry, of
@@ -139,6 +147,46 @@ impl RepositoryService {
                     .read_failure(&error);
                 }
             };
+            if removal {
+                let hint = if let Some(record) = &record {
+                    Some(record.scope.clone())
+                } else if let Some(id) = confirmation {
+                    // This lookup recovers identity only. `consent` rereads and
+                    // validates the confirmation before any request is accepted.
+                    match self.confirmation_record(id) {
+                        Ok(record) => record.map(|record| record.scope),
+                        Err(error) => {
+                            return Reply {
+                                binding: binding.as_ref(),
+                                identity: &identity,
+                            }
+                            .read_failure(&error);
+                        }
+                    }
+                } else {
+                    None
+                };
+                match binding.resolve_scope(self, hint.as_ref()) {
+                    Ok(scope) => {
+                        identity = RequestIdentity::with_scope(request_id, binding.as_ref(), scope)
+                    }
+                    Err(answer) => {
+                        let kept = if record
+                            .as_ref()
+                            .is_some_and(|record| record.state == RequestState::Accepted)
+                        {
+                            Kept::Accepted
+                        } else {
+                            Kept::No
+                        };
+                        return Reply {
+                            binding: binding.as_ref(),
+                            identity: &identity,
+                        }
+                        .envelope(answer, None, kept);
+                    }
+                }
+            }
             match record {
                 Some(record) => {
                     let reply = Reply {

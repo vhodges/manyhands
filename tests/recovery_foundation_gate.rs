@@ -1280,6 +1280,45 @@ fn registration_removal_requires_its_own_pending_record() {
 }
 
 #[test]
+fn registration_removal_after_restart_preserves_missing_root_recovery_evidence() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let root = fixture.root.canonicalize().unwrap();
+    let pending = OperationId::new();
+    service.with_registry_connection_for_testing(|connection| {
+        connection.execute("INSERT INTO operation_records(root_path,operation_ulid,action,state,observed_at) VALUES(?1,?2,'refresh','observed',1)", params![root.to_str().unwrap(), pending.to_string()]).unwrap();
+    }).unwrap();
+    drop(service);
+    drop(fixture.repository);
+    let displaced = tempfile::tempdir().unwrap();
+    std::fs::rename(&root, displaced.path().join("repository")).unwrap();
+    let before = support::confirmation::tree(displaced.path());
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let error = reopened
+        .remove_registration(RemoveRegistrationRequest {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(registered_repository_count(data.path()), 1);
+    let db = Connection::open(data.path().join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let found: (String, i64) = db
+        .query_row(
+            "SELECT state,observed_at FROM operation_records WHERE operation_ulid=?1",
+            [pending.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(found, ("observed".into(), 1));
+    assert_eq!(support::confirmation::tree(displaced.path()), before);
+}
+
+#[test]
 fn enable_replay_records_completed_lifecycle_once() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
