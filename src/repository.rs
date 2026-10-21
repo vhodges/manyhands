@@ -5050,8 +5050,17 @@ impl RepositoryService {
                         )))
                     };
                 }
+                // A repository enabled in Git that this data directory
+                // does not hold, enabled through another say, is
+                // registered here and indexed, as after a commit.
+                let newly_registered = registered_repository_id(
+                    &self.registry_path,
+                    &root,
+                    RepositoryOperation::Enable,
+                )
+                .is_err_and(|error| error.kind == RepositoryErrorKind::RepositoryNotRegistered);
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
-                if record.is_pending {
+                if record.is_pending || newly_registered {
                     let commit_oid = repository
                         .head()
                         .and_then(|head| head.peel_to_commit())
