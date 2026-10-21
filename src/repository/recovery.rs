@@ -994,12 +994,14 @@ impl LocalStep {
             | Self::AuthoritativeObserved
             | Self::RemoteChanged
             | Self::PublicationCommitted
+            // Enablement repairs an index write interrupted between its
+            // configuration commit and recording InitializationCommitted.
+            | Self::ConfigurationWritten
             | Self::InitializationCommitted => Some(self),
             Self::BranchObserved
             | Self::WorktreeObserved
             | Self::PublicationConfigurationWritten
             | Self::RepositoryInitialized
-            | Self::ConfigurationWritten
             | Self::Retry
             | Self::Error
             | Self::Completed

@@ -118,20 +118,6 @@ impl Fixture {
         let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
         let created = self.execute(Some(confirmation), Mutation::RepoCreate(input()));
         assert_eq!(created.code, ResultCode::Ok, "{}", created.message);
-        // `repo create` commits the configuration without updating Git's
-        // index, which then shows it deleted and untracked: the library's
-        // own fixtures add it back the same way (`tests/support/items.rs`,
-        // `commit`). Without this, `ticket create` answers
-        // `worktree_not_clean` and `commit_file` would commit the
-        // configuration's removal. This works around ticket
-        // 01M5B0Z6PNP7X4WH4JV3N0VQJ6 ("Enablement must leave the Git index
-        // current for the configuration it commits"); remove this reset
-        // when that ticket merges.
-        let repository = git2::Repository::open(&root).unwrap();
-        let head = repository.head().unwrap().peel_to_tree().unwrap();
-        let mut index = repository.index().unwrap();
-        index.read_tree(&head).unwrap();
-        index.write().unwrap();
         root
     }
 
