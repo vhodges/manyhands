@@ -387,10 +387,15 @@ fn read_errors_map_to_their_states_by_code() {
         ResultCode::NotRepository,
         ResultCode::NotRepositoryRoot,
         ResultCode::RepositoryNotEnabled,
+        ResultCode::InvalidPath,
     ] {
         match classify(&draft, Err(code)) {
             TargetState::RepositoryUnavailable(got) => assert_eq!(got, code),
             _ => panic!("{code:?} is RepositoryUnavailable"),
+        }
+        match classify_comment(&comment_draft(None), Err(code), Err(ResultCode::Busy)) {
+            TargetState::RepositoryUnavailable(got) => assert_eq!(got, code),
+            _ => panic!("{code:?} is RepositoryUnavailable for a comment draft"),
         }
     }
     assert!(matches!(
@@ -400,7 +405,6 @@ fn read_errors_map_to_their_states_by_code() {
     for code in [
         ResultCode::Busy,
         ResultCode::IndexUnavailable,
-        ResultCode::InvalidPath,
         ResultCode::InternalError,
     ] {
         match classify(&draft, Err(code)) {

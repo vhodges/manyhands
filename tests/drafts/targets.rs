@@ -590,11 +590,11 @@ fn a_repository_folder_renamed_away_is_unavailable() {
         _ => panic!("a repository renamed away is RepositoryUnavailable"),
     }
 
-    // Resolving the root afresh answers `invalid_path`, which the approved
-    // code mapping makes a failed read, not an unavailable repository.
+    // Resolving the root afresh, as the Drafts page does for each row,
+    // answers `invalid_path`: the folder is gone, so it is unavailable too.
     match world.classify(&claim, TICKET_A) {
-        TargetState::ReadFailed(code) => assert_eq!(code, ResultCode::InvalidPath),
-        _ => panic!("a fresh resolution of a missing root is ReadFailed by the mapping"),
+        TargetState::RepositoryUnavailable(code) => assert_eq!(code, ResultCode::InvalidPath),
+        _ => panic!("a fresh resolution of a missing root is RepositoryUnavailable"),
     }
 }
 

@@ -201,7 +201,9 @@ fn read_error(code: ResultCode) -> TargetState {
         | ResultCode::RepositoryInaccessible
         | ResultCode::NotRepository
         | ResultCode::NotRepositoryRoot
-        | ResultCode::RepositoryNotEnabled => TargetState::RepositoryUnavailable(code),
+        | ResultCode::RepositoryNotEnabled
+        // A stored root that no longer exists: the repository folder is gone.
+        | ResultCode::InvalidPath => TargetState::RepositoryUnavailable(code),
         ResultCode::ItemNotFound => TargetState::ItemNotFound,
         code => TargetState::ReadFailed(code),
     }
