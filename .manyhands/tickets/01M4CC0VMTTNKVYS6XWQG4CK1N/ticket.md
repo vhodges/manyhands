@@ -19,8 +19,8 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
 
 ## Entry Gate
