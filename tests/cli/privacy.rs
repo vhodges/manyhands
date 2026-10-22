@@ -414,9 +414,47 @@ fn no_url_credential_or_key_material_sentinel_reaches_any_output() {
         .map(|c| c["command"].as_str().unwrap().to_owned())
         .collect();
     let covered: BTreeSet<_> = rows.iter().map(|(r, v, ..)| format!("{r} {v}")).collect();
-    assert_eq!(covered, available);
+    // SSH execution cannot live in this libtest target. These named cases use
+    // the CLI remote helper's UTF-8/UTF-16LE output scan, including successful
+    // execution in each mode; previews/refusals are not execution evidence.
+    let remote = [
+        (
+            "host observe",
+            "observe_an_unpinned_host",
+            "observe_prints_the_next_commands_input_line",
+        ),
+        (
+            "host approve",
+            "approve_by_prepare_and_confirm",
+            "human_host_verbs_and_noops",
+        ),
+        (
+            "host replace",
+            "replace_after_the_host_key_rotates",
+            "human_host_verbs_and_noops",
+        ),
+    ];
+    let source = include_str!("../cli_remote/hosts.rs");
+    let remote_covered: BTreeSet<_> = remote
+        .iter()
+        .map(|(verb, json, human)| {
+            for case in [json, human] {
+                assert!(source.contains(&format!("fn {case}(")));
+            }
+            (*verb).to_owned()
+        })
+        .collect();
+    assert!(covered.is_disjoint(&remote_covered));
+    assert_eq!(
+        covered
+            .union(&remote_covered)
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+        available
+    );
+    assert_eq!(available.len(), 18);
     assert_eq!(covered.len(), rows.len());
-    let mut expected_executions = available.clone();
+    let mut expected_executions = covered.clone();
     if !cfg!(unix) {
         expected_executions.remove("key generate");
         expected_executions.remove("key delete");

@@ -17,6 +17,32 @@ use crate::support::{
 const PENDING_REFERENCES: &[&str] = &[];
 
 #[test]
+fn host_input_schemas_match_closed_required_shapes_and_examples_reach_prepare() {
+    for verb in ["approve", "replace"] {
+        let file = format!("host_{verb}.schema.json");
+        let example = read_json(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/cli_input_v1/host_{verb}.json")),
+        );
+        schema::check(&directory(), &file, &example).unwrap();
+        for field in example.as_object().unwrap().keys() {
+            let mut missing = example.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(schema::check(&directory(), &file, &missing).is_err());
+            for bad in [Value::Null, serde_json::json!(1)] {
+                let mut value = example.clone();
+                value[field] = bad;
+                assert!(schema::check(&directory(), &file, &value).is_err());
+            }
+        }
+        let mut unknown = example;
+        unknown["passphrase"] = "not-an-input-field".into();
+        assert!(schema::check(&directory(), &file, &unknown).is_err());
+    }
+    super::mutation::host_verbs_match_prepare();
+}
+
+#[test]
 fn protection_accepts_passphrase_and_none_only() {
     let f = super::keys::Fixture::new();
     for protection in ["passphrase", "none", "secret"] {

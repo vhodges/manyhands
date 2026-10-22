@@ -66,9 +66,9 @@ Command catalog:
   key clear  Clear a repository's selected key. Available now.
   key remove  Remove a key registration. Available now.
   key delete  Delete a key. Available now.
-  host approve  Approve a host pin. Arrives with C2.
-  host replace  Replace a host pin. Arrives with C2.
-  host observe  Observe a host key. Arrives with C2.
+  host approve  Approve a host pin. Available now.
+  host replace  Replace a host pin. Available now.
+  host observe  Observe a host key. Available now.
   request show  Show a request. Available now.
   request cancel  Cancel a request. Available now.
   folder create  Create a document folder. Arrives with C3.

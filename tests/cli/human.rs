@@ -1,6 +1,20 @@
 use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
 
+#[test]
+fn c2_host_human_previews_and_remote_execution_evidence() {
+    super::mutation::host_verbs_match_prepare();
+    // Successful reads/approvals/replacements and their no-ops require the
+    // isolated SSH target, never a fixture inside this libtest process.
+    let remote = include_str!("../cli_remote/hosts.rs");
+    for case in [
+        "human_host_verbs_and_noops",
+        "observe_prints_the_next_commands_input_line",
+    ] {
+        assert!(remote.contains(&format!("fn {case}(")));
+    }
+}
+
 fn key_human_result(
     f: &super::keys::Fixture,
     verb: &str,

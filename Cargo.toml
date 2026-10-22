@@ -55,6 +55,10 @@ name = "ssh_fixture"
 harness = false
 
 [[test]]
+name = "cli_remote"
+harness = false
+
+[[test]]
 name = "ssh_transport"
 harness = false
 

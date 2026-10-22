@@ -215,6 +215,13 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "host_observe",
+    "host_approve_prepare",
+    "host_approve",
+    "host_approve_host_mismatch",
+    "host_approve_host_replacement_required",
+    "host_replace_prepare",
+    "host_replace",
     "key_import",
     "key_generate",
     "key_generate_unlock_required",
@@ -295,6 +302,7 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "host_observe_text",
     "repo_create_prepare_text",
     "remote_add_text",
     "remote_select_identity_required_text",

@@ -44,7 +44,10 @@ quality reviews, both **APPROVE, no outstanding findings**, over
 at `984b315`; sessions are recorded below. The six-command **448-test** gate at
 `58f2847` and targeted privacy/Clippy checks after the correction remain the
 verification evidence. This follow-up records approvals only; no tests are rerun.
-Controller owns push; Task 10 is not assigned. Task 8's approvals remain below.
+Controller owns push. The owner subsequently assigned **Task 10 only**, starting
+at `2cf87a3`, to a fresh inline implementer without subagents. Task 10's targeted
+checks now pass and its delivery is recorded below; independent controller review
+is pending. Task 11 and its Part C gate are not started. Task 8's approvals remain below.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -384,6 +387,118 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 10 — Host Observation, Approval, Replacement And Unlock (2026-10-22)
+
+#### Base, scope and delivery
+
+- Task/Part C base: **`2cf87a3f5bccf2ca9ced4883fd4d87ad78689633`**. The assigned
+  branch/worktree was clean. `git fetch origin && git merge origin/main` returned
+  **Already up to date**; main is **`32d938d956a0d3374b6be27b7740e99c4ea39727`**.
+  The approved Part B reviews above are preserved. No subagents were dispatched.
+- Delivered `host observe` as an unlocking read with a required joined repository
+  path and optional C1-parsed authority. It writes immediate human connecting
+  progress, uses the existing terminal credential provider and caller-owned
+  supplied-passphrase flag, and passes F2's observation envelope through unchanged.
+- Delivered confirmed, input-required `host approve` and `host replace` through
+  the existing mutation driver. Their closed input schemas/examples require the
+  approved string fields; invalid authority input is a value-free `invalid_input`.
+  Shared driver request/confirmation checks remain ordered before input.
+- Human observation renders host/port, fetch/push use, presented and pinned keys,
+  reapproval and one compact next-command input line. The live test pipes that
+  exact line to approval prepare. A pure case imports the existing bin renderer
+  and C1 parser into the harness to prove bracketed IPv6 round trips without
+  requiring an IPv6 listener. Host human results, no-ops, mismatch data and
+  replacement guidance are covered alongside JSON results.
+- Added `cli_remote` with `harness = false`, **27 isolated cases**. Plain-key
+  repositories/registry selection are built through the CLI. Protected cases use
+  `World::new()` at `World::data()`, verify its existing selected registration via
+  CLI, and copy the approved `verify_ssh_transport` pin helper with `Provider`.
+  All CLI children use the existing isolated CLI or Unix PTY helpers.
+- SSH cases prove preview does not connect, approvals/replacements store only the
+  intended pin, receive updates remain empty and local references remain unchanged.
+  Wrong-old replacement is F2's `invalid_input`; wrong-new is `host_mismatch` with
+  the actual presented key. No refusal changes the pin.
+- Protected cases prove JSON unlock refusal, unpinned observation without unlock,
+  successful Unix terminal unlock, the known wrong-passphrase
+  `transport_unavailable`/exit 5 with hint and exactly one prompt/no retry, server
+  rejection as `unlock_failed`/exit 3, and Ctrl-C as `unlock_required`/exit 3.
+  Cancelled approval leaves no pin or request record; cancelled observation keeps
+  its pin. Both streams, transcript, data and CLI home are scanned for the right
+  and wrong passphrases in UTF-8 and UTF-16LE. Actual fixture private-key fragments
+  are also scanned in helper-produced outputs, with probes retained only in memory.
+- Applied E2 and E3, added confirmed-flag/schema/human rows, and registered seven
+  JSON goldens plus the observation text golden. Actual live envelopes are schema
+  checked before normalization. Port fields and recovery-authority ports normalize
+  to 0. Every generated golden and both root-help diffs were read.
+- Replaced every staged exit code with named SSH cases, including `key_rejected`
+  via anonymous server acceptance and the owner's **cross-platform missing-selected-
+  source** `key_unavailable` case before connection. Missing-source import still
+  succeeds. The exact **49 F2 / 52 CLI-inclusive union** and unreachable reasons are
+  unchanged. Unix PTY execution is not represented as Windows prompting evidence.
+- The Task 9 privacy inventory now accounts for **18** available C2 verbs: its
+  unchanged local successful-execution inventory plus explicit, disjoint named
+  SSH JSON/human cases using the common output scan. This authorized adjustment
+  preserves the local execution assertions; Task 11 still owns global evidence
+  and the Part C gate. No privacy-filter/broad-gate run is claimed here.
+
+#### RED, corrections and GREEN
+
+All Rust commands used Devenv and Cargo `--locked`, except ordinary fmt. Before
+production edits, `cargo test --locked --test cli_remote` was **0 passed / 26
+failed** after correcting new-harness compilation and list-shape assumptions.
+The failures were unavailable host behavior (including missing terminal prompts).
+The IPv6 pure case was added during coverage review, bringing the target to 27.
+
+New-test corrections during implementation, without changing F2 or old assertions:
+
+- Use the actual transport module exports, `accept_anonymous`, PTY String
+  transcript, and the published list DTO's `items` field.
+- Expect `invalid_input` for a mismatched old pin (`bind/host.rs:856–859`), rather
+  than the new test's guessed `external_change`; use a valid canonical SHA256
+  fingerprint in the replacement example.
+- Normalize complete text port fields/authorities rather than passing a short
+  port string to the golden helper's minimum-length placeholder rule.
+- A strengthened output scan initially treated the whole fixture URL as secret.
+  Remote-add intentionally publishes its credential-free location, as its existing
+  golden shows. The scan now checks actual private-key fragments and secret
+  sentinels; no output contract or library behavior was changed.
+
+Final targeted verification, without golden-update mode:
+
+| Command after `devenv shell --` | Result |
+| --- | --- |
+| `cargo test --locked --test cli_remote` | **27 passed**, 0 failed |
+| `cargo test --locked --test cli input_schemas` | **7 passed**, 159 filtered |
+| `cargo test --locked --test cli exits` | **5 passed**, 161 filtered; exact audit accounting |
+| `cargo test --locked --test cli help` | **9 passed**, 157 filtered |
+| `cargo fmt --check` | Passed; final formatting also applied before the last remote/schema run |
+
+This is **48 passing task-check cases**, not a claim that the complete CLI, bin,
+privacy, Clippy or all-feature gates ran. The CLI inventory is now 166 (two new
+tests); its shared host prepare helper executes in the input-schema check. Golden
+generation used `MANYHANDS_UPDATE_GOLDEN=1` outside CI, followed by normal compares.
+
+#### Self-review and checkpoint
+
+- Reviewed production glue, new test sources, schema/example/golden contents,
+  platform guards, output scans and all existing-file diffs. No unresolved
+  self-review finding or library gap. The wrong-passphrase defect remains the
+  already-authorized separate ticket `01M5E6DYJ6GN7DMW4424TH3V78`.
+- `git diff --check` passed. A restricted `git diff --exit-code` confirmed no
+  change to `Cargo.lock`, forbidden library files or `schemas/v1`. Cargo.toml
+  changes only by the approved `[[test]]` entry; production adds no thread/child,
+  input diagnostic values, secret formatting/serialization or new result code.
+- Pre-delivery `git merge-tree --write-tree HEAD origin/main` passed with tree
+  **`dbb672264e4f50220cb46ecfcc00390f82a9dcd5`** (committed base before task staging).
+- Canonical completion comment: **`01M5K0F12D504FN3ZZCCPE6RXH`**, allocated by built
+  CLI `id new --json` through `tests/support/cli.rs`, with fresh temporary HOME/
+  data and terminal detachment. The temporary input-schema-filter utility was
+  removed, and the seven-test filter passed again; its utility run is not counted.
+- Task-end commit subject: **`feat: add host observe, approve and replace`**, with
+  the required Claude Opus 5.5 coauthor. Its exact head is returned to the
+  controller. Independent spec/quality review remains pending. Ticket stays open;
+  no push, PR, cleanup, native CI, Task 11 or Part C broad gate.
 
 ### Part B Independent Review Checkpoint — Both Approve (2026-10-22)
 

@@ -1,5 +1,5 @@
-//! C2's audited code inventory. Staged evidence is deliberately not proof:
-//! Tasks 8–10 must replace each staged entry with binary/SSH rows.
+//! C2's audited code inventory. SSH references run in the isolated cli_remote
+//! target; its PTY cases run on Unix, with Windows prompting still manual evidence.
 use super::{
     mutation::{Fixture, IDENTITY, REMOTE, REQUEST, checked},
     remotes::{self, NEXT, SELECT},
@@ -41,54 +41,10 @@ const REASONS: &[(&str, &str)] = &[
     ),
 ];
 
-const STAGED: &[(&str, u8, &str)] = &[
-    #[cfg(not(unix))]
-    (
-        "key_unavailable",
-        10,
-        "Windows: missing-selected-source host observe; Task 8's generated-key deletion fixture is Unix-only",
-    ),
-    (
-        "host_mismatch",
-        10,
-        "SSH approval/replacement presented fingerprint mismatch",
-    ),
-    (
-        "host_replacement_required",
-        10,
-        "Approval prepare over another pin",
-    ),
-    (
-        "publication_remote_required",
-        10,
-        "Observe without a publication remote",
-    ),
-    (
-        "no_selected_key",
-        10,
-        "Observe pinned host without a selected key",
-    ),
-    (
-        "key_rejected",
-        10,
-        "SSH server rejects an unprotected selected key",
-    ),
-    (
-        "unlock_failed",
-        10,
-        "SSH server rejects the correctly unlocked key",
-    ),
-    (
-        "transport_unavailable",
-        10,
-        "Wrong-passphrase SSH case, current library contract",
-    ),
-];
+const STAGED: &[(&str, u8, &str)] = &[];
 
 enum How {
     Here,
-    // Task 10 installs real function references, then this variant is constructed.
-    #[allow(dead_code)]
     Remote(&'static str),
     Prompt(&'static str),
 }
@@ -164,6 +120,15 @@ macro_rules! row {
     };
 }
 const ROWS: &[Row] = &[
+    Row { name: "ssh_mismatch", args: &[], input: b"", code: "host_mismatch", exit: 3, how: How::Remote("approve_a_fingerprint_the_host_does_not_present_is_host_mismatch") },
+    Row { name: "ssh_replacement", args: &[], input: b"", code: "host_replacement_required", exit: 3, how: How::Remote("approve_over_another_pin_is_host_replacement_required") },
+    Row { name: "ssh_publication", args: &[], input: b"", code: "publication_remote_required", exit: 3, how: How::Remote("observe_without_a_publication_remote_is_publication_remote_required") },
+    Row { name: "ssh_no_key", args: &[], input: b"", code: "no_selected_key", exit: 3, how: How::Remote("observe_a_pinned_host_without_a_selected_key_is_no_selected_key") },
+    Row { name: "ssh_missing_source", args: &[], input: b"", code: "key_unavailable", exit: 3, how: How::Remote("observe_with_a_missing_selected_source_is_key_unavailable") },
+    Row { name: "ssh_key_rejected", args: &[], input: b"", code: "key_rejected", exit: 3, how: How::Remote("a_server_accepting_without_the_selected_key_is_key_rejected") },
+    Row { name: "ssh_unlock_required", args: &[], input: b"", code: "unlock_required", exit: 3, how: How::Remote("json_approve_with_a_protected_key_is_unlock_required") },
+    Row { name: "ssh_unlock_failed", args: &[], input: b"", code: "unlock_failed", exit: 3, how: How::Remote("a_rejected_key_after_the_right_passphrase_is_unlock_failed") },
+    Row { name: "ssh_wrong_passphrase", args: &[], input: b"", code: "transport_unavailable", exit: 5, how: How::Remote("a_wrong_passphrase_is_today_transport_unavailable_with_the_hint") },
     row!("protected_generation", &["key", "generate", "--input", "-", "--request-id", REQUEST], super::keys::PROTECTED, "unlock_required", 3),
     row!("imported_delete", &["key", "delete", "--key-id", "{key}", "--prepare"], b"", "key_not_deletable", 2),
     row!("selected_key_remove", &["key", "remove", "--key-id", "{key}", "--request-id", super::remotes::LAST], b"", "selected_key_in_use", 3),

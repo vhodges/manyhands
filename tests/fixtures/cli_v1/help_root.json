@@ -1029,27 +1029,102 @@
         "summary": "Delete a key."
       },
       {
-        "available": false,
+        "available": true,
         "command": "host approve",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Approve a host pin."
       },
       {
-        "available": false,
+        "available": true,
         "command": "host replace",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Replace a host pin."
       },
       {
-        "available": false,
+        "available": true,
         "command": "host observe",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--authority",
+            "required": false,
+            "summary": "Select a publication remote authority to observe.",
+            "value": "host[:port]"
+          }
+        ],
+        "repository": "required",
         "summary": "Observe a host key."
       },
       {

@@ -53,6 +53,21 @@ pub fn prepare_output(json: bool, envelope: &Envelope<PrepareDataDto>) -> Output
     }
 }
 
+pub fn observation_output(
+    json: bool,
+    envelope: &Envelope<manyhands::repository::HostObservationDto>,
+    supplied: bool,
+) -> Output {
+    if !json && envelope.failure_class().is_some() {
+        return human_failure(
+            envelope,
+            (supplied && envelope.code == ResultCode::TransportUnavailable)
+                .then_some("hint: if the passphrase was wrong, run the command again"),
+        );
+    }
+    envelope_output(json, envelope, human_admin::observation)
+}
+
 pub const USAGE_CODE: ResultCode = ResultCode::UsageError;
 pub const UNAVAILABLE_CODE: ResultCode = ResultCode::CommandUnavailable;
 

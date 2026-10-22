@@ -159,6 +159,36 @@ pub fn failure_extra(envelope: &Envelope<MutationDataDto>, supplied: bool) -> St
     }
     out
 }
+pub fn observation(dto: &HostObservationDto) -> Human {
+    let mut stdout = fields(dto);
+    if dto.pinned_algorithm.as_deref() != Some(dto.presented_algorithm.as_str())
+        || dto.pinned_fingerprint.as_deref() != Some(dto.presented_fingerprint.as_str())
+    {
+        let authority = if dto.host.contains(':') {
+            format!("[{}]:{}", dto.host, dto.port)
+        } else {
+            format!("{}:{}", dto.host, dto.port)
+        };
+        // Reconstruct public next-command fields only from the published DTO.
+        let mut input = serde_json::json!({
+            "authority": authority,
+            "algorithm": dto.presented_algorithm,
+            "fingerprint": dto.presented_fingerprint,
+        });
+        let verb = if let Some(old) = &dto.pinned_fingerprint {
+            input["old_fingerprint"] = old.clone().into();
+            "replace"
+        } else {
+            "approve"
+        };
+        stdout.push_str(&format!("Input for host {verb}:\n{input}\n"));
+    }
+    Human {
+        stdout,
+        notes: vec![],
+    }
+}
+
 pub fn request(dto: &RequestDto) -> Human {
     Human {
         stdout: fields(dto),

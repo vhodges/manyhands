@@ -14,8 +14,7 @@ pub enum InputRule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     Read,
-    /// A read that can ask to unlock a key: `host observe` (Task 10).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// A read that can ask to unlock a key: `host observe`.
     UnlockingRead,
     Mutation {
         confirmed: bool,
@@ -577,9 +576,65 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Refused,
         },
     },
-    planned("host", "approve", "Approve a host pin.", "C2"),
-    planned("host", "replace", "Replace a host pin.", "C2"),
-    planned("host", "observe", "Observe a host key.", "C2"),
+    CommandSpec {
+        resource: "host",
+        verb: "approve",
+        summary: "Approve a host pin.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "host",
+        verb: "replace",
+        summary: "Replace a host pin.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "host",
+        verb: "observe",
+        summary: "Observe a host key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            option(
+                "--authority",
+                Some("host[:port]"),
+                false,
+                "Select a publication remote authority to observe.",
+            ),
+        ],
+        kind: Kind::UnlockingRead,
+    },
     CommandSpec {
         resource: "request",
         verb: "show",

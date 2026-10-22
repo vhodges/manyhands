@@ -409,6 +409,7 @@ fn input_refusals_through_the_binary_and_ids_are_ordered() {
 }
 #[test]
 fn every_mutation_verbs_confirmed_flag_matches_prepare() {
+    host_verbs_match_prepare();
     key_verbs_match_prepare();
     let remote = Fixture::new();
     super::remotes::add(&remote);
@@ -455,6 +456,76 @@ fn every_mutation_verbs_confirmed_flag_matches_prepare() {
         assert!(preview["data"]["confirmation_id"].is_string());
     }
 }
+pub fn host_verbs_match_prepare() {
+    let f = Fixture::new();
+    let root = f.repo.root.to_str().unwrap();
+    checked(
+        &[
+            "remote",
+            "add",
+            "--repo",
+            root,
+            "--input",
+            "-",
+            "--request-id",
+            REQUEST,
+            "--json",
+        ],
+        &f.env,
+        br#"{"name":"origin","url":"ssh://git@example.invalid:2222/repo.git"}"#,
+        0,
+        "ok",
+        None,
+    );
+    super::remotes::select(&f);
+    for verb in ["approve", "replace"] {
+        let input = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("tests/fixtures/cli_input_v1/host_{verb}.json")),
+        )
+        .unwrap();
+        if verb == "replace" {
+            let value: Value = serde_json::from_slice(&input).unwrap();
+            let service = manyhands::repository::RepositoryService::open_at(&f.env.data).unwrap();
+            support::credentials::pin_host(
+                &service,
+                "example.invalid",
+                2222,
+                "ssh-ed25519",
+                value["old_fingerprint"].as_str().unwrap(),
+            );
+        }
+        let args = [
+            "host",
+            verb,
+            "--repo",
+            root,
+            "--input",
+            "-",
+            "--prepare",
+            "--json",
+        ];
+        let preview = checked(
+            &args,
+            &f.env,
+            &input,
+            0,
+            "ok",
+            Some("host_preview.schema.json"),
+        );
+        assert_eq!(preview["data"]["command"], format!("host {verb}"));
+        assert!(preview["data"]["confirmation_id"].is_string());
+        let out = run(&args[..args.len() - 1], &f.env, &input);
+        assert_eq!(out.status, 0);
+        assert!(out.stderr.is_empty());
+        assert!(
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .contains(&format!("Preview of host {verb}"))
+        );
+    }
+}
+
 pub fn key_verbs_match_prepare() {
     let f = super::keys::Fixture::new();
     f.call(

@@ -209,11 +209,10 @@ fn validate(command: &CommandSpec, args: &ArgMatches) -> Result<(), String> {
         ("ticket", "list") if args.get_flag("ready") && args.get_flag("blocked") => {
             return Err("--ready conflicts with --blocked.".to_owned());
         }
-        ("host", "inspect") => {
-            authority(
-                args.get_one::<String>("authority")
-                    .expect("required authority"),
-            )?;
+        ("host", "inspect" | "observe") => {
+            if let Some(text) = args.get_one::<String>("authority") {
+                authority(text)?;
+            }
         }
         _ => {}
     }

@@ -139,7 +139,7 @@ fn catalog_repository_rules_and_planned_metadata_match_the_design() {
                     (command.resource, command.verb),
                     ("repo", "list")
                         | ("key", _)
-                        | ("host", _)
+                        | ("host", "list" | "inspect")
                         | ("id", "new")
                         | ("request", "show" | "cancel")
                 );

@@ -185,6 +185,46 @@ fn host_inspect(
     ))
 }
 
+pub fn host_observe(
+    service: &RepositoryService,
+    session: &mut crate::mutate::Session,
+    args: &ArgMatches,
+) -> Output {
+    use crate::{admin, catalog, mutate, prompt::TerminalProvider, terminal::Terminal};
+    use manyhands::repository::keys::SessionCredentials;
+    use std::{cell::Cell, io::Write};
+    let spec = catalog::find("host", "observe").expect("host observe catalog entry");
+    let root = match admin::mutation_root(session, spec, args, None) {
+        Ok(root) => root,
+        Err(out) => return out,
+    };
+    let authority = match args
+        .get_one::<String>("authority")
+        .map(|text| parse::authority(text))
+        .transpose()
+    {
+        Ok(value) => value.map(|(host, port)| SshAuthority { host, port }),
+        Err(_) => {
+            return mutate::refusal(session, "host observe", None, ResultCode::UsageError, None);
+        }
+    };
+    if !session.json {
+        let _ = writeln!(std::io::stderr().lock(), "progress: connecting");
+    }
+    let supplied = Cell::new(false);
+    let terminal = if session.interactive {
+        session
+            .terminal
+            .as_deref_mut()
+            .map(|t| t as &mut dyn Terminal)
+    } else {
+        None
+    };
+    let mut credentials = SessionCredentials::new(TerminalProvider::new(terminal, &supplied));
+    let envelope = service.observe_host(&root, authority.as_ref(), &mut credentials);
+    render::observation_output(session.json, &envelope, supplied.get())
+}
+
 fn index_status(
     service: &RepositoryService,
     args: &ArgMatches,
@@ -585,6 +625,9 @@ pub fn dispatch(
         "key public" => {
             return read_output(&name, json, key_public(service, args), human::public_key);
         }
+        "host observe" => return host_observe(service, session, args),
+        "host approve" => return crate::admin::host_approve(service, session, command, args),
+        "host replace" => return crate::admin::host_replace(service, session, command, args),
         "host list" => return read_output(&name, json, host_list(service), human::host_list),
         "host inspect" => {
             return read_output(

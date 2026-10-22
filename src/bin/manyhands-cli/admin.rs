@@ -8,11 +8,13 @@ use crate::{
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, InitialsChange, KeyClearInput, KeyDeleteInput,
-        KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, RemoteAddInput,
-        RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
-        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
+        CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, InitialsChange,
+        KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
+        KeySelectInput, Mutation, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput,
+        RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
+        RequestId, SharedKeyId,
         keys::{KeyProtection, KeyStore},
+        transport::SshAuthority,
     },
     results::ResultCode,
 };
@@ -713,6 +715,116 @@ pub fn key_delete(
                 store: store.clone(),
                 id,
             })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+struct HostInput {
+    authority: SshAuthority,
+    algorithm: String,
+    fingerprint: String,
+    old_fingerprint: Option<String>,
+}
+
+pub fn host_approve(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    host_mutation(service, session, spec, args, false)
+}
+
+pub fn host_replace(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    host_mutation(service, session, spec, args, true)
+}
+
+fn host_mutation(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    replace: bool,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let fields = (|| {
+            object.only(if replace {
+                &["authority", "algorithm", "fingerprint", "old_fingerprint"]
+            } else {
+                &["authority", "algorithm", "fingerprint"]
+            })?;
+            Ok((
+                object.string("authority")?,
+                object.string("algorithm")?,
+                object.string("fingerprint")?,
+                if replace {
+                    Some(object.string("old_fingerprint")?)
+                } else {
+                    None
+                },
+            ))
+        })();
+        let (authority, algorithm, fingerprint, old_fingerprint) =
+            fields.map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let (host, port) = crate::parse::authority(&authority).map_err(|_| {
+            mutate::refusal(
+                session,
+                &name(spec),
+                flags.request_id,
+                ResultCode::InvalidInput,
+                Some("Input field authority must be host[:port] or [IPv6][:port], with a port from 1 to 65535.".into()),
+            )
+        })?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((
+            flags,
+            root,
+            HostInput {
+                authority: SshAuthority { host, port },
+                algorithm,
+                fingerprint,
+                old_fingerprint,
+            },
+        ))
+    })();
+    let (flags, root, input) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            if let Some(old_fingerprint) = &input.old_fingerprint {
+                Mutation::HostReplace(HostReplaceInput {
+                    root: root.clone(),
+                    authority: input.authority.clone(),
+                    algorithm: input.algorithm.clone(),
+                    fingerprint: input.fingerprint.clone(),
+                    old_fingerprint: old_fingerprint.clone(),
+                })
+            } else {
+                Mutation::HostApprove(HostApproveInput {
+                    root: root.clone(),
+                    authority: input.authority.clone(),
+                    algorithm: input.algorithm.clone(),
+                    fingerprint: input.fingerprint.clone(),
+                })
+            }
         },
         &mut std::thread::sleep,
     )
