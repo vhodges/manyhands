@@ -477,7 +477,7 @@ fn the_why_blocked_panel_gives_the_selected_rows_reasons_in_full(cx: &mut TestAp
     let by_id = names(&shell, &root);
     let rows = shell
         .workspace
-        .read_with(cx, |workspace, cx| workspace.tickets_pane.rows(cx));
+        .read_with(cx, |workspace, cx| workspace.tickets_pane().rows(cx));
     shell.keys("secondary-2", cx);
     let mut shown = Vec::new();
     for (index, item) in list.items.iter().enumerate() {

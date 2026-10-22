@@ -56,7 +56,8 @@ use gpui_kit::{
 };
 use manyhands::{repository::RemoteDto, results::Outcome};
 
-use super::{Read, Wrapped, wrapped};
+use super::{Wrapped, wrapped};
+use crate::desktop::model::read_state::Read;
 use crate::desktop::{
     model::{
         list_state::LABEL_BUSY,
@@ -593,7 +594,7 @@ impl RemotesPage {
                 body.child(text(id, code.message()))
                     .child(div().text_xs().text_color(muted).child(code.as_str())),
             ),
-            Read::Ready(_) => None,
+            Read::None | Read::Ready(_) => None,
         }
     }
 

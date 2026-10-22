@@ -100,16 +100,42 @@ impl OpenTarget {
     /// What `item`, listed in `repo`, opens as: by ID when it has a
     /// well-formed one, otherwise by its path.
     pub(crate) fn for_item(repo: &RepoKey, item: &ItemDto) -> Self {
+        ItemLocator::for_item(item).in_repository(repo)
+    }
+}
+
+/// An item's address before a row is opened in its repository.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum ItemLocator {
+    Identified { kind: ItemDtoKind, id: ItemId },
+    Inspect { worktree: String, path: String },
+}
+
+impl ItemLocator {
+    pub(crate) fn for_item(item: &ItemDto) -> Self {
         match item.id.as_deref().map(str::parse::<ItemId>) {
-            Some(Ok(id)) => Self::Item {
-                repo: repo.clone(),
+            Some(Ok(id)) => Self::Identified {
                 kind: item.kind,
                 id,
             },
             _ => Self::Inspect {
-                repo: repo.clone(),
                 worktree: item.context.worktree.clone(),
                 path: item.path.clone(),
+            },
+        }
+    }
+
+    pub(crate) fn in_repository(&self, repo: &RepoKey) -> OpenTarget {
+        match self {
+            Self::Identified { kind, id } => OpenTarget::Item {
+                repo: repo.clone(),
+                kind: *kind,
+                id: id.clone(),
+            },
+            Self::Inspect { worktree, path } => OpenTarget::Inspect {
+                repo: repo.clone(),
+                worktree: worktree.clone(),
+                path: path.clone(),
             },
         }
     }

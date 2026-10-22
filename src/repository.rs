@@ -5013,6 +5013,16 @@ impl RepositoryService {
                         "the configured publication remote is unavailable or ineligible",
                     ));
                 }
+                if matches!(
+                    record.completed_step,
+                    Some(LocalStep::ConfigurationWritten | LocalStep::InitializationCommitted)
+                ) {
+                    // This operation wrote the configuration. A prior attempt
+                    // may have committed without publishing its index entry.
+                    // Repair only an absent entry, from current HEAD: never
+                    // regress later commits or overwrite subsequent staging.
+                    let _ = refresh_missing_configuration_index(&repository, &root);
+                }
                 ensure_worktree_exclusion(&repository, &root)?;
                 if record.completed_step == Some(LocalStep::AuthoritativeObserved) {
                     let commit_oid = repository
@@ -5040,8 +5050,17 @@ impl RepositoryService {
                         )))
                     };
                 }
+                // A repository enabled in Git that this data directory
+                // does not hold, enabled through another say, is
+                // registered here and indexed, as after a commit.
+                let newly_registered = registered_repository_id(
+                    &self.registry_path,
+                    &root,
+                    RepositoryOperation::Enable,
+                )
+                .is_err_and(|error| error.kind == RepositoryErrorKind::RepositoryNotRegistered);
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
-                if record.is_pending {
+                if record.is_pending || newly_registered {
                     let commit_oid = repository
                         .head()
                         .and_then(|head| head.peel_to_commit())
@@ -5208,6 +5227,11 @@ impl RepositoryService {
                 };
             }
         };
+        // The commit is authoritative; this must stay outside the rollback
+        // closure. Like save, index publication is best effort and runs under
+        // our existing lease, before any post-commit interruption or handoff.
+        let _ =
+            refresh_configuration_index(&repository, commit_oid, IndexRefreshPolicy::ReplaceOwned);
         self.check_failure(
             FailurePoint::AfterInitializationCommit,
             RepositoryOperation::Enable,
@@ -8602,6 +8626,61 @@ fn refresh_owned_index(
     added_paths: &[&Path],
     removed_source: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    refresh_owned_index_with_policy(
+        repository,
+        committed_index,
+        added_paths,
+        removed_source,
+        IndexRefreshPolicy::ReplaceOwned,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum IndexRefreshPolicy {
+    ReplaceOwned,
+    AddMissing,
+}
+
+fn refresh_configuration_index(
+    repository: &Repository,
+    commit: git2::Oid,
+    policy: IndexRefreshPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut committed = Index::new()?;
+    committed.read_tree(&repository.find_commit(commit)?.tree()?)?;
+    refresh_owned_index_with_policy(
+        repository,
+        &committed,
+        &[Path::new(canonical::CONFIG_PATH)],
+        None,
+        policy,
+    )
+}
+
+fn refresh_missing_configuration_index(
+    repository: &Repository,
+    root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let head = repository.head()?.peel_to_commit()?;
+    let Some((blob, _)) = configuration_entry_from_tree(&head.tree()?) else {
+        return Ok(());
+    };
+    let path = root.join(canonical::CONFIG_PATH);
+    if regular_nonexecutable_file(&std::fs::symlink_metadata(&path)?)
+        && std::fs::read(path)? == repository.find_blob(blob)?.content()
+    {
+        refresh_configuration_index(repository, head.id(), IndexRefreshPolicy::AddMissing)?;
+    }
+    Ok(())
+}
+
+fn refresh_owned_index_with_policy(
+    repository: &Repository,
+    committed_index: &Index,
+    added_paths: &[&Path],
+    removed_source: Option<&Path>,
+    policy: IndexRefreshPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
     let index_path = repository.path().join("index");
@@ -8620,10 +8699,16 @@ fn refresh_owned_index(
     // writers cannot stage unrelated changes between the read and publication.
     // Serialize a detached index: repository-backed writes may zero unrelated
     // racy entries' stat fields. Never replace the live contents with read_tree.
-    let index_modified = std::fs::metadata(&index_path)?.modified()?;
+    let index_modified = match std::fs::metadata(&index_path) {
+        Ok(metadata) => Some(metadata.modified()?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let scratch = tempfile::tempdir_in(repository.path())?;
     let scratch_index = scratch.path().join("index");
-    std::fs::copy(&index_path, &scratch_index)?;
+    if index_modified.is_some() {
+        std::fs::copy(&index_path, &scratch_index)?;
+    }
     let mut index = Index::open(&scratch_index)?;
     let mut changed = false;
     if let Some(source) = removed_source
@@ -8633,6 +8718,11 @@ fn refresh_owned_index(
         changed = true;
     }
     for path in added_paths {
+        if matches!(policy, IndexRefreshPolicy::AddMissing)
+            && (0..=3).any(|stage| index.get_path(path, stage).is_some())
+        {
+            continue;
+        }
         let entry = committed_index
             .get_path(path, 0)
             .ok_or_else(|| git2::Error::from_str("the committed owned entry is missing"))?;
@@ -8669,7 +8759,9 @@ fn refresh_owned_index(
         file.write_all(&bytes)?;
         // Advancing the index timestamp could make an unchanged cached stat
         // entry stop being racy, hiding an unrelated same-stat worktree edit.
-        file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        if let Some(index_modified) = index_modified {
+            file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        }
         file.sync_all()?;
         drop(lock.file.take());
         std::fs::rename(&lock.path, &index_path)?;
@@ -10925,6 +11017,108 @@ mod tests {
         fn assert_sync<T: Sync>() {}
 
         assert_sync::<RepositoryService>();
+    }
+
+    #[test]
+    fn enablement_index_preserves_changes_staged_after_validation() {
+        // Identity resolution runs after the clean-worktree check. Use the
+        // existing provider seam to model a Git writer staging at that point.
+        #[derive(Default)]
+        struct StageAfterValidation {
+            entries: Vec<String>,
+            modified: Option<std::time::SystemTime>,
+        }
+        impl IdentityConfigProvider for StageAfterValidation {
+            fn effective_config(
+                &mut self,
+                repository: &Repository,
+                root: &Path,
+                _operation: RepositoryOperation,
+            ) -> Result<Config, RepositoryError> {
+                std::fs::write(root.join("fixture.txt"), b"staged modification\n").unwrap();
+                std::fs::write(root.join("other.txt"), b"staged addition\n").unwrap();
+                let mut index = repository.index().unwrap();
+                index.add_path(Path::new("fixture.txt")).unwrap();
+                index.add_path(Path::new("other.txt")).unwrap();
+                index.write().unwrap();
+                self.entries = index.iter().map(|entry| format!("{entry:?}")).collect();
+                self.modified = Some(
+                    std::fs::metadata(repository.path().join("index"))
+                        .unwrap()
+                        .modified()
+                        .unwrap(),
+                );
+                std::fs::write(root.join("fixture.txt"), b"later unstaged modification\n").unwrap();
+                Ok(repository.config().unwrap())
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = create_born_repository(directory.path())
+            .canonicalize()
+            .unwrap();
+        let repository = Repository::open(&root).unwrap();
+        // This low-level fixture makes its baseline commit without an index.
+        let mut baseline = repository.index().unwrap();
+        baseline
+            .read_tree(&repository.head().unwrap().peel_to_tree().unwrap())
+            .unwrap();
+        baseline.write().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let mut provider = StageAfterValidation::default();
+        let outcome = service
+            .enable_with_identity_provider(
+                EnableRepositoryRequest {
+                    root: root.clone(),
+                    primary_branch: "main".to_owned(),
+                    identity: None,
+                    operation_id: OperationId::new(),
+                },
+                None,
+                &mut provider,
+            )
+            .unwrap();
+        assert!(matches!(outcome, EnableRepositoryOutcome::Enabled { .. }));
+        let reopened = Repository::open(&root).unwrap();
+        let index = reopened.index().unwrap();
+        assert_eq!(
+            index
+                .iter()
+                .filter(|entry| entry.path != canonical::CONFIG_PATH.as_bytes())
+                .map(|entry| format!("{entry:?}"))
+                .collect::<Vec<_>>(),
+            provider.entries
+        );
+        assert_eq!(
+            std::fs::metadata(repository.path().join("index"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            provider.modified.unwrap()
+        );
+        let tree = reopened.head().unwrap().peel_to_tree().unwrap();
+        let path = Path::new(canonical::CONFIG_PATH);
+        assert_eq!(
+            index.get_path(path, 0).unwrap().id,
+            tree.get_path(path).unwrap().id()
+        );
+        assert_eq!(reopened.status_file(path).unwrap(), Status::CURRENT);
+        assert!(tree.get_path(Path::new("other.txt")).is_err());
+        assert_eq!(
+            reopened
+                .find_blob(tree.get_path(Path::new("fixture.txt")).unwrap().id())
+                .unwrap()
+                .content(),
+            b"fixture\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("fixture.txt")).unwrap(),
+            b"later unstaged modification\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("other.txt")).unwrap(),
+            b"staged addition\n"
+        );
     }
 
     #[test]

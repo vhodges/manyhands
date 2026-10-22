@@ -101,6 +101,8 @@ impl Fixture {
         )
         .unwrap();
         let mut index = repository.index().unwrap();
+        // This fixture authors its initial configuration before enablement;
+        // staging it constructs the baseline commit, not an index repair.
         index.add_path(Path::new(".manyhands/config.toml")).unwrap();
         index.add_path(Path::new("docs/a.md")).unwrap();
         let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();

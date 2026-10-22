@@ -289,7 +289,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let label = recovery_label(action.action);
         let runnable = self
-            .services
+            .services()
             .operations()
             .read(cx)
             .recovery_step(id, action)
@@ -316,7 +316,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let requests: Vec<_> = self
-            .services
+            .services()
             .operations()
             .read(cx)
             .requests()
@@ -336,7 +336,7 @@ impl Workspace {
             );
         }
         for id in requests {
-            let entry = self.services.operations().read(cx).request(id).cloned();
+            let entry = self.services().operations().read(cx).request(id).cloned();
             if let Some(request) = entry {
                 section = section.child(self.session_entry(&request, cx));
             }
@@ -352,7 +352,7 @@ impl Workspace {
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let muted = cx.theme().muted_foreground;
         let pending: Vec<(RepoKey, ListState<manyhands::repository::OperationListDto>)> = self
-            .services
+            .services()
             .operations()
             .read(cx)
             .pending()
