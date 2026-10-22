@@ -36,7 +36,7 @@ not rerun in this task.
 
 All eighteen API inventory rows are refreshed in place, including signatures,
 typed inputs, confirmation and shared/binding result codes. The audit records
-a 48-code F2 union (51 with the approved CLI-built codes) for later exit
+a 49-code F2 union (52 with the approved CLI-built codes) for later exit
 coverage. Wrong-passphrase defect 01M5E6DY remains deferred as approved.
 
 - [Execution ledger](../../../docs/plans/2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md)

@@ -158,7 +158,7 @@ unpinned observation stops at host verification, before any unlock prompt.
 
 #### C2 exit-coverage union
 
-The eighteen F2 row sets expand to the following **48 codes**. Task 7's exit
+The eighteen F2 row sets expand to the following **49 codes**. Task 7's exit
 table plus its individually justified `REASONS` must account for this union;
 SSH cases may supply the designated coverage. A code's inclusion is not a
 claim that a normal CLI fixture can force every defensive/race/backend path.
@@ -168,7 +168,8 @@ already_applied bare_repository busy cancelled
 confirmation_expired confirmation_mismatch confirmation_not_found
 confirmation_required confirmation_used discovery_pending external_change
 host_mismatch host_replacement_required identity_required index_unavailable
-internal_error invalid_input invalid_path invalid_remote key_not_deletable
+internal_error invalid_configuration invalid_input invalid_path invalid_remote
+key_not_deletable
 key_not_found key_rejected key_unavailable no_selected_key not_confirmable
 not_repository not_repository_root occupied_path ok publication_remote_in_use
 publication_remote_required push_rejected recovery_required registration_pending
@@ -181,7 +182,7 @@ worktree_conflicted worktree_not_clean wrong_branch
 Additionally, the CLI owns the eight codes in design R-6: `usage_error`,
 `command_unavailable`, `invalid_path`, `invalid_input`, `invalid_id`,
 `cancelled`, `unlock_required`, `internal_error`. Their union with the F2 set
-is **51 codes**. Keep the three CLI-only additions explicit when building the
+is **52 codes**. Keep the three CLI-only additions explicit when building the
 coverage table: `command_unavailable` covers the pre-delivery catalog guard,
 not a delivered C2 F2 call. Startup errors remain C1's. Library cancellation
 and prompt cancellation have different origins but share exit 130; a

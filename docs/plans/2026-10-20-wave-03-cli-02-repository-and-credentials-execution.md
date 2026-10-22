@@ -273,7 +273,7 @@ consent, request replay, read sessions, repository resolution, domain outcome
 mapping and host overrides are included, rather than just grepping binding
 code literals.
 
-The audit enumerates a **48-code F2 union** and a **51-code union with the
+The audit enumerates a **49-code F2 union** and a **52-code union with the
 eight approved CLI-built codes**. The three additions are usage_error,
 command_unavailable and invalid_id; command_unavailable is the pre-delivery
 guard. Task 7 must distinguish mapped-but-unreachable defensive arms and
@@ -380,8 +380,31 @@ for the independent per-task/Part reviews the controller coordinates.
 - Self-review: bounded documentation-only diff, complete baseline checklist,
   exact prerequisite IDs, no duplicate C2 rows, code union and named-edit
   accounting, and verification counts reviewed. `rg --count` confirmed 18
-  C2 rows and the 62/6/60 search counts; `git diff --check` passed. Shell
-  arithmetic/unique-key checks confirmed 48 distinct F2 codes and the 258
-  test total. No blocker identified.
+  C2 rows and the 62/6/60 search counts; `git diff --check` passed. Node
+  set-equality verification after spec review confirmed 49 distinct F2 codes,
+  52 with CLI codes, and the 258 test total remains unchanged. The initial
+  count-only check missed an omission; see the correction below.
 - Status: **Task 0 implemented; controller review pending.** Task 1 has not
   started. Ticket remains open and the Cycle remains in progress.
+
+### Task 0 — Spec-Review Correction (2026-10-22)
+
+- Review finding: **important** — the published exit-coverage union omitted
+  `invalid_configuration`, although the per-verb rows included it. Confirmed
+  against `src/repository/mutation/bind/host.rs:228–234` and
+  `src/repository/mutation/outcome.rs:54`.
+- Correction base: `58dab870a330657eadc1cd653420df30653347a0`. Added the code
+  to the union and corrected repeated totals in the audit, this ledger and
+  the Task 0 comment to **49 F2 / 52 including CLI-built codes**. The original
+  delivery commit is preserved; this correction is a separate commit.
+- Verification: a Node set-equality check parsed all **18 distinct C2 rows**
+  and expanded all **8 shared code groups** from the actual audit text. Before
+  correction it found exactly one missing code, `invalid_configuration`, and
+  zero extra codes. After correction the published list equals the expanded
+  row union: **49 unique codes, zero missing, zero extra, zero duplicates**.
+  Adding the eight R-6 CLI codes produces **52 unique codes**. This replaces
+  the insufficient initial check, which only counted a copied union list.
+- Reviewed the documentation diff and ran `git diff --check`; no Rust tests
+  were rerun for this documentation-only correction, as directed. The earlier
+  258-test baseline evidence remains unchanged. The finding is resolved;
+  controller review is still pending and Task 1 has not started.
