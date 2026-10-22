@@ -49,8 +49,6 @@ pub struct CommandSpec {
     pub availability: Availability,
     pub repo: Option<RepoRule>,
     pub options: &'static [OptionSpec],
-    // Startup's mode decision starts using this in Task 2.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub kind: Kind,
 }
 
@@ -61,8 +59,6 @@ impl CommandSpec {
         }
     }
 
-    // Startup's mode decision starts using this in Task 2.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub fn prompts(&self) -> bool {
         matches!(self.kind, Kind::Mutation { .. } | Kind::UnlockingRead)
     }

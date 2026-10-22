@@ -216,8 +216,6 @@ fn validate(command: &CommandSpec, args: &ArgMatches) -> Result<(), String> {
 
 /// Rules checked by startup after the mode is known. Errors hold usage detail
 /// for human stderr.
-// Startup wires in the mode decision in Task 2.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn mode_rules(spec: &CommandSpec, args: &ArgMatches, interactive: bool) -> Result<(), String> {
     if !matches!(spec.kind, Kind::Mutation { .. }) {
         return Ok(());

@@ -25,14 +25,15 @@ planning comment `01M5E861TCK5Z90NYBY0CE69QA`, which says approval and the
 index prerequisite are pending. The fresh implementer's assignment in this
 session was **Task 0 only**. Task 0 now passes both spec and quality review,
 including its correction at `fbae49a`: **49 F2 / 52 CLI-inclusive codes** and
-the **258-test baseline**. The fresh implementer's current assignment is
-**Task 1 only**. Implementers never dispatch subagents.
+the **258-test baseline**. Task 1 also passed independent spec and quality
+reviews and was pushed through `c448c24`. The fresh implementer's current
+assignment is **Task 2 only**. Implementers never dispatch subagents.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `fbae49a`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 1's implementer commits locally
+The branch was pushed at `c448c24`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 2's implementer commits locally
 and returns to the controller for review.
 
 ## Baseline
@@ -516,3 +517,95 @@ The full Cycle gate remains reserved for Task 12.
 - This correction is documentation-only. Per owner direction, no further
   checks or tests were run; existing implementation verification remains the
   evidence above. The bookkeeping commit is local; the controller owns push.
+
+### Task 2 — Controlling Terminal And Interactive Mode
+
+- Date: 2026-10-22. Actual base:
+  **`c448c249d48a9f4cfacfbb259311e43697c07dc4`**. Clean worktree/index and exact
+  ticket branch confirmed before implementation. `git fetch origin main &&
+  git merge origin/main` returned **Already up to date**. Main remains
+  `d7962c3615786ca663662b0debb9460769308a57`.
+- Implemented only Task 2, inline, without subagents. Task 0/1 review/push
+  evidence above was preserved; the assignment authorizes a local commit and
+  returns it to the controller for independent review and subsequent push.
+- Added `Terminal`, `open`, `LineEditor`, `Step`, `MAX_LINE_BYTES = 4096` and
+  the test-only `FakeTerminal` with the approved interfaces. Both platform
+  modules use explicit cfg/path declarations from the path-loaded parent.
+- Unix owns `/dev/tty` through an O_CLOEXEC descriptor; Windows owns CONIN$
+  and CONOUT$ handles. Each ask saves mode and installs its restoration guard
+  before changing mode, then writes the prompt. Early returns and unwinding
+  drop the guard. Unix retries interrupted reads and mode changes. Windows
+  combines UTF-16 surrogates and batches echoed UTF-8 bytes for conversion
+  back to console UTF-16. Both report invalid encoding with fixed text.
+- Secret handling: fixed-capacity zeroizing editor bytes avoid reallocations;
+  erased bytes are zeroized before truncation. Returned strings and platform
+  read/conversion buffers are zeroizing. Masked Pending values are always
+  empty. No input/secret-holding type derives Debug, Display or Serialize.
+- Startup opens the terminal only for a prompting human command without
+  `--non-interactive`, checking `spec.prompts()` before the clap flag lookup.
+  It applies `mode_rules` before transport/service and retains terminal
+  ownership through dispatch for Task 5's driver wiring. RealStartup delegates
+  to `terminal::open`.
+- The Task 1 deferred minor is covered: all eight terminal-present / JSON /
+  noninteractive combinations with `--confirm` but no `--request-id` accept
+  only interactive human mode. Accepted startup reaches the fake service's
+  busy refusal; other modes return usage_error before transport.
+
+#### RED / GREEN evidence
+
+All Rust commands ran through Devenv in this ticket worktree, with `--locked`
+except fmt, which does not support it. Only Task 2's named checks ran. As in
+Task 1, the plan's unsupported two positional filters were split into separate
+`terminal` and `startup` commands.
+
+| Phase | Command | Result |
+| --- | --- | --- |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli terminal` | Exit 101; nine executed tests failed at the unimplemented key-handler stub; 83 filtered; two expected unused-scaffold warnings |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli startup` | Exit 101; 14 passed, four failed, 80 filtered; new order/refusal tests saw transport/service instead of terminal/mode validation; four expected unused-wiring warnings |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli terminal` | 12 passed, zero failed/ignored, 86 filtered; nine editor tests plus three startup names matching terminal; no compiler warnings |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli startup` | 18 passed, zero failed/ignored, 80 filtered; no compiler warnings |
+| Format | `devenv shell -- cargo fmt` | Applied formatting to new code |
+| Format | `devenv shell -- cargo fmt --check` | First check found Windows call formatting; after formatting, passed, including the final source tree |
+| Lint | `devenv shell -- cargo clippy --locked --bin manyhands-cli -- -D warnings` | Passed, exit 0 |
+
+The two GREEN filters cover **27 distinct tests**, including **15 new tests**
+(nine editor and six startup); their three overlapping matches are not counted
+twice. The bin contains 98 tests, but no unfiltered run is claimed. The two
+negative startup invariants already passed during RED; the four positive
+mode/order tests failed before wiring and passed afterwards.
+
+#### Self-review, staged allowances and handoff
+
+- Checked the full diff against Task 2, the approved design and the existing
+  test-edit boundary. The only pre-existing test change is the mechanical
+  FakeStartup field/method addition; all existing assertions remain intact.
+  New tests use local specs/fake terminal and fake service refusal, never a
+  real terminal, key store or global Git configuration. No library gap or
+  extra semantic existing-test edit was needed.
+- Removed the Task 1 `kind`, `prompts` and `mode_rules` allowances as their
+  startup consumers arrived. Retained Task 5 input/mutation/option and Task 10
+  unlocking-kind allowances. Two narrow Terminal method allowances stage
+  `write`/`ask` until Task 3's actual prompt callers; remove them then.
+- Windows source is **149 lines**, including safety comments, with signatures
+  checked against locked `windows-sys-0.61.2` sources: Console Get/SetConsoleMode,
+  FlushConsoleInputBuffer, ReadConsoleW and WriteConsoleW; FileSystem CreateFileW;
+  Foundation handle/access constants. OwnedHandle closes partially opened
+  pairs. R-16 remains: Windows first compiles in authorized post-merge native
+  CI. Source inspection is not Windows compilation or a live-terminal test.
+- Cargo.toml adds only `Win32_System_Console`; Cargo.lock, library modules and
+  output schemas are unchanged. No threads or child processes were added to
+  the CLI. The standalone comment-ID command used the existing built
+  `target/debug/manyhands-cli id new`, isolated by an empty inherited environment,
+  temporary HOME/XDG/data under `/tmp/opencode/`, disabled Git configuration
+  and `setsid`; it generated `01M5HYN6GR13DY4ZBGTX0363YH`.
+- Source/test files: `Cargo.toml`, `src/bin/manyhands-cli.rs`, and
+  `src/bin/manyhands-cli/{catalog.rs,parse.rs,startup.rs,startup_tests.rs,
+  terminal.rs,terminal/unix.rs,terminal/windows.rs,terminal_tests.rs}`. Evidence:
+  this ledger and canonical comment `01M5HYN6GR13DY4ZBGTX0363YH.md`.
+- `git diff --check` passed. Pre-commit `git merge-tree --write-tree HEAD
+  origin/main` succeeded, tree `a5fac53e8b82e7c93ae326e3c10c165be80abc77`.
+- Delivery subject: **`feat: read the controlling terminal and decide the interactive mode`**.
+  The commit containing this entry is the Task 2 delivery; its hash is reported
+  in the implementer's handoff to avoid a self-referential ID.
+- Status: **Task 2 implemented, ready for controller review**. Task 3 has not
+  started; the Cycle/ticket remain open.

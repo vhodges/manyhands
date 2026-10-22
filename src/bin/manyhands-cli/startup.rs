@@ -14,9 +14,11 @@ use super::{
     dispatch,
     parse::{self, Action, HelpTarget, Invocation},
     render::{self, Human, Output},
+    terminal::Terminal,
 };
 
 pub trait Startup {
+    fn open_terminal(&mut self) -> Option<Box<dyn Terminal>>;
     fn start_transport(&mut self) -> Result<(), ()>;
     fn open_service(&mut self) -> Result<RepositoryService, ReadError>;
 }
@@ -77,6 +79,27 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             )
         }
         Action::Run { command, args } => {
+            // Read commands may have no clap arguments at all. Check their kind
+            // before looking up the prompting-only flag.
+            let terminal = if command.prompts() && !json && !args.get_flag("non-interactive") {
+                startup.open_terminal()
+            } else {
+                None
+            };
+            // Keep ownership through dispatch; Task 5 passes it to the driver.
+            let interactive = terminal.is_some();
+            if let Err(detail) = parse::mode_rules(command, &args, interactive) {
+                return render::failure_output(
+                    json,
+                    &Envelope::failure(
+                        command_name(command),
+                        Scope::default(),
+                        render::USAGE_CODE,
+                        Vec::new(),
+                    ),
+                    Some(detail),
+                );
+            }
             if startup.start_transport().is_err() {
                 return render::failure_output(
                     json,

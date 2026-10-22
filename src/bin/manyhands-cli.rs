@@ -20,6 +20,8 @@ mod parse;
 mod render;
 #[path = "manyhands-cli/startup.rs"]
 mod startup;
+#[path = "manyhands-cli/terminal.rs"]
+mod terminal;
 
 fn main() {
     let args: Vec<OsString> = std::env::args_os().collect();
@@ -30,9 +32,13 @@ fn main() {
 struct RealStartup;
 
 impl startup::Startup for RealStartup {
+    fn open_terminal(&mut self) -> Option<Box<dyn terminal::Terminal>> {
+        terminal::open()
+    }
+
     fn start_transport(&mut self) -> Result<(), ()> {
-        // SAFETY: only argument collection and parsing have run; they start no
-        // threads or native Git activity. Service opening follows this call.
+        // SAFETY: only argument parsing and controlling-terminal opening have run;
+        // neither starts threads or native Git activity. Service opening follows.
         unsafe { manyhands::runtime::initialize_git_transport_before_threads() }.map_err(|_| ())
     }
 
