@@ -4,10 +4,14 @@
 //! This module holds the version 1 file format. Types that hold draft text
 //! derive no `Debug`, so text cannot reach a log or an error by accident.
 
+mod protect;
+#[cfg(test)]
+mod protect_tests;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
 
+pub use protect::{DraftError, DraftErrorKind};
 pub use schema::{
     BaseContext, CommentTarget, ContextKind, Draft, DraftBase, DraftFields, DraftId, DraftTarget,
     ItemKind, UnreadableReason,
@@ -18,4 +22,27 @@ pub use schema::{
 #[doc(hidden)]
 pub mod codec {
     pub use super::schema::{decode, encode};
+}
+
+/// The protected drafts folder, for the crate's integration tests and
+/// tooling only. The crate uses `protect::Folder` directly; this wrapper
+/// exposes just enough of it to test the folder's protection.
+#[doc(hidden)]
+pub mod folder {
+    use super::{DraftError, protect};
+    use std::{fs::File, path::Path};
+
+    /// `<data>/drafts`, created or checked and held open.
+    pub struct Folder(protect::Folder);
+
+    impl Folder {
+        pub fn open(data: &Path) -> Result<Self, DraftError> {
+            protect::Folder::open(data).map(Self)
+        }
+
+        /// A new owner-only file in the held folder.
+        pub fn create_new(&mut self, name: &str) -> Result<File, DraftError> {
+            self.0.create_new(name)
+        }
+    }
 }
