@@ -88,18 +88,16 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             };
             let interactive = terminal.is_some();
             if let Err(detail) = parse::mode_rules(command, &args, interactive) {
-                let request_id = args
-                    .get_one::<String>("request-id")
-                    .and_then(|text| manyhands::repository::RequestId::parse(text).ok());
-                return crate::mutate::refusal(
-                    &crate::mutate::Session {
-                        json,
-                        interactive,
-                        terminal,
-                    },
-                    &command_name(command),
-                    request_id,
-                    render::USAGE_CODE,
+                // IDs are parsed only after service opening, in dispatch.
+                // Every early refusal retains C1's null request ID.
+                return render::failure_output(
+                    json,
+                    &Envelope::failure(
+                        command_name(command),
+                        Scope::default(),
+                        render::USAGE_CODE,
+                        Vec::new(),
+                    ),
                     Some(detail),
                 );
             }

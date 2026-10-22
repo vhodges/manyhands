@@ -2,7 +2,7 @@ use super::mutation::{Fixture, REQUEST, checked, golden};
 use crate::support::mutation::NoPassphrase;
 use manyhands::repository::{keys::SessionCredentials, *};
 
-fn accepted(f: &Fixture) {
+pub(super) fn accepted(f: &Fixture) {
     let service = RepositoryService::open_at_with_failure_point_for_testing(
         f.data.path(),
         FailurePoint::AfterRemoteMutation,

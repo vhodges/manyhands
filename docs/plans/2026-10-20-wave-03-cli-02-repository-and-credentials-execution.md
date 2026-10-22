@@ -328,8 +328,8 @@ These are approved decisions, not questions reopened by this baseline:
 | R-2 | Interactive means human + no non-interactive flag + controlling terminal; prompts only on terminal device |
 | R-3 | Explicit request ID for JSON/non-interactive; allocate/print for interactive; refused with prepare |
 | R-4 | Interactive prepare/show/consent/execute; existing request record goes directly to execute |
-| R-5 | Missing-identity prompt only for create/enable without supplied identity after identity_required |
-| R-6 | Eight CLI-built refusal codes and exact empty-scope/null-operation/data fields; echo valid request ID when known |
+| R-5 | Missing-identity prompt only for create/enable without supplied identity after identity_required. Owner clarification, 2026-10-22: later invocations must include that identity in --input, even interactively; existing-record replay never re-prompts identity or consent. |
+| R-6 | Eight CLI-built refusal codes and exact empty-scope/null-operation/data fields. Owner clarification, 2026-10-22: all pre-dispatch errors keep request_id null; post-open CLI refusals retain a valid parsed or allocated ID. |
 | R-7 | New passphrase twice, three attempts maximum |
 | R-8 | Bounded retry with same request and confirmation, no repeated consent or protected generation |
 | R-9 | Human progress on stderr; ignore early progress/request-note write failure; prompt-write failure cancels; final-write failure exits 1 |
@@ -410,7 +410,9 @@ these equivalent-spelling/control-flow changes. No subagents are authorized.
   CommandSpec (and the root helper the already parsed request ID), because
   Output requires mode/command context. Request then confirmation validation
   precedes input reading/shape checking and root joining; paths are never
-  canonicalized by CLI glue. Mode refusals retain a valid supplied request ID.
+  canonicalized by CLI glue. Mode refusals retained a valid supplied request ID
+  in this original delivery; the owner subsequently chose null for every early
+  error. See the spec-review correction below, which supersedes that behavior.
   C2 clap diagnostics use fixed text instead of echoing rejected values.
 - Renderer/progress RED preceded their implementations while completing the
   driver, whose GREEN depends on those renderers. No renderer stub remains.
@@ -565,6 +567,93 @@ request ID/fixed guidance and is not a warning.
 - **Task 5 complete and ready for controller spec/quality review.** Independent
   review is not claimed by this implementer. The controller owns the subsequent
   push; the Cycle/ticket remain open. No Task 6 work, subagents or native CI.
+
+### Task 5 — Spec-Review Correction (2026-10-22)
+
+Review: **`ses_e9bd75504ffemMwjV080mC11cY`**. Correction base:
+**`caebe9d5a9748ac9ab9cb10301b21ad3eb300c01`**. Started from the clean assigned
+ticket worktree, inline without subagents. `git fetch origin main && git merge
+origin/main` returned Already up to date. This is a separate correction commit,
+not an amendment to the original Task 5 commit or its stop/completion comments.
+
+#### Owner rulings and resolutions
+
+1. **“Keep early IDs null.”** Every error before dispatch (usage/mode,
+   transport startup and service opening included) retains `request_id: null`.
+   Reverted Task 5's early mode-rule ID parsing/echo. IDs are parsed only in
+   dispatch after service opening; post-open CLI refusals still retain valid
+   IDs. Cycle contract item 8, design startup/R-6 table and ruling, and plan
+   runtime/refusal/test requirements carry the explicit 2026-10-22 decision.
+   Adjusted only the Task 5-created mode-refusal assertion. Added a new startup
+   matrix for valid/malformed IDs, human/JSON, usage/mode/transport/service-open
+   failure, checking null IDs or no human request note and the exact startup
+   calls. Existing baseline startup tests remain intact.
+2. **“Require identity in retry input.”** Replaced the earlier promise that an
+   interactive retry asks for identity again. Every later invocation must give
+   the originally prompted identity in `--input`, interactive retries included.
+   Direct existing-record replay never asks identity or consent; no new retry
+   exception. Bounded retries within the original invocation reuse Extras.
+   Updated Cycle item 3, design R-5/flow/note and plan tests, and changed the
+   emitted note to match, without values. Added a driver case with an existing
+   record and `Plan.identity_prompt = true`: one direct execute, no prepare or
+   prompt, and an unchanged library request_mismatch refusal when input omits
+   identity. Extended the note assertions. No future repo-create verb glue added.
+3. **Human request coverage gap.** Added three binary tests covering finished
+   and accepted request show/cancel and unknown-request failures. Show checks
+   state, command, accepted/finished times, request/operation IDs and operation
+   family, stored-result outcome/code/message/data, and absent accepted result.
+   Cancel checks state, ID, requested/acknowledged flags and the accepted-local
+   no-stop explanation. Success is stdout with empty stderr; failure is stderr
+   with empty stdout. Real remote-add fixtures ensure operation IDs exist.
+   Reused the existing AfterRemoteMutation actor by widening only its helper
+   visibility. The new coverage passed against the existing renderer; no renderer
+   change or golden update was needed. Repository config stays byte-identical.
+
+#### Targeted RED/GREEN evidence
+
+All Cargo commands ran through Devenv with `--locked`; fmt has no locked flag.
+
+| Phase / command | Result |
+| --- | --- |
+| RED: `cargo test --locked --bin manyhands-cli startup` | 18 passed, one new test failed because mode refusal printed the argv request ID |
+| RED: `cargo test --locked --bin manyhands-cli mutate` | 13 passed, one updated note test failed on the old terminal-only wording; the new no-reprompt case already passed |
+| Coverage: `cargo test --locked --test cli human::request` | Three new tests passed against the existing implementation |
+| GREEN: `cargo test --locked --bin manyhands-cli startup` | **19 passed**, 147 filtered |
+| GREEN: `cargo test --locked --bin manyhands-cli mutate` | **14 passed**, 152 filtered |
+| GREEN: `cargo test --locked --test cli mutation::` | **12 passed**, 82 filtered; post-open valid-ID retention also remains covered |
+| GREEN: `cargo test --locked --test cli requests::` | **6 passed**, 88 filtered |
+| GREEN: `cargo test --locked --test cli human::` | **4 passed**, 90 filtered |
+| `cargo clippy --locked --all-targets -- -D warnings` | **Passed**, no warnings |
+| `cargo fmt` / `cargo fmt --check` | **Passed** |
+| `git diff --check` | **Passed** |
+
+The five GREEN filters cover **55 distinct tests**, including **five new tests**
+in this correction. No unfiltered bin/CLI/full-suite/checkpoint run was repeated.
+The bin now contains 166 tests and CLI target 94; these are inventory totals,
+not a claim of fresh unfiltered execution. Earlier Task 5 results remain history.
+
+#### Self-review and handoff
+
+- Read the complete correction diff, checked the two governing rulings against
+  implementation, and searched the governing design/plan for the superseded
+  re-prompt/early-ID promises. Resolved the R-6 table/ruling disagreement.
+- Only two production behaviors changed: the mode-error envelope follows the
+  original early-error path, and the fixed identity retry note has the clarified
+  wording. The replay mechanism, input validation order, library envelopes,
+  credential handling and renderers are unchanged.
+- New coverage uses fake startup/terminal/boundary objects or isolated binary
+  helpers and the existing local actor. No real terminal, global Git config,
+  keys or application data are used. Baseline test assertions are untouched.
+- No library, result-code, output-schema, dependency, lockfile or golden edits.
+  No unresolved self-review issue or library gap found. Controller re-review is
+  pending; this implementer does not claim independent review approval.
+- Pre-commit merge-tree check passed, tree
+  `c76c35ce966a4c3913d13f530823db31a9fae062`. The completion comment ID
+  `01M5J3X842BJJWHZ4ZZCJF5B1N` came from the built CLI in an isolated temporary
+  HOME/XDG/app environment with no inherited environment or controlling terminal.
+- Separate delivery subject: **`fix: align Task 5 request handling with owner rulings`**,
+  with the required Claude Opus 5.5 coauthor. The handoff reports its final hash.
+  No push, subagents, PR, closure, cleanup or native CI. Ticket remains open.
 
 ### Task 0 — Baseline, Prerequisite, Audit Refresh And Ledger
 

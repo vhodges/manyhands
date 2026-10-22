@@ -169,6 +169,12 @@ Authority, in order:
 3. **Request identity.** One request ID per intent. A retry reuses it with the
    same command, target and input. The library decides replay, mismatch and
    settlement; the CLI never decides them itself.
+   **Owner clarification, 2026-10-22:** if the original invocation prompted for
+   an identity, every later invocation of that request must supply the same
+   identity in `--input`, including interactive retries. An existing-record
+   retry goes directly to execute and never asks for identity or consent. The
+   driver keeps prompted identity for its own bounded in-invocation retries;
+   there is no new retry exception or identity-reconstruction flow.
 4. **Consent.** A command that needs confirmation executes only with a
    confirmation the caller prepared, or with the consent of an interactive
    human given on the terminal. No flag approves host trust, key deletion or a
@@ -192,8 +198,12 @@ Authority, in order:
    - C2's `invalid_input`, `invalid_id`, `cancelled`, `unlock_required` and
      `internal_error`.
 
-   Their fields are fixed by design ruling R-6. Exit statuses follow C1's
-   class mapping.
+   Their fields are fixed by design ruling R-6. **Owner clarification,
+   2026-10-22:** all errors before dispatch (usage/mode, transport startup and
+   service opening included) keep `request_id: null`, even when argv contains
+   a valid request ID. IDs are parsed only after service opening. Post-open
+   CLI refusals in dispatch retain a valid parsed or allocated ID; a malformed
+   request ID remains null. Exit statuses follow C1's class mapping.
 9. **Never printed.** No secret, credential, backend text, SQL or `Debug`
    rendering, in either mode, and no input value in a diagnostic the CLI
    writes (item 2). Remote locations are redacted by the library.
@@ -299,6 +309,16 @@ R-17 narrow or condition test evidence. Named edits E1–E9 change pre-existing
 CLI tests. All three are submitted for approval with these documents.
 
 ## Review Record
+
+### Task 5 owner clarifications (2026-10-22)
+
+Spec review `ses_e9bd75504ffemMwjV080mC11cY` exposed inconsistent promises in
+R-6 and the identity-retry flow. The owner chose **“Keep early IDs null”** and
+**“Require identity in retry input”**. Required Contract items 3 and 8 above,
+design R-5/R-6 and the implementation plan now carry those decisions. Startup
+ordering and direct replay are preserved. The review also requires human-mode
+binary coverage for request show/cancel, including record details, local
+no-stop guidance and split streams, in Task 5.
 
 | Source | Concern | Classification | Resolution |
 | --- | --- | --- | --- |

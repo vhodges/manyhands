@@ -55,6 +55,78 @@ fn output_json(output: &Output) -> Value {
 }
 
 #[test]
+fn early_mutation_refusals_keep_ids_null_and_preserve_startup_order() {
+    for request_id in ["01M4CC0VMTTNKVYS6XWQG4CK1N", "invalid-id-sentinel"] {
+        for (extra, transport_fails, code, status, stages) in [
+            (vec!["--unknown"], false, ResultCode::UsageError, 2, vec![]),
+            (vec!["--prepare"], false, ResultCode::UsageError, 2, vec![]),
+            (
+                vec!["--prepare", "--confirm", request_id],
+                false,
+                ResultCode::UsageError,
+                2,
+                vec![],
+            ),
+            (
+                vec![],
+                true,
+                ResultCode::InternalError,
+                1,
+                vec!["transport"],
+            ),
+            (
+                vec![],
+                false,
+                ResultCode::Busy,
+                5,
+                vec!["transport", "service"],
+            ),
+        ] {
+            for json in [false, true] {
+                let mut args = vec![
+                    "repo",
+                    "identity-set",
+                    "--repo",
+                    "missing-root",
+                    "--input",
+                    "missing-input",
+                    "--request-id",
+                    request_id,
+                ];
+                args.extend_from_slice(&extra);
+                let mut startup = FakeStartup {
+                    transport_fails,
+                    ..Default::default()
+                };
+                let output = run(invocation(&args, json), &mut startup);
+                let mut expected = stages.clone();
+                if !json && extra.first() != Some(&"--unknown") {
+                    expected.insert(0, "terminal");
+                }
+                assert_eq!(startup.calls, expected);
+                assert_eq!(output.status, status);
+                if json {
+                    let value = output_json(&output);
+                    assert_eq!(value["code"], code.as_str());
+                    assert!(value["request_id"].is_null());
+                    assert!(value["operation_id"].is_null() && value["data"].is_null());
+                    assert_eq!(
+                        value["scope"],
+                        serde_json::to_value(Scope::default()).unwrap()
+                    );
+                } else {
+                    assert!(output.stdout.is_empty());
+                    let stderr = String::from_utf8(output.stderr).unwrap();
+                    assert!(stderr.contains(&format!("code: {}\n", code.as_str())));
+                    assert!(!stderr.contains(request_id));
+                    assert!(!stderr.contains("request: "));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn directory_unset_empty_absolute_and_relative() {
     let cwd = std::env::current_dir().unwrap();
     assert_eq!(data_directory(None, &cwd).unwrap(), None);

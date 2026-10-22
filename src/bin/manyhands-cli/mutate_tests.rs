@@ -388,7 +388,54 @@ fn identity_required_then_asked_then_prepared_again() {
     let note = identity_note(id());
     assert!(note.contains(&id().to_string()));
     assert!(note.contains("\"identity\""));
+    assert!(note.contains("every retry, including at a terminal"));
+    assert!(note.contains("--input"));
+    assert!(!note.contains("without a terminal"));
     assert!(!note.contains("sentinel"));
+}
+
+#[test]
+fn an_existing_record_with_identity_prompt_enabled_never_reconstructs_identity() {
+    let b = FakeBoundary::default();
+    *b.exists.borrow_mut() = Some(Ok(true));
+    b.answers
+        .borrow_mut()
+        .push_back(answer(ResultCode::RequestMismatch, Outcome::Error, None));
+    let (mut s, t) = interactive(&["must-not-be-asked", "must-not-be-asked", "yes"]);
+    let mut builds = 0;
+    let out = run(
+        &b,
+        &mut s,
+        &SPEC,
+        flags(),
+        Plan {
+            identity_prompt: true,
+            retry: true,
+        },
+        &mut |extras| {
+            builds += 1;
+            assert!(extras.identity.is_none());
+            Mutation::RepoCreate(RepoCreateInput {
+                root: "/fixture".into(),
+                primary_branch: "main".into(),
+                identity: None,
+                slug_prefix: None,
+            })
+        },
+        &mut |_| panic!("mismatch must not retry"),
+    );
+    assert_eq!(out.status, 2);
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("code: request_mismatch\n")
+    );
+    assert_eq!(builds, 1);
+    assert_eq!(b.calls.borrow().as_slice(), ["exists", "execute"]);
+    assert_eq!(b.confirmations.borrow().as_slice(), [None]);
+    assert!(t.borrow().asks.is_empty());
+    assert!(t.borrow().written.is_empty());
+    assert_eq!(t.borrow().answers.len(), 3);
 }
 #[test]
 fn an_existing_record_skips_prepare_and_consent() {

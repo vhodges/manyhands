@@ -56,6 +56,7 @@ Every change of state is one F2 `prepare` or `execute`. Nothing under `src/repos
 - **Runtime.**
   - The CLI spawns no thread and no child process.
   - The transport starts before the service opens. Help, version, usage errors and unavailable commands touch neither the transport nor the data directory.
+  - **Owner clarification, 2026-10-22 — Keep early IDs null:** all errors before dispatch, including usage/mode, transport and service opening, have null `request_id`. IDs are parsed only after service opening; post-open CLI refusals retain valid parsed or allocated IDs. Add new regression tests without changing baseline-test semantics.
   - JSON mode writes one envelope to stdout and nothing to stderr.
 - **Secrets.**
   - No type that holds input or a secret derives or implements `Debug`, `Display` or `Serialize`.
@@ -611,7 +612,8 @@ pub fn run(
     sleep: &mut dyn FnMut(std::time::Duration),
 ) -> Output;
 
-/// A refusal made before `execute` (R-6). Echoes `request_id` when given.
+/// A post-open refusal in dispatch before `execute` (R-6).
+/// Echoes `request_id` when given; pre-dispatch errors keep IDs null.
 pub fn refusal(session: &Session, command: &str, request_id: Option<RequestId>,
                code: ResultCode, detail: Option<String>) -> Output;
 
@@ -672,8 +674,10 @@ impl PtyCli {
   - `no_retry_when_the_plan_says_so`.
   - `interactive_prepare_then_consent_yes_executes_with_the_preview_s_confirmation`.
   - `consent_no_is_a_cancelled_refusal_echoing_the_request_id`.
-  - `identity_required_then_asked_then_prepared_again`: two `prepare` calls; the second mutation carries the identity; the stderr note is written without values.
+  - `identity_required_then_asked_then_prepared_again`: two `prepare` calls; the second mutation carries the identity; the stderr note is written without values. **Owner clarification, 2026-10-22 — Require identity in retry input:** the note states every later retry, interactive ones included, must supply that identity in `--input`. Bounded in-invocation retries reuse Extras; no reconstruction exception.
   - `an_existing_record_skips_prepare_and_consent`.
+  - An existing-record retry with `Plan.identity_prompt` true still skips identity and consent, executes directly and leaves replay/mismatch to the library.
+  - New startup cases prove valid and malformed argv IDs stay null on usage/mode/transport/service-open failures, with the existing startup order and no early ID validation.
   - `prepare_flag_calls_prepare_only`.
   - `refusals_have_null_operation_and_data_empty_scope_no_recovery`.
 - [ ] **Step 3: Implement** `flow`, `should_retry`, `Boundary` (and its `RepositoryService` impl), `Session`, `refusal` and `run`, following the design's Mutation Driver section.
@@ -741,7 +745,7 @@ impl PtyCli {
     - `request_cancel_of_a_finished_local_request` (golden `request_cancel`);
     - `request_cancel_of_an_accepted_local_request_is_not_requested`;
     - `request_verbs_refuse_repo`.
-  - In `tests/cli/human.rs`, the table's first rows: `repo identity-set` and `remote add` in human mode, and the identity-set no-op.
+  - In `tests/cli/human.rs`, the table's first rows: `repo identity-set` and `remote add` in human mode, and the identity-set no-op. **Task 5 review clarification, 2026-10-22:** also cover request show/cancel through the binary in human mode: finished/accepted state, command, accepted/finished times, operation IDs, stored-result outcome/code/message, request IDs and cancel flags, accepted-local no-stop explanation, success stdout/empty stderr and failure stderr/empty stdout.
 - [ ] **Step 9: Write the first pseudo-terminal tests** in `tests/cli/prompts.rs` (`#[cfg(unix)]`):
   - `consent_yes_sets_the_identity`: `repo identity-set` without `--request-id`. `request: ` appears on stderr, the preview appears on the terminal, and the identity is set.
   - `consent_no_is_cancelled_exit_130_and_changes_nothing`.

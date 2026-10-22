@@ -165,7 +165,7 @@ fn json_needs_a_request_id_and_prepare_refuses_request_or_confirm() {
     }
 }
 #[test]
-fn a_mode_refusal_retains_a_valid_request_id_and_c2_usage_never_echoes_values() {
+fn a_mode_refusal_keeps_request_id_null_and_c2_usage_never_echoes_values() {
     let f = Fixture::new();
     let v = checked(
         &f.args(
@@ -179,7 +179,7 @@ fn a_mode_refusal_retains_a_valid_request_id_and_c2_usage_never_echoes_values() 
         "usage_error",
         None,
     );
-    assert_eq!(v["request_id"], REQUEST);
+    assert!(v["request_id"].is_null());
     let out = run(
         &f.args("repo", "identity-set", &["--bogus=private-sentinel"]),
         &f.env,

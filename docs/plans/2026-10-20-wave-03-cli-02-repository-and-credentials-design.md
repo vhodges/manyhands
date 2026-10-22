@@ -215,6 +215,12 @@ C1's order is kept. One step is added, before the transport starts:
 5. Resolve the data directory and open the service (C1).
 6. Dispatch.
 
+**Owner clarification, 2026-10-22 — Keep early IDs null.** Every error before
+dispatch, including usage/mode, transport and service-open failures, has null
+`request_id`, even if argv contains a valid ID. Do not parse IDs early just to
+echo them. Dispatch parses them after service opening, and only post-open
+CLI refusals retain a valid parsed or allocated ID (R-6).
+
 The `Startup` trait and its fake keep proving the order. The fake gains a
 `terminal_present` setting.
 
@@ -436,11 +442,15 @@ pub fn flow(
    - rebuild the mutation with them as a supplied identity;
    - call `prepare` again.
 
-   The supplied identity is then part of the request's input. A later retry
-   of the same request ID from a terminal asks for it again. Without a
-   terminal, the retry must supply it in `--input`. The CLI writes a note to
-   stderr saying so, without the values:
-   `note: request <id> now includes the identity you entered; a retry without a terminal must give it as "identity" in its input`.
+   The supplied identity is then part of the request's input. **Owner
+   clarification, 2026-10-22 — Require identity in retry input:** every later
+   invocation of the same request must supply that identity in `--input`, even
+   from a terminal. Existing-record retries go directly to execute without an
+   identity or consent prompt; the library decides replay or mismatch. There
+   is no identity-reconstruction exception. Bounded retries within the original
+   invocation reuse its prompted identity as already specified. The CLI writes
+   a note to stderr without the values:
+   `note: request <id> now includes the identity you entered; every retry, including at a terminal, must give it as "identity" in --input`.
 3. If the answer is not a preview, render it and stop. That covers a
    refusal, a no-op (`already_applied`) and `host_replacement_required` with
    its data.
@@ -510,7 +520,7 @@ instead of a library call. A `prepare` may already have run.
 | Field | Value |
 | --- | --- |
 | `command` | the parsed command, or C1's `cli usage` |
-| `request_id` | The request ID when the invocation has a valid one, whether supplied or allocated and printed (the CLI RFC allows null only for read-only and help results). Null when there is none, or when `--request-id` itself is malformed. |
+| `request_id` | **Owner clarification, 2026-10-22:** null for every error before dispatch, including usage/mode, transport and service-open failures; IDs are parsed only after service opening. For a post-open CLI refusal in dispatch, the valid parsed or allocated-and-printed request ID is retained. Null when there is none or `--request-id` itself is malformed. |
 | `operation_id`, `data` | null |
 | `scope` | Empty. The CLI resolves no repository for a mutation; the library does. This differs from C1's read rule, where a malformed `--id` carries the resolved repository's scope, because a mutation's root may not exist yet. |
 | `effects` | every effect `not_requested`, `commit_oid` null |
@@ -807,6 +817,9 @@ mapping of its own:
   identity re-prepare, consent and the bounded retry with a fake boundary
   and a recording sleep. `should_retry` is tested over each qualifying and
   non-qualifying result.
+  An existing-record retry with `Plan.identity_prompt` true still asks for
+  neither identity nor consent; the note requires identity in `--input` for
+  every later invocation, interactive ones included, without echoing values.
 - **Terminal reader.** The key handling over scripted bytes: Enter, CRLF,
   backspace over a multi-byte character, Ctrl-U, Ctrl-C, Ctrl-D on an empty
   and on a non-empty line, the length limit, invalid UTF-8, and no echo when
@@ -823,7 +836,9 @@ mapping of its own:
   - Failure rendering adds the request, operation, effects and data lines.
   - CLI-built envelopes have the fields R-6's table gives: null
     `operation_id` and `data`, empty scope, no recovery, and `request_id`
-    echoed only when the invocation has a valid one.
+    null before dispatch, retained after service opening only when parsed or
+    allocated as valid. New tests cover early usage/mode/transport/service-open
+    failures with valid and malformed argv IDs and preserve startup ordering.
 - **Startup order** with the fake:
   - a mode-dependent usage error starts nothing;
   - a prompting command opens the terminal before the transport;
@@ -910,6 +925,11 @@ mapping of its own:
     `request_not_found`;
   - `request cancel` for an unknown request, a finished one, and an
     accepted local one (requested false, as F2 answers).
+  - Human-mode coverage in `tests/cli/human.rs` (Task 5 review clarification,
+    2026-10-22): show finished/accepted records with state, command, timestamps,
+    operation IDs and stored-result outcome/code/message; cancel finished and
+    accepted local requests with IDs, flags and the no-stop explanation. Prove
+    success stdout/empty stderr and failure stderr/empty stdout through the binary.
 - **`tests/cli/prompts.rs`**, Unix only, through a pseudo-terminal:
   - consent yes and no;
   - Ctrl-C at consent, with the terminal's modes the same afterwards;
@@ -1182,8 +1202,8 @@ Made on this branch:
 | R-2 | Interactive means human output, no `--non-interactive`, and a controlling terminal. Prompts read and write the terminal device only. | The RFC's terminal rule. It keeps stdin free for `--input -`, and keeps prompts visible when output is redirected. |
 | R-3 | `--request-id` is required in JSON and non-interactive mode, allocated and printed in interactive mode, and refused with `--prepare`. | The CLI RFC's request rule. `prepare` takes no request. |
 | R-4 | Interactive confirmed commands: prepare, show, ask, execute. A `--request-id` that names an existing record is a retry and goes straight to `execute`. | A retry's consent is in its record, and a new preview of a half-done command could refuse it. |
-| R-5 | The identity prompt is offered only for `repo create` and `repo enable`, when `prepare` answers `identity_required` and the input had none. | Only those two take an identity. `remote select` points to `repo identity-set`, which F2's recovery already names. |
-| R-6 | Eight CLI-built codes: C1's three and C2's five, for refusals before `execute` or in place of a library call. `operation_id` and `data` are null, the scope is empty, there are no actions, and `request_id` follows the table in the Mutation Driver. A mode-rule `usage_error` has a null `request_id`, because IDs are parsed only after the service opens. | As C1's usage envelopes, plus the CLI RFC's rule that a mutation's `request_id` is null only when there is none. No new result code. |
+| R-5 | The identity prompt is offered only for `repo create` and `repo enable`, when `prepare` answers `identity_required` and the input had none. Owner clarification, 2026-10-22: every later invocation must supply any previously prompted identity in `--input`, even at a terminal; existing-record retries never ask for identity or consent. | Only those two take an identity. Direct replay and library mismatch decisions are preserved; no reconstruction exception. `remote select` points to `repo identity-set`. |
+| R-6 | Eight CLI-built codes: C1's three and C2's five, for refusals before `execute` or in place of a library call. `operation_id` and `data` are null, the scope is empty and there are no actions. Owner clarification, 2026-10-22: every pre-dispatch error (usage/mode, transport and service opening included) has null `request_id`. Post-open CLI refusals retain valid parsed or allocated IDs, as detailed above. | Preserve C1 startup ordering: IDs are parsed only after service opening. This is the explicit early-error exception to request-ID retention. No new result code. |
 | R-7 | A new passphrase is entered twice, with up to three attempts, then `invalid_input`. | It catches typing mistakes without an unbounded loop. |
 | R-8 | Bounded automatic retry (decision 7): `busy` or `partial` results whose first action is `request.retry` for this request, three more attempts at 100/200/400 ms. Each attempt presents the same confirmation as the one before. Never for a protected generation; never re-asking consent. | F2's recorded acceptance that front ends retry these without asking, and D1's R6 timings. |
 | R-9 | Progress stages on stderr in human mode, written by the CLI itself for `host observe`. A failed write of a progress line or the `request:` note is ignored. A failed prompt write is a cancel. The final output keeps C1's exit-1 rule. | Network calls can take seconds, and an early line must not stop a request in flight. The JSON contract keeps stderr empty. |

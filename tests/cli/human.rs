@@ -1,5 +1,150 @@
-use super::mutation::{Fixture, REMOTE, REQUEST, run};
+use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
+
+fn request_fixture(finished: bool) -> Fixture {
+    let f = Fixture::new();
+    if finished {
+        std::fs::write(&f.input, REMOTE).unwrap();
+        checked(
+            &f.args("remote", "add", &["--json", "--request-id", REQUEST]),
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("remote_mutation.schema.json"),
+        );
+    } else {
+        super::requests::accepted(&f);
+    }
+    f
+}
+
+fn assert_line(text: &str, label: &str, value: &str) {
+    let expected = format!("{label}: {value}");
+    assert!(
+        text.lines().any(|line| line == expected),
+        "missing {expected:?} in {text}"
+    );
+}
+
+#[test]
+fn request_show_human_reports_finished_and_accepted_record_details() {
+    for finished in [false, true] {
+        let f = request_fixture(finished);
+        let before = f.config();
+        let json = checked(
+            &["request", "show", "--request-id", REQUEST, "--json"],
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("request.schema.json"),
+        );
+        let dto = &json["data"];
+        assert_eq!(dto["state"], if finished { "finished" } else { "accepted" });
+        let output = run(&["request", "show", "--request-id", REQUEST], &f.env, &[]);
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_line(&text, "Request id", REQUEST);
+        assert_line(&text, "State", dto["state"].as_str().unwrap());
+        assert_line(&text, "Command", "remote add");
+        assert_line(&text, "Accepted at", dto["accepted_at"].as_str().unwrap());
+        assert_line(
+            &text,
+            "Finished at",
+            dto["finished_at"].as_str().unwrap_or("none"),
+        );
+        let operations = dto["operations"].as_array().unwrap();
+        assert!(!operations.is_empty());
+        for operation in operations {
+            assert_line(
+                &text,
+                "Operations family",
+                operation["family"].as_str().unwrap(),
+            );
+            assert_line(
+                &text,
+                "Operations operation id",
+                operation["operation_id"].as_str().unwrap(),
+            );
+        }
+        if finished {
+            assert!(!dto["finished_at"].is_null());
+            for (key, label) in [
+                ("outcome", "Result outcome"),
+                ("code", "Result code"),
+                ("message", "Result message"),
+            ] {
+                assert_line(&text, label, dto["result"][key].as_str().unwrap());
+            }
+            assert_line(&text, "Result data name", "origin");
+            assert_line(
+                &text,
+                "Result data location",
+                dto["result"]["data"]["location"].as_str().unwrap(),
+            );
+        } else {
+            assert!(dto["result"].is_null());
+            assert_line(&text, "Result", "none");
+        }
+        assert_eq!(f.config(), before);
+    }
+}
+
+#[test]
+fn request_cancel_human_reports_state_ids_and_local_no_stop_explanation() {
+    for finished in [false, true] {
+        let f = request_fixture(finished);
+        let before = f.config();
+        let output = run(&["request", "cancel", "--request-id", REQUEST], &f.env, &[]);
+        assert_eq!(output.status, 0);
+        assert!(output.stderr.is_empty());
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert_line(&text, "Request id", REQUEST);
+        assert_line(
+            &text,
+            "State",
+            if finished { "finished" } else { "accepted" },
+        );
+        assert_line(&text, "Requested", "false");
+        assert_line(&text, "Acknowledged", "false");
+        assert_eq!(
+            text.contains("This local command cannot be stopped after acceptance.\n"),
+            !finished
+        );
+        let json = checked(
+            &["request", "cancel", "--request-id", REQUEST, "--json"],
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("cancel.schema.json"),
+        );
+        assert_eq!(json["data"]["request_id"], REQUEST);
+        assert_eq!(json["data"]["requested"], false);
+        assert_eq!(json["data"]["acknowledged"], false);
+        assert_eq!(f.config(), before);
+    }
+}
+
+#[test]
+fn request_human_failures_use_stderr_only() {
+    let f = Fixture::new();
+    for verb in ["show", "cancel"] {
+        let output = run(&["request", verb, "--request-id", REQUEST], &f.env, &[]);
+        assert_eq!(output.status, 2);
+        assert!(output.stdout.is_empty());
+        let text = String::from_utf8(output.stderr).unwrap();
+        assert_line(&text, "code", "request_not_found");
+        assert_line(
+            &text,
+            "error",
+            manyhands::results::ResultCode::RequestNotFound.message(),
+        );
+    }
+}
+
 #[test]
 fn c2_human_results_split_streams_and_retain_public_ids() {
     for (resource, verb, noop) in [

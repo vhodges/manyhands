@@ -256,7 +256,7 @@ pub fn run(
 
 fn identity_note(id: RequestId) -> String {
     format!(
-        "note: request {id} now includes the identity you entered; a retry without a terminal must give it as \"identity\" in its input"
+        "note: request {id} now includes the identity you entered; every retry, including at a terminal, must give it as \"identity\" in --input"
     )
 }
 
