@@ -4,6 +4,58 @@ use crate::{
 };
 
 #[test]
+fn remote_remove_and_select_have_exact_catalog_and_parser_contracts() {
+    for (verb, confirmed) in [("remove", true), ("select", false)] {
+        let spec = catalog::find("remote", verb).unwrap();
+        assert_eq!(spec.availability, Availability::Available("C2"));
+        assert_eq!(spec.repo, Some(RepoRule::Required));
+        assert_eq!(
+            spec.kind,
+            Kind::Mutation {
+                confirmed,
+                input: InputRule::Required
+            }
+        );
+        assert_eq!(
+            spec.options
+                .iter()
+                .map(|o| (o.name, o.required))
+                .collect::<Vec<_>>(),
+            [
+                ("--repo", true),
+                ("--input", true),
+                ("--request-id", false),
+                ("--prepare", false),
+                ("--confirm", false)
+            ]
+        );
+        for extra in [
+            vec!["--repo", "fixture", "--input", "-", "--prepare"],
+            vec![
+                "--repo",
+                "fixture",
+                "--input",
+                "-",
+                "--request-id",
+                "01M4CC0VMTTNKVYS6XWQG4CK1N",
+            ],
+        ] {
+            let parsed = parse::parse(
+                [vec!["manyhands-cli", "remote", verb], extra]
+                    .concat()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            );
+            let Action::Run { args, .. } = parsed.action else {
+                panic!("remote mutation must parse")
+            };
+            assert!(parse::mode_rules(spec, &args, false).is_ok());
+        }
+    }
+}
+
+#[test]
 fn repository_verbs_are_confirmed_c2_mutations_with_exact_options() {
     for verb in ["create", "enable", "remove"] {
         let spec = catalog::find("repo", verb).unwrap();

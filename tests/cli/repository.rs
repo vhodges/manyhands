@@ -3,7 +3,6 @@ use crate::support::{
     self,
     cli::{self, CliEnv},
 };
-use manyhands::repository::RepositoryService;
 use serde_json::Value;
 use std::{
     fs,
@@ -277,13 +276,23 @@ fn remote_select_follows_create_and_enable_without_worktree_not_clean() {
             "ok",
             Some("remote_mutation.schema.json"),
         );
-        // Task 7 replaces this boundary call with the CLI's remote select.
-        let service = RepositoryService::open_at(&f.env.data).unwrap();
-        support::confirmation::select_through(
-            &service,
-            "01M4CC0VMTTNKVYS6XWQG4CK1Q",
-            &f.root,
-            Some("origin"),
+        checked(
+            &[
+                "remote",
+                "select",
+                "--repo",
+                f.root.to_str().unwrap(),
+                "--input",
+                "-",
+                "--request-id",
+                "01M4CC0VMTTNKVYS6XWQG4CK1Q",
+                "--json",
+            ],
+            &f.env,
+            super::remotes::SELECT,
+            0,
+            "ok",
+            Some("remote_mutation.schema.json"),
         );
     }
 }

@@ -7,8 +7,9 @@ use crate::{
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, InitialsChange, Mutation, RemoteAddInput, RepoCreateInput,
-        RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId,
+        CommitIdentity, ConfirmationId, InitialsChange, Mutation, RemoteAddInput,
+        RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId,
     },
     results::ResultCode,
 };
@@ -336,6 +337,79 @@ pub fn remote_add(
                 url: url.clone(),
             })
         },
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn remote_remove(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    remote_name(
+        service,
+        session,
+        spec,
+        args,
+        |object| Ok(Some(object.string("name")?)),
+        |root, name| {
+            Mutation::RemoteRemove(RemoteRemoveInput {
+                root,
+                name: name.expect("required remote name"),
+            })
+        },
+    )
+}
+
+pub fn remote_select(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    remote_name(
+        service,
+        session,
+        spec,
+        args,
+        |object| object.nullable_string("name"),
+        |root, name| Mutation::RemoteSelect(RemoteSelectInput { root, name }),
+    )
+}
+
+fn remote_name(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    read_name: impl FnOnce(&InputObject) -> Result<Option<String>, InputError>,
+    build: impl Fn(PathBuf, Option<String>) -> Mutation,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let name = object
+            .only(&["name"])
+            .and_then(|()| read_name(&object))
+            .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, name, root))
+    })();
+    let (flags, name, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| build(root.clone(), name.clone()),
         &mut std::thread::sleep,
     )
 }

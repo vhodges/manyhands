@@ -409,6 +409,21 @@ fn input_refusals_through_the_binary_and_ids_are_ordered() {
 }
 #[test]
 fn every_mutation_verbs_confirmed_flag_matches_prepare() {
+    let remote = Fixture::new();
+    super::remotes::add(&remote);
+    for (verb, code, exit) in [("remove", "ok", 0), ("select", "not_confirmable", 2)] {
+        let value = super::remotes::call(
+            &remote,
+            verb,
+            super::remotes::SELECT,
+            &["--prepare"],
+            exit,
+            code,
+        );
+        if verb == "remove" {
+            schema::check_published("remote_removal_preview.schema.json", &value["data"]).unwrap();
+        }
+    }
     let f = Fixture::new();
     for (resource, verb, input, confirmed) in [
         ("repo", "identity-set", IDENTITY, true),

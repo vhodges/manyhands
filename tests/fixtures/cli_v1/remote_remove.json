@@ -1,0 +1,30 @@
+{
+  "code": "ok",
+  "command": "remote remove",
+  "data": {
+    "location": null,
+    "name": "origin"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

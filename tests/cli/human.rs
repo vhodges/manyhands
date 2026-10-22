@@ -2,6 +2,68 @@ use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
 
 #[test]
+fn c2_remote_human_results_and_noops_retain_public_ids() {
+    use super::remotes::{self, LAST, SELECT};
+    for (verb, noop, clear) in [
+        ("select", false, false),
+        ("select", true, false),
+        ("select", false, true),
+        ("select", true, true),
+        ("remove", false, false),
+    ] {
+        let f = Fixture::new();
+        remotes::add(&f);
+        if (noop && !clear) || (!noop && clear) {
+            remotes::select(&f);
+        }
+        let input = if clear {
+            br#"{"name":null}"#.as_slice()
+        } else {
+            SELECT
+        };
+        let preview =
+            (verb == "remove").then(|| remotes::call(&f, verb, input, &["--prepare"], 0, "ok"));
+        std::fs::write(&f.input, input).unwrap();
+        let mut flags = vec!["--request-id", LAST];
+        if let Some(preview) = &preview {
+            flags.extend([
+                "--confirm",
+                preview["data"]["confirmation_id"].as_str().unwrap(),
+            ]);
+        }
+        let output = run(&f.args("remote", verb, &flags), &f.env, &[]);
+        assert_eq!(output.status, 0);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr
+                .lines()
+                .all(|line| line.starts_with("progress: ") || line.starts_with("note: "))
+        );
+        assert_eq!(
+            stdout.starts_with("Already applied; nothing changed."),
+            noop
+        );
+        assert!(!stdout.contains("sentinel") && !stderr.contains("sentinel"));
+        flags.push("--json");
+        let replay = checked(
+            &f.args("remote", verb, &flags),
+            &f.env,
+            &[],
+            0,
+            if noop { "already_applied" } else { "ok" },
+            Some("remote_mutation.schema.json"),
+        );
+        for pointer in ["/request_id", "/operation_id", "/effects/commit_oid"] {
+            if let Some(id) = replay.pointer(pointer).and_then(serde_json::Value::as_str) {
+                assert!(stdout.contains(id));
+            }
+        }
+        assert!(stdout.contains(if clear { "Name: none" } else { "Name: origin" }));
+    }
+}
+
+#[test]
 fn c2_repository_human_results_split_streams_and_retain_public_ids() {
     for (verb, noop) in [
         ("create", false),

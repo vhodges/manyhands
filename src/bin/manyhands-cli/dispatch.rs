@@ -462,6 +462,8 @@ pub fn dispatch(
             return crate::admin::repo_identity_set(service, session, command, args);
         }
         "remote add" => return crate::admin::remote_add(service, session, command, args),
+        "remote remove" => return crate::admin::remote_remove(service, session, command, args),
+        "remote select" => return crate::admin::remote_select(service, session, command, args),
         "request show" | "request cancel" => {
             let id = match crate::admin::request_id(session, command, args) {
                 Ok(Some(id)) => id,

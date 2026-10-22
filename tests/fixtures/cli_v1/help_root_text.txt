@@ -58,8 +58,8 @@ Command catalog:
   repo remove  Remove a repository registration. Available now.
   repo identity-set  Set repository identity. Available now.
   remote add  Add a repository remote. Available now.
-  remote remove  Remove a repository remote. Arrives with C2.
-  remote select  Select a repository remote. Arrives with C2.
+  remote remove  Remove a repository remote. Available now.
+  remote select  Select a repository remote. Available now.
   key generate  Generate a key. Arrives with C2.
   key import  Import a key. Arrives with C2.
   key select  Select a key for a repository. Arrives with C2.

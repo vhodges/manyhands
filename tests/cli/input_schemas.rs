@@ -16,6 +16,27 @@ use crate::support::{
 
 const PENDING_REFERENCES: &[&str] = &[];
 
+#[test]
+fn remote_names_are_required_and_only_selection_is_nullable() {
+    for verb in ["remove", "select"] {
+        let schema = format!("remote_{verb}.schema.json");
+        assert!(
+            schema::check(&directory(), &schema, &serde_json::json!({"name":"origin"})).is_ok()
+        );
+        assert_eq!(
+            schema::check(&directory(), &schema, &serde_json::json!({"name":null})).is_ok(),
+            verb == "select"
+        );
+        for invalid in [
+            serde_json::json!({}),
+            serde_json::json!({"name":1}),
+            serde_json::json!({"name":"origin","url":"extra"}),
+        ] {
+            assert!(schema::check(&directory(), &schema, &invalid).is_err());
+        }
+    }
+}
+
 fn directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/input/v1")
 }

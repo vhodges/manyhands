@@ -227,6 +227,10 @@ pub const CLI_CASES: &[&str] = &[
     "repo_identity_set_prepare",
     "repo_identity_set",
     "remote_add",
+    "remote_select",
+    "remote_select_clear",
+    "remote_remove_prepare",
+    "remote_remove",
     "request_show",
     "request_show_accepted",
     "request_cancel",
@@ -285,6 +289,7 @@ pub const CLI_CASES: &[&str] = &[
 pub const CLI_TEXT_CASES: &[&str] = &[
     "repo_create_prepare_text",
     "remote_add_text",
+    "remote_select_identity_required_text",
     "help_root_text",
     "version_text",
     "ticket_list_text",

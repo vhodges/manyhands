@@ -31,16 +31,17 @@ quality reviews and was pushed at `b38d4ce`. Task 3 passed independent spec and
 quality reviews and was pushed at `28055ba`. Task 4 passed both reviews and was
 pushed at `5a71e6b`. Task 5 and its owner-ruling correction passed spec and
 quality review and were pushed through `c9b99aa` (review sessions recorded below).
-The fresh implementer's assignment is **Task 6 only**; implementation and its
-targeted verification are complete, awaiting controller review. Implementers
-never dispatch subagents.
+Task 6 passed spec and quality review and was pushed at `6f336f4` (sessions
+recorded below). The fresh implementer's assignment is **Task 7 and the Part A
+checkpoint only**, inline without subagents. Task 7's named targeted checks pass;
+the post-commit checkpoint and controller's independent Part A reviews are pending.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `c9b99aa`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 6's implementer commits locally
-and returns to the controller for review.
+The branch was pushed at `6f336f4`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 7's implementer commits locally
+and returns to the controller for independent review; no push is authorized here.
 
 ## Baseline
 
@@ -373,6 +374,88 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 6 review bookkeeping / Task 7 start
+
+- Controller reports Task 6 spec **PASS** (`ses_e9ba8bec6ffelsf7DuPcStMqKK`)
+  and quality **PASS** (`ses_e9ba73416ffeBvwJ4fmVR0U5Ga`), pushed at `6f336f4`.
+  These approvals supersede Task 6's historical pending-review entry below.
+- Actual Task 7 base: **`6f336f40c4603de92303bbde88e64c72e8751e8b`**.
+  Assigned branch/worktree clean at entry. Fetch and `git merge origin/main`
+  returned Already up to date; main is `d7962c3615786ca663662b0debb9460769308a57`.
+- Read AGENTS, the approved Cycle/design/plan and execution evidence. Owner
+  early-null-ID and explicit-identity-retry rulings remain in force. The Part A
+  review range begins at **`fbae49a`**, Task 1's base. Task 8 is not assigned.
+
+### Task 7 — Remote Remove/Select And The Exit Table (2026-10-22)
+
+#### Implementation and self-review
+
+- `remote remove` is confirmed with a required string name. `remote select` is
+  unconfirmed with a required nullable name; null clears publication selection.
+  Both use the existing mutation driver, ordered input validation and unchanged
+  F2 envelopes. Catalog/dispatch and two closed input schemas/examples are wired.
+  Existing catalog-driven parse rules and human renderers need no new branches.
+- Added 11 remote tests: select/clear goldens; remove prepare/execute goldens;
+  publication-remote refusal; name conflict; bad URL; non-SSH selection; missing
+  identity and `repo.identity_set` recovery; redaction in both modes, including
+  removal preview/execution; stopped remote-add completion and partial mismatch;
+  selected-remote no-op; closed input shapes and required grammar.
+- Missing-identity coverage uses `require_no_system_identity`, clears only the
+  isolated local/global identities and proves global bytes remain unchanged.
+  Its human failure golden normalizes root/request/operation IDs. All four JSON
+  goldens are registered and explicitly checked against published output schemas.
+- Task 6's approved follow-on now uses CLI select after CLI create/enable/add.
+  Added human select/clear/remove and both selection no-ops, a bin catalog/parser
+  contract, confirmed-prepare rows, and input-schema nullable/missing checks.
+- The exit table has **37 run-here rows plus one Unix prompt reference**,
+  representing **35 distinct codes**. Besides the mandated rows it covers
+  invalid prefix/initials, inaccessible Git config, degraded persisted index,
+  replay after lost commit ancestry, and a conflicted index through the binary.
+  Busy uses the required child repository lease and bounded retry timing.
+- Exact audit accounting: **49 F2 / 52 CLI-inclusive codes**, checked against the
+  actual Task 0 Markdown code block, with **12 explicitly staged key/host codes**
+  for Tasks 8–10 and **5 individually reasoned no-fixture codes** (expiry,
+  registration/discovery injection, remote unavailable and defensive push rejection).
+  Staged entries are not coverage claims. `host_approval_required` is excluded.
+  The SSH-reference checker is ready for actual Task 10 function references;
+  cancellation names the existing Unix PTY case. Windows prompting remains manual.
+- Reviewed production/input/test changes, all five new goldens and both E3 help
+  diffs. No library, output-schema, result-code, dependency or lockfile change;
+  no new production thread/child. Existing tests keep their semantics except the
+  explicitly authorized Task 6 CLI-select follow-on and planned additive rows.
+
+#### Targeted verification before task commit
+
+All Rust commands used Devenv and Cargo `--locked`, except normal fmt.
+
+| Command/phase | Result |
+| --- | --- |
+| RED `cargo test --locked --test cli remotes::` | 2 passed / 9 failed; seven new-verb failures at `command_unavailable`, two new-test assumption failures |
+| GREEN remotes with guarded golden generation | 11 passed; initially generated text needed operation-ID normalization, then regenerated |
+| Exit table first run | 3 passed / 1 failed: create on a file is occupied_path; changed new invalid-path fixture to an absent parent |
+| Expanded exit table | 3 passed / 1 failed: fixture's pre-enablement git2 handle cached its old index; explicit `index.read(true)` fixes fixture setup |
+| Final `cargo test --locked --test cli remotes::` | **11 passed**, 120 filtered, no golden-update environment; 2.26s |
+| Final `cargo test --locked --test cli exits::` | **4 passed**, 127 filtered; 11.60s |
+| `cargo test --locked --test cli repository::` | **14 passed**, 117 filtered; 2.33s |
+| E3 regeneration `cargo test --locked --test cli help` | **9 passed**, 122 filtered; only two approved root help fixtures changed |
+| `cargo fmt`; `git diff --check` | Passed |
+
+The two initial new-test assumption corrections follow existing F2 behavior:
+stopped-add completion returns `ok`/success, and SSH usernames are explicitly
+non-secret in `results::redact_url`. HTTPS userinfo is used to prove both user
+and password removal; no library behavior was changed. Recovery is an array,
+as the existing envelope specifies. No owner/library stop was encountered.
+
+Task comment: **`01M5J6FNZ3GRSWG091C1MPDT16`**, generated by the built CLI in
+a fresh `/tmp/opencode/` HOME/XDG/app-data sandbox, empty inherited environment,
+Git config disabled and `setsid` detached. Initial `/usr/bin` PATH lookup failed
+before launching the CLI; the successful call used the absolute Nix setsid path.
+
+Delivery subject: **`feat: add remote remove and select, and the exit table`**,
+with the required coauthor. This entry's containing commit is Task 7's delivery.
+**Post-commit Part A checkpoint and independent controller spec/quality reviews
+are pending.** No full-suite, native CI, push, PR, closure, cleanup or subagents.
 
 ### Task 5 review bookkeeping / Task 6 start
 
