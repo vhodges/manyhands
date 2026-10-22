@@ -42,7 +42,7 @@ pub fn command() -> Command {
         .subcommand_required(false);
     for (name, summary) in [
         ("json", "Write a JSON result."),
-        ("non-interactive", "Run without prompts (no effect in C1)."),
+        ("non-interactive", "Run without terminal prompts."),
         ("help", "Show help."),
         ("version", "Show the version."),
     ] {
@@ -117,6 +117,12 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
         Ok(matches) => matches,
         Err(error) => {
             let target = raw_target(&args);
+            let detail = if matches!(&target,HelpTarget::Command(spec) if spec.delivered_by()=="C2")
+            {
+                "Invalid command options. Use --help for accepted options.".to_owned()
+            } else {
+                error.render().to_string()
+            };
             let action = if raw_help {
                 Action::Help(target)
             } else {
@@ -125,7 +131,7 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
                         HelpTarget::Command(command) => Some(command),
                         _ => None,
                     },
-                    detail: error.render().to_string(),
+                    detail,
                 }
             };
             return Invocation {

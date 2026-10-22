@@ -137,7 +137,11 @@ fn catalog_repository_rules_and_planned_metadata_match_the_design() {
             Availability::Available(_) => {
                 let refused = matches!(
                     (command.resource, command.verb),
-                    ("repo", "list") | ("key", _) | ("host", _) | ("id", "new")
+                    ("repo", "list")
+                        | ("key", _)
+                        | ("host", _)
+                        | ("id", "new")
+                        | ("request", "show" | "cancel")
                 );
                 assert_eq!(
                     command.repo,

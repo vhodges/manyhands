@@ -594,19 +594,81 @@
         "summary": "Remove a repository registration."
       },
       {
-        "available": false,
+        "available": true,
         "command": "repo identity-set",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Set repository identity."
       },
       {
-        "available": false,
+        "available": true,
         "command": "remote add",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Add a repository remote."
       },
       {
@@ -698,19 +760,33 @@
         "summary": "Observe a host key."
       },
       {
-        "available": false,
+        "available": true,
         "command": "request show",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--request-id",
+            "required": true,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Show a request."
       },
       {
-        "available": false,
+        "available": true,
         "command": "request cancel",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--request-id",
+            "required": true,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Cancel a request."
       },
       {

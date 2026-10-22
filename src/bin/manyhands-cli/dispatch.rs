@@ -449,11 +449,44 @@ fn ticket_find(
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
-    json: bool,
+    session: &mut crate::mutate::Session,
     service: &RepositoryService,
 ) -> Output {
+    let json = session.json;
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "repo identity-set" => {
+            return crate::admin::repo_identity_set(service, session, command, args);
+        }
+        "remote add" => return crate::admin::remote_add(service, session, command, args),
+        "request show" | "request cancel" => {
+            let id = match crate::admin::request_id(session, command, args) {
+                Ok(Some(id)) => id,
+                Err(output) => return output,
+                Ok(None) => {
+                    return crate::mutate::refusal(
+                        session,
+                        &name,
+                        None,
+                        ResultCode::InvalidId,
+                        None,
+                    );
+                }
+            };
+            return if command.verb == "show" {
+                render::envelope_output(
+                    json,
+                    &service.show_request(id),
+                    crate::human_admin::request,
+                )
+            } else {
+                render::envelope_output(
+                    json,
+                    &service.cancel_request(id),
+                    crate::human_admin::cancel,
+                )
+            };
+        }
         "ticket ready" => {
             return read_output(&name, json, ticket_ready(service, args), human::item_list);
         }

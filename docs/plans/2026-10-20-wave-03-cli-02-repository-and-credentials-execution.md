@@ -28,14 +28,16 @@ including its correction at `fbae49a`: **49 F2 / 52 CLI-inclusive codes** and
 the **258-test baseline**. Task 1 also passed independent spec and quality
 reviews and was pushed through `c448c24`. Task 2 passed independent spec and
 quality reviews and was pushed at `b38d4ce`. Task 3 passed independent spec and
-quality reviews and was pushed at `28055ba`. The fresh implementer's current
-assignment is **Task 4 only**. Implementers never dispatch subagents.
+quality reviews and was pushed at `28055ba`. Task 4 passed both reviews and was
+pushed at `5a71e6b`. The fresh implementer's assignment is **Task 5 only**;
+implementation and its targeted verification are complete, awaiting controller
+review. Implementers never dispatch subagents.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `28055ba`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 4's implementer commits locally
+The branch was pushed at `5a71e6b`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 5's implementer commits locally
 and returns to the controller for review.
 
 ## Baseline
@@ -369,6 +371,200 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 4 review bookkeeping / Task 5 start
+
+- Controller reports Task 4 spec **PASS** (`ses_e9bfd6cd0ffep2GsXknh9ANnkm`)
+  and quality **PASS** (`ses_e9bfbeeceffeT1PURbvIC4w6NV`), pushed at `5a71e6b`.
+- Task 5 base: `5a71e6b`; exact assigned branch and clean tree confirmed.
+  `git fetch origin main && git merge origin/main` returned Already up to date.
+- Task 5 executes inline with TDD and no subagents. Only its named targeted
+  commands run; the controller owns independent review and the subsequent push.
+
+### Task 5 — Implementation Present, Owner Stop At Clippy (2026-10-22)
+
+**Superseding owner ruling:** the owner explicitly selected **“Approve
+correction”**, authorizing `[b'\r', b'\n']` → `*b"\r\n"` in
+`terminal_tests.rs`, the three Task 5-owned lint corrections, targeted terminal
+and mutate verification, all-target Clippy, final self-review and the local Task
+5 commit. The original stop entry/comment below remains historical evidence.
+The successful unfiltered bin/CLI runs are retained rather than repeated for
+these equivalent-spelling/control-flow changes. No subagents are authorized.
+
+- Base and current HEAD: **`5a71e6bfcfed1d4a42fb24a8a3fc7db1e5492088`**.
+  All Task 5 work is **uncommitted** in the assigned ticket worktree. The owner
+  stop below prevents a completed-task commit or review-ready claim.
+- Implemented the driver, Boundary adapter, invocation credential lifetime,
+  bounded same-confirmation retry, R-6 refusals, exhaustive preview variants and
+  effect phrases, mutation/prepare rendering, progress, four verb catalog and
+  dispatch paths, typed identity/remote input glue, schemas and example inputs.
+- Added isolated CLI stdin support and the Unix PTY helper (separate standard
+  pipes, controlling-terminal setup, kept slave, bounded child waits, master
+  reader, reap/close/join cleanup). Five PTY cases pass, including Ctrl-C mode
+  restoration, replay without consent and stdin y / terminal n.
+- Applied E2–E7/E9 only as scoped, including mechanical dispatch signatures;
+  E3 changes only the four delivered verbs/options and non-interactive summary.
+  Removed consumed catalog/prompt allowances. No library, output-schema,
+  dependency or lockfile edits. `terminal_tests.rs` is unchanged.
+- Interface adaptation: `admin::flags` and `mutation_root` receive Session and
+  CommandSpec (and the root helper the already parsed request ID), because
+  Output requires mode/command context. Request then confirmation validation
+  precedes input reading/shape checking and root joining; paths are never
+  canonicalized by CLI glue. Mode refusals retain a valid supplied request ID.
+  C2 clap diagnostics use fixed text instead of echoing rejected values.
+- Renderer/progress RED preceded their implementations while completing the
+  driver, whose GREEN depends on those renderers. No renderer stub remains.
+
+#### Verification evidence
+
+Every Rust command ran through Devenv; Cargo used `--locked`, except fmt.
+
+| Check | Evidence |
+| --- | --- |
+| `cargo test --locked --bin manyhands-cli mutate` | RED: 13 new failures at stubs, then GREEN: 13 passed |
+| `cargo test --locked --bin manyhands-cli human_admin` | RED: five failures at stubs, then GREEN: five passed |
+| `cargo test --locked --bin manyhands-cli progress` | RED: two failures at stubs, then GREEN: two passed |
+| `cargo test --locked --bin manyhands-cli admin` | RED: new availability/grammar test failed, five overlapping renderer tests passed; see deviation below |
+| `cargo test --locked --test cli mutation` | RED: 11 new failures at unavailable verbs; later runs exposed fixture schema/confirmation assumptions, corrected only in new tests |
+| `cargo test --locked --test cli requests` | RED: six new failures at unavailable verbs; GREEN: six passed |
+| `cargo test --locked --test cli prompts` | RED: five new failures at helper stubs; GREEN: five passed |
+| `cargo test --locked --test cli mutation::a_mode_refusal` | RED: valid supplied request ID was null; fix covered by final CLI run |
+| `cargo test --locked --bin manyhands-cli` | **164 passed**, zero failed/ignored/filtered |
+| `cargo test --locked --test cli` | First: 90 passed, one new test had wrong expected exit class. After correction: **91 passed**, zero failed/ignored/filtered |
+| `cargo clippy --locked --all-targets -- -D warnings` | **FAILED**, four findings below; owner stop |
+| `cargo fmt` | Passed before final tests |
+| `git diff --check` | Passed at stop |
+
+Final test evidence covers **255 distinct tests**, including **45 new tests**
+(21 bin + 24 CLI); no full-suite or Part checkpoint gate was run. The mismatch
+fixture was corrected to use a real confirmation of different input; the
+library's `ConfirmationMismatch` is Input (exit 2), while a nonexistent ID is
+`confirmation_not_found`. Identity preview uses `identity_preview.schema.json`.
+No library behavior was changed to satisfy a test.
+
+Goldens were generated with `MANYHANDS_UPDATE_GOLDEN=1`, through the guarded
+existing helper, for mutation/request/human/help cases. Read the entire changed
+help diff and all seven new fixtures. Request timestamps normalize to the same
+`<timestamp>` placeholder so accepted/finished timestamps being equal or unequal
+does not make the fixture unstable. Schema reachability, closed objects,
+examples, envelope/data schemas and exact fixture inventory pass in the CLI run.
+The actual published example files are the binary tests' input bytes.
+
+**Verification deviation:** the implementer ran an extra bin `admin` filter
+while establishing RED for the new grammar test, although the named bin filters
+were mutate/human_admin/progress. It ran six tests (five overlapping renderer
+tests and the new grammar test), not a broader gate. A `human` CLI filter also
+matched 15 existing cases; only the two authorized help fixtures changed among
+pre-existing goldens. Subsequent human regeneration used the exact new test name.
+
+#### Stop evidence and resumption
+
+The all-targets Clippy command reports an unexpected required change to a
+pre-existing test outside E1–E9 and the explicitly listed mechanical changes:
+
+```text
+src/bin/manyhands-cli/terminal_tests.rs:20:19
+for ending in [b'\r', b'\n'] {
+clippy::byte_char_slices (-D warnings): try *b"\r\n"
+```
+
+**Owner ruling requested before touching that file:** permit the mechanically
+equivalent byte-string spelling, or direct another resolution. The file remains
+unchanged; no warning suppression was added. This is a pre-existing lint, not
+a library gap. The Task 2 bin-only Clippy run did not compile its unit tests.
+
+Three Task 5-owned lint findings also remain, left at the immediate stop:
+
+- `mutate.rs:160`: redundant identity-prompt closure. Do not blindly replace it
+  with `.map(prompt::identity)`: that spelling already caused an E0521 trait-object
+  lifetime error. Use an explicit match/reborrow without the redundant closure.
+- `tests/cli/human.rs:31`: collapse nested `if !noop` / `if let Some`.
+- `tests/cli/mutation.rs:122`: collapse nested optional-placeholder/dedup `if`.
+
+After the owner ruling, resolve these findings, rerun affected named checks and
+Clippy, finish self-review/fmt verification, inspect status/diff/log, and commit
+the required subject/coauthor. Controller review and push follow that commit.
+Self-review so far covered driver decisions, privacy/ID handling, isolation,
+golden diffs and preservation of existing tests; final review is pending.
+
+Canonical stop comment: `01M5J1Y1J1RG99H9JM0AKK06Q1.md`. Its ID came from the
+built CLI with empty inherited environment, temporary HOME/XDG/app data,
+disabled Git configuration and `setsid`. Ticket remains open; no commit, push,
+PR, closure, cleanup or native CI was performed by Task 5.
+
+### Task 5 — Approved Correction And Completion (2026-10-22)
+
+The owner explicitly selected **“Approve correction”** after the stop, authorizing
+the equivalent terminal-test spelling and Task 5 lint fixes. Applied exactly:
+
+1. `terminal_tests.rs`: `[b'\r', b'\n']` → `*b"\r\n"`; identical bytes, order and
+   assertions. This is the owner's additional mechanical-test exception.
+2. `mutate.rs`: explicit `match` on the optional borrowed terminal; the same
+   identity prompt or `Asked::Cancelled`, without the closure/lifetime problem.
+3. `tests/cli/human.rs` and `tests/cli/mutation.rs`: equivalent let-chain
+   conditionals, preserving evaluation order and every assertion.
+
+No semantic change was required. The stop comment
+`01M5J1Y1J1RG99H9JM0AKK06Q1.md` is retained unchanged as history. Its blockers are
+resolved by this entry and completion comment `01M5J2CNN5N2F9352GHS6WDF9S.md`.
+
+#### Authorized resumption verification
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo fmt` | Passed |
+| `devenv shell -- cargo test --locked --bin manyhands-cli terminal` | **13 passed**, 151 filtered, zero failures/ignored |
+| `devenv shell -- cargo test --locked --bin manyhands-cli mutate` | **13 passed**, 151 filtered, zero failures/ignored |
+| `devenv shell -- cargo clippy --locked --all-targets -- -D warnings` | **Passed**, no warnings |
+| `devenv shell -- cargo fmt --check` | **Passed** |
+| `git diff --check` | **Passed** |
+
+The existing **164-bin / 91-CLI** successful runs remain the unfiltered evidence;
+neither was repeated after these mechanical changes, as the owner directed.
+The terminal filter includes nine editor tests and four other terminal-named
+tests. These 26 filtered passes overlap the 255 distinct tests already counted.
+The driver test's immediate identity note is expected stderr, contains only the
+request ID/fixed guidance and is not a warning.
+
+#### Final self-review and delivery
+
+- Reviewed the source/test diff, new modules, schemas/examples, all changed help
+  goldens and all new JSON/text fixtures against Task 5 and its interfaces.
+  Rechecked final request timestamp normalization after regeneration.
+- Driver review: flow priority, prepare/no-ID behavior, existing-request lookup
+  conditions, unchanged unexpected lookup failures, identity re-prepare, consent
+  cancellation, same request/confirmation and fresh mutation on every retry,
+  one credential session and sticky supplied flag, bounded sleeps and final
+  envelope rendering. No unresolved self-review issue or library gap found.
+- Rendering/glue review: all eight preview detail variants and 26 effects,
+  escaped DTO fields, failure metadata/data/hint and inherited recovery output,
+  per-verb input shape, initials tri-state, ordered selector/input failures,
+  noncanonicalized roots, C2 usage-value privacy and R-6 request retention.
+- Isolation review: detached ordinary children, shared temporary environment,
+  PTY's independent pre-exec/session, kept slave, EIO handling after reap,
+  separate standard pipes, deadlines and drop cleanup. CLI production code
+  creates neither threads nor children. Windows/macOS source paths are present;
+  only Linux execution is claimed, with native verification left to the Cycle.
+- Existing-test changes are E2–E7/E9, dispatch-signature wiring, and the newly
+  approved one-line terminal spelling. E1/E8 and existing read expectations
+  remain as previously approved. No changes to library paths, output schemas,
+  result codes, dependencies or lockfiles.
+- Refetched `origin/main`; it remains an ancestor of HEAD. `git merge-tree
+  --write-tree HEAD origin/main` succeeded, tree
+  `1b0cb5c691e90a3b320fabaec84a89a867917006`. No merge or rebase was needed.
+- Changes: eight new bin module/test files (`admin`, `mutate`, `human_admin`,
+  `progress`); bin/catalog/parse/startup/dispatch/render/prompt wiring; four CLI
+  integration modules; shared CLI and PTY helpers; two input schemas/examples;
+  six JSON and one text golden; two help goldens; ledger and both comments.
+- Completion comment ID generated by the built CLI in a fresh `/tmp/opencode/`
+  sandbox with empty inherited environment, isolated HOME/XDG/app data, disabled
+  Git configuration and `setsid`, as for the stop comment.
+- Delivery subject: **`feat: add the mutation driver, request verbs, repo identity-set and remote add`**.
+  Required coauthor: `Claude Opus 5.5 <noreply@anthropic.com>`. This entry's commit
+  is Task 5's local delivery; the handoff reports its final hash.
+- **Task 5 complete and ready for controller spec/quality review.** Independent
+  review is not claimed by this implementer. The controller owns the subsequent
+  push; the Cycle/ticket remain open. No Task 6 work, subagents or native CI.
 
 ### Task 0 — Baseline, Prerequisite, Audit Refresh And Ledger
 

@@ -86,17 +86,20 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             } else {
                 None
             };
-            // Keep ownership through dispatch; Task 5 passes it to the driver.
             let interactive = terminal.is_some();
             if let Err(detail) = parse::mode_rules(command, &args, interactive) {
-                return render::failure_output(
-                    json,
-                    &Envelope::failure(
-                        command_name(command),
-                        Scope::default(),
-                        render::USAGE_CODE,
-                        Vec::new(),
-                    ),
+                let request_id = args
+                    .get_one::<String>("request-id")
+                    .and_then(|text| manyhands::repository::RequestId::parse(text).ok());
+                return crate::mutate::refusal(
+                    &crate::mutate::Session {
+                        json,
+                        interactive,
+                        terminal,
+                    },
+                    &command_name(command),
+                    request_id,
+                    render::USAGE_CODE,
                     Some(detail),
                 );
             }
@@ -108,7 +111,16 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
                 );
             }
             match startup.open_service() {
-                Ok(service) => dispatch::dispatch(command, &args, json, &service),
+                Ok(service) => dispatch::dispatch(
+                    command,
+                    &args,
+                    &mut crate::mutate::Session {
+                        json,
+                        interactive,
+                        terminal,
+                    },
+                    &service,
+                ),
                 Err(error) => {
                     render::failure_output(json, &error.to_envelope(command_name(command)), None)
                 }

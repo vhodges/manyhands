@@ -17,7 +17,7 @@ fn line(editor: LineEditor, expected: &str) {
 
 #[test]
 fn enter_ends_a_line_with_cr_or_lf() {
-    for ending in [b'\r', b'\n'] {
+    for ending in *b"\r\n" {
         let mut editor = LineEditor::new(false);
         pending(&mut editor, b'a', b"");
         assert!(matches!(editor.feed(ending), Step::Done));

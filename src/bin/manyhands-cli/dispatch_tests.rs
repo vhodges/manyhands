@@ -14,7 +14,16 @@ fn id_new_dispatches_a_canonical_id_in_both_modes() {
     let service = RepositoryService::open_at(directory.path()).unwrap();
     let spec = catalog::find("id", "new").unwrap();
     for json in [false, true] {
-        let output = dispatch(spec, &ArgMatches::default(), json, &service);
+        let output = dispatch(
+            spec,
+            &ArgMatches::default(),
+            &mut crate::mutate::Session {
+                json,
+                interactive: false,
+                terminal: None,
+            },
+            &service,
+        );
         assert_eq!(output.status, 0);
         assert!(output.stderr.is_empty());
         let id = if json {
@@ -46,10 +55,11 @@ fn all_28_available_verbs_reach_a_real_dispatch_arm() {
     let service = RepositoryService::open_at(directory.path()).unwrap();
     let missing = directory.path().join("missing-repository");
     let mut count = 0;
-    for spec in catalog::COMMANDS
-        .iter()
-        .filter(|spec| matches!(spec.availability, Availability::Available(_)))
-    {
+    for spec in catalog::COMMANDS.iter().filter(|spec| {
+        matches!(spec.availability, Availability::Available(_))
+            && spec.delivered_by() == "C1"
+            && spec.kind == catalog::Kind::Read
+    }) {
         let mut argv = vec!["manyhands-cli", spec.resource, spec.verb];
         for option in spec.options.iter().filter(|option| option.required) {
             argv.extend([
@@ -69,7 +79,16 @@ fn all_28_available_verbs_reach_a_real_dispatch_arm() {
         let parse::Action::Run { args, .. } = invocation.action else {
             panic!("expected Run for {spec:?}")
         };
-        let output = dispatch(spec, &args, true, &service);
+        let output = dispatch(
+            spec,
+            &args,
+            &mut crate::mutate::Session {
+                json: true,
+                interactive: false,
+                terminal: None,
+            },
+            &service,
+        );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["command"], format!("{} {}", spec.resource, spec.verb));
         // An empty placeholder list cannot hide a missing dispatch arm behind

@@ -98,7 +98,10 @@ fn every_available_verb_accepts_its_minimum_inputs_and_requires_each_one() {
         AVAILABLE.len(),
         catalog::COMMANDS
             .iter()
-            .filter(|command| matches!(command.availability, Availability::Available(_)))
+            .filter(
+                |command| matches!(command.availability, Availability::Available(_))
+                    && command.delivered_by() == "C1"
+            )
             .count()
     );
     for args in AVAILABLE {

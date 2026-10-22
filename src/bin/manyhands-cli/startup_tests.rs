@@ -108,10 +108,9 @@ fn service_free_actions_never_call_startup_in_either_mode() {
 
 #[test]
 fn every_available_run_starts_transport_before_service_and_maps_open_failure() {
-    for command in catalog::COMMANDS
-        .iter()
-        .filter(|spec| matches!(spec.availability, Availability::Available(_)))
-    {
+    for command in catalog::COMMANDS.iter().filter(|spec| {
+        matches!(spec.availability, Availability::Available(_)) && spec.kind == catalog::Kind::Read
+    }) {
         for json in [false, true] {
             let mut startup = FakeStartup::default();
             let output = run(

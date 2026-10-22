@@ -1,0 +1,215 @@
+use crate::{
+    catalog::CommandSpec,
+    input::{self, InputError, InputObject, Tristate},
+    mutate::{self, MutationFlags, Plan, Session},
+    render::Output,
+};
+use clap::ArgMatches;
+use manyhands::{
+    repository::{
+        ConfirmationId, InitialsChange, Mutation, RemoteAddInput, RepoIdentitySetInput,
+        RepositoryService, RequestId,
+    },
+    results::ResultCode,
+};
+use std::path::PathBuf;
+
+fn name(spec: &CommandSpec) -> String {
+    format!("{} {}", spec.resource, spec.verb)
+}
+
+// Session/spec context is needed to render the first failure in the caller's
+// mode, retaining a valid request ID if a later selector is malformed.
+pub fn flags(
+    session: &Session,
+    spec: &CommandSpec,
+    args: &ArgMatches,
+) -> Result<MutationFlags, Output> {
+    let request_id = request_id(session, spec, args)?;
+    let confirm = args
+        .try_get_one::<String>("confirm")
+        .ok()
+        .flatten()
+        .map(|text| ConfirmationId::parse(text))
+        .transpose()
+        .map_err(|_| {
+            mutate::refusal(
+                session,
+                &name(spec),
+                request_id,
+                ResultCode::InvalidId,
+                None,
+            )
+        })?;
+    Ok(MutationFlags {
+        request_id,
+        confirm,
+        prepare: args
+            .try_get_one::<bool>("prepare")
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false),
+    })
+}
+pub fn request_id(
+    session: &Session,
+    spec: &CommandSpec,
+    args: &ArgMatches,
+) -> Result<Option<RequestId>, Output> {
+    args.get_one::<String>("request-id")
+        .map(|text| RequestId::parse(text))
+        .transpose()
+        .map_err(|_| mutate::refusal(session, &name(spec), None, ResultCode::InvalidId, None))
+}
+pub fn input_object(
+    session: &Session,
+    spec: &CommandSpec,
+    args: &ArgMatches,
+    request_id: Option<RequestId>,
+) -> Result<InputObject, Output> {
+    let cwd = std::env::current_dir()
+        .map_err(|_| input_failure(session, spec, request_id, InputError::Unreadable))?;
+    input::read(
+        args.get_one::<String>("input").expect("required input"),
+        &cwd,
+        &mut std::io::stdin().lock(),
+    )
+    .map_err(|e| input_failure(session, spec, request_id, e))
+}
+fn input_failure(
+    session: &Session,
+    spec: &CommandSpec,
+    request_id: Option<RequestId>,
+    error: InputError,
+) -> Output {
+    mutate::refusal(
+        session,
+        &name(spec),
+        request_id,
+        ResultCode::InvalidInput,
+        Some(error.detail()),
+    )
+}
+pub fn mutation_root(
+    session: &Session,
+    spec: &CommandSpec,
+    args: &ArgMatches,
+    request_id: Option<RequestId>,
+) -> Result<PathBuf, Output> {
+    let root = PathBuf::from(args.get_one::<String>("repo").expect("required repository"));
+    if root.is_absolute() {
+        Ok(root)
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(root))
+            .map_err(|_| {
+                mutate::refusal(
+                    session,
+                    &name(spec),
+                    request_id,
+                    ResultCode::InvalidPath,
+                    None,
+                )
+            })
+    }
+}
+struct IdentityInput {
+    name: String,
+    email: String,
+    initials: InitialsChange,
+}
+fn identity_input(input: &InputObject) -> Result<IdentityInput, InputError> {
+    input.only(&["name", "email", "initials"])?;
+    Ok(IdentityInput {
+        name: input.string("name")?,
+        email: input.string("email")?,
+        initials: match input.tristate("initials")? {
+            Tristate::Missing => InitialsChange::Unchanged,
+            Tristate::Null => InitialsChange::Clear,
+            Tristate::Value(s) => InitialsChange::Set(s),
+        },
+    })
+}
+pub fn repo_identity_set(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let input = identity_input(&object)
+            .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, input, root))
+    })();
+    let (flags, input, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::RepoIdentitySet(RepoIdentitySetInput {
+                root: root.clone(),
+                name: input.name.clone(),
+                email: input.email.clone(),
+                initials: input.initials.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}
+pub fn remote_add(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let fields = (|| {
+            object.only(&["name", "url"])?;
+            Ok((object.string("name")?, object.string("url")?))
+        })();
+        let (name, url) = fields.map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, name, url, root))
+    })();
+    let (flags, name, url, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::RemoteAdd(RemoteAddInput {
+                root: root.clone(),
+                name: name.clone(),
+                url: url.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+#[cfg(test)]
+#[path = "admin_tests.rs"]
+mod tests;

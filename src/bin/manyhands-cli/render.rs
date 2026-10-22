@@ -1,7 +1,57 @@
 use std::io::{self, Write};
 
+use crate::human_admin;
 use manyhands::results::{Envelope, FailureClass, ResultCode};
+use manyhands::{
+    repository::{MutationDataDto, PrepareDataDto},
+    results::Outcome,
+};
 use serde::Serialize;
+
+pub fn mutation_output(
+    json: bool,
+    envelope: &Envelope<MutationDataDto>,
+    passphrase_supplied: bool,
+) -> Output {
+    if json {
+        return json_output(envelope);
+    }
+    if envelope.failure_class().is_some() {
+        return human_failure(
+            envelope,
+            Some(&human_admin::failure_extra(envelope, passphrase_supplied)),
+        );
+    }
+    let human = human_admin::mutation_success(envelope);
+    Output {
+        stdout: human.stdout.into_bytes(),
+        stderr: Vec::new(),
+        status: exit_status(envelope.failure_class()),
+    }
+}
+pub fn prepare_output(json: bool, envelope: &Envelope<PrepareDataDto>) -> Output {
+    if json {
+        return json_output(envelope);
+    }
+    if envelope.failure_class().is_some() {
+        let extra = envelope.data.as_ref().map(human_admin::fields);
+        return human_failure(envelope, extra.as_deref());
+    }
+    let stdout = match envelope.data.as_ref() {
+        Some(PrepareDataDto::Preview(preview)) => format!(
+            "{}Apply with the same command and --confirm {}; add --request-id unless you run it at a terminal.\n",
+            human_admin::preview(preview),
+            field(&preview.confirmation_id)
+        ),
+        _ if envelope.outcome == Outcome::Noop => "Already applied; nothing changed.\n".into(),
+        _ => format!("{}\n", field(&envelope.message)),
+    };
+    Output {
+        stdout: stdout.into_bytes(),
+        stderr: Vec::new(),
+        status: exit_status(envelope.failure_class()),
+    }
+}
 
 pub const USAGE_CODE: ResultCode = ResultCode::UsageError;
 pub const UNAVAILABLE_CODE: ResultCode = ResultCode::CommandUnavailable;

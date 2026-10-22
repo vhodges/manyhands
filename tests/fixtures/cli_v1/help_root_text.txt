@@ -20,7 +20,7 @@ Commands:
 
 Options:
       --json             Write a JSON result.
-      --non-interactive  Run without prompts (no effect in C1).
+      --non-interactive  Run without terminal prompts.
       --help             Show help.
       --version          Show the version.
 
@@ -56,8 +56,8 @@ Command catalog:
   repo create  Create a repository. Arrives with C2.
   repo enable  Enable Manyhands in a repository. Arrives with C2.
   repo remove  Remove a repository registration. Arrives with C2.
-  repo identity-set  Set repository identity. Arrives with C2.
-  remote add  Add a repository remote. Arrives with C2.
+  repo identity-set  Set repository identity. Available now.
+  remote add  Add a repository remote. Available now.
   remote remove  Remove a repository remote. Arrives with C2.
   remote select  Select a repository remote. Arrives with C2.
   key generate  Generate a key. Arrives with C2.
@@ -69,8 +69,8 @@ Command catalog:
   host approve  Approve a host pin. Arrives with C2.
   host replace  Replace a host pin. Arrives with C2.
   host observe  Observe a host key. Arrives with C2.
-  request show  Show a request. Arrives with C2.
-  request cancel  Cancel a request. Arrives with C2.
+  request show  Show a request. Available now.
+  request cancel  Cancel a request. Available now.
   folder create  Create a document folder. Arrives with C3.
   document create  Create a document. Arrives with C3.
   document save  Save a document. Arrives with C3.

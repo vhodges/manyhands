@@ -5,11 +5,10 @@ pub enum Availability {
     Planned(&'static str),
 }
 
-// C2 verb delivery starts using these input rules in Task 5.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputRule {
     Required,
+    #[cfg_attr(not(test), allow(dead_code))] // Task 6 delivers input-free mutations.
     Refused,
 }
 
@@ -19,8 +18,6 @@ pub enum Kind {
     /// A read that can ask to unlock a key: `host observe` (Task 10).
     #[cfg_attr(not(test), allow(dead_code))]
     UnlockingRead,
-    // C2 mutation delivery starts in Task 5.
-    #[cfg_attr(not(test), allow(dead_code))]
     Mutation {
         confirmed: bool,
         input: InputRule,
@@ -88,29 +85,24 @@ const REPO: OptionSpec = option(
 );
 const ID: OptionSpec = option("--id", Some("ULID"), true, "Canonical item ULID.");
 const KEY_ID: OptionSpec = option("--key-id", Some("ULID"), true, "Canonical key ULID.");
-// These options join per-command lists when C2 verb delivery starts in Task 5.
-#[cfg_attr(not(test), allow(dead_code))]
 pub const INPUT: OptionSpec = option(
     "--input",
     Some("file|-"),
     false,
     "Read one JSON input object from a file or stdin (-).",
 );
-#[cfg_attr(not(test), allow(dead_code))]
 pub const REQUEST_ID: OptionSpec = option(
     "--request-id",
     Some("ULID"),
     false,
     "Canonical request ULID.",
 );
-#[cfg_attr(not(test), allow(dead_code))]
 pub const PREPARE: OptionSpec = option(
     "--prepare",
     None,
     false,
     "Prepare a confirmation preview without executing the mutation.",
 );
-#[cfg_attr(not(test), allow(dead_code))]
 pub const CONFIRM: OptionSpec = option(
     "--confirm",
     Some("ULID"),
@@ -234,6 +226,16 @@ const fn planned(
 }
 
 use RepoRule::{Refused, Required};
+const MUTATION_INPUT: &[OptionSpec] = &[
+    REPO,
+    OptionSpec {
+        required: true,
+        ..INPUT
+    },
+    REQUEST_ID,
+    PREPARE,
+    CONFIRM,
+];
 
 /// The approved command catalog, ordered by delivering Cycle.
 pub const COMMANDS: &[CommandSpec] = &[
@@ -407,8 +409,30 @@ pub const COMMANDS: &[CommandSpec] = &[
     planned("repo", "create", "Create a repository.", "C2"),
     planned("repo", "enable", "Enable Manyhands in a repository.", "C2"),
     planned("repo", "remove", "Remove a repository registration.", "C2"),
-    planned("repo", "identity-set", "Set repository identity.", "C2"),
-    planned("remote", "add", "Add a repository remote.", "C2"),
+    CommandSpec {
+        resource: "repo",
+        verb: "identity-set",
+        summary: "Set repository identity.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "add",
+        summary: "Add a repository remote.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     planned("remote", "remove", "Remove a repository remote.", "C2"),
     planned("remote", "select", "Select a repository remote.", "C2"),
     planned("key", "generate", "Generate a key.", "C2"),
@@ -420,8 +444,30 @@ pub const COMMANDS: &[CommandSpec] = &[
     planned("host", "approve", "Approve a host pin.", "C2"),
     planned("host", "replace", "Replace a host pin.", "C2"),
     planned("host", "observe", "Observe a host key.", "C2"),
-    planned("request", "show", "Show a request.", "C2"),
-    planned("request", "cancel", "Cancel a request.", "C2"),
+    CommandSpec {
+        resource: "request",
+        verb: "show",
+        summary: "Show a request.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[OptionSpec {
+            required: true,
+            ..REQUEST_ID
+        }],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "request",
+        verb: "cancel",
+        summary: "Cancel a request.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[OptionSpec {
+            required: true,
+            ..REQUEST_ID
+        }],
+        kind: Kind::Read,
+    },
     planned("folder", "create", "Create a document folder.", "C3"),
     planned("document", "create", "Create a document.", "C3"),
     planned("document", "save", "Save a document.", "C3"),

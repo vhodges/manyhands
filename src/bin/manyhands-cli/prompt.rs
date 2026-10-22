@@ -10,20 +10,17 @@ use manyhands::repository::{
 
 use crate::{render, terminal::Terminal};
 
-#[cfg_attr(not(test), allow(dead_code))] // Task 5 wires the mutation driver.
 pub enum Consent {
     Yes,
     No,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Tasks 5/9 consume prompt answers.
 pub enum Asked<T> {
     Answer(T),
     Cancelled,
     Exhausted,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Task 5 wires the mutation driver.
 pub fn consent(terminal: &mut dyn Terminal, preview_text: &str) -> Consent {
     if terminal.write(preview_text).is_err() {
         return Consent::No;
@@ -38,7 +35,6 @@ pub fn consent(terminal: &mut dyn Terminal, preview_text: &str) -> Consent {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Task 5 wires the identity re-prepare.
 pub fn identity(terminal: &mut dyn Terminal) -> Asked<CommitIdentity> {
     for _ in 0..3 {
         let Ok(Some(mut name)) = terminal.ask("Name for commits in this repository: ", true) else {
@@ -91,7 +87,6 @@ pub fn new_passphrase(terminal: &mut dyn Terminal, label: &str) -> Asked<SecretP
     Asked::Exhausted
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Tasks 5/10 create session credentials.
 pub struct TerminalProvider<'a> {
     terminal: Option<&'a mut dyn Terminal>,
     /// Invocation-owned evidence for R-18; holds no secret and is never cleared.
@@ -99,7 +94,6 @@ pub struct TerminalProvider<'a> {
 }
 
 impl<'a> TerminalProvider<'a> {
-    #[cfg_attr(not(test), allow(dead_code))] // Tasks 5/10 create session credentials.
     pub fn new(terminal: Option<&'a mut dyn Terminal>, supplied: &'a Cell<bool>) -> Self {
         Self { terminal, supplied }
     }

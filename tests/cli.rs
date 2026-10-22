@@ -24,8 +24,17 @@ mod content;
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/human.rs"]
+mod human;
 #[path = "cli/input_schemas.rs"]
 mod input_schemas;
+#[path = "cli/mutation.rs"]
+mod mutation;
+#[cfg(unix)]
+#[path = "cli/prompts.rs"]
+mod prompts;
+#[path = "cli/requests.rs"]
+mod requests;
 
 #[path = "cli/relationships.rs"]
 mod relationships;

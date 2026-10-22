@@ -7,6 +7,8 @@ use manyhands::{
     repository::{ReadError, RepositoryService},
     results::ResultCode,
 };
+#[path = "manyhands-cli/admin.rs"]
+mod admin;
 
 #[path = "manyhands-cli/catalog.rs"]
 mod catalog;
@@ -14,10 +16,16 @@ mod catalog;
 mod dispatch;
 #[path = "manyhands-cli/human.rs"]
 mod human;
+#[path = "manyhands-cli/human_admin.rs"]
+mod human_admin;
 #[path = "manyhands-cli/input.rs"]
 mod input;
+#[path = "manyhands-cli/mutate.rs"]
+mod mutate;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
+#[path = "manyhands-cli/progress.rs"]
+mod progress;
 #[path = "manyhands-cli/prompt.rs"]
 mod prompt;
 #[path = "manyhands-cli/render.rs"]
