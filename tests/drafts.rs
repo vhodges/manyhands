@@ -8,7 +8,11 @@ mod claims;
 mod crash;
 #[path = "drafts/format.rs"]
 mod format;
+#[path = "support/mod.rs"]
+mod repo;
 #[path = "drafts/support.rs"]
 mod support;
+#[path = "drafts/targets.rs"]
+mod targets;
 #[path = "drafts/write.rs"]
 mod write;

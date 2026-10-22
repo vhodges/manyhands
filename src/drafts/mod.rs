@@ -2,10 +2,18 @@
 //! repository so a crash or a failed save never loses typed text.
 //!
 //! This module holds the version 1 file format, the drafts folder's owner
-//! protection, and the store of claims and atomic revisions. Types that hold
+//! protection, the store of claims and atomic revisions, the pure
+//! comparison of a draft with its item and its restore policy, and the
+//! Markdown export. Nothing here calls a repository mutation. Types that hold
 //! draft text derive no `Debug`, so text cannot reach a log or an error by
 //! accident.
 
+mod compare;
+#[cfg(test)]
+mod compare_tests;
+mod export;
+#[cfg(test)]
+mod export_tests;
 mod protect;
 #[cfg(test)]
 mod protect_tests;
@@ -16,6 +24,11 @@ mod store;
 #[cfg(test)]
 mod store_tests;
 
+pub use compare::{
+    Change, Comparison, Field, RefusalReason, Restore, TargetState, classify, classify_comment,
+    compare, restore_policy,
+};
+pub use export::markdown;
 pub use protect::{DraftError, DraftErrorKind};
 pub use schema::{
     BaseContext, CommentTarget, ContextKind, Draft, DraftBase, DraftFields, DraftId, DraftTarget,
