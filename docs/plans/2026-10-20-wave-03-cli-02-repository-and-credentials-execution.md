@@ -38,12 +38,14 @@ the post-commit Part A checkpoint passes all six commands and **414 tests**.
 Controller reports independent full Part A spec and quality reviews both
 **APPROVE, no findings**, over `fbae49a..54dc047` (sessions recorded below).
 
-**Current assignment/status:** Task 9 and its Part B checkpoint complete locally,
-inline without subagents, from pushed Task 8 head `c40ffbc`. Controller reports
-Task 8 spec and quality approval (sessions below). Task 9 is `de3c7cf`, followed
-by the test-only Clippy correction `58f2847`. All six Part B commands pass at
-`58f2847`, with **448 tests passed**. This evidence-only commit records the gate.
-Independent controller reviews and push are pending; Task 10 is not assigned.
+**Current assignment/status:** Task 9's Part B spec-review P2 privacy-coverage
+finding is corrected in this entry's containing commit, tests/evidence only,
+inline without subagents. Spec session `ses_e9a146cbdffeOvI7kGAmzMRtSQ` identified
+that command-name coverage included refusals instead of execution outputs.
+Targeted privacy tests and CLI-test Clippy pass after the correction. The prior
+six-command **448-test** gate at `58f2847` remains historical evidence, not a
+rerun on the correction. Controller re-review, quality review and push are pending;
+Task 10 is not assigned. Task 8's reported approvals are recorded below.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -383,6 +385,57 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Part B Spec Review P2 — Execution-Output Privacy Correction (2026-10-22)
+
+- Review: **`ses_e9a146cbdffeOvI7kGAmzMRtSQ`**, P2. The previous privacy table
+  counted command names but remote select and key select/clear/remove stopped
+  at not_confirmable, generate stopped at unlock_required, and delete used an
+  imported-key refusal. Those cases did not prove binding execution-output
+  privacy. The owner's follow-up authorizes this existing-test correction and
+  targeted privacy checks only, plus relevant Clippy; no implementation changes.
+- Entry head was **`84a6c9228ecd63a4904e2cf60879a79a59666e81`**, clean. Required
+  fetch/merge brought in main's comment-ID-only fix `32d938d`, producing merge
+  **`50ece1ad9f89cddbb61a9d9c0abac684a2da6b2d`** (correction base). Main is
+  **`32d938d956a0d3374b6be27b7740e99c4ea39727`**. No Rust/domain code came from
+  that merge, so it does not justify repeating the broad gate.
+- Added an independently checked successful-execution inventory: **15 available
+  C2 verbs per mode on Unix**, **13 per mode elsewhere**, excluding only real
+  generated-key creation/deletion on non-Unix. Coverage is recorded after an
+  expected `ok` result and a non-prepare invocation. Previews/refusals cannot
+  satisfy the execution inventory.
+- Human and JSON executions use separate temporary homes, data directories,
+  repositories and fresh requests. Each mode performs real registry import,
+  select, clear and remove; remote add/select/remove; confirmed repository
+  create/enable/identity-set/remove; and request show/cancel. Unix additionally
+  generates and confirms deletion of a real generated key, asserting both files
+  exist before deletion and are absent afterwards. Imported source bytes/mtimes
+  remain unchanged, and registry removal leaves no key registered.
+- JSON results assert exact codes and the published envelope schema. Human
+  mutation outputs are scanned directly, then their finished request records
+  verify exact stored codes/data; no mutation replay substitutes for a mode's
+  real execution. Every helper-produced stdout/stderr, including confirmation
+  previews and companion reads, is scanned for C1 URL/private-key/operation
+  sentinels in UTF-8 and UTF-16LE. Human and JSON refusal cases are retained as
+  additional evidence with explicit not_confirmable, unlock_required and
+  key_not_deletable assertions. Existing protected-generation PTY scans are
+  unchanged.
+- **RED:** `devenv shell -- cargo test --locked --test cli privacy` — **1 passed,
+  1 failed**, 162 filtered. A strengthened inventory assertion exposed only
+  four successful non-prepare command names in the old rows, versus 15 required.
+- **GREEN:** the same command — **2 passed, 0 failed**, 162 filtered; 6.56s.
+  `devenv shell -- cargo clippy --locked --test cli -- -D warnings` passed
+  (1.50s), as did `devenv shell -- cargo fmt --check` and `git diff --check`.
+  No full suite or six-command/448-test rerun. Test inventory counts are unchanged.
+- Self-review covered the full test diff, per-mode isolation, exact-code checks,
+  coverage accounting, Unix guards and retained refusals. Only
+  `tests/cli/privacy.rs`, this ledger and the canonical review comment are in the
+  correction. No production/domain/library/schema/golden change or new crate.
+- Canonical comment: **`01M5JZ37NF92TPS0QZEMPN4AK9`**, allocated through built CLI
+  `id new --json` with fresh temporary HOME/XDG/app-data, empty inherited
+  environment, disabled Git configuration and absolute `setsid` detachment.
+  Correction commit carries the required coauthor. **Ready for controller
+  re-review; approval is not claimed.** No subagents or push.
 
 ### Part B Checkpoint — Local Gate Passed, Controller Reviews Pending
 
