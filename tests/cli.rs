@@ -24,6 +24,9 @@ mod content;
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/input_schemas.rs"]
+mod input_schemas;
+
 #[path = "cli/relationships.rs"]
 mod relationships;
 

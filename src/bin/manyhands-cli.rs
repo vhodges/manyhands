@@ -14,6 +14,8 @@ mod catalog;
 mod dispatch;
 #[path = "manyhands-cli/human.rs"]
 mod human;
+#[path = "manyhands-cli/input.rs"]
+mod input;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
 #[path = "manyhands-cli/prompt.rs"]

@@ -27,14 +27,15 @@ session was **Task 0 only**. Task 0 now passes both spec and quality review,
 including its correction at `fbae49a`: **49 F2 / 52 CLI-inclusive codes** and
 the **258-test baseline**. Task 1 also passed independent spec and quality
 reviews and was pushed through `c448c24`. Task 2 passed independent spec and
-quality reviews and was pushed at `b38d4ce`. The fresh implementer's current
-assignment is **Task 3 only**. Implementers never dispatch subagents.
+quality reviews and was pushed at `b38d4ce`. Task 3 passed independent spec and
+quality reviews and was pushed at `28055ba`. The fresh implementer's current
+assignment is **Task 4 only**. Implementers never dispatch subagents.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `b38d4ce`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 3's implementer commits locally
+The branch was pushed at `28055ba`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 4's implementer commits locally
 and returns to the controller for review.
 
 ## Baseline
@@ -682,3 +683,89 @@ environment, files or pipes. Sentinel checks cover terminal writes and prompts.
   This entry's commit is the Task 3 delivery; the handoff reports its final ID.
 - Status: **Task 3 implemented, ready for controller review**. Task 4 has not
   started. The controller owns review and subsequent push; the ticket stays open.
+
+#### Task 3 review bookkeeping
+
+- Reviewed and pushed implementation: `28055bae53c26a4b814a6d263f8cabc28e6e0303`.
+- Independent spec review **APPROVE**: `ses_e9c083b62ffeI5tLJunx3nZAV1`.
+- Independent quality review **APPROVE**: `ses_e9c073b81ffeUNboZn1PFsSisp`.
+- Controller-provided approvals supersede Task 3's pending-review entry. Task 4
+  preserves this evidence without rerunning Task 3 checks.
+
+### Task 4 — Input Reading, Field Checks And The Input Schema Contract
+
+- Date: 2026-10-22. Base: **`28055bae53c26a4b814a6d263f8cabc28e6e0303`**.
+  Exact ticket branch and clean worktree/index confirmed. `git fetch origin main
+  && git merge origin/main` returned **Already up to date**, leaving the base
+  unchanged; main remains `d7962c3615786ca663662b0debb9460769308a57`.
+  Implementation was inline, Task 4 only, without subagents.
+- Added opaque `InputObject`, `Tristate`, all ten `InputError` variants, the
+  specified accessors, `read`, `parse` and `schema_name`. Input is read once to
+  EOF from supplied stdin or from a path joined to the invocation directory.
+  UTF-8 validation precedes parsing; exactly one initial BOM is skipped.
+  JSON whitespace alone is Empty; non-JSON whitespace is Malformed.
+- The recursive `Json` tree keeps all JSON kinds. Its serde visitor rejects
+  repeated decoded keys in every object, including inside arrays. A
+  `DeserializeSeed` passes a parse-local duplicate-key slot through recursion;
+  the regular `Deserialize` implementation delegates to the same visitor.
+  No error-message prefix/suffix parsing or global state is needed. All serde
+  errors are discarded, and `Deserializer::end` refuses trailing JSON.
+  Serde's default recursion limit stays enabled.
+- Diagnostics use fixed text and escaped field names; InvalidValue names only
+  the static allowed choices. No input-holding type implements Debug, Display
+  or Serialize. Required/optional/nullable/tristate semantics remain distinct;
+  shape checking preserves strings for library content validation.
+- Published the closed draft-2020-12 commit-identity input schema. The three
+  contract tests use real JSON help, the existing supported-keyword checker,
+  reference reachability and recursive closed-object checks. The independent
+  naming helper replaces verb hyphens with underscores. `PENDING_REFERENCES`
+  contains only commit_identity until Task 6; it fails if that exception becomes
+  redundant. There are no available input-taking verbs or example inputs yet:
+  the standalone pending schema and `.gitkeep`-only fixture directory are
+  intentional, not end-to-end mutation evidence.
+
+#### RED / GREEN evidence
+
+Only the two named filters and formatting ran, all through Devenv; Cargo tests
+used `--locked` and fmt used its normal syntax.
+
+| Phase | Command | Result |
+| --- | --- | --- |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli input` | Exit 101; all 25 new input tests failed at unimplemented stubs, two existing matching parse tests passed; 116 filtered; two expected unused-scaffold warnings |
+| Schema RED | `devenv shell -- cargo test --locked --test cli input_schemas` | Exit 101; two tests failed because the input-schema directory was not yet published; the intentionally empty example-directory test passed; 64 filtered |
+| Format | `devenv shell -- cargo fmt` | Passed; formatted the three new Rust files |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli input` | 27 passed, zero failed/ignored, 116 filtered; no compiler warnings |
+| GREEN | `devenv shell -- cargo test --locked --test cli input_schemas` | 3 passed, zero failed/ignored, 64 filtered; no compiler warnings |
+| Format | `devenv shell -- cargo fmt --check` | Passed |
+
+The GREEN filters cover **30 distinct tests**, of which **28 are new**. Tests
+cover every error kind, EOF and I/O behavior, relative and absolute paths,
+directory/missing-file refusals, UTF-16 encoding detail, BOM/trailing input,
+all accessors, unknown fields, escaped/equivalent duplicate keys, nested-array
+duplicates, recursion limits and sentinel privacy. File cases use temporary
+directories; stdin cases use injected readers. The help child uses the existing
+isolated CLI harness and returns before terminal/transport/service startup.
+
+#### Self-review and handoff
+
+- Reviewed the full new implementation/tests against Task 4 and R-1/R-15.
+  **No unresolved self-review issue or library gap found.** The only change to
+  an existing test file is `tests/cli.rs` module wiring. No existing assertion,
+  output checker/schema, library source, dependency or lockfile changed.
+- Narrow non-test dead-code allowances stage the public input interfaces until
+  Tasks 5–10 consume them. Three Json payload allowances retain bool/number/array
+  data even though the current accessors only refuse those kinds.
+- Files: `.gitattributes`, `src/bin/manyhands-cli.rs`,
+  `src/bin/manyhands-cli/{input.rs,input_tests.rs}`, `tests/cli.rs`,
+  `tests/cli/input_schemas.rs`, `schemas/input/v1/commit_identity.schema.json`,
+  `tests/fixtures/cli_input_v1/.gitkeep`, this ledger, and canonical comment
+  `01M5J01BZ1RHCC2J96PGGNP0X8.md`.
+- Comment ID generated by the built `target/debug/manyhands-cli id new` with
+  an empty inherited environment, temporary HOME/XDG/app data under
+  `/tmp/opencode/`, global/system Git configuration disabled and `setsid`.
+- `git diff --check` passed. Pre-commit `git merge-tree --write-tree HEAD
+  origin/main` passed (tree `9bcc11bfe7bf6c9bc158a26848cd12cd1fc34aec`).
+- Delivery subject: **`feat: read and check JSON mutation input`**. This entry's
+  commit is Task 4's delivery; the handoff records its final hash.
+- Status: **Task 4 implemented, ready for controller review**. Task 5 has not
+  started. Controller review/push follow separately; the ticket remains open.
