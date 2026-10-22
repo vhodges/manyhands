@@ -117,7 +117,7 @@ fn catalog_matches_every_command_and_delivering_cycle_without_duplicates() {
         .iter()
         .map(|command| {
             let cycle = match command.availability {
-                Availability::Available => "C1",
+                Availability::Available(cycle) => cycle,
                 Availability::Planned(cycle) => cycle,
             };
             (format!("{} {}", command.resource, command.verb), cycle)
@@ -134,7 +134,7 @@ fn catalog_repository_rules_and_planned_metadata_match_the_design() {
     for command in COMMANDS {
         assert!(!command.summary.is_empty());
         match command.availability {
-            Availability::Available => {
+            Availability::Available(_) => {
                 let refused = matches!(
                     (command.resource, command.verb),
                     ("repo", "list") | ("key", _) | ("host", _) | ("id", "new")
@@ -239,5 +239,55 @@ fn catalog_publishes_only_the_available_verbs_options_and_requirements() {
             "duplicate option for {name}"
         );
         assert_eq!(actual, expected.into_iter().collect(), "options for {name}");
+    }
+}
+
+#[test]
+fn delivered_by_reads_the_cycle_from_either_availability() {
+    for (cycle, commands) in &DESIGN[..2] {
+        for name in *commands {
+            let (resource, verb) = name.split_once(' ').unwrap();
+            let spec = find(resource, verb).unwrap();
+            assert_eq!(spec.delivered_by(), *cycle, "{name}");
+            if *cycle == "C1" {
+                assert_eq!(spec.availability, Availability::Available("C1"));
+                assert_eq!(spec.kind, Kind::Read);
+            }
+        }
+    }
+    for availability in [Availability::Planned("C2"), Availability::Available("C2")] {
+        let spec = CommandSpec {
+            availability,
+            ..*find("repo", "create").unwrap()
+        };
+        assert_eq!(spec.delivered_by(), "C2");
+    }
+}
+
+#[test]
+fn prompts_is_true_only_for_mutations_and_unlocking_reads() {
+    for (kind, expected) in [
+        (Kind::Read, false),
+        (Kind::UnlockingRead, true),
+        (
+            Kind::Mutation {
+                confirmed: true,
+                input: InputRule::Required,
+            },
+            true,
+        ),
+        (
+            Kind::Mutation {
+                confirmed: false,
+                input: InputRule::Refused,
+            },
+            true,
+        ),
+    ] {
+        let spec = CommandSpec {
+            kind,
+            ..*find("id", "new").unwrap()
+        };
+        assert_eq!(spec.prompts(), expected, "{kind:?}");
     }
 }

@@ -103,7 +103,7 @@ fn service_free_actions_never_call_startup_in_either_mode() {
 fn every_available_run_starts_transport_before_service_and_maps_open_failure() {
     for command in catalog::COMMANDS
         .iter()
-        .filter(|spec| spec.availability == Availability::Available)
+        .filter(|spec| matches!(spec.availability, Availability::Available(_)))
     {
         for json in [false, true] {
             let mut startup = FakeStartup::default();
@@ -191,8 +191,8 @@ fn successful_startup_dispatches_id_new() {
 fn expected_command(spec: &catalog::CommandSpec) -> Value {
     json!({
         "command": format!("{} {}", spec.resource, spec.verb),
-        "available": spec.availability == Availability::Available,
-        "delivered_by": match spec.availability { Availability::Available => "C1", Availability::Planned(cycle) => cycle },
+        "available": matches!(spec.availability, Availability::Available(_)),
+        "delivered_by": spec.delivered_by(),
         "summary": spec.summary,
         "repository": match spec.repo { Some(RepoRule::Required) => Some("required"), Some(RepoRule::Refused) => Some("refused"), None => None },
         "options": spec.options.iter().map(|option| json!({"name": option.name, "value": option.value, "required": option.required, "summary": option.summary})).collect::<Vec<_>>()

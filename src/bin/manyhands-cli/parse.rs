@@ -2,7 +2,7 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use super::catalog::{self, Availability, CommandSpec};
+use super::catalog::{self, Availability, CommandSpec, Kind};
 
 #[derive(Debug)]
 pub struct Invocation {
@@ -64,7 +64,7 @@ pub fn command() -> Command {
         for spec in catalog::resource_commands(spec.resource) {
             let mut verb = base_command(spec.verb).about(spec.summary);
             match spec.availability {
-                Availability::Available => {
+                Availability::Available(_) => {
                     for option in spec.options {
                         let name = option.name.strip_prefix("--").expect("catalog long option");
                         let mut arg = Arg::new(name).long(name).help(option.summary);
@@ -160,7 +160,7 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
         if let Some((command, args)) = selected {
             match command.availability {
                 Availability::Planned(_) => Action::Unavailable { command },
-                Availability::Available => match validate(command, args) {
+                Availability::Available(_) => match validate(command, args) {
                     Ok(()) => Action::Run {
                         command,
                         args: args.clone(),
@@ -210,6 +210,28 @@ fn validate(command: &CommandSpec, args: &ArgMatches) -> Result<(), String> {
             )?;
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Rules checked by startup after the mode is known. Errors hold usage detail
+/// for human stderr.
+// Startup wires in the mode decision in Task 2.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn mode_rules(spec: &CommandSpec, args: &ArgMatches, interactive: bool) -> Result<(), String> {
+    if !matches!(spec.kind, Kind::Mutation { .. }) {
+        return Ok(());
+    }
+    let prepare = args.get_flag("prepare");
+    let request_id = args.contains_id("request-id");
+    if prepare && request_id {
+        return Err("--prepare conflicts with --request-id.".to_owned());
+    }
+    if prepare && args.contains_id("confirm") {
+        return Err("--prepare conflicts with --confirm.".to_owned());
+    }
+    if !interactive && !prepare && !request_id {
+        return Err("--request-id is required for a non-interactive mutation.".to_owned());
     }
     Ok(())
 }

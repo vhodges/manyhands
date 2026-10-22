@@ -23,12 +23,17 @@ The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
 planning comment `01M5E861TCK5Z90NYBY0CE69QA`, which says approval and the
 index prerequisite are pending. The fresh implementer's assignment in this
-session is **Task 0 only**. Implementers never dispatch subagents.
+session was **Task 0 only**. Task 0 now passes both spec and quality review,
+including its correction at `fbae49a`: **49 F2 / 52 CLI-inclusive codes** and
+the **258-test baseline**. The fresh implementer's current assignment is
+**Task 1 only**. Implementers never dispatch subagents.
 
 Commits are authorized, ending with
-`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Push, PR, closure,
-native CI and worktree cleanup require separate authorization. The controller
-will ask about pushing after Task 0. No Task 1 work is included here.
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
+authorized pushing task commits; the controller pushes **after reviews**.
+The branch was pushed at `fbae49a`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 1's implementer commits locally
+and returns to the controller for review.
 
 ## Baseline
 
@@ -408,3 +413,88 @@ for the independent per-task/Part reviews the controller coordinates.
   were rerun for this documentation-only correction, as directed. The earlier
   258-test baseline evidence remains unchanged. The finding is resolved;
   controller review is still pending and Task 1 has not started.
+
+### Task 1 — Catalog Kinds, Delivering Cycle And Mutation Options
+
+- Date: 2026-10-22. Actual base:
+  **`fbae49a205a358ddadf35ecc2c85ebfb19356bec`**. Worktree and branch match the
+  assignment above; the initial worktree/index were clean and the remote
+  ticket branch matched HEAD. `git fetch origin && git merge origin/main`
+  returned **Already up to date**; main remains
+  `d7962c3615786ca663662b0debb9460769308a57`.
+- The controller's Task 0 spec/quality approvals and push authorization above
+  supersede the earlier pending-review/push entries. No baseline test rerun
+  or API audit change was needed.
+- Implemented the exact `Availability`, `InputRule`, `Kind`, `CommandSpec.kind`,
+  `delivered_by`, `prompts`, four option constants and `parse::mode_rules`
+  interfaces. C1 stays `Available("C1")`/`Read`; all planned entries stay
+  `Read`, and C2 stays planned. Startup help gets its delivering Cycle from
+  `spec.delivered_by()`. The existing per-command option declaration mechanism
+  needed no new parser mechanism.
+- Existing tests: **E1**, **E8**, and mechanical tuple matching only in catalog,
+  parse, startup and dispatch tests. The independent DESIGN table, minimum
+  invocations, 28-command dispatch assertion and all goldens are unchanged.
+  Four new tests cover attribution, prompts, mutation modes and read exemption.
+- **Command spelling adjustment:** Cargo accepts one positional test filter,
+  so the plan's `cargo test --locked --bin manyhands-cli catalog parse startup`
+  was expressed as three separate commands with `catalog`, `parse`, and
+  `startup`. This changes neither intended filters nor behavior/specification.
+
+#### RED / GREEN evidence
+
+All Rust commands below ran through Devenv in the ticket worktree.
+
+| Phase | Command | Result |
+| --- | --- | --- |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli catalog` | Exit 101: 33 compile errors for the missing new interfaces/tuple variant; no tests executed |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli parse` | Same expected compile-time RED, exit 101 |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli startup` | Same expected compile-time RED, exit 101 |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli catalog` | 6 passed, 77 filtered |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli parse` | 22 passed, 61 filtered |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli startup` | 12 passed, 71 filtered |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli` | 83 passed, zero filtered; baseline 79 plus four new tests |
+| GREEN | `devenv shell -- cargo test --locked --test cli help` | 9 passed, 55 filtered; unchanged help goldens |
+| Format | `devenv shell -- cargo fmt --check` | Initial check identified four formatting-only changes; applied them, then passed |
+| Self-review follow-up | `devenv shell -- cargo test --locked --bin manyhands-cli catalog` | 6 passed, 77 filtered after refining the new attribution test |
+| Final format | `devenv shell -- cargo fmt --check` | Passed |
+| Build check | `devenv shell -- cargo check --all-features --locked` | Passed |
+| Lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
+
+Every GREEN test run had zero failures/ignored tests and no compiler warnings.
+The final bin/help coverage is **92 distinct tests**; filter runs overlap the
+83 bin tests and are not additional distinct tests. This task used the approved
+targeted checks, not the full Cycle gate reserved for Task 12.
+
+#### Decisions, self-review and handoff
+
+- Mode validation implements only the last two grammar rows: noninteractive
+  execution needs a request ID; prepare conflicts with request ID or confirm.
+  Both read kinds return before looking up mutation-only clap arguments.
+  Diagnostics contain option names, never provided values. Startup wiring of
+  the mode decision remains Task 2.
+- Narrow `cfg_attr(not(test), allow(dead_code))` allowances keep the intermediate
+  production build warning-free. Remove the `kind`/`prompts`/`mode_rules`
+  allowances when startup consumes them in Task 2; input-rule, mutation-kind
+  and option allowances as delivery starts in Task 5; unlocking-read allowance
+  in Task 10. There is no module-wide or general warning suppression.
+- Self-review checked the full source/test diff against Task 1 and E1/E8,
+  constructors, availability predicates, options and read-before-clap guard.
+  The attribution test uses a local planned C2 spec as well as a local available
+  C2 spec, so later C2 delivery need not change that test's semantics. C1
+  attribution/kinds and the catalog's delivering cycles remain asserted.
+  No library gap or additional semantic edit to an existing test was found.
+- Changed source/test files: `src/bin/manyhands-cli/{catalog.rs,parse.rs,startup.rs,
+  catalog_tests.rs,parse_tests.rs,startup_tests.rs,dispatch_tests.rs}`. Also this
+  ledger and canonical comment `01M5HXDMCHV0XETF62NPSKDVX2.md`.
+- Comment ID came from the built `target/debug/manyhands-cli id new`, run in a
+  new `/tmp/opencode/` sandbox with an empty inherited environment, isolated
+  HOME/XDG/app data, Git configuration disabled and no controlling terminal.
+  No secrets, real key store or developer application data were accessed.
+- `git diff --check` passed. Pre-commit `git merge-tree --write-tree HEAD
+  origin/main` succeeded (tree `2c541234245aa4d3a80b48c3b0ce8a279b9ca267`).
+- Delivery subject: **`refactor: give catalog entries a kind and a delivering Cycle`**.
+  The commit containing this entry is Task 1's delivery; its final hash is in
+  the implementer's handoff, avoiding a self-referential commit ID.
+- Status: **Task 1 implemented, awaiting controller spec/quality review.**
+  Task 2 has not started. The controller owns the authorized post-review push;
+  the ticket remains open and the Cycle remains in progress.

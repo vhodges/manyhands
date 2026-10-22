@@ -98,7 +98,7 @@ fn every_available_verb_accepts_its_minimum_inputs_and_requires_each_one() {
         AVAILABLE.len(),
         catalog::COMMANDS
             .iter()
-            .filter(|command| command.availability == Availability::Available)
+            .filter(|command| matches!(command.availability, Availability::Available(_)))
             .count()
     );
     for args in AVAILABLE {
@@ -574,5 +574,116 @@ fn non_utf8_values_are_usage_errors_including_planned_arguments() {
                 ..
             }
         ));
+    }
+}
+
+fn local_matches(spec: &CommandSpec, args: &[&str]) -> ArgMatches {
+    let mut command = Command::new(spec.verb);
+    for option in spec.options {
+        let name = option.name.strip_prefix("--").unwrap();
+        let arg = Arg::new(name).long(name);
+        command = command.arg(match option.value {
+            Some(value) => arg.value_name(value).action(ArgAction::Set),
+            None => arg.action(ArgAction::SetTrue),
+        });
+    }
+    command
+        .try_get_matches_from(std::iter::once(spec.verb).chain(args.iter().copied()))
+        .unwrap()
+}
+
+#[test]
+fn mode_rules_enforce_mutation_request_and_prepare_combinations() {
+    use catalog::{CONFIRM, INPUT, InputRule, Kind, PREPARE, REQUEST_ID};
+
+    let spec = CommandSpec {
+        resource: "test",
+        verb: "mutate",
+        summary: "Test mutation.",
+        availability: Availability::Available("C2"),
+        repo: None,
+        options: &[INPUT, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    };
+    assert_eq!(
+        spec.options
+            .iter()
+            .map(|option| (option.name, option.value, option.required))
+            .collect::<Vec<_>>(),
+        [
+            ("--input", Some("file|-"), false),
+            ("--request-id", Some("ULID"), false),
+            ("--prepare", None, false),
+            ("--confirm", Some("ULID"), false),
+        ]
+    );
+    for (args, interactive, error) in [
+        (vec![], false, Some("--request-id")),
+        (vec![], true, None),
+        (vec!["--prepare"], false, None),
+        (vec!["--request-id", "X"], false, None),
+        (vec!["--request-id", "X", "--confirm", "Y"], false, None),
+        (
+            vec!["--prepare", "--request-id", "X"],
+            false,
+            Some("--request-id"),
+        ),
+        (
+            vec!["--prepare", "--request-id", "X"],
+            true,
+            Some("--request-id"),
+        ),
+        (
+            vec!["--prepare", "--confirm", "X"],
+            false,
+            Some("--confirm"),
+        ),
+        (vec!["--prepare", "--confirm", "X"], true, Some("--confirm")),
+    ] {
+        let result = mode_rules(&spec, &local_matches(&spec, &args), interactive);
+        match error {
+            Some(option) => {
+                let detail = result.expect_err("invalid mutation mode");
+                assert!(detail.contains(option), "{args:?}: {detail}");
+                if args.contains(&"--prepare") {
+                    assert!(detail.contains("--prepare"), "{args:?}: {detail}");
+                }
+                assert!(!detail.contains('X'), "usage detail must not echo values");
+            }
+            None => assert_eq!(result, Ok(()), "{args:?}, interactive={interactive}"),
+        }
+    }
+}
+
+#[test]
+fn mode_rules_exempt_reads_including_a_request_id_selector() {
+    let spec = CommandSpec {
+        resource: "request",
+        verb: "show",
+        summary: "Test request read.",
+        availability: Availability::Available("C2"),
+        repo: None,
+        options: &[catalog::REQUEST_ID],
+        kind: catalog::Kind::Read,
+    };
+    for interactive in [false, true] {
+        for args in [vec![], vec!["--request-id", "X"]] {
+            assert_eq!(
+                mode_rules(&spec, &local_matches(&spec, &args), interactive),
+                Ok(())
+            );
+        }
+        let unlocking = CommandSpec {
+            kind: catalog::Kind::UnlockingRead,
+            options: &[],
+            ..spec
+        };
+        assert_eq!(
+            mode_rules(&unlocking, &ArgMatches::default(), interactive),
+            Ok(())
+        );
     }
 }

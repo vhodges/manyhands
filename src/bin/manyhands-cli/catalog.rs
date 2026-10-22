@@ -1,7 +1,30 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
-    Available,
+    /// Available, with the Cycle that delivered it.
+    Available(&'static str),
     Planned(&'static str),
+}
+
+// C2 verb delivery starts using these input rules in Task 5.
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRule {
+    Required,
+    Refused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Read,
+    /// A read that can ask to unlock a key: `host observe` (Task 10).
+    #[cfg_attr(not(test), allow(dead_code))]
+    UnlockingRead,
+    // C2 mutation delivery starts in Task 5.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Mutation {
+        confirmed: bool,
+        input: InputRule,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +49,23 @@ pub struct CommandSpec {
     pub availability: Availability,
     pub repo: Option<RepoRule>,
     pub options: &'static [OptionSpec],
+    // Startup's mode decision starts using this in Task 2.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub kind: Kind,
+}
+
+impl CommandSpec {
+    pub fn delivered_by(&self) -> &'static str {
+        match self.availability {
+            Availability::Available(cycle) | Availability::Planned(cycle) => cycle,
+        }
+    }
+
+    // Startup's mode decision starts using this in Task 2.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn prompts(&self) -> bool {
+        matches!(self.kind, Kind::Mutation { .. } | Kind::UnlockingRead)
+    }
 }
 
 pub const REPOSITORY_VALUES: &[&str] = &["required", "refused"];
@@ -52,6 +92,35 @@ const REPO: OptionSpec = option(
 );
 const ID: OptionSpec = option("--id", Some("ULID"), true, "Canonical item ULID.");
 const KEY_ID: OptionSpec = option("--key-id", Some("ULID"), true, "Canonical key ULID.");
+// These options join per-command lists when C2 verb delivery starts in Task 5.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const INPUT: OptionSpec = option(
+    "--input",
+    Some("file|-"),
+    false,
+    "Read one JSON input object from a file or stdin (-).",
+);
+#[cfg_attr(not(test), allow(dead_code))]
+pub const REQUEST_ID: OptionSpec = option(
+    "--request-id",
+    Some("ULID"),
+    false,
+    "Canonical request ULID.",
+);
+#[cfg_attr(not(test), allow(dead_code))]
+pub const PREPARE: OptionSpec = option(
+    "--prepare",
+    None,
+    false,
+    "Prepare a confirmation preview without executing the mutation.",
+);
+#[cfg_attr(not(test), allow(dead_code))]
+pub const CONFIRM: OptionSpec = option(
+    "--confirm",
+    Some("ULID"),
+    false,
+    "Execute with a prepared confirmation ULID.",
+);
 const STATUS: OptionSpec = option(
     "--status",
     Some("text"),
@@ -144,9 +213,10 @@ const fn available(
         resource,
         verb,
         summary,
-        availability: Availability::Available,
+        availability: Availability::Available("C1"),
         repo: Some(repo),
         options,
+        kind: Kind::Read,
     }
 }
 
@@ -163,6 +233,7 @@ const fn planned(
         availability: Availability::Planned(cycle),
         repo: None,
         options: &[],
+        kind: Kind::Read,
     }
 }
 

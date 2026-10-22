@@ -48,7 +48,7 @@ fn all_28_available_verbs_reach_a_real_dispatch_arm() {
     let mut count = 0;
     for spec in catalog::COMMANDS
         .iter()
-        .filter(|spec| spec.availability == Availability::Available)
+        .filter(|spec| matches!(spec.availability, Availability::Available(_)))
     {
         let mut argv = vec!["manyhands-cli", spec.resource, spec.verb];
         for option in spec.options.iter().filter(|option| option.required) {

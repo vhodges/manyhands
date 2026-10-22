@@ -68,7 +68,7 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             let name = command_name(command);
             let extra = match command.availability {
                 Availability::Planned(cycle) => Some(format!("{name} arrives with {cycle}.")),
-                Availability::Available => None,
+                Availability::Available(_) => None,
             };
             render::failure_output(
                 json,
@@ -138,11 +138,8 @@ fn help_output(json: bool, target: HelpTarget) -> Output {
             .iter()
             .map(|spec| HelpCommandDto {
                 command: command_name(spec),
-                available: spec.availability == Availability::Available,
-                delivered_by: match spec.availability {
-                    Availability::Available => "C1",
-                    Availability::Planned(cycle) => cycle,
-                },
+                available: matches!(spec.availability, Availability::Available(_)),
+                delivered_by: spec.delivered_by(),
                 summary: spec.summary,
                 repository: spec.repo.map(|rule| match rule {
                     RepoRule::Required => catalog::REPOSITORY_VALUES[0],
@@ -200,7 +197,7 @@ fn text_help(target: &HelpTarget, commands: &[&CommandSpec]) -> String {
         for command in commands {
             catalog_help.push_str(&format!("  {}  {}", command_name(command), command.summary));
             match command.availability {
-                Availability::Available => catalog_help.push_str(" Available now."),
+                Availability::Available(_) => catalog_help.push_str(" Available now."),
                 Availability::Planned(cycle) => {
                     catalog_help.push_str(&format!(" Arrives with {cycle}."))
                 }
