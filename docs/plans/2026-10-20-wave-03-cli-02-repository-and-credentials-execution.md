@@ -38,12 +38,12 @@ the post-commit Part A checkpoint passes all six commands and **414 tests**.
 Controller reports independent full Part A spec and quality reviews both
 **APPROVE, no findings**, over `fbae49a..54dc047` (sessions recorded below).
 
-**Current assignment/status:** Task 9 and its Part B checkpoint only, inline
-without subagents, from pushed Task 8 head `c40ffbc`. Controller reports Task 8
-spec and quality approval (sessions below). Task 9's targeted checks and
-self-review pass; its implementation is in this entry's containing delivery
-commit. The post-commit six-command Part B gate and independent controller
-reviews are pending. Controller owns review and push; Task 10 is not assigned.
+**Current assignment/status:** Task 9 and its Part B checkpoint complete locally,
+inline without subagents, from pushed Task 8 head `c40ffbc`. Controller reports
+Task 8 spec and quality approval (sessions below). Task 9 is `de3c7cf`, followed
+by the test-only Clippy correction `58f2847`. All six Part B commands pass at
+`58f2847`, with **448 tests passed**. This evidence-only commit records the gate.
+Independent controller reviews and push are pending; Task 10 is not assigned.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -383,6 +383,61 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Part B Checkpoint — Local Gate Passed, Controller Reviews Pending
+
+This supersedes Task 9's pending-local-gate status below. Actual commits:
+
+- Task 9 implementation: **`de3c7cf`**, subject
+  `feat: add key generate with masked passphrase entry`.
+- Test-only correction: **`58f284753108a66cf37f323ca06d80120b400d1b`**, subject
+  `test: simplify CLI privacy case types`. The first checkpoint attempt passed
+  all-feature check and fmt, then Clippy rejected the new privacy row's explicit
+  tuple type as `type_complexity`. A named type alias resolves it without changing
+  any test behavior or adding a lint allowance. Targeted privacy rerun: **2 passed**.
+- Tested Part B range:
+  **`d9496b93f393c9d718a67aefbf95cc5103c4c870..58f284753108a66cf37f323ca06d80120b400d1b`**.
+  The independent review range must also include this evidence-only commit.
+
+All six commands were then run on the corrected committed head, sequentially,
+through Devenv. Every command exited **0**. No golden-update environment:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed; 0.33s |
+| `devenv shell -- cargo fmt --check` | Passed |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed; 1.26s, no warnings |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed; 0.66s |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | Passed; build 1.51s; counts below |
+
+| Target | Passed | Failed | Ignored | Filtered | Execution time |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `manyhands-cli` bin | 169 | 0 | 0 | 0 | 0.24s |
+| `cli` | 164 | 0 | 0 | 0 | 39.23s |
+| `mutation_contract` | 44 | 0 | 0 | 0 | 17.55s |
+| `read_contract` | 71 | 0 | 0 | 0 | 12.21s |
+| **Total** | **448** | **0** | **0** | **0** | |
+
+- Part B adds **34 tests** to Part A's 414: 19 in Task 8 and 15 in Task 9.
+  The fixed identity-retry note printed by a driver unit test is expected.
+  Gate coverage includes all keys/PTY/privacy, the exact golden inventory, input
+  schema reachability, unchanged output contracts, all C1 regression tests and
+  the 49/52 audit accounting. No full suite ran.
+- Final fetch and `git merge origin/main`: **Already up to date**. Main is still
+  **`d7962c3615786ca663662b0debb9460769308a57`**. Tested head's merge-tree passed:
+  **`f6c4fa7392c036e47274eb132ec568f9c4b505b4`**. The worktree was clean.
+- Self-review inspected Task 9's entire base-to-head diff, all new schema/example/
+  golden files, E3 help changes, shared request-ID ordering and the PTY/helper
+  change. No unresolved finding or library gap. Task 8's controller-reported
+  approvals are preserved rather than represented as a new independent review.
+- Canonical checkpoint comment: **`01M5JYBTTET5ETZ94KGMFF3S80`**, allocated by the
+  built CLI in the isolated detached ID session described below. This separate
+  evidence commit carries the required coauthor. The ticket remains open.
+- **Independent Part B spec review, then quality review: pending with controller.**
+  Linux evidence only; Windows key-file/console and other native evidence remain
+  the approved later native/manual checks. No push, PR, closure, cleanup, native
+  CI, Task 10 implementation or subagents.
 
 ### Task 8 Approval / Task 9 Start (2026-10-22)
 
