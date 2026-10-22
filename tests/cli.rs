@@ -33,6 +33,8 @@ mod mutation;
 #[cfg(unix)]
 #[path = "cli/prompts.rs"]
 mod prompts;
+#[path = "cli/repository.rs"]
+mod repository;
 #[path = "cli/requests.rs"]
 mod requests;
 

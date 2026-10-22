@@ -429,6 +429,15 @@ fn every_mutation_verbs_confirmed_flag_matches_prepare() {
         );
         assert_eq!(v["data"].is_object(), confirmed);
     }
+    for verb in ["create", "enable", "remove"] {
+        let f = super::repository::Fixture::new(if verb == "remove" { "enable" } else { verb });
+        if verb == "remove" {
+            f.onboard("enable");
+        }
+        let preview = f.prepare(verb);
+        assert_eq!(preview["data"]["command"], format!("repo {verb}"));
+        assert!(preview["data"]["confirmation_id"].is_string());
+    }
 }
 #[test]
 fn human_progress_lines_and_empty_json_stderr() {

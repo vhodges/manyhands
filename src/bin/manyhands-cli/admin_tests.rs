@@ -2,6 +2,43 @@ use crate::{
     catalog::{self, Availability, InputRule, Kind, RepoRule},
     parse::{self, Action},
 };
+
+#[test]
+fn repository_verbs_are_confirmed_c2_mutations_with_exact_options() {
+    for verb in ["create", "enable", "remove"] {
+        let spec = catalog::find("repo", verb).unwrap();
+        assert_eq!(spec.availability, Availability::Available("C2"));
+        assert_eq!(spec.repo, Some(RepoRule::Required));
+        assert_eq!(
+            spec.kind,
+            Kind::Mutation {
+                confirmed: true,
+                input: if verb == "remove" {
+                    InputRule::Refused
+                } else {
+                    InputRule::Required
+                },
+            }
+        );
+        let mut expected = vec![("--repo", true)];
+        if verb != "remove" {
+            expected.push(("--input", true));
+        }
+        expected.extend([
+            ("--request-id", false),
+            ("--prepare", false),
+            ("--confirm", false),
+        ]);
+        assert_eq!(
+            spec.options
+                .iter()
+                .map(|option| (option.name, option.required))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}
+
 #[test]
 fn first_four_verbs_have_their_c2_contracts_and_required_options() {
     for (resource, verb, kind, repo, valid) in [

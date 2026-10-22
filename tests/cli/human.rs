@@ -1,6 +1,84 @@
 use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
 
+#[test]
+fn c2_repository_human_results_split_streams_and_retain_public_ids() {
+    for (verb, noop) in [
+        ("create", false),
+        ("enable", false),
+        ("remove", false),
+        ("enable", true),
+    ] {
+        let f = super::repository::Fixture::new(if verb == "create" { "create" } else { "enable" });
+        if verb == "remove" || noop {
+            f.onboard("enable");
+        }
+        let preview = if noop { None } else { Some(f.prepare(verb)) };
+        let mut extra = if let Some(preview) = &preview {
+            vec![
+                "--request-id",
+                "01M4CC0VMTTNKVYS6XWQG4CK1P",
+                "--confirm",
+                preview["data"]["confirmation_id"].as_str().unwrap(),
+            ]
+        } else {
+            vec!["--prepare"]
+        };
+        let out = run(&f.args(verb, &extra), &f.env, &[]);
+        assert_eq!(out.status, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr
+                .lines()
+                .all(|line| line.starts_with("progress: ") || line.starts_with("note: "))
+        );
+        assert!(!stdout.contains("sentinel") && !stderr.contains("sentinel"));
+        if noop {
+            assert!(stdout.starts_with("Already applied; nothing changed."));
+        }
+        extra.push("--json");
+        let replay = run(&f.args(verb, &extra), &f.env, &[]);
+        let json = cli::json(&replay);
+        assert_eq!(replay.status, 0);
+        assert_eq!(json["code"], if noop { "already_applied" } else { "ok" });
+        for pointer in ["/request_id", "/operation_id", "/effects/commit_oid"] {
+            if let Some(id) = json.pointer(pointer).and_then(serde_json::Value::as_str) {
+                assert!(stdout.contains(id));
+            }
+        }
+    }
+}
+
+#[test]
+fn repo_create_human_prepare_preview() {
+    let f = super::repository::Fixture::new("create");
+    let output = run(&f.args("create", &["--prepare"]), &f.env, &[]);
+    assert_eq!(output.status, 0);
+    assert!(output.stderr.is_empty());
+    assert!(!f.root.exists());
+    let text = String::from_utf8(output.stdout).unwrap();
+    let line = text
+        .lines()
+        .find_map(|line| line.strip_prefix("Confirmation: "))
+        .unwrap();
+    let (confirmation, expires) = line.split_once(" (expires ").unwrap();
+    let expires = expires.strip_suffix(')').unwrap();
+    // The library resolves the existing parent of an absent create target.
+    let root = std::fs::canonicalize(f.root.parent().unwrap())
+        .unwrap()
+        .join(f.root.file_name().unwrap());
+    cli::assert_cli_text_golden(
+        "repo_create_prepare_text",
+        &text,
+        &[
+            (root.to_str().unwrap(), "<repository>"),
+            (confirmation, "<confirmation-id>"),
+            (expires, "<expires-at>"),
+        ],
+    );
+}
+
 fn request_fixture(finished: bool) -> Fixture {
     let f = Fixture::new();
     if finished {

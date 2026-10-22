@@ -53,9 +53,9 @@ Command catalog:
   operation list  List repository operations. Available now.
   operation show  Show a repository operation. Available now.
   id new  Generate a new item ID. Available now.
-  repo create  Create a repository. Arrives with C2.
-  repo enable  Enable Manyhands in a repository. Arrives with C2.
-  repo remove  Remove a repository registration. Arrives with C2.
+  repo create  Create a repository. Available now.
+  repo enable  Enable Manyhands in a repository. Available now.
+  repo remove  Remove a repository registration. Available now.
   repo identity-set  Set repository identity. Available now.
   remote add  Add a repository remote. Available now.
   remote remove  Remove a repository remote. Arrives with C2.

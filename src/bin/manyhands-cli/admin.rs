@@ -7,8 +7,8 @@ use crate::{
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        ConfirmationId, InitialsChange, Mutation, RemoteAddInput, RepoIdentitySetInput,
-        RepositoryService, RequestId,
+        CommitIdentity, ConfirmationId, InitialsChange, Mutation, RemoteAddInput, RepoCreateInput,
+        RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId,
     },
     results::ResultCode,
 };
@@ -169,6 +169,136 @@ pub fn repo_identity_set(
         &mut std::thread::sleep,
     )
 }
+struct RepositoryInput {
+    primary_branch: String,
+    identity: Option<CommitIdentity>,
+    slug_prefix: Option<String>,
+}
+
+fn repository_input(input: &InputObject) -> Result<RepositoryInput, InputError> {
+    input.only(&["primary_branch", "identity", "ticket_slug_prefix"])?;
+    let primary_branch = input.string("primary_branch")?;
+    let identity = input
+        .optional_object("identity")?
+        .map(|identity| {
+            identity.only(&["name", "email"])?;
+            Ok(CommitIdentity {
+                name: identity.string("name")?,
+                email: identity.string("email")?,
+            })
+        })
+        .transpose()?;
+    Ok(RepositoryInput {
+        primary_branch,
+        identity,
+        slug_prefix: input.optional_string("ticket_slug_prefix")?,
+    })
+}
+
+pub fn repo_create(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    repo_onboard(service, session, spec, args, |root, input, identity| {
+        Mutation::RepoCreate(RepoCreateInput {
+            root,
+            primary_branch: input.primary_branch.clone(),
+            identity,
+            slug_prefix: input.slug_prefix.clone(),
+        })
+    })
+}
+
+pub fn repo_enable(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    repo_onboard(service, session, spec, args, |root, input, identity| {
+        Mutation::RepoEnable(RepoEnableInput {
+            root,
+            primary_branch: input.primary_branch.clone(),
+            identity,
+            slug_prefix: input.slug_prefix.clone(),
+        })
+    })
+}
+
+fn repo_onboard(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    build: impl Fn(PathBuf, &RepositoryInput, Option<CommitIdentity>) -> Mutation,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let input = repository_input(&object)
+            .map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, input, root))
+    })();
+    let (flags, input, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: input.identity.is_none(),
+            retry: true,
+        },
+        &mut |extras| {
+            build(
+                root.clone(),
+                &input,
+                extras
+                    .identity
+                    .as_ref()
+                    .or(input.identity.as_ref())
+                    .cloned(),
+            )
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn repo_remove(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let root = mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root))
+    })();
+    let (flags, root) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| Mutation::RepoRemove(RepoRemoveInput { root: root.clone() }),
+        &mut std::thread::sleep,
+    )
+}
+
 pub fn remote_add(
     service: &RepositoryService,
     session: &mut Session,

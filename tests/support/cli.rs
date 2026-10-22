@@ -215,6 +215,15 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "repo_create_prepare",
+    "repo_create_empty_prepare",
+    "repo_create",
+    "repo_enable_prepare",
+    "repo_enable",
+    "repo_create_identity_required",
+    "repo_enable_identity_required",
+    "repo_remove_prepare",
+    "repo_remove",
     "repo_identity_set_prepare",
     "repo_identity_set",
     "remote_add",
@@ -274,6 +283,7 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "repo_create_prepare_text",
     "remote_add_text",
     "help_root_text",
     "version_text",

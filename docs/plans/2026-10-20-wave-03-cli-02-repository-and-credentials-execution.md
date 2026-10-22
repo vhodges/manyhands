@@ -29,15 +29,17 @@ the **258-test baseline**. Task 1 also passed independent spec and quality
 reviews and was pushed through `c448c24`. Task 2 passed independent spec and
 quality reviews and was pushed at `b38d4ce`. Task 3 passed independent spec and
 quality reviews and was pushed at `28055ba`. Task 4 passed both reviews and was
-pushed at `5a71e6b`. The fresh implementer's assignment is **Task 5 only**;
-implementation and its targeted verification are complete, awaiting controller
-review. Implementers never dispatch subagents.
+pushed at `5a71e6b`. Task 5 and its owner-ruling correction passed spec and
+quality review and were pushed through `c9b99aa` (review sessions recorded below).
+The fresh implementer's assignment is **Task 6 only**; implementation and its
+targeted verification are complete, awaiting controller review. Implementers
+never dispatch subagents.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `5a71e6b`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 5's implementer commits locally
+The branch was pushed at `c9b99aa`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 6's implementer commits locally
 and returns to the controller for review.
 
 ## Baseline
@@ -371,6 +373,117 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 5 review bookkeeping / Task 6 start
+
+- Controller reports Task 5 spec **PASS** (`ses_e9bd75504ffemMwjV080mC11cY`)
+  and quality **PASS** (`ses_e9bbe16d3ffeiRbUv1m8h4c0Oz`), pushed through
+  `c9b99aa`. Those approvals supersede the pending-review entries below.
+- Task 6 actual base and pre-delivery HEAD:
+  **`c9b99aabe370663c702b8256858256da92620083`**. Confirmed the assigned branch,
+  clean index/worktree, approved Cycle/design/plan and owner clarifications.
+  `git fetch origin && git merge origin/main` returned **Already up to date**.
+- Executed only Task 6, inline with TDD. Controller owns independent reviews
+  and the subsequent push. Task 7 remains the controller's next assignment.
+
+### Task 6 — Repository Verbs (2026-10-22)
+
+#### Implementation and contract evidence
+
+- Added `admin::{repo_create, repo_enable, repo_remove}` and their dispatch and
+  catalog entries. Create/enable are confirmed, input-required C2 mutations;
+  remove is confirmed and refuses input. Existing catalog-driven parser rules
+  supply required/refused options, so no extra `parse.rs` branch was needed.
+- Shared create/enable shape checking requires a string `primary_branch`, accepts
+  an optional closed identity with required string name/email, and maps optional
+  `ticket_slug_prefix` to library `slug_prefix`. Explicit nulls are refused.
+  Inputs have no Debug, Display or Serialize implementation. CLI diagnostics
+  remain value-free and all library envelopes pass through unchanged.
+- `Plan.identity_prompt` is exactly `input.identity.is_none()`. The builder uses
+  prompted Extras before supplied input, creating a fresh mutation for each call.
+  Removal takes `mutation_root` directly, preserving missing-root spelling.
+- Published two closed input schemas and two example files. The binary's golden
+  cases read those actual files. `commit_identity` is now reached by `$ref`, and
+  `PENDING_REFERENCES` is empty. Added nine JSON and one human preview golden;
+  every JSON envelope and preview is checked against existing output schemas.
+- Repository coverage: absent/empty/occupied create targets, existing enable,
+  registration through a second data directory, prefix preview/write, local-only
+  supplied identity, inherited global identity/source without local writes,
+  accessible removal preserving the repository/worktree snapshot, and exact
+  missing-root removal. The onboarding regression uses CLI remote add followed
+  by the approved temporary library RemoteSelect call; Task 7 switches that call.
+- Review Focus 1 passes: a deleted stored root with a trailing separator returns
+  `invalid_path`, preserves registration, and its exact root then removes it.
+- Four new PTY cases cover create/enable identity previews, cancellation before
+  target creation, and three empty names. Each missing-identity test first probes
+  system configuration read-only and fails with the prescribed message if either
+  identity key is present. All terminal answers follow an expected prompt.
+- Both successful PTY identity cases additionally prove the new owner ruling:
+  a later interactive retry without the prompted identity returns library
+  `request_mismatch` with an empty terminal transcript; retry with the identity in
+  input replays the exact success stdout without a prompt or repository change.
+  Global configuration remains byte-identical throughout.
+- Extended confirmed-prepare coverage and added a human table for all three verbs
+  plus already-enabled-and-registered no-op, public IDs, effects and split streams.
+  The existing human renderer already satisfies these cases. A new catalog test
+  pins all three confirmed flags/input rules/option lists, and binary cases cover
+  grammar, null early IDs, closed input shapes and value-free post-open failures.
+
+#### RED / GREEN verification
+
+All Rust commands used Devenv and Cargo `--locked`, except normal fmt commands.
+
+| Command / phase | Result |
+| --- | --- |
+| RED: `cargo test --locked --test cli repository::` | **0 passed, 11 failed**, all at `command_unavailable`; before production edits |
+| Repository integration after wiring, with golden generation | Initially 3 passed/8 failed, then 10/1: corrected new-test schema filename/TOML key and the registration-only preview's two documented effects |
+| Repository comparison without updating | 10 passed/1 failed: new removal golden needed `enabled_at` normalization; added the placeholder |
+| GREEN / regenerate: `cargo test --locked --test cli repository::` | **11 passed**, 96 filtered |
+| GREEN with Review Focus 1, shape and grammar coverage | **14 passed**, 96 filtered, without golden updating |
+| `cargo test --locked --test cli prompts::` | 8 passed/1 failed: the new empty-name script had not answered Email; the existing prompt validates each complete name/email pair. Corrected only the new script to expect/answer Email each time |
+| Generate `human::repo_create_human_prepare_preview` | **1 passed**, 113 filtered |
+| Regenerate E3: `cargo test --locked --test cli help` | **9 passed**, 105 filtered |
+| Final `devenv shell -- cargo test --locked --test cli` | **114 passed**, zero failed/ignored/filtered; 33.17s |
+| Final `devenv shell -- cargo test --locked --bin manyhands-cli` | **167 passed**, zero failed/ignored/filtered; 0.72s |
+| `devenv shell -- cargo fmt` / `cargo fmt --check` | **Passed** |
+| `git diff --check` | **Passed** |
+
+Final checks cover **281 distinct tests**, including **21 new tests** (20 CLI,
+one bin). The corrected PTY script is covered by the final unfiltered CLI run.
+Golden generation used the guarded `MANYHANDS_UPDATE_GOLDEN=1` helper, never CI.
+No broader Cargo check/Clippy/contract/full-suite/native gate was run.
+
+#### Self-review and local delivery
+
+- Reviewed the complete production/test diff from the actual base, the new
+  repository module, input schemas/examples, all ten new goldens, and both E3
+  help diffs. Empty-directory and absent-directory previews intentionally have
+  distinct fixtures because only the absent case creates a directory. Both
+  executions share the same normalized `repo_create` success golden.
+- Reviewed check order, request replay, prompt eligibility/Extras lifetime,
+  null handling, local/global config boundaries, path preservation and snapshot
+  assertions. No unresolved self-review issue or library gap was found.
+- Existing test semantics change only through Task 6's expressly required
+  confirmed-test/schema-pending extensions and E3. Human/PTY/grammar/catalog
+  coverage is additive. No library, output schema, result-code, dependency or
+  lockfile edit; no production thread or child-process creation.
+- Changed file groups: admin/glue/catalog/dispatch and one new bin test; the new
+  repository integration module plus CLI module wiring/human/prompt/mutation/
+  input-schema tests; fixture registration; two input schemas/examples; nine JSON
+  and one text golden; two help goldens; this ledger and the completion comment.
+- Refetched main before delivery; merge again returned Already up to date.
+  `origin/main` remains `d7962c3615786ca663662b0debb9460769308a57`.
+  `git merge-tree --write-tree HEAD origin/main` succeeded, tree
+  `35e4aed9abceba91bb67b315250164f745a8446a`.
+- Comment **`01M5J581M45YVMHXX7AMXGFDZH`** was generated with the built
+  `target/debug/manyhands-cli id new`, detached by setsid with an empty inherited
+  environment and fresh temporary HOME/XDG/application-data paths under
+  `/tmp/opencode/`. The canonical comment is included in the task commit.
+- Delivery subject: **`feat: add repo create, enable and remove`**, with the
+  required Claude Opus 5.5 coauthor. This entry's containing commit is the task
+  delivery HEAD; its exact hash and base-to-head range are in the final handoff.
+  **Task 6 is ready for controller spec/quality review.** No push, subagents,
+  PR, closure, cleanup or native CI. Ticket remains open.
 
 ### Task 4 review bookkeeping / Task 5 start
 

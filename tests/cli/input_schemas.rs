@@ -14,8 +14,7 @@ use crate::support::{
     schema,
 };
 
-// Task 6 removes this exception when repo create/enable reference the schema.
-const PENDING_REFERENCES: &[&str] = &["commit_identity.schema.json"];
+const PENDING_REFERENCES: &[&str] = &[];
 
 fn directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/input/v1")
