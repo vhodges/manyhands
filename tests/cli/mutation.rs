@@ -457,6 +457,13 @@ fn every_mutation_verbs_confirmed_flag_matches_prepare() {
 }
 pub fn key_verbs_match_prepare() {
     let f = super::keys::Fixture::new();
+    f.call(
+        "generate",
+        &["--input", "-", "--prepare"],
+        super::keys::GENERATE,
+        2,
+        "not_confirmable",
+    );
     let imported = f.import();
     for verb in ["import", "select", "clear", "remove"] {
         let mut flags = vec!["--prepare"];

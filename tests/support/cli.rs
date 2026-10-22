@@ -216,6 +216,8 @@ pub fn json(run: &CliRun) -> Value {
 
 pub const CLI_CASES: &[&str] = &[
     "key_import",
+    "key_generate",
+    "key_generate_unlock_required",
     "key_select",
     "key_clear",
     "key_remove",

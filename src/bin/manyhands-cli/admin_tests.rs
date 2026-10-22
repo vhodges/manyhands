@@ -4,6 +4,51 @@ use crate::{
 };
 
 #[test]
+fn key_generate_has_the_unconfirmed_input_required_c2_contract() {
+    let spec = catalog::find("key", "generate").unwrap();
+    assert_eq!(spec.availability, Availability::Available("C2"));
+    assert_eq!(spec.repo, Some(RepoRule::Refused));
+    assert_eq!(
+        spec.kind,
+        Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required
+        }
+    );
+    assert_eq!(
+        spec.options
+            .iter()
+            .map(|o| (o.name, o.required))
+            .collect::<Vec<_>>(),
+        [
+            ("--input", true),
+            ("--request-id", false),
+            ("--prepare", false),
+            ("--confirm", false)
+        ]
+    );
+    for extra in [
+        vec!["--prepare"],
+        vec!["--request-id", "01M4CC0VMTTNKVYS6XWQG4CK1N"],
+    ] {
+        let parsed = parse::parse(
+            [
+                vec!["manyhands-cli", "key", "generate", "--input", "-"],
+                extra,
+            ]
+            .concat()
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        );
+        let Action::Run { args, .. } = parsed.action else {
+            panic!("generation must parse")
+        };
+        assert!(parse::mode_rules(spec, &args, false).is_ok());
+    }
+}
+
+#[test]
 fn remote_remove_and_select_have_exact_catalog_and_parser_contracts() {
     for (verb, confirmed) in [("remove", true), ("select", false)] {
         let spec = catalog::find("remote", verb).unwrap();

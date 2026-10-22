@@ -8,7 +8,6 @@ pub enum Availability {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputRule {
     Required,
-    #[cfg_attr(not(test), allow(dead_code))] // Task 6 delivers input-free mutations.
     Refused,
 }
 
@@ -490,7 +489,26 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Required,
         },
     },
-    planned("key", "generate", "Generate a key.", "C2"),
+    CommandSpec {
+        resource: "key",
+        verb: "generate",
+        summary: "Generate a key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "key",
         verb: "import",

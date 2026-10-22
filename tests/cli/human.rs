@@ -92,6 +92,19 @@ fn c2_keys_human_results_and_selection_noops_retain_public_ids() {
 
 #[cfg(unix)]
 #[test]
+fn key_generate_human_result() {
+    let f = super::keys::Fixture::new();
+    key_human_result(
+        &f,
+        "generate",
+        &["--input", "-", "--request-id", REQUEST],
+        super::keys::GENERATE,
+        false,
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn key_delete_human_preview_and_result() {
     let f = super::keys::Fixture::new();
     let key = super::keys::generate(&f.env);

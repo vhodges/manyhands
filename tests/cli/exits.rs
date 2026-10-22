@@ -49,11 +49,6 @@ const STAGED: &[(&str, u8, &str)] = &[
         "Windows: missing-selected-source host observe; Task 8's generated-key deletion fixture is Unix-only",
     ),
     (
-        "unlock_required",
-        9,
-        "Protected generation without a terminal; Task 10 adds SSH unlock",
-    ),
-    (
         "host_mismatch",
         10,
         "SSH approval/replacement presented fingerprint mismatch",
@@ -169,6 +164,7 @@ macro_rules! row {
     };
 }
 const ROWS: &[Row] = &[
+    row!("protected_generation", &["key", "generate", "--input", "-", "--request-id", REQUEST], super::keys::PROTECTED, "unlock_required", 3),
     row!("imported_delete", &["key", "delete", "--key-id", "{key}", "--prepare"], b"", "key_not_deletable", 2),
     row!("selected_key_remove", &["key", "remove", "--key-id", "{key}", "--request-id", super::remotes::LAST], b"", "selected_key_in_use", 3),
     row!("unknown_key", &["key", "select", "--key-id", REQUEST, "--request-id", NEXT], b"", "key_not_found", 2),

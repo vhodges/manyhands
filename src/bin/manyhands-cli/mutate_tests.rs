@@ -165,6 +165,7 @@ fn preview() -> Envelope<PrepareDataDto> {
 fn flags() -> MutationFlags {
     MutationFlags {
         request_id: Some(id()),
+        allocated: false,
         prepare: false,
         confirm: None,
     }
@@ -460,6 +461,7 @@ fn prepare_flag_calls_prepare_only() {
         MutationFlags {
             request_id: None,
             prepare: true,
+            allocated: false,
             confirm: None,
         },
         true,

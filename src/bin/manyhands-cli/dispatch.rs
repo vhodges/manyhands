@@ -465,6 +465,7 @@ pub fn dispatch(
         "remote remove" => return crate::admin::remote_remove(service, session, command, args),
         "remote select" => return crate::admin::remote_select(service, session, command, args),
         "key import" => return crate::admin::key_import(service, session, command, args),
+        "key generate" => return crate::admin::key_generate(service, session, command, args),
         "key select" => return crate::admin::key_select(service, session, command, args),
         "key clear" => return crate::admin::key_clear(service, session, command, args),
         "key remove" => return crate::admin::key_remove(service, session, command, args),

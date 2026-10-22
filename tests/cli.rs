@@ -34,6 +34,8 @@ mod input_schemas;
 mod keys;
 #[path = "cli/mutation.rs"]
 mod mutation;
+#[path = "cli/privacy.rs"]
+mod privacy;
 #[cfg(unix)]
 #[path = "cli/prompts.rs"]
 mod prompts;

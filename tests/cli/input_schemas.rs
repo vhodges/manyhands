@@ -17,6 +17,32 @@ use crate::support::{
 const PENDING_REFERENCES: &[&str] = &[];
 
 #[test]
+fn protection_accepts_passphrase_and_none_only() {
+    let f = super::keys::Fixture::new();
+    for protection in ["passphrase", "none", "secret"] {
+        let value = serde_json::json!({"label":"Generated key", "protection":protection});
+        let allowed = protection != "secret";
+        super::keys::call(
+            &f.env,
+            "generate",
+            &["--input", "-", "--prepare"],
+            &serde_json::to_vec(&value).unwrap(),
+            2,
+            if allowed {
+                "not_confirmable"
+            } else {
+                "invalid_input"
+            },
+        );
+        assert_eq!(
+            schema::check(&directory(), "key_generate.schema.json", &value).is_ok(),
+            allowed
+        );
+    }
+    super::keys::no_generated_key_or_request(&f.env, super::mutation::REQUEST);
+}
+
+#[test]
 fn keys_import_schema_matches_required_optional_and_closed_shapes() {
     let file = "key_import.schema.json";
     schema::validate(&directory(), file).unwrap();

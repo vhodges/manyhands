@@ -9,20 +9,16 @@ use serde::{
 
 use super::render;
 
-// Task 5 starts consuming these entry points; later verb tasks use all accessors.
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct InputObject {
     fields: BTreeMap<String, Json>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub enum Tristate {
     Missing,
     Null,
     Value(String),
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub enum InputError {
     Unreadable,
     NotUtf8,
@@ -42,7 +38,6 @@ pub enum InputError {
     },
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl InputError {
     pub fn detail(&self) -> String {
         match self {
@@ -74,7 +69,6 @@ impl InputError {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn read(source: &str, cwd: &Path, stdin: &mut dyn Read) -> Result<InputObject, InputError> {
     let bytes = if source == "-" {
         let mut bytes = Vec::new();
@@ -88,7 +82,6 @@ pub fn read(source: &str, cwd: &Path, stdin: &mut dyn Read) -> Result<InputObjec
     parse(&bytes)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse(bytes: &[u8]) -> Result<InputObject, InputError> {
     let text = std::str::from_utf8(bytes).map_err(|_| InputError::NotUtf8)?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -114,7 +107,6 @@ pub fn parse(bytes: &[u8]) -> Result<InputObject, InputError> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl InputObject {
     pub fn only(&self, allowed: &[&str]) -> Result<(), InputError> {
         for key in self.fields.keys() {

@@ -10,6 +10,164 @@ use serde_json::Value;
 use std::{fs, path::PathBuf};
 
 pub const IMPORT: &[u8] = include_bytes!("../fixtures/cli_input_v1/key_import.json");
+pub const GENERATE: &[u8] = include_bytes!("../fixtures/cli_input_v1/key_generate.json");
+pub const PROTECTED: &[u8] = br#"{"label":"Protected key","protection":"passphrase"}"#;
+
+pub fn no_generated_key_or_request(env: &CliEnv, request: &str) {
+    assert!(!env.home.path().join(".ssh/manyhands").exists());
+    checked(
+        &["request", "show", "--json", "--request-id", request],
+        env,
+        &[],
+        2,
+        "request_not_found",
+        None,
+    );
+}
+
+#[test]
+fn a_protected_generation_without_a_terminal_is_unlock_required() {
+    let f = Fixture::new();
+    let value = f.call(
+        "generate",
+        &["--input", "-", "--request-id", REQUEST],
+        PROTECTED,
+        3,
+        "unlock_required",
+    );
+    assert_eq!(value["request_id"], REQUEST);
+    assert!(value["operation_id"].is_null() && value["data"].is_null());
+    golden("key_generate_unlock_required", &value, &f.env);
+    no_generated_key_or_request(&f.env, REQUEST);
+    let out = run(
+        &["key", "generate", "--input", "-", "--request-id", REQUEST],
+        &f.env,
+        PROTECTED,
+    );
+    assert_eq!(out.status, 3);
+    assert!(out.stdout.is_empty());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("A passphrase can be entered only at a terminal")
+    );
+}
+
+#[test]
+fn prepare_of_key_generate_is_not_confirmable_and_asks_nothing() {
+    let f = Fixture::new();
+    for input in [GENERATE, PROTECTED] {
+        let value = f.call(
+            "generate",
+            &["--input", "-", "--prepare"],
+            input,
+            2,
+            "not_confirmable",
+        );
+        assert!(value["request_id"].is_null());
+    }
+    no_generated_key_or_request(&f.env, REQUEST);
+}
+
+#[cfg(unix)]
+#[test]
+fn generate_an_unprotected_key() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let value = f.call(
+        "generate",
+        &["--input", "-", "--request-id", REQUEST],
+        GENERATE,
+        0,
+        "ok",
+    );
+    golden("key_generate", &value, &f.env);
+    let directory = f.env.home.path().join(".ssh/manyhands");
+    assert_eq!(
+        fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    let private = directory.join(key_id(&value));
+    let public = directory.join(format!("{}.pub", key_id(&value)));
+    // The existing store contract is 0700 directories, 0600 private files,
+    // and 0644 public companions (keys/storage/unix.rs).
+    for (path, mode) in [(&private, 0o600), (&public, 0o644)] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+    let key = ssh_key::PrivateKey::from_openssh(fs::read(&private).unwrap()).unwrap();
+    assert!(!key.is_encrypted());
+    assert_eq!(
+        ssh_key::PublicKey::from_openssh(&fs::read_to_string(public).unwrap()).unwrap(),
+        *key.public_key()
+    );
+    let before = credentials::key_file_states(&[private]);
+    assert_eq!(
+        f.call(
+            "generate",
+            &["--input", "-", "--request-id", REQUEST],
+            GENERATE,
+            0,
+            "ok"
+        ),
+        value
+    );
+    assert_eq!(
+        credentials::key_file_states(&[directory.join(key_id(&value))]),
+        before
+    );
+}
+
+#[test]
+fn generate_checks_ids_then_closed_input_and_refuses_repository_selection() {
+    let f = Fixture::new();
+    for (request, confirm, id) in [
+        ("bad", "bad", Value::Null),
+        (REQUEST, "bad", Value::String(REQUEST.into())),
+    ] {
+        let value = f.call(
+            "generate",
+            &[
+                "--input",
+                "missing",
+                "--request-id",
+                request,
+                "--confirm",
+                confirm,
+            ],
+            &[],
+            2,
+            "invalid_id",
+        );
+        assert_eq!(value["request_id"], id);
+    }
+    for input in [
+        br#"{}"#.as_slice(),
+        br#"{"label":null,"protection":"none"}"#,
+        br#"{"label":"x","protection":null}"#,
+        br#"{"label":"x","protection":"none","passphrase":"not-allowed"}"#,
+        br#"{"label":"x","label":"y","protection":"none"}"#,
+    ] {
+        f.call(
+            "generate",
+            &["--input", "-", "--request-id", REQUEST],
+            input,
+            2,
+            "invalid_input",
+        );
+    }
+    f.call("generate", &["--prepare"], &[], 2, "usage_error");
+    f.call(
+        "generate",
+        &["--input", "-", "--prepare", "--repo", "."],
+        GENERATE,
+        2,
+        "usage_error",
+    );
+    no_generated_key_or_request(&f.env, REQUEST);
+}
 pub struct Fixture {
     pub env: CliEnv,
     _data: tempfile::TempDir,

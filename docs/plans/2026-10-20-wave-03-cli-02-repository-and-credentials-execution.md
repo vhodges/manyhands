@@ -38,11 +38,12 @@ the post-commit Part A checkpoint passes all six commands and **414 tests**.
 Controller reports independent full Part A spec and quality reviews both
 **APPROVE, no findings**, over `fbae49a..54dc047` (sessions recorded below).
 
-**Current assignment/status:** Task 8 only, inline without subagents, from the
-pushed Part A head `d9496b9`. The owner approved the missing-source fixture
-correction after the recorded stop; no library gap/ticket is needed. Task 8's
-targeted verification and self-review are complete; the containing delivery
-commit is ready for controller spec/quality review. Controller owns any push.
+**Current assignment/status:** Task 9 and its Part B checkpoint only, inline
+without subagents, from pushed Task 8 head `c40ffbc`. Controller reports Task 8
+spec and quality approval (sessions below). Task 9's targeted checks and
+self-review pass; its implementation is in this entry's containing delivery
+commit. The post-commit six-command Part B gate and independent controller
+reviews are pending. Controller owns review and push; Task 10 is not assigned.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -382,6 +383,109 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 8 Approval / Task 9 Start (2026-10-22)
+
+- Controller reports Task 8 spec **APPROVE**
+  (`ses_e9a259bf1ffeSai2cfbB7LmiBt`) and quality **APPROVE**
+  (`ses_e9a23eb6bffeNga7SWg3sMfCgI`), pushed at **`c40ffbc`**. These supersede
+  the historical pending-review entry below.
+- Actual Task 9 base: **`c40ffbc223579508ab65d9f965be2d89116389d9`**. Clean
+  assigned branch/worktree on entry; fetch and `git merge origin/main` returned
+  **Already up to date**. Main remains `d7962c3615786ca663662b0debb9460769308a57`.
+- Read current AGENTS, Cycle, design, Task 9 plan, ticket and prior evidence.
+  Owner authorizes targeted checks, Task 9 commit and the six-command Part B
+  checkpoint, not a full suite. Part B's review base is **`d9496b9`**.
+
+### Task 9 — Key Generation And Masked Passphrase Entry (2026-10-22)
+
+#### Implementation and self-review
+
+- Delivered `key generate` as an unconfirmed, input-required, repo-refused C2
+  mutation. Published its closed input schema/example; enum values are exactly
+  `passphrase` and `none`. Existing catalog-driven parsing and human key-result
+  rendering supply the behavior; added explicit catalog/parser and human rows.
+- Ordered checks are request/confirmation IDs, input shape, store lookup, then
+  prompts. Shared `MutationFlags::allocate` now allocates and immediately prints
+  the interactive request before input/store/prompt work. `allocated` preserves
+  the distinction from explicit IDs for the driver's existing-record lookup;
+  no placeholder ID or extra replay lookup. Post-open CLI refusals retain it.
+- Protected execution asks twice through the existing zeroizing terminal prompt;
+  cancellation/exhaustion map to cancelled/invalid_input. Without interactivity,
+  it returns unlock_required before execute, even for a finished request. Prepare
+  asks nothing and uses Unencrypted, with the F2 not-confirmable-before-input
+  reason documented. The builder takes the secret once, with protected retry
+  disabled, without cloning a secret or panicking on retries.
+- Added **15 tests: 14 CLI and one bin**. PTY evidence covers matched non-ASCII
+  passphrases, decryption with the sentinel and rejection of a wrong answer,
+  three mismatches, Ctrl-C/mode restoration, prepare with both protections,
+  R-6 refusal IDs and R-19 nonterminal/interactive replay plus stored result.
+  The PTY helper exposes the first live stderr line so the successful test reads
+  the canonical request ID **before supplying either secret answer**.
+- Privacy scans both streams, the transcript and every data/home file for the
+  passphrase in UTF-8 and UTF-16LE. The sentinel enters the child only as PTY
+  keystrokes. A separate both-mode table covers exactly all **15 available C2
+  verbs**, using C1 URL/private-key/operation-material sentinels; inert source
+  key files intentionally contain their source markers and are output-only
+  checks. Generated-key CLI file cases are Unix-only.
+- Replaced staged unlock_required exit evidence with a real binary row, retaining
+  the **49 F2 / 52 CLI-inclusive code union**. Seven Unix codes remain staged for
+  Task 10 (eight on Windows, including its missing-source host-observe evidence).
+- Read the entire implementation/test diff, both new JSON goldens and both E3
+  root-help diffs. Only key-generate help availability/options/repo policy changes.
+  All JSON goldens are registered and checked against unchanged output schemas.
+  Removed consumed staging allowances. Two existing unit fixture initializers
+  gained only the mechanical `allocated: false` field; other existing-test changes
+  are the planned additive prepare/exit rows and E3. No new semantic exception.
+- No library, result-code, output-schema, crate/lockfile or production thread/
+  child change; no input/secret Debug, Display or Serialize, no value-bearing
+  diagnostic. The separate wrong-passphrase transport defect stays accepted.
+  Self-review has no unresolved blocker; independent review belongs to controller.
+
+#### TDD and targeted verification
+
+Every Rust command used Devenv and Cargo locked, except ordinary fmt. Before
+production edits, the named RED filters were:
+
+| Filter (`cargo test --locked --test cli …`) | Passed | Failed | Reason |
+| --- | ---: | ---: | --- |
+| `keys` | 17 | 4 | command_unavailable instead of generation/refusals |
+| `prompts` | 9 | 6 | no generation prompt/request ID/prepare behavior |
+| `privacy` | 0 | 2 | no prompt and key generate absent from available catalog |
+| `input_schemas` | 5 | 1 | command_unavailable instead of not_confirmable |
+
+Two **new-test** assumptions were corrected after tracing existing library
+behavior: the store's permissions are 0700 directory / 0600 private / **0644
+public** (`keys/storage/unix.rs` and its tests), and enable cannot change the
+prefix of an already-enabled repository (`mutation/bind/repo.rs:809–812`). The
+privacy enable row now uses a separate unenabled repository. No production or
+pre-existing assertion was changed to accommodate these fixture corrections.
+
+Final targeted runs, without the golden-update environment:
+
+| Command suffix after `devenv shell --` | Result |
+| --- | --- |
+| `cargo test --locked --test cli keys` | **21 passed**, 143 filtered |
+| `cargo test --locked --test cli prompts` | **15 passed**, 149 filtered |
+| `cargo test --locked --test cli privacy` | **2 passed**, 162 filtered |
+| `cargo test --locked --test cli input_schemas` | **6 passed**, 158 filtered |
+| `cargo test --locked --test cli exits` | **5 passed**, 159 filtered |
+| `cargo test --locked --test cli key_generate` | **2 passed**, 162 filtered (includes human result) |
+| `cargo test --locked --test cli help` | **9 passed**, 155 filtered |
+| `cargo test --locked --bin manyhands-cli mutate` | **14 passed**, 155 filtered |
+| `cargo test --locked --bin manyhands-cli key_generate` | **1 passed**, 168 filtered |
+
+Counts overlap. The current CLI inventory is 164, bin inventory 169; this is not
+a claim that the broad checkpoint has run. Guarded golden generation used
+`MANYHANDS_UPDATE_GOLDEN=1`, outside CI. `cargo fmt` and `git diff --check` passed.
+
+Completion comment: **`01M5JYBTSGT87AWGD9CSWAWS8N`**. Its ID and the reserved
+Part B checkpoint comment ID came from built CLI `id new --json`, in a fresh
+`/tmp/opencode/` HOME/XDG/app-data sandbox, empty inherited environment, Git
+configuration disabled and absolute `setsid` detachment. Delivery subject:
+**`feat: add key generate with masked passphrase entry`**, required coauthor.
+Post-commit Part B gate and controller reviews follow; no push/PR/closure/
+cleanup/native CI or Task 10 work.
 
 ### Task 8 — Completed After Approved Fixture Correction (2026-10-22)
 

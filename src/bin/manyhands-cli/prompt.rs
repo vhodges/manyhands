@@ -60,7 +60,6 @@ pub fn identity(terminal: &mut dyn Terminal) -> Asked<CommitIdentity> {
     Asked::Exhausted
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Task 9 wires protected key generation.
 pub fn new_passphrase(terminal: &mut dyn Terminal, label: &str) -> Asked<SecretPassphrase> {
     let prompt = format!("New passphrase for key \"{}\": ", render::field(label));
     for _ in 0..3 {

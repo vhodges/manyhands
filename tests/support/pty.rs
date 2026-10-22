@@ -11,7 +11,7 @@ use std::{
     },
     process::{Child, Command, ExitStatus, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver},
     },
@@ -31,6 +31,7 @@ pub struct PtyCli {
     transcript: Vec<u8>,
     consumed: usize,
     before: libc::tcflag_t,
+    live_stderr: Arc<Mutex<Vec<u8>>>,
 }
 
 fn owned(fd: libc::c_int) -> io::Result<File> {
@@ -124,6 +125,7 @@ impl PtyCli {
         let mut child = command.spawn().unwrap();
         let mut workers = Vec::new();
         let (sender, pipes) = mpsc::channel();
+        let live_stderr = Arc::new(Mutex::new(Vec::new()));
         for (is_stdout, mut pipe) in [
             (
                 true,
@@ -135,9 +137,28 @@ impl PtyCli {
             ),
         ] {
             let sender = sender.clone();
+            let live_stderr = Arc::clone(&live_stderr);
             workers.push(thread::spawn(move || {
                 let mut bytes = Vec::new();
-                let result = pipe.read_to_end(&mut bytes).map(|_| bytes);
+                let result = (|| {
+                    let mut buffer = [0; 4096];
+                    loop {
+                        match pipe.read(&mut buffer) {
+                            Ok(0) => return Ok(bytes),
+                            Ok(count) => {
+                                bytes.extend_from_slice(&buffer[..count]);
+                                if !is_stdout {
+                                    live_stderr
+                                        .lock()
+                                        .unwrap()
+                                        .extend_from_slice(&buffer[..count]);
+                                }
+                            }
+                            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                            Err(error) => return Err(error),
+                        }
+                    }
+                })();
                 let _ = sender.send((is_stdout, result));
             }));
         }
@@ -210,6 +231,7 @@ impl PtyCli {
             transcript: Vec::new(),
             consumed: 0,
             before,
+            live_stderr,
         }
     }
     pub fn expect(&mut self, text: &str) {
@@ -249,6 +271,24 @@ impl PtyCli {
     }
     pub fn send(&mut self, bytes: &[u8]) {
         self.master.write_all(bytes).unwrap();
+    }
+    /// Observe the unbuffered request note while the child is still waiting at
+    /// its first prompt. No keystrokes need to be sent to make stderr visible.
+    pub fn first_stderr_line(&self) -> String {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            {
+                let bytes = self.live_stderr.lock().unwrap();
+                if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+                    return String::from_utf8(bytes[..end].to_vec()).unwrap();
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "request note missing before prompt answer"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
     }
     fn wait(&self) -> ExitStatus {
         let deadline = Instant::now() + Duration::from_secs(10);

@@ -2,16 +2,17 @@ use crate::{
     catalog::CommandSpec,
     input::{self, InputError, InputObject, Tristate},
     mutate::{self, MutationFlags, Plan, Session},
+    prompt::{self, Asked},
     render::Output,
 };
 use clap::ArgMatches;
 use manyhands::{
     repository::{
         CommitIdentity, ConfirmationId, InitialsChange, KeyClearInput, KeyDeleteInput,
-        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, RemoteAddInput,
+        KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, RemoteAddInput,
         RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
         RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
-        keys::KeyStore,
+        keys::{KeyProtection, KeyStore},
     },
     results::ResultCode,
 };
@@ -28,7 +29,19 @@ pub fn flags(
     spec: &CommandSpec,
     args: &ArgMatches,
 ) -> Result<MutationFlags, Output> {
-    let request_id = request_id(session, spec, args)?;
+    let mut flags = MutationFlags {
+        request_id: request_id(session, spec, args)?,
+        allocated: false,
+        prepare: args
+            .try_get_one::<bool>("prepare")
+            .ok()
+            .flatten()
+            .copied()
+            .unwrap_or(false),
+        confirm: None,
+    };
+    flags.allocate(session);
+    let request_id = flags.request_id;
     let confirm = args
         .try_get_one::<String>("confirm")
         .ok()
@@ -44,16 +57,8 @@ pub fn flags(
                 None,
             )
         })?;
-    Ok(MutationFlags {
-        request_id,
-        confirm,
-        prepare: args
-            .try_get_one::<bool>("prepare")
-            .ok()
-            .flatten()
-            .copied()
-            .unwrap_or(false),
-    })
+    flags.confirm = confirm;
+    Ok(flags)
 }
 pub fn request_id(
     session: &Session,
@@ -412,6 +417,104 @@ fn remote_name(
             retry: true,
         },
         &mut |_| build(root.clone(), name.clone()),
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn key_generate(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let fields = (|| {
+            object.only(&["label", "protection"])?;
+            Ok((
+                object.string("label")?,
+                object.one_of("protection", &["passphrase", "none"])? == "passphrase",
+            ))
+        })();
+        let (label, protected) =
+            fields.map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let store = KeyStore::for_current_user().map_err(|_| {
+            mutate::refusal(
+                session,
+                &name(spec),
+                flags.request_id,
+                ResultCode::InternalError,
+                None,
+            )
+        })?;
+        Ok((flags, label, protected, store))
+    })();
+    let (flags, label, protected, store) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    let mut secret = if protected && !flags.prepare {
+        if !session.interactive {
+            return mutate::refusal(
+                session,
+                &name(spec),
+                flags.request_id,
+                ResultCode::UnlockRequired,
+                Some("A passphrase can be entered only at a terminal".into()),
+            );
+        }
+        let asked = session
+            .terminal
+            .as_deref_mut()
+            .map(|terminal| prompt::new_passphrase(terminal, &label))
+            .unwrap_or(Asked::Cancelled);
+        match asked {
+            Asked::Answer(secret) => Some(secret),
+            Asked::Cancelled => {
+                return mutate::refusal(
+                    session,
+                    &name(spec),
+                    flags.request_id,
+                    ResultCode::Cancelled,
+                    None,
+                );
+            }
+            Asked::Exhausted => {
+                return mutate::refusal(
+                    session,
+                    &name(spec),
+                    flags.request_id,
+                    ResultCode::InvalidInput,
+                    None,
+                );
+            }
+        }
+    } else {
+        // F2 prepare rejects this unconfirmed command as not_confirmable before
+        // reading its input. Unencrypted is sufficient; never ask for a secret.
+        None
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: !protected,
+        },
+        &mut |_| {
+            Mutation::KeyGenerate(KeyGenerateInput {
+                store: store.clone(),
+                label: label.clone(),
+                // An unconfirmed protected execute builds exactly once (retry is
+                // disabled). Move its secret, never clone it or panic on a retry.
+                protection: secret
+                    .take()
+                    .map_or(KeyProtection::Unencrypted, KeyProtection::Passphrase),
+            })
+        },
         &mut std::thread::sleep,
     )
 }

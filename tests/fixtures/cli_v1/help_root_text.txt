@@ -60,7 +60,7 @@ Command catalog:
   remote add  Add a repository remote. Available now.
   remote remove  Remove a repository remote. Available now.
   remote select  Select a repository remote. Available now.
-  key generate  Generate a key. Arrives with C2.
+  key generate  Generate a key. Available now.
   key import  Import a key. Available now.
   key select  Select a key for a repository. Available now.
   key clear  Clear a repository's selected key. Available now.

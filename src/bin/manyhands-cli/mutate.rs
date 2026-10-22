@@ -89,8 +89,21 @@ pub struct Session {
 }
 pub struct MutationFlags {
     pub request_id: Option<RequestId>,
+    pub allocated: bool,
     pub prepare: bool,
     pub confirm: Option<ConfirmationId>,
+}
+impl MutationFlags {
+    // Shared with argument validation: the note must precede input, store
+    // lookup and prompts, and subsequent CLI refusals retain this exact ID.
+    pub fn allocate(&mut self, session: &Session) {
+        if !self.prepare && self.request_id.is_none() && session.interactive {
+            let id = RequestId::new();
+            note(&format!("request: {id}"));
+            self.request_id = Some(id);
+            self.allocated = true;
+        }
+    }
 }
 #[derive(Default)]
 pub struct Extras {
@@ -108,7 +121,7 @@ pub fn run(
     boundary: &dyn Boundary,
     session: &mut Session,
     spec: &'static CommandSpec,
-    flags: MutationFlags,
+    mut flags: MutationFlags,
     plan: Plan,
     build: &mut dyn FnMut(&Extras) -> Mutation,
     sleep: &mut dyn FnMut(Duration),
@@ -125,18 +138,15 @@ pub fn run(
     if flags.prepare {
         return render::prepare_output(session.json, &boundary.prepare(&build(&extras)));
     }
+    flags.allocate(session);
     let request_id = match flags.request_id {
         Some(id) => id,
-        None if session.interactive => {
-            let id = RequestId::new();
-            note(&format!("request: {id}"));
-            id
-        }
         None => return refusal(session, &command, None, ResultCode::UsageError, None),
     };
     let exists = if confirmed
         && session.interactive
         && flags.request_id.is_some()
+        && !flags.allocated
         && flags.confirm.is_none()
     {
         match boundary.request_exists(request_id) {
