@@ -54,8 +54,15 @@ fn seed(root: &str, id: &str) -> Result<String, String> {
         }
         DraftFields::Comment { .. } => unreachable!("an item's fields are never a comment's"),
     }
+    // The registration root as the desktop has it, not as typed: `.`, a
+    // relative path or a trailing slash would never match.
+    let repository = resolved
+        .root()
+        .to_str()
+        .ok_or("the repository root is not UTF-8")?
+        .to_owned();
     let target = DraftTarget {
-        repository: root.to_owned(),
+        repository,
         item_kind: match item.kind {
             ItemDtoKind::Document => ItemKind::Document,
             ItemDtoKind::Ticket => ItemKind::Ticket,

@@ -339,10 +339,15 @@ fn item_id(text: &str) -> Result<ItemId, UnreadableReason> {
     text.parse().map_err(|_| UnreadableReason::Damaged)
 }
 
+/// A file time, taken to UTC. A time whose UTC year is outside 0 to 9999
+/// is damaged: the conversion could leave the supported range, and such a
+/// year could never be written back as RFC 3339.
 fn time(text: &str) -> Result<OffsetDateTime, UnreadableReason> {
     OffsetDateTime::parse(text, &Rfc3339)
-        .map(|time| time.to_offset(UtcOffset::UTC))
-        .map_err(|_| UnreadableReason::Damaged)
+        .ok()
+        .and_then(|time| time.checked_to_offset(UtcOffset::UTC))
+        .filter(|time| (0..=9999).contains(&time.year()))
+        .ok_or(UnreadableReason::Damaged)
 }
 
 impl From<FileFields> for DraftFields {

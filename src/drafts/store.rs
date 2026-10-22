@@ -65,6 +65,7 @@ struct Shared {
 }
 
 /// One draft file in the folder.
+#[derive(Clone)]
 pub struct Listing {
     pub id: DraftId,
     pub entry: Entry,
@@ -82,6 +83,7 @@ pub enum Held {
 
 // The approved API returns a listed draft by value.
 #[allow(clippy::large_enum_variant)]
+#[derive(Clone)]
 pub enum Entry {
     Draft(Draft),
     Unreadable(UnreadableReason),
@@ -343,8 +345,18 @@ impl DraftStore {
             base,
             current,
         };
-        self.write_file(&draft).map_err(|failure| failure.error)?;
-        Ok(DraftClaim { hold, draft })
+        match self.write_file(&draft) {
+            Ok(()) => Ok(DraftClaim { hold, draft }),
+            Err(failure) => {
+                // The error carries no ID, so a revision 1 left behind
+                // could be neither found nor cleaned: the caller keeps the
+                // text, and the file goes.
+                if failure.replaced {
+                    let _ = hold.delete();
+                }
+                Err(failure.error)
+            }
+        }
     }
 
     /// Claims an existing draft and removes its stray temporary files.
@@ -366,7 +378,9 @@ impl DraftStore {
         Ok(DraftClaim { hold, draft })
     }
 
-    /// Takes `id`'s lock and deletes its file, readable or not.
+    /// Deletes the draft with that ID whether or not it is readable,
+    /// taking its lock first, so a draft claimed here or elsewhere is
+    /// refused.
     pub fn discard_unreadable(&self, id: DraftId) -> Result<(), DraftError> {
         let hold = self.hold(id)?;
         hold.delete()
@@ -459,9 +473,10 @@ struct WriteFailure {
 }
 
 impl Hold {
-    /// Deletes the draft file, then the lock file, then releases the lock.
-    /// A draft file already gone is no failure; a lock file that stays is
-    /// harmless.
+    /// Deletes the draft file, then its temporary files, then the lock
+    /// file, then releases the lock. A draft file already gone is no
+    /// failure; the temporary files go on a best-effort basis, and a lock
+    /// file that stays is harmless.
     fn delete(self) -> Result<(), DraftError> {
         {
             let folder = self.store.folder();
@@ -469,6 +484,14 @@ impl Hold {
                 Ok(()) => {}
                 Err(e) if e.kind == DraftErrorKind::NotFound => {}
                 Err(e) => return Err(e),
+            }
+            // A dead writer's temporary file can hold the draft's text.
+            if let Ok(names) = folder.names() {
+                for name in names {
+                    if is_temporary_of(&name, self.id) {
+                        let _ = folder.remove(&name);
+                    }
+                }
             }
             let _ = folder.remove(&lock_name(self.id));
         }
@@ -525,6 +548,10 @@ impl DraftClaim {
 
     /// Deletes the draft if `saved_revision` is the stored revision;
     /// otherwise hands the claim back.
+    ///
+    /// It consumes the claim even when it fails: a failed retirement
+    /// leaves the draft on disk and releases it. No text is lost, but the
+    /// caller must treat the session as released.
     pub fn retire(self, saved_revision: u64) -> Result<Retired, DraftError> {
         if self.draft.revision != saved_revision {
             return Ok(Retired::Kept(self));
@@ -534,6 +561,10 @@ impl DraftClaim {
     }
 
     /// Deletes the draft, whatever its revision.
+    ///
+    /// It consumes the claim even when it fails: a failed discard leaves
+    /// the draft on disk and releases it. No text is lost, but the caller
+    /// must treat the session as released.
     pub fn discard(self) -> Result<(), DraftError> {
         self.hold.delete()
     }

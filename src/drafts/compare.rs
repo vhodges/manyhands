@@ -225,9 +225,10 @@ fn context_changed(base: &BaseContext, read: &ItemContextDto) -> bool {
 /// an equal observation; otherwise changed.
 ///
 /// A draft with no base at all is unverified, compared with the item's
-/// own fields as the base, so only the draft's changes show. A comment
-/// draft is classified by its item alone; `classify_comment` also checks
-/// its thread.
+/// own fields as the base, so only the draft's changes show.
+///
+/// It does not check a comment's thread: comment drafts must go through
+/// `classify_comment` instead.
 pub fn classify(draft: &Draft, item: Result<&ItemDto, ResultCode>) -> TargetState {
     let item = match item {
         Ok(item) => item,

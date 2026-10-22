@@ -203,3 +203,47 @@ fn a_store_and_its_claims_cross_threads() {
     send_sync::<manyhands::drafts::DraftStore>();
     send::<manyhands::drafts::DraftClaim>();
 }
+
+/// A temporary file a dead writer left for `id`, holding text.
+fn leave_temporary_file(data: &std::path::Path, id: DraftId) -> std::path::PathBuf {
+    let path = drafts(data).join(format!(".{id}.0123456789abcdef.tmp"));
+    std::fs::write(&path, b"{\"half\": \"a draft's text").unwrap();
+    path
+}
+
+#[test]
+fn discard_and_retirement_remove_the_drafts_temporary_files() {
+    let data = tempfile::tempdir().unwrap();
+    let store = store(data.path());
+
+    let discarded = create(&store);
+    let retired = create(&store);
+    let unreadable = create(&store);
+    let ids = [
+        discarded.draft().id,
+        retired.draft().id,
+        unreadable.draft().id,
+    ];
+    drop(unreadable);
+    for id in ids {
+        leave_temporary_file(data.path(), id);
+    }
+
+    assert!(discarded.discard().is_ok());
+    assert!(matches!(retired.retire(1), Ok(Retired::Deleted)));
+    assert!(store.discard_unreadable(ids[2]).is_ok());
+
+    assert!(list(&store).is_empty());
+    assert!(names(data.path()).is_empty(), "{:?}", names(data.path()));
+}
+
+#[test]
+fn deleting_one_draft_keeps_another_drafts_temporary_files() {
+    let data = tempfile::tempdir().unwrap();
+    let store = store(data.path());
+    let first = create(&store);
+    let second = create(&store);
+    let kept = leave_temporary_file(data.path(), second.draft().id);
+    assert!(first.discard().is_ok());
+    assert!(kept.exists());
+}

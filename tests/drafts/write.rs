@@ -124,3 +124,16 @@ fn a_failure_point_applies_to_every_clone_of_the_store() {
         Err(DraftErrorKind::Io)
     );
 }
+
+#[test]
+fn a_create_whose_first_write_fails_after_the_rename_leaves_no_draft() {
+    let data = tempfile::tempdir().unwrap();
+    let store = store(data.path()).with_failure_point_for_testing(
+        FailurePoint::SyncFolder,
+        FailureAction::Fail(DraftErrorKind::Io),
+    );
+    let created = store.create(target(), None, fields(1)).map(|_| ());
+    assert_eq!(created.map_err(|e| e.kind), Err(DraftErrorKind::Io));
+    assert!(list(&store).is_empty());
+    assert!(names(data.path()).is_empty(), "{:?}", names(data.path()));
+}
