@@ -457,13 +457,16 @@ All Rust commands below ran through Devenv in the ticket worktree.
 | Format | `devenv shell -- cargo fmt --check` | Initial check identified four formatting-only changes; applied them, then passed |
 | Self-review follow-up | `devenv shell -- cargo test --locked --bin manyhands-cli catalog` | 6 passed, 77 filtered after refining the new attribution test |
 | Final format | `devenv shell -- cargo fmt --check` | Passed |
-| Build check | `devenv shell -- cargo check --all-features --locked` | Passed |
-| Lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed |
+| Process deviation: unsolicited broad build check | `devenv shell -- cargo check --all-features --locked` | Passed; outside Task 1's named commands |
+| Process deviation: unsolicited broad lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed; outside Task 1's named commands |
 
 Every GREEN test run had zero failures/ignored tests and no compiler warnings.
 The final bin/help coverage is **92 distinct tests**; filter runs overlap the
-83 bin tests and are not additional distinct tests. This task used the approved
-targeted checks, not the full Cycle gate reserved for Task 12.
+83 bin tests and are not additional distinct tests. The broad check and Clippy
+runs were unsolicited and constitute a **process deviation**, not approved
+targeted verification. Later tasks will run only their explicitly named
+commands; any proposed expansion must return to the controller for authorization.
+The full Cycle gate remains reserved for Task 12.
 
 #### Decisions, self-review and handoff
 
@@ -495,6 +498,21 @@ targeted checks, not the full Cycle gate reserved for Task 12.
 - Delivery subject: **`refactor: give catalog entries a kind and a delivering Cycle`**.
   The commit containing this entry is Task 1's delivery; its final hash is in
   the implementer's handoff, avoiding a self-referential commit ID.
-- Status: **Task 1 implemented, awaiting controller spec/quality review.**
+- Status: **Task 1 approved by both independent spec and quality reviews.**
   Task 2 has not started. The controller owns the authorized post-review push;
   the ticket remains open and the Cycle remains in progress.
+
+#### Task 1 review bookkeeping
+
+- Reviewed implementation: `ecf49efdd9f8171d41e35c6896ce4463ce6ad1ea`.
+- Spec review **APPROVE**: `ses_e9c258597ffeFcJQweSFDVxUPE`.
+- Quality review **APPROVE**: `ses_e9c241338ffeFlhPApQJnKnYim`.
+- Spec minor resolved: the verification table and narrative now explicitly
+  identify the unsolicited broad check/Clippy runs as a process deviation,
+  with the named-command-only commitment for later tasks above.
+- Deferred nonblocking suggestion: add an explicit **`--confirm` without
+  `--request-id`** test during **Task 2 mode integration**. Preserve this as a
+  Task 2 review follow-up; no Task 1 test or behavior change is requested.
+- This correction is documentation-only. Per owner direction, no further
+  checks or tests were run; existing implementation verification remains the
+  evidence above. The bookkeeping commit is local; the controller owns push.
