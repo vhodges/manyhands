@@ -33,8 +33,9 @@ pushed at `5a71e6b`. Task 5 and its owner-ruling correction passed spec and
 quality review and were pushed through `c9b99aa` (review sessions recorded below).
 Task 6 passed spec and quality review and was pushed at `6f336f4` (sessions
 recorded below). The fresh implementer's assignment is **Task 7 and the Part A
-checkpoint only**, inline without subagents. Task 7's named targeted checks pass;
-the post-commit checkpoint and controller's independent Part A reviews are pending.
+checkpoint only**, inline without subagents. Task 7 is committed at `94083f4`;
+the post-commit Part A checkpoint passes all six commands and **414 tests**.
+Controller independent Part A spec and quality reviews are **pending**.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -456,6 +457,60 @@ Delivery subject: **`feat: add remote remove and select, and the exit table`**,
 with the required coauthor. This entry's containing commit is Task 7's delivery.
 **Post-commit Part A checkpoint and independent controller spec/quality reviews
 are pending.** No full-suite, native CI, push, PR, closure, cleanup or subagents.
+
+### Part A Checkpoint — Local Gate Passed, Independent Reviews Pending
+
+This entry supersedes the task-completion entry's pending **local gate** status.
+Tested task head: **`94083f4c281d533ebf6b0ea0c06abbd8a184b957`**.
+Part A review range:
+**`fbae49a205a358ddadf35ecc2c85ebfb19356bec..94083f4c281d533ebf6b0ea0c06abbd8a184b957`**.
+The evidence-only commit containing this entry extends that range with this ledger
+and the checkpoint comment. Controller reviews must include all Part A commits,
+including the Task 5 owner-ruling correction, not merely the last task commit.
+
+All six authorized checkpoint commands ran in the assigned worktree through
+Devenv, with Cargo locked except fmt. All exited **0**, with no gate corrections:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed; 1.08s |
+| `devenv shell -- cargo fmt --check` | Passed |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed; 11.05s, no warnings |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed; 9.27s |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed; exit 0 |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | Passed; build 2.71s, counts below |
+
+| Target | Passed | Failed | Ignored | Filtered | Execution time |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `manyhands-cli` bin | 168 | 0 | 0 | 0 | 0.25s |
+| `cli` | 131 | 0 | 0 | 0 | 36.69s |
+| `mutation_contract` | 44 | 0 | 0 | 0 | 12.80s |
+| `read_contract` | 71 | 0 | 0 | 0 | 11.63s |
+| **Total** | **414** | **0** | **0** | **0** | |
+
+- **18 new Task 7 tests** (one bin and 17 CLI); **156 net additional tests**
+  since the 258-test Task 0 baseline. Table subcases are not added to test counts.
+  The existing driver identity-retry note on stderr is expected fixed guidance.
+- The gate covers the new human table, catalog/parser contract, schemas and exact
+  golden inventory, confirmed-prepare extension, all remote/exit cases, all existing
+  CLI and Unix prompt cases, and both output-contract targets. Goldens were compared
+  without an update environment during the gate. No full suite was run.
+- Final fetch and `git merge origin/main`: **Already up to date**. Main remains
+  **`d7962c3615786ca663662b0debb9460769308a57`**. Merge-tree at tested head
+  succeeded: **`b385209c862a2975347fc66072f97e57c877f6cb`**. The task tree was clean.
+- Self-review covered Task 7's complete base-to-head diff, all new and regenerated
+  goldens, boundary/privacy constraints, fixture isolation, real binary outcomes
+  and audit accounting. No unresolved self-review finding or library gap.
+  Part A's overall change inventory was inspected; prior approved task reviews
+  are retained as evidence, not replaced by an implementer review claim.
+- **Controller independent Part A spec review, then quality review: pending.**
+  The implementer dispatched neither. Native platforms/Windows console prompting
+  remain the approved later native/manual evidence; key/host work is staged for
+  later tasks. Task 8 has not started. Ticket remains open.
+- Checkpoint comment **`01M5J6Q5KTRW8V0505D318JFY6`** came from built CLI `id new`
+  with a fresh `/tmp/opencode/` HOME/XDG/app-data sandbox, empty inherited environment,
+  disabled Git config and absolute `setsid`. Evidence is committed separately with
+  the required coauthor. No push, PR, closure, cleanup or CI dispatch.
 
 ### Task 5 review bookkeeping / Task 6 start
 
