@@ -3,7 +3,7 @@
 //! and its owner must be the process token's user or its default owner
 //! (ruling R4). Call patterns follow `repository/keys/storage/windows.rs`.
 
-use super::{DraftError, DraftErrorKind, Folder};
+use super::{DraftError, DraftErrorKind, Folder, entry_name};
 use crate::drafts::UnreadableReason;
 use std::{
     ffi::c_void,
@@ -15,7 +15,7 @@ use std::{
         fs::{MetadataExt, OpenOptionsExt},
         io::{AsRawHandle, FromRawHandle},
     },
-    path::Path,
+    path::{Path, PathBuf},
     ptr::{null, null_mut},
 };
 use windows_sys::Win32::{
@@ -35,6 +35,11 @@ impl Folder {
         open_folder(data, &folder.path)?;
         Ok(folder)
     }
+    /// The path of the entry `name` directly inside the folder; an absolute
+    /// or multi-part name is refused rather than joined.
+    fn entry(&self, name: &str) -> Result<PathBuf, DraftError> {
+        Ok(self.path.join(entry_name(name)?))
+    }
 
     /// Makes or checks `drafts/` again, after it was removed.
     pub(crate) fn reopen(&mut self) -> Result<(), DraftError> {
@@ -45,7 +50,7 @@ impl Folder {
     /// made again once.
     pub(crate) fn create_new(&mut self, name: &str) -> Result<File, DraftError> {
         check_folder(&self.path)?;
-        let path = self.path.join(name);
+        let path = self.entry(name)?;
         let create = || {
             OpenOptions::new()
                 .read(true)
@@ -70,7 +75,7 @@ impl Folder {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-            .open(self.path.join(name))
+            .open(self.entry(name).map_err(|_| UnreadableReason::NotAFile)?)
             .map_err(|_| UnreadableReason::Access)?;
         let metadata = file.metadata().map_err(|_| UnreadableReason::Access)?;
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !metadata.is_file() {
@@ -82,13 +87,13 @@ impl Folder {
     // Used by the draft store (Task 3).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn rename(&self, from: &str, to: &str) -> Result<(), DraftError> {
-        Ok(std::fs::rename(self.path.join(from), self.path.join(to))?)
+        Ok(std::fs::rename(self.entry(from)?, self.entry(to)?)?)
     }
 
     // Used by the draft store (Task 3).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove(&self, name: &str) -> Result<(), DraftError> {
-        Ok(std::fs::remove_file(self.path.join(name))?)
+        Ok(std::fs::remove_file(self.entry(name)?)?)
     }
 
     /// Win32 has no unprivileged folder sync; files are flushed one by one.

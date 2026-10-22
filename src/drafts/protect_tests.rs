@@ -177,3 +177,38 @@ fn the_default_data_directory_is_absolute_or_unavailable() {
         Err(error) => assert_eq!(error.kind, DraftErrorKind::Unavailable),
     }
 }
+
+#[test]
+fn names_cannot_leave_the_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open(data.path()).unwrap();
+    drop(folder.create_new("a").unwrap());
+    let outside = data.path().join("x");
+    for name in ["../x", "sub/x", "..\\x", "", ".", "..", "a\0b"] {
+        assert_eq!(
+            folder.create_new(name).map(drop).map_err(|e| e.kind),
+            Err(DraftErrorKind::Io),
+            "{name:?}"
+        );
+        assert!(matches!(
+            folder.open_file(name),
+            Err(super::UnreadableReason::NotAFile)
+        ));
+        assert_eq!(
+            folder.remove(name).map_err(|e| e.kind),
+            Err(DraftErrorKind::Io)
+        );
+    }
+    let absolute = outside.to_str().unwrap().to_owned();
+    assert!(folder.create_new(&absolute).is_err());
+    assert_eq!(
+        folder.rename("a", "../b").map_err(|e| e.kind),
+        Err(DraftErrorKind::Io)
+    );
+    assert_eq!(
+        folder.rename("../x", "b").map_err(|e| e.kind),
+        Err(DraftErrorKind::Io)
+    );
+    assert!(!outside.exists() && !data.path().join("b").exists());
+    assert_eq!(folder.names().unwrap(), vec!["a".to_owned()]);
+}

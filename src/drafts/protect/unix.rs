@@ -1,7 +1,9 @@
 //! Decision 5: `drafts/` is held open and every operation is relative to it,
 //! as `repository/keys/storage/unix.rs` does for the key store.
 
-use super::{DraftError, DraftErrorKind, Folder, Verdict, data_verdict, folder_verdict};
+use super::{
+    DraftError, DraftErrorKind, Folder, Verdict, data_verdict, entry_name, folder_verdict,
+};
 use crate::drafts::UnreadableReason;
 use std::{
     ffi::{CStr, CString},
@@ -34,10 +36,11 @@ impl Folder {
     /// A new owner-only file, made exclusively and never through a link. If
     /// the held folder has been removed, `drafts/` is reopened once.
     pub(crate) fn create_new(&mut self, name: &str) -> Result<File, DraftError> {
+        let name = self::name(name)?;
         let create = |folder: &Folder| {
             open_at(
                 &folder.handle,
-                name,
+                &name,
                 libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
                 0o600,
             )
@@ -61,7 +64,8 @@ impl Folder {
     // Used by the draft store (Task 3).
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn open_file(&self, name: &str) -> Result<File, UnreadableReason> {
-        let file = open_at(&self.handle, name, libc::O_RDONLY, 0).map_err(|error| {
+        let name = self::name(name).map_err(|_| UnreadableReason::NotAFile)?;
+        let file = open_at(&self.handle, &name, libc::O_RDONLY, 0).map_err(|error| {
             if is_link_or_not_directory(&error) {
                 UnreadableReason::NotAFile
             } else {
@@ -195,7 +199,7 @@ fn open_folder(data: &Path) -> Result<File, DraftError> {
         }
     }
     let folder =
-        open_at(&data, DRAFTS, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(protection)?;
+        open_at(&data, &drafts, libc::O_RDONLY | libc::O_DIRECTORY, 0).map_err(protection)?;
     check_folder(&folder)?;
     Ok(folder)
 }
@@ -238,12 +242,13 @@ fn is_link_or_not_directory(error: &io::Error) -> bool {
     )
 }
 
+/// A checked entry name (see `entry_name`), ready for a `*at` call.
 fn name(name: &str) -> Result<CString, DraftError> {
-    CString::new(name).map_err(|_| DraftError::new(DraftErrorKind::Io))
+    CString::new(entry_name(name)?).map_err(|_| DraftError::new(DraftErrorKind::Io))
 }
 
-fn open_at(parent: &File, name: &str, flags: i32, mode: libc::mode_t) -> io::Result<File> {
-    let name = CString::new(name).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+/// Opens `name`, already checked by `name`, directly inside `parent`.
+fn open_at(parent: &File, name: &CStr, flags: i32, mode: libc::mode_t) -> io::Result<File> {
     let fd = unsafe {
         libc::openat(
             parent.as_raw_fd(),

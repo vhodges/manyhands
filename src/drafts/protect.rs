@@ -84,6 +84,19 @@ pub(crate) struct Folder {
     handle: std::fs::File,
 }
 
+/// `name`, if it names an entry directly inside the folder: not empty, not
+/// `.` or `..`, and with no separator or NUL, so no earlier path component
+/// can be resolved (or followed through a link) on the way. On Windows `:`
+/// is refused too: `C:x` would replace the folder in `Path::join`, and
+/// `x:y` names an alternate data stream.
+fn entry_name(name: &str) -> Result<&str, DraftError> {
+    let separator = |c: char| matches!(c, '/' | '\\' | '\0') || (cfg!(windows) && c == ':');
+    if name.is_empty() || name == "." || name == ".." || name.contains(separator) {
+        return Err(DraftError::new(DraftErrorKind::Io));
+    }
+    Ok(name)
+}
+
 impl Folder {
     /// The data directory `path` is in.
     fn data(&self) -> Result<&std::path::Path, DraftError> {
