@@ -16,6 +16,8 @@ mod dispatch;
 mod human;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
+#[path = "manyhands-cli/prompt.rs"]
+mod prompt;
 #[path = "manyhands-cli/render.rs"]
 mod render;
 #[path = "manyhands-cli/startup.rs"]

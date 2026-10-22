@@ -10,12 +10,10 @@ mod platform;
 mod platform;
 
 pub trait Terminal {
-    /// Text that asks nothing, such as a preview. Consumed by Task 3's prompts.
-    #[allow(dead_code)]
+    /// Text that asks nothing, such as a preview.
     fn write(&mut self, text: &str) -> io::Result<()>;
     /// Set reading mode before the prompt; restore it on every exit path.
     /// A masked answer stays in zeroizing storage. None means cancelled.
-    #[allow(dead_code)] // Task 3 introduces the first prompt caller.
     fn ask(&mut self, prompt: &str, echo: bool) -> io::Result<Option<Zeroizing<String>>>;
 }
 

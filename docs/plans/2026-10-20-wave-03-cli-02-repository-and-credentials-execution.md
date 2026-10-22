@@ -26,14 +26,15 @@ index prerequisite are pending. The fresh implementer's assignment in this
 session was **Task 0 only**. Task 0 now passes both spec and quality review,
 including its correction at `fbae49a`: **49 F2 / 52 CLI-inclusive codes** and
 the **258-test baseline**. Task 1 also passed independent spec and quality
-reviews and was pushed through `c448c24`. The fresh implementer's current
-assignment is **Task 2 only**. Implementers never dispatch subagents.
+reviews and was pushed through `c448c24`. Task 2 passed independent spec and
+quality reviews and was pushed at `b38d4ce`. The fresh implementer's current
+assignment is **Task 3 only**. Implementers never dispatch subagents.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
-The branch was pushed at `c448c24`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 2's implementer commits locally
+The branch was pushed at `b38d4ce`. PR, merge, closure, native CI and worktree
+cleanup remain outside this assignment. Task 3's implementer commits locally
 and returns to the controller for review.
 
 ## Baseline
@@ -609,3 +610,75 @@ mode/order tests failed before wiring and passed afterwards.
   in the implementer's handoff to avoid a self-referential ID.
 - Status: **Task 2 implemented, ready for controller review**. Task 3 has not
   started; the Cycle/ticket remain open.
+
+#### Task 2 review bookkeeping
+
+- Reviewed and pushed implementation: `b38d4ce4e2ce94ae0ae785ef59e6ce4c2f80e5c0`.
+- Independent spec review **APPROVE**: `ses_e9c12607dffeudkEKbyxetZEsO`.
+- Independent quality review **APPROVE**: `ses_e9c10cb4bffeCI3uTsHs2qbHld`.
+- These controller-provided approvals supersede Task 2's pending-review entry;
+  the Task 3 implementer preserved them without rerunning Task 2 checks.
+
+### Task 3 — Prompts And The Terminal Credential Provider
+
+- Date: 2026-10-22. Base: **`b38d4ce4e2ce94ae0ae785ef59e6ce4c2f80e5c0`**.
+  Exact ticket branch and clean worktree/index confirmed. The AGENTS preflight
+  `git fetch origin main && git merge origin/main` returned **Already up to date**;
+  no history changed. Work was inline, Task 3 only, with no subagents.
+- Added `Consent`, `Asked<T>`, consent, identity and new-passphrase prompts,
+  and `TerminalProvider` implementing `SessionCredentialProvider`. Prompt text
+  goes only through `Terminal`; each write/ask error cancels. Consent writes
+  its preview first and accepts trimmed case-insensitive y/yes only.
+- An identity attempt is a name/email pair, up to three pairs. Whitespace-only
+  fields count as empty; accepted values are preserved for library validation.
+  New passphrases are asked twice per attempt, up to three pairs, with fixed
+  empty/mismatch/NUL explanations. Passphrase whitespace is significant.
+- Secret answers stay zeroizing, compare directly without copying, and move
+  into `SecretPassphrase::new(std::mem::take(&mut *line))`. No new input or
+  secret-holding type implements Debug, Display or Serialize. Labels use
+  `render::field`; diagnostics never interpolate answers or I/O error text.
+- Unlock asks once per library request, emits ambiguous-authentication guidance
+  on its own line, and returns Unavailable without a terminal. Its caller-owned
+  `Cell<bool>` is set only on Supplied and never reset by a later cancellation.
+  Future callers use `as_deref_mut().map(|t| t as &mut dyn Terminal)` as planned.
+
+#### RED / GREEN evidence
+
+Only the named prompt filter and formatting ran, through Devenv:
+
+| Phase | Command | Result |
+| --- | --- | --- |
+| RED | `devenv shell -- cargo test --locked --bin manyhands-cli prompt` | Exit 101; all 20 new tests failed at unimplemented prompt stubs; two existing matching tests passed; 96 filtered; three expected unused-scaffold warnings |
+| Format | `devenv shell -- cargo fmt` | Passed; formatted only the new prompt files |
+| GREEN | `devenv shell -- cargo test --locked --bin manyhands-cli prompt` | 22 passed, zero failed/ignored, 96 filtered; no compiler warnings |
+| Format | `devenv shell -- cargo fmt --check` | Passed |
+
+The 22 matches are **20 new prompt tests** plus existing catalog/startup tests
+whose names contain `prompt`. The tests use the existing FakeTerminal and a
+local I/O-failure wrapper. Unlock requests observe an empty temporary file
+through the public API and parse a fixed SharedKeyId. No real terminal, app
+data, keys or global Git configuration are used; no secret enters argv,
+environment, files or pipes. Sentinel checks cover terminal writes and prompts.
+
+#### Self-review and handoff
+
+- Reviewed the implementation, all 20 tests and the diff against Task 3's
+  interfaces and design table: ordering/echo, both cancellation positions,
+  three-attempt bounds, whitespace, NUL validation, I/O failures, escaped labels,
+  sentinel privacy and sticky supplied evidence. **No unresolved self-review
+  issue or library gap found.** No pre-existing test was edited.
+- Removed the obsolete Terminal write/ask allowances. Narrow non-test
+  dead-code allowances on prompt entry points/types identify their future
+  Task 5/9/10 consumers; remove them as those consumers arrive.
+- Files: `src/bin/manyhands-cli.rs`, `src/bin/manyhands-cli/{prompt.rs,
+  prompt_tests.rs,terminal.rs}`, this ledger and canonical comment
+  `01M5HZC1PK8DSPMKS27CJ6D33R.md`. No library, schema or dependency changes.
+- Comment ID generated by the existing built `target/debug/manyhands-cli id new`
+  with an empty inherited environment, isolated temporary HOME/XDG/app data
+  under `/tmp/opencode/`, disabled global/system Git configuration and `setsid`.
+- `git diff --check` passed. Pre-commit `git merge-tree --write-tree HEAD
+  origin/main` passed (tree `741b3b3e2e0f56b8db8eeb120c2137a63cae8777`).
+- Delivery subject: **`feat: ask for consent, identity and passphrases on the terminal`**.
+  This entry's commit is the Task 3 delivery; the handoff reports its final ID.
+- Status: **Task 3 implemented, ready for controller review**. Task 4 has not
+  started. The controller owns review and subsequent push; the ticket stays open.
