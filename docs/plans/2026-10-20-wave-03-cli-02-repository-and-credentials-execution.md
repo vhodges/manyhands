@@ -35,14 +35,15 @@ Task 6 passed spec and quality review and was pushed at `6f336f4` (sessions
 recorded below). The fresh implementer's assignment is **Task 7 and the Part A
 checkpoint only**, inline without subagents. Task 7 is committed at `94083f4`;
 the post-commit Part A checkpoint passes all six commands and **414 tests**.
-Controller independent Part A spec and quality reviews are **pending**.
+Controller reports independent full Part A spec and quality reviews both
+**APPROVE, no findings**, over `fbae49a..54dc047` (sessions recorded below).
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
 The branch was pushed at `6f336f4`. PR, merge, closure, native CI and worktree
-cleanup remain outside this assignment. Task 7's implementer commits locally
-and returns to the controller for independent review; no push is authorized here.
+cleanup remain outside this assignment. Task 7's implementer records the approved
+Part A reviews in a documentation-only commit; no push is authorized here.
 
 ## Baseline
 
@@ -511,6 +512,31 @@ Devenv, with Cargo locked except fmt. All exited **0**, with no gate corrections
   with a fresh `/tmp/opencode/` HOME/XDG/app-data sandbox, empty inherited environment,
   disabled Git config and absolute `setsid`. Evidence is committed separately with
   the required coauthor. No push, PR, closure, cleanup or CI dispatch.
+
+### Part A Independent Review Checkpoint — Both Approve
+
+On 2026-10-22, the controller supplied the independent full Part A review results:
+
+- **Actual reviewed range:**
+  `fbae49a205a358ddadf35ecc2c85ebfb19356bec..54dc0478c0ad8e92fd00703c22f8e1cb94de0687`
+  (`fbae49a..54dc047`), covering all Part A implementation and checkpoint evidence.
+- **Spec review:** `ses_e9b92dbe1ffeoZhFLNT3UpLUq3` — **APPROVE; no findings**.
+- **Quality review:** `ses_e9b8f8b8affebeGEH1thonaCC4` — **APPROVE; no findings**.
+
+These controller-reported approvals supersede the historical pending-review
+statuses above. Both independent review gates are satisfied for the exact range
+named here. No corrective implementation work was requested.
+
+The existing six-command local gate and **414 passing tests** remain the
+verification evidence. This follow-up changes documentation only; no Rust tests
+were rerun, as explicitly directed. The approval-bookkeeping commit itself is
+after the reviewed range and is not represented as independently reviewed.
+
+Canonical review checkpoint comment: **`01M5J76R5QKG26GG41PC4H55PR`**. Its ID
+was generated with the built CLI's `id new`, using a fresh `/tmp/opencode/`
+HOME/XDG/app-data sandbox, an empty inherited environment, disabled Git config
+and absolute `setsid`. The documentation-only commit uses the required coauthor.
+No push or Task 8 work; the Cycle ticket remains open.
 
 ### Task 5 review bookkeeping / Task 6 start
 
