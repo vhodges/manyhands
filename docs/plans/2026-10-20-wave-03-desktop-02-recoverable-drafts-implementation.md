@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D2 Recoverable Drafts And External-Change Handling Implementation Plan"
 date: 2026-10-20
-status: "proposed"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,9 +10,9 @@ id: "01M5E48FZAGA44CWYWZY9SY63X"
 
 # Recoverable Drafts And External-Change Handling Implementation Plan
 
-> **For agentic workers:** Do not begin until the product owner approves the
-> Cycle, design and this plan and explicitly authorizes implementation. Then
-> use `implementing-a-cycle` and the selected execution method task by task,
+> **For agentic workers:** The product owner approved the Cycle, design and
+> this plan on 2026-10-22 and authorized implementation. Use
+> `implementing-a-cycle` and the selected execution method task by task,
 > re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VMZ21Z79B09YQRA0P7J`. Parts B and C
 > waited for the Structure part of `01M5CS4MJ0G7B0MPJD0KN0QMYA` (Cycle
@@ -38,7 +38,9 @@ through `gpui_kit::*` only; Devenv. No new dependency.
 [design](2026-10-20-wave-03-desktop-02-recoverable-drafts-design.md).
 Executors read both. Section names below refer to the design.
 
-**Status:** Proposed. Not approved.
+**Status:** Approved by the product owner on 2026-10-22, together with the
+Cycle and design. Approval authorizes the Rust changes in this plan. It
+does not authorize publication, merge, ticket closure or worktree cleanup.
 
 ## Global Constraints
 
@@ -910,6 +912,10 @@ impl Workspace {
 - A kind label "Comment on <item title>" and every item title outside a
   draft's own row use `TicketName { slug: None, title }.title_or(id)`
   (ruling R25).
+- A later ticket will host the page in a dock with a visibility toggle
+  (Cycle exclusions, 2026-10-22). Keep the routing rules in `content.rs`;
+  `DraftsPage` must not assume it fills the content region, and Restore
+  leaves it through `open_item`, not by hiding itself.
 
 - [ ] **Step 1: Write the failing model tests.** `row_actions` over every
   `RowState`: `Readable` with `Held::No` and each `Ready` target follows

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D2 Recoverable Drafts And External-Change Handling Design"
 date: 2026-10-20
-status: "proposed"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -20,7 +20,8 @@ recovery surface shows, and how each requirement is proved. The Cycle
 document owns scope, exclusions and the six product-owner decisions of
 2026-10-20 and 2026-10-21; this document cites them by number.
 
-It is proposed for approval. Approval does not authorize implementation.
+It was approved by the product owner on 2026-10-22, together with the Cycle
+and implementation plan.
 
 ## Library Surface Audit At `3bda743`
 
@@ -642,6 +643,15 @@ router in `view/workspace/content.rs`, not a new `Workspace` field:
   Settings does. Whether each page keeps its own offset is a question for
   `01M5F3GVDYTH1Q5V5FCS9YF7V3`; D2 follows what main has when it lands.
 
+**A dock later (2026-10-22).** The product owner plans for the Drafts
+surface to become a panel whose visibility can be toggled and whose dock
+position can be set, in a later ticket (Cycle exclusions). D2 does not
+build it. So that the change is to the page's host only, the rules above
+live in `content.rs` and `open_item`: `DraftsPage` renders its rows,
+Inspect and actions without assuming it fills the content region, and
+Restore leaves the page through `open_item` showing the tabs, not by
+hiding itself.
+
 - **Rows** come from a `Drafts` read of the store. Each row's target state
   then comes from its own reads (`resolve_repository`, `show_item`, and for
   a comment `list_comments`) under that row's stamp, so a late answer never
@@ -945,6 +955,7 @@ source before it was applied. Rows naming a finding record the result.
 | `01M5CS4MJ0` "before D2/D3 add pages" | Sequencing against the structure follow-up. | Decision | Cycle decision 4; satisfied on 2026-10-21 (`d7962c3`). | Cycle entry evidence. |
 | R23, Structure plan "D2 extends the private content boundary"; `workspace/content.rs` derives the page from `SettingsHost::is_shown()` | How a second page joins the router without a second flag that can disagree. | Ruling | `ContentPage::Drafts`; the page entity owns its shown state; every transition leaves at most one page shown; the Drafts arm clears the passphrase as the tabs do. If wrong, the router's one file changes. | Routing view tests. |
 | R24, plan Task 10's `RowState` and `RowActions` were named but not defined | The page's row types. | Ruling | Defined in the Drafts page section, with the target state as the Structure split's `Read<TargetState>`. If wrong, the model's row types change; the store is untouched. | Drafts page tests, one per state. |
+| Product owner, 2026-10-22 | The Drafts surface later becomes a panel with a visibility toggle and a dock position. | Decision | Out of D2's scope (Cycle exclusions). D2 keeps the page's contents independent of its host. | A later ticket; `docs/future-ideas.md`. |
 | R25, Structure split's `TicketName` and `ItemLocator` | How D2 names items outside a draft's own row and opens their tabs. | Ruling | Item titles as tab titles show them (`title_or(id)`, no short code); tabs opened through `ItemLocator::in_repository`. | Privacy sweep; Restore and Show tests. |
 | Ticket and track rule 3 say D2 consumes only F1 | D2 consumes D1 and F2 too. | Settled | All three are closed and merged; track rule 1 holds. | Cycle entry evidence. |
 | Local main ahead of `origin/main` | Planning base. | Settled | Planned on `origin/main` per `AGENTS.md`. Main was published, and `d7962c3` was merged into the branch on 2026-10-21. | Cycle entry evidence. |

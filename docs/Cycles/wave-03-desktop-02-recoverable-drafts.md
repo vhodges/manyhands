@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D2: Recoverable Drafts And External-Change Handling"
 date: 2026-10-20
-status: "proposed"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,9 +10,10 @@ id: "01M5E48FX24HPXZ1SPRRKRP7S6"
 
 # Wave 03 D2: Recoverable Drafts And External-Change Handling
 
-**Proposed for approval.** None of this document, the design or the
-implementation plan is approved yet. Approving them does not authorize
-implementation.
+**Approved by the product owner on 2026-10-22**, together with the design
+and implementation plan. Implementation is authorized and is handed to a
+separate session. Approval does not authorize publication, merge, ticket
+closure or worktree cleanup.
 
 ## Purpose And Authority
 
@@ -209,6 +210,15 @@ the work review-ready.
   last successful flush, at most about five seconds.
 - No automatic restore. Nothing is restored at launch or by opening a tab;
   Restore is always the user's action.
+- No dockable Drafts panel. The product owner plans (2026-10-22) for the
+  Drafts surface to become a panel whose visibility can be toggled and
+  whose dock position can be set, in a later ticket. D2 shows it as a
+  content page in place of the tabs (design ruling R23). **Obligation:**
+  D2 keeps the page's rows, Inspect, actions and reads free of
+  content-page assumptions. The page-only rules (one page shown at a time,
+  Close tab inert, the passphrase clearing, the tabs shown on Restore) stay
+  in `workspace/content.rs` and `open_item`, so the later ticket changes
+  the page's host, not its contents.
 - No retargeting of a draft to a moved repository or another item. Such a
   draft can be exported or discarded.
 - No background polling or worker shutdown policy (D6). D2 adds the draft
