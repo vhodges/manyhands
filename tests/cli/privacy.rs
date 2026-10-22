@@ -4,6 +4,8 @@ use crate::support::cli::{CliEnv, CliRun};
 use crate::support::{credentials, operations};
 use std::{collections::BTreeSet, fs};
 
+type OutputCase<'a> = (&'a str, &'a str, Vec<&'a str>, &'a [u8], i32);
+
 fn absent(bytes: &[u8], sentinel: &str) {
     for needle in [
         sentinel.as_bytes().to_vec(),
@@ -79,7 +81,7 @@ fn no_url_credential_or_key_material_sentinel_reaches_any_output() {
     let remote = serde_json::to_vec(&serde_json::json!({"name":"other", "url":url})).unwrap();
     let root = f.repo.root.to_str().unwrap();
     let create = f.env.home.path().join("new-repo");
-    let rows: Vec<(&str, &str, Vec<&str>, &[u8], i32)> = vec![
+    let rows: Vec<OutputCase<'_>> = vec![
         (
             "repo",
             "create",
