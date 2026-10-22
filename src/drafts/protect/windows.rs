@@ -67,44 +67,67 @@ impl Folder {
         }
     }
 
-    /// An existing draft file, for reading: a regular file, no reparse point.
-    /// Draft files inherit the folder's ACL; their owner is not checked.
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn open_file(&self, name: &str) -> Result<File, UnreadableReason> {
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
-            .open(self.entry(name).map_err(|_| UnreadableReason::NotAFile)?)
-            .map_err(|_| UnreadableReason::Access)?;
-        let metadata = file.metadata().map_err(|_| UnreadableReason::Access)?;
+    /// A draft's lock file, opened for locking and made if absent. If
+    /// `drafts/` has been removed, it is made again once.
+    pub(crate) fn open_lock(&mut self, name: &str) -> Result<File, DraftError> {
+        let path = self.entry(name)?;
+        let open = || {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(&path)
+        };
+        let file = match open() {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.reopen()?;
+                open()?
+            }
+            result => result?,
+        };
+        let metadata = file.metadata()?;
         if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !metadata.is_file() {
-            return Err(UnreadableReason::NotAFile);
+            return Err(DraftError::new(DraftErrorKind::Io));
         }
         Ok(file)
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// An existing draft file, for reading: a regular file, no reparse point.
+    /// Draft files inherit the folder's ACL; their owner is not checked.
+    /// `None` when there is no such file, for example because another
+    /// process removed it after the folder was listed.
+    pub(crate) fn open_file(&self, name: &str) -> Result<Option<File>, UnreadableReason> {
+        let file = match OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(self.entry(name).map_err(|_| UnreadableReason::NotAFile)?)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(UnreadableReason::Access),
+        };
+        let metadata = file.metadata().map_err(|_| UnreadableReason::Access)?;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 || !metadata.is_file() {
+            return Err(UnreadableReason::NotAFile);
+        }
+        Ok(Some(file))
+    }
+
     pub(crate) fn rename(&self, from: &str, to: &str) -> Result<(), DraftError> {
         Ok(std::fs::rename(self.entry(from)?, self.entry(to)?)?)
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove(&self, name: &str) -> Result<(), DraftError> {
         Ok(std::fs::remove_file(self.entry(name)?)?)
     }
 
     /// Win32 has no unprivileged folder sync; files are flushed one by one.
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn sync(&self) -> Result<(), DraftError> {
         Ok(())
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn names(&self) -> Result<Vec<String>, DraftError> {
         let mut names = Vec::new();
         for entry in std::fs::read_dir(&self.path)? {

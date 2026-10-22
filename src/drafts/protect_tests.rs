@@ -123,8 +123,8 @@ fn files_are_made_renamed_listed_read_and_removed_inside_the_folder() {
     );
     let mut text = String::new();
     match folder.open_file("a.json") {
-        Ok(mut file) => file.read_to_string(&mut text).unwrap(),
-        Err(_) => panic!("the draft opens"),
+        Ok(Some(mut file)) => file.read_to_string(&mut text).unwrap(),
+        Ok(None) | Err(_) => panic!("the draft opens"),
     };
     assert_eq!(text, "text");
     folder.remove("a.json").unwrap();
@@ -211,4 +211,64 @@ fn names_cannot_leave_the_folder() {
     );
     assert!(!outside.exists() && !data.path().join("b").exists());
     assert_eq!(folder.names().unwrap(), vec!["a".to_owned()]);
+}
+
+#[test]
+fn a_name_that_is_gone_is_not_an_unreadable_file() {
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open(data.path()).unwrap();
+    drop(folder.create_new("a.json").unwrap());
+    folder.remove("a.json").unwrap();
+    assert!(matches!(folder.open_file("a.json"), Ok(None)));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_file_that_cannot_be_opened_is_access_not_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    not_root();
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open(data.path()).unwrap();
+    drop(folder.create_new("a.json").unwrap());
+    let path = data.path().join("drafts/a.json");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let opened = folder.open_file("a.json");
+    assert!(matches!(opened, Err(super::UnreadableReason::Access)));
+}
+
+#[test]
+fn a_lock_file_is_made_once_and_opened_again() {
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open(data.path()).unwrap();
+    let first = folder.open_lock("a.lock").unwrap();
+    let second = folder.open_lock("a.lock").unwrap();
+    assert!(first.metadata().unwrap().is_file() && second.metadata().unwrap().is_file());
+    assert_eq!(folder.names().unwrap(), vec!["a.lock".to_owned()]);
+    assert_eq!(
+        folder.open_lock("../a.lock").map(drop).map_err(|e| e.kind),
+        Err(DraftErrorKind::Io)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_lock_file_is_owner_only_and_never_a_link() {
+    use std::os::unix::fs::PermissionsExt;
+    not_root();
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open(data.path()).unwrap();
+    let lock = folder.open_lock("a.lock").unwrap();
+    assert_eq!(lock.metadata().unwrap().permissions().mode() & 0o077, 0);
+    std::fs::write(data.path().join("elsewhere"), b"").unwrap();
+    std::os::unix::fs::symlink(
+        data.path().join("elsewhere"),
+        data.path().join("drafts/b.lock"),
+    )
+    .unwrap();
+    assert_eq!(
+        folder.open_lock("b.lock").map(drop).map_err(|e| e.kind),
+        Err(DraftErrorKind::ProtectionUnavailable)
+    );
+    std::fs::create_dir(data.path().join("drafts/c.lock")).unwrap();
+    assert!(folder.open_lock("c.lock").is_err());
 }

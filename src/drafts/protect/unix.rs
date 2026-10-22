@@ -60,18 +60,39 @@ impl Folder {
         Ok(file)
     }
 
-    /// An existing draft file, for reading: a regular file, not a link, ours.
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn open_file(&self, name: &str) -> Result<File, UnreadableReason> {
-        let name = self::name(name).map_err(|_| UnreadableReason::NotAFile)?;
-        let file = open_at(&self.handle, &name, libc::O_RDONLY, 0).map_err(|error| {
-            if is_link_or_not_directory(&error) {
-                UnreadableReason::NotAFile
-            } else {
-                UnreadableReason::Access
+    /// A draft's lock file, opened for locking and made (0600) if absent;
+    /// never through a link. If the held folder has been removed, `drafts/`
+    /// is reopened once.
+    pub(crate) fn open_lock(&mut self, name: &str) -> Result<File, DraftError> {
+        let name = self::name(name)?;
+        let open =
+            |folder: &Folder| open_at(&folder.handle, &name, libc::O_RDWR | libc::O_CREAT, 0o600);
+        let file = match open(self) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                self.reopen()?;
+                open(self)?
             }
-        })?;
+            result => result.map_err(protection)?,
+        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(DraftError::new(DraftErrorKind::Io));
+        }
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err(DraftError::new(DraftErrorKind::ProtectionUnavailable));
+        }
+        Ok(file)
+    }
+
+    /// An existing draft file, for reading: a regular file, not a link, ours.
+    /// `None` when there is no such file, for example because another
+    /// process removed it after the folder was listed.
+    pub(crate) fn open_file(&self, name: &str) -> Result<Option<File>, UnreadableReason> {
+        let name = self::name(name).map_err(|_| UnreadableReason::NotAFile)?;
+        let file = match open_at(&self.handle, &name, libc::O_RDONLY, 0) {
+            Ok(file) => file,
+            Err(error) => return unopened(&error),
+        };
         let metadata = file.metadata().map_err(|_| UnreadableReason::Access)?;
         if !metadata.is_file() {
             return Err(UnreadableReason::NotAFile);
@@ -79,11 +100,9 @@ impl Folder {
         if metadata.uid() != unsafe { libc::geteuid() } {
             return Err(UnreadableReason::NotOwned);
         }
-        Ok(file)
+        Ok(Some(file))
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn rename(&self, from: &str, to: &str) -> Result<(), DraftError> {
         let (from, to) = (name(from)?, name(to)?);
         let fd = self.handle.as_raw_fd();
@@ -93,8 +112,6 @@ impl Folder {
         Ok(())
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn remove(&self, name: &str) -> Result<(), DraftError> {
         let name = self::name(name)?;
         if unsafe { libc::unlinkat(self.handle.as_raw_fd(), name.as_ptr(), 0) } != 0 {
@@ -103,16 +120,12 @@ impl Folder {
         Ok(())
     }
 
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn sync(&self) -> Result<(), DraftError> {
         Ok(self.handle.sync_all()?)
     }
 
     /// The names in the folder, `.` and `..` and names that are not UTF-8
     /// left out.
-    // Used by the draft store (Task 3).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn names(&self) -> Result<Vec<String>, DraftError> {
         let fd = unsafe { libc::dup(self.handle.as_raw_fd()) };
         if fd < 0 {
@@ -264,4 +277,16 @@ fn open_at(parent: &File, name: &CStr, flags: i32, mode: libc::mode_t) -> io::Re
         return Err(io::Error::last_os_error());
     }
     Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+/// Why an existing name could not be opened as a draft file: `None` when it
+/// is gone, a link or folder is not a file, and anything else is access.
+fn unopened(error: &io::Error) -> Result<Option<File>, UnreadableReason> {
+    if error.kind() == io::ErrorKind::NotFound {
+        Ok(None)
+    } else if is_link_or_not_directory(error) {
+        Err(UnreadableReason::NotAFile)
+    } else {
+        Err(UnreadableReason::Access)
+    }
 }

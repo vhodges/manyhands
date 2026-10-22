@@ -142,8 +142,6 @@ pub(crate) fn folder_verdict(mode: u32, uid: u32, euid: u32, is_dir: bool) -> Ve
 /// The application data directory, the registry's own: the twin of
 /// `default_data_directory` in `src/repository.rs`, with the same
 /// `ProjectDirs` arguments. If either changes, change both.
-// Used by the draft store (Task 3).
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn default_data_directory() -> Result<PathBuf, DraftError> {
     directories::ProjectDirs::from("com", "manyhands", "Manyhands")
         .map(|directories| directories.data_local_dir().to_owned())

@@ -1,8 +1,10 @@
 //! Recoverable drafts: a headless store of unsaved edits, kept outside every
 //! repository so a crash or a failed save never loses typed text.
 //!
-//! This module holds the version 1 file format. Types that hold draft text
-//! derive no `Debug`, so text cannot reach a log or an error by accident.
+//! This module holds the version 1 file format, the drafts folder's owner
+//! protection, and the store of claims and atomic revisions. Types that hold
+//! draft text derive no `Debug`, so text cannot reach a log or an error by
+//! accident.
 
 mod protect;
 #[cfg(test)]
@@ -10,12 +12,18 @@ mod protect_tests;
 mod schema;
 #[cfg(test)]
 mod schema_tests;
+mod store;
+#[cfg(test)]
+mod store_tests;
 
 pub use protect::{DraftError, DraftErrorKind};
 pub use schema::{
     BaseContext, CommentTarget, ContextKind, Draft, DraftBase, DraftFields, DraftId, DraftTarget,
     ItemKind, UnreadableReason,
 };
+#[doc(hidden)]
+pub use store::{CRASH_EXIT_CODE, FailureAction, FailurePoint};
+pub use store::{DraftClaim, DraftStore, Entry, Held, Listing, Retired, Written};
 
 /// The file codec, for the crate's integration tests and tooling only. The
 /// crate uses `schema::encode` and `schema::decode` directly.
