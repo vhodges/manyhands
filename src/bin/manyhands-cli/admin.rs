@@ -7,9 +7,11 @@ use crate::{
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, InitialsChange, Mutation, RemoteAddInput,
+        CommitIdentity, ConfirmationId, InitialsChange, KeyClearInput, KeyDeleteInput,
+        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, RemoteAddInput,
         RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
-        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId,
+        RepoIdentitySetInput, RepoRemoveInput, RepositoryService, RequestId, SharedKeyId,
+        keys::KeyStore,
     },
     results::ResultCode,
 };
@@ -410,6 +412,205 @@ fn remote_name(
             retry: true,
         },
         &mut |_| build(root.clone(), name.clone()),
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn key_import(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let object = input_object(session, spec, args, flags.request_id)?;
+        let fields = (|| {
+            object.only(&["label", "private_key_path", "public_key_path"])?;
+            Ok((
+                object.string("label")?,
+                object.string("private_key_path")?,
+                object.optional_string("public_key_path")?,
+            ))
+        })();
+        let (label, private, public) =
+            fields.map_err(|e| input_failure(session, spec, flags.request_id, e))?;
+        let cwd = std::env::current_dir().map_err(|_| {
+            mutate::refusal(
+                session,
+                &name(spec),
+                flags.request_id,
+                ResultCode::InvalidPath,
+                None,
+            )
+        })?;
+        Ok((
+            flags,
+            label,
+            cwd.join(private),
+            public.map(|path| cwd.join(path)),
+        ))
+    })();
+    let (flags, label, private_key_path, public_key_path) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::KeyImport(KeyImportInput {
+                label: label.clone(),
+                private_key_path: private_key_path.clone(),
+                public_key_path: public_key_path.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+fn key_id(
+    session: &Session,
+    spec: &CommandSpec,
+    args: &ArgMatches,
+    request_id: Option<RequestId>,
+) -> Result<SharedKeyId, Output> {
+    SharedKeyId::parse(
+        args.get_one::<String>("key-id")
+            .expect("required key selector"),
+    )
+    .map_err(|_| {
+        mutate::refusal(
+            session,
+            &name(spec),
+            request_id,
+            ResultCode::InvalidId,
+            None,
+        )
+    })
+}
+
+pub fn key_select(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    key_selected(service, session, spec, args, |id| {
+        Mutation::KeySelect(KeySelectInput { id })
+    })
+}
+
+pub fn key_remove(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    key_selected(service, session, spec, args, |id| {
+        Mutation::KeyRemove(KeyRemoveInput { id })
+    })
+}
+
+fn key_selected(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    build: impl Fn(SharedKeyId) -> Mutation,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let id = key_id(session, spec, args, flags.request_id)?;
+        Ok((flags, id))
+    })();
+    let (flags, id) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| build(id),
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn key_clear(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let flags = match flags(session, spec, args) {
+        Ok(flags) => flags,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| Mutation::KeyClear(KeyClearInput {}),
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn key_delete(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let result = (|| {
+        let flags = flags(session, spec, args)?;
+        let id = key_id(session, spec, args, flags.request_id)?;
+        let store = KeyStore::for_current_user().map_err(|_| {
+            mutate::refusal(
+                session,
+                &name(spec),
+                flags.request_id,
+                ResultCode::InternalError,
+                None,
+            )
+        })?;
+        Ok((flags, id, store))
+    })();
+    let (flags, id, store) = match result {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::KeyDelete(KeyDeleteInput {
+                store: store.clone(),
+                id,
+            })
+        },
         &mut std::thread::sleep,
     )
 }

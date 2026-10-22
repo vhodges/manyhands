@@ -1,6 +1,177 @@
 use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
 
+fn key_human_result(
+    f: &super::keys::Fixture,
+    verb: &str,
+    flags: &[&str],
+    input: &[u8],
+    noop: bool,
+) {
+    let mut args = vec!["key", verb];
+    args.extend_from_slice(flags);
+    let out = run(&args, &f.env, input);
+    assert_eq!(out.status, 0, "{}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(
+        stderr
+            .lines()
+            .all(|line| line.starts_with("progress: ") || line.starts_with("note: "))
+    );
+    assert_eq!(
+        stdout.starts_with("Already applied; nothing changed."),
+        noop
+    );
+    args.push("--json");
+    let replay = checked(
+        &args,
+        &f.env,
+        input,
+        0,
+        if noop { "already_applied" } else { "ok" },
+        Some("key_mutation.schema.json"),
+    );
+    for pointer in ["/request_id", "/operation_id", "/data/id"] {
+        if let Some(id) = replay.pointer(pointer).and_then(serde_json::Value::as_str) {
+            assert!(stdout.contains(id));
+        }
+    }
+    for (field, label) in [
+        ("label", "Label"),
+        ("fingerprint", "Fingerprint"),
+        ("deletion", "Deletion"),
+        ("generation", "Generation"),
+    ] {
+        assert_line(
+            &stdout,
+            label,
+            replay["data"][field].as_str().unwrap_or("none"),
+        );
+    }
+    for sentinel in crate::support::credentials::SECRET_SENTINELS {
+        assert!(!stdout.contains(sentinel) && !stderr.contains(sentinel));
+    }
+}
+
+#[test]
+fn c2_keys_human_results_and_selection_noops_retain_public_ids() {
+    use super::keys::{Fixture as KeyFixture, IMPORT, key_id};
+    use super::remotes::{LAST, NEXT};
+    for (verb, noop) in [
+        ("import", false),
+        ("import", true),
+        ("select", false),
+        ("clear", false),
+        ("remove", false),
+        ("select", true),
+        ("clear", true),
+    ] {
+        let f = KeyFixture::new();
+        let imported = (verb != "import" || noop).then(|| f.import());
+        let id = imported.as_ref().map(key_id).unwrap_or(REQUEST);
+        if (verb == "select" && noop) || (verb == "clear" && !noop) {
+            f.call(
+                "select",
+                &["--key-id", id, "--request-id", NEXT],
+                &[],
+                0,
+                "ok",
+            );
+        }
+        let mut flags = vec!["--request-id", LAST];
+        if verb == "import" {
+            flags.extend(["--input", "-"]);
+        }
+        if ["select", "remove"].contains(&verb) {
+            flags.extend(["--key-id", id]);
+        }
+        key_human_result(&f, verb, &flags, IMPORT, noop);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn key_delete_human_preview_and_result() {
+    let f = super::keys::Fixture::new();
+    let key = super::keys::generate(&f.env);
+    let id = key.id.to_string();
+    let out = run(
+        &["key", "delete", "--key-id", &id, "--prepare"],
+        &f.env,
+        &[],
+    );
+    assert_eq!(out.status, 0);
+    assert!(out.stderr.is_empty());
+    let text = String::from_utf8(out.stdout).unwrap();
+    for expected in [
+        "Preview of key delete",
+        "Will delete the private key file.",
+        "Will delete the public key file.",
+        "Will unregister the key.",
+        "Confirmation: ",
+        "--confirm",
+        "--request-id",
+        &id,
+        key.private_key_path.to_str().unwrap(),
+        key.public_key_path.as_ref().unwrap().to_str().unwrap(),
+    ] {
+        assert!(text.contains(expected));
+    }
+    let preview = f.call("delete", &["--key-id", &id, "--prepare"], &[], 0, "ok");
+    key_human_result(
+        &f,
+        "delete",
+        &[
+            "--key-id",
+            &id,
+            "--request-id",
+            REQUEST,
+            "--confirm",
+            preview["data"]["confirmation_id"].as_str().unwrap(),
+        ],
+        &[],
+        false,
+    );
+    assert!(!key.private_key_path.exists());
+    assert!(!key.public_key_path.unwrap().exists());
+}
+
+#[test]
+fn key_human_refusals_use_stderr_only_and_preserve_imported_files() {
+    let f = super::keys::Fixture::new();
+    let imported = f.import();
+    let id = super::keys::key_id(&imported);
+    let before = crate::support::credentials::key_file_states(&f.files());
+    for (verb, flags, exit, code) in [
+        (
+            "delete",
+            vec!["--key-id", id, "--prepare"],
+            2,
+            "key_not_deletable",
+        ),
+        (
+            "select",
+            vec!["--key-id", REQUEST, "--request-id", super::remotes::NEXT],
+            2,
+            "key_not_found",
+        ),
+    ] {
+        let mut args = vec!["key", verb];
+        args.extend(flags);
+        let out = run(&args, &f.env, &[]);
+        assert_eq!(out.status, exit);
+        assert!(out.stdout.is_empty());
+        let text = String::from_utf8(out.stderr).unwrap();
+        assert_line(&text, "code", code);
+        assert!(text.contains("error: "));
+    }
+    assert_eq!(
+        crate::support::credentials::key_file_states(&f.files()),
+        before
+    );
+}
+
 #[test]
 fn c2_remote_human_results_and_noops_retain_public_ids() {
     use super::remotes::{self, LAST, SELECT};

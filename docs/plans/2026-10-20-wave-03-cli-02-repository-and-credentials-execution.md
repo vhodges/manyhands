@@ -38,6 +38,12 @@ the post-commit Part A checkpoint passes all six commands and **414 tests**.
 Controller reports independent full Part A spec and quality reviews both
 **APPROVE, no findings**, over `fbae49a..54dc047` (sessions recorded below).
 
+**Current assignment/status:** Task 8 only, inline without subagents, from the
+pushed Part A head `d9496b9`. The owner approved the missing-source fixture
+correction after the recorded stop; no library gap/ticket is needed. Task 8's
+targeted verification and self-review are complete; the containing delivery
+commit is ready for controller spec/quality review. Controller owns any push.
+
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
 authorized pushing task commits; the controller pushes **after reviews**.
@@ -376,6 +382,155 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 8 — Completed After Approved Fixture Correction (2026-10-22)
+
+This entry supersedes the historical stop below. The owner explicitly said
+**“Approve fixture correction”**: preserve missing-source import success,
+replace Step 3's `key_unavailable` fixture with Unix confirmed deletion against
+a symlinked isolated store lock, and schedule the cross-platform missing-selected-
+source `host observe` case for Task 10. The plan, relevant design evidence and
+canonical ruling comment **`01M5JX9ETZJ6C4S6F5PTJ1RB6E`** record that authorization.
+It is a plan correction against intentional library semantics, not a new library
+feature or gap. No library ticket was created.
+
+#### Delivery and self-review
+
+- Actual base: **`d9496b93f393c9d718a67aefbf95cc5103c4c870`**. Fetch/merge of
+  main on resumption was again Already up to date. This entry's containing
+  commit is Task 8's delivery; the final handoff records its exact head.
+- Five verbs use existing F2 mutations and the shared driver: import joins paths
+  to cwd after required/optional string shape checks; select/remove parse the key
+  after request/confirmation IDs; clear has no selector/input; delete locates the
+  current-user store only after selectors and maps lookup failure to the existing
+  CLI `internal_error` refusal. All refuse repository selection. Generate stays
+  planned for Task 9. Existing catalog-driven parser and human renderer suffice.
+- Added **19 tests**: 15 key cases, one input-schema case and three human cases.
+  Cases cover relative and optional paths, missing-source registration, duplicate-
+  import and selection/clear no-ops, selected-key refusal, imported-file preservation,
+  generated deletion/confirmation, accepted partial deletion completion and replay,
+  malformed IDs/closed grammar, ordered validation and escaped control labels.
+  Cross-cutting prepare coverage includes all five verbs; the keys-filter wrapper
+  exercises the same helper without running the broader mutation target.
+- The four exit rows replace the staged Task 8 codes. The corrected deletion
+  fixture proves **`ELOOP` → `UnsafePath` → `key_unavailable`**, blocked/exit 3,
+  null operation ID, no request record, unchanged registration, unchanged key-file
+  and sentinel bytes/mtimes, and the retained symlink. Imported deletion remains
+  `key_not_deletable`, Input/exit 2, as the existing library specifies.
+- **49 F2 / 52 CLI-inclusive audit set unchanged**, verified against the published
+  audit. Unix has 41 run-here rows plus the prompt reference and eight staged
+  key/host codes; on Windows only the generated-key lock row is absent, and
+  `key_unavailable` explicitly remains staged for Task 10. The audit document and
+  code-set literals were not edited. Windows/native execution is not claimed.
+- Read all six new JSON goldens and both regenerated E3 diffs. Fixed imported-key
+  fingerprints remain literal; only generated fingerprints/IDs/paths/times are
+  normalized. Actual delete-preview paths/fingerprint are asserted before golden
+  normalization. Relative-path assertions compare absolute targets with platform-
+  appropriate resolved-path equivalence rather than assuming Windows verbatim
+  prefixes or macOS temp aliases have identical spellings.
+- Self-review retained original help summaries: E3 changes only the five verbs'
+  availability, repository rules and option metadata. Existing test extensions are
+  the planned key rows and E3; no unrelated semantic edit was needed. No library,
+  output-schema, result-code, crate/lockfile, production thread or child change.
+  No new input-holding Debug/Display/Serialize type or value-bearing diagnostic.
+  All CLI children, including checkpoint ID generation, used the isolated helper.
+
+#### Verification
+
+All Rust commands used Devenv, Cargo locked except fmt. Historical RED was
+**0 passed / 12 failed at command_unavailable** before production changes. The
+initial bad exit expectation and original Step 3 stop remain recorded below.
+After the ruling, the corrected exit fixture passed without a production fix.
+
+Final runs on the delivered Rust tree, **without** the golden-update environment:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --test cli keys` | **17 passed**, 133 filtered; 3.24s |
+| `devenv shell -- cargo test --locked --test cli exits` | **5 passed**, 145 filtered; 16.01s |
+| `devenv shell -- cargo test --locked --test cli human` | **26 passed**, 124 filtered; 5.65s |
+| `devenv shell -- cargo test --locked --test cli help` | **9 passed**, 141 filtered; 0.10s |
+| `devenv shell -- cargo fmt --check` | Passed |
+| `git diff --check` | Passed |
+
+Filter counts overlap: keys includes one human case and the input-schema case;
+human includes the control-label case and two help cases; exits includes the
+existing broken-pipe case. The final inventory has 150 CLI tests (131 at base),
+not an assertion that all 150 ran. Guarded keys/help golden-generation runs also
+passed 17/9; after self-review normalized only new golden fields and restored
+original help summaries, those filters were regenerated, read, and compared again.
+No broad checkpoint or full suite ran.
+
+Comment IDs were allocated with built CLI `id new` through `tests/support/cli.rs`
+using a temporary keys-filter checkpoint utility, removed before final checks.
+Its first utility-only run used the wrong schema filename (`id.schema.json`);
+the corrected `new_id.schema.json` run passed and produced the two comment IDs.
+These utility runs are not counted as regression tests. Completion comment:
+**`01M5JX9EW0ZAYYF7DYSYZYPYKC`**.
+
+Pre-delivery `git merge-tree --write-tree HEAD origin/main` succeeded with tree
+`4d17d0ce0707d18c1a7653ef28cc4aa2802bc66e` (the committed Part A head, before
+staging this task). No unresolved self-review blocker. Independent controller
+spec/quality review is pending. Delivery subject is
+**`feat: add key import, select, clear, remove and delete`**, with the required
+Claude Opus 5.5 coauthor. No push, PR, closure, cleanup, native CI or Task 9 work.
+
+### Task 8 — STOP: Missing-Source Import Contract Conflict (2026-10-22)
+
+- Fresh inline implementer, no subagents. Actual base and unchanged HEAD:
+  **`d9496b93f393c9d718a67aefbf95cc5103c4c870`**. The assigned worktree was
+  clean on entry. `git fetch origin main && git merge origin/main` returned
+  **Already up to date**. Owner reports Part A's 414-test gate and both
+  independent approvals recorded/pushed; Part B starts at this base.
+- Read AGENTS and approved Cycle/design/plan. Early pre-dispatch IDs stay null;
+  identity retry still requires input. Task 8 only; no broader gate authorized.
+- **Blocker:** Step 3 explicitly requires `key_unavailable` (exit 3) for
+  `key import` of a missing private source, supposedly through `SourceMissing`.
+  The new exit-table row `missing_key_source` instead returns **`ok`, exit 0**,
+  with a registered key ID, label `Missing key`, and null fingerprint.
+  Its input is `{"label":"Missing key","private_key_path":"absent-key-source"}`
+  in the isolated child's HOME. This is not a CLI mapping defect:
+  - `src/repository/mutation/bind/key.rs:282–294` delegates import to
+    `register_shared_key_under`.
+  - `src/repository/keys/registry.rs:127–137,200–225` normalizes the path,
+    observes source state, and stores the registration including that state.
+  - `registry.rs:878–886` maps a missing file to `PrivateKeySourceState::Missing`,
+    rather than an error.
+  - Existing test `tests/shared_key_registry.rs:619–640`,
+    `recovery_missing_private_source_remains_registered_without_private_format_errors`,
+    explicitly requires missing sources to remain registerable.
+- **Stopped under the owner's gap/contract stop rule.** No library change,
+  fabricated CLI refusal, changed baseline assertion, alternate exit fixture,
+  or weakening of the failing new assertion. Controller/owner must resolve the
+  Step 3 assumption against the existing library contract before resumption.
+
+#### Uncommitted implementation and verification at the stop
+
+- Five key verbs wired through existing driver/catalog/dispatch; closed import
+  schema/example, integration cases, six new JSON goldens, additive human/schema/
+  confirmed-prepare cases, and four formerly staged exit rows. Generated-key
+  creation/deletion cases are Unix-only. Store lookup was source-inspected:
+  `KeyStore::for_current_user/for_home` only resolves the home, and imported-key
+  deletion preflight reads the registry without opening the store. Metadata-only
+  import/select/clear/remove/refusal tests remain cross-platform.
+- All Rust commands used Devenv and Cargo `--locked`, except normal fmt:
+
+  | Command/phase | Actual result |
+  | --- | --- |
+  | RED `cargo test --locked --test cli keys` | **0 passed / 12 failed**, every failure at `command_unavailable`, before production edits |
+  | Initial keys with guarded golden generation | **11 passed / 1 failed**: new test assumed exit 3 for `key_not_deletable`; `results.rs:599` specifies Input/exit 2, corrected only the new assertion |
+  | `cargo fmt` | Passed |
+  | Expanded keys with guarded golden generation | **15 passed**, 133 filtered, including input schema, confirmed-prepare helper and human key table |
+  | `cargo test --locked --test cli exits` | **4 passed / 1 failed**, 143 filtered; blocked by missing-source import success |
+  | `cargo test --locked --test cli human` (independent parallel call already running) | **25 passed / 1 failed**, 122 filtered; only the expected E3 root-help golden is stale |
+
+- Golden generation was guarded with `MANYHANDS_UPDATE_GOLDEN=1`; generated
+  deletion paths needed full-path normalization, corrected in the new helper.
+  **No final non-update keys run, E3 regeneration, complete golden/diff self-review,
+  or Task 8 GREEN/complete claim.** Help fixtures still need the approved update.
+- All task changes remain uncommitted. No task-completion commit or completion
+  comment was made at this blocked checkpoint; no comment ID was allocated.
+  No push, PR, closure, cleanup, native CI, Task 9 or full-suite work.
 
 ### Task 6 review bookkeeping / Task 7 start
 

@@ -845,43 +845,162 @@
         "summary": "Generate a key."
       },
       {
-        "available": false,
+        "available": true,
         "command": "key import",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Import a key."
       },
       {
-        "available": false,
+        "available": true,
         "command": "key select",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--key-id",
+            "required": true,
+            "summary": "Canonical key ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Select a key for a repository."
       },
       {
-        "available": false,
+        "available": true,
         "command": "key clear",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Clear a repository's selected key."
       },
       {
-        "available": false,
+        "available": true,
         "command": "key remove",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--key-id",
+            "required": true,
+            "summary": "Canonical key ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Remove a key registration."
       },
       {
-        "available": false,
+        "available": true,
         "command": "key delete",
         "delivered_by": "C2",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--key-id",
+            "required": true,
+            "summary": "Canonical key ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "refused",
         "summary": "Delete a key."
       },
       {

@@ -42,14 +42,12 @@ const REASONS: &[(&str, &str)] = &[
 ];
 
 const STAGED: &[(&str, u8, &str)] = &[
+    #[cfg(not(unix))]
     (
-        "key_not_deletable",
-        8,
-        "Imported-key delete prepare, files unchanged",
+        "key_unavailable",
+        10,
+        "Windows: missing-selected-source host observe; Task 8's generated-key deletion fixture is Unix-only",
     ),
-    ("key_not_found", 8, "Unknown canonical key selector"),
-    ("key_unavailable", 8, "Import missing key source"),
-    ("selected_key_in_use", 8, "Remove selected key"),
     (
         "unlock_required",
         9,
@@ -171,6 +169,11 @@ macro_rules! row {
     };
 }
 const ROWS: &[Row] = &[
+    row!("imported_delete", &["key", "delete", "--key-id", "{key}", "--prepare"], b"", "key_not_deletable", 2),
+    row!("selected_key_remove", &["key", "remove", "--key-id", "{key}", "--request-id", super::remotes::LAST], b"", "selected_key_in_use", 3),
+    row!("unknown_key", &["key", "select", "--key-id", REQUEST, "--request-id", NEXT], b"", "key_not_found", 2),
+    #[cfg(unix)]
+    row!("unsafe_key_store_lock", &["key", "delete", "--key-id", "{key}", "--request-id", NEXT, "--confirm", "{confirmation}"], b"", "key_unavailable", 3),
     row!("success", ADD, REMOTE, "ok", 0),
     row!("selected_noop", SELECT_ARGS, SELECT, "already_applied", 0),
     row!("usage", &["remote", "add"], b"", "usage_error", 2),
@@ -347,7 +350,97 @@ fn every_run_here_row_reaches_its_code_and_exit_through_the_binary() {
         let mut confirmation = REQUEST.to_owned();
         let mut alternate_env = None;
         let mut other_repo = None;
+        let mut key = String::new();
+        let mut key_files = Vec::new();
+        let mut key_before = Vec::new();
+        #[cfg(unix)]
+        let mut key_registration = None;
         match row.name {
+            #[cfg(unix)]
+            "unsafe_key_store_lock" => {
+                use manyhands::repository::{
+                    RepositoryService,
+                    keys::{KeyMaterialErrorKind, KeyStore},
+                };
+                let generated = super::keys::generate(&f.env);
+                key = generated.id.to_string();
+                key_registration = Some(super::keys::call(
+                    &f.env,
+                    "show",
+                    &["--key-id", &key],
+                    &[],
+                    0,
+                    "ok",
+                ));
+                key_files = vec![
+                    generated.private_key_path,
+                    generated.public_key_path.unwrap(),
+                ];
+                let preview = super::keys::call(
+                    &f.env,
+                    "delete",
+                    &["--key-id", &key, "--prepare"],
+                    &[],
+                    0,
+                    "ok",
+                );
+                confirmation = preview["data"]["confirmation_id"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let sentinel = f.env.home.path().join("lock-sentinel");
+                fs::write(&sentinel, b"untouched lock target").unwrap();
+                key_files.push(sentinel.clone());
+                key_before = support::credentials::key_file_states(&key_files);
+                let lock = f.env.home.path().join(".ssh/manyhands/.lock");
+                fs::remove_file(&lock).unwrap();
+                std::os::unix::fs::symlink(&sentinel, &lock).unwrap();
+                // Prove the errno and public-domain cause, not just the final code.
+                use std::os::unix::fs::OpenOptionsExt;
+                let error = fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(libc::O_NOFOLLOW)
+                    .open(&lock)
+                    .unwrap_err();
+                assert_eq!(error.raw_os_error(), Some(libc::ELOOP));
+                let service = RepositoryService::open_at(&f.env.data).unwrap();
+                let error = service
+                    .review_generated_key_deletion(
+                        &KeyStore::for_home(f.env.home.path()).unwrap(),
+                        generated.id,
+                    )
+                    .unwrap_err();
+                assert_eq!(error.kind, KeyMaterialErrorKind::UnsafePath);
+            }
+            "imported_delete" | "selected_key_remove" => {
+                use crate::support::credentials;
+                key_files = ["imported", "imported.pub"]
+                    .map(|p| f.env.home.path().join(p))
+                    .to_vec();
+                fs::write(&key_files[0], credentials::private_fixture_bytes()).unwrap();
+                fs::write(&key_files[1], credentials::public_fixture_text()).unwrap();
+                key_before = credentials::key_file_states(&key_files);
+                let imported = super::keys::call(
+                    &f.env,
+                    "import",
+                    &["--input", "-", "--request-id", REQUEST],
+                    super::keys::IMPORT,
+                    0,
+                    "ok",
+                );
+                key = super::keys::key_id(&imported).to_owned();
+                if row.name == "selected_key_remove" {
+                    super::keys::call(
+                        &f.env,
+                        "select",
+                        &["--key-id", &key, "--request-id", NEXT],
+                        &[],
+                        0,
+                        "ok",
+                    );
+                }
+            }
             "selected_noop" | "publication" => {
                 remotes::add(&f);
                 remotes::select(&f);
@@ -471,6 +564,7 @@ fn every_run_here_row_reaches_its_code_and_exit_through_the_binary() {
             .map(|arg| match *arg {
                 "{root}" => root.to_str().unwrap(),
                 "{confirmation}" => confirmation.as_str(),
+                "{key}" => key.as_str(),
                 // The stopped request belongs to REQUEST, not NEXT.
                 NEXT if row.name == "partial_mismatch" => REQUEST,
                 arg => arg,
@@ -493,6 +587,35 @@ fn every_run_here_row_reaches_its_code_and_exit_through_the_binary() {
         if row.name == "partial_mismatch" {
             assert_eq!(result["outcome"], "partial");
         }
+        #[cfg(unix)]
+        if row.name == "unsafe_key_store_lock" {
+            assert_eq!(result["outcome"], "blocked");
+            assert_eq!(result["request_id"], NEXT);
+            assert!(result["operation_id"].is_null());
+            for (field, effect) in result["effects"].as_object().unwrap() {
+                if field == "commit_oid" {
+                    assert!(effect.is_null());
+                } else {
+                    assert_eq!(effect, "not_requested");
+                }
+            }
+            checked(
+                &["request", "show", "--request-id", NEXT, "--json"],
+                &f.env,
+                &[],
+                2,
+                "request_not_found",
+                None,
+            );
+            let registered = super::keys::call(&f.env, "show", &["--key-id", &key], &[], 0, "ok");
+            assert_eq!(Some(&registered), key_registration.as_ref());
+            assert_eq!(registered["data"]["id"], key);
+            assert_eq!(registered["data"]["selected"], false);
+            assert_eq!(
+                fs::read_link(f.env.home.path().join(".ssh/manyhands/.lock")).unwrap(),
+                key_files[2]
+            );
+        }
         if row.name == "busy" {
             assert!(
                 start.elapsed() >= Duration::from_millis(700),
@@ -504,6 +627,10 @@ fn every_run_here_row_reaches_its_code_and_exit_through_the_binary() {
             );
         }
         drop(other_repo);
+        assert_eq!(
+            crate::support::credentials::key_file_states(&key_files),
+            key_before
+        );
     }
 }
 

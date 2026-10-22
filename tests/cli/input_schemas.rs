@@ -17,6 +17,39 @@ use crate::support::{
 const PENDING_REFERENCES: &[&str] = &[];
 
 #[test]
+fn keys_import_schema_matches_required_optional_and_closed_shapes() {
+    let file = "key_import.schema.json";
+    schema::validate(&directory(), file).unwrap();
+    let definition = read_json(&directory().join(file));
+    assert_closed(&definition);
+    assert_eq!(
+        definition["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert!(definition["title"].as_str().is_some_and(|s| !s.is_empty()));
+    let example: Value = serde_json::from_slice(super::keys::IMPORT).unwrap();
+    schema::check(&directory(), file, &example).unwrap();
+    let mut optional = example.clone();
+    optional.as_object_mut().unwrap().remove("public_key_path");
+    schema::check(&directory(), file, &optional).unwrap();
+    for field in ["label", "private_key_path", "public_key_path"] {
+        for bad in [Value::Null, serde_json::json!(1)] {
+            let mut value = example.clone();
+            value[field] = bad;
+            assert!(schema::check(&directory(), file, &value).is_err());
+        }
+        if field != "public_key_path" {
+            let mut value = example.clone();
+            value.as_object_mut().unwrap().remove(field);
+            assert!(schema::check(&directory(), file, &value).is_err());
+        }
+    }
+    let mut unknown = example;
+    unknown["passphrase"] = serde_json::json!("not-an-input-field");
+    assert!(schema::check(&directory(), file, &unknown).is_err());
+}
+
+#[test]
 fn remote_names_are_required_and_only_selection_is_nullable() {
     for verb in ["remove", "select"] {
         let schema = format!("remote_{verb}.schema.json");

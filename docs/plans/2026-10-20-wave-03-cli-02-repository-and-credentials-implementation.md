@@ -870,9 +870,12 @@ Every key verb refuses `--repo`.
   - `#[cfg(unix)] an_interrupted_deletion_is_completed_by_the_same_request`, following the design: the `FailurePoint::DeletionAfterPrivatePhase` actor, then the CLI without `--confirm`, then a replay that deletes nothing more.
   - `a_key_id_that_is_a_short_code_or_lowercase_is_invalid_id`.
 - [ ] **Step 2: Run them and see them fail. Implement and flip** the five catalog entries: `key delete` with `confirmed: true`, the rest not. Add `key_import`'s schema, and the rule, `confirmed`-flag and human rows.
-- [ ] **Step 3: Add exits rows:** `key_not_deletable`, `selected_key_in_use`, `key_not_found` (an unknown key ID) and `key_unavailable` (`key import` of a missing file, which maps through `SourceMissing`), and any other key code the audit lists.
+- [ ] **Step 3: Add exits rows:** `key_not_deletable`, `selected_key_in_use`, `key_not_found` (an unknown key ID), and `key_unavailable` from a Unix confirmed deletion whose isolated store lock is a symlink, plus any other key code the audit lists.
+  - **Owner ruling, 2026-10-22 — Approve fixture correction:** import intentionally registers missing/unavailable sources. It does not map their state through `SourceMissing`; preserve success and add a missing-source import regression. This corrects the plan, not a library gap; no library ticket is needed.
+  - Generate an unselected key with the library actor in the child's isolated HOME, obtain the CLI delete preview, then replace only `.ssh/manyhands/.lock` with a symlink to an isolated sentinel. Execute with the preview's confirmation. Verify `ELOOP` → `UnsafePath` → `key_unavailable`, exit 3, before acceptance; generated files and sentinel bytes/mtimes and registration remain unchanged.
+  - Keep this generated-key row Unix-only. Record `key_unavailable` as staged Windows evidence for Task 10's missing-selected-source host observation, not as universal coverage. Preserve the exact 49 F2 / 52 CLI-inclusive audit union.
 - [ ] **Step 4: Write the Review Focus 4 output test** `a_label_with_control_characters_is_escaped_in_human_output`. Import a key labelled `"k\x1b[2J"` and list it in human mode; stdout holds the escaped form and no raw `ESC`.
-- [ ] **Step 5: Run** `devenv shell -- cargo test --locked --test cli keys exits human`. Regenerate and read the help goldens.
+- [ ] **Step 5: Run** `devenv shell -- cargo test --locked --test cli keys`, `devenv shell -- cargo test --locked --test cli exits`, and `devenv shell -- cargo test --locked --test cli human` separately. Regenerate and read the help goldens with the prescribed `help` filter.
 - [ ] **Step 6: Commit** `feat: add key import, select, clear, remove and delete`. Add a ticket comment.
 
 ## Task 9: Key Generation, Passphrase Entry And Part B Checkpoint
@@ -940,6 +943,7 @@ SSH goldens replace the server's port with `0`.
   - `observe_an_unpinned_host` (golden `host_observe`): it reports the presented key, and `host list` is empty afterwards;
   - `observe_names_only_the_remote_s_authorities`: another authority is `invalid_input`;
   - `observe_without_a_publication_remote_is_publication_remote_required`;
+  - **Owner ruling, 2026-10-22:** `observe_with_a_missing_selected_source_is_key_unavailable`, cross-platform. Import a nonexistent private path and select its registration, with an enabled repository and selected SSH publication remote containing a username. `host observe` must return `key_unavailable`, exit 3. Source preflight precedes connection and prompting, so no live server or pin is needed; this may run in the ordinary isolated CLI target. Replace the staged Windows exit evidence from Task 8 with this real binary row. Do not change import semantics or the audit union.
   - `observe_a_pinned_host_without_a_selected_key_is_no_selected_key`;
   - `approve_by_prepare_and_confirm` (golden `host_approve_prepare`): the pin is stored, `fixture.receive_updates()` is empty, every local reference is unchanged, and the success envelope is checked against its schema;
   - `approving_the_pinned_key_is_a_no_op`;

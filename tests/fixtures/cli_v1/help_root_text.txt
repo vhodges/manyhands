@@ -61,11 +61,11 @@ Command catalog:
   remote remove  Remove a repository remote. Available now.
   remote select  Select a repository remote. Available now.
   key generate  Generate a key. Arrives with C2.
-  key import  Import a key. Arrives with C2.
-  key select  Select a key for a repository. Arrives with C2.
-  key clear  Clear a repository's selected key. Arrives with C2.
-  key remove  Remove a key registration. Arrives with C2.
-  key delete  Delete a key. Arrives with C2.
+  key import  Import a key. Available now.
+  key select  Select a key for a repository. Available now.
+  key clear  Clear a repository's selected key. Available now.
+  key remove  Remove a key registration. Available now.
+  key delete  Delete a key. Available now.
   host approve  Approve a host pin. Arrives with C2.
   host replace  Replace a host pin. Arrives with C2.
   host observe  Observe a host key. Arrives with C2.

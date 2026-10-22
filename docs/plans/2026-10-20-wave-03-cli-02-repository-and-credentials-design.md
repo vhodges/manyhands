@@ -111,6 +111,19 @@ baseline, which will also contain the `01M5CVB2` and `01M5B0Z6` fixes.
   `directories::BaseDirs::home_dir()`. That reads `HOME` on Linux and macOS,
   but uses the Windows known-folder API on Windows, which ignores
   `USERPROFILE`.
+- **Owner ruling, 2026-10-22 — Approve fixture correction.** Missing or
+  unavailable private sources remain registerable by `key import`; source state
+  is metadata, not an import refusal (`keys/registry.rs:117–137,200–225,878–886`;
+  `tests/shared_key_registry.rs:619–665`). The Task 8 plan's original missing-file
+  import exit fixture was incorrect, not a library gap, and needs no new library
+  ticket. Task 8 proves `key_unavailable` on Unix through a confirmed generated-key
+  deletion with a symlinked isolated `.ssh/manyhands/.lock`: `O_NOFOLLOW` produces
+  `ELOOP`, mapped to `UnsafePath`, then `key_unavailable`. The failure is before
+  request acceptance, and key files, sentinel and registration remain unchanged.
+  Windows coverage stays explicitly staged until Task 10's cross-platform
+  missing-selected-source `host observe` case. Source preflight fails before
+  connection or prompting, requiring no live server or pin. The audited union
+  remains 49 F2 / 52 CLI-inclusive codes; import's audited code set is unchanged.
 - **Progress.** `ProgressSink::event(&mut self, &ProgressEvent)` is called on
   the calling thread. `ProgressEvent` carries `request_id`, `operation_id`,
   `command`, `scope`, `stage: ProgressStage` and `effects`, and no content.
@@ -904,6 +917,7 @@ mapping of its own:
       `request_mismatch` with outcome `partial`, exit 4.
 - **`tests/cli/keys.rs`.**
   - import, select, clear and remove;
+  - missing-source import succeeds and records the missing source state;
   - an imported key refused by delete with its files byte-identical;
   - `selected_key_in_use`;
   - protected generation without a terminal answers `unlock_required`.
@@ -920,6 +934,8 @@ mapping of its own:
     - the CLI then completes it under the same request ID, without
       `--confirm`;
     - a replay of the finished deletion deletes nothing more.
+  - Unix exit evidence also includes confirmed deletion with a symlinked store
+    lock; its `key_unavailable` does not delete files or accept the request.
 - **`tests/cli/requests.rs`.**
   - `request show` for a finished request, for an accepted request, and
     `request_not_found`;
@@ -963,6 +979,9 @@ mapping of its own:
   server runs only in `harness = false` targets. Each such code's row records
   "covered by `cli_remote::<case>`". A test reads the `tests/cli_remote/`
   sources and checks that a function of that name exists.
+  - Task 8's `key_unavailable` deletion fixture is Unix-only. On Windows the
+    code remains staged for Task 10's missing-selected-source observation; the
+    inventory must not count a skipped generated-key row as executed evidence.
   - Task 0's audit refresh records the set of codes each C2 verb can
     return. The test asserts that the table's codes, together with
     `REASONS`, equal that set, and that every exit class is covered.

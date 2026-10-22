@@ -464,6 +464,11 @@ pub fn dispatch(
         "remote add" => return crate::admin::remote_add(service, session, command, args),
         "remote remove" => return crate::admin::remote_remove(service, session, command, args),
         "remote select" => return crate::admin::remote_select(service, session, command, args),
+        "key import" => return crate::admin::key_import(service, session, command, args),
+        "key select" => return crate::admin::key_select(service, session, command, args),
+        "key clear" => return crate::admin::key_clear(service, session, command, args),
+        "key remove" => return crate::admin::key_remove(service, session, command, args),
+        "key delete" => return crate::admin::key_delete(service, session, command, args),
         "request show" | "request cancel" => {
             let id = match crate::admin::request_id(session, command, args) {
                 Ok(Some(id)) => id,

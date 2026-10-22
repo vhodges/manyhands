@@ -409,6 +409,7 @@ fn input_refusals_through_the_binary_and_ids_are_ordered() {
 }
 #[test]
 fn every_mutation_verbs_confirmed_flag_matches_prepare() {
+    key_verbs_match_prepare();
     let remote = Fixture::new();
     super::remotes::add(&remote);
     for (verb, code, exit) in [("remove", "ok", 0), ("select", "not_confirmable", 2)] {
@@ -452,6 +453,35 @@ fn every_mutation_verbs_confirmed_flag_matches_prepare() {
         let preview = f.prepare(verb);
         assert_eq!(preview["data"]["command"], format!("repo {verb}"));
         assert!(preview["data"]["confirmation_id"].is_string());
+    }
+}
+pub fn key_verbs_match_prepare() {
+    let f = super::keys::Fixture::new();
+    let imported = f.import();
+    for verb in ["import", "select", "clear", "remove"] {
+        let mut flags = vec!["--prepare"];
+        if verb == "import" {
+            flags.extend(["--input", "-"]);
+        }
+        if ["select", "remove"].contains(&verb) {
+            flags.extend(["--key-id", super::keys::key_id(&imported)]);
+        }
+        let value = f.call(verb, &flags, super::keys::IMPORT, 2, "not_confirmable");
+        assert!(value["data"].is_null());
+    }
+    // Current-user Windows store ignores HOME; only this actual key-file row is skipped.
+    #[cfg(unix)]
+    {
+        let key = super::keys::generate(&f.env);
+        let value = f.call(
+            "delete",
+            &["--key-id", &key.id.to_string(), "--prepare"],
+            &[],
+            0,
+            "ok",
+        );
+        assert_eq!(value["data"]["command"], "key delete");
+        assert!(value["data"]["confirmation_id"].is_string());
     }
 }
 #[test]

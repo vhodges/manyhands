@@ -215,6 +215,12 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "key_import",
+    "key_select",
+    "key_clear",
+    "key_remove",
+    "key_delete_prepare",
+    "key_delete",
     "repo_create_prepare",
     "repo_create_empty_prepare",
     "repo_create",
