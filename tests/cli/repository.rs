@@ -188,6 +188,134 @@ fn create_in_an_empty_directory() {
     golden("repo_create", &f.execute("create", &preview));
     assert_onboarded(&f);
 }
+
+#[test]
+fn repository_noop_prepares_preserve_state_in_both_modes() {
+    for verb in ["enable", "remove", "identity-set"] {
+        for json in [false, true] {
+            let mut f = Fixture::new("enable");
+            if verb != "remove" {
+                f.onboard("enable");
+            }
+            if verb == "identity-set" {
+                f.set_input(
+                    br#"{"name":"Repository Person","email":"repository@example.invalid"}"#,
+                );
+            }
+            // Removal deliberately names an existing, unregistered Git root.
+            let before = support::repository_and_worktree_snapshot_at(&f.root);
+            let registered = f.listed()["data"].clone();
+            let global = f.global();
+            let result =
+                super::human::assert_noop_in_mode(&f.args(verb, &["--prepare"]), &f.env, &[], json);
+            assert!(result["data"]["confirmation_id"].is_null());
+            assert_eq!(
+                support::repository_and_worktree_snapshot_at(&f.root),
+                before
+            );
+            assert_eq!(f.listed()["data"], registered);
+            assert_eq!(f.global(), global);
+        }
+    }
+}
+
+#[test]
+fn accepted_create_satisfied_by_another_actor_is_a_noop_in_both_modes() {
+    use manyhands::{
+        repository::{
+            CommitIdentity, FailurePoint, Mutation, RepoCreateInput, RepositoryService, RequestId,
+            RequestState,
+        },
+        results::ResultCode,
+    };
+    for json in [false, true] {
+        let mut f = Fixture::new("create");
+        f.set_input(br#"{"primary_branch":"main","identity":{"name":"Example Person","email":"example@example.invalid"}}"#);
+        let identity = || CommitIdentity {
+            name: "Example Person".into(),
+            email: "example@example.invalid".into(),
+        };
+        let build = || {
+            Mutation::RepoCreate(RepoCreateInput {
+                root: f.root.clone(),
+                primary_branch: "main".into(),
+                identity: Some(identity()),
+                slug_prefix: None,
+            })
+        };
+        {
+            let service = RepositoryService::open_at_with_failure_point_for_testing(
+                &f.env.data,
+                FailurePoint::BeforeRequestDomainCall,
+            )
+            .unwrap();
+            let preview = support::confirmation::prepare_with(&service, &build());
+            let stopped = support::mutation::execute_confirmed(
+                &service,
+                REQUEST,
+                &preview.data.unwrap().confirmation_id,
+                build(),
+            );
+            assert_eq!(stopped.code, ResultCode::InternalError);
+            assert_eq!(
+                service
+                    .request_record(RequestId::parse(REQUEST).unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                RequestState::Accepted
+            );
+            assert!(!f.root.exists());
+        }
+        // No journal/effect belongs to the accepted request. A separate CLI
+        // intent creates the requested end state under the isolated home.
+        let preview = f.prepare("create");
+        checked(
+            &f.args(
+                "create",
+                &[
+                    "--json",
+                    "--request-id",
+                    super::remotes::NEXT,
+                    "--confirm",
+                    preview["data"]["confirmation_id"].as_str().unwrap(),
+                ],
+            ),
+            &f.env,
+            &[],
+            0,
+            "ok",
+            None,
+        );
+        let before = support::repository_and_worktree_snapshot_at(&f.root);
+        let global = f.global();
+        let result = super::human::assert_noop_in_mode(
+            &f.args("create", &["--request-id", REQUEST]),
+            &f.env,
+            &[],
+            json,
+        );
+        assert!(result["effects"]["commit_oid"].is_null());
+        assert_eq!(
+            support::repository_and_worktree_snapshot_at(&f.root),
+            before
+        );
+        assert_onboarded(&f);
+        assert_eq!(f.global(), global);
+        let record = checked(
+            &["request", "show", "--json", "--request-id", REQUEST],
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("request.schema.json"),
+        );
+        assert_eq!(record["data"]["state"], "finished");
+        assert_eq!(record["data"]["result"]["outcome"], "noop");
+        assert_eq!(record["data"]["result"]["code"], "already_applied");
+    }
+}
+
 #[test]
 fn create_in_an_absent_directory() {
     let f = Fixture::new("create");

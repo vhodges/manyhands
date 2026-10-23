@@ -385,6 +385,214 @@ fn importing_an_already_registered_source_is_a_noop() {
     );
     assert_eq!(credentials::key_file_states(&f.files()), before);
 }
+
+#[test]
+fn registry_noops_preserve_key_files_in_both_modes() {
+    for verb in ["import", "select", "clear"] {
+        for json in [false, true] {
+            let f = Fixture::new();
+            let imported = f.import();
+            let id = key_id(&imported);
+            if verb == "select" {
+                f.call(
+                    "select",
+                    &["--key-id", id, "--request-id", NEXT],
+                    &[],
+                    0,
+                    "ok",
+                );
+            }
+            let before = credentials::key_file_states(&f.files());
+            let listed = f.call("list", &[], &[], 0, "ok")["data"].clone();
+            let mut args = vec!["key", verb, "--request-id", LAST];
+            if verb == "import" {
+                args.extend(["--input", "-"]);
+            }
+            if verb == "select" {
+                args.extend(["--key-id", id]);
+            }
+            super::human::assert_noop_in_mode(&args, &f.env, IMPORT, json);
+            assert!(
+                credentials::key_file_states(&f.files()) == before,
+                "key files changed"
+            );
+            assert_eq!(f.call("list", &[], &[], 0, "ok")["data"], listed);
+        }
+    }
+}
+
+#[test]
+fn accepted_key_removal_with_lost_result_is_a_noop_in_both_modes() {
+    use manyhands::{
+        repository::{
+            FailurePoint, KeyRemoveInput, Mutation, RepositoryService, RequestId, RequestState,
+            SharedKeyId,
+        },
+        results::ResultCode,
+    };
+    for json in [false, true] {
+        let f = Fixture::new();
+        let imported = f.import();
+        let id = key_id(&imported);
+        let before = credentials::key_file_states(&f.files());
+        {
+            let service = RepositoryService::open_at_with_failure_point_for_testing(
+                &f.env.data,
+                FailurePoint::BeforeRequestSettlement,
+            )
+            .unwrap();
+            let lost = crate::support::mutation::execute_with(
+                &service,
+                NEXT,
+                Mutation::KeyRemove(KeyRemoveInput {
+                    id: SharedKeyId::parse(id).unwrap(),
+                }),
+            );
+            assert_eq!(lost.code, ResultCode::InternalError);
+            assert_eq!(
+                service
+                    .request_record(RequestId::parse(NEXT).unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                RequestState::Accepted
+            );
+        }
+        assert!(
+            f.call("list", &[], &[], 0, "ok")["data"]["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let result = super::human::assert_noop_in_mode(
+            &["key", "remove", "--key-id", id, "--request-id", NEXT],
+            &f.env,
+            &[],
+            json,
+        );
+        assert_eq!(result["data"]["id"], id);
+        assert!(
+            credentials::key_file_states(&f.files()) == before,
+            "imported files changed"
+        );
+        assert!(
+            f.call("list", &[], &[], 0, "ok")["data"]["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let record = checked(
+            &["request", "show", "--json", "--request-id", NEXT],
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("request.schema.json"),
+        );
+        assert_eq!(record["data"]["state"], "finished");
+        assert_eq!(record["data"]["result"]["code"], "already_applied");
+        assert_eq!(record["data"]["result"]["outcome"], "noop");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn completed_key_deletion_with_lost_result_is_a_noop_in_both_modes() {
+    use manyhands::{
+        repository::{
+            FailurePoint, KeyDeleteInput, Mutation, RepositoryService, RequestId, RequestState,
+            keys::KeyStore,
+        },
+        results::ResultCode,
+    };
+    for json in [false, true] {
+        let f = Fixture::new();
+        let key = generate(&f.env);
+        let other = generate(&f.env);
+        let build = || {
+            Mutation::KeyDelete(KeyDeleteInput {
+                store: KeyStore::for_home(f.env.home.path()).unwrap(),
+                id: key.id,
+            })
+        };
+        {
+            let service = RepositoryService::open_at_with_failure_point_for_testing(
+                &f.env.data,
+                FailurePoint::BeforeRequestSettlement,
+            )
+            .unwrap();
+            let preview = crate::support::confirmation::prepare_with(&service, &build());
+            let lost = crate::support::mutation::execute_confirmed(
+                &service,
+                REQUEST,
+                &preview.data.unwrap().confirmation_id,
+                build(),
+            );
+            assert_eq!(lost.code, ResultCode::InternalError);
+            assert_eq!(
+                service
+                    .request_record(RequestId::parse(REQUEST).unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                RequestState::Accepted
+            );
+        }
+        let private = &key.private_key_path;
+        let public = key.public_key_path.as_ref().unwrap();
+        assert!(!private.exists() && !public.exists());
+        // Files subsequently placed at the old names are not the deleted key.
+        fs::write(private, b"unrelated private-path replacement\n").unwrap();
+        fs::write(public, b"unrelated public-path replacement\n").unwrap();
+        let mut files = f.files();
+        files.extend([
+            private.clone(),
+            public.clone(),
+            other.private_key_path,
+            other.public_key_path.unwrap(),
+        ]);
+        let before = credentials::key_file_states(&files);
+        let listed = f.call("list", &[], &[], 0, "ok")["data"].clone();
+        assert!(
+            !listed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == key.id.to_string())
+        );
+        let result = super::human::assert_noop_in_mode(
+            &[
+                "key",
+                "delete",
+                "--key-id",
+                &key.id.to_string(),
+                "--request-id",
+                REQUEST,
+            ],
+            &f.env,
+            &[],
+            json,
+        );
+        assert_eq!(result["data"]["id"], key.id.to_string());
+        assert!(
+            credentials::key_file_states(&files) == before,
+            "key/replacement files changed"
+        );
+        assert_eq!(f.call("list", &[], &[], 0, "ok")["data"], listed);
+        let record = checked(
+            &["request", "show", "--json", "--request-id", REQUEST],
+            &f.env,
+            &[],
+            0,
+            "ok",
+            Some("request.schema.json"),
+        );
+        assert_eq!(record["data"]["state"], "finished");
+        assert_eq!(record["data"]["result"]["code"], "already_applied");
+        assert_eq!(record["data"]["result"]["outcome"], "noop");
+    }
+}
+
 #[test]
 fn removing_the_selected_key_is_selected_key_in_use() {
     let f = Fixture::new();

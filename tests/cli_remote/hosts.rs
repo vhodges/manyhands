@@ -19,6 +19,7 @@ cases!(
     replace_naming_a_key_the_host_does_not_present_is_host_mismatch,
     observe_prints_the_next_commands_input_line,
     human_host_verbs_and_noops,
+    host_noop_prepares_preserve_state_in_both_modes,
     a_server_accepting_without_the_selected_key_is_key_rejected,
     host_grammar_and_input_shapes,
     ipv6_observation_input_round_trips_the_c1_parser
@@ -694,6 +695,63 @@ fn human_host_verbs_and_noops() -> Result<(), FixtureError> {
     );
     Ok(())
 }
+
+fn host_noop_prepares_preserve_state_in_both_modes() -> Result<(), FixtureError> {
+    let f = Plain::new()?;
+    f.approve();
+    let before = support::repository_and_worktree_snapshot_at(&f.root);
+    let pin_before = pins(&f.env);
+    let files = [f.server.client_key_path().to_owned()];
+    let files_before = support::credentials::key_file_states(&files);
+    let sockets = f.server.accepted_sockets();
+    for verb in ["approve", "replace"] {
+        let mut input = host_input(&f.server);
+        if verb == "replace" {
+            input["old_fingerprint"] = input["fingerprint"].clone();
+        }
+        for json in [false, true] {
+            let mut args = vec![
+                "host",
+                verb,
+                "--repo",
+                f.root.to_str().unwrap(),
+                "--input",
+                "-",
+                "--prepare",
+            ];
+            if json {
+                args.push("--json");
+            }
+            let out = run(&f.env, &args, &serde_json::to_vec(&input).unwrap());
+            assert_eq!(out.status, 0);
+            assert!(out.stderr.is_empty());
+            if json {
+                let value = cli::json(&out);
+                schema::check_published("envelope.schema.json", &value).unwrap();
+                assert_eq!(value["outcome"], "noop");
+                assert_eq!(value["code"], "already_applied");
+                assert!(value["data"].is_null());
+            } else {
+                assert!(
+                    out.stdout
+                        .starts_with(b"Already applied; nothing changed.\n")
+                );
+            }
+            assert_eq!(pins(&f.env), pin_before);
+            assert_eq!(
+                support::repository_and_worktree_snapshot_at(&f.root),
+                before
+            );
+            assert!(
+                support::credentials::key_file_states(&files) == files_before,
+                "key file changed"
+            );
+            assert_eq!(f.server.accepted_sockets(), sockets);
+        }
+    }
+    Ok(())
+}
+
 fn a_server_accepting_without_the_selected_key_is_key_rejected() -> Result<(), FixtureError> {
     let f = Plain::new()?;
     f.server.accept_anonymous();

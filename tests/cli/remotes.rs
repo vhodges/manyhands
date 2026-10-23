@@ -32,6 +32,51 @@ pub fn select(f: &Fixture) -> Value {
 }
 
 #[test]
+fn remote_noops_preserve_repository_in_both_modes() {
+    for (verb, clear) in [
+        ("add", false),
+        ("remove", false),
+        ("select", false),
+        ("select", true),
+    ] {
+        for json in [false, true] {
+            let f = Fixture::new();
+            if verb == "add" || (verb == "select" && !clear) {
+                add(&f);
+            }
+            if verb == "select" && !clear {
+                select(&f);
+            }
+            let input = if clear {
+                br#"{"name":null}"#.as_slice()
+            } else if verb == "add" {
+                REMOTE
+            } else {
+                SELECT
+            };
+            fs::write(&f.input, input).unwrap();
+            let flags = if verb == "remove" {
+                vec!["--prepare"]
+            } else {
+                vec!["--request-id", LAST]
+            };
+            // LAST is a new intent, not replay of the successful add/select.
+            let before = crate::support::repository_and_worktree_snapshot_at(&f.repo.root);
+            let global = fs::read(f.env.home.path().join(".gitconfig")).unwrap();
+            super::human::assert_noop_in_mode(&f.args("remote", verb, &flags), &f.env, &[], json);
+            assert_eq!(
+                crate::support::repository_and_worktree_snapshot_at(&f.repo.root),
+                before
+            );
+            assert_eq!(
+                fs::read(f.env.home.path().join(".gitconfig")).unwrap(),
+                global
+            );
+        }
+    }
+}
+
+#[test]
 fn select_then_clear() {
     let f = Fixture::new();
     add(&f);

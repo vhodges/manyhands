@@ -19,6 +19,15 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
+**Final-spec follow-up, 2026-10-23 UTC:** review
+`ses_e96bcb4cfffeoD5umHyL4mfvrx` identified an important per-verb no-op evidence
+gap. Eight new test cases now cover all **14 no-op-capable C2 verbs** in JSON
+and human modes, including accepted-record-only create/remove/delete paths;
+the other four verbs have explicit source-based non-no-op explanations.
+Targeted checks passed **95 executions / 90 distinct cases**, plus Clippy/fmt.
+The finding is addressed for controller re-review; final spec approval and
+quality review are still pending. **Not review-ready; ticket remains open.**
+
 **Task 12 resumption update, 2026-10-23 UTC: blocker resolved; final review
 pending.** The separately reviewed identity-validation fix landed on main as
 `563893c` and is merged into C2 at `eeba464`. The owner authorized continuation
@@ -413,6 +422,123 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Final Spec Finding: Complete Per-Verb No-Op Evidence (2026-10-23 UTC)
+
+Controller-supplied final spec review **`ses_e96bcb4cfffeoD5umHyL4mfvrx`**
+identified an important evidence gap before quality review. The five named
+missing cases were repository removal at an unregistered root, adding an
+identical remote under a new request ID, preparing removal of an absent
+nonpublication remote, accepted key removal whose result was lost after
+unregistering, and completed key deletion whose result was lost before
+settlement. Existing interrupted-deletion evidence replayed **`ok`**, and was
+not proof of the distinct `noop/already_applied` result.
+
+Entry/test base **`dea361084f5cf18aca55f15636df3c2ecce2f18a`** was clean.
+Fetch/merge was already current at main **`563893c118f8e6a2d1f9ec9ccfe240f120decb95`**;
+entry and post-check merge-tree passed with
+**`6eee1614301dff4650085561dc4899b14430b2ab`**. Main remained unchanged.
+Owner authorization remains targeted checks after the merged library fix;
+neither a full suite nor the library's suite was rerun.
+
+#### All eighteen capabilities inspected
+
+The source audit went beyond the five reported omissions. `RepoBinding` also
+supports **`repo create` as a no-op only after acceptance**, when another actor
+has supplied the requested enabled/registered end state before its domain call
+(`bind/repo.rs::observe_again`, lines 1356–1382). A new create at an occupied
+root is still `occupied_path`, not a no-op. That additional accepted-record-only
+case is now exercised through the binary in both modes.
+
+There are **14 reachable no-op verbs and four non-no-op verbs**, not eighteen
+no-op verbs. The corrected per-verb inventory in Step 4 below records every
+verb, its exact test and its reachable state or source justification. No capable
+verb is left with an unreachable-fixture excuse. Generated-key deletion remains
+Unix-only CLI evidence; Windows native/manual obligations are unchanged.
+
+#### Added tests and assertions
+
+Seven new libtest cases and one new SSH case were added in C2-created files;
+all old assertions and goldens remain intact. No library, production CLI,
+dependency, output schema, shared test helper or workflow changes.
+
+- `human::c2_noop_inventory_accounts_for_all_eighteen_verbs` compares the
+  complete 14+4 inventory with the executable C2 help catalog and checks that
+  every cited both-mode case exists. This is an inventory check, not a claim
+  that checking a source name executes its test.
+- `human::assert_noop_in_mode` runs the real binary, asserts exit 0,
+  `outcome: noop`, `code: already_applied`, correct command, schema and empty
+  JSON stderr. Human stdout must start with **`Already applied; nothing
+  changed.`**; prepare stderr is empty, execution stderr contains only progress.
+  A human call is followed by the same JSON invocation to inspect its stored/
+  unchanged answer. Separate fixtures exercise the first call in each mode.
+- Repository and remote cases compare complete repository/worktree snapshots
+  and isolated global config bytes. Ordinary repository prepares also compare
+  registrations. Remote add uses a **new request ID** after the original add,
+  not an `ok` replay. Remote selection covers both already-selected and already-
+  cleared states.
+- Accepted create uses the public `BeforeRequestDomainCall` failure actor,
+  asserts its accepted record and absent root, then another **isolated CLI
+  request** creates the end state. The original request resumes as a no-op,
+  claims no commit, changes no repository bytes and finishes with a stored no-op.
+- Key remove and delete use public **`BeforeRequestSettlement`** actors,
+  verifying accepted records after unregister/deletion. CLI retries under the
+  same IDs finish with stored no-op results in each mode. Key remove preserves
+  imported files. Generated deletion preserves another generated key, imported
+  fixture files, and unrelated replacement files deliberately placed at **both
+  deleted paths**. Key snapshots include bytes, kind, permissions and mtime;
+  assertion failures do not dump their private bytes.
+- Host prepare no-ops are checked explicitly in both modes for approve and
+  replace, preserving pins, repository snapshot and the fixture client key;
+  the server's socket count does not increase. This adds one isolated SSH case
+  rather than a network fixture to the ordinary CLI libtest process.
+
+#### Honest RED/GREEN and targeted verification
+
+The new inventory test was written first, naming the required evidence. Its
+initial all-feature run failed **because the `repo create` evidence function
+did not exist**: 0 passed / 1 failed / 170 filtered, exit 101. That is RED
+evidence of the coverage gap, not a fabricated production no-op failure.
+After the cases were added, all behavioral cases passed on their first run
+against the existing implementation. No domain change or old-test adjustment
+was needed.
+
+Complete logs and actual exit codes are under
+**`/tmp/opencode/c2-task12-verification-0860a6a/`**. All test/Clippy commands
+below used `devenv shell --` and `--all-features --locked`; fmt was normal.
+
+| Command after `devenv shell --` | Result | Log |
+| --- | --- | --- |
+| Initial `cargo test --all-features --locked --test cli human::c2_noop_inventory_accounts_for_all_eighteen_verbs -- --exact` | Expected inventory RED; exit 101 | `36-noop-inventory-red.log` |
+| `cargo test --all-features --locked --test cli repository` | 29 passed, 148 filtered; exit 0 | `37-noop-repository.log` |
+| `cargo test --all-features --locked --test cli keys` | 24 passed, 153 filtered; exit 0 | `38-noop-keys.log` |
+| `cargo test --all-features --locked --test cli remotes` | 12 passed, 165 filtered; exit 0 | `39-noop-remotes.log` |
+| `cargo test --all-features --locked --test cli human` | 29 passed, 148 filtered; exit 0; includes inventory GREEN | `40-noop-human.log` |
+| `cargo test --all-features --locked --test cli_remote host_noop_prepares_preserve_state_in_both_modes -- --exact` | 1 SSH case passed; exit 0 | `41-noop-hosts.log` |
+| `cargo clippy --all-features --locked --bin manyhands-cli --test cli --test cli_remote -- -D warnings` | Passed; exit 0 | `42-noop-clippy.log` |
+| `cargo fmt --check` | Passed; exit 0 | `43-noop-fmt.log` |
+
+Fresh GREEN total: **95 passing executions / 90 distinct cases**, zero failed,
+ignored or measured. Five cases overlap the requested CLI substring filters:
+the repository and key human-result cases, escaped key-label human output,
+key-generation repository-selector refusal, and the new remote no-op case.
+CLI inventory is now **177** (170 + 7 new); SSH inventory **31** (30 + 1 new),
+but neither entire target was rerun. The exact SSH filter ran only the added
+case, leaving the other 30 unselected. No additive full-suite total is claimed.
+
+#### Review handoff
+
+The important no-op evidence finding is addressed by new executable evidence
+and the corrected Step 4 inventory below. **Controller spec re-review and final
+quality review remain pending**; no review approval or readiness is inferred
+from these tests. The ticket stays open. Previous manual evidence, the merged
+identity fix, distinct upstream/C2 test records, native obligations and known
+wrong-passphrase library defect remain as recorded in the preceding checkpoints.
+
+Canonical review-fix comment **`01M5MNVXES0DE47V9KW9T1GS31`** was allocated by
+isolated detached built CLI `id new --json` and includes current `created_by`.
+Commit subject is **`test: complete C2 per-verb no-op evidence`**, with the
+required coauthor. No subagents, push, native CI, PR, closure or cleanup.
 
 ### Task 12 — Merged Identity Fix Verified; Blocker Resolved, Final Review Pending (2026-10-23 UTC)
 
@@ -1200,15 +1326,38 @@ remains a successful registration by the approved owner ruling.
 
 **Per-verb schema/golden and human/no-op inventory:** JSON names below are
 registered in `tests/support/cli.rs::CLI_CASES` and live under
-`tests/fixtures/cli_v1/`. These are the delivered test assets, not another run.
+`tests/fixtures/cli_v1/`. The no-op column was corrected after final spec review
+`ses_e96bcb4cfffeoD5umHyL4mfvrx`: it now identifies **every C2 verb**, including
+accepted-record-only no-ops, with fresh both-mode/state-preservation evidence
+from the review-fix checkpoint above. `cli::` functions are in `tests/cli/`;
+`cli_remote::` functions are in the isolated SSH target. All fresh execution
+is Linux x86_64; Unix-only generation/deletion does not imply Windows evidence.
 
 | C2 verbs | JSON result / preview golden names | Human and no-op execution evidence |
 | --- | --- | --- |
-| repo create, enable, remove, identity-set | `repo_create` / `repo_create_prepare` (also empty prepare); `repo_enable` / `repo_enable_prepare`; `repo_remove` / `repo_remove_prepare`; `repo_identity_set` / `repo_identity_set_prepare` | `cli::human::c2_repository_human_results_split_streams_and_retain_public_ids`, `repo_create_human_prepare_preview`, `c2_human_results_split_streams_and_retain_public_ids`; already-enabled/identity-set no-ops; repository tests cover create absent/empty, remove live/missing roots and prefix. |
-| remote add, remove, select | `remote_add`; `remote_remove` / `remote_remove_prepare`; `remote_select` (also selection clear) | `cli::human::c2_remote_human_results_and_noops_retain_public_ids`; `cli::remotes::selecting_the_selected_remote_is_a_no_op`; `c2_human_results_split_streams_and_retain_public_ids` covers add. |
-| key generate, import, select, clear, remove, delete | `key_generate` (also unlock refusal); `key_import`; `key_select`; `key_clear`; `key_remove`; `key_delete` / `key_delete_prepare` | `cli::human::c2_keys_human_results_and_selection_noops_retain_public_ids`, `key_generate_human_result`, `key_delete_human_preview_and_result`; `cli::keys::importing_an_already_registered_source_is_a_noop`, `selecting_the_selected_key_and_clearing_no_selection_are_no_ops`. Generated-file cases Unix-only. |
-| host observe, approve, replace | `host_observe`; `host_approve` / `host_approve_prepare`; `host_replace` / `host_replace_prepare`; mismatch/replacement-required goldens | `cli_remote::hosts::human_host_verbs_and_noops`, `observe_prints_the_next_commands_input_line`, `approving_the_pinned_key_is_a_no_op`; `cli::human::c2_host_human_previews_and_remote_execution_evidence`. |
-| request show, cancel | `request_show`, `request_show_accepted`; `request_cancel` | `cli::human::request_show_human_reports_finished_and_accepted_record_details`, `request_cancel_human_reports_state_ids_and_local_no_stop_explanation`, `request_human_failures_use_stderr_only`; read semantics, not mutation no-ops. |
+| repo create | `repo_create` / `repo_create_prepare` (also empty prepare) | **Accepted-record-only no-op:** `cli::repository::accepted_create_satisfied_by_another_actor_is_a_noop_in_both_modes`; accepted before its domain call, another CLI intent creates/enables/registers the requested state, original request resumes as no-op without claiming the other's commit. `bind/repo.rs::observe_again` (1356–1382). A fresh create at an occupied root is not a no-op. |
+| repo enable | `repo_enable` / `repo_enable_prepare` | `cli::repository::repository_noop_prepares_preserve_state_in_both_modes`: already enabled and registered, `--prepare` returns no-op in both modes without a confirmation or filesystem/registration change. `bind/repo.rs::check` (821–822). |
+| repo remove | `repo_remove` / `repo_remove_prepare` | Same `repository_noop_prepares_preserve_state_in_both_modes`: an existing unregistered Git root, `--prepare`, both modes; repository and registration snapshot preserved. `bind/repo_remove.rs::preview` (388–392). Accepted removal retries can also reach this end state; no replayed `ok` is substituted as proof. |
+| repo identity-set | `repo_identity_set` / `repo_identity_set_prepare` | Same `repository_noop_prepares_preserve_state_in_both_modes`: requested identity already local, `--prepare` in both modes; exact repository/global config preservation. `bind/repo_identity.rs` AlreadyApplied preview branch. |
+| remote add | `remote_add` | `cli::remotes::remote_noops_preserve_repository_in_both_modes`: same name and URL under a **new request ID**, not the original success replay; both modes return no-op and preserve full repository/global config. `repository.rs` add-remote NoChange and `mutation/outcome.rs::remote_outcome_code` (233–238). |
+| remote remove | `remote_remove` / `remote_remove_prepare` | Same `remote_noops_preserve_repository_in_both_modes`: absent nonpublication remote, `--prepare`, both modes and unchanged repository. `bind/remote.rs::check` (1187–1196); a selected publication remote is a refusal, not a no-op. |
+| remote select | `remote_select`, `remote_select_clear` | Same `remote_noops_preserve_repository_in_both_modes`: already-selected remote and already-cleared selection, new request IDs, both modes and unchanged repository/configuration. Existing human selection table also covers these states. |
+| key generate | `key_generate`, `key_generate_unlock_required` | Normal human evidence: `cli::human::key_generate_human_result`. **No top-level no-op capability:** `bind/key.rs:805–813` deliberately maps its own `GenerateSharedKeyOutcome::AlreadyCreated` to `ok`; a new request generates a new key. `outcome.rs:256–265` explicitly documents the binding override. A successful replay is not relabeled as a no-op. |
+| key import | `key_import` | `cli::keys::registry_noops_preserve_key_files_in_both_modes`: already registered source with a new request, both modes; key bytes/kind/permissions/mtime and registrations unchanged. `key_registry_change_code` maps recorded `changed: false` to AlreadyApplied. |
+| key select | `key_select` | Same `registry_noops_preserve_key_files_in_both_modes`: selected key selected again under a new request, both modes, unchanged key files and registry. |
+| key clear | `key_clear` | Same `registry_noops_preserve_key_files_in_both_modes`: no selection, with a registration still present, new request; both modes preserve files and registry. |
+| key remove | `key_remove` | **Accepted-record-only no-op:** `cli::keys::accepted_key_removal_with_lost_result_is_a_noop_in_both_modes`; BeforeRequestSettlement actor has unregistered the key while its request stays accepted, CLI retries the same ID and stores no-op. Imported files remain byte/metadata-identical. `bind/key.rs::remove/reenter` and `outcome.rs:292–299`. A new request naming an absent key is KeyNotFound, not a no-op. |
+| key delete | `key_delete` / `key_delete_prepare` | **Accepted-record-only no-op, Unix CLI:** `cli::keys::completed_key_deletion_with_lost_result_is_a_noop_in_both_modes`; full deletion completed before settlement failed, CLI retries the same ID as AlreadyDeleted/no-op. Replacement files at both old paths and unrelated keys are unchanged. This is distinct from `an_interrupted_deletion_is_completed_by_the_same_request`, whose partial deletion completion and finished replay legitimately return `ok`. `outcome.rs:312–319`; library fixture `a_key_delete_whose_result_was_lost_is_a_no_op_and_not_external_change`. Windows remains native/manual evidence. |
+| host observe | `host_observe` | Human evidence: `cli_remote::hosts::observe_prints_the_next_commands_input_line` and `human_host_verbs_and_noops`. **No top-level no-op capability:** `bind/host.rs::observe_host` (899–1009) returns `Envelope::read_success`, including an unchanged pin; observed state lives in data. |
+| host approve | `host_approve` / `host_approve_prepare` | `cli_remote::hosts::host_noop_prepares_preserve_state_in_both_modes`: pin already equals requested key, prepare in JSON/human, exact no-op result/prefix, empty stderr, unchanged repository/pins/key file, no new socket. `bind/host.rs::preview` (828–834). |
+| host replace | `host_replace` / `host_replace_prepare` | Same `host_noop_prepares_preserve_state_in_both_modes`: desired replacement is already pinned; both modes and preservation/no-connection assertions. The older rotated-key journey separately covers a real replacement followed by its no-op prepare. |
+| request show | `request_show`, `request_show_accepted` | Human evidence: `cli::human::request_show_human_reports_finished_and_accepted_record_details`. **No top-level no-op capability:** `mutation/mod.rs::show_request` (357–377) returns read success; a nested stored `data.result.outcome: noop` is not the read's outcome. |
+| request cancel | `request_cancel` | Human evidence: `cli::human::request_cancel_human_reports_state_ids_and_local_no_stop_explanation`. **No top-level no-op capability:** `mutation/progress.rs::cancel_request` returns read success even when `requested: false`; no-stop data is not `Outcome::Noop`. |
+
+`cli::human::c2_noop_inventory_accounts_for_all_eighteen_verbs` ties these
+14 capable + 4 non-no-op classifications to the binary's C2 catalog and named
+cases. Every capable verb has actual JSON/human evidence; none is merely
+listed as covered by an `ok` replay or an unimplemented fixture.
 
 `cli::mutation::every_mutation_verbs_confirmed_flag_matches_prepare`, with
 `host_verbs_match_prepare` and `key_verbs_match_prepare`, ties preview behavior
@@ -1231,7 +1380,7 @@ execution data is null. Input schemas under `schemas/input/v1/` are
 | Required evidence | Actual test/function or fresh check |
 | --- | --- |
 | Every reachable exit class | `cli::exits::every_exit_class_is_covered` and executable rows: 0 success/no-op/preview, 1 internal, 2 input, 3 blocked, 4 incomplete (`another_url_on_a_stopped_request_is_partial_request_mismatch`), 5 transient, 130 cancelled via Unix PTY. Five unreachable codes remain individually justified above. |
-| Every verb in human mode, split streams, no-ops | Per-verb table above; `cli::privacy::execution_outputs` inventories successful local executions in both modes plus named disjoint SSH coverage, compared with all 18 C2 catalog entries. No-op evidence includes enable, identity-set, remote select/clear, imported-source/key selection/clear, host approve/replace. |
+| Every verb in human mode, split streams, no-ops | The corrected eighteen-row inventory above and `cli::human::c2_noop_inventory_accounts_for_all_eighteen_verbs` account for all 14 no-op-capable verbs in both modes and four source-justified non-no-op verbs. New cases explicitly assert no-op outcome/code, human prefix, split streams and repository/key preservation, including accepted-record-only create, key remove and key delete. `cli::privacy::execution_outputs` remains successful-execution privacy evidence, not a substitute for no-op coverage. |
 | Wave MH-COLLAB-006 and MH-NFR-003/004/006/008: progress | `cli::mutation::human_progress_lines_and_empty_json_stderr`; bin progress `a_stage_is_written_once_per_change` and `a_failed_write_is_ignored`; SSH human observation emits connecting. JSON helpers require empty stderr and one envelope. |
 | Consent | `cli::mutation::prepare_then_confirm_sets_the_identity_locally`, `another_confirmation_or_other_input_is_confirmation_mismatch`; `cli::prompts::consent_yes_sets_the_identity`, `consent_no_is_cancelled_exit_130_and_changes_nothing`, `ctrl_c_at_consent_is_cancelled_and_restores_the_terminal`; live host prepare/confirm cases above. |
 | Safe-point cancellation | Prompt cancellation above plus `cli::requests::request_cancel_of_an_accepted_local_request_is_not_requested`. C2 has no after-acceptance safe point and installs no process-wide Ctrl-C handler; before-acceptance token cancellation is not CLI-reachable. No in-flight cancellation claim is invented. |

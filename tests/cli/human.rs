@@ -1,6 +1,174 @@
 use super::mutation::{Fixture, REMOTE, REQUEST, checked, run};
 use crate::support::cli;
 
+/// Call the real binary in the selected mode. A human result is followed by
+/// the same invocation in JSON, checking the stored/no-change answer as well
+/// as the human prefix. Callers snapshot state around both invocations and
+/// use separate fixtures for the first human and first JSON call.
+pub fn assert_noop_in_mode(
+    args: &[&str],
+    env: &cli::CliEnv,
+    input: &[u8],
+    json: bool,
+) -> serde_json::Value {
+    if !json {
+        let out = run(args, env, input);
+        assert_eq!(out.status, 0, "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.stdout
+                .starts_with(b"Already applied; nothing changed.\n")
+        );
+        if args.contains(&"--prepare") {
+            assert!(out.stderr.is_empty());
+        } else {
+            assert!(
+                std::str::from_utf8(&out.stderr)
+                    .unwrap()
+                    .lines()
+                    .all(|line| line.starts_with("progress: "))
+            );
+        }
+    }
+    let mut json_args = args.to_vec();
+    json_args.push("--json");
+    let value = checked(&json_args, env, input, 0, "already_applied", None);
+    assert_eq!(value["outcome"], "noop");
+    assert_eq!(value["command"], format!("{} {}", args[0], args[1]));
+    value
+}
+
+#[test]
+fn c2_noop_inventory_accounts_for_all_eighteen_verbs() {
+    use std::collections::BTreeSet;
+    let data = tempfile::tempdir().unwrap();
+    let env = cli::CliEnv::new(data.path().join("data"));
+    let help = cli::json(&run(&["--help", "--json"], &env, &[]));
+    let available: BTreeSet<_> = help["data"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["available"] == true && c["delivered_by"] == "C2")
+        .map(|c| c["command"].as_str().unwrap())
+        .collect();
+    let repository = include_str!("repository.rs");
+    let remotes = include_str!("remotes.rs");
+    let keys = include_str!("keys.rs");
+    let hosts = include_str!("../cli_remote/hosts.rs");
+    // Each case exercises JSON and human output and snapshots its no-op's
+    // affected repository/key files. Accepted-record-only paths are explicit.
+    let evidence = [
+        (
+            "repo create",
+            repository,
+            "accepted_create_satisfied_by_another_actor_is_a_noop_in_both_modes",
+        ),
+        (
+            "repo enable",
+            repository,
+            "repository_noop_prepares_preserve_state_in_both_modes",
+        ),
+        (
+            "repo remove",
+            repository,
+            "repository_noop_prepares_preserve_state_in_both_modes",
+        ),
+        (
+            "repo identity-set",
+            repository,
+            "repository_noop_prepares_preserve_state_in_both_modes",
+        ),
+        (
+            "remote add",
+            remotes,
+            "remote_noops_preserve_repository_in_both_modes",
+        ),
+        (
+            "remote remove",
+            remotes,
+            "remote_noops_preserve_repository_in_both_modes",
+        ),
+        (
+            "remote select",
+            remotes,
+            "remote_noops_preserve_repository_in_both_modes",
+        ),
+        (
+            "key import",
+            keys,
+            "registry_noops_preserve_key_files_in_both_modes",
+        ),
+        (
+            "key select",
+            keys,
+            "registry_noops_preserve_key_files_in_both_modes",
+        ),
+        (
+            "key clear",
+            keys,
+            "registry_noops_preserve_key_files_in_both_modes",
+        ),
+        (
+            "key remove",
+            keys,
+            "accepted_key_removal_with_lost_result_is_a_noop_in_both_modes",
+        ),
+        (
+            "key delete",
+            keys,
+            "completed_key_deletion_with_lost_result_is_a_noop_in_both_modes",
+        ),
+        (
+            "host approve",
+            hosts,
+            "host_noop_prepares_preserve_state_in_both_modes",
+        ),
+        (
+            "host replace",
+            hosts,
+            "host_noop_prepares_preserve_state_in_both_modes",
+        ),
+    ];
+    let no_noop = [
+        (
+            "key generate",
+            "The binding maps its own AlreadyCreated to ok, not already_applied.",
+        ),
+        (
+            "host observe",
+            "A read returns success/ok, including an unchanged pin.",
+        ),
+        (
+            "request show",
+            "A nested stored noop does not change the top-level success/ok.",
+        ),
+        (
+            "request cancel",
+            "requested:false is data in success/ok, not a noop outcome.",
+        ),
+    ];
+    let covered: BTreeSet<_> = evidence.iter().map(|(verb, _, _)| *verb).collect();
+    let excluded: BTreeSet<_> = no_noop
+        .iter()
+        .map(|(verb, reason)| {
+            assert!(!reason.is_empty());
+            *verb
+        })
+        .collect();
+    assert_eq!(covered.len(), 14);
+    assert_eq!(excluded.len(), 4);
+    assert!(covered.is_disjoint(&excluded));
+    assert_eq!(
+        covered.union(&excluded).copied().collect::<BTreeSet<_>>(),
+        available
+    );
+    for (verb, source, case) in evidence {
+        assert!(
+            source.contains(&format!("fn {case}(")),
+            "missing both-mode no-op evidence for {verb}: {case}"
+        );
+    }
+}
+
 #[test]
 fn c2_host_human_previews_and_remote_execution_evidence() {
     super::mutation::host_verbs_match_prepare();
