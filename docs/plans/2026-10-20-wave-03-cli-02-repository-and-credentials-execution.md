@@ -52,7 +52,9 @@ The fresh inline implementer is assigned **Task 11 only, no subagents**, from
 `40f856f`, with Part C review base `2cf87a3`. Task 11's implementation/evidence
 and named tests are complete; its Part C checkpoint passes all six commands
 and **481 tests**, including the scoped SSH-fixture lint correction at `d8ef550`.
-Independent Part C spec/quality review is pending with the controller.
+Controller reports full Part C spec and quality reviews both **APPROVE, no
+findings**, over **`2cf87a3..677675f`**; sessions are recorded below. This
+documentation-only follow-up records those approvals without rerunning tests.
 Task 12 and Cycle review-ready status remain outside this assignment.
 
 Commits are authorized, ending with
@@ -393,6 +395,34 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Part C Independent Review Checkpoint — Both Approve (2026-10-23 UTC)
+
+The controller supplied completed independent reviews of the **full Part C
+range**, including Task 10, Task 11, the scoped SSH-fixture lint correction and
+the local checkpoint evidence:
+
+- **Reviewed range:**
+  `2cf87a3f5bccf2ca9ced4883fd4d87ad78689633..677675fe2d71c34937b0e12b752311bdd8f20fe1`
+  (`2cf87a3..677675f`).
+- **Spec review:** `ses_e99d81494ffe0X9fZPYtMmFCoT` — **APPROVE**.
+- **Quality review:** `ses_e99d65a48ffeodBIQ7vcQEPEXp` — **APPROVE**.
+- **Findings: none.** These approvals supersede the historical pending-review
+  statuses below for the exact range above.
+
+The six-command **481-test** Part C gate remains the verification evidence.
+This follow-up changes only this ledger and its canonical checkpoint comment;
+no tests were rerun and no new implementation or independent review is claimed.
+The approval-record commit follows the reviewed range and is not represented
+as part of that approval.
+
+Canonical checkpoint comment: **`01M5K2QV11K76PA3D7BYTAS2Y6`**. Its ID came
+from built CLI `id new --json`, with an empty inherited environment, fresh
+temporary HOME/XDG/app-data, disabled Git configuration, null stdin and absolute
+`setsid` detachment. Entry head was `677675f`, with a clean worktree. The
+documentation-only commit uses the required Claude Opus 5.5 coauthor.
+No tests, push or subagents. Task 12 remains outstanding; the ticket stays open
+and the Cycle is not yet review-ready.
 
 ### Part C Checkpoint — Local Gate Passed, Controller Reviews Pending (2026-10-23 UTC)
 
