@@ -41,8 +41,6 @@ const REASONS: &[(&str, &str)] = &[
     ),
 ];
 
-const STAGED: &[(&str, u8, &str)] = &[];
-
 enum How {
     Here,
     Remote(&'static str),
@@ -621,22 +619,9 @@ fn the_table_and_reasons_account_for_every_code_of_the_audit() {
         assert!(!reason.is_empty());
         *code
     }));
-    let staged = set(STAGED.iter().map(|(code, task, reason)| {
-        assert!((8..=10).contains(task));
-        assert!(!reason.is_empty());
-        *code
-    }));
     assert_eq!(reasons.len(), REASONS.len());
-    assert_eq!(staged.len(), STAGED.len());
-    assert!(
-        covered.is_disjoint(&reasons)
-            && covered.is_disjoint(&staged)
-            && reasons.is_disjoint(&staged)
-    );
-    assert_eq!(
-        set(covered.into_iter().chain(reasons).chain(staged)),
-        expected
-    );
+    assert!(covered.is_disjoint(&reasons));
+    assert_eq!(set(covered.into_iter().chain(reasons)), expected);
     assert_eq!(set(ROWS.iter().map(|r| r.name)).len(), ROWS.len());
 }
 

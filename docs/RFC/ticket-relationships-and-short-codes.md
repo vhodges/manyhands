@@ -262,6 +262,9 @@ Existing verbs change as follows.
   whole-code, case-insensitive filter and `--ready` / `--blocked`.
 - `repo create` and `repo enable` accept optional `ticket_slug_prefix`, shown
   in the confirmation preview and written to the tracked configuration.
+  **Amended 2026-10-20 by C2:** the input name is `ticket_slug_prefix`; the
+  published confirmation preview names that value `slug_prefix`. This keeps
+  F2's output contract unchanged; it does not rename the input or tracked key.
 - `repo identity` reports the effective initials and their source.
   `repo identity-set` accepts optional `initials`, written to repository-local
   Git configuration and never to global configuration.

@@ -294,6 +294,67 @@ fn missing_identity_fixture(verb: &str) -> super::repository::Fixture {
     f
 }
 
+#[test]
+fn piped_input_and_terminal_prompts_are_separate() {
+    super::repository::require_no_system_identity();
+    let f = super::repository::Fixture::new("create");
+    let global = f.global();
+    let input = br#"{"primary_branch":"main","ticket_slug_prefix":"piped"}"#;
+    let mut p = PtyCli::spawn(
+        &[
+            "repo",
+            "create",
+            "--repo",
+            f.root.to_str().unwrap(),
+            "--input",
+            "-",
+        ]
+        .iter()
+        .map(OsStr::new)
+        .collect::<Vec<_>>(),
+        &f.env,
+        input,
+    );
+    p.expect("Name for commits in this repository: ");
+    p.send(b"Pipe Person\n");
+    p.expect("Email: ");
+    p.send(b"pipe@example.invalid\n");
+    p.expect("Proceed? [y/N] ");
+    p.send(b"yes\n");
+    let (out, transcript) = p.finish();
+    assert_eq!(out.status, 0);
+    assert!(transcript.contains("Preview of repo create"));
+    assert!(transcript.contains("Identity name: Pipe Person"));
+    assert!(transcript.contains("Identity email: pipe@example.invalid"));
+    assert!(transcript.contains("piped"));
+    for bytes in [&out.stdout, &out.stderr] {
+        let text = std::str::from_utf8(bytes).unwrap();
+        for value in ["Pipe Person", "pipe@example.invalid", "piped"] {
+            assert!(
+                !text.contains(value),
+                "input value outside preview/terminal echo"
+            );
+        }
+    }
+    let stderr = std::str::from_utf8(&out.stderr).unwrap();
+    assert!(
+        stderr.contains(
+            "every retry, including at a terminal, must give it as \"identity\" in --input"
+        )
+    );
+    assert_eq!(f.local().get_string("user.name").unwrap(), "Pipe Person");
+    assert_eq!(
+        f.local().get_string("user.email").unwrap(),
+        "pipe@example.invalid"
+    );
+    assert!(
+        std::fs::read_to_string(f.root.join(".manyhands/config.toml"))
+            .unwrap()
+            .contains("piped")
+    );
+    assert_eq!(f.global(), global);
+}
+
 fn ask_identity_and_verify(verb: &str) {
     let mut f = missing_identity_fixture(verb);
     let global = f.global();

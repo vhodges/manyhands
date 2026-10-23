@@ -2,6 +2,8 @@
 pub use manyhands::{repository, runtime};
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
+#[path = "cli_remote/journeys.rs"]
+mod journeys;
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/ssh_harness.rs"]
@@ -81,7 +83,12 @@ fn main() {
         eprintln!("CLI SSH initialization failed");
         std::process::exit(1);
     }
-    let cases: Vec<_> = hosts::CASES.iter().chain(unlock::CASES).copied().collect();
+    let cases: Vec<_> = hosts::CASES
+        .iter()
+        .chain(unlock::CASES)
+        .chain(journeys::CASES)
+        .copied()
+        .collect();
     ssh_harness::run(&cases);
 }
 

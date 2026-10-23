@@ -46,8 +46,12 @@ at `984b315`; sessions are recorded below. The six-command **448-test** gate at
 verification evidence. This follow-up records approvals only; no tests are rerun.
 Controller owns push. The owner subsequently assigned **Task 10 only**, starting
 at `2cf87a3`, to a fresh inline implementer without subagents. Task 10's targeted
-checks now pass and its delivery is recorded below; independent controller review
-is pending. Task 11 and its Part C gate are not started. Task 8's approvals remain below.
+checks pass and its delivery is recorded below. The controller reports Task 10
+spec/quality **APPROVE** and push at `40f856f`; sessions are recorded below.
+The fresh inline implementer is assigned **Task 11 only, no subagents**, from
+`40f856f`, with Part C review base `2cf87a3`. Task 11's implementation/evidence
+and named tests are complete; its post-commit Part C checkpoint is pending.
+Task 12 and Cycle review-ready status remain outside this assignment.
 
 Commits are authorized, ending with
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The owner has now
@@ -387,6 +391,109 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 10 Controller Approvals / Task 11 Entry
+
+- Controller reports Task 10 spec **APPROVE**, session
+  `ses_e99f3d532ffe5deBgPJRI40TM7`, and quality **APPROVE**, session
+  `ses_e99f1a00dffe2ZeueUTF4DLAt7`. Task 10 is pushed at
+  **`40f856f6eef6d238bfca4cd1cb328048f81a342a`**; the remote-tracking ticket
+  branch independently resolves to that same commit. These approvals supersede
+  Task 10's historical pending-review text below; no new review is claimed here.
+- Task 11 began on the assigned clean ticket branch/worktree. `git fetch origin
+  && git merge origin/main` returned **Already up to date**. Main remains
+  **`32d938d956a0d3374b6be27b7740e99c4ea39727`**.
+- Part C review base remains **`2cf87a3f5bccf2ca9ced4883fd4d87ad78689633`**.
+  Owner authorization is Task 11, named checks, task/evidence commits and
+  canonical comments only. No subagents, push, PR, ticket closure, worktree
+  cleanup, native dispatch or Task 12 full suite.
+
+### Task 11 — Journeys, Evidence And Document Amendments (2026-10-23 UTC)
+
+#### Delivery and evidence
+
+- Added `tests/cli_remote/journeys.rs` and registered three harness cases:
+  `onboard_an_empty_directory`, `onboard_an_existing_repository`, and Unix-only
+  `onboard_with_a_generated_key`. Each actual onboarding step is CLI JSON:
+  explicit identity on create/enable, server URL add/select, fixture-key import
+  or generation/public-key read/allow-list, key selection, observation, exact
+  observed-key approval and final authenticated observation. Mutation executions
+  have request IDs; confirmed verbs prepare without an ID then execute with
+  confirmation. Existing history is built only by the existing git2 helper.
+- Final observation increases authentication attempts and accepted-key count,
+  adds no rejection, reports the observed algorithm/fingerprint as the pin,
+  requires no reapproval, and repo list contains the canonical root. Existing
+  history remains an ancestor. No receive updates occur. Shared CLI helpers
+  enforce isolated home/data/Git/terminal state and bounded output-pipe EOF for
+  every child; server helper processes are not mistaken for CLI subprocesses.
+  Generated-key code and its harness case are compiled only on Unix.
+- Added `piped_input_and_terminal_prompts_are_separate`: a piped create JSON
+  object supplies branch/prefix while identity and consent are answered on a
+  PTY. Preview and local state carry the supplied values; streams/diagnostics
+  do not echo them, the retry note states the owner policy, and isolated global
+  configuration is byte-identical.
+- Removed the `STAGED` escape hatch from exit accounting: exactly **49 F2 /
+  52 CLI-inclusive codes**, covered rows plus five individual reasons, with
+  source-checked SSH references and all exit classes. Existing successful
+  both-mode execution privacy tests ran unchanged, including the Part B P2
+  correction; Task 10's live host outputs and UTF-8/UTF-16LE passphrase scans
+  of streams/transcript/home/data ran in the SSH target. No command-name-only
+  or refusal-only substitute was introduced. Existing mutation evidence also
+  passed unchanged.
+- Amended the CLI, authentication and relationships RFCs, Wave 03 and API audit
+  exactly for the design's Document Amendments. Retained existing command/18
+  audit rows, closing C2 evidence with actual test files and preserving 49/52
+  codes. Amendments use the required **Amended 2026-10-20 by C2** label; owner
+  early-null-ID, retry-identity and missing-source-fixture rulings retain their
+  actual **2026-10-22** date. This task's UTC completion crossed into October 23.
+- Added `--test cli_remote` immediately after `--test cli` in the native test
+  command; no workflow dispatch. No production/library, output-schema, lockfile,
+  dependency, golden or pre-C2 test semantic change.
+
+#### Test-first evidence and verification
+
+This is test/document work over approved implementation, with no production
+behavior edits. A temporary negative control omitted the host approval step:
+after correcting the public-key schema reference, the empty/imported and
+generated journeys failed the **final observation must authenticate** assertion.
+The control was removed by adding the required observed-key prepare/confirm.
+It was not counted as a production defect or left as a test option.
+
+New-fixture corrections: uppercase `PIPE` was refused before identity prompting
+because library prefixes require lowercase letters/digits; corrected to `piped`.
+The existing-repository helper nests a temporary directory, so the journey now
+uses its returned root rather than a guessed path. The published schema is
+`public_key.schema.json`, not `key_public.schema.json`. No old test or library
+semantics were changed to accommodate these corrections.
+
+| Run after `devenv shell --` | Result |
+| --- | --- |
+| Initial `cargo test --locked --test cli_remote --test cli` | CLI **166 passed / 1 failed** (new uppercase-prefix fixture); SSH target not reached |
+| After prefix correction, same command | CLI **167 passed**; SSH **27 passed / 3 failed** (negative control plus new fixture errors) |
+| `cargo test --locked --test cli_remote`, schema corrected, control retained | **27 passed / 3 failed**; empty/generated hit authentication assertion; existing root still incorrect |
+| Complete journeys, `cargo fmt` then named two-target command | CLI **167 passed**, SSH **30 passed** |
+| Final test-only Unix compile guard/accepted-key assertion and document edits; `cargo fmt` then same named command | CLI **167 passed**, SSH **30 passed**; no failed/ignored/filtered cases |
+
+Final named-run total: **197 passing cases** (not cumulative across reruns).
+The final CLI run took 26.93s. Every Rust command used Devenv and Cargo locked,
+except ordinary fmt. Full-suite execution remains reserved for Task 12.
+
+#### Self-review and task commit
+
+Reviewed the complete test and document diffs, all eighteen audit rows, required
+amendment checklist, Unix guards, isolation and secret handling. No unresolved
+self-review finding or library gap. Existing deferrals remain: wrong-passphrase
+library ticket `01M5E6DYJ6GN7DMW4424TH3V78`, Windows console/key-file manual
+checks, macOS PTY behavior and authorized post-merge native CI. Independent
+Part C spec/quality reviews belong to the controller; Cycle is not review-ready.
+
+Task completion comment **`01M5K1VA8HNPDRKDNC519W20J4`** and reserved checkpoint
+comment **`01M5K1VA9GQJ84AA8XZJFPA8H6`** were allocated by built CLI `id new
+--json` with empty inherited environment, fresh temporary HOME/XDG/app-data,
+disabled Git config, null stdin and absolute `setsid` detachment. No real
+developer data or terminal was used. Task commit subject is
+`test: prove the C2 journeys and amend the contract documents`, with the exact
+required coauthor. Post-commit checkpoint evidence follows separately.
 
 ### Task 10 — Host Observation, Approval, Replacement And Unlock (2026-10-22)
 
