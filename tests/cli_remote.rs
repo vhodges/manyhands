@@ -4,6 +4,9 @@ pub use manyhands::{repository, runtime};
 mod hosts;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
+// As in the other SSH targets, preserve the shared fixture's domain error type.
+// Limit this allowance to that imported module, not the CLI cases or bin modules.
+#[allow(clippy::result_large_err)]
 #[path = "support/remote_world.rs"]
 mod remote_world;
 #[path = "support/ssh_harness.rs"]
