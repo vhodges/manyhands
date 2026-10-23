@@ -41,10 +41,15 @@ manyhands-cli [--json] [--non-interactive] <resource> <verb>
 are accepted before or after the subcommand. Unknown commands/options are usage
 errors. Repository-scoped commands require `--repo`; there is no implicit
 "most recently selected" repository. Paths resolve relative to the invocation
-directory, then normalize through the domain service. A linked worktree maps
-to its repository's common Git identity, while item operations still resolve
+directory, then normalize through the domain service. For reads, a linked
+worktree maps to its repository's common Git identity, while item operations still resolve
 their one canonical context. File paths inside input objects are documented
 as repository-relative or invocation-relative by their command.
+
+Amended 2026-10-20 by C2: every mutation refuses a linked worktree's root with
+`not_repository_root`. Mutation roots are joined to the invocation directory,
+not canonicalized by the CLI: create can name an absent root, and remove can
+name the exact stored root of a missing registration directory.
 
 All item/comment identifiers are full canonical ULIDs. Titles and display
 abbreviations are never mutation selectors. Nonconforming resources without a
@@ -73,7 +78,9 @@ commands do not open it or initialize the Git transport.
 ## Command taxonomy
 
 `--repo` is required except for `repo list`, `key` commands, `host list`, `host inspect`,
-`id new` and help/version operations. `--id` selects an item,
+`request show`, `request cancel`, `id new` and help/version operations.
+Amended 2026-10-20 by C2: the request verbs refuse `--repo` and select the
+application-level record with required `--request-id`. `--id` selects an item,
 `--key-id` selects a key, and `--operation-id` selects an operation; their names
 are not interchangeable. Every verb has human and JSON output. Each row lists command-specific inputs;
 IDs, request IDs, observation and consent rules below apply where relevant.
@@ -84,20 +91,21 @@ the port defaults to 22. `folder list` joins the reads. `document show` and
 `ticket show` require exactly one of `--id` or repository-relative `--path`;
 only `--path` accepts an optional `--context` worktree path. `path observe`
 and `ticket check` move to C3. F2's `request show`, `request cancel` and
-`host observe` join C2, and `operation abandon` joins C4. These later verbs
-are cataloged as planned; their delivering Cycles publish their input rules.
+`host observe` join C2, and `operation abandon` joins C4.
+Amended 2026-10-20 by C2: all eighteen C2 verbs are available with the rules
+below; C3–C5 verbs remain cataloged as planned until their delivering Cycles.
 
 | Commands | Inputs and behavior |
 | --- | --- |
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
 | `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
-| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
+| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}` and `ticket_slug_prefix`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
 | `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. |
 | `repo identity` | Inspect effective name/email and source. |
-| `repo identity-set` | Input `name`, `email`; explicitly writes repository-local Git config, never global config. Confirmation required. |
+| `repo identity-set` | Input `name`, `email`, optional nullable `initials`; missing leaves initials unchanged, null clears, a string sets. Explicitly writes repository-local Git config, never global config. Confirmation required. |
 | `remote list` | Names, redacted locations and publication selection; never echo embedded credentials. |
 | `remote add` | Input `name`, `url`; add the named configuration, without implicit publication selection. |
-| `remote remove` | Input `name`; show publication/polling effects and require confirmation. |
+| `remote remove` | Input `name`; preview tracking-reference/upstream effects and require confirmation. The publication remote is refused with `publication_remote_in_use`, so preview `publication_affected` is always false. |
 | `remote select` | Input `name` (SSH only) or `null` to clear publication selection. |
 | `key list`, `key show` | Non-secret registrations, selection, ownership and fingerprint; show takes an opaque key ID. |
 | `key generate` | Input `label`, `protection` (`passphrase` or `none`); passphrase comes only from masked terminal interaction. |
@@ -106,8 +114,8 @@ are cataloged as planned; their delivering Cycles publish their input rules.
 | `key remove`, `key delete` | Unregister only, or separately delete owned generated files. Delete requires exact effect confirmation and cleared selection. Imported deletion is rejected. |
 | `key public` | Return public-key text/fingerprint if available; never private contents. |
 | `host list`, `host inspect` | Non-secret application-global pins; inspect takes `--authority`, never `--repo`. No network observation. |
-| `host observe` | Planned for C2: F2's configured-host observation for the approval flow. |
-| `host approve`, `host replace` | Input exact authority and presented fingerprint; replacement also requires old fingerprint. Explicit confirmation and transport re-observation required. |
+| `host observe` | Required `--repo`, optional `--authority <host[:port]>` (bracketed IPv6, default port 22); observes configured SSH authorities without writing a pin. May unlock for authentication. Human output supplies the next approve/replace input object. |
+| `host approve`, `host replace` | Input exact `authority`, `algorithm`, `fingerprint`; replacement also requires `old_fingerprint`. Explicit confirmation, transport re-observation and authentication with the selected key are required before storing trust. |
 | `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. |
 | `folder list` | List indexed document folders under `docs/`; no scan or refresh. |
 | `folder create` | Input repository-relative `path` under `docs/`; local empty folder until content is added. |
@@ -127,15 +135,14 @@ are cataloged as planned; their delivering Cycles publish their input rules.
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. |
 | `operation abandon` | Planned for C4: F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. |
-| `request show`, `request cancel` | Planned for C2: inspect or cancel through F2's request boundary. |
+| `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
 ### Registration removal targeting
 
-Amended 2026-10-19 by defect ticket `01M4R19P943QZKHHKRXV2D2TP2`. This is the
-library mutation contract that CLI C2 will expose; the executable verb remains
-planned until that Cycle delivers it.
+Amended 2026-10-19 by defect ticket `01M4R19P943QZKHHKRXV2D2TP2`.
+Amended 2026-10-20 by C2: `repo remove` now exposes this library mutation contract.
 
 `repo remove` selects a registration before requiring a live Git repository.
 When the root is missing or its directory no longer contains `.git`, callers
@@ -216,6 +223,61 @@ extends this taxonomy, as amended on 2026-10-07. It adds `ticket ready`,
 on existing ticket, identity and repository verbs. `--id` still takes only a
 canonical ULID; a short code is a search key and is rejected as an item ID.
 
+## C2 mutation options and input schemas
+
+Amended 2026-10-20 by C2. Selectors remain flags; all other mutation values
+arrive in one `--input <file|->` JSON object. Every mutation declares
+`--prepare` and `--confirm <ULID>`; unconfirmed verbs answer `not_confirmable`.
+Request and confirmation IDs must be canonical ULIDs, as must `--key-id`.
+
+| Verbs | Required | Refused |
+| --- | --- | --- |
+| `repo create`, `repo enable`, `repo identity-set`, `remote add`, `remote remove`, `remote select`, `host approve`, `host replace` | `--repo`, `--input` | — |
+| `repo remove` | `--repo` | `--input` |
+| `key generate`, `key import` | `--input` | `--repo` |
+| `key select`, `key remove`, `key delete` | `--key-id` | `--repo`, `--input` |
+| `key clear` | — | `--repo`, `--input` |
+| `host observe` | `--repo` | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `request show`, `request cancel` | `--request-id` | `--repo`, `--input`, `--prepare`, `--confirm` |
+| Noninteractive/JSON mutation execution | `--request-id` | — |
+| Every mutation | — | `--prepare` with either `--request-id` or `--confirm` |
+
+Confirmed C2 mutations are repo create/enable/remove/identity-set, remote
+remove, key delete and host approve/replace. All other C2 mutations are
+unconfirmed. `--prepare` takes no request ID and allocates none.
+
+Each input-taking verb publishes a closed schema under `schemas/input/v1/`,
+named `<resource>_<verb>.schema.json` with hyphens replaced by underscores.
+The shared `commit_identity.schema.json` is reached by `$ref`. Required fields
+are listed below; optional does not mean nullable unless explicitly stated.
+
+| Verb | Input fields |
+| --- | --- |
+| `repo create`, `repo enable` | Required string `primary_branch`; optional object `identity` with required strings `name`, `email`; optional string `ticket_slug_prefix`. |
+| `repo identity-set` | Required strings `name`, `email`; optional string-or-null `initials` (unchanged/clear/set as above). |
+| `remote add` | Required strings `name`, `url`. |
+| `remote remove` | Required string `name`. |
+| `remote select` | Required string-or-null `name`; null clears the selection. |
+| `key generate` | Required string `label`; required `protection`: `passphrase` or `none`. |
+| `key import` | Required strings `label`, `private_key_path`; optional string `public_key_path`. Both paths are invocation-relative. |
+| `host approve` | Required strings `authority`, `algorithm`, `fingerprint`; authority uses the host selector's syntax. |
+| `host replace` | Approve fields plus required string `old_fingerprint`. |
+
+Input is read after service opening, once to EOF for stdin. A leading UTF-8
+BOM is skipped. Unreadable/empty/non-UTF-8 input, malformed JSON, non-object
+values, duplicate keys at any depth, unknown fields, missing required fields,
+wrong types and invalid enum values are `invalid_input`, exit 2. Human input
+diagnostics name the escaped field and problem, never its value. `passphrase`
+is an unknown field; input provides no secret channel. Content validation is
+the library's, not a second CLI policy.
+
+Input compatibility is distinct from output compatibility: adding an optional
+field or accepting a new enum value is non-breaking. Adding a required field,
+removing/renaming a field, narrowing a type/enum or changing its meaning requires
+a new input version. Input objects are closed, but only required fields occur
+in `required`; the output all-properties rule does not apply to optional input.
+Input `ticket_slug_prefix` maps to published preview field `slug_prefix`.
+
 ## Observations, request identity and retries
 
 Show/inspect returns an opaque observation token representing the exact source,
@@ -225,7 +287,7 @@ creation explicitly expects absence. Stale observations produce
 `external_change`, preserving input and canonical state. There is no `--force`
 override. Caller-provided source/body never enters operation diagnostics.
 
-Every mutating invocation has a request ULID. JSON/noninteractive mutation
+Every mutating execution has a request ULID. JSON/noninteractive mutation
 requires caller-supplied `--request-id`; human interactive mode may allocate one
 and prints it before work begins. Reusing a request ID requires the same
 repository, command, target and semantic input. The adapter records non-secret
@@ -244,6 +306,24 @@ so explicitly. It cannot silently reconstruct an unsaved body from an operation
 record. These are required adapter/domain additions, not guarantees of current
 Wave 01 request structs.
 
+Amended 2026-10-20 by C2: only `execute` is automatically retried, and only
+when **(code is `busy` OR outcome is `partial`) AND the first recovery action
+is `request.retry` naming this request**. At most three further attempts follow
+100, 200 and 400 ms delays. Each uses the same command, target, input, request
+ID and confirmation as the preceding attempt, with no repeated consent or
+identity prompt. Stop at the first nonqualifying answer; return the last
+envelope unchanged. Human retries emit `progress: retrying` to stderr.
+Prepare, host observe and request show/cancel are never automatically retried;
+neither is `transport_unavailable` merely because it offers a retry action.
+One invocation keeps one credential session across its bounded retries.
+
+Protected key generation is excluded from automatic retry because its secret
+is moved into the first call. On a later invocation (R-19), an interactive
+retry asks for the passphrase again even for a finished request; if files were
+already written, the library registers them without using the new answer.
+A noninteractive retry is CLI-built `unlock_required`, without a library
+execute call. `request show` exposes the stored result of a finished request.
+
 ## Consent and noninteractive input
 
 Terminal mode may prompt for missing identity, passphrase, host approval and
@@ -253,6 +333,32 @@ terminal disables all prompts. A JSON command that needs a secret returns
 For protected keys, interactive one-shot commands unlock for that invocation.
 No pipe/argument/environment secret channel or desktop unlock sharing is
 included. There is no resident CLI credential session.
+
+Amended 2026-10-20 by C2: interactive mode means human output, no
+`--non-interactive`, and an available controlling terminal. All prompt I/O is
+on that terminal device, never stdin/stdout/stderr, so piped `--input -` and
+terminal prompts coexist. A new passphrase is masked and entered twice, with
+at most three attempts; exhaustion is `invalid_input`.
+
+For an interactive confirmed command without explicit `--prepare`/`--confirm`:
+prepare, display the preview on the terminal, ask `Proceed? [y/N]`, then execute
+with that confirmation only for `y`/`yes` (case-insensitive). A supplied request
+ID whose record already exists goes directly to execute without re-preview or
+consent; any lookup failure except `request_not_found` is returned unchanged.
+Unconfirmed commands execute directly. Explicit prepare/confirm never prompt
+for consent or identity; confirmed execution can still prompt to unlock.
+
+Create/enable with no input identity may ask for name/email only after prepare
+answers `identity_required`, then prepare again using the supplied identity.
+**Owner clarification, 2026-10-22:** every later invocation of that request,
+including an interactive retry, must provide the same identity in `--input`.
+Existing-record retries never reconstruct or prompt for it; the library decides
+replay or mismatch. Bounded retries within the original invocation reuse it.
+The CLI's note explains this without printing identity values. Library preview
+and result data retain their non-secret fields unchanged; CLI-written diagnostics
+never echo input values (except the escaped non-secret label in a new-passphrase
+prompt). Interactive execution without an ID allocates one and writes
+`request: <ULID>` immediately to stderr before library work.
 
 Two-phase confirmation makes automation explicit:
 
@@ -271,7 +377,9 @@ An expired or missing confirmation after cache loss requires a new preview.
 No global `--yes` can approve host trust, key deletion or a changed target.
 
 `host approve/replace` bind exact fingerprints separately from lifecycle
-consent, and persist trust only after the observed host presents them again.
+consent. Amended 2026-10-20 by C2 (F2 decision 6): trust is persisted only after
+the connection re-observes the expected algorithm/fingerprint **and authenticates
+with the selected key**. Merely seeing a host key does not store a pin.
 Republishing a remotely deleted previously published item branch also requires
 an explicit prepare/confirm effect summary; ordinary sync must not recreate it
 silently. Previewing arbitrary raw input does not make it valid or authorized.
@@ -292,6 +400,12 @@ JSON always writes one compact envelope and newline to stdout, with empty
 stderr. An output write/flush failure, including a broken pipe, exits 1
 without a panic or further diagnostic.
 
+Amended 2026-10-20 by C2: human progress stages go immediately to stderr once
+per stage change; host observe writes `progress: connecting` before its call.
+Failed writes of these early lines or the early request-ID note are ignored
+so they cannot stop in-flight work (R-9). Prompt write failure cancels the
+prompt. The final output write retains C1's exit-1 rule. JSON stderr stays empty.
+
 Amended 2026-10-18 by C1: JSON help and version are success envelopes named
 `cli help` and `cli version`, with empty scope and no requested effects.
 Help data lists commands, availability, delivering Cycle, summary, repository
@@ -308,8 +422,8 @@ uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 | --- | --- |
 | `schema_version` | Integer `1`. |
 | `command` | Canonical two-word command string. |
-| `request_id` | ULID string or null for read-only/generated-help results. |
-| `operation_id` | Domain operation ID string or null when no operation began. |
+| `request_id` | ULID string, or null when none applies, including prepare, ordinary reads/help and pre-dispatch failures; request selectors and post-open refusal retention follow C2 below. |
+| `operation_id` | Domain operation ID string or null when no operation began; may be set on a refusal after acceptance (F2, amended 2026-10-20 by C2). |
 | `outcome` | `success`, `noop`, `partial`, `blocked`, `cancelled`, `error`. |
 | `code` | Stable lower_snake_case result/recovery code; never raw backend error text. |
 | `message` | Redacted human explanation, not a machine discriminator. |
@@ -399,10 +513,13 @@ Example: a comment checkpoint succeeded but configured publication failed:
 }
 ```
 
-The version 1 JSON Schemas are closed: every object they define sets
-`additionalProperties: false` and requires all of its properties, except the
-free-form objects (the envelope's `data`, `unknown_metadata` and a recovery
-action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
+Amended 2026-10-20 by C2: the version 1 **output** JSON Schemas in `schemas/v1/`
+are closed: every object they define sets `additionalProperties: false` and
+requires all its properties, except four free-form objects: the envelope's
+`data`, `unknown_metadata`, a recovery action's `arguments`, and request show's
+stored `result.data` (F2's fourth object). Input schemas live separately and
+allow the optional fields described above. The output compatibility rule is
+(product owner, 2026-10-08):
 
 - A schema describes exactly what the build that ships it produces.
 - Adding a field, an enumeration value or a result or problem code is a
@@ -427,6 +544,34 @@ missing or conflicting inputs and malformed option values. An approved verb
 delivered by a later Cycle returns `command_unavailable`; human stderr names
 that Cycle. Both are input failures (exit 2), with empty scope, null data,
 no recovery actions and their fixed code messages in JSON.
+
+### CLI-built refusals (R-6)
+
+Amended 2026-10-20 by C2. For C2 the CLI builds refusals before execute or in
+place of a library call; library envelopes pass through unchanged. The codes
+are `usage_error`, `command_unavailable`, `invalid_path`, `invalid_input`,
+`invalid_id`, `cancelled`, `unlock_required` and `internal_error`. They name
+the parsed command (or `cli usage`), have null `operation_id` and `data`, empty
+scope, no recovery actions, all effects `not_requested` and null `commit_oid`.
+JSON `message` is the fixed result-code message, never input or backend text.
+
+**Owner clarification, 2026-10-22:** every pre-dispatch error, including
+usage/mode, transport startup and service-opening failures, keeps
+`request_id: null` even if argv has a valid ID. IDs are parsed only after the
+service opens. A post-open CLI refusal retains a valid parsed or
+allocated-and-printed request ID; absent/malformed request IDs remain null.
+Checks are request ID, confirmation ID, key ID, input, key-store lookup, then
+prompts. Invalid IDs are `invalid_id`; malformed input or three exhausted
+identity/new-passphrase attempts are `invalid_input`; protected generation
+without a terminal is `unlock_required`; unavailable current-user key-store
+location is `internal_error`. No new output code/schema is introduced.
+
+Amended 2026-10-20 by C2: a wrong passphrase currently passes through as
+`transport_unavailable`, exit 5, pending defect `01M5E6DYJ6GN7DMW4424TH3V78`
+(decision 9). When this invocation supplied a passphrase, human stderr adds
+`hint: if the passphrase was wrong, run the command again`. JSON is unchanged,
+and no automatic retry sends the wrong answer again. `unlock_failed`, exit 3,
+is demonstrated by a server rejecting the key after the right passphrase.
 
 | Exit | Meaning |
 | --- | --- |
@@ -472,9 +617,19 @@ but resident CLI scheduling is outside the MVP. A possible future daemon is
 intended for server-side change watching and automation triggers, not ordinary
 user-machine polling; it requires a separate PRD/enhancement design.
 
-Ctrl-C requests safe-point cancellation and exits `130` after the final result
-when possible. Another forced termination is interruption, never evidence of
-rollback. Platform-native stop handling follows the runtime RFC.
+Amended 2026-10-20 by C2 (decision 6): before execute, declining consent,
+Ctrl-C or EOF at a prompt is CLI-built `cancelled`, exit 130. Only the unused
+prepare confirmation can remain, to expire. During a connection's unlock
+prompt, Ctrl-C/EOF dismisses the prompt; the library returns `unlock_required`,
+exit 3. C2 installs no process-wide Ctrl-C handler and has no safe point after
+acceptance. Outside prompts, termination is interruption, not rollback. C4
+owns safe-point Ctrl-C cancellation for synchronization.
+
+The accepted local-write interruption window (decision 8) remains: create,
+enable or remote select can stop between writing `.manyhands/config.toml` and
+committing it, leaving a dirty-worktree refusal on retry. Remove the uncommitted
+configuration for create/enable, or restore its committed content for remote
+select, then retry the same request. C4 owns later operation abandonment.
 
 ## Alternatives, risks and required evidence
 
@@ -503,5 +658,10 @@ strings. The background
 journey uses explicit `poll once` to prove the CLI counterpart; automatic
 scheduling is desktop-only. Verify safe cancellation and overlap with a desktop
 operation through the existing domain protocol, no resident worker after exit,
-and no display or desktop dependency. These are future acceptance obligations;
-the current `manyhands-cli` entry point is still an empty scaffold at the draft base.
+and no display or desktop dependency. Amended 2026-10-20 by C2: C1 reads and
+C2's eighteen administration verbs now run through the executable. C2's empty,
+existing-history and Unix generated-key onboarding journeys are in
+`tests/cli_remote/journeys.rs`; exit, stdin/PTY and privacy evidence is in
+`tests/cli/` and `tests/cli_remote/`. Authoring/synchronization and the remaining
+PRD journeys remain obligations of later Cycles. Native CI runs after merge;
+Windows prompting/key-file checks remain manual, not implied by Linux evidence.
