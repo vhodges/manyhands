@@ -4,11 +4,13 @@ manyhands_kind: ticket
 id: "01M4CC0VMTTNKVYS6XWQG4CK1N"
 title: "Wave 03 C2: CLI Repository And Credential Administration"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
 cycle: "C2"
+closed_at: "2026-10-23T23:53:03Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 ---
 
 Make repository onboarding and SSH setup usable without GUI or
@@ -17,10 +19,11 @@ external Git/key-generation commands.
 CLI track of [Wave 03](../../../docs/Waves/wave-03-dogfooding.md#c2-cli-repository-and-credential-administration).
 The Wave document owns this Cycle's scope, exclusions and track rules.
 
-## Delivery Status — Review-Ready
+## Delivery Status — Closed With Owner Approval
 
-**2026-10-23: implementation, local verification and final reviews complete;
-Task 12 through Step 6 is review-ready.** The controller reports both final
+**Closed at 2026-10-23T23:53:03Z with explicit owner approval.** Implementation,
+local verification and final reviews were complete at readiness commit
+`b4bc0a31556b821167a88eb96fcaa12c2eea9b7a`. The controller reports both final
 whole-branch reviews **APPROVE, no findings**, for
 `563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`:
 
@@ -35,8 +38,15 @@ Native Windows console/key-file checks, macOS PTY behavior and post-merge CI
 remain owed; each CI run requires approval. Known wrong-passphrase defect
 `01M5E6DYJ6GN7DMW4424TH3V78` remains open and nonblocking.
 
-**This ticket remains open. Closure is not authorized.** Review-ready status
-does not authorize push, PR, merge, cleanup or CI dispatch.
+The owner explicitly directed: **“Close the ticket, merge to main and push to
+origin. Clean up the local and remote branches as well as the worktree”.**
+This commit records closure; the **controller** will merge, push and remove
+the local/remote ticket branches and worktree. Those delivery/cleanup actions
+are authorized but **not yet performed by this checkpoint**. Closure comment:
+`01M5NJXBC7A1VHAQ32S6GF8AAK`.
+
+**Native CI is not authorized by this instruction.** Post-merge CI on main
+still requires separate approval for each dispatch.
 
 ## Planning
 

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2: CLI Repository And Credential Administration"
 date: 2026-10-20
-status: "implemented, review-ready"
+status: "closed"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -17,8 +17,12 @@ implementation plan, for subagent-driven execution. The owner answered the
 planning questions on 2026-10-20. They are decisions 1–9 below; decisions 7–9
 followed two independent reviews of the drafts.
 
-**Implemented, locally verified and review-ready, 2026-10-23.** Task 12 through
-Step 6 is complete. The controller reports both final whole-branch reviews
+**Closed with explicit owner approval at 2026-10-23T23:53:03Z.** Implementation,
+local verification and Task 12 through Step 6 were complete at readiness
+commit `b4bc0a31556b821167a88eb96fcaa12c2eea9b7a`. Step 7 closure is recorded
+now; the authorized merge, push and local/remote branch/worktree cleanup are
+pending controller execution, not claimed as done. The controller reports both
+final whole-branch reviews
 **APPROVE, no findings**, at `9c3a23ef349a667132ded3faa35cacb118ee2fa9` against
 main `563893c118f8e6a2d1f9ec9ccfe240f120decb95`:
 
@@ -34,8 +38,9 @@ protected generation passed; identity prompting was observed, while corrected
 invalid-input refusal and valid creation are post-fix automated evidence, not
 a claimed human rerun. The original approval above remains part of the record.
 
-**Ticket remains open; closure is not authorized.** Windows console first native
-compilation/prompting (R-16), Windows key-file checks, macOS PTY behavior and
+**Ticket is closed; controller delivery/cleanup is authorized and pending.**
+The owner's instruction does **not** authorize native CI. Windows console
+first native compilation/prompting (R-16), Windows key-file checks, macOS PTY behavior and
 post-merge CI on main remain owed; each CI dispatch needs its own owner approval.
 Wrong-passphrase defect `01M5E6DYJ6GN7DMW4424TH3V78` stays open and nonblocking
 under decision 9. The bounded desktop launch is smoke evidence only, with no

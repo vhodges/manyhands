@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2 CLI Repository And Credential Administration Design"
 date: 2026-10-20
-status: "implemented, review-ready"
+status: "implemented, closed"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,8 +12,11 @@ id: "01M5E2E00HDF992A4D7HQ3TFRJ"
 
 ## Execution Status
 
-**Implemented, locally verified and review-ready, 2026-10-23.** Task 12 through
-Step 6 is complete. Final whole-branch spec review
+**Implemented and closed with explicit owner approval at 2026-10-23T23:53:03Z.**
+Readiness was recorded at `b4bc0a31556b821167a88eb96fcaa12c2eea9b7a` after
+Task 12 through Step 6. Step 7 closure is recorded in this documentation-only
+checkpoint; the controller's authorized merge, push and branch/worktree cleanup
+remain pending. Final whole-branch spec review
 **`ses_e96bcb4cfffeoD5umHyL4mfvrx`** and independent actual-code quality review
 **`ses_e96987265ffe2Est5HzXZ9VZp8`** both **APPROVE, no findings**, for
 `563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`.
@@ -29,12 +32,13 @@ evidence, not a claimed human rerun. All-feature output ordering and both-mode
 no-op evidence for all 14 capable verbs (four source-justified non-no-op verbs)
 are covered by the final reviews.
 
-The ticket stays **open**; closure is not authorized. Windows console first
-native compilation/prompting (R-16), Windows key files, macOS PTY behavior and
+The ticket is **closed**. Merge/push/cleanup authorization does **not** include
+native CI. Windows console first native compilation/prompting (R-16), Windows
+key files, macOS PTY behavior and
 post-merge CI on main remain owed, with approval required for each CI dispatch.
 Known wrong-passphrase defect `01M5E6DYJ6GN7DMW4424TH3V78` remains open and
 nonblocking. Desktop smoke proves bounded launch/rendering, not graceful exit.
-This readiness update reruns no tests. Details and provenance are in the
+This closure update reruns no tests. Details and provenance are in the
 [execution ledger](2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
 
 ## Intent And Approval Boundary

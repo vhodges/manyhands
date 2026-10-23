@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2 CLI Repository And Credential Administration Execution"
 date: 2026-10-22
-status: "implemented, review-ready"
+status: "implemented, closed"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -19,9 +19,12 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**2026-10-23 UTC: implemented, locally verified and review-ready.** Task 12
+**Closed with explicit owner approval at 2026-10-23T23:53:03Z.** Task 12
 implementation, verification, acceptance mapping, final reviews and Step 6
-readiness bookkeeping are complete. The controller reports final whole-branch
+readiness were complete at `b4bc0a31556b821167a88eb96fcaa12c2eea9b7a`.
+Step 7 is now authorized: this commit records ticket closure; the controller's
+merge, push and local/remote branch/worktree cleanup remain **pending**, not
+performed by this implementer. The controller reports final whole-branch
 spec **`ses_e96bcb4cfffeoD5umHyL4mfvrx`** and independent actual-code quality
 **`ses_e96987265ffe2Est5HzXZ9VZp8`** both **APPROVE, no findings**, on
 `563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`.
@@ -40,7 +43,8 @@ Owner Ctrl-C exit 130 with restored modes and protected generation passed.
 Identity prompting was observed; corrected refusal and valid creation are
 post-fix automated evidence, not a human rerun or invented waiver. Native
 obligations and the nonblocking wrong-passphrase defect remain explicit below.
-**Ticket stays open; closure and later delivery actions are not authorized.**
+**Ticket is closed. Merge/push/cleanup are authorized for the controller;
+native CI is not authorized and still needs separate approval per run.**
 
 ### Historical authorization and task checkpoints
 
@@ -420,6 +424,58 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 Step 7 — Owner-Approved Closure; Controller Delivery Pending (2026-10-23 UTC)
+
+The owner explicitly authorized:
+
+> Close the ticket, merge to main and push to origin. Clean up the local and
+> remote branches as well as the worktree.
+
+This authorization supersedes the earlier readiness checkpoint's prohibition
+on closure and delivery. The assignment to this implementer is **closure and
+documentation commit only**. The controller owns execution of the remaining
+authorized actions; no merge, push or cleanup is represented as completed here.
+
+| Lifecycle item | State at this checkpoint |
+| --- | --- |
+| Ticket closure | Recorded: `status: closed`, `closed_at: 2026-10-23T23:53:03Z`, `closed_by: Vince Hodges <vince@imbas.ca>` |
+| Merge C2 into main | Owner-authorized; pending controller execution |
+| Push to origin | Owner-authorized; pending controller execution |
+| Remove local and remote ticket branches | Owner-authorized; pending controller execution |
+| Remove the C2 ticket worktree | Owner-authorized; pending controller execution after delivery |
+| Native CI | **Not authorized** by this instruction; each post-merge dispatch on main still requires separate owner approval |
+
+Closure time is actual UTC from `date -u`, and the approved owner identity
+matches the canonical closed-ticket form read from
+`.manyhands/tickets/01M5MAVV5CQE98Q9P2GG9T4FP9/ticket.md`. Only C2's ticket is
+changed. Entry was clean at readiness HEAD
+**`b4bc0a31556b821167a88eb96fcaa12c2eea9b7a`**, with observed `origin/main`
+**`563893c118f8e6a2d1f9ec9ccfe240f120decb95`**.
+
+The reviewed source remains **`9c3a23ef349a667132ded3faa35cacb118ee2fa9`**
+against that main. Both whole-branch reviews remain **APPROVE, no findings**:
+spec **`ses_e96bcb4cfffeoD5umHyL4mfvrx`** after the no-op correction, and
+independent actual-code quality **`ses_e96987265ffe2Est5HzXZ9VZp8`**. The
+readiness evidence/comment **`01M5MPSP0DHPDMFA2N9X8B0A1C`** and all historical
+verification records are preserved. This closure commit changes no production,
+library or test source, so no tests are repeated.
+
+The historical C2 4,118-pass/1-ignored composed record, upstream identity-fix
+full-suite report, targeted 97- and 90-distinct-case evidence, complete no-op
+inventory, and manual/automated identity distinction retain their existing
+provenance. Closure adds no native or graceful-desktop-exit claim. Windows
+console first native compilation/prompting (R-16/R-11), Windows key-file checks,
+macOS PTY behavior and a separately approved post-merge native CI run are still owed. Known
+wrong-passphrase defect **`01M5E6DYJ6GN7DMW4424TH3V78`** remains open and
+nonblocking under decision 9.
+
+Canonical closure comment **`01M5NJXBC7A1VHAQ32S6GF8AAK`** was allocated by
+isolated detached built CLI `id new --json` **before worktree removal** and
+includes `created_by`. Commit subject:
+**`chore: close the C2 repository and credential administration ticket`**, with
+the required coauthor. No subagents, push, merge, cleanup or CI dispatch by this
+implementer. Delivery completion must be recorded by the controller when done.
 
 ### Task 12 Step 6 — Review-Ready After Final Whole-Branch Approvals (2026-10-23 UTC)
 
