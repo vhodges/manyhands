@@ -1,9 +1,10 @@
 ---
+id: 01M5BXRSKDK99KNSQF9NFJ124M
+item_id: 01M4CC0VMY5RBMP70QVBXWXM6A
+created_at: 2026-10-20T05:50:24Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5BXRSKDK99KNSQF9NFJ124M"
-item_id: "01M4CC0VMY5RBMP70QVBXWXM6A"
-created_at: "2026-10-20T05:50:24Z"
 ---
 
 Part B checkpoint (Tasks 8–10) at `323c66e`. Not pushed. `origin/main` is

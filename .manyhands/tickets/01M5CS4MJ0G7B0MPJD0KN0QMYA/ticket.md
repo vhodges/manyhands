@@ -1,14 +1,14 @@
 ---
+id: 01M5CS4MJ0G7B0MPJD0KN0QMYA
+title: 'Desktop follow-up: structure from the D1 reviews'
+type: task
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-21T14:52:58Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5CS4MJ0G7B0MPJD0KN0QMYA"
-title: "Desktop follow-up: structure from the D1 reviews"
-type: "task"
-status: "closed"
-closed_at: "2026-10-21T14:52:58Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
 ---
 
 The D1 desktop reviews (Wave 03 Cycle D1, ticket

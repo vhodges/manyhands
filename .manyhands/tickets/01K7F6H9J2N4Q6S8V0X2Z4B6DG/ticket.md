@@ -1,16 +1,16 @@
 ---
+cycle: '08'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+title: 'Wave 02 Cycle 08: One-Shot Polling And Materialization'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-15T13:46:50Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-title: "Wave 02 Cycle 08: One-Shot Polling And Materialization"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-15T13:46:50Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "08"
 ---
 
 Safely observe a remote once, update clean local state, and materialize newly

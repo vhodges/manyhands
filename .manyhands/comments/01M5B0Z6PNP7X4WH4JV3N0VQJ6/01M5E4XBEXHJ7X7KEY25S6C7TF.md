@@ -1,9 +1,10 @@
 ---
+id: 01M5E4XBEXHJ7X7KEY25S6C7TF
+item_id: 01M5B0Z6PNP7X4WH4JV3N0VQJ6
+created_at: 2026-10-21T02:33:42Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5E4XBEXHJ7X7KEY25S6C7TF"
-item_id: "01M5B0Z6PNP7X4WH4JV3N0VQJ6"
-created_at: "2026-10-21T02:33:42Z"
 ---
 
 ## Approved design implemented; targeted verification

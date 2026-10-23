@@ -1,9 +1,10 @@
 ---
+id: 01M4CBMMDZ80MSRG22GZ3922AG
+item_id: 01M4CAQGTMM3JYFMWQJCZXP1KZ
+created_at: 2026-10-07T23:37:06Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CBMMDZ80MSRG22GZ3922AG"
-item_id: "01M4CAQGTMM3JYFMWQJCZXP1KZ"
-created_at: "2026-10-07T23:37:06Z"
 ---
 
 Ruling checkpoint: the product owner accepted the byte changes made by

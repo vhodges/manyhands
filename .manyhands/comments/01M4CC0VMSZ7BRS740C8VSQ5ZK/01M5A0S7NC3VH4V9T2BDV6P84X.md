@@ -1,9 +1,10 @@
 ---
+id: 01M5A0S7NC3VH4V9T2BDV6P84X
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T12:04:35Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A0S7NC3VH4V9T2BDV6P84X"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T12:04:35Z"
 ---
 
 Task 1 review-fix checkpoint. Controller reports spec PASS and one important

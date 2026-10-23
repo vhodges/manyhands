@@ -10487,7 +10487,23 @@ fn publication_remote_eligible_for(
     }))
 }
 
+/// The identity Git's configuration gives a commit, and the level it is
+/// from: the first level that holds both a name and an email decides.
+/// One that a commit would not carry unchanged is no identity, and no
+/// level below stands in for it.
 fn resolve_identity(
+    local_config: &Config,
+    effective_config: &Config,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<Option<(CommitIdentity, ConfigLevel)>, RepositoryError> {
+    Ok(
+        deciding_identity(local_config, effective_config, root, operation)?
+            .filter(|(identity, _)| commits_unchanged(identity)),
+    )
+}
+
+fn deciding_identity(
     local_config: &Config,
     effective_config: &Config,
     root: &Path,
@@ -10545,24 +10561,40 @@ fn complete_identity_at_level(
     })
 }
 
-#[allow(dead_code)] // Task 4 calls this before its first local config write.
+/// Refuses a supplied identity that a commit would not carry unchanged,
+/// before anything is written with it.
 fn validate_identity(
     identity: &CommitIdentity,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
-    if identity.name.is_empty()
-        || identity.email.is_empty()
-        || identity.name.contains('\0')
-        || identity.email.contains('\0')
-    {
+    if !commits_unchanged(identity) {
         return Err(RepositoryError::new(
             operation,
             None,
             RepositoryErrorKind::InvalidIdentity,
-            "commit identity name and email must be nonempty and NUL-free",
+            "commit identity name and email must be nonempty, hold no control character, and be \
+             ones a Git commit carries unchanged",
         ));
     }
     Ok(())
+}
+
+/// Whether a commit made as `identity` carries its name and its email as
+/// they are. Git refuses `<` and `>` in either, drops white space and
+/// `, : ; " \ '` from their ends, and refuses a value that is then empty.
+/// It writes a line break into the commit as it is, where no reader can
+/// parse it, so a value with a control character is not one either.
+fn commits_unchanged(identity: &CommitIdentity) -> bool {
+    let CommitIdentity { name, email } = identity;
+    if [name, email]
+        .iter()
+        .any(|value| value.chars().any(char::is_control))
+    {
+        return false;
+    }
+    Signature::new(name, email, &git2::Time::new(0, 0)).is_ok_and(|signature| {
+        signature.name() == Some(name.as_str()) && signature.email() == Some(email.as_str())
+    })
 }
 
 fn remote_info(repository: &Repository, root: &Path) -> Result<Vec<RemoteInfo>, RepositoryError> {
@@ -11448,6 +11480,78 @@ mod tests {
                 RepositoryOperation::Enable
             )
             .is_ok()
+        );
+    }
+
+    /// What libgit2 1.9 makes a signature of: it refuses `<` and `>`
+    /// in either value, drops white space and `, : ; " \ '` from both
+    /// ends, and refuses a value that is then empty. It writes a line
+    /// break into the commit as it is, which no reader can then parse.
+    #[test]
+    fn identity_validation_refuses_what_a_commit_would_not_carry_unchanged() {
+        let plain = "Example Person";
+        let email = "example@example.invalid";
+        for (name, email) in [
+            ("Example Person <example@example.invalid>", email),
+            (plain, "<example@example.invalid>"),
+            ("Example > Person", email),
+            (plain, "example>@example.invalid"),
+            ("Example\nPerson", email),
+            (plain, "example@example.invalid\n"),
+            ("Example\tPerson", email),
+            (" Example Person", email),
+            ("Example Person,", email),
+            (plain, "'example@example.invalid'"),
+            (";", email),
+            (plain, " "),
+        ] {
+            let identity = CommitIdentity {
+                name: name.to_owned(),
+                email: email.to_owned(),
+            };
+            let error = validate_identity(&identity, RepositoryOperation::CreateAndEnable)
+                .expect_err(&format!("{name:?} {email:?}"));
+            assert_eq!(error.kind, RepositoryErrorKind::InvalidIdentity);
+        }
+
+        for (name, email) in [
+            (plain, email),
+            ("Ada O'Brien, Jr.", "ada.obrien@example.invalid"),
+            ("Zoë Example", "zoë@example.invalid"),
+            // An email need not hold an `@` for Git to commit as it.
+            ("Person", "person"),
+        ] {
+            let identity = CommitIdentity {
+                name: name.to_owned(),
+                email: email.to_owned(),
+            };
+            assert!(
+                validate_identity(&identity, RepositoryOperation::CreateAndEnable).is_ok(),
+                "{name:?} {email:?}"
+            );
+        }
+    }
+
+    /// The level that holds a whole pair decides it: one Git cannot commit
+    /// as is no identity, and a level below is not used in its place.
+    #[test]
+    fn identity_resolver_finds_none_where_the_deciding_pair_cannot_be_committed() {
+        let bracketed = "[user]\nname = \"Example <example@example.invalid>\"\n\
+                         email = example@example.invalid\n";
+        let complete = "[user]\nname = Global Name\nemail = global@example.invalid\n";
+        let resolved = |local: &str, global: &str| {
+            let (_local_directory, local) = isolated_config(ConfigLevel::Local, local);
+            let (_global_directory, global) = isolated_config(ConfigLevel::Global, global);
+            resolve_identity(&local, &global, Path::new("/"), RepositoryOperation::Enable)
+                .unwrap()
+                .map(|(identity, level)| (identity.name, level))
+        };
+
+        assert_eq!(resolved(bracketed, complete), None);
+        assert_eq!(resolved("", bracketed), None);
+        assert_eq!(
+            resolved("", complete),
+            Some(("Global Name".to_owned(), ConfigLevel::Global))
         );
     }
 

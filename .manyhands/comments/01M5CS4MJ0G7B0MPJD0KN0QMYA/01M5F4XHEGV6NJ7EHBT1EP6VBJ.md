@@ -1,9 +1,10 @@
 ---
+id: 01M5F4XHEGV6NJ7EHBT1EP6VBJ
+item_id: 01M5CS4MJ0G7B0MPJD0KN0QMYA
+created_at: 2026-10-21T11:53:03Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5F4XHEGV6NJ7EHBT1EP6VBJ"
-item_id: "01M5CS4MJ0G7B0MPJD0KN0QMYA"
-created_at: "2026-10-21T11:53:03Z"
 ---
 
 ## Structure plan ready for owner review

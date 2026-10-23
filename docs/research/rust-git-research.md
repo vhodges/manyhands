@@ -1,3 +1,12 @@
+---
+title: "Rust Git Research"
+date: 2026-09-28
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J93ADZHCVRNPPPT8CY"
+---
+
 # Rust Git Research
 
 > Status: unverified external research. Validate crate versions and APIs before implementation; the examples use direct `gpui` imports while this repository uses `gpui-kit` re-exports.

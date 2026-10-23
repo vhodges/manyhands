@@ -1,9 +1,10 @@
 ---
+id: 01M4CPJN0TE203NE6WZVG3722V
+item_id: 01M4CKWWRA1DHFPMWKPNK7CQ1G
+created_at: 2026-10-08T02:48:15Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CPJN0TE203NE6WZVG3722V"
-item_id: "01M4CKWWRA1DHFPMWKPNK7CQ1G"
-created_at: "2026-10-08T02:48:15Z"
 ---
 
 Review checkpoint: the product owner asked for a code review of `75515d3`.

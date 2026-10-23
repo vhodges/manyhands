@@ -1,16 +1,16 @@
 ---
+cycle: '10'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+title: 'Wave 02 Cycle 10: Confirmed Ticket Closure'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-18T14:59:28Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-title: "Wave 02 Cycle 10: Confirmed Ticket Closure"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-18T14:59:28Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "10"
 ---
 
 Close a ticket with its required closure metadata and the same guarded
