@@ -1,12 +1,14 @@
 ---
+id: 01M5MAVV5CQE98Q9P2GG9T4FP9
+title: Reject invalid Git signatures before repository onboarding writes
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-23T14:33:17Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M5MAVV5CQE98Q9P2GG9T4FP9"
-title: "Reject invalid Git signatures before repository onboarding writes"
-type: "defect"
-status: "open"
-project: "manyhands"
-team: "core"
 ---
 
 Repository creation accepts a supplied name containing angle brackets during
@@ -129,3 +131,19 @@ Diagnosis only: no implementation, production/test edits, commits, or readiness
 claim. The separate owner Ctrl+C check remains outstanding; answering `y` and
 exiting 0 is not Ctrl+C evidence. Protected-generation mismatch retry success is
 a separate manual observation and does not resolve this onboarding blocker.
+
+## Resolution and approved closure
+
+Fixed in `b62d9e9`, with review follow-up `33485cb`. Onboarding now commits
+only as an identity Git carries unchanged. Each value holds no control
+character, and git2's signature gives the name and email back as they were
+supplied. A supplied identity that fails is `invalid_input` at preview and in
+the domain. One from Git's configuration counts as missing in the shared
+resolver, and no lower level stands in for it. Both are refused before any
+write. Outstanding partial creates keep their pending rows. The rule is in
+`docs/RFC/cli-contract.md` under "Onboarding identity".
+
+Verification, independent review and the owner's decisions are recorded in
+comments `01M5MCXTQA3JE7JKS52PPNFNFC` and `01M5MJMV6XWME37VA45S9BNS6H`. The
+owner approved closing the ticket, merging to main and pushing on 2026-10-23.
+C2's blocked owner verification can resume once this is on main.
