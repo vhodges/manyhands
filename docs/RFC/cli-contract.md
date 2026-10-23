@@ -170,6 +170,26 @@ is asked to yield. It never implicitly abandons that work. A live repository
 continues to require its Git lease. A root or lease replacement detected while
 acquiring guards produces a retryable busy result.
 
+### Onboarding identity
+
+Amended 2026-10-23 by defect ticket `01M5MAVV5CQE98Q9P2GG9T4FP9`.
+
+`repo create` and `repo enable` commit only as an identity Git carries
+unchanged. A name and an email each hold no control character. Git's
+signature must also give both back as they were supplied. Git refuses `<`
+and `>`, and trims white space and `, : ; " \ '` from either end. So a value
+that it would trim, or that trims to nothing, is refused too. An email
+needs no `@` here; `repo identity-set` keeps its stricter rule. A supplied
+identity that fails is `invalid_input` at preview and in the domain. One
+from Git's configuration counts as missing: inspection reports an identity
+as required, and the command answers `identity_required`. In both cases the
+refusal comes before any write. The first configuration level that holds a
+whole pair decides the identity, and no lower level stands in for it.
+The same resolver serves every command that commits as Git's configured
+identity. So item and comment saves, repair, and the publication-remote
+change also treat an unusable configured identity as missing, and
+`repo identity` reports it as `none`.
+
 ### List ordering
 
 List ordering is deterministic: repositories by normalized root, documents by
