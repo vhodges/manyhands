@@ -19,6 +19,17 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
+**Task 12 update, 2026-10-23 UTC:** the fresh inline verification implementer
+was assigned Steps 1, 2 and 4, with no subagents. Step 1 and the acceptance
+mapping are recorded below. Step 2 is **incomplete**: its single full-suite
+launch hit the 1,200,000 ms tool deadline during the desktop target, after the
+library target passed. It was not restarted. The other eight gate commands
+completed, and the isolated desktop smoke submitted rendered Wayland buffers.
+Real-terminal manual checks and controller final spec/quality reviews remain
+pending. **Not review-ready.** The controller must rule on the interrupted gate
+and manual evidence before a later completion/readiness commit. Historical
+task assignments and approvals below are preserved.
+
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
 planning comment `01M5E861TCK5Z90NYBY0CE69QA`, which says approval and the
@@ -395,6 +406,255 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Local Verification And Acceptance Evidence (2026-10-23 UTC)
+
+#### Scope, baseline and Step 1
+
+- Assigned base and tested HEAD: **`0860a6afe0a4fa5bcfd23568c27b50677dc2fd2c`**.
+  The assigned ticket branch/worktree was clean. Tasks 0–11 and Part A/B/C
+  approvals were carried forward; this session did not repeat their reviews.
+- `git fetch origin main` succeeded. `git merge origin/main` returned
+  **Already up to date**, with main at
+  **`32d938d956a0d3374b6be27b7740e99c4ea39727`**. No rebase.
+- `git merge-tree --write-tree HEAD origin/main` succeeded with tree
+  **`7ac2f1af9e809bb23e2caf54bf3fed8356553689`** at entry and after verification.
+- Linux **x86_64** only. Devenv reports Rust **1.98.1**
+  (`48a229cea`, 2026-09-01), Cargo **1.98.0** (`797e8a9bc`, 2026-08-05),
+  Git **2.55.0**. The isolated built binary reports `manyhands-cli 0.1.0`.
+- No code, tests, dependencies, lockfiles, workflow or schemas changed in this
+  task. No test semantic edit, library fix or new result code was attempted.
+
+#### Step 2 — Exact sequential gate and complete logs
+
+Log root **`/tmp/opencode/c2-task12-verification-0860a6a/`**. Files below
+contain complete captured command output, not filtered excerpts. The full-suite
+log was read in full (all **1,950 lines**). `verification-status.txt` records
+the tool timeout, process checks, environment observations and versions;
+`isolated-runner.sh` records the smoke isolation/termination policy.
+
+| Order | Command | Outcome | Log |
+| --- | --- | --- | --- |
+| 1 | `devenv shell -- cargo check --all-features --locked` | Passed; Cargo 0.37s | `01-check.log` |
+| 2 | `devenv shell -- cargo fmt --check` | Passed | `02-fmt.log` |
+| 3 | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed; 0.42s | `03-clippy.log` |
+| 4 | `devenv shell -- cargo test --all-features --locked --no-fail-fast` | **Interrupted by tool timeout; not a passing full gate** | `04-full-suite.log` |
+| 5 | `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed; 0.44s | `05-cli-check.log` |
+| 6 | `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed | `06-no-gpui.log` |
+| 7 | `devenv shell -- cargo check --locked --features desktop --bin manyhands` | Passed; 31.29s | `07-desktop-check.log` |
+| 8 | `devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings` | Passed; 10.38s | `08-desktop-clippy.log` |
+| 9 | `devenv shell -- cargo run --locked --bin manyhands-cli` | Completed; bare help, 72 catalog entries; compile 36.37s | `09-cli-smoke.log` |
+
+The first eight commands used their exact argv; output logging used `tee` and
+`pipefail`. The CLI smoke kept its exact Cargo command, with the Cargo target
+runner isolating the application environment, null stdin and `setsid` detachment.
+The runner uses `env -i`, fresh HOME/USERPROFILE/XDG config/data/state/cache,
+APPDATA/LOCALAPPDATA and `MANYHANDS_DATA_DIR` under the log root's `smoke-home`;
+Git global configuration is `/dev/null` and system Git config is disabled.
+Only nonsecret execution/library/display paths are supplied to the application.
+No developer key, global Git config or real application data is used by smoke
+commands. The built CLI's `id new` used the same isolated detached runner.
+
+**Full-suite launch count: exactly one.** Systematic investigation found:
+
+1. The tool reported exactly **“shell tool terminated command after exceeding
+   timeout 1200000 ms”**. Its retained output is also at
+   `/home/vhodges/.local/share/opencode/tool-output/tool_16637699b001d9cjdC1YHXgTGx`.
+2. Compilation took **6m59s**, then the library target took **754.23s**. Those
+   already consume about 19m33s of the 20-minute budget. The desktop was still
+   producing passing results when the tool stopped it; there is no observed
+   assertion failure or evidence of a hung individual test.
+3. `ps -C cargo -C manyhands-1af3716480cb1b5a -C tee` found no matching
+   surviving process. No duplicate launch or resumed test command was issued.
+4. There is no Cargo aggregate exit/result after termination. No production
+   fix is justified by this evidence. The remaining full-gate evidence requires
+   a controller decision; prior Part C results do not fill this fresh-run gap.
+
+| Target reached in this run | Observed passes | Failed | Ignored | Result |
+| --- | ---: | ---: | ---: | --- |
+| Library `src/lib.rs` | **1,217** | 0 | 0 | Complete summary; 0 measured/filtered; 754.23s |
+| Desktop `src/main.rs` | **127 individual `ok` lines** | None observed | None observed | Announced 362; **235 have no completion result**; no target summary |
+| `manyhands-cli` | 0 observed | Unknown | Unknown | Not reached |
+| Doc tests | 0 observed | Unknown | Unknown | Not reached |
+
+The complete captured log contains **1,344 individual passes**. Only **1,217**
+belong to a completed target. Neither number is a successful full-suite total.
+No ignored/failed test was reported before interruption; ignored/failed totals
+for unreached targets are unknown. This is an execution interruption, not an
+intentional libtest skip. In particular, the pre-existing opt-in
+`read_characterization` ignore was **not reached**, not silently counted as
+passed or as a fresh observed ignore.
+
+Every integration target below has the same fresh-run count: **0 observed
+passes, no result, not reached** (not a failing or ignored test count):
+
+| Unreached integration targets | Unreached integration targets |
+| --- | --- |
+| `canonical_foundation` | `cli` |
+| `cli_remote` | `comment_publication` |
+| `discovery_rebuild` | `document_promotion` |
+| `editor_feasibility` | `journal_rejection` |
+| `key_material` | `key_storage` |
+| `local_authoring` | `mutation_bridges` |
+| `mutation_confirmation` | `mutation_contract` |
+| `mutation_relationships` | `mutation_remote` |
+| `mutation_replay` | `read_boundary` |
+| `read_characterization` | `read_comments` |
+| `read_contract` | `read_credentials` |
+| `read_items` | `read_relationships` |
+| `read_repository` | `read_status` |
+| `recovery_foundation_gate` | `remote_merge_recovery` |
+| `remote_observation` | `remote_polling` |
+| `remote_reservation` | `remote_synchronization` |
+| `repository_enablement` | `session_credentials` |
+| `shared_key_registry` | `ssh_fixture` |
+| `ssh_transport` | `ticket_closure` |
+
+Complete-output SHA-256 anchors:
+
+```text
+04-full-suite.log    6c713a74c5d1c5ac11000be4d1ce101de387b1ff5607d42e0ef0b70237b047e6
+09-cli-smoke.log     f5b7449b123de3daa070cd6e6e6317df2b5cbcde9941a7c97bcd9be6522c5d5c
+10-desktop-smoke.log 14353a9311eb2b486197bc235cfa4106013d4ee23e6a9852eda7d8e9fd2e3d51
+```
+
+#### Desktop smoke and Step 3 feasibility
+
+Display variables inspected without dumping the environment:
+`DISPLAY=:1`, `WAYLAND_DISPLAY=wayland-1`, `XDG_RUNTIME_DIR=/run/user/1000`,
+`XDG_SESSION_TYPE=wayland`, `XDG_CURRENT_DESKTOP=COSMIC`. The display was active.
+
+`devenv shell -- cargo run --locked --features desktop --bin manyhands` ran
+with the isolated target runner, detached/null stdin and `WAYLAND_DEBUG=1`.
+Compilation finished in **1m38s**. `10-desktop-smoke.log` records the actual
+launch at line 126, toplevel creation at 290, configure at 2790–2791, and
+rendered buffer attachment/commit at **3696–3698** and **5070–5072**. This is
+fresh Linux Wayland launch/render-submission evidence, not a visual approval.
+
+A scoped graceful-close feasibility probe, `wlrctl toplevel find
+app_id:manyhands`, answered **Foreign Toplevel Management interface not found!**
+on this compositor. No window-close request was issued. The runner instead
+bounded the actual desktop process (after compilation) to **15 seconds** with
+`timeout --signal=TERM --kill-after=5s`; no application-level graceful-quit
+claim is made. The command's exact exit status was not separately captured.
+Post-launch `ps -C cargo -C manyhands -C timeout` found no matching process.
+
+Tool stdin/stdout/stderr all report **isTTY=false**. No real-terminal manual
+check was performed and no developer terminal was appropriated. Step 3 remains
+**pending human operator or explicit owner waiver**, to be requested by the
+controller: interactive identity-create in a throwaway repository; Ctrl-C at
+consent followed by `stty -a` proving echo; protected key generation with a
+passphrase entered directly at the terminal. Existing PTY tests do not satisfy
+this manual requirement. A graceful desktop quit also remains unverified.
+
+#### Step 4 — Every Cycle acceptance row
+
+**Evidence provenance:** source/test names below were checked at `0860a6a`.
+They identify the implemented evidence and the **previous completed Part C
+Linux checkpoint at `d8ef550`**, not newly passed tests from Task 12. That
+checkpoint recorded bin **169**, `cli` **167**, `cli_remote` **30**,
+`mutation_contract` **44**, `read_contract` **71** = **481**, all with zero
+failed/ignored/filtered. The intervening commits only recorded evidence and
+approvals. Task 12's timeout did not reach any of those targets. All platform
+claims here are Linux x86_64 execution; Unix-only cases still owe macOS native
+execution, and Windows console/key-file behavior remains manual/native work.
+
+Names prefixed `cli::` are functions in `tests/cli/<module>.rs`; names prefixed
+`cli_remote::` are cases in `tests/cli_remote/<module>.rs`, registered in the
+custom SSH target. `bin::` refers to `src/bin/manyhands-cli/*_tests.rs`.
+
+| Cycle acceptance row | Actual test/function evidence and platform boundary |
+| --- | --- |
+| Empty repository onboarding | `cli_remote::journeys::onboard_an_empty_directory`; `onboard` runs create, remote add/select, import/select, observe, prepare/confirm approval, authenticated final observation and repo list, checking accepted authentication and pin equality. `onboard_with_a_generated_key` additionally exercises generate/public/select (Unix-only). CLI steps use no Git/ssh-keygen subprocess; fixture server setup is distinct. |
+| Existing repository onboarding | `cli_remote::journeys::onboard_an_existing_repository` uses enable and the same journey, preserving history ancestry. `cli::repository::remote_select_follows_create_and_enable_without_worktree_not_clean` holds the prerequisite regression. |
+| Missing identity: create, enable and select | `cli::prompts::create_asks_for_an_identity_and_previews_it` and `enable_asks_for_an_identity_and_previews_it` share `ask_identity_and_verify`: terminal prompts, supplied/local preview fields, local identity, byte-identical isolated global config, later missing-input mismatch and explicit-identity replay without prompts (Unix PTY). `cli::repository::identity_required_then_resubmitted_with_identity` loops both create and enable noninteractively. `cli::remotes::select_without_identity_recovers_through_identity_set` proves the select refusal/recovery action and success after identity-set, preserving global bytes. `require_no_system_identity` enforces R-17 rather than skipping. |
+| Cancelled unlock | `cli_remote::unlock::ctrl_c_at_the_unlock_prompt_of_approve_is_unlock_required` proves exit 3, no pin and request-not-found settlement; `ctrl_c_at_the_unlock_prompt_of_observe_is_unlock_required` uses a pinned host and preserves its pin (Unix PTY). `json_approve_with_a_protected_key_is_unlock_required` and `json_observe_of_a_pinned_host_with_a_protected_key_is_unlock_required` prove no-prompt JSON refusal. |
+| Wrong unlock/current library behavior | `cli_remote::unlock::a_wrong_passphrase_is_today_transport_unavailable_with_the_hint` proves current exit 5, no pin, one prompt/no automatic retry and human hint. `observe_of_a_pinned_host_with_a_wrong_passphrase_shows_the_hint` covers observe. `a_rejected_key_after_the_right_passphrase_is_unlock_failed` proves exit 3 separately. `prompted` and `scan` check no secret persistence. Unix PTY; defect **01M5E6DYJ6GN7DMW4424TH3V78** remains open. |
+| Exact host replacement | `cli_remote::hosts::replace_after_the_host_key_rotates`; `replace_with_a_wrong_old_fingerprint_is_refused_at_prepare` (invalid_input); `replace_naming_a_key_the_host_does_not_present_is_host_mismatch`. Refusals preserve the old pin; success installs the exact presented replacement. |
+| Imported-key non-deletion | `cli::keys::deleting_an_imported_key_is_key_not_deletable_and_its_files_are_unchanged`; human stderr-only refusal is also in `cli::human::key_human_refusals_use_stderr_only_and_preserve_imported_files`. |
+| Generated-key deletion retry | `cli::keys::an_interrupted_deletion_is_completed_by_the_same_request`: library actor uses DeletionAfterPrivatePhase, CLI resumes under the same ID, finished replay deletes nothing more. Unix-only; Windows retains F2 library evidence/native manual obligation. |
+| Configuration failures | `cli::exits::every_run_here_row_reaches_its_code_and_exit_through_the_binary` covers invalid_remote, publication_remote_in_use, remote_name_conflict, worktree_not_clean, wrong_branch, invalid_configuration, repository_not_enabled, invalid prefix/initials and other local codes. Named SSH rows cover publication_remote_required, no_selected_key, key_unavailable and transport/authentication codes. `the_table_and_reasons_account_for_every_code_of_the_audit`, `every_cli_remote_reference_names_an_existing_case` and `every_exit_class_is_covered` hold the exact **49 F2 / 52 CLI-inclusive** inventory. No STAGED escape hatch remains. Five unreachable reasons are detailed below. |
+| Schemas for every new verb | `cli::input_schemas::every_input_taking_command_has_exactly_one_schema_and_every_schema_is_reached`, `every_input_schema_uses_only_the_checked_keywords_and_is_closed`, `every_example_input_validates_against_its_schema`, plus host/key/remote shape tests. All 18 verbs have registered CLI_CASES goldens; confirmed verbs have previews. Local `golden`/`checked` helpers and SSH `Plain` checks validate actual envelopes against unchanged output schemas. `approve_by_prepare_and_confirm` and `replace_after_the_host_key_rotates` validate live success shapes. The verb inventory is expanded below. |
+| No prompt consumes stdin | `cli::prompts::piped_input_and_terminal_prompts_are_separate` (piped create JSON, identity/consent on PTY); `stdin_y_with_n_on_the_terminal_is_cancelled`; `cli::mutation::without_confirm_and_waiting_stdin_are_never_consent` (detached, exit 3, unchanged identity). PTY cases Unix-only. |
+| No secret persisted | `cli::privacy::no_passphrase_reaches_output_data_home_or_the_transcript`, `no_url_credential_or_key_material_sentinel_reaches_any_output`, `scan_passphrase`, and `cli_remote::unlock::no_passphrase_reaches_the_transcript_the_data_or_the_home`. UTF-8/UTF-16LE scans include stdout/stderr, home/data and PTY transcript; successful both-mode mutation outputs are scanned, including the Part B correction. Protected generation uses `cli::prompts::a_protected_generation_asks_twice_masked`; Unix PTY is not Windows manual evidence. |
+
+**Unreachable-code reasons** from `tests/cli/exits.rs::REASONS`: exactly five,
+disjoint from covered rows. `confirmation_expired` needs ten minutes/an F2
+injected clock; `registration_pending` and `discovery_pending` require
+library-only injected failures unavailable inside the CLI child;
+`remote_unavailable` has no deterministic fixture; `push_rejected` is a
+defensive host mapping although C2 never pushes. `host_approval_required` is
+outside the audited C2 union, not a sixth missing case. The cross-platform
+missing-selected-source observation proves `key_unavailable`; the Unix unsafe
+store-lock fixture adds byte-preservation evidence. Missing-source import
+remains a successful registration by the approved owner ruling.
+
+**Per-verb schema/golden and human/no-op inventory:** JSON names below are
+registered in `tests/support/cli.rs::CLI_CASES` and live under
+`tests/fixtures/cli_v1/`. These are the delivered test assets, not another run.
+
+| C2 verbs | JSON result / preview golden names | Human and no-op execution evidence |
+| --- | --- | --- |
+| repo create, enable, remove, identity-set | `repo_create` / `repo_create_prepare` (also empty prepare); `repo_enable` / `repo_enable_prepare`; `repo_remove` / `repo_remove_prepare`; `repo_identity_set` / `repo_identity_set_prepare` | `cli::human::c2_repository_human_results_split_streams_and_retain_public_ids`, `repo_create_human_prepare_preview`, `c2_human_results_split_streams_and_retain_public_ids`; already-enabled/identity-set no-ops; repository tests cover create absent/empty, remove live/missing roots and prefix. |
+| remote add, remove, select | `remote_add`; `remote_remove` / `remote_remove_prepare`; `remote_select` (also selection clear) | `cli::human::c2_remote_human_results_and_noops_retain_public_ids`; `cli::remotes::selecting_the_selected_remote_is_a_no_op`; `c2_human_results_split_streams_and_retain_public_ids` covers add. |
+| key generate, import, select, clear, remove, delete | `key_generate` (also unlock refusal); `key_import`; `key_select`; `key_clear`; `key_remove`; `key_delete` / `key_delete_prepare` | `cli::human::c2_keys_human_results_and_selection_noops_retain_public_ids`, `key_generate_human_result`, `key_delete_human_preview_and_result`; `cli::keys::importing_an_already_registered_source_is_a_noop`, `selecting_the_selected_key_and_clearing_no_selection_are_no_ops`. Generated-file cases Unix-only. |
+| host observe, approve, replace | `host_observe`; `host_approve` / `host_approve_prepare`; `host_replace` / `host_replace_prepare`; mismatch/replacement-required goldens | `cli_remote::hosts::human_host_verbs_and_noops`, `observe_prints_the_next_commands_input_line`, `approving_the_pinned_key_is_a_no_op`; `cli::human::c2_host_human_previews_and_remote_execution_evidence`. |
+| request show, cancel | `request_show`, `request_show_accepted`; `request_cancel` | `cli::human::request_show_human_reports_finished_and_accepted_record_details`, `request_cancel_human_reports_state_ids_and_local_no_stop_explanation`, `request_human_failures_use_stderr_only`; read semantics, not mutation no-ops. |
+
+`cli::mutation::every_mutation_verbs_confirmed_flag_matches_prepare`, with
+`host_verbs_match_prepare` and `key_verbs_match_prepare`, ties preview behavior
+to the catalog. The ten input-taking verbs have closed schemas plus the shared
+commit-identity schema; non-input verbs deliberately have none.
+
+Output checks use the existing `envelope.schema.json` and appropriate data
+root: `preview.schema.json` and the command-specific preview schemas (for
+example `identity_preview.schema.json`), `identity_mutation.schema.json`,
+`remote_mutation.schema.json`, `key_mutation.schema.json`,
+`host_observation.schema.json`, `host_mutation.schema.json`,
+`request.schema.json` and `cancel.schema.json`. Repository create/enable/remove
+execution data is null. Input schemas under `schemas/input/v1/` are
+`repo_create`, `repo_enable`, `repo_identity_set`, `remote_add`, `remote_remove`,
+`remote_select`, `key_generate`, `key_import`, `host_approve`, `host_replace`
+(each `.schema.json`), plus referenced `commit_identity.schema.json`.
+
+#### Additional Cycle/Wave evidence
+
+| Required evidence | Actual test/function or fresh check |
+| --- | --- |
+| Every reachable exit class | `cli::exits::every_exit_class_is_covered` and executable rows: 0 success/no-op/preview, 1 internal, 2 input, 3 blocked, 4 incomplete (`another_url_on_a_stopped_request_is_partial_request_mismatch`), 5 transient, 130 cancelled via Unix PTY. Five unreachable codes remain individually justified above. |
+| Every verb in human mode, split streams, no-ops | Per-verb table above; `cli::privacy::execution_outputs` inventories successful local executions in both modes plus named disjoint SSH coverage, compared with all 18 C2 catalog entries. No-op evidence includes enable, identity-set, remote select/clear, imported-source/key selection/clear, host approve/replace. |
+| Wave MH-COLLAB-006 and MH-NFR-003/004/006/008: progress | `cli::mutation::human_progress_lines_and_empty_json_stderr`; bin progress `a_stage_is_written_once_per_change` and `a_failed_write_is_ignored`; SSH human observation emits connecting. JSON helpers require empty stderr and one envelope. |
+| Consent | `cli::mutation::prepare_then_confirm_sets_the_identity_locally`, `another_confirmation_or_other_input_is_confirmation_mismatch`; `cli::prompts::consent_yes_sets_the_identity`, `consent_no_is_cancelled_exit_130_and_changes_nothing`, `ctrl_c_at_consent_is_cancelled_and_restores_the_terminal`; live host prepare/confirm cases above. |
+| Safe-point cancellation | Prompt cancellation above plus `cli::requests::request_cancel_of_an_accepted_local_request_is_not_requested`. C2 has no after-acceptance safe point and installs no process-wide Ctrl-C handler; before-acceptance token cancellation is not CLI-reachable. No in-flight cancellation claim is invented. |
+| Redaction and secrets | Privacy row above; `cli::remotes::credentials_in_remote_urls_never_reach_either_output_mode`; bin input `no_detail_echoes_a_value`; control-character labels are escaped in `cli::keys::a_label_with_control_characters_is_escaped_in_human_output`. |
+| Stale writes | `cli::exits` row `stale` produces `external_change` from a stale identity preview, before the intended mutation. |
+| Replay, mismatch and completion | `cli::mutation::replay_and_request_mismatch`; `cli::remotes::a_stopped_remote_add_is_completed_by_the_same_request`, `another_url_on_a_stopped_request_is_partial_request_mismatch`; generated deletion retry above. `bin::mutate` tests `a_busy_answer_is_retried_three_times_at_most_with_the_set_delays`, `a_retry_presents_the_same_confirmation`, `a_retry_stops_at_the_first_answer_that_does_not_qualify`, `no_retry_when_the_plan_says_so`, `retry_requires_code_or_partial_and_the_first_action_for_this_request` prove 100/200/400 ms, same confirmation and bounded predicate. |
+| Prompted identity and protected-generation retry limitations | `ask_identity_and_verify` checks later invocations supply identity; bin `an_existing_record_with_identity_prompt_enabled_never_reconstructs_identity` keeps direct replay. `cli::prompts::a_protected_generation_retried_without_a_terminal_is_unlock_required_and_request_show_has_its_result` covers R-19, with interactive re-entry masked and no automatic retry. |
+| Help/version/planned commands touch no service/data | `cli::help::root_help_and_bare_call_match_in_both_modes_without_data`, `version_in_both_modes_has_no_data_directory`, `planned_command_recognizes_trailing_json_and_names_its_cycle_in_human_mode`; bin `startup::tests::service_free_actions_never_call_startup_in_either_mode`. Fresh isolated bare CLI smoke above. |
+| Child isolation and no lingering process | `tests/support/cli.rs::{cli_environment,cli_command,collect_cli}` supplies isolated home/data/config, Unix setsid/Windows DETACHED_PROCESS, deadlines/reaping and bounded pipe EOF; PTYs use `tests/support/pty.rs` instead of the developer terminal. `cli::mutation::a_child_has_no_controlling_terminal`; `cli::boundaries::broken_stdout_pipe_exits_one_without_panic_or_lingering_process`. Fresh smoke process checks found no remaining launch. |
+| Wave MH-NFR-002/005: headless/native boundary | Fresh CLI-only check and `scripts/check-cli-no-gpui.sh` passed; CLI source remains bin-private with synchronous calls, no runtime child/thread spawn, no desktop dependency. Desktop check/Clippy and Wayland launch passed to the extent stated above. This is not Windows/macOS evidence. |
+| Contract amendments | Task 11 amended `docs/RFC/{cli-contract,authentication-and-credential-handling,ticket-relationships-and-short-codes}.md`, Wave 03 and all 18 existing API-audit rows in place. The Part C approvals cover those changes. Native build.yml includes `--test cli_remote` after `--test cli`. No native dispatch was performed. |
+
+#### Handoff, outstanding gates and canonical checkpoint
+
+Step 1 is complete; Step 4's acceptance mapping is complete. **Step 2 remains
+incomplete because of the interrupted full suite.** Step 3 requires the
+controller to obtain human evidence or an explicit owner waiver. Final
+whole-branch spec and quality reviews belong to the controller, followed by
+any authorized completion/readiness commit. This evidence commit grants none
+of those approvals and leaves the ticket open and **not review-ready**.
+
+Carry forward: native Windows console compilation/prompting (R-16/R-11),
+Windows key-file creation/deletion manual checks (R-10), macOS PTY lifecycle
+and terminal-mode restoration, and authorized post-merge native CI on main.
+Wrong-passphrase library defect **`01M5E6DYJ6GN7DMW4424TH3V78`** remains open;
+the CLI continues to prove/pass through today's transport_unavailable answer.
+
+Canonical verification comment **`01M5K4DAX766KRZXWPH39QC1CY`**, allocated by
+the built CLI `id new --json` with the isolated detached runner, accompanies
+this ledger. Commit subject: **`docs: record C2 final local verification and acceptance evidence`**,
+with the required `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+No subagents, full-suite rerun, push, PR, merge to main, closure or cleanup.
 
 ### Part C Independent Review Checkpoint — Both Approve (2026-10-23 UTC)
 
