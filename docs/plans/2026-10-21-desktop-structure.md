@@ -1,3 +1,12 @@
+---
+title: "Desktop Structure Implementation Plan"
+date: 2026-10-21
+author: "Vince Hodges <vince@imbas.ca> && Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J90MH3C3DBB544NXJ2"
+---
+
 # Desktop Structure Implementation Plan
 
 > **For Claude:** After owner approval and explicit implementation authorization,

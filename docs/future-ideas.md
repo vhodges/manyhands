@@ -7,6 +7,8 @@ tags:
   - not scheduled
 author: "Vince Hodges <vince@imbas.ca>"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4JADFCMEC8DHJRJBXNJ"
 ---
 # Future Ideas
 

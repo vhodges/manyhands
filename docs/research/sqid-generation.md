@@ -1,3 +1,12 @@
+---
+title: "Sqid Generation"
+date: 2026-10-05
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J9NTQXVJRDP61JM03X"
+---
+
 Here is a complete, production-ready Rust implementation using the official sqids crate.
 
 Because your full ULID contains 128 bits of data, we can convert its two underlying u64 halves into a slice of integers. Sqids will then blend these numbers across a custom alphabet (which automatically strips out confusing characters like O, I, 0, and 1), giving you a highly scrambled, stateless, and clean visual slug.
