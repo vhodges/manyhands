@@ -30,6 +30,9 @@ mod support;
 #[path = "mutation_confirmation/enablement_index.rs"]
 mod enablement_index;
 
+#[path = "mutation_confirmation/unusable_identity.rs"]
+mod unusable_identity;
+
 use support::mutation::Previewed as _;
 use support::{
     confirmation::*,
