@@ -1,9 +1,10 @@
 ---
+id: 01M5A29F5AVHDZNAHG3NAV62AS
+item_id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+created_at: 2026-10-19T12:30:56Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5A29F5AVHDZNAHG3NAV62AS"
-item_id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-created_at: "2026-10-19T12:30:56Z"
 ---
 
 Task 3 checkpoint: result codes, schemas, isolated CLI harness and first goldens.

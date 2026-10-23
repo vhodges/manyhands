@@ -4,6 +4,8 @@ date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && OpenCode"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4JAA3DG00069R3J4WQV"
 ---
 
 # MVP/Dogfooding Architecture RFC
