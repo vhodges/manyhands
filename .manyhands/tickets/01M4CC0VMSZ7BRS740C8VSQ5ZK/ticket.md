@@ -1,16 +1,16 @@
 ---
+cycle: C1
+wave: '03'
+id: 01M4CC0VMSZ7BRS740C8VSQ5ZK
+title: 'Wave 03 C1: CLI Shell And Inspection'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-19T17:08:51Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMSZ7BRS740C8VSQ5ZK"
-title: "Wave 03 C1: CLI Shell And Inspection"
-type: "cycle"
-status: "closed"
-closed_at: "2026-10-19T17:08:51Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "C1"
 ---
 
 Make existing state inspectable through the CLI without enabling

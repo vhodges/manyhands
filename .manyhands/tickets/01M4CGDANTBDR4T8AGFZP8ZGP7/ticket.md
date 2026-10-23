@@ -1,13 +1,15 @@
 ---
+wave: '03'
+id: 01M4CGDANTBDR4T8AGFZP8ZGP7
+title: Add ticket dependencies, hierarchy and short codes to Wave 03
+type: task
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-08T01:23:35Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CGDANTBDR4T8AGFZP8ZGP7"
-title: "Add ticket dependencies, hierarchy and short codes to Wave 03"
-type: "task"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "03"
 ---
 
 Specify blocking dependencies, a parent hierarchy and a human short code for
