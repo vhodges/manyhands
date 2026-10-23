@@ -50,7 +50,9 @@ checks pass and its delivery is recorded below. The controller reports Task 10
 spec/quality **APPROVE** and push at `40f856f`; sessions are recorded below.
 The fresh inline implementer is assigned **Task 11 only, no subagents**, from
 `40f856f`, with Part C review base `2cf87a3`. Task 11's implementation/evidence
-and named tests are complete; its post-commit Part C checkpoint is pending.
+and named tests are complete; its Part C checkpoint passes all six commands
+and **481 tests**, including the scoped SSH-fixture lint correction at `d8ef550`.
+Independent Part C spec/quality review is pending with the controller.
 Task 12 and Cycle review-ready status remain outside this assignment.
 
 Commits are authorized, ending with
@@ -391,6 +393,76 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Part C Checkpoint — Local Gate Passed, Controller Reviews Pending (2026-10-23 UTC)
+
+- Task 11 implementation commit:
+  **`4757e1b57ded295ff7d6603a410e1b1b0b6ad4d3`**, subject
+  `test: prove the C2 journeys and amend the contract documents`.
+- Checkpoint correction commit:
+  **`d8ef5505dd18153c510990c0d4b66c7997e5ba88`**, subject
+  `test: scope the shared SSH fixture lint allowance`.
+- Part C code/test range:
+  **`2cf87a3f5bccf2ca9ced4883fd4d87ad78689633..d8ef5505dd18153c510990c0d4b66c7997e5ba88`**.
+  Controller review must include this following evidence-only commit as well.
+  Task 10's approvals are preserved below; they do not substitute for full
+  Part C review or Task 12.
+
+The first checkpoint passed check/fmt, then Clippy diagnosed `result_large_err`
+in `tests/support/remote_world.rs:255`, imported into Task 10's new SSH target.
+Existing document-promotion, ticket-closure and other SSH targets already allow
+that shared fixture error shape. The correction adds the same allowance **only
+to cli_remote's imported remote_world module**, with a rationale. No shared
+helper, library error type, production code or test assertion changed.
+
+After the correction, the first five gate commands passed. The combined tool
+invocation's 120-second deadline expired during mutation-contract startup,
+after bin **169**, CLI **167**, SSH **30** had passed; no contract result was
+claimed for that interrupted run. A process check found no surviving matching
+test child. The exact sixth command was rerun on the same tree with a 600-second
+tool deadline and completed normally. No further source change or broader run.
+
+All six required commands passed through Devenv on the corrected tree, which
+was then committed as `d8ef550` (no golden-update mode):
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.46s |
+| `devenv shell -- cargo fmt --check` | Passed |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 2.33s |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 0.56s |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed |
+| `devenv shell -- cargo test --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract --test cli_remote` | Passed; completed rerun build 0.22s, counts below |
+
+| Target | Passed | Failed | Ignored | Filtered | Execution time |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `manyhands-cli` bin | 169 | 0 | 0 | 0 | 0.24s |
+| `cli` | 167 | 0 | 0 | 0 | 25.63s |
+| `cli_remote` | 30 | 0 | 0 | 0 | custom runner does not report duration |
+| `mutation_contract` | 44 | 0 | 0 | 0 | 8.55s |
+| `read_contract` | 71 | 0 | 0 | 0 | 6.00s |
+| **Total** | **481** | **0** | **0** | **0** | |
+
+Task 11 adds four cases to Task 10's inventory: three SSH journeys and one CLI
+PTY case. Part C adds 33 to the Part B 448-test gate. The driver unit test's
+fixed identity-retry note is expected output. Counts are not cumulative across
+repeated runs. Full suite and manual front-end checks remain Task 12's work.
+
+Final fetch and `git merge origin/main` returned **Already up to date** at main
+**`32d938d956a0d3374b6be27b7740e99c4ea39727`**. At corrected head `d8ef550`,
+`git merge-tree --write-tree HEAD origin/main` passed with tree
+**`a6b6151dd15084dd3a1edf693fa001fd9d8a48d8`**. Worktree was clean before this
+evidence-only update. Whitespace checks passed; restricted diff from Task 11
+base confirms no production, Cargo/dependency, output-schema or golden change.
+All eighteen audit rows were counted and reviewed in place.
+
+Canonical checkpoint comment: **`01M5K1VA9GQJ84AA8XZJFPA8H6`**, allocated with
+the task comment by isolated built CLI `id new --json`. This separate evidence
+commit uses the required coauthor. Self-review has no unresolved finding or
+library gap. Deferrals remain the named wrong-passphrase library defect and
+approved native/manual checks; controller Part C spec/quality review is pending.
+Ticket remains open and Cycle is **not review-ready** before Task 12. No push,
+PR, closure, worktree cleanup, native workflow dispatch or subagents.
 
 ### Task 10 Controller Approvals / Task 11 Entry
 
