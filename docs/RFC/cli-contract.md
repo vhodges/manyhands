@@ -185,6 +185,10 @@ from Git's configuration counts as missing: inspection reports an identity
 as required, and the command answers `identity_required`. In both cases the
 refusal comes before any write. The first configuration level that holds a
 whole pair decides the identity, and no lower level stands in for it.
+The same resolver serves every command that commits as Git's configured
+identity. So item and comment saves, repair, and the publication-remote
+change also treat an unusable configured identity as missing, and
+`repo identity` reports it as `none`.
 
 ### List ordering
 

@@ -6,8 +6,8 @@ use super::*;
 
 const EMAIL: &str = "example@example.invalid";
 
-/// The supplied identities a commit would not carry as given, with the
-/// plain one beside them that it would.
+/// The supplied identities a commit would not carry as given; `plain` is
+/// the one beside them that it would.
 fn bracketed() -> [(&'static str, CommitIdentity); 2] {
     [
         (
