@@ -19,16 +19,18 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**Task 12 update, 2026-10-23 UTC:** the fresh inline verification implementer
-was assigned Steps 1, 2 and 4, with no subagents. Step 1 and the acceptance
-mapping are recorded below. Step 2 is **incomplete**: its single full-suite
-launch hit the 1,200,000 ms tool deadline during the desktop target, after the
-library target passed. It was not restarted. The other eight gate commands
-completed, and the isolated desktop smoke submitted rendered Wayland buffers.
-Real-terminal manual checks and controller final spec/quality reviews remain
-pending. **Not review-ready.** The controller must rule on the interrupted gate
-and manual evidence before a later completion/readiness commit. Historical
-task assignments and approvals below are preserved.
+**Task 12 continuation update, 2026-10-23 UTC:** all automated targets now have
+completed results, using the explicitly authorized targeted continuation.
+Distinct totals are **4,111 passed, 4 failed, 1 ignored**, with no filtered or
+measured cases, across **42 target groups**. The original library's 1,217 passes
+are counted once; its tests were not rerun. The original 127 partial desktop
+passes are excluded. The original monolithic command remains interrupted,
+not retroactively successful. Three CLI and one SSH C2 text-golden failures
+are a **blocking all-feature rendering-order issue**, detailed below. The
+continuation changed no source or test expectations. The other eight gate
+commands and isolated smoke evidence remain recorded. Manual ruling and final
+controller spec/quality reviews are pending. **Not review-ready.** Historical
+assignments, initial interruption evidence and approvals below are preserved.
 
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
@@ -406,6 +408,246 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Authorized Targeted Continuation Completed With Four Failures (2026-10-23 UTC)
+
+#### Authorization, source identity and synchronization
+
+The controller explicitly authorized completion of the interrupted **desktop
+target**, then the **CLI bin and every metadata-enumerated integration target**,
+then **doc tests separately**, all with `--all-features --locked`. This was a
+targeted continuation, not another full-suite command. No library unit test
+rerun, test-thread override, skip filter, source edit or golden regeneration.
+
+- Continuation entry/tested HEAD:
+  **`0bf98499c212b9e47e319d716f8b7959262b9571`**. It differs from the original
+  tested `0860a6a` only by the initial verification ledger/comment.
+- Entry fetch/merge was already up to date at main `32d938d`; merge-tree gave
+  `b11f7cf854d7e1ec547724305281604068c85648`.
+- At the final fetch, main had advanced to
+  **`90adb722c81351da5c599f2fccdcb8df070d2798`**. The required merge produced
+  **`a19f6fe4245beb049838c5141c9cf4260c5c8ba1`**, adding only three upstream
+  branding assets (`brand/Manyhands human–digital hand logo.png`,
+  `brand/manyhands-icon.svg`, `brand/manyhands-logo.svg`).
+- After that merge, `git diff --exit-code 0860a6a -- src tests schemas
+  Cargo.toml Cargo.lock .github/workflows/build.yml` still passed. The tested
+  Rust/test/schema/dependency/workflow tree therefore remains exact. No test
+  rerun was needed for branding or evidence-only changes. Merge-tree passed
+  with `8f2c70632a629fc542bc7ce1a3ed775a336c2e3f` before this evidence update.
+- Platform/toolchain remain Linux x86_64, Rust 1.98.1, Cargo 1.98.0,
+  Manyhands 0.1.0 as recorded in the initial verification.
+
+#### Inventory, owned runner and exact commands
+
+All artifacts are under **`/tmp/opencode/c2-task12-verification-0860a6a/`**.
+`devenv shell -- cargo metadata --no-deps --format-version 1 --all-features
+--locked` supplied the actual root-package inventory: **38 integration
+targets**. Complete metadata and stderr are in `11-metadata.log` and
+`11-metadata.stderr.log`; the extracted inventory is
+`11-target-inventory.txt`. `editor_feasibility` requires `editor-probe`, which
+was enabled consistently in every test invocation by `--all-features`.
+
+`continue-verification.cjs` was written with apply_patch under that log root.
+Each phase was launched once through `nohup setsid node ... <phase>`, detached
+with null stdin and redirected launcher output. The script exclusively creates
+its state/log files (rejecting duplicate launches), owns a separate timeout
+process group, runs the command with a **two-hour limit and 15-second TERM/KILL
+fallback**, and records command argv, PIDs, start/end times, exit code and
+signal. Short polling calls observed the existing process; no tool timeout
+could restart it. The three phases ran sequentially with default test threading.
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli \
+  --test canonical_foundation --test cli --test cli_remote \
+  --test comment_publication --test discovery_rebuild --test document_promotion \
+  --test editor_feasibility --test journal_rejection --test key_material \
+  --test key_storage --test local_authoring --test mutation_bridges \
+  --test mutation_confirmation --test mutation_contract --test mutation_relationships \
+  --test mutation_remote --test mutation_replay --test read_boundary \
+  --test read_characterization --test read_comments --test read_contract \
+  --test read_credentials --test read_items --test read_relationships \
+  --test read_repository --test read_status --test recovery_foundation_gate \
+  --test remote_merge_recovery --test remote_observation --test remote_polling \
+  --test remote_reservation --test remote_synchronization --test repository_enablement \
+  --test session_credentials --test shared_key_registry --test ssh_fixture \
+  --test ssh_transport --test ticket_closure --no-fail-fast
+
+devenv shell -- cargo test --all-features --locked --doc
+```
+
+| Phase | UTC interval | Exit / result | Complete log and status stem |
+| --- | --- | --- | --- |
+| Desktop | 01:09:26.682–01:11:52.760 | **0**, 362 passed; test time 144.86s | `12-desktop-tests` |
+| CLI + 38 integrations | 01:12:14.777–02:40:45.497 | **101**, all 39 targets completed; 2,521 passed, 4 failed, 1 ignored; wall time 88m30.720s | `13-cli-integrations` |
+| Doc tests | 02:42:03.832–02:42:05.422 | **0**, 11 passed; test time 0.09s | `14-doc-tests` |
+
+Each stem has `.log`, `.status.json` and `.launcher.log` files. No phase timed
+out or ended by signal. The full integration log has **3,000 lines**, including
+Cargo's final **“2 targets failed”** naming `cli` and `cli_remote`, followed by
+the recorded exit 101. Summaries and failure details were read through the end.
+
+`summarize-continuation.cjs` reads the complete logs, checks the resulting
+target inventory exactly against metadata plus library/bins/docs, and emits
+`15-continuation-summary.json` and `.txt`. It uses only the completed library
+summary from `04-full-suite.log`, not that run's partial desktop results.
+The summary confirms all **42 target groups**, no missing or duplicated target.
+
+After completion, `ps` found no remaining supervisor/timeout PID among
+`318976`, `318995`, `321499`, `321506`, `426420`, `426427`. `pgrep -g` found
+no process in any of the three owned timeout groups (`318995`, `321506`,
+`426427`). No runner was left active.
+
+#### Distinct final results — original library plus completed continuation
+
+**4,115 distinct executed tests/cases: 4,111 passed and 4 failed.** One further
+case was explicitly ignored, for an inventory of **4,116**. All measured and
+filtered counts are zero. The **127 earlier partial desktop passes are not
+added again**; the complete 362-test desktop result replaces that partial
+evidence for counting purposes. Prior Part A/B/C checkpoint counts are not
+added to this total either.
+
+| Target | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| Library (original completed target; not rerun) | 1217 | 0 | 0 |
+| `manyhands` desktop bin | 362 | 0 | 0 |
+| `manyhands-cli` bin | 169 | 0 | 0 |
+| `canonical_foundation` | 62 | 0 | 0 |
+| `cli` | 164 | **3** | 0 |
+| `cli_remote` | 29 | **1** | 0 |
+| `comment_publication` | 41 | 0 | 0 |
+| `discovery_rebuild` | 79 | 0 | 0 |
+| `document_promotion` | 74 | 0 | 0 |
+| `editor_feasibility` | 9 | 0 | 0 |
+| `journal_rejection` | 26 | 0 | 0 |
+| `key_material` | 39 | 0 | 0 |
+| `key_storage` | 2 | 0 | 0 |
+| `local_authoring` | 140 | 0 | 0 |
+| `mutation_bridges` | 129 | 0 | 0 |
+| `mutation_confirmation` | 179 | 0 | 0 |
+| `mutation_contract` | 44 | 0 | 0 |
+| `mutation_relationships` | 27 | 0 | 0 |
+| `mutation_remote` | 88 | 0 | 0 |
+| `mutation_replay` | 308 | 0 | 0 |
+| `read_boundary` | 20 | 0 | 0 |
+| `read_characterization` | 0 | 0 | **1** |
+| `read_comments` | 22 | 0 | 0 |
+| `read_contract` | 71 | 0 | 0 |
+| `read_credentials` | 25 | 0 | 0 |
+| `read_items` | 76 | 0 | 0 |
+| `read_relationships` | 17 | 0 | 0 |
+| `read_repository` | 33 | 0 | 0 |
+| `read_status` | 24 | 0 | 0 |
+| `recovery_foundation_gate` | 52 | 0 | 0 |
+| `remote_merge_recovery` | 25 | 0 | 0 |
+| `remote_observation` | 15 | 0 | 0 |
+| `remote_polling` | 84 | 0 | 0 |
+| `remote_reservation` | 13 | 0 | 0 |
+| `remote_synchronization` | 63 | 0 | 0 |
+| `repository_enablement` | 91 | 0 | 0 |
+| `session_credentials` | 11 | 0 | 0 |
+| `shared_key_registry` | 39 | 0 | 0 |
+| `ssh_fixture` | 35 | 0 | 0 |
+| `ssh_transport` | 123 | 0 | 0 |
+| `ticket_closure` | 73 | 0 | 0 |
+| Doc tests | 11 | 0 | 0 |
+| **Total** | **4111** | **4** | **1** |
+
+The ignored case is
+`read_characterization::reads_of_a_thousand_item_repository_are_characterized`:
+**“a characterization, run on request with --ignored --nocapture”** (log line
+1920). It was not enabled, counted as passed or omitted from the inventory.
+The eleven compile-fail doc tests passed as expected; “compile fail” is their
+intended assertion, not an additional failure count. Unix-only/Windows-only
+conditional compilation is not represented as native execution or as a libtest
+ignore. This is still Linux-only evidence.
+
+#### Four failures and systematic source diagnosis
+
+No source/test fix is included in this verification/evidence assignment. The
+all-feature failures are retained as blockers, not weakened or hidden by a
+default-feature rerun. Exact evidence from `13-cli-integrations.log`:
+
+| Target / failing test | Evidence |
+| --- | --- |
+| `cli`: `human::repo_create_human_prepare_preview` | Lines 427–467; assertion at `tests/support/cli.rs:363`. Expected alphabetic fields begin Identity email/name; actual fields begin Root/Primary branch, then nested identity in DTO insertion order. Values, effects, confirmation and guidance agree. |
+| `cli`: `human::c2_human_results_split_streams_and_retain_public_ids` | Lines 471–489; `remote_add_text` at the same golden assertion. Expected Location then Name; actual Name then Location. Metadata and values agree. |
+| `cli`: `remotes::select_without_identity_recovers_through_identity_set` | Lines 492–516; `remote_select_identity_required_text`. Expected Location then Name; actual Name then Location. Progress, error, IDs and recovery text agree. The case fails at the comparison, so its later recovery steps are not claimed as freshly completed. |
+| `cli_remote`: `observe_prints_the_next_commands_input_line` | Lines 541–542; custom runner reports one failed isolated child and `observation: 363`, matching the text-golden helper's assertion line. The privacy panic hook reports only the line number, not its path or payload, so a raw SSH expected/actual diff is not claimed. `hosts.rs:545–599` parses/reuses the input line before comparing `host_observe_text`. |
+
+The code trace identifies the feature-sensitive rendering mechanism:
+
+1. `src/bin/manyhands-cli/human_admin.rs:9–49` serializes published DTOs to
+   `serde_json::Value` and recursively iterates each object directly, without
+   explicit ordering. This supplies preview, mutation success/failure,
+   observation and request text.
+2. `human_admin.rs:162–184` also prints the host next-command JSON object
+   directly, inserting `authority` before `algorithm`; the text golden expects
+   `algorithm` before `authority`. Both paths depend on map iteration order.
+3. Locked `serde_json` 1.0.151's `src/map.rs:1–4,23–36` documents and implements
+   default BTreeMap versus IndexMap when `preserve_order` is enabled.
+4. After tests completed, **`devenv shell -- cargo tree --all-features --locked
+   -e features -i serde_json`** passed. Complete output is
+   `16-serde-json-features.log`. Lines **167–177** show `preserve_order` enabled
+   by `gpui-pre` and `gpui-pre-http-client` in the normal dependency graph;
+   lines 18–29 connect the root all-feature/desktop graph. The separate
+   proc-macro occurrence of gpui-pre-perf is not confused with that graph.
+5. The three raw CLI diffs exactly match the change from sorted keys to
+   insertion order. The SSH failure site and golden share the formatter and
+   are consistent with the same cause, without claiming a suppressed diff
+   was observed. Prior Part C execution omitted `--all-features`, explaining
+   why those passes did not expose this configuration-sensitive output.
+
+The controller has a concrete **bin-rendering correction** to resolve before
+readiness, including both ordinary fields and the embedded host input JSON.
+The existing goldens remain the acceptance evidence; no golden regeneration,
+test semantic edit, library change, output-schema change or thread override
+was attempted. Detailed local notes are in `continuation-diagnosis.md`.
+
+#### Acceptance mapping, smoke/manual boundary and handoff
+
+The initial Step 4 mapping below still names the actual implementation tests.
+Its historical “not reached by Task 12” provenance is now superseded by this
+completed **all-feature** continuation, subject to the four explicit failures
+above. In particular, CLI unit **169**, CLI **164/3**, CLI SSH **29/1**, mutation
+contract **44**, and read contract **71** are fresh results; the old **481**
+checkpoint is not claimed as a fresh all-feature pass. All three onboarding
+journeys, both cancelled-unlock cases, wrong-passphrase/rejected-key cases,
+replacement refusals, key deletion retry, privacy, schemas and exact **49 F2 /
+52 CLI-inclusive** exit accounting ran in the completed targets. Human text
+goldens, the select-identity recovery case, and host input-line text remain
+blocked as detailed above. No STAGED inventory or missing-target exception.
+
+The original monolithic full-suite launch count remains **one** and its
+interrupted status is preserved. The authorized continuation completed the
+target inventory but **did not pass the test gate**. The controller owns the
+failure correction/ruling, final spec/quality reviews and later readiness
+commit. Ticket remains open and **not review-ready**.
+
+The controller accepted the previously recorded bounded isolated desktop
+launch/render observation as sufficient smoke evidence; graceful application
+exit was not proved and is not newly claimed. No smoke rerun or real-terminal
+operation was performed. Manual identity-create, Ctrl-C consent/stty echo,
+and protected generation still await the controller's owner question/ruling.
+Windows console/key-file checks, macOS PTY behavior and authorized post-merge
+native CI remain owed. Wrong-passphrase library defect
+**`01M5E6DYJ6GN7DMW4424TH3V78`** remains separate and open.
+
+Canonical continuation comment: **`01M5KA88GD1PXC8KYJJ6ZQ8R4B`**, allocated by
+the built CLI `id new --json` using the existing isolated detached runner,
+empty application environment and temporary HOME/XDG/app-data. This follow-up
+commits only the ledger and canonical comment, with the required Claude Opus
+5.5 coauthor. No subagents, push, PR, native dispatch, ticket closure or cleanup.
+
+Complete-log SHA-256 anchors:
+
+```text
+12-desktop-tests.log          c87c9d9e87c7a3180a42266e10737b5159148d9e6eddf3acab90f01e024860d0
+13-cli-integrations.log       e15d0982ad5d52e3cdf077587d4b3b0c02d5ea32e343b625ef1db67468aa1706
+14-doc-tests.log              936e1d2ad55248c71d1d1ae52bfd85b42438e643a31965d0d1e82f65f31ecb4f
+15-continuation-summary.json  8c0bcffb4c889a62902628d8e36cbf4896618405fcdeba3e6929d102bfec02ba
+```
 
 ### Task 12 — Local Verification And Acceptance Evidence (2026-10-23 UTC)
 
