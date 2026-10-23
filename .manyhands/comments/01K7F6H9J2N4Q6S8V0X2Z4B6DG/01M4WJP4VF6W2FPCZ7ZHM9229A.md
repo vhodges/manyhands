@@ -1,9 +1,10 @@
 ---
+id: 01M4WJP4VF6W2FPCZ7ZHM9229A
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-14T06:48:06Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4WJP4VF6W2FPCZ7ZHM9229A"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-14T06:48:06Z"
 ---
 
 Task 6 spec ses_ec74e7b1cffe52NiF8TdyiLNkR's four findings technically corrected,

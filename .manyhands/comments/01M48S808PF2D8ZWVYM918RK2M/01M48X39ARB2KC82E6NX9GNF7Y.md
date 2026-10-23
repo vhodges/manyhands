@@ -1,9 +1,10 @@
 ---
+id: 01M48X39ARB2KC82E6NX9GNF7Y
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T15:25:14Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M48X39ARB2KC82E6NX9GNF7Y"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T15:25:14Z"
 ---
 
 Task 1 accepted after independent review: all six planned Devenv commands

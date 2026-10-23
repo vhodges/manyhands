@@ -1,9 +1,10 @@
 ---
+id: 01M58Y0H1C3YDX8KY73ENG3A1E
+item_id: 01M4CC0VMY5RBMP70QVBXWXM6A
+created_at: 2026-10-19T02:22:55Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M58Y0H1C3YDX8KY73ENG3A1E"
-item_id: "01M4CC0VMY5RBMP70QVBXWXM6A"
-created_at: "2026-10-19T02:22:55Z"
 ---
 
 Planning checkpoint. The Cycle document, design and implementation plan are

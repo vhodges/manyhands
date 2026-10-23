@@ -1,9 +1,10 @@
 ---
+id: 01M4DYC8RPXEXKPVYB54BMTCTZ
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T14:23:49Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4DYC8RPXEXKPVYB54BMTCTZ"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T14:23:49Z"
 ---
 
 Task 8 checkpoint (relationship view and index edges): complete at

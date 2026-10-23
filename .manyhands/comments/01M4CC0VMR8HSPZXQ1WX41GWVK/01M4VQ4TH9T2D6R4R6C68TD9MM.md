@@ -1,9 +1,10 @@
 ---
+id: 01M4VQ4TH9T2D6R4R6C68TD9MM
+item_id: 01M4CC0VMR8HSPZXQ1WX41GWVK
+created_at: 2026-10-13T22:46:47Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4VQ4TH9T2D6R4R6C68TD9MM"
-item_id: "01M4CC0VMR8HSPZXQ1WX41GWVK"
-created_at: "2026-10-13T22:46:47Z"
 ---
 
 The product owner accepted the handoff on 2026-10-13 and authorized marking

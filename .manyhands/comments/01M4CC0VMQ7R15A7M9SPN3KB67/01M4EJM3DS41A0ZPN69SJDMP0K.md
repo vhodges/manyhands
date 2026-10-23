@@ -1,9 +1,10 @@
 ---
+id: 01M4EJM3DS41A0ZPN69SJDMP0K
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T20:17:37Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4EJM3DS41A0ZPN69SJDMP0K"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T20:17:37Z"
 ---
 
 Product-owner decisions after handoff, 2026-10-08, and what followed.

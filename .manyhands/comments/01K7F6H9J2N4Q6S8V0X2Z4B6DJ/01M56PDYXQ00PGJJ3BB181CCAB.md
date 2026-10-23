@@ -1,9 +1,10 @@
 ---
+id: 01M56PDYXQ00PGJJ3BB181CCAB
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+created_at: 2026-10-18T05:05:49Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M56PDYXQ00PGJJ3BB181CCAB"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-created_at: "2026-10-18T05:05:49Z"
 ---
 
 Task 7 checkpoint: the domain refuses new writes to a closed ticket (C5).
