@@ -19,19 +19,19 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**Task 12 renderer-correction update, 2026-10-23 UTC:** the automated gate is
-**green by combined completed-target and authorized targeted-fix evidence**.
-All four prior failures now pass with all features and unchanged goldens.
-Three new ordering regressions fail before the fix and pass afterwards in both
-all-feature and default builds. Combined distinct results are **4,118 passed,
-0 unresolved failures, 1 ignored** (4,115 existing cases plus 3 new cases).
-This is not a new monolithic suite pass: the original command remains
-interrupted, the library was not rerun, and the earlier 127 partial desktop
-passes and duplicate feature-mode executions are not added again. The owner
-chose **“I'll perform the checks”**: the manual gate is **not waived** and
-results are pending. Final controller spec/quality reviews are also pending.
-**Not review-ready.** Historical failure, continuation and approval evidence
-below is preserved.
+**Task 12 manual-verification update, 2026-10-23 UTC: implementation complete;
+verification blocked.** Owner testing exposed the confirmed shared-library
+identity-validation defect **`01M5MAVV5CQE98Q9P2GG9T4FP9`**. Under track rule 5,
+C2 stops before final whole-branch review/readiness until that separate defect
+is handled or the owner rules. Manual Ctrl-C cancellation/terminal restoration
+and protected-key generation passed; the identity prompt/preview was observed,
+but onboarding execution returned partial `recovery_required`.
+
+The recorded combined automated evidence remains **4,118 passed, 1 ignored**;
+this discovery is a coverage gap, not an invalidation of those results or a
+new successful monolithic run. The manual gate is not waived. Final independent
+whole-branch spec/quality review has **not been done**. **Not review-ready;
+ticket remains open.** Original approvals and historical evidence are preserved.
 
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
@@ -409,6 +409,62 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Owner Manual Evidence And Separate Onboarding Blocker (2026-10-23 UTC)
+
+Documentation checkpoint at **`8a488c5d48a66bf830e5e2482b2d8b228099c667`**.
+The following manual observations and independent diagnostic results were
+supplied by the controller; this implementer did not repeat them or operate
+the owner's terminal. Only generic identity examples are recorded.
+
+| Manual check | Owner evidence and status |
+| --- | --- |
+| Create with missing identity | **Prompt/preview observed; onboarding blocked.** The name prompt accepted a combined name-and-angle-bracketed-email value, and email was entered separately. The preview showed both supplied fields. Execution reached `accepted`/`writing`, then returned partial `recovery_required`. This does not count as successful repository onboarding. |
+| Ctrl-C at consent | **Passed.** The owner confirmed the second attempt really used Ctrl-C, reported **`Exit: 130`**, and `stty` showed **`isig icanon echo`** restored. |
+| Protected-key generation | **Passed.** An initial passphrase mismatch was reported; a subsequent matching repeat generated the key successfully. The owner reported no passphrase leakage. No passphrase is included in this record. |
+
+Independent diagnostic session **`ses_e97554d1affert03xVR1jrIZXN`** reproduced
+the defect with generic data: name `Example Person <example@example.invalid>`
+and separate email `example@example.invalid` prepare successfully, but execute
+returns **partial `recovery_required`, exit 4**. Name `Example Person` with
+the same email succeeds with **exit 0** at a fresh root. Reproduction evidence:
+**`/tmp/opencode/c2-identity-diagnostic-vxEBW1`**. This diagnostic is not a final
+independent whole-branch review, and no agent was spawned for this checkpoint.
+
+Reported source trace at this baseline:
+
+- `src/repository.rs:10549–10565`, `validate_identity`, rejects only empty/NUL
+  identity values, allowing angle brackets through preparation.
+- `Signature::now` at `src/repository.rs:5166` reaches libgit2
+  `signature.c:79–83`, which rejects angle brackets.
+- Repository initialization at `src/repository.rs:4763–4788` precedes
+  enablement; the failed enable/rollback leaves `.git` behind.
+- Rollback-incomplete handling at `src/repository.rs:10380–10390`, mapped by
+  `src/repository/mutation/outcome.rs:63–65`, yields `recovery_required` after
+  the partial effect rather than an early invalid-identity refusal.
+
+The canonical defect is already filed as **`01M5MAVV5CQE98Q9P2GG9T4FP9`** on
+branch `manyhands/ticket/01M5MAVV5CQE98Q9P2GG9T4FP9`, in its own worktree
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M5MAVV5CQE98Q9P2GG9T4FP9`.
+The controller reports discovery verified and the filing intentionally
+uncommitted under file-ticket policy. That separate ticket is not duplicated,
+edited or committed by this C2 checkpoint. No library fix belongs in C2.
+
+**Implementation complete; verification blocked under global track rule 5**
+until separate handling or an owner ruling. The automated **4,118 passing /
+1 ignored** combined evidence is retained exactly as previously qualified;
+the invalid-signature case reveals missing coverage. The manual gate is not
+waived, and successful prompt entry alone does not satisfy onboarding.
+Final independent whole-branch spec/quality review has **not been done**;
+Task 12 stops before that review, readiness and closure. Native Windows
+console/key-file checks, macOS PTY behavior, authorized post-merge native CI,
+and existing defect `01M5E6DYJ6GN7DMW4424TH3V78` remain pending/carried forward.
+
+Canonical blocker comment: **`01M5MB23HVCK6BY8XD52KP7BJY`**, generated with the
+built CLI's isolated detached `id new --json`. This checkpoint changes only
+C2 documentation/comment, preserves approved metadata and original approval,
+and runs no tests. Commit uses the required coauthor. No push, library edit,
+new agent, readiness declaration, ticket closure or cleanup.
 
 ### Task 12 — Deterministic Human Rendering Correction, Automated Gate Green (2026-10-23 UTC)
 

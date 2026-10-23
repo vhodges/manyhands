@@ -10,6 +10,20 @@ id: "01M5E2E00HDF992A4D7HQ3TFRJ"
 
 # Wave 03 C2 CLI Repository And Credential Administration Design
 
+## Execution Status
+
+**2026-10-23: implementation complete; verification blocked** by separately
+filed shared-library identity-validation defect `01M5MAVV5CQE98Q9P2GG9T4FP9`.
+Task 12 stops before final whole-branch review/readiness under track rule 5,
+pending separate handling or an owner ruling. Owner manual Ctrl-C/terminal
+restoration and protected-key generation passed; identity entry/preview was
+observed but onboarding failed with partial `recovery_required`. The combined
+4,118 passing / 1 ignored automated evidence remains valid with this coverage
+gap. The manual gate is not waived, final independent review is not done,
+and native obligations remain pending. The original 2026-10-22 approval and
+`status: approved` metadata are unchanged. Details are in the
+[execution ledger](2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
+
 ## Intent And Approval Boundary
 
 This design implements the [C2 Cycle](../Cycles/wave-03-cli-02-repository-and-credentials.md).

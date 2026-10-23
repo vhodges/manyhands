@@ -17,6 +17,18 @@ implementation plan, for subagent-driven execution. The owner answered the
 planning questions on 2026-10-20. They are decisions 1–9 below; decisions 7–9
 followed two independent reviews of the drafts.
 
+**Execution status, 2026-10-23: implementation complete; verification blocked.**
+Owner manual onboarding exposed shared-library identity-validation defect
+`01M5MAVV5CQE98Q9P2GG9T4FP9`, already filed separately under track rule 5.
+Ctrl-C/terminal restoration and protected-key generation passed; identity
+prompt/preview worked, but onboarding returned partial `recovery_required`.
+The combined 4,118 passing / 1 ignored automated evidence remains valid; this
+is a coverage gap. Task 12 stops before final whole-branch review/readiness
+until separate handling or an owner ruling. The manual gate is not waived;
+final independent review is not done, native obligations remain pending, and
+the ticket stays open. Original approval and `status: approved` are retained.
+See the [execution ledger](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
+
 - [Design](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-design.md)
 - [Implementation plan](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-implementation.md)
 
