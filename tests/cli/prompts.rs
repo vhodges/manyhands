@@ -432,6 +432,55 @@ fn enable_asks_for_an_identity_and_previews_it() {
 }
 
 #[test]
+fn unusable_prompted_identity_is_refused_before_consent_or_onboarding_writes() {
+    super::repository::require_no_system_identity();
+    for verb in ["create", "enable"] {
+        let f = missing_identity_fixture(verb);
+        let global = f.global();
+        let before = (verb == "enable")
+            .then(|| crate::support::repository_and_worktree_snapshot_at(&f.root));
+        let mut p = spawn_repository(&f, verb, &[]);
+        p.expect("Name for commits in this repository: ");
+        p.send(b"Example Person <example@example.invalid>\n");
+        p.expect("Email: ");
+        p.send(b"example@example.invalid\n");
+        let (out, transcript) = p.finish();
+        assert_eq!(out.status, 2);
+        assert!(out.stdout.is_empty());
+        let stderr = std::str::from_utf8(&out.stderr).unwrap();
+        assert!(stderr.contains("code: invalid_input"));
+        assert!(!stderr.contains("progress:"));
+        assert!(!stderr.contains("Example Person") && !stderr.contains("example@example.invalid"));
+        assert!(!transcript.contains("Preview of") && !transcript.contains("Proceed?"));
+        if let Some(before) = before {
+            assert_eq!(
+                crate::support::repository_and_worktree_snapshot_at(&f.root),
+                before
+            );
+        } else {
+            assert!(!f.root.exists());
+        }
+        assert!(!f.root.join(".manyhands").exists());
+        assert!(f.listed()["data"]["items"].as_array().unwrap().is_empty());
+        assert_eq!(f.global(), global);
+        super::mutation::checked(
+            &[
+                "request",
+                "show",
+                "--json",
+                "--request-id",
+                &allocated_request(&out.stderr),
+            ],
+            &f.env,
+            &[],
+            2,
+            "request_not_found",
+            None,
+        );
+    }
+}
+
+#[test]
 fn ctrl_c_at_the_identity_prompt_is_cancelled_and_creates_nothing() {
     super::repository::require_no_system_identity();
     let f = missing_identity_fixture("create");

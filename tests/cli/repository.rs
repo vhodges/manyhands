@@ -342,6 +342,116 @@ fn identity_required_then_resubmitted_with_identity() {
         assert_eq!(f.global(), global);
     }
 }
+
+#[test]
+fn unusable_supplied_identity_is_refused_before_onboarding_writes() {
+    for (verb, empty_directory) in [("create", false), ("create", true), ("enable", false)] {
+        let mut f = Fixture::new(verb);
+        if empty_directory {
+            fs::create_dir(&f.root).unwrap();
+        }
+        let before =
+            (verb == "enable").then(|| support::repository_and_worktree_snapshot_at(&f.root));
+        let global = f.global();
+        for (name, email) in [
+            (
+                "Example Person <example@example.invalid>",
+                "example@example.invalid",
+            ),
+            ("Example Person", "<example@example.invalid>"),
+        ] {
+            f.set_input(
+                &serde_json::to_vec(&serde_json::json!({
+                    "primary_branch": "main",
+                    "identity": {"name": name, "email": email}
+                }))
+                .unwrap(),
+            );
+            let refused = checked(
+                &f.args(verb, &["--json", "--prepare"]),
+                &f.env,
+                &[],
+                2,
+                "invalid_input",
+                None,
+            );
+            assert_eq!(refused["outcome"], "error");
+            assert!(refused["data"].is_null());
+            assert!(refused["operation_id"].is_null());
+            assert!(!f.root.join(".manyhands").exists());
+            if let Some(before) = &before {
+                assert_eq!(
+                    &support::repository_and_worktree_snapshot_at(&f.root),
+                    before
+                );
+            } else if empty_directory {
+                assert_eq!(fs::read_dir(&f.root).unwrap().count(), 0);
+            } else {
+                assert!(!f.root.exists());
+            }
+            assert!(f.listed()["data"]["items"].as_array().unwrap().is_empty());
+            assert_eq!(f.global(), global);
+        }
+
+        // The same target and separate email succeed with the plain name.
+        f.set_input(br#"{"primary_branch":"main","identity":{"name":"Example Person","email":"example@example.invalid"}}"#);
+        let preview = f.prepare(verb);
+        assert_eq!(
+            preview["data"]["details"]["identity"]["name"],
+            "Example Person"
+        );
+        f.execute(verb, &preview);
+        assert_onboarded(&f);
+        assert_eq!(f.local().get_string("user.name").unwrap(), "Example Person");
+        assert_eq!(
+            f.local().get_string("user.email").unwrap(),
+            "example@example.invalid"
+        );
+        assert_eq!(f.global(), global);
+    }
+}
+
+#[test]
+fn unusable_configured_identity_is_required_before_onboarding_writes() {
+    require_no_system_identity();
+    for verb in ["create", "enable"] {
+        let mut f = Fixture::new(verb);
+        if verb == "enable" {
+            f.remove_local_identity();
+        }
+        fs::write(
+            f.env.home.path().join(".gitconfig"),
+            "[user]\nname = Example Person <example@example.invalid>\nemail = example@example.invalid\n",
+        ).unwrap();
+        f.set_input(br#"{"primary_branch":"main"}"#);
+        let global = f.global();
+        let before =
+            (verb == "enable").then(|| support::repository_and_worktree_snapshot_at(&f.root));
+        let refused = checked(
+            &f.args(verb, &["--json", "--prepare"]),
+            &f.env,
+            &[],
+            3,
+            "identity_required",
+            None,
+        );
+        assert_eq!(refused["outcome"], "blocked");
+        assert!(refused["data"].is_null());
+        assert!(refused["operation_id"].is_null());
+        if let Some(before) = before {
+            assert_eq!(
+                support::repository_and_worktree_snapshot_at(&f.root),
+                before
+            );
+        } else {
+            assert!(!f.root.exists());
+        }
+        assert!(!f.root.join(".manyhands").exists());
+        assert!(f.listed()["data"]["items"].as_array().unwrap().is_empty());
+        assert_eq!(f.global(), global);
+    }
+}
+
 #[test]
 fn a_global_identity_is_previewed_with_its_source_and_enable_writes_none() {
     let mut f = Fixture::new("enable");

@@ -12,16 +12,17 @@ id: "01M5E2E00HDF992A4D7HQ3TFRJ"
 
 ## Execution Status
 
-**2026-10-23: implementation complete; verification blocked** by separately
-filed shared-library identity-validation defect `01M5MAVV5CQE98Q9P2GG9T4FP9`.
-Task 12 stops before final whole-branch review/readiness under track rule 5,
-pending separate handling or an owner ruling. Owner manual Ctrl-C/terminal
-restoration and protected-key generation passed; identity entry/preview was
-observed but onboarding failed with partial `recovery_required`. The combined
-4,118 passing / 1 ignored automated evidence remains valid with this coverage
-gap. The manual gate is not waived, final independent review is not done,
-and native obligations remain pending. The original 2026-10-22 approval and
-`status: approved` metadata are unchanged. Details are in the
+**2026-10-23: blocker resolved; final review pending.** Separate identity defect
+`01M5MAVV5CQE98Q9P2GG9T4FP9` landed on main at `563893c` and is merged into
+C2 at `eeba464`. Owner-authorized targeted tests passed (98 executions /
+97 distinct cases), including CLI refusal-before-writes and valid controls,
+with Clippy/fmt green. The fix branch's full suite and earlier C2 evidence
+remain separately attributed. Owner identity prompting was previously observed;
+corrected refusal and valid create are automated evidence, not a human rerun.
+Owner Ctrl-C/terminal restoration and protected generation already passed.
+Final independent whole-branch review and native obligations remain pending;
+**not review-ready**. The original 2026-10-22 approval and `status: approved`
+metadata are unchanged. Details are in the
 [execution ledger](2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
 
 ## Intent And Approval Boundary

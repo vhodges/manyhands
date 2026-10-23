@@ -19,19 +19,23 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**Task 12 manual-verification update, 2026-10-23 UTC: implementation complete;
-verification blocked.** Owner testing exposed the confirmed shared-library
-identity-validation defect **`01M5MAVV5CQE98Q9P2GG9T4FP9`**. Under track rule 5,
-C2 stops before final whole-branch review/readiness until that separate defect
-is handled or the owner rules. Manual Ctrl-C cancellation/terminal restoration
-and protected-key generation passed; the identity prompt/preview was observed,
-but onboarding execution returned partial `recovery_required`.
+**Task 12 resumption update, 2026-10-23 UTC: blocker resolved; final review
+pending.** The separately reviewed identity-validation fix landed on main as
+`563893c` and is merged into C2 at `eeba464`. The owner authorized continuation
+with targeted tests because the fix branch already ran its full suite. Fresh
+merged-tree verification passed **98 executions / 97 distinct cases**, including
+three new CLI identity regressions, plus targeted CLI Clippy and formatting.
+No new library or production CLI change was needed.
 
-The recorded combined automated evidence remains **4,118 passed, 1 ignored**;
-this discovery is a coverage gap, not an invalidation of those results or a
-new successful monolithic run. The manual gate is not waived. Final independent
-whole-branch spec/quality review has **not been done**. **Not review-ready;
-ticket remains open.** Original approvals and historical evidence are preserved.
+The previous C2 **4,118 passed / 1 ignored** composed evidence and the fix
+branch's separately reported **3,281 passed / 1 ignored** remain distinct
+historical records, not a new combined full-suite total. Manual identity
+prompt/preview was previously observed; the corrected refusal and valid create
+are now proven automatically, not by a claimed human rerun. Owner Ctrl-C exit
+130 with restored modes and protected generation already passed. The owner
+authorized resumption on this evidence; no manual waiver is invented. Final
+independent whole-branch spec/quality reviews remain pending. **Not review-ready;
+ticket remains open.** Original approvals and history are preserved.
 
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
@@ -409,6 +413,155 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Merged Identity Fix Verified; Blocker Resolved, Final Review Pending (2026-10-23 UTC)
+
+#### Owner authorization, merged fix and cleanup preservation
+
+The owner reported that the defect landed on main and authorized continuation:
+the full suite ran on the fix branch, so a targeted set after merging is
+sufficient. The controller had already fetched and merged main into C2 before
+this implementer resumed. Independent entry checks confirmed a clean worktree:
+
+- C2 merge/test base: **`eeba464ecc008e7943ea8349e26ea7b24c030da9`**.
+- Merged main: **`563893c118f8e6a2d1f9ec9ccfe240f120decb95`**.
+- Fix implementation: **`b62d9e9e0d6a1152b29b9743822152a0b5314565`**;
+  documentation follow-up `33485cb`. Defect `01M5MAVV5CQE98Q9P2GG9T4FP9`
+  is closed on main after its own owner-approved review/delivery.
+- `git merge-tree --write-tree HEAD origin/main` succeeded with
+  **`9b61d81dbfa94a504762641e9cd7f6dc3936a9e4`** at entry and after checks;
+  final fetch found main unchanged. No duplicate merge or rebase.
+- Cleanup commits **`6d2936d`**, **`4c82dd1`**, **`25b9fcf`** are preserved:
+  canonical closed-ticket fields, comment front matter/authors, and managed
+  document headers. These upstream changes are not C2-authored rewrites.
+  Existing C2 comments are left as they stand; the new comment uses current
+  canonical fields including **`created_by`**.
+
+Read the defect ticket and all three comments, particularly verification
+comment **`01M5MJMV6XWME37VA45S9BNS6H`**. It reports on `b62d9e9`:
+`devenv shell -- cargo test --all-features --locked --no-fail-fast` exited 0,
+**3,281 passed, 0 failed, 1 ignored**, with check/fmt/Clippy and front-end
+evidence also recorded. Its independent review and owner delivery are upstream
+evidence, not a new C2 full-suite run or C2's final whole-branch review. The
+earlier defect comment **`01M5MCXTQA3JE7JKS52PPNFNFC`** records the real before/
+after CLI reproduction and the library's TDD failures. No test count from
+that branch is added to C2's historical 4,118-pass composed count.
+
+The library implementation now checks `commits_unchanged` from both supplied
+identity validation and the configured-identity resolver. Supplied unusable
+identity is **`invalid_input`** before writes; unusable configured identity
+counts as missing and is **`identity_required`**, with no lower-level fallback.
+Controls, signature trimming and angle brackets follow the merged rule. The
+library diff in C2 is exactly main's; no new library or production CLI edit
+was made here, and the CLI does not duplicate domain validation.
+
+#### RFC merge and code-accounting review
+
+Reviewed `docs/RFC/cli-contract.md` against **both merge parents**. Relative
+to pre-merge C2, the substantive addition is the separate **Onboarding identity**
+subsection and its configured-commit-path follow-up. Relative to main, the C2
+mutation grammar, input schemas, prefix/initials, request flags, terminal and
+retry rules, early-null-ID clarification, progress, consent, host authentication,
+wrong-passphrase handling and cancellation amendments remain present. The two
+amendments coexist; no RFC repair was required.
+
+The fix uses existing result codes. Fresh `exits` verification passes the exact
+**49 F2 / 52 CLI-inclusive** audit union and source-linked coverage, with no
+STAGED entries or union expansion. The configured-identity semantics broaden
+the circumstances of an already-accounted-for `identity_required`, not its code
+set. No schema/output changes. Header inspection and the two-parent diff found
+no cleanup-specific integration problem; no unrelated metadata suite was run
+and no broad rewrite of existing comments/documents was performed.
+
+#### New CLI regressions and provenance
+
+Added only three tests in C2-created test files:
+
+- `tests/cli/repository.rs::unusable_supplied_identity_is_refused_before_onboarding_writes`:
+  bracketed name and bracketed email return `error/invalid_input`, exit 2 at
+  prepare, with no confirmation data or operation ID. Covers absent and empty
+  create targets and first enable; no new Git directory/configuration or
+  registration, existing repository snapshot and isolated global bytes unchanged.
+  Plain `Example Person` with the same separate generic email then prepares and
+  executes on the same target successfully, with local identity, registration,
+  committed/indexed configuration and clean configuration status asserted.
+- `tests/cli/repository.rs::unusable_configured_identity_is_required_before_onboarding_writes`:
+  isolated unusable global identity with no supplied input yields
+  `blocked/identity_required`, exit 3 for create and enable, not `invalid_input`.
+  Root/snapshot, configuration, registration and isolated global bytes are kept.
+- `tests/cli/prompts.rs::unusable_prompted_identity_is_refused_before_consent_or_onboarding_writes`:
+  Unix PTY, create and enable. A bracketed name entered at the actual identity
+  prompt is refused with exit 2 after library preparation, before preview or
+  consent and before any accepted/writing progress. No root/config/registration
+  mutation or accepted request remains; `request show` is `request_not_found`.
+  Diagnostics do not echo the entered identity; terminal echo is expected.
+
+These are regression additions over the **already-fixed merged library** and
+passed on their first run. RED provenance is the prior independent CLI
+reproduction (invalid name prepared, then failed partially and left `.git`) and
+the fix ticket's own TDD evidence. This implementer did not revert the landed
+library fix or pretend these new tests ran RED. Existing assertions, fixtures
+and goldens remain unchanged. Fixtures and PTYs use the existing isolated CLI
+helpers, never the owner's sandbox, terminal, keys, global configuration or
+application data.
+
+#### Exact targeted verification
+
+Every command ran sequentially through Devenv, with `--all-features --locked`
+for tests/Clippy. Normal `cargo fmt` preceded checks. Complete output and actual
+exit codes are retained under **`/tmp/opencode/c2-task12-verification-0860a6a/`**.
+
+| Command after `devenv shell --` | Passed | Filtered | Result/log |
+| --- | ---: | ---: | --- |
+| `cargo test --all-features --locked --test repository_enablement --test mutation_confirmation unusable_identity` | 4 mutation-confirmation + 4 enablement | 179 + 91 | exit 0; `27-merged-unusable-identity.log` |
+| `cargo test --all-features --locked --test cli repository` | 26 | 144 | exit 0; `28-cli-repository-resumption.log` |
+| `cargo test --all-features --locked --test cli prompts` | 17 | 153 | exit 0; `29-cli-prompts-resumption.log` |
+| `cargo test --all-features --locked --test cli remotes` | 11 | 159 | exit 0; `30-cli-remotes-resumption.log` |
+| `cargo test --all-features --locked --test cli exits` | 5 | 165 | exit 0; `31-cli-exits-resumption.log` |
+| `cargo test --all-features --locked --test cli human` | 28 | 142 | exit 0; `32-cli-human-resumption.log` |
+| `cargo test --all-features --locked --test cli_remote onboard` | 3 SSH journeys | 27 other cases not selected; runner prints no filtered count | exit 0; `33-cli-onboarding-resumption.log` |
+| `cargo clippy --all-features --locked --bin manyhands-cli --test cli -- -D warnings` | — | — | exit 0; `34-cli-resumption-clippy.log`, 3.41s |
+| `cargo fmt --check` | — | — | exit 0; `35-resumption-fmt.log` |
+
+Fresh total: **98 passing executions, zero failures/ignored/measured**. The
+requested substring filters overlap on
+`human::c2_repository_human_results_split_streams_and_retain_public_ids`, so
+the distinct total is **97 cases** (86 CLI, 8 shared-library integration,
+3 SSH). CLI inventory is now 170, but the full CLI target was not rerun.
+The `onboard` filter matches exactly the registered empty-directory,
+existing-repository and Unix generated-key journeys in
+`tests/cli_remote/journeys.rs`; all three completed and authenticated.
+
+This is the owner-approved targeted verification after merging. The earlier
+C2 composed evidence and the upstream full-suite evidence retain their exact
+provenance; there is **no newly executed full suite or additive grand total**.
+The original interrupted monolithic C2 command is still recorded as such.
+
+#### Blocker closure and final-review handoff
+
+**Blocker resolved; final review pending.** The separate fix is on main and
+the merged CLI now proves correct refusal before writes plus successful valid
+creation/enablement. The owner explicitly authorized continuing with this
+targeted evidence. Final independent whole-branch spec/quality reviews remain
+the controller's next step; this update does **not** mark review-ready or close
+the C2 ticket.
+
+Manual provenance is unchanged: owner identity prompting/preview was observed
+before the fix, with invalid-signature onboarding then blocked. Corrected
+refusal and valid create are now **automated evidence**; there is no claim that
+the owner manually reran a valid create. Owner Ctrl-C **exit 130** with restored
+`isig icanon echo`, and protected-key mismatch then successful matching repeat,
+already passed. No new manual waiver or human observation is invented.
+Native Windows console/key-file checks, macOS PTY behavior, authorized
+post-merge CI and known library defect `01M5E6DYJ6GN7DMW4424TH3V78` remain
+carried forward; the accepted bounded desktop smoke still proves no graceful
+application exit.
+
+Canonical resumption comment: **`01M5MKRV26RGPH85WV7J0SVTBG`**, allocated by
+isolated detached built CLI `id new --json`, with `created_by` following current
+main's comment form. Only the new comment is authored; cleanup and old C2
+comments are preserved. Commit includes the required coauthor. No subagents,
+push, PR, main-branch merge, C2 closure, worktree cleanup or CI dispatch.
 
 ### Task 12 — Owner Manual Evidence And Separate Onboarding Blocker (2026-10-23 UTC)
 
