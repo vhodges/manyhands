@@ -1,6 +1,106 @@
 use super::*;
 use manyhands::results::{Effects, Outcome, ResultCode, Scope, WriteEffect};
 use std::collections::HashSet;
+
+#[test]
+fn ordering_fields_sorts_nested_objects_without_reordering_arrays() {
+    let dto = serde_json::json!({
+        "z_last": null,
+        "nested": {"z_value": "last\n", "a_value": "first"},
+        "entries": [
+            {"z_value": "second", "a_value": 2},
+            {"z_value": "first", "a_value": 1}
+        ],
+        "empty": [],
+        "a_first": true
+    });
+    assert_eq!(
+        fields(&dto),
+        concat!(
+            "A first: true\n",
+            "Empty: none\n",
+            "Entries a value: 2\n",
+            "Entries z value: second\n",
+            "Entries a value: 1\n",
+            "Entries z value: first\n",
+            "Nested a value: first\n",
+            "Nested z value: last\\n\n",
+            "Z last: none\n"
+        )
+    );
+}
+
+#[test]
+fn ordering_preview_keeps_effect_sequence_after_sorted_fields() {
+    let mut dto = sample(PreviewDetailsDto::Repository(RepositoryPreviewDto {
+        root: "root\n".into(),
+        primary_branch: "main".into(),
+        identity: PreviewIdentityDto {
+            name: "Person".into(),
+            email: "person@example.invalid".into(),
+            source: PreviewIdentitySource::Supplied,
+            written_locally: true,
+        },
+        slug_prefix: None,
+    }));
+    dto.effects = vec![
+        PreviewEffectDto {
+            effect: PreviewEffect::ConfigurationWritten,
+        },
+        PreviewEffectDto {
+            effect: PreviewEffect::DirectoryCreated,
+        },
+    ];
+    assert_eq!(
+        preview(&dto),
+        concat!(
+            "Preview of command\\r\n",
+            "Identity email: person@example.invalid\n",
+            "Identity name: Person\n",
+            "Identity source: supplied\n",
+            "Identity written locally: true\n",
+            "Primary branch: main\n",
+            "Root: root\\n\n",
+            "Slug prefix: none\n",
+            "Will write the Manyhands configuration.\n",
+            "Will create the directory.\n",
+            "Confirmation: confirmation\\n (expires expiry\\t)\n"
+        )
+    );
+}
+
+#[test]
+fn ordering_observation_input_is_stable_for_approve_and_replace() {
+    for (pin, expected) in [
+        (
+            None,
+            "Input for host approve:\n{\"algorithm\":\"ssh-ed25519\",\"authority\":\"[2001:db8::1]:2222\",\"fingerprint\":\"SHA256:presented\"}\n",
+        ),
+        (
+            Some("SHA256:old"),
+            "Input for host replace:\n{\"algorithm\":\"ssh-ed25519\",\"authority\":\"[2001:db8::1]:2222\",\"fingerprint\":\"SHA256:presented\",\"old_fingerprint\":\"SHA256:old\"}\n",
+        ),
+    ] {
+        let dto = HostObservationDto {
+            host: "2001:db8::1".into(),
+            port: 2222,
+            fetch: true,
+            push: false,
+            presented_algorithm: "ssh-ed25519".into(),
+            presented_fingerprint: "SHA256:presented".into(),
+            pinned_algorithm: pin.map(|_| "ssh-ed25519".into()),
+            pinned_fingerprint: pin.map(str::to_owned),
+            reapproval_required: false,
+        };
+        let out = observation(&dto);
+        assert_eq!(
+            &out.stdout[out.stdout.find("Input for host ").unwrap()..],
+            expected
+        );
+        assert!(out.notes.is_empty());
+    }
+}
+
 #[test]
 fn every_preview_effect_has_a_distinct_phrase() {
     let phrases: HashSet<_> = PreviewEffect::ALL

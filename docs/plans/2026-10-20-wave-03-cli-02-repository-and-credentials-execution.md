@@ -19,18 +19,19 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**Task 12 continuation update, 2026-10-23 UTC:** all automated targets now have
-completed results, using the explicitly authorized targeted continuation.
-Distinct totals are **4,111 passed, 4 failed, 1 ignored**, with no filtered or
-measured cases, across **42 target groups**. The original library's 1,217 passes
-are counted once; its tests were not rerun. The original 127 partial desktop
-passes are excluded. The original monolithic command remains interrupted,
-not retroactively successful. Three CLI and one SSH C2 text-golden failures
-are a **blocking all-feature rendering-order issue**, detailed below. The
-continuation changed no source or test expectations. The other eight gate
-commands and isolated smoke evidence remain recorded. Manual ruling and final
-controller spec/quality reviews are pending. **Not review-ready.** Historical
-assignments, initial interruption evidence and approvals below are preserved.
+**Task 12 renderer-correction update, 2026-10-23 UTC:** the automated gate is
+**green by combined completed-target and authorized targeted-fix evidence**.
+All four prior failures now pass with all features and unchanged goldens.
+Three new ordering regressions fail before the fix and pass afterwards in both
+all-feature and default builds. Combined distinct results are **4,118 passed,
+0 unresolved failures, 1 ignored** (4,115 existing cases plus 3 new cases).
+This is not a new monolithic suite pass: the original command remains
+interrupted, the library was not rerun, and the earlier 127 partial desktop
+passes and duplicate feature-mode executions are not added again. The owner
+chose **“I'll perform the checks”**: the manual gate is **not waived** and
+results are pending. Final controller spec/quality reviews are also pending.
+**Not review-ready.** Historical failure, continuation and approval evidence
+below is preserved.
 
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
@@ -408,6 +409,163 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 — Deterministic Human Rendering Correction, Automated Gate Green (2026-10-23 UTC)
+
+#### Authorization, root cause and bounded change
+
+The controller confirmed the diagnosis and authorized a production CLI-only
+ordering fix, meaningful new regressions, the four failed cases with all
+features, focused regressions in both feature modes, CLI-only Clippy and
+evidence/commit. Existing goldens and pre-existing assertions must remain
+unchanged. The owner explicitly selected **“I'll perform the checks”** for
+the manual gate; this is not a waiver, and no manual result has been received.
+
+Entry HEAD **`da65f1734c1ece127b4e019ec91ee705cab345b1`** was clean. Fetch/merge
+was already up to date at main **`90adb722c81351da5c599f2fccdcb8df070d2798`**;
+entry and post-verification merge-tree returned
+**`81f604579392816c270e20c203c23737d6b29762`** for the committed base. Final
+fetch found main unchanged.
+
+The precise prior CLI diffs (`13-cli-integrations.log:427–516`) were read
+again: only public-field ordering differs in repository preview, mutation
+success and identity-required failure text. The SSH record (`541–565`) points
+to line 363, matching the text-golden assertion; its raw diff remains suppressed
+by the unchanged privacy hook. Source inspection confirms that the observed
+host output uses `fields()` and a separate directly formatted JSON input
+object. The new inline-input regression supplies the previously suppressed
+mechanism as an independent, public-data-only RED diff: authority-before-
+algorithm versus the golden's algorithm-before-authority.
+
+Only **`src/bin/manyhands-cli/human_admin.rs`** changes in production:
+
+- `fields()` explicitly calls **`Value::sort_all_objects()`** on its local
+  serialized DTO before walking it. This sorts object keys recursively,
+  including nested objects inside arrays, independent of serde_json's
+  `preserve_order` feature. Array element order stays intact.
+- `observation()` explicitly sorts its local input JSON after inserting the
+  optional old fingerprint and before printing the compact human input line.
+  Both approve and replace therefore retain the existing golden layout.
+- Preview effects still use their original vector order; the effects summary
+  still uses its explicit fixed sequence. Escaping, null/empty display,
+  serialization-failure fallback, notes, success/failure metadata and the
+  library's JSON envelopes are unchanged. The three old CLI rechecks exercise
+  preview, success and failure rendering; the SSH recheck exercises the host
+  fields and inline-input line together.
+
+`human_admin_tests.rs` gains **three new tests only**; no pre-existing assertion
+is edited. Restricted diff checks confirm no change to the shared library,
+integration tests, fixtures/goldens, schemas, dependencies/lockfile or workflow.
+The desktop code does not use this bin-private renderer, so its unchanged
+checks were not repeated. No thread-count override or golden-update mode.
+
+#### Test-first evidence and exact targeted verification
+
+Log root remains **`/tmp/opencode/c2-task12-verification-0860a6a/`**. Every
+command's complete stdout/stderr and actual `COMMAND_EXIT` are retained.
+All Rust commands used Devenv and `--locked`, except ordinary fmt.
+
+New regressions, selected by `human_admin::tests::ordering_`:
+
+1. `ordering_fields_sorts_nested_objects_without_reordering_arrays` — exact
+   nested object-field order, objects in a deliberately non-sorted array,
+   newline escaping, null and empty-array presentation.
+2. `ordering_preview_keeps_effect_sequence_after_sorted_fields` — exact
+   repository preview including nested identity order, escaped fields, null
+   prefix, and deliberately nonalphabetical effect sequence.
+3. `ordering_observation_input_is_stable_for_approve_and_replace` — exact
+   compact input-line ordering for both unpinned approval and replacement,
+   including an IPv6 authority and the old fingerprint.
+
+| Command | Result | Complete log |
+| --- | --- | --- |
+| Before production fix: `devenv shell -- cargo test --all-features --locked --bin manyhands-cli human_admin::tests::ordering_` | **RED: 0 passed, 3 failed, 169 filtered; exit 101**. All three fail on the expected ordering mismatch, not compilation or fixtures. | `17-renderer-order-red.log` |
+| After fix: same all-feature command | **3 passed**, 0 failed/ignored, 169 filtered; exit 0 | `18-renderer-order-all-features.log` |
+| `devenv shell -- cargo test --locked --bin manyhands-cli human_admin::tests::ordering_` | Default features: **3 passed**, 0 failed/ignored, 169 filtered; exit 0 | `19-renderer-order-default.log` |
+| `devenv shell -- cargo test --all-features --locked --test cli human::repo_create_human_prepare_preview -- --exact` | **1 passed**, 0 failed/ignored, 166 filtered; exit 0 | `20-repo-preview-recheck.log` |
+| `devenv shell -- cargo test --all-features --locked --test cli human::c2_human_results_split_streams_and_retain_public_ids -- --exact` | **1 passed**, 0 failed/ignored, 166 filtered; exit 0 | `21-human-results-recheck.log` |
+| `devenv shell -- cargo test --all-features --locked --test cli remotes::select_without_identity_recovers_through_identity_set -- --exact` | **1 passed**, 0 failed/ignored, 166 filtered; exit 0 | `22-select-identity-recheck.log` |
+| `devenv shell -- cargo test --all-features --locked --test cli_remote observe_prints_the_next_commands_input_line -- --exact` | **1 SSH case passed**; exit 0 | `23-host-observation-recheck.log` |
+| `devenv shell -- cargo clippy --all-features --locked --bin manyhands-cli -- -D warnings` | Passed; exit 0, 10.37s | `24-cli-renderer-clippy.log` |
+| `devenv shell -- cargo fmt --check` | Passed; exit 0 | `25-renderer-fmt.log` |
+
+Ordinary `devenv shell -- cargo fmt` ran before the green checks. The SSH
+runner's parser at `tests/support/ssh_harness.rs:316–340` accepts one case-name
+filter plus `--exact`; its comparison uses the bare registered case name,
+which is the command above. Only that SSH case ran; the runner does not print
+a filtered count (the other 29 registered cases were not rerun).
+
+Fresh GREEN executions: **10** = three new tests in each of two feature modes
+plus four previously failing cases. That is **7 unique cases**, not ten new
+tests. Initial RED failures are retained as TDD evidence and are not current
+unresolved failures. No full suite, completed library target, desktop target,
+other integration cases, or doc tests were rerun for this fix.
+
+#### Combined evidence and corrected acceptance status
+
+| Evidence composition | Passed | Unresolved failures | Ignored |
+| --- | ---: | ---: | ---: |
+| Previously completed target evidence | 4111 | 4 | 1 |
+| Replace the four failed results with their exact all-feature passing rechecks | **4115** | **0** | **1** |
+| Add three new regression cases, counted once each despite two feature-mode runs | **4118** | **0** | **1** |
+
+Thus the combined inventory is **4,119 distinct cases: 4,118 passing and one
+ignored**. The existing `read_characterization` opt-in ignore is unchanged.
+The all-feature bin inventory is now 172 (169 previously passed plus three new
+focused passes); `cli` is composed as 167 passing (164 prior plus three exact
+rechecks), and `cli_remote` as 30 passing (29 prior plus one exact recheck).
+These are **composed results**, not claims that those entire targets were rerun
+after the fix. The original library's 1,217 passes and all other completed
+target evidence remain carried forward. The earlier 127 partial desktop passes
+and the three duplicate default-feature regression passes are not added again.
+
+The four acceptance blockers recorded in the previous entry are resolved by
+unchanged-golden passes. In particular, the remote-select missing-identity
+case now completes its recovery steps, and the host observation case completes
+the input-line/schema reuse and final text-golden check. The prior Step 4
+mapping remains applicable with these corrected results. Automated Task 12
+gate evidence is **green under the controller's targeted-correction policy**.
+`26-renderer-correction-summary.json` records this arithmetic and its provenance
+without overwriting the historical failing continuation summary.
+
+The original monolithic command remains **interrupted**, with a launch count
+of one; it is not reclassified as successful. The eight other original gate
+commands, bounded isolated desktop launch and subsequent targeted Clippy/fmt
+are the verification evidence. This narrow renderer change does not justify
+another full-suite or desktop-only run.
+
+#### Manual gate and controller handoff
+
+**Manual gate NOT waived.** Owner choice: **“I'll perform the checks”**.
+The controller provided isolated commands; the owner's observations/results
+are pending for identity-create, Ctrl-C at consent plus `stty` echo, and
+protected key generation. No real-terminal operation or manual success is
+claimed by this implementer. The accepted bounded desktop smoke still has no
+graceful-application-exit claim.
+
+Final controller spec/quality reviews are pending. **Do not mark review-ready**
+until those reviews and the owner's manual evidence/ruling are recorded.
+The ticket stays open. Native Windows console/key-file checks, macOS PTY,
+authorized post-merge native CI and known library defect
+`01M5E6DYJ6GN7DMW4424TH3V78` remain carried forward.
+
+Canonical correction comment: **`01M5MACQXZ1G9FWDWHYQ4E0H2B`**, allocated with
+built CLI `id new --json` using the isolated detached runner and temporary
+HOME/XDG/app-data. The fix/evidence commit uses the required
+`Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` trailer. No subagents
+or push. No old test edits, native CI, PR, closure or worktree cleanup.
+
+Selected complete-log SHA-256 anchors:
+
+```text
+17-renderer-order-red.log          515066df4f4f682bbc9bdd202ac03621d261f4ad482e166b9e62e0aa60372d1e
+18-renderer-order-all-features.log 3b6c0b8c1a97777124a360e4f3c13b631d51d659e52eaccc7bbd7a5226742607
+19-renderer-order-default.log      c3624c082a207a414948e0da011c37b848307662cdba610b981b8f74a4f36cd7
+20-repo-preview-recheck.log        17beb5bd37b608ff2b1b3b83c561714daf1386350cd8ae76f738f88fe9d41b75
+21-human-results-recheck.log       0abc7a90eb68ad2971bedc83f49851bbda4087c9edff74cf061e94fcc7199e4e
+22-select-identity-recheck.log     bc5f98b3ac4ec610c3bb94c78425d6b1cd738f6ccfd5ea9d51f9e9b329f3f3b7
+23-host-observation-recheck.log    6d9e7f704444a938f3553f713f628ad2c5afff697f472f0a0bac98d2388ad534
+```
 
 ### Task 12 — Authorized Targeted Continuation Completed With Four Failures (2026-10-23 UTC)
 

@@ -43,7 +43,9 @@ pub(super) fn fields(dto: &impl serde::Serialize) -> String {
     }
     let mut out = String::new();
     // Public DTOs contain only serializable scalars, arrays and objects.
-    if let Ok(value) = serde_json::to_value(dto) {
+    if let Ok(mut value) = serde_json::to_value(dto) {
+        // Keep human field order stable even when dependencies enable preserve_order.
+        value.sort_all_objects();
         walk("", &value, &mut out);
     }
     out
@@ -181,6 +183,8 @@ pub fn observation(dto: &HostObservationDto) -> Human {
         } else {
             "approve"
         };
+        // This compact JSON line is part of the human output's stable layout too.
+        input.sort_all_objects();
         stdout.push_str(&format!("Input for host {verb}:\n{input}\n"));
     }
     Human {
