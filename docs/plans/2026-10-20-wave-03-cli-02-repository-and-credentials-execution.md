@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2 CLI Repository And Credential Administration Execution"
 date: 2026-10-22
-status: in-progress
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -19,32 +19,30 @@ Ticket: `01M4CC0VMTTNKVYS6XWQG4CK1N`.
 
 ## Authorization And Current Execution Status
 
-**Final-spec follow-up, 2026-10-23 UTC:** review
-`ses_e96bcb4cfffeoD5umHyL4mfvrx` identified an important per-verb no-op evidence
-gap. Eight new test cases now cover all **14 no-op-capable C2 verbs** in JSON
-and human modes, including accepted-record-only create/remove/delete paths;
-the other four verbs have explicit source-based non-no-op explanations.
-Targeted checks passed **95 executions / 90 distinct cases**, plus Clippy/fmt.
-The finding is addressed for controller re-review; final spec approval and
-quality review are still pending. **Not review-ready; ticket remains open.**
+**2026-10-23 UTC: implemented, locally verified and review-ready.** Task 12
+implementation, verification, acceptance mapping, final reviews and Step 6
+readiness bookkeeping are complete. The controller reports final whole-branch
+spec **`ses_e96bcb4cfffeoD5umHyL4mfvrx`** and independent actual-code quality
+**`ses_e96987265ffe2Est5HzXZ9VZp8`** both **APPROVE, no findings**, on
+`563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`.
+The spec approval follows the per-verb no-op evidence fix. This documentation
+commit follows the reviewed code and does not claim a new review of itself.
 
-**Task 12 resumption update, 2026-10-23 UTC: blocker resolved; final review
-pending.** The separately reviewed identity-validation fix landed on main as
-`563893c` and is merged into C2 at `eeba464`. The owner authorized continuation
-with targeted tests because the fix branch already ran its full suite. Fresh
-merged-tree verification passed **98 executions / 97 distinct cases**, including
-three new CLI identity regressions, plus targeted CLI Clippy and formatting.
-No new library or production CLI change was needed.
+Verification provenance remains separate: historical C2 **4,118 passed /
+1 ignored** composed evidence; upstream identity-fix full-suite report
+**3,281 passed / 1 ignored**; merged-tree targeted **97 distinct cases**;
+then no-op review-fix targeted **90 distinct cases**. These overlap and are
+not summed or presented as a new monolithic run. No tests are rerun now under
+the owner's targeted-verification authorization. The field-order fix and
+both-mode no-op evidence for **14 capable / 18 total verbs** are reviewed.
 
-The previous C2 **4,118 passed / 1 ignored** composed evidence and the fix
-branch's separately reported **3,281 passed / 1 ignored** remain distinct
-historical records, not a new combined full-suite total. Manual identity
-prompt/preview was previously observed; the corrected refusal and valid create
-are now proven automatically, not by a claimed human rerun. Owner Ctrl-C exit
-130 with restored modes and protected generation already passed. The owner
-authorized resumption on this evidence; no manual waiver is invented. Final
-independent whole-branch spec/quality reviews remain pending. **Not review-ready;
-ticket remains open.** Original approvals and history are preserved.
+Owner Ctrl-C exit 130 with restored modes and protected generation passed.
+Identity prompting was observed; corrected refusal and valid creation are
+post-fix automated evidence, not a human rerun or invented waiver. Native
+obligations and the nonblocking wrong-passphrase defect remain explicit below.
+**Ticket stays open; closure and later delivery actions are not authorized.**
+
+### Historical authorization and task checkpoints
 
 The product owner approved the Cycle, design and implementation plan on
 **2026-10-22** for subagent-driven execution. That approval supersedes the
@@ -422,6 +420,93 @@ as resolved in the approved documents. Baseline inspection does not substitute
 for the independent per-task/Part reviews the controller coordinates.
 
 ## Task Log
+
+### Task 12 Step 6 — Review-Ready After Final Whole-Branch Approvals (2026-10-23 UTC)
+
+The controller supplied the completed final reviews and explicitly authorized
+readiness bookkeeping only. Both reviews cover the **whole branch**, not just
+the last test commit:
+
+- Reviewed base/current main:
+  **`563893c118f8e6a2d1f9ec9ccfe240f120decb95`**.
+- Reviewed HEAD: **`9c3a23ef349a667132ded3faa35cacb118ee2fa9`**.
+- Reviewed range:
+  **`563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`**.
+- **Spec:** `ses_e96bcb4cfffeoD5umHyL4mfvrx` — **APPROVE after the no-op
+  evidence fix; no findings**.
+- **Quality:** `ses_e96987265ffe2Est5HzXZ9VZp8` — **APPROVE; independent
+  actual-code review; no findings**.
+
+These approvals supersede the historical pending-review statements in the
+earlier checkpoints. No agent was spawned and no additional independent review
+is claimed by this bookkeeping implementer. The readiness commit comes after
+the reviewed range and changes documentation only.
+
+#### Fresh synchronization and readiness boundary
+
+Entry was clean at the reviewed HEAD. **`git fetch origin main`** succeeded;
+main remains **`563893c118f8e6a2d1f9ec9ccfe240f120decb95`**. There are no commits
+in `HEAD..origin/main` and no incoming diff, so no merge or test follow-up was
+needed. Required **`git merge-tree --write-tree HEAD origin/main`** exited 0,
+producing **`0c0c49ece53aaa7ec1ebf0bc190f7b1feab2acb6`** at the reviewed HEAD.
+
+**Task 12 through Step 6 is complete: implementation, verification, acceptance
+mapping, final spec/quality review and readiness.** The Cycle, design and this
+ledger now use the established **`status: "implemented, review-ready"`** form.
+Original approval and all historical evidence remain intact. The ticket body
+records readiness, but its lifecycle status is still **`open`**, with no
+`closed_at` or `closed_by`. Step 7 delivery/closure is not authorized by this
+checkpoint. The controller handles any separately authorized push.
+
+#### Evidence accepted for readiness — distinct provenance, no new full suite
+
+| Evidence | Provenance and scope |
+| --- | --- |
+| Historical C2 automated evidence | **4,118 passed, 1 ignored** composed result from the completed original library target, targeted continuation, four corrected all-feature ordering failures and three new regressions. It excludes the earlier 127 partial desktop passes and duplicate feature-mode executions. The original monolithic command remains interrupted. |
+| Separate identity-fix full suite | Defect `01M5MAVV5CQE98Q9P2GG9T4FP9`, implementation `b62d9e9`, merged on main as `563893c`; comment `01M5MJMV6XWME37VA45S9BNS6H` reports **3,281 passed, 0 failed, 1 ignored**, exit 0. This is upstream evidence, not a C2 rerun. |
+| Post-merge targeted C2 verification | Base `eeba464`, evidence/regressions `dea3610`: **98 passing executions / 97 distinct cases**, zero failures/ignored, plus targeted Clippy/fmt. Proves invalid supplied/configured/prompted identity refusal before effects, valid controls, and all three onboarding journeys. |
+| Final-spec no-op correction | `9c3a23e`: **95 passing executions / 90 distinct cases**, zero failures/ignored, plus targeted Clippy/fmt. The complete eighteen-verb inventory identifies **14 reachable top-level no-op verbs** with both-mode/state-preservation evidence, and four source-justified non-no-op verbs. Accepted-record-only create, key remove and key delete are explicit. |
+| All-feature renderer correction | `8a488c5`: deterministic nested field and inline host-input JSON ordering, existing goldens/assertions preserved; three new regressions passed both feature modes and all four original failures passed targeted all-feature rechecks. Included in the reviewed range. |
+| Manual observations | Owner confirmed Ctrl-C **exit 130**, with **`isig icanon echo`** restored, and protected-generation mismatch followed by matching-repeat success without reported secret leakage. Identity prompting/preview was observed before the library fix. Post-fix invalid-input refusal and valid creation are automated evidence; no human rerun of valid creation is claimed. Owner authorized continuation on this documented distinction. |
+| Desktop smoke | Isolated bounded Wayland launch created/configured a toplevel and submitted rendered buffers; no process remained. This is launch/render evidence, **not graceful application exit or a visual approval**. |
+
+The 97- and 90-case selections overlap each other and earlier evidence; the
+upstream and C2 suites also overlap. **Do not sum these into a grand total or
+call them a new monolithic suite pass.** The owner explicitly allowed targeted
+verification after the fix branch's full suite. This documentation-only
+readiness checkpoint runs **no tests**, changes no production/test code, and
+does not weaken or replace any earlier result.
+
+Complete prior logs remain under
+`/tmp/opencode/c2-task12-verification-0860a6a/`; individual checkpoint tables
+retain commands, statuses, hashes and exact filters. The one ignored
+characterization test remains disclosed in its original evidence.
+
+#### Explicit nonblocking deferrals and native work owed
+
+- **`01M5E6DYJ6GN7DMW4424TH3V78` remains open and nonblocking** under C2
+  decision 9: today's wrong-passphrase `transport_unavailable` answer is passed
+  through, with the human hint and no automatic retry. This readiness record
+  does not claim that library defect fixed.
+- **Windows console first native compilation and prompting (R-16/R-11):** the
+  Windows terminal module has not been compiled/exercised by this Linux run;
+  native console behavior remains owed.
+- **Windows key-file creation/deletion (R-10):** native/manual evidence remains
+  owed; Unix CLI key-file tests do not establish Windows home isolation or
+  behavior.
+- **macOS PTY behavior:** native lifecycle, teardown and terminal-mode
+  restoration remain owed; Linux PTY results are not macOS evidence.
+- **Post-merge native Build CI runs on main**, following repository policy.
+  **Every dispatch requires separate owner approval**; readiness authorizes
+  no CI run. Native failures are follow-on work under that policy, not a claim
+  of unobserved native success here.
+
+Canonical review-ready comment **`01M5MPSP0DHPDMFA2N9X8B0A1C`** was generated
+by built CLI `id new --json` using the existing isolated detached runner and
+includes current `created_by`. Changes are confined to the Cycle/design/
+execution status, ticket body and this new comment. The exact commit subject
+is **`docs: mark Wave 03 C2 review-ready`**, with the required coauthor.
+No tests, push, PR, ticket closure, merge into main, cleanup or CI dispatch.
 
 ### Task 12 — Final Spec Finding: Complete Per-Verb No-Op Evidence (2026-10-23 UTC)
 

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2: CLI Repository And Credential Administration"
 date: 2026-10-20
-status: approved
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -17,17 +17,29 @@ implementation plan, for subagent-driven execution. The owner answered the
 planning questions on 2026-10-20. They are decisions 1–9 below; decisions 7–9
 followed two independent reviews of the drafts.
 
-**Execution status, 2026-10-23: blocker resolved; final review pending.**
-Identity-validation defect `01M5MAVV5CQE98Q9P2GG9T4FP9` landed on main at
-`563893c` and was merged into C2 at `eeba464`. Owner-authorized targeted
-verification passed: 98 executions / 97 distinct cases, including three new
-CLI regressions, plus Clippy/fmt. Prior C2 evidence and the fix branch's full
-suite are recorded separately in the ledger. Manual identity prompting was
-previously observed; corrected refusal and valid create are now automated
-evidence, not a claimed human rerun. Owner Ctrl-C/terminal restoration and
-protected generation already passed. Final independent whole-branch review
-and native obligations remain pending. **Not review-ready; ticket stays open.**
-Original approval and `status: approved` are retained.
+**Implemented, locally verified and review-ready, 2026-10-23.** Task 12 through
+Step 6 is complete. The controller reports both final whole-branch reviews
+**APPROVE, no findings**, at `9c3a23ef349a667132ded3faa35cacb118ee2fa9` against
+main `563893c118f8e6a2d1f9ec9ccfe240f120decb95`:
+
+- Spec: **`ses_e96bcb4cfffeoD5umHyL4mfvrx`**, approved after the no-op evidence fix.
+- Quality: **`ses_e96987265ffe2Est5HzXZ9VZp8`**, independent review of actual code.
+
+The ledger preserves the historical 4,118 passed / 1 ignored composed C2
+evidence, the separately reported identity-fix-branch full suite, and the
+owner-authorized targeted checks (97 then 90 distinct cases, not summed).
+The all-feature field-order fix and complete 14-of-18 no-op capability inventory
+are included in the reviewed range. Owner Ctrl-C/terminal restoration and
+protected generation passed; identity prompting was observed, while corrected
+invalid-input refusal and valid creation are post-fix automated evidence, not
+a claimed human rerun. The original approval above remains part of the record.
+
+**Ticket remains open; closure is not authorized.** Windows console first native
+compilation/prompting (R-16), Windows key-file checks, macOS PTY behavior and
+post-merge CI on main remain owed; each CI dispatch needs its own owner approval.
+Wrong-passphrase defect `01M5E6DYJ6GN7DMW4424TH3V78` stays open and nonblocking
+under decision 9. The bounded desktop launch is smoke evidence only, with no
+graceful-exit claim. No tests were rerun for this documentation-only checkpoint.
 See the [execution ledger](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
 
 - [Design](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-design.md)

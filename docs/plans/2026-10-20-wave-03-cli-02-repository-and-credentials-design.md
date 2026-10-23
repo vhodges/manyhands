@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C2 CLI Repository And Credential Administration Design"
 date: 2026-10-20
-status: approved
+status: "implemented, review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,17 +12,29 @@ id: "01M5E2E00HDF992A4D7HQ3TFRJ"
 
 ## Execution Status
 
-**2026-10-23: blocker resolved; final review pending.** Separate identity defect
-`01M5MAVV5CQE98Q9P2GG9T4FP9` landed on main at `563893c` and is merged into
-C2 at `eeba464`. Owner-authorized targeted tests passed (98 executions /
-97 distinct cases), including CLI refusal-before-writes and valid controls,
-with Clippy/fmt green. The fix branch's full suite and earlier C2 evidence
-remain separately attributed. Owner identity prompting was previously observed;
-corrected refusal and valid create are automated evidence, not a human rerun.
-Owner Ctrl-C/terminal restoration and protected generation already passed.
-Final independent whole-branch review and native obligations remain pending;
-**not review-ready**. The original 2026-10-22 approval and `status: approved`
-metadata are unchanged. Details are in the
+**Implemented, locally verified and review-ready, 2026-10-23.** Task 12 through
+Step 6 is complete. Final whole-branch spec review
+**`ses_e96bcb4cfffeoD5umHyL4mfvrx`** and independent actual-code quality review
+**`ses_e96987265ffe2Est5HzXZ9VZp8`** both **APPROVE, no findings**, for
+`563893c118f8e6a2d1f9ec9ccfe240f120decb95..9c3a23ef349a667132ded3faa35cacb118ee2fa9`.
+Spec approval includes the completed no-op evidence correction. The original
+2026-10-22 design approval is preserved as historical authority.
+
+Verification is the recorded composed C2 evidence, the separate merged
+identity-fix-branch full-suite report, and owner-authorized targeted checks;
+their overlapping counts are not summed into a new full-suite claim. Owner
+Ctrl-C/terminal restoration and protected generation passed. Identity prompting
+was observed; post-fix valid creation and invalid-input refusal are automated
+evidence, not a claimed human rerun. All-feature output ordering and both-mode
+no-op evidence for all 14 capable verbs (four source-justified non-no-op verbs)
+are covered by the final reviews.
+
+The ticket stays **open**; closure is not authorized. Windows console first
+native compilation/prompting (R-16), Windows key files, macOS PTY behavior and
+post-merge CI on main remain owed, with approval required for each CI dispatch.
+Known wrong-passphrase defect `01M5E6DYJ6GN7DMW4424TH3V78` remains open and
+nonblocking. Desktop smoke proves bounded launch/rendering, not graceful exit.
+This readiness update reruns no tests. Details and provenance are in the
 [execution ledger](2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
 
 ## Intent And Approval Boundary
