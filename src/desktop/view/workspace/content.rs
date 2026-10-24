@@ -120,12 +120,18 @@ impl Workspace {
 
     /// Closes the tab `id`. A tab with a restored draft attached asks
     /// first: Keep draft, Discard or Cancel. True when the tab closed now.
+    /// While quitting waits for drafts or a job, with Quit now in view,
+    /// nothing closes and nothing opens in front of it.
     pub(in crate::desktop::view) fn close_tab(
         &mut self,
         id: TabId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.services.worker().quitting() || self.services.operations().read(cx).saving_drafts()
+        {
+            return false;
+        }
         let attached = self.content.tabs.pane(id).and_then(|pane| {
             let pane = pane.read(cx);
             let draft = self.services.drafts().read(cx).attached(&pane.tab_key())?;

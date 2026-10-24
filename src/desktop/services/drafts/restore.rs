@@ -219,15 +219,6 @@ impl DraftRegistry {
         self.sessions.remove(&current);
         self.saves.retain(|_, record| record.draft != current);
         self.detach_ended();
-        let ended: Vec<DraftId> = self
-            .releasing
-            .iter()
-            .copied()
-            .filter(|pending| self.current_id(*pending).is_none())
-            .collect();
-        for pending in ended {
-            self.releasing.remove(&pending);
-        }
         self.reload_listing(cx);
         cx.notify();
         Some(Ok(()))
@@ -271,7 +262,8 @@ impl DraftRegistry {
         }
     }
 
-    /// Forgets the tabs whose session has ended.
+    /// Forgets the tabs, and the releases waiting, whose session has
+    /// ended.
     pub(super) fn detach_ended(&mut self) {
         let ended: Vec<TabKey> = self
             .attached
@@ -281,6 +273,15 @@ impl DraftRegistry {
             .collect();
         for tab in ended {
             self.attached.remove(&tab);
+        }
+        let ended: Vec<DraftId> = self
+            .releasing
+            .iter()
+            .copied()
+            .filter(|pending| self.current_id(*pending).is_none())
+            .collect();
+        for pending in ended {
+            self.releasing.remove(&pending);
         }
     }
 }

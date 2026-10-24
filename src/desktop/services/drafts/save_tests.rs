@@ -1038,3 +1038,165 @@ async fn a_tab_keeps_its_session_when_its_text_is_stored_again(cx: &mut TestAppC
     );
     holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, new, "Typed while retiring");
 }
+
+/// Part B review M3: a retirement lists the store again, so a restored
+/// draft's row, held here, does not stay once the draft is gone.
+#[gpui_kit::test]
+async fn a_retirement_lists_the_store_again(cx: &mut TestAppContext) {
+    use crate::desktop::{model::tabs::TabKey, test_support::drafts::store_draft};
+    use manyhands::repository::ItemDtoKind;
+
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.create_document(&root, DOCUMENT, DOCUMENT_PATH, "Item title");
+    let stored = store_draft(&fixture, &root, ItemDtoKind::Document, DOCUMENT, "Body");
+    let (_backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let tab = TabKey::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Document,
+        id: DOCUMENT.to_owned(),
+    };
+    let restored = drafts.update(cx, |registry, cx| registry.restore(stored, tab.clone(), cx));
+    cx.run_until_parked();
+    let id = match restored.await {
+        Ok(id) => id,
+        Err(refused) => panic!("the draft must be restored: {refused:?}"),
+    };
+    let listed = |cx: &TestAppContext| {
+        drafts.read_with(cx, |registry, _| {
+            registry
+                .listing()
+                .rows()
+                .unwrap()
+                .iter()
+                .find(|listing| listing.id == id)
+                .map(|listing| listing.held)
+        })
+    };
+    assert_eq!(listed(cx), Some(Held::Here));
+
+    edit(&drafts, id, document_fields("Saved title", "Body"), cx);
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    finished(&services, request, 1, cx).await;
+    assert!(!session_live(&drafts, id, cx));
+    assert_eq!(listed(cx), None, "the retired draft is listed no more");
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.attached(&tab)),
+        None
+    );
+}
+
+/// Part B review M2 and M7: Discard of a session left with no claim, its
+/// draft retired and the store again failed, answers `Ok`: the draft is
+/// already gone, and nothing is left.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn discarding_an_unclaimed_session_whose_draft_is_gone_succeeds(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (_root, id) = document_draft(&fixture, &services, cx).await;
+    let (retire, store_again) = retiring_under_an_edit(&backend, &services, id, true, cx).await;
+    retire.send(()).unwrap();
+    cx.run_until_parked();
+    let folder = fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    store_again.unwrap().send(()).unwrap();
+    cx.run_until_parked();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Failed(DraftErrorKind::Access))
+    );
+
+    let discarded = drafts.update(cx, |registry, cx| registry.discard(id, cx));
+    cx.run_until_parked();
+    assert_eq!(discarded.await, Ok(()));
+    assert!(fixture.draft_store().list().unwrap().is_empty());
+    assert!(drafts.read_with(cx, |registry, _| registry.is_idle()));
+}
+
+/// Part B review M1: a caller that drops the save's task does not leave
+/// the session flushing: the save is still sent, and once it is over
+/// another may be.
+#[gpui_kit::test]
+async fn a_dropped_save_task_still_sends_and_frees_the_session(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (_root, id) = document_draft(&fixture, &services, cx).await;
+    edit(&drafts, id, document_fields("Saved title", "Body"), cx);
+    backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+    drop(drafts.update(cx, |registry, cx| registry.save(id, cx)));
+    cx.run_until_parked();
+    let request = drafts.read_with(cx, |registry, _| {
+        let requests: Vec<DesktopRequestId> = registry.saves.keys().copied().collect();
+        match requests.as_slice() {
+            [request] => *request,
+            _ => panic!("the save is sent once"),
+        }
+    });
+    finished(&services, request, 1, cx).await;
+    drafts.update(cx, |registry, cx| registry.dismissed(request, cx));
+    backend.replace_service(RepositoryService::open_at(fixture.data_dir()).unwrap());
+    assert!(save(&drafts, id, cx).await.is_some());
+}
+
+/// Part B review M7: quitting while a session is stored but busy, its
+/// saved revision retiring behind a held write, waits in "Saving drafts
+/// for recovery" until the retirement lands, then quits.
+#[gpui_kit::test]
+async fn quitting_waits_for_a_retirement_in_flight(cx: &mut TestAppContext) {
+    use crate::desktop::view::{harness::Shell, quit::QuitPhase};
+
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.create_document(&root, DOCUMENT, DOCUMENT_PATH, "Item title");
+    let shell = Shell::open(fixture, cx);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let drafts = services.drafts().clone();
+    let id = begin(
+        &shell.fixture,
+        &services,
+        &root,
+        ItemKind::Document,
+        DOCUMENT,
+        cx,
+    )
+    .await;
+    edit(&drafts, id, document_fields("Saved title", "Body"), cx);
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    let retire = shell.backend.hold_read(ReadKind::DraftWrite);
+    finished(&services, request, 1, cx).await;
+    assert!(matches!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Saved(_))
+    ));
+    assert!(drafts.read_with(cx, |registry, _| registry.unsaved()));
+
+    let phase = |cx: &TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.quit_phase())
+    };
+    shell.keys("secondary-q", cx);
+    assert_eq!(phase(cx), QuitPhase::SavingDrafts);
+    assert!(stored(&shell.fixture.draft_store(), id).is_some());
+
+    retire.send(()).unwrap();
+    shell.run(cx);
+    assert_eq!(phase(cx), QuitPhase::Quit);
+    assert!(stored(&shell.fixture.draft_store(), id).is_none());
+}

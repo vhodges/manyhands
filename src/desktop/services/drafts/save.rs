@@ -22,6 +22,7 @@
 //! abandoned. A completion for a draft discarded meanwhile, or for a
 //! request whose save is over, changes nothing.
 
+use futures::FutureExt;
 use gpui_kit::{Context, Task};
 use manyhands::{
     drafts::{DraftErrorKind, DraftFields, DraftId},
@@ -78,22 +79,33 @@ impl DraftRegistry {
             return Task::ready(None);
         }
         session.set_saving(Some(Saving::Flushing));
-        cx.spawn(async move |registry, cx| {
-            loop {
-                let flush = registry
-                    .update(cx, |registry, cx| registry.flush_now(id, cx))
-                    .ok()?;
-                let flushed = flush.await;
-                let sent = registry
-                    .update(cx, |registry, cx| registry.send_save(id, flushed, cx))
-                    .ok()?;
-                match sent {
-                    Send::Sent(request) => return Some(request),
-                    Send::Refused => return None,
-                    Send::Again => {}
+        // The flush and the send run to their end whether or not the
+        // caller keeps the task: a dropped task must not leave the
+        // session flushing, refusing every later save.
+        let work = cx
+            .spawn(async move |registry, cx| {
+                loop {
+                    let flush = registry
+                        .update(cx, |registry, cx| registry.flush_now(id, cx))
+                        .ok()?;
+                    let flushed = flush.await;
+                    let sent = registry
+                        .update(cx, |registry, cx| registry.send_save(id, flushed, cx))
+                        .ok()?;
+                    match sent {
+                        Send::Sent(request) => return Some(request),
+                        Send::Refused => return None,
+                        Send::Again => {}
+                    }
                 }
-            }
+            })
+            .shared();
+        let driven = work.clone();
+        cx.spawn(async move |_, _| {
+            driven.await;
         })
+        .detach();
+        cx.spawn(async move |_, _| work.await)
     }
 
     /// Sends the save once the newest revision is stored; another flush
@@ -215,7 +227,10 @@ impl DraftRegistry {
             .collect();
         for request in over {
             let record = self.saves.remove(&request).expect("listed above");
-            if let Some(live) = self.sessions.get_mut(&record.draft)
+            // The session may go on under another ID.
+            if let Some(live) = self
+                .current_id(record.draft)
+                .and_then(|current| self.sessions.get_mut(&current))
                 && matches!(
                     live.session.saving(),
                     Some(Saving::Submitted(saving, _)) if saving == request
@@ -232,9 +247,10 @@ impl DraftRegistry {
     /// retirement the store kept, or a store again that made a new draft,
     /// puts its claim back in the session's slot, so that draft is
     /// discarded too. A save still in flight changes nothing when it
-    /// finishes. On failure the store has released the draft, which stays
-    /// on disk: the session is over either way. The store is listed again
-    /// once it lands.
+    /// finishes. A slot left empty by a draft already gone answers `Ok`.
+    /// On failure the store has released the draft, which stays on disk:
+    /// the session is over either way. The store is listed again once it
+    /// lands, whatever it answered.
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
@@ -260,7 +276,17 @@ impl DraftRegistry {
                 off_thread(
                     &registry.backend,
                     ReadKind::DraftWrite,
-                    move |_| take(&slot)?.discard(),
+                    move |store| match take(&slot) {
+                        Ok(claim) => claim.discard(),
+                        // No claim is left: a retirement deleted the
+                        // draft, or consumed the claim and released it
+                        // and a store again failed. Already gone is
+                        // discarded; a released draft is still there.
+                        Err(empty) => match store.raw_bytes(id) {
+                            Err(gone) if gone.kind == DraftErrorKind::NotFound => Ok(()),
+                            _ => Err(empty),
+                        },
+                    },
                     cx,
                 )
             });

@@ -332,6 +332,82 @@ mod saving_drafts {
         drop(gate);
     }
 
+    /// Part B review: closing a tab with a draft attached, by
+    /// `secondary-w` or its Close, opens no dialog in front of Quit now
+    /// while drafts are saving, and the tab stays.
+    #[gpui_kit::test]
+    async fn no_close_dialog_opens_while_drafts_are_saving(cx: &mut TestAppContext) {
+        use manyhands::{drafts::DraftFields, repository::ItemDtoKind};
+
+        use crate::desktop::{
+            model::navigation::OpenTarget,
+            test_support::{drafts::store_draft, fixtures::item_id},
+            view::harness::key,
+        };
+
+        const ONE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ0";
+        let fixture = Fixture::new();
+        let a = fixture.create_repository("a");
+        fixture.commit_ticket(&a, ONE, "One", "");
+        fixture.refresh(&a);
+        let draft = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Draft body");
+        let shell = Shell::open(fixture, cx);
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.open_item(
+                OpenTarget::Item {
+                    repo: key(&a),
+                    kind: ItemDtoKind::Ticket,
+                    id: item_id(ONE),
+                },
+                cx,
+            )
+        });
+        shell.run(cx);
+        shell.click("draft-restore-button", cx);
+        assert!(shell.present("draft-section", cx), "the draft is restored");
+
+        let drafts = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let mut fields = drafts.read_with(cx, |registry, _| {
+            registry.session(draft).unwrap().current().clone()
+        });
+        if let DraftFields::Ticket { body, .. } = &mut fields {
+            *body = "Unsaved body".to_owned();
+        }
+        drafts.update(cx, |registry, cx| registry.edit(draft, fields, cx));
+        shell.run(cx);
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+
+        shell.keys("secondary-w", cx);
+        assert!(!shell.present("close-draft-dialog", cx));
+        // The tab's Close goes through the same path.
+        let closed = shell.visual(cx).update(|window, cx| {
+            shell.workspace.update(cx, |workspace, cx| {
+                let id = workspace.content.tabs.active().expect("the tab is open");
+                workspace.close_tab(id, window, cx)
+            })
+        });
+        assert!(!closed);
+        shell.run(cx);
+        assert!(!shell.present("close-draft-dialog", cx));
+        assert_eq!(
+            shell
+                .workspace
+                .read_with(cx, |workspace, _| workspace.tab_keys().len()),
+            1,
+            "the tab stays"
+        );
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        drop(gate);
+    }
+
     /// With a job running too, the drafts are saved first; then quitting
     /// is D1's "Finishing", and it quits once the job returns.
     #[gpui_kit::test]

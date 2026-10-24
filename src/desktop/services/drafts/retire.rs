@@ -162,11 +162,16 @@ impl DraftRegistry {
             // Deleted, or the store consumed the claim and released the
             // draft: newer text is stored again; otherwise the session is
             // over.
+            // The store is listed again either way: the draft is gone, or
+            // released and no longer held here.
             Ok(Retired::Deleted) | Err(_) if newer => {
                 self.store_again(id, Some(base), cx);
+                self.reload_listing(cx);
             }
             Ok(Retired::Deleted) | Err(_) => {
                 self.sessions.remove(&id);
+                self.detach_ended();
+                self.reload_listing(cx);
             }
         }
         cx.notify();
@@ -250,6 +255,8 @@ impl DraftRegistry {
                 self.schedule(id, cx);
             }
         }
+        // A new draft held here, or none: the store is listed as it is.
+        self.reload_listing(cx);
         cx.notify();
     }
 }
