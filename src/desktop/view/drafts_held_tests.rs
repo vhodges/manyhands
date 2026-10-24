@@ -1,8 +1,8 @@
 //! Drafts page rows of drafts someone holds: one open in another window
 //! reads so and offers Inspect and Export only, never Restore or Discard,
 //! whether its lock is held through a handle of this process or by
-//! another Manyhands process; and one held here with no tab to show
-//! offers no Show.
+//! another Manyhands process; one held here with no tab to show offers
+//! no Show; and an unreadable one held elsewhere offers no Discard….
 
 use gpui_kit::TestAppContext;
 use manyhands::repository::ItemDtoKind;
@@ -85,4 +85,34 @@ async fn a_draft_held_here_without_a_tab_offers_no_show(cx: &mut TestAppContext)
     shell.keys("secondary-shift-d", cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(RESTORED_HERE));
     assert_eq!(actions(&shell, id, cx), ["inspect", "export", "discard"]);
+}
+
+/// An unreadable draft whose lock another Manyhands process holds offers
+/// Export raw… only: no Discard…, as for a readable draft open elsewhere.
+/// (`hold_elsewhere` claims through the store, which refuses an unreadable
+/// draft, so the lock is held through a handle of its own, as the first
+/// test here does.)
+#[gpui_kit::test]
+fn an_unreadable_draft_held_elsewhere_offers_no_discard(cx: &mut TestAppContext) {
+    use fs4::fs_std::FileExt;
+
+    let fixture = Fixture::new();
+    fixture.draft_store();
+    let id = manyhands::drafts::DraftId::generate();
+    let drafts = fixture.data_dir().join("drafts");
+    std::fs::write(drafts.join(format!("{id}.json")), b"not a draft").unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(drafts.join(format!("{id}.lock")))
+        .unwrap();
+    assert!(FileExt::try_lock_exclusive(&lock).unwrap());
+    let shell = Shell::open(fixture, cx);
+
+    shell.keys("secondary-shift-d", cx);
+    assert!(shell.present(super::row_id(id, "row"), cx));
+    assert_eq!(actions(&shell, id, cx), ["export-raw"]);
+    FileExt::unlock(&lock).unwrap();
 }

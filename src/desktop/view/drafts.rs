@@ -232,7 +232,7 @@ impl DraftsPage {
                     read: None,
                 },
                 Entry::Unreadable(reason) => Slot {
-                    row: DraftRow::unreadable(listing.id, reason),
+                    row: DraftRow::unreadable(listing.id, reason, listing.held),
                     draft: None,
                     read: None,
                 },

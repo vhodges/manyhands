@@ -695,7 +695,8 @@ hiding itself.
   nothing, so a `DraftRow` holding draft text has no `Debug`.
 - **Unreadable rows** read "This draft cannot be read" with the reason
   ("saved by a newer Manyhands", "damaged", "not accessible", "owned by
-  another user", "not a file") and offer Export raw… and Discard….
+  another user", "not a file") and offer Export raw… and Discard…;
+  one another process holds offers Export raw… only.
 - **Open elsewhere** rows read "Open in another Manyhands window" and offer
   Inspect and Export only.
 - **Held here** rows read "Restored in this window" and offer Show, which

@@ -6,6 +6,7 @@
 //! - A discarded row gives the focus to the next row, else the previous.
 //! - An Inspect panel whose row goes leaves the focus on a live control.
 //! - Neither dialog opens while the worker quits, or over another dialog.
+//! - A discard landing behind another dialog leaves the focus there.
 //!
 //! Draft types derive no `Debug`; tests read them through `match` and
 //! compare text.
@@ -206,4 +207,47 @@ fn no_dialog_opens_over_another(cx: &mut TestAppContext) {
     shell.keys("escape", cx);
     assert!(!shell.present("discard-draft-dialog", cx));
     assert!(focused(&shell, row_id(rows[0], "discard"), cx));
+}
+
+/// A discard that lands while another dialog is open leaves the focus in
+/// that dialog: the page's refocus waits, and once the dialog closes it
+/// goes to the discarded row's neighbour.
+#[gpui_kit::test]
+fn a_discard_landing_behind_a_dialog_leaves_the_focus_there(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+
+    use crate::desktop::services::ReadKind;
+
+    let shell = three_drafts(cx);
+    let rows = shown(&shell, cx);
+    shell.click(row_id(rows[1], "discard"), cx);
+    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.click("discard-draft-confirm", cx);
+    assert!(!shell.present("discard-draft-dialog", cx));
+    assert!(kept(&shell, rows[1]), "the discard is held");
+
+    shell
+        .visual(cx)
+        .update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog.title("Probe")));
+    shell.run(cx);
+    let in_dialog = shell.frame(cx, |window, cx| window.focused(cx));
+    assert!(in_dialog.is_some());
+
+    drop(gate);
+    shell.run(cx);
+    assert!(!kept(&shell, rows[1]));
+    assert!(!shown(&shell, cx).contains(&rows[1]), "the row went");
+    assert_eq!(
+        shell.frame(cx, |window, cx| window.focused(cx)),
+        in_dialog,
+        "the focus stays in the dialog"
+    );
+    assert!(!focused(&shell, row_id(rows[2], "row"), cx));
+
+    shell
+        .visual(cx)
+        .update(|window, cx| window.close_dialog(cx));
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(focused(&shell, row_id(rows[2], "row"), cx));
 }

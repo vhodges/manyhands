@@ -197,8 +197,14 @@ impl DraftsPage {
     /// Where the focus goes once a discarded row has gone: drawn each
     /// frame, it acts only then. (An Inspect panel that goes with its row
     /// needs nothing here: the workspace's focus-lost handler gives the
-    /// focus to the page's first control.)
+    /// focus to the page's first control.) Not while a dialog is open or
+    /// quitting waits, with Quit now holding the focus: the refocus is kept
+    /// for the first frame after, and goes to a neighbour still listed then,
+    /// else the page's first control.
     pub(super) fn apply_refocus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.refocus.is_none() || !may_open(&self.services, window, cx) {
+            return;
+        }
         let listed = |page: &Self, id: &DraftId| page.slots.iter().any(|slot| slot.row.id == *id);
         if let Some(refocus) = &self.refocus
             && !listed(self, &refocus.removed)

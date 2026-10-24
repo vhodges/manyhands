@@ -222,8 +222,13 @@ fn an_unreadable_draft_offers_discard_only() {
                 ..RowActions::default()
             }
         );
-        let row = DraftRow::unreadable(DraftId::generate(), reason);
-        assert!(row.actions.discard && !row.actions.inspect);
+        for held in [Held::No, Held::Here] {
+            let row = DraftRow::unreadable(DraftId::generate(), reason, held);
+            assert!(row.actions.discard && !row.actions.inspect);
+        }
+        // Open in another process: no Discard…, as for a readable draft.
+        let row = DraftRow::unreadable(DraftId::generate(), reason, Held::Elsewhere);
+        assert_eq!(row.actions, RowActions::default());
     }
 }
 
