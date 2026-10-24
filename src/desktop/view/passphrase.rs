@@ -180,6 +180,22 @@ impl PassphraseDialog {
         cx.notify();
     }
 
+    /// Quitting saves drafts first: empties the input, lets it go and
+    /// gives the prompt back unanswered, to be held while the drafts are
+    /// saved. The caller closes the dialog.
+    pub(crate) fn withdraw(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PromptRequest> {
+        self._enter = None;
+        if let Some(input) = self.input.take() {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+        self.prompt.take()
+    }
+
     /// Empties the input and lets it go, then replies, once. False when
     /// the prompt was already answered.
     fn answer(&mut self, reply: PromptReply, window: &mut Window, cx: &mut Context<Self>) -> bool {

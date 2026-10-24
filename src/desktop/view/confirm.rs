@@ -130,9 +130,10 @@ fn open(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // Quitting waits for a job with "Finishing" and Quit now in view:
-    // nothing opens in front of them, and no request could be sent.
-    if services.worker().quitting() {
+    // Quitting waits for drafts or a job with Quit now in view: nothing
+    // opens in front of it, and once the worker quits no request could be
+    // sent.
+    if services.worker().quitting() || services.operations().read(cx).saving_drafts() {
         return;
     }
     let title = intent.label();

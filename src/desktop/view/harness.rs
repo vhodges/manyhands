@@ -11,6 +11,7 @@ use gpui_kit::{
     App, ElementId, Entity, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext,
     Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
+use manyhands::drafts::{DraftFields, DraftId, DraftTarget, ItemKind};
 
 use super::workspace::Workspace;
 use crate::desktop::{
@@ -266,6 +267,57 @@ impl Shell {
             })
         })
         .await;
+    }
+}
+
+/// A ticket draft's fields with `body`; no repository holds its item.
+fn draft_fields(body: &str) -> DraftFields {
+    DraftFields::Ticket {
+        title: "Draft title".to_owned(),
+        ticket_type: "task".to_owned(),
+        status: "open".to_owned(),
+        project: None,
+        team: None,
+        deps: Vec::new(),
+        parent: None,
+        body: body.to_owned(),
+    }
+}
+
+impl Shell {
+    /// Begins a session with "First body", stored at revision 1.
+    pub(crate) async fn begin_draft(&self, cx: &mut TestAppContext) -> DraftId {
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let target = DraftTarget {
+            repository: "/a/repository".to_owned(),
+            item_kind: ItemKind::Ticket,
+            item_id: "01ARZ3NDEKTSV4RRFFQ69G5FG0".parse().unwrap(),
+            comment: None,
+        };
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin(target, None, draft_fields("First body"), cx)
+        });
+        self.run(cx);
+        match begun.await {
+            Ok(id) => id,
+            Err(kind) => panic!("the draft must begin: {kind:?}"),
+        }
+    }
+
+    /// A session whose newest text, "Newer body", is in memory only: its
+    /// write is not yet due.
+    pub(crate) async fn unsaved_draft(&self, cx: &mut TestAppContext) -> DraftId {
+        let id = self.begin_draft(cx).await;
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        drafts.update(cx, |registry, cx| {
+            registry.edit(id, draft_fields("Newer body"), cx)
+        });
+        self.run(cx);
+        id
     }
 }
 

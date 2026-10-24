@@ -81,6 +81,9 @@ pub(crate) struct Workspace {
     quit_focus: FocusHandle,
     /// The dialog layer owns the open passphrase dialog.
     passphrase: Option<WeakEntity<PassphraseDialog>>,
+    /// While drafts are saved for quitting, and their dialog asks, a
+    /// prompt waits with the request model, neither shown nor answered.
+    prompts_held: bool,
     /// Launch refreshes are submitted once, after the first repository list.
     launched: bool,
     pending_reads: HashMap<RepoKey, Task<()>>,
@@ -192,6 +195,7 @@ impl Workspace {
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),
             passphrase: None,
+            prompts_held: false,
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),

@@ -191,7 +191,7 @@ async fn quit_now_quits_while_the_job_is_held(cx: &mut TestAppContext) {
 /// D1's phases. A failed flush asks with Quit anyway and Cancel.
 mod saving_drafts {
     use gpui_kit::{TestAppContext, test::TestWindowExt};
-    use manyhands::drafts::{DraftFields, DraftId, DraftTarget, ItemKind};
+    use manyhands::drafts::DraftId;
 
     use super::QuitPhase;
     use crate::desktop::{
@@ -203,60 +203,18 @@ mod saving_drafts {
         },
     };
 
-    const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
-
-    fn fields(body: &str) -> DraftFields {
-        DraftFields::Ticket {
-            title: "Draft title".to_owned(),
-            ticket_type: "task".to_owned(),
-            status: "open".to_owned(),
-            project: None,
-            team: None,
-            deps: Vec::new(),
-            parent: None,
-            body: body.to_owned(),
-        }
-    }
-
     fn phase(shell: &Shell, cx: &mut TestAppContext) -> QuitPhase {
         shell
             .workspace
             .read_with(cx, |workspace, _| workspace.quit_phase())
     }
 
-    /// A session begun with "First body", stored at revision 1.
     async fn begun(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
-        let drafts = shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
-        let target = DraftTarget {
-            repository: "/a/repository".to_owned(),
-            item_kind: ItemKind::Ticket,
-            item_id: TICKET.parse().unwrap(),
-            comment: None,
-        };
-        let begun = drafts.update(cx, |registry, cx| {
-            registry.begin(target, None, fields("First body"), cx)
-        });
-        shell.run(cx);
-        match begun.await {
-            Ok(id) => id,
-            Err(kind) => panic!("the draft must begin: {kind:?}"),
-        }
+        shell.begin_draft(cx).await
     }
 
-    /// A session whose newest text, "Newer body", is in memory only: its
-    /// write is not yet due.
     async fn unsaved(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
-        let id = begun(shell, cx).await;
-        let drafts = shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
-        drafts.update(cx, |registry, cx| {
-            registry.edit(id, fields("Newer body"), cx)
-        });
-        shell.run(cx);
-        id
+        shell.unsaved_draft(cx).await
     }
 
     fn body(shell: &Shell, id: DraftId) -> Option<String> {
@@ -330,6 +288,47 @@ mod saving_drafts {
         shell.click("quit-now", cx);
         assert_eq!(phase(&shell, cx), QuitPhase::Quit);
         assert_eq!(body(&shell, id).as_deref(), Some("First body"));
+        drop(gate);
+    }
+
+    /// Nothing opens a confirmation in front of Quit now while drafts are
+    /// saving; once they are saved and quitting is D1's, nothing does
+    /// either.
+    #[gpui_kit::test]
+    async fn no_confirmation_opens_while_drafts_are_saving(cx: &mut TestAppContext) {
+        use gpui_kit::component::WindowExt;
+
+        use crate::desktop::{services::requests::Intent, view::confirm::confirm};
+
+        let shell = Shell::open(Fixture::new(), cx);
+        unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+
+        let services = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().clone());
+        let mut visual = shell.visual(cx);
+        let origin = visual.update(|_, cx| cx.focus_handle());
+        visual.update(|window, cx| {
+            confirm(
+                Intent::RepoRemove {
+                    root: "/a/repository".into(),
+                },
+                origin,
+                &services,
+                window,
+                cx,
+            )
+        });
+        shell.run(cx);
+        assert!(!visual.update(|window, cx| window.has_active_dialog(cx)));
+        assert!(!shell.present("confirm-dialog", cx));
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
         drop(gate);
     }
 

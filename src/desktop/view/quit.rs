@@ -8,7 +8,10 @@
 //! fails, a dialog says how many drafts could not be saved, with Quit
 //! anyway and Cancel, the default, which focuses the first failed draft's
 //! Retry in the operation area. Flushing happens before GPUI may quit:
-//! `on_app_quit` gets at most 200 ms.
+//! `on_app_quit` gets at most 200 ms. While drafts are saved, and while
+//! that dialog asks, no confirmation opens and a passphrase prompt is held,
+//! neither shown nor answered: quitting going on answers it
+//! `Unavailable`, as below; Cancel shows it again.
 //!
 //! Then, with no job running it quits. With one running it refuses,
 //! stops the worker admitting jobs, shows "Finishing" and Quit now, and
