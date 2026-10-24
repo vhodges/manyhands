@@ -281,6 +281,13 @@ fn discard_body(message: &str, confirm: &Confirm) -> impl IntoElement + use<> {
         .child(
             h_flex()
                 .gap_2()
+                // The safe choice is the first Tab stop: one stray Tab and
+                // Enter keeps the draft.
+                .child(dialog_button(
+                    "discard-draft-cancel",
+                    CANCEL,
+                    |_, window, cx| window.close_dialog(cx),
+                ))
                 .child(dialog_button(
                     "discard-draft-confirm",
                     DISCARD_CONFIRM,
@@ -288,11 +295,6 @@ fn discard_body(message: &str, confirm: &Confirm) -> impl IntoElement + use<> {
                         window.close_dialog(cx);
                         confirm(window, cx);
                     },
-                ))
-                .child(dialog_button(
-                    "discard-draft-cancel",
-                    CANCEL,
-                    |_, window, cx| window.close_dialog(cx),
                 )),
         )
 }

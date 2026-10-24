@@ -12,7 +12,7 @@
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
-    component::{button::Button, h_flex},
+    component::{ActiveTheme, button::Button, h_flex},
     div,
 };
 use manyhands::drafts::{DraftId, Held, markdown};
@@ -34,12 +34,18 @@ impl EventEmitter<DraftDiscarded> for ItemPane {}
 impl ItemPane {
     /// Export… and Discard… for the session `id`, and what the last
     /// export came to.
-    pub(super) fn draft_actions(&mut self, id: DraftId, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn draft_actions(
+        &mut self,
+        id: DraftId,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let focus = self
             .draft
             .discard_focus
             .get_or_insert_with(|| cx.focus_handle())
             .clone();
+        let ring = cx.theme().ring;
         let row = self
             .draft
             .actions_focus
@@ -56,6 +62,7 @@ impl ItemPane {
             .id("draft-discard")
             .test_support()
             .aria_label(DISCARD)
+            .relative()
             .track_focus(&focus)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.is_keyboard() {
@@ -68,7 +75,18 @@ impl ItemPane {
                     .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                         this.discard_draft(id, window, cx)
                     })),
-            );
+            )
+            // The focus Escape gives back to the wrapper shows a ring.
+            .children(focus.is_focused(window).then(|| {
+                div()
+                    .id("draft-discard-focus-ring")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .rounded_sm()
+                    .border_2()
+                    .border_color(ring)
+            }));
         // Below a long section and its comparison: the focus in the row
         // scrolls it into view.
         h_flex()

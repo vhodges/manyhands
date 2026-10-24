@@ -6,9 +6,14 @@
 //! may show text is read back from the window's own models and frame: the
 //! operation model's entries and their envelope messages, everything the
 //! window draws outside the draft's own section, its notifications, each
-//! dialog's message, and the `Debug` of every `DraftError` produced.
+//! dialog's message, and the error kinds the registry answered.
 //!
-//! Draft types derive no `Debug`, so `{:?}` applies to `DraftError` only.
+//! What the `{:?}` check covers: the desktop never receives a `DraftError`,
+//! only its `DraftErrorKind`, from the failed flush and `flush_failures`.
+//! The test rebuilds `DraftError { kind }` from each kind and checks its
+//! `Debug` and `Display`. A `DraftError` holds only its kind, so it cannot
+//! carry draft text by construction; the check pins that its rendering
+//! adds none. Draft types derive no `Debug` at all.
 
 use gpui_kit::{ElementId, TestAppContext, component::WindowExt};
 use manyhands::{

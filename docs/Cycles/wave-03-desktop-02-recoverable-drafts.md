@@ -310,9 +310,9 @@ Windows and macOS execution is not claimed (entry-gate item 6).
 - **Post-merge native run:** `--test drafts` on Windows and macOS (store
   protection, rename and locks); the desktop journeys there are G1's.
 - **Keyboard, not automated:** a Kit button's own focus ring, which
-  `test_support` cannot observe; and the ring of a row action whose focus
-  was given back by Escape (from Inspect or Discard's dialog), which lands
-  on the action's wrapper, not its Kit button, and draws no ring of its own.
+  `test_support` cannot observe. The focus Escape gives back (from Inspect
+  or Discard's dialog) lands on the action's wrapper, which draws its own
+  `*-focus-ring`; the keyboard tests assert it after each Escape.
 
 ## Product-Owner Decisions (2026-10-20 and 2026-10-21)
 

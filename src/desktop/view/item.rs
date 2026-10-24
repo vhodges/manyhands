@@ -129,7 +129,7 @@ impl Render for ItemPane {
         let status = self.status("item", self.model.item(), cx);
         let not_refreshed = self.not_refreshed(cx);
         let banner = self.draft_banner(item.as_ref(), cx);
-        let section = self.draft_section(cx);
+        let section = self.draft_section(window, cx);
         let relationships = match &item {
             Some(_) => self.relationships_panel(window, cx),
             None => None,

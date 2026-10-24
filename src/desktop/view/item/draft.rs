@@ -295,7 +295,11 @@ impl ItemPane {
     }
 
     /// The section of the draft restored in this tab.
-    pub(super) fn draft_section(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn draft_section(
+        &mut self,
+        window: &gpui_kit::Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let tab = self.tab_key();
         let registry = self.services.drafts().read(cx);
         let id = registry.attached(&tab)?;
@@ -354,7 +358,7 @@ impl ItemPane {
                 .child(self.recovery_line(id, recovery, cx))
                 .children(target)
                 .children(compare)
-                .child(self.draft_actions(id, cx))
+                .child(self.draft_actions(id, window, cx))
                 .child(later(cx))
                 .into_any_element(),
         )

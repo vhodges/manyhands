@@ -6,10 +6,12 @@
 //! held, Quit now focused; and quitting when a draft cannot be saved,
 //! Cancel by Enter and Quit anyway by Tab.
 //!
-//! Two kinds of defect these found are pinned here: a focus given back to
-//! a Kit button's wrapper (Escape from Inspect or Discard's dialog) must
-//! be pressed by Enter again, and Enter on a dialog's focused button must
-//! press that button, not the dialog's default.
+//! Defects these found are pinned here: a focus given back to a Kit
+//! button's wrapper (Escape from Inspect or Discard's dialog) must draw
+//! its own ring and be pressed by Enter again; Enter on a dialog's focused
+//! button must press that button, not the dialog's default; a dialog's
+//! first Tab stop is its safe choice; and the tab's Export… and Discard…
+//! scroll into view below a long comparison.
 //!
 //! As in D1's walk, each step asserts which element holds focus and that
 //! it is on screen: in a region, that region alone draws its ring; in a
@@ -27,7 +29,7 @@ use crate::desktop::{
     services::ReadKind,
     test_support::{
         drafts::{held, store_draft},
-        fixtures::Fixture,
+        fixtures::{Fixture, ticket_path, ticket_source},
     },
     view::{
         drafts::{
@@ -100,6 +102,19 @@ impl Walk {
         });
     }
 
+    /// The wrapper ring `ring` is drawn and on screen: the focus Escape
+    /// gave back to a wrapper is visible.
+    fn ringed(&self, ring: impl Into<ElementId>, cx: &mut TestAppContext) {
+        let ring = ring.into();
+        self.shell.frame(cx, |window, _| {
+            let found = window.try_find(ring.clone());
+            assert!(
+                found.is_some_and(|ring| ring.visible()),
+                "{ring:?} is drawn"
+            );
+        });
+    }
+
     /// Tab, within an open dialog, until `id` holds focus.
     fn tab_in_dialog(&self, id: &'static str, cx: &mut TestAppContext) {
         self.tab_to("tab", id, cx);
@@ -112,7 +127,11 @@ impl Walk {
 fn two_drafts(cx: &mut TestAppContext) -> (Walk, DraftId, DraftId) {
     let fixture = Fixture::new();
     let a = fixture.create_repository("a");
-    fixture.commit_ticket(&a, ONE, "One", "");
+    // One's body is long: its comparison (the item's body and the
+    // draft's base) pushes the tab's Export… and Discard… off screen.
+    let long: String = (0..120).map(|n| format!("Line {n} of One.\n")).collect();
+    let source = ticket_source(ONE, "One", "").replace("Body of One.\n", &long);
+    fixture.commit_file(&a, &ticket_path(ONE), source.as_bytes());
     fixture.commit_ticket(&a, TWO, "Two", "");
     fixture.refresh(&a);
     let one = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Mine");
@@ -159,12 +178,15 @@ fn the_drafts_page_works_by_keyboard_alone(cx: &mut TestAppContext) {
     assert!(walk.shell.present("comparison", cx));
     walk.keys("escape", cx);
     assert!(!walk.shell.present("drafts-inspect", cx));
+    let inspect_ring = row_id(one, "inspect-focus-ring");
     walk.on(row_id(one, "inspect"), Region::Content, cx);
+    walk.ringed(inspect_ring.clone(), cx);
     // The focus given back is pressed by Enter again.
     walk.enter(cx);
     walk.on("drafts-inspect", Region::Content, cx);
     walk.keys("escape", cx);
     walk.on(row_id(one, "inspect"), Region::Content, cx);
+    walk.ringed(inspect_ring, cx);
 
     // Export…: the save dialog asks where; the file is written.
     let folder = tempfile::tempdir().unwrap();
@@ -191,7 +213,9 @@ fn the_drafts_page_works_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.keys("escape", cx);
     assert!(!walk.shell.present("discard-draft-dialog", cx));
     assert!(kept(&walk, two));
+    let discard_ring = row_id(two, "discard-focus-ring");
     walk.on(discard.clone(), Region::Content, cx);
+    walk.ringed(discard_ring.clone(), cx);
 
     // Discard…, Enter: the default is Cancel; nothing is discarded.
     walk.enter(cx);
@@ -200,6 +224,19 @@ fn the_drafts_page_works_by_keyboard_alone(cx: &mut TestAppContext) {
     assert!(!walk.shell.present("discard-draft-dialog", cx));
     assert!(kept(&walk, two));
     walk.on(discard.clone(), Region::Content, cx);
+    walk.ringed(discard_ring.clone(), cx);
+
+    // Discard…, one Tab, Enter: the first Tab stop is Cancel, the safe
+    // choice; nothing is discarded.
+    walk.enter(cx);
+    walk.dialog_open("discard-draft-dialog", cx);
+    walk.keys("tab", cx);
+    walk.in_dialog("discard-draft-cancel-button", cx);
+    walk.enter(cx);
+    assert!(!walk.shell.present("discard-draft-dialog", cx));
+    assert!(kept(&walk, two));
+    walk.on(discard.clone(), Region::Content, cx);
+    walk.ringed(discard_ring, cx);
 
     // Discard…, Tab to Confirm, Enter: the draft and its row go, and the
     // focus goes to the other row.
@@ -257,12 +294,14 @@ fn restore_compare_and_close_work_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.keys("escape", cx);
     assert!(!walk.shell.present("discard-draft-dialog", cx));
     walk.on("draft-discard", Region::Content, cx);
+    walk.ringed("draft-discard-focus-ring", cx);
     walk.enter(cx);
     walk.dialog_open("discard-draft-dialog", cx);
     walk.enter(cx);
     assert!(!walk.shell.present("discard-draft-dialog", cx));
     assert_eq!(attached(&walk, cx), Some(one));
     walk.on("draft-discard", Region::Content, cx);
+    walk.ringed("draft-discard-focus-ring", cx);
 
     // Close, Escape: the tab and its draft stay, focus back on the tab.
     walk.keys("secondary-3", cx);
@@ -285,10 +324,14 @@ fn restore_compare_and_close_work_by_keyboard_alone(cx: &mut TestAppContext) {
     assert_eq!(attached(&walk, cx), Some(one));
     walk.on(("tab", 0usize), Region::Content, cx);
 
-    // Close, Enter: Keep draft, the default. The tab closes and the draft
-    // is let go of, still stored.
+    // Close, one Tab, Enter: the first Tab stop is Keep draft, the safe
+    // choice (Enter alone is Keep draft too:
+    // `tabs_tests::keep_draft_releases_the_claim_and_the_draft_is_listed_again`).
+    // The tab closes and the draft is let go of, still stored.
     walk.keys("secondary-w", cx);
     walk.dialog_open("close-draft-dialog", cx);
+    walk.keys("tab", cx);
+    walk.in_dialog("close-draft-keep-button", cx);
     walk.enter(cx);
     walk.shell.run(cx);
     assert!(!walk.shell.present("close-draft-dialog", cx));
@@ -383,6 +426,16 @@ async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
 
     walk.keys("secondary-q", cx);
     walk.dialog_open("drafts-not-saved-dialog", cx);
+    walk.enter(cx);
+    assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
+    assert_eq!(phase(cx), QuitPhase::Running);
+    walk.on(draft_flush_id(id, "retry"), Region::Operations, cx);
+
+    // One Tab, Enter: the first Tab stop is Cancel; it does not quit.
+    walk.keys("secondary-q", cx);
+    walk.dialog_open("drafts-not-saved-dialog", cx);
+    walk.keys("tab", cx);
+    walk.in_dialog("drafts-not-saved-cancel-button", cx);
     walk.enter(cx);
     assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
     assert_eq!(phase(cx), QuitPhase::Running);

@@ -160,7 +160,7 @@ impl DraftsPage {
         let actions = order
             .into_iter()
             .filter(|ix| offered(row, ACTIONS[*ix].0) && (ACTIONS[*ix].0 != "show" || tab))
-            .map(|ix| self.action(id, ix, &focus.actions[ix], cx))
+            .map(|ix| self.action(id, ix, &focus.actions[ix], window, cx))
             .collect::<Vec<_>>();
         // A Restore refused as open elsewhere is moot once the listing
         // says another window holds the draft: the row says so itself.
@@ -209,9 +209,11 @@ impl DraftsPage {
         id: DraftId,
         ix: usize,
         focus: &FocusHandle,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (part, label) = ACTIONS[ix];
+        let ring = cx.theme().ring;
         let wrapper = ElementId::from(row_id(id, part));
         let act: Rc<RowAction> = match part {
             "show" => Rc::new(move |this, _, cx| this.show_tab_of(id, cx)),
@@ -243,6 +245,24 @@ impl DraftsPage {
             }))
             .child(button)
             .child(self.scroll.marker_within(focus))
+            .children(
+                focus
+                    .is_focused(window)
+                    .then(|| focus_ring(row_id(id, &format!("{part}-focus-ring")), ring)),
+            )
             .into_any_element()
     }
+}
+
+/// The ring a wrapper draws while its own focus is held: the focus that
+/// Escape gives back to it, where the Kit button inside draws none.
+fn focus_ring(id: String, ring: gpui_kit::Hsla) -> impl IntoElement {
+    div()
+        .id(id)
+        .test_support()
+        .absolute()
+        .inset_0()
+        .rounded_sm()
+        .border_2()
+        .border_color(ring)
 }

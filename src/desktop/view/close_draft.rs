@@ -96,19 +96,16 @@ fn body(item: &str, choose: &Choose, cx: &App) -> impl IntoElement + use<> {
         if let Some(press) = press.clone() {
             button = button.on_click(move |_: &ClickEvent, window, cx| press(window, cx));
         }
+        let wrapper = div().id(id).test_support().aria_label(label);
         // Enter on a focused button presses that button: its wrapper takes
         // the dialog's Enter (`Confirm`, on key down), whose default is
-        // Keep draft. Save, unavailable, takes it and does nothing.
-        div()
-            .id(id)
-            .test_support()
-            .aria_label(label)
-            .on_action(move |_: &Confirm, window, cx| {
-                if let Some(press) = &press {
-                    press(window, cx)
-                }
-            })
-            .child(button)
+        // Keep draft. Save, unavailable, cannot take the focus, so it has
+        // no handler.
+        match press {
+            Some(press) => wrapper.on_action(move |_: &Confirm, window, cx| press(window, cx)),
+            None => wrapper,
+        }
+        .child(button)
     };
     v_flex()
         .id("close-draft-dialog")

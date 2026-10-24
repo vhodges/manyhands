@@ -212,15 +212,17 @@ fn not_saved_body(message: &str, choose: &Choose) -> impl IntoElement + use<> {
         .child(
             h_flex()
                 .gap_2()
-                .child(button(
-                    "drafts-not-saved-quit",
-                    QUIT_ANYWAY,
-                    NotSavedChoice::QuitAnyway,
-                ))
+                // The safe choice is the first Tab stop: one stray Tab and
+                // Enter does not quit.
                 .child(button(
                     "drafts-not-saved-cancel",
                     CANCEL,
                     NotSavedChoice::Cancel,
+                ))
+                .child(button(
+                    "drafts-not-saved-quit",
+                    QUIT_ANYWAY,
+                    NotSavedChoice::QuitAnyway,
                 )),
         )
 }
