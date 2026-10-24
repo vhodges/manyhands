@@ -42,6 +42,7 @@ use crate::desktop::{
     },
     view::harness::{key, wait_until},
 };
+use manyhands::drafts::{FailureAction, FailurePoint as DraftFailurePoint};
 
 const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
@@ -964,4 +965,32 @@ async fn dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent(
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
     assert!(save(&drafts, id, cx).await.is_some());
+}
+
+/// Review fix round 2: a live session whose write fails `NotFound` is
+/// reported by `flush_all`, and stays failed with its text: only a session
+/// that ended is not a failure. The store's own failure point gives the
+/// write its `NotFound`, as the protected folder does for a file gone
+/// under it.
+#[gpui_kit::test]
+async fn flush_all_reports_a_live_sessions_not_found(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (_backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (_root, id) = document_draft(&fixture, &services, cx).await;
+    // Clones share the failure point: the desktop's store fails too.
+    let _failing = fixture.draft_store().with_failure_point_for_testing(
+        DraftFailurePoint::CreateTemp,
+        FailureAction::Fail(DraftErrorKind::NotFound),
+    );
+
+    edit(&drafts, id, document_fields("Unsaved title", "Body"), cx);
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    let answered = all.await;
+    assert_eq!(answered, vec![(id, DraftErrorKind::NotFound)]);
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Failed(DraftErrorKind::NotFound))
+    );
 }

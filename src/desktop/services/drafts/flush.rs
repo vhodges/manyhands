@@ -24,10 +24,13 @@ impl DraftRegistry {
     /// write this flush made failed. A session whose draft is gone with
     /// its text unstored is stored again as a new draft first.
     ///
-    /// `NotFound` means only that the session has ended, retired or
-    /// discarded, and holds no unsaved text: no text is left in memory
-    /// with no way to store it. An ID whose session goes on under a new
-    /// draft (`current_id`) reaches that session.
+    /// `NotFound` with no live session (`current_id` is `None`) means only
+    /// that the session has ended, retired or discarded, and holds no
+    /// unsaved text: no text is left in memory with no way to store it.
+    /// A live session's write can fail `NotFound` too (its drafts folder
+    /// gone): that is a real failure, and the session stays failed with
+    /// its text. An ID whose session goes on under a new draft reaches
+    /// that session.
     pub(crate) fn flush_now(
         &mut self,
         id: DraftId,
@@ -51,8 +54,10 @@ impl DraftRegistry {
     }
 
     /// Flushes every session now; answers the ones that failed, by the ID
-    /// each goes on under. A session that ended meanwhile (`NotFound`, see
-    /// `flush_now`) left nothing unsaved and is not a failure.
+    /// each goes on under. Only a session that ended meanwhile, `NotFound`
+    /// with no live session, left nothing unsaved and is not a failure; a
+    /// live session's `NotFound` is reported. If the registry is gone,
+    /// every failure is reported.
     #[cfg_attr(not(test), allow(dead_code))] // Called by Task 9's quit; tests until then.
     pub(crate) fn flush_all(
         &mut self,
@@ -70,16 +75,17 @@ impl DraftRegistry {
             let failed: Vec<(DraftId, DraftErrorKind)> = join_all(flushes)
                 .await
                 .into_iter()
-                .filter_map(|(id, result)| match result {
-                    Err(DraftErrorKind::NotFound) | Ok(()) => None,
-                    Err(kind) => Some((id, kind)),
-                })
+                .filter_map(|(id, result)| result.err().map(|kind| (id, kind)))
                 .collect();
             registry
                 .read_with(cx, |registry, _| {
                     failed
                         .iter()
-                        .map(|(id, kind)| (registry.current_id(*id).unwrap_or(*id), *kind))
+                        .filter_map(|(id, kind)| match (registry.current_id(*id), kind) {
+                            // The session ended: nothing unsaved is left.
+                            (None, DraftErrorKind::NotFound) => None,
+                            (current, kind) => Some((current.unwrap_or(*id), *kind)),
+                        })
                         .collect()
                 })
                 .unwrap_or(failed)

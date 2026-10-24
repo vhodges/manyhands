@@ -246,6 +246,7 @@ impl DraftRegistry {
                 live.session.recreate_failed(error.kind, base);
                 live.write = None;
                 self.sessions.insert(id, live);
+                self.schedule(id, cx);
             }
         }
         cx.notify();
