@@ -210,8 +210,8 @@ type Confirm = Rc<dyn Fn(&mut Window, &mut App)>;
 /// Opens the Discard dialog naming `name`, unless a dialog may not open
 /// now. Only Confirm, by click (or Enter on the focused button), calls
 /// `confirm`; the default is Cancel, so Enter, Escape and Cancel
-/// discard nothing (as Keep draft and quit'"'"'s Cancel are the defaults of
-/// D2'"'"'s other dialogs). Either way the focus goes back to `origin`.
+/// discard nothing (as Keep draft and quit's Cancel are the defaults of
+/// D2's other dialogs). Either way the focus goes back to `origin`.
 pub(crate) fn open_discard(
     name: Option<String>,
     origin: FocusHandle,
