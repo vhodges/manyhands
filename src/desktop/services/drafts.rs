@@ -91,8 +91,9 @@ pub(crate) struct DraftRegistry {
     /// How many listings have landed: a view rebuilds what it shows of
     /// the listing when this moves.
     listed: u64,
-    /// The drafts the first listing to land held: those this launch
-    /// recovered.
+    /// The drafts the launch listing held: those this launch recovered.
+    /// Taken from the first listing to land; one that failed recovers
+    /// none for the session, so a draft kept this session never counts.
     launch: Option<BTreeSet<DraftId>>,
     /// The "Recovered drafts" entry was dismissed: for this session.
     recovered_dismissed: bool,
@@ -186,16 +187,16 @@ impl DraftRegistry {
         }
         self.listed += 1;
         self.listing_failure = result.as_ref().err().map(|error| error.kind);
+        self.launch.get_or_insert_with(|| match &result {
+            Ok(rows) => rows.iter().map(|listing| listing.id).collect(),
+            Err(_) => BTreeSet::new(),
+        });
         self.listing = match result {
-            Ok(rows) => {
-                self.launch
-                    .get_or_insert_with(|| rows.iter().map(|listing| listing.id).collect());
-                ListState::Ready {
-                    rows,
-                    complete: true,
-                    index: None,
-                }
-            }
+            Ok(rows) => ListState::Ready {
+                rows,
+                complete: true,
+                index: None,
+            },
             // The store's kinds are not result codes: the list reads as
             // failed, as a read the library could not finish does.
             Err(_) => ListState::Failed(ReadFailure {

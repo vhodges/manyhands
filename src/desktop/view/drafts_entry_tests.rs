@@ -97,16 +97,46 @@ fn review_in_drafts_opens_the_page_on_the_drafts_row(cx: &mut TestAppContext) {
     }));
 }
 
-/// An operation entry names a draft's item by its title as read, or by
-/// its ID when no read gave one, never by the draft's own title.
+/// The drafts folder made read-only for as long as it lives; its mode is
+/// put back on drop, so a failed assertion leaves the fixture removable.
+#[cfg(unix)]
+struct ReadOnly(std::path::PathBuf);
+
+#[cfg(unix)]
+impl ReadOnly {
+    fn new(folder: std::path::PathBuf) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+        Self(folder)
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ReadOnly {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o700));
+    }
+}
+
+/// An operation entry names a draft's item by its title as read when the
+/// draft began, or by its ID when that read failed, never by the draft's
+/// own title.
 #[cfg(unix)]
 #[gpui_kit::test]
 async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppContext) {
-    use std::os::unix::fs::PermissionsExt;
+    use manyhands::{
+        drafts::{DraftBase, DraftTarget, ItemKind},
+        repository::{LeaseKind, RepositoryService},
+    };
+
+    use crate::desktop::test_support::fixtures::item_id;
 
     const SENTINEL: &str = "SENTINEL-d2c4";
     let fixture = Fixture::new();
     let a = with_ticket(&fixture, "a", ONE, "One");
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
     store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Mine");
     let shell = Shell::open(fixture, cx);
     open(&shell, ticket(&a, ONE), cx);
@@ -116,24 +146,52 @@ async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppConte
     let restored = drafts
         .read_with(cx, |registry, _| registry.attached(&tab))
         .expect("the draft is restored");
-    // Begun with no read of its item: named by its ID.
-    let unread = shell.begin_draft(cx).await;
+
+    // A draft of Two begun when its read failed: the registry's cache is
+    // held, so the read answers busy and the draft has no base.
+    let base = {
+        let _lease = RepositoryService::hold_lease_for_testing(
+            &a,
+            shell.fixture.data_dir(),
+            LeaseKind::CacheWrite,
+        )
+        .unwrap();
+        let service = shell.fixture.service();
+        match service.resolve_repository(&a) {
+            Ok(repo) => match service.show_item(&repo, &item_id(TWO)) {
+                Ok(item) => DraftBase::of(&item),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        }
+    };
+    assert!(base.is_none(), "the read must fail");
+    let target = DraftTarget {
+        repository: a.to_str().unwrap().to_owned(),
+        item_kind: ItemKind::Ticket,
+        item_id: item_id(TWO),
+        comment: None,
+    };
+    let begun = drafts.update(cx, |registry, cx| {
+        registry.begin(target, base, ticket_fields("Two", "Mine"), cx)
+    });
+    shell.run(cx);
+    let unread = match begun.await {
+        Ok(id) => id,
+        Err(kind) => panic!("the draft must begin: {kind:?}"),
+    };
     for id in [restored, unread] {
         drafts.update(cx, |registry, cx| {
             registry.edit(id, ticket_fields(SENTINEL, SENTINEL), cx)
         });
     }
 
-    let folder = shell.fixture.data_dir().join("drafts");
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let _read_only = ReadOnly::new(shell.fixture.data_dir().join("drafts"));
     cx.executor().advance_clock(IDLE);
     shell.run(cx);
     let entries = [
         (restored, draft_flush_failed("One", DraftErrorKind::Access)),
-        (
-            unread,
-            draft_flush_failed("01ARZ3NDEKTSV4RRFFQ69G5FG0", DraftErrorKind::Access),
-        ),
+        (unread, draft_flush_failed(TWO, DraftErrorKind::Access)),
     ];
     for (id, expected) in entries {
         assert_eq!(shell.label(draft_flush_id(id, "entry"), cx), Some(expected));
@@ -153,5 +211,40 @@ async fn an_operation_entry_names_the_item_never_the_draft(cx: &mut TestAppConte
             .any(|label| label.starts_with("Recovery copy of"))
     );
     assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
-    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A Review in Drafts that arrives while a dialog is open waits: the page
+/// opens, on that row, once the dialog has closed.
+#[gpui_kit::test]
+fn review_in_drafts_waits_for_an_open_dialog(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+
+    let fixture = Fixture::new();
+    let a = with_ticket(&fixture, "a", ONE, "One");
+    let id = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Mine");
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    shell
+        .visual(cx)
+        .update(|window, cx| window.open_dialog(cx, |dialog, _, _| dialog.title("Probe")));
+    shell.run(cx);
+
+    // The banner cannot be pressed behind the dialog; its request is
+    // made as the banner makes it.
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.review_in_drafts(id, cx));
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(!drafts_shown(&shell, cx), "not behind the dialog");
+
+    shell
+        .visual(cx)
+        .update(|window, cx| window.close_dialog(cx));
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(drafts_shown(&shell, cx));
+    assert!(shell.frame(cx, |window, _| {
+        window.find(row_id(id, "row")).focused() == Some(true)
+    }));
 }

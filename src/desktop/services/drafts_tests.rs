@@ -641,3 +641,66 @@ async fn edits_notify_only_when_the_recovery_state_changes(cx: &mut TestAppConte
     assert_eq!(notified.get(), 2);
     assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
 }
+
+/// "Recovered drafts" counts what the launch listing held and nothing
+/// stored later: a draft kept this session is never counted.
+#[gpui_kit::test]
+fn recovered_counts_only_the_launch_listings_drafts(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    store_draft(&fixture.draft_store(), ticket_target("/a/repository"));
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let recovered = |cx: &mut TestAppContext| {
+        services
+            .drafts()
+            .read_with(cx, |registry, _| registry.recovered())
+    };
+    assert_eq!(recovered(cx), Some(1));
+
+    store_draft(&fixture.draft_store(), ticket_target("/b/repository"));
+    services
+        .drafts()
+        .update(cx, |registry, cx| registry.reload_listing(cx));
+    cx.run_until_parked();
+    assert_eq!(listed(&services, cx).map(|ids| ids.len()), Some(2));
+    assert_eq!(recovered(cx), Some(1));
+}
+
+/// A launch listing that failed recovers nothing for the session, even
+/// once a later listing finds drafts.
+#[gpui_kit::test]
+fn a_failed_launch_listing_recovers_nothing_for_the_session(cx: &mut TestAppContext) {
+    use manyhands::drafts::DraftError;
+
+    use crate::desktop::model::stamp::{Stamp, ViewScope};
+
+    let fixture = Fixture::new();
+    store_draft(&fixture.draft_store(), ticket_target("/a/repository"));
+    let backend = fixture.delaying_backend();
+    let gate = backend.hold_read(ReadKind::Drafts);
+    let services = cx.update(|cx| Services::start(backend.clone(), cx));
+    cx.run_until_parked();
+
+    // The launch listing's own stamp, answered with a failure.
+    let launch = Stamp {
+        scope: ViewScope::Drafts,
+        generation: 1,
+    };
+    services.drafts().update(cx, |registry, _| {
+        let failed = Err(DraftError {
+            kind: DraftErrorKind::Io,
+        });
+        assert!(registry.apply_listing(launch, failed));
+        assert_eq!(registry.recovered(), None);
+    });
+    drop(gate);
+    cx.run_until_parked();
+    services
+        .drafts()
+        .update(cx, |registry, cx| registry.reload_listing(cx));
+    cx.run_until_parked();
+    assert_eq!(listed(&services, cx).map(|ids| ids.len()), Some(1));
+    services.drafts().read_with(cx, |registry, _| {
+        assert_eq!(registry.recovered(), None);
+    });
+}

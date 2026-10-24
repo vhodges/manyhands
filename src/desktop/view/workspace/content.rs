@@ -87,8 +87,13 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens the Drafts page a tab's Review in Drafts asked for.
+    /// Opens the Drafts page a tab's Review in Drafts asked for. While a
+    /// dialog is open the request waits, as D1's actions do not act behind
+    /// one; the frame after the dialog closes opens it.
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);
         }
@@ -363,6 +368,13 @@ impl Workspace {
                 body
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drafts_page(
+        &self,
+    ) -> &gpui_kit::Entity<crate::desktop::view::drafts::DraftsPage> {
+        &self.content.drafts
     }
 
     #[cfg(test)]

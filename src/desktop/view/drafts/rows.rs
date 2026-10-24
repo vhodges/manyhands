@@ -139,6 +139,9 @@ impl DraftsPage {
                     .text_xs()
                     .text_color(muted)
             });
+        // Show only where there is a tab to show: a draft held here whose
+        // session has no tab (one begun by the editor) offers none.
+        let tab = self.services.drafts().read(cx).tab_of(id).is_some();
         // Nothing would be lost: Discard comes first.
         let mut order: Vec<usize> = (0..ACTIONS.len()).collect();
         if matches!(row.target(), Some(TargetState::AlreadySaved)) {
@@ -146,7 +149,7 @@ impl DraftsPage {
         }
         let actions = order
             .into_iter()
-            .filter(|ix| offered(row.actions, ACTIONS[*ix].0))
+            .filter(|ix| offered(row.actions, ACTIONS[*ix].0) && (ACTIONS[*ix].0 != "show" || tab))
             .map(|ix| self.action(id, ix, &focus.actions[ix], cx));
         let mut element = v_flex()
             .id(row_id(id, "row"))

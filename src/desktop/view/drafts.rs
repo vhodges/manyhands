@@ -350,3 +350,7 @@ mod routing_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "drafts_entry_tests.rs"]
 mod entry_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "drafts_held_tests.rs"]
+mod held_tests;

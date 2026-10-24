@@ -14,18 +14,17 @@ use gpui_kit::{Entity, TestAppContext, test::TestWindowExt};
 use manyhands::{
     drafts::{
         CommentTarget, DraftBase, DraftError, DraftErrorKind, DraftFields, DraftId, DraftTarget,
-        ItemKind,
+        ItemKind, TargetState,
     },
     repository::{ItemDtoKind, LeaseKind, RepositoryService},
 };
 
-use super::{
-    ACTIONS, CANNOT_READ, CHECKING, COMMENT_LATER, NO_DRAFTS, OPEN_ELSEWHERE, RESTORED_HERE, row_id,
-};
+use super::{ACTIONS, CANNOT_READ, CHECKING, COMMENT_LATER, NO_DRAFTS, RESTORED_HERE, row_id};
 use crate::desktop::{
     model::{
         drafts::rows::{COMMENT_ON, TICKET as TICKET_KIND},
         navigation::OpenTarget,
+        stamp::{Stamp, ViewScope},
     },
     services::{ReadKind, drafts::DraftRegistry},
     test_support::{
@@ -81,7 +80,7 @@ pub(super) fn registry(shell: &Shell, cx: &mut TestAppContext) -> Entity<DraftRe
 
 /// The actions row `id` offers, by their element parts, in `ACTIONS`
 /// order.
-fn actions(shell: &Shell, id: DraftId, cx: &mut TestAppContext) -> Vec<&'static str> {
+pub(super) fn actions(shell: &Shell, id: DraftId, cx: &mut TestAppContext) -> Vec<&'static str> {
     ACTIONS
         .iter()
         .map(|(part, _)| *part)
@@ -89,13 +88,13 @@ fn actions(shell: &Shell, id: DraftId, cx: &mut TestAppContext) -> Vec<&'static 
         .collect()
 }
 
-fn state(shell: &Shell, id: DraftId, cx: &mut TestAppContext) -> Option<String> {
+pub(super) fn state(shell: &Shell, id: DraftId, cx: &mut TestAppContext) -> Option<String> {
     shell.label(row_id(id, "state"), cx)
 }
 
 /// Stores a draft of the ticket `id` of `root` with `current` over
 /// `base`, and lets it go.
-fn store(
+pub(super) fn store(
     fixture: &Fixture,
     root: &str,
     id: &str,
@@ -115,7 +114,7 @@ fn store(
     )
 }
 
-fn store_target(
+pub(super) fn store_target(
     fixture: &Fixture,
     target: DraftTarget,
     base: Option<DraftBase>,
@@ -387,7 +386,6 @@ fn a_draft_restored_here_offers_show_which_focuses_its_tab(cx: &mut TestAppConte
 
     shell.keys("secondary-shift-d", cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(RESTORED_HERE));
-    assert_ne!(state(&shell, id, cx).as_deref(), Some(OPEN_ELSEWHERE));
     assert_eq!(actions(&shell, id, cx), ["show", "inspect", "discard"]);
 
     shell.click(row_id(id, "show"), cx);
@@ -433,7 +431,9 @@ fn a_failed_listing_reads_its_fixed_reason(cx: &mut TestAppContext) {
 }
 
 /// A row's item read held past a new listing never lands on it: the
-/// newer read's state stays.
+/// newer read's state stays. The earlier read's answer, delivered under
+/// the stamp it was asked with, is kept out by that stamp; under the
+/// current one the same answer lands.
 #[gpui_kit::test]
 fn a_late_item_read_never_lands_after_the_listing_reloads(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -454,11 +454,28 @@ fn a_late_item_read_never_lands_after_the_listing_reloads(cx: &mut TestAppContex
     shell.run(cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
 
-    shell.fixture.commit_removal(&a, &ticket_path(ONE));
-    shell.fixture.refresh(&a);
-    drop(first);
+    let page = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.drafts_page().clone());
+    let asked = |generation| Stamp {
+        scope: ViewScope::DraftRow(id),
+        generation,
+    };
+    // Shown, then rebuilt by the new listing: the first read was asked
+    // under generation 1, the second under 2.
+    page.update(cx, |page, cx| {
+        assert!(!page.generations.is_current(&asked(1)));
+        assert!(page.generations.is_current(&asked(2)));
+        page.landed(id, &asked(1), TargetState::ItemNotFound, None, cx);
+    });
     shell.run(cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
+    page.update(cx, |page, cx| {
+        page.landed(id, &asked(2), TargetState::ItemNotFound, None, cx);
+    });
+    shell.run(cx);
+    assert_eq!(state(&shell, id, cx).as_deref(), Some(ITEM_NOT_FOUND));
+    drop(first);
 }
 
 /// A file a newer Manyhands wrote is listed, not rewritten: its bytes are
