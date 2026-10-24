@@ -4,11 +4,13 @@ manyhands_kind: ticket
 id: "01M4CC0VMZ21Z79B09YQRA0P7J"
 title: "Wave 03 D2: Recoverable Drafts And External-Change Handling"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
 cycle: "D2"
+closed_at: "2026-10-24T20:58:23Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 ---
 
 Establish preservation of unsaved work before editor integration.
