@@ -12,9 +12,10 @@ id: "01M5QY019WPP3AVCKD13XKMJNA"
 
 ## Execution Status
 
-**Draft, for product-owner approval.** The planning questions are answered
-(Cycle decisions 1–4). Nothing is approved and nothing is implemented. No
-build or test was run for this draft.
+**Draft, for product-owner approval.** The planning questions are answered:
+Cycle decisions 1–4 before review, and decisions 5–6 after it. The first
+review round's findings are applied (see the Cycle's Review Record). Nothing
+is approved or implemented. No build or test was run for this draft.
 
 ## Intent And Approval Boundary
 
@@ -26,7 +27,7 @@ design governs the
 Approval of this design covers:
 
 - the per-verb grammar and input fields;
-- the save patch's mechanics (R-4, R-5);
+- the save patch and its refusals (decisions 2 and 5);
 - rulings R-1 to R-18;
 - named edit E1;
 - the document amendments listed below.
@@ -41,24 +42,25 @@ changes. C3 adds no result code, recovery action or output schema.
 
 ## Baseline Facts
 
-Read at branch head `9ed4a04` (main `e49f978` merged). Facts marked *(Task 0)*
-came from read-only research. They were not re-read for this draft, and Task 0
-re-checks them before any code.
+Read at branch head `9ed4a04` (main `e49f978` merged). The source-and-
+feasibility review re-read every fact below at `6c25c43`, and confirmed
+facts 1–8 and 10–21 within a few lines. Task 0 re-checks them all before
+any code.
 
 **Library.**
 
 1. `Mutation` (`src/repository/mutation/mod.rs:398`) has a variant for each of
    C3's eleven mutations: `FolderCreate`, `DocumentCreate`, `DocumentSave`,
    `DocumentMove`, `DocumentRepair`, `TicketCreate`, `TicketSave`,
-   `TicketRepair`, `TicketSlugAssign`, `IndexRefresh` and `IndexRebuild`.
+   `TicketRepair`, `TicketSlugAssign`, `IndexRefresh` and `IndexRebuild`. Each
+   input type is reachable as `manyhands::repository::<Name>`.
 2. The inputs, all under `src/repository/mutation/bind/`:
    - `DocumentCreateInput { root, id: ItemId, path: PathBuf, draft: DocumentDraft }`
      (`document.rs:47`);
    - `DocumentSaveInput { root, id, draft, observation: Option<String> }`
      (`document.rs:59`), with `None` refused as `invalid_input`;
    - `DocumentMoveInput { root, id, observation: Option<String>, destination_path, destination_observation }`
-     (`document.rs:70`). The destination token is `observe_path`'s "in the
-     document's context";
+     (`document.rs:70`);
    - `TicketCreateInput { root, id, draft: TicketDraft, deps: Vec<String>, parent: Option<String>, initials: Option<String> }`
      (`ticket.rs:44`);
    - `TicketSaveInput { root, id, draft, deps: RelationshipWrite<Vec<String>>, parent: RelationshipWrite<String>, observation: String }`
@@ -68,97 +70,186 @@ re-checks them before any code.
    - `FolderCreateInput { root, path: String }` (`folder.rs:58`);
    - `DocumentRepairInput` and `TicketRepairInput`, each
      `{ root, path: PathBuf, observation: String, source: String }`
-     (`repair.rs:100`, `:114`). The observation is "the token `show_path`
-     gave for the file on primary";
+     (`repair.rs:100`, `:114`);
    - `IndexRefreshInput { root }` and `IndexRebuildInput { root }`
      (`index.rs:36`, `:43`).
 3. `DocumentDraft { title, body }` and
    `TicketDraft { title, ticket_type, status, project: Option<String>, team: Option<String>, body }`
-   (`src/repository.rs:579`, `:585`). `RelationshipWrite` is
-   `Unchanged | Clear | Set(T)`, default `Unchanged` (`:613`). The library
-   takes a complete draft. F2's design leaves the save patch to the CLI.
+   (`src/repository.rs:579`, `:585`) derive only `Clone`. `RelationshipWrite`
+   is `Unchanged | Clear | Set(T)`, with default `Unchanged` (`:613`). The
+   library takes a complete draft, and F2's design leaves the save patch to
+   the CLI.
 4. Of C3's mutations, only `DocumentRepair` and `TicketRepair` need
    confirmation (`needs_confirmation`, `src/repository/mutation/command.rs`
    around line 436).
 5. The save bindings read the item through `save::read_item`
    (`src/repository/mutation/bind/save.rs:89`). It answers `item_not_found`
-   for an item of the other kind, one without a source or observation, one
-   whose source does not parse, and one whose parsed ID differs.
-6. `observe_path(&self, repo, context: Option<&Path>, path: &Path) -> Result<PathObservationDto, ReadError>`
-   (`src/repository/read/items.rs:1963`). The context must be the repository
-   root or an item context the index holds as active (`named_context`).
-   Otherwise it is `invalid_path`. The path must be a canonical item path
-   (`docs/**/*.md` or `.manyhands/tickets/<id>/ticket.md`) or a listed
-   nonconforming entry (`readable_path`). Another item's canonical path in
-   that context is allowed. `PathObservationDto { path, exists, observation, context }`
-   is in `src/repository/read/dto.rs:20`.
-7. `check_ticket_relationships(&self, repo, id: &ItemId, proposed: &ProposedRelationships) -> Result<RelationshipCheckDto, ReadError>`
-   (`items.rs:2033`), with `ProposedRelationships { deps: Vec<ItemId>, parent: Option<ItemId> }`
-   (`items.rs:113`). It answers from the index and does not scan.
+   in each of these cases:
+   - the item is of the other kind;
+   - it has no source or observation;
+   - its source does not parse;
+   - its parsed ID differs.
+6. `observe_path(&self, repo, context: Option<&Path>, path: &Path)`
+   (`src/repository/read/items.rs:1963`).
+   - The context must be the repository root or an item context the index
+     holds as active. Anything else is `invalid_path`.
+   - The path must be a canonical item path or a listed nonconforming entry.
+     Another item's path in that context is allowed.
+   - In a document's context it gives exactly the token that `prepare_move`
+     compares (`document.rs:556–566`). On primary it gives the token that
+     repair compares.
+7. `check_ticket_relationships` (`items.rs:2033`) takes
+   `ProposedRelationships { deps: Vec<ItemId>, parent: Option<ItemId> }`
+   (`items.rs:113`). The check gives the ticket exactly the proposed `deps`
+   and `parent` (`items.rs:368–415`), so an empty `deps` proposes no
+   dependencies. It answers from the index.
 8. `show_item` (`items.rs:1784`) returns `ItemDto`
-   (`src/repository/read/dto.rs:426`). Its `title`, `type`, `status`,
-   `project`, `team` and `body` are each `Option<String>`.
-9. A body round-trips byte for byte. `split_front_matter`
-   (`src/canonical.rs:1026`) returns everything after the closing `---`
-   line, and `serialize_item` (`:911`) writes `---\n{yaml}---\n{body}`.
-10. *(Task 0)* An index binding answers with no `data`, `effects.discovery`
-    `current` on success. `IndexRebuild` restores an unavailable index
-    before its binding runs.
-11. *(Task 0)* A save refused with `identity_required` deletes its request
-    record and leaves the editing context's worktree with no commit. The same
-    request ID succeeds once an identity is set
-    (`tests/mutation_replay/execute.rs` around line 1100).
+   (`src/repository/read/dto.rs:426`):
+   - a conforming item's `title` and `body` are `Some` (`items.rs:1131–1133`);
+     an empty body is `Some("")`;
+   - `project` and `team` are `None` only when the key is absent. A
+     non-string value makes the ticket nonconforming
+     (`optional_item_string`, `src/canonical.rs:1106`), so it reads as
+     `item_not_found`.
+9. **Every write re-emits the whole front matter.**
+   - `serialize_item` (`src/canonical.rs:911`) writes unknown keys first, then
+     the defined keys, in its own quoting and block style. The order is
+     pinned by `tests/canonical_foundation.rs:449–461`.
+   - The body is written byte for byte: `split_front_matter` (`:1026`)
+     returns everything after the closing `---`.
+   - A document save writes its file whenever the source is the destination
+     (`will_write_destination`, `src/repository.rs:2265`). So saving a
+     hand-written document commits a normalization, even with no value
+     changed.
+   - A ticket save compares parsed items (`src/repository.rs:2646–2658`). A
+     save that changes no value is a no-op.
+10. An index binding answers with no `data` and `effects.discovery` `current`
+    on success. `IndexRebuild` restores an unavailable index before its
+    binding runs (`execute.rs:96–141`, `command.rs:188–190`).
+11. A save refused with `identity_required` deletes its request record and
+    keeps the editing context's worktree with no commit. The same request ID
+    then succeeds once an identity is set (`execute.rs:1100–1186`).
 12. The failure hook is per service and in process:
     `RepositoryService::open_at_with_failure_point_for_testing`
     (`src/repository.rs:4490`), wrapped by `FailOnce`
-    (`tests/support/mod.rs:277`). A CLI process cannot be given one.
+    (`tests/support/mod.rs:277`). A CLI test drives one on the CLI's data
+    directory with `support::mutation::execute_with` (`:487`) or
+    `execute_confirmed` (`:505`), scoped in a block as
+    `tests/cli/keys.rs:744–753` does.
 13. Result-code classes (`src/results.rs`):
     - Input (exit 2): `relationship_cycle`, `invalid_relationship`,
       `occupied_path`, `slug_already_assigned`, `not_repairable`,
-      `item_not_found`, `path_not_found`;
+      `item_not_found`, `path_not_found`, `invalid_path`;
     - Blocked (exit 3): `external_change`, `identity_required`,
       `initials_required`, `invalid_slug_configuration`,
-      `identity_ambiguous`, `ticket_closed`, `index_unavailable`;
-    - Incomplete (exit 4): `discovery_pending`.
+      `identity_ambiguous`, `ticket_closed`, `index_unavailable`,
+      `repository_not_registered`;
+    - Incomplete (exit 4): `discovery_pending`;
+    - Transient (exit 5): `busy`.
+14. Codes the bindings give in these cases:
+    - `document create` on a taken path: `occupied_path`;
+    - `folder create` on an occupied path: `occupied_path`;
+    - `folder create` outside `docs/`: `invalid_path`;
+    - `folder create` of an existing folder: a no-op.
+15. A move to the document's own path takes the already-applied rule
+    (`document.rs:550–553`, `only_at` `:512–527`). It is a no-op only when
+    the document's branch tip holds the document there and nowhere else. A
+    document on primary alone answers `external_change`.
+16. A slug assignment whose composed code equals the committed slug is
+    already applied, a no-op (`ticket.rs:1247–1268`). `slug_already_assigned`
+    needs a different code already in the file.
+17. A no-op save of an item that has no editing context still creates the
+    context's branch and worktree (`execute.rs:1159–1164`).
+18. The database is `manyhands.sqlite3` in the data directory
+    (`REGISTRY_FILE`, `src/repository.rs:112`), in WAL mode
+    (`discovery.rs:1539`).
+    - After the file is deleted, opening creates an empty registry. Item
+      reads then answer `repository_not_registered` with `index.rebuild`
+      (`tests/mutation_replay/index.rs:471–480`).
+    - Bytes that are not a database leave the index unavailable
+      (`repository.rs:5607–5621`), so reads answer `index_unavailable`.
+    - F2's tests remove every `manyhands.sqlite3*` file except `.lock`
+      first (`tests/mutation_replay/index.rs:344–352`).
+19. The repair fault point F2 uses is
+    `AfterOwnedWriteBeforeLifecyclePersistence`. The stopped call answers
+    `internal_error`, partial, exit 1
+    (`tests/mutation_bridges/repair.rs:650–678`).
+    `support::repair::Shelf` (`tests/support/repair.rs:89`) builds the
+    nonconforming fixtures and is already in the `cli` target. The
+    re-entry ignores the confirmation presented, so the CLI can present
+    the one the actor used.
+20. The index stores item titles (`discovered_items.title`,
+    `discovery.rs:1623–1637`). F2's privacy helper
+    `support::mutation::assert_request_stores_exclude` (`:157`) scans only
+    the request stores (`REQUEST_STORES`, `:73`).
+21. A partial save offers `operation.resume` (`execute.rs:573–577`), which is
+    C4's verb. A refresh that meets an operation needing recovery answers
+    index-pending (`repository.rs:1366–1370`).
+22. `hold_lease_in_child_for_test` (`tests/support/mod.rs:477`) holds the
+    repository lease from a child process. C2 reaches `busy`, exit 5,
+    through the binary with it (`tests/cli/exits.rs:512`).
 
 **CLI.**
 
-14. The thirteen C3 verbs are `planned(…, "C3")` at
-    `src/bin/manyhands-cli/catalog.rs:662–679`. `planned()` (`:209`) gives
-    them no repository rule and no options. `available()` (`:191`) is fixed
-    to `"C1"` and `Kind::Read`, so C2's entries are literal `CommandSpec`s.
-    `prompts()` is true for every `Kind::Mutation`.
-15. `parse::parse` replaces clap's error text only for verbs delivered by C2
-    (`parse.rs:120`). "--context requires --path." is at `parse.rs:206`.
-16. `mutate::run` (`mutate.rs:120`), `mutate::refusal` (`:273`), the
-    `Boundary` trait (`:40`) and `RETRY_DELAYS_MS` (`:73`) are C2's driver.
-    The `build` closure is called on every attempt, including bounded
-    retries.
-17. `InputObject` offers `only`, `string`, `optional_string`,
+23. The thirteen C3 verbs are `planned(…, "C3")` at
+    `src/bin/manyhands-cli/catalog.rs:662–679`.
+    - `planned()` (`:209`) gives them no repository rule and no options.
+    - `available()` (`:191`) is fixed to `"C1"` and `Kind::Read`, so C2's
+      entries are literal `CommandSpec`s.
+    - `prompts()` is true for every `Kind::Mutation`.
+    - `MUTATION_INPUT` is at `:227`. `repo remove` uses
+      `&[REPO, REQUEST_ID, PREPARE, CONFIRM]` (`:437`).
+24. `parse::parse` replaces clap's error text only for verbs delivered by C2
+    (`parse.rs:120`).
+    - clap's unknown-argument error names the option and not its value. A
+      stray positional value is echoed: "unexpected argument '<value>'".
+    - "--context requires --path." is at `parse.rs:206`.
+    - `validate` (`:191`) enforces each option's `required` flag.
+    - A value option given twice keeps the last value
+      (`parse_tests.rs:310–343`).
+25. C2's driver:
+    - `mutate::run` (`mutate.rs:120`) calls its `build` closure on every
+      attempt;
+    - `mutate::refusal` (`:273`) always uses an empty scope;
+    - the `Boundary` trait is at `:40` and `RETRY_DELAYS_MS` at `:73`.
+26. `InputObject` offers `only`, `string`, `optional_string`,
     `nullable_string`, `tristate`, `optional_object` and `one_of`
-    (`input.rs:110–181`), with no accessor for a JSON array.
-18. In `dispatch`, an available verb with no arm answers `internal_error`
-    (`dispatch.rs:678–688`). The read `show` answers `item_not_found` for an
-    item of the other kind (`dispatch.rs:330`).
-19. `human_admin::mutation_success` prints every field of the
-    `MutationDataDto` (`human_admin.rs:139`). `preview` already formats
-    `PreviewDetailsDto::Repair` (`:62`).
-20. C2's exit table is pinned to the audit section "C2 exit-coverage union"
-    and to its counts (`tests/cli/exits.rs:601`). C2's no-op and privacy
-    inventories filter on `delivered_by == "C2"` (`tests/cli/human.rs:50`,
+    (`input.rs:110–181`). There is no accessor for a JSON array.
+    `nullable_string` refuses a missing field.
+27. In `dispatch`, an available verb with no arm answers `internal_error`
+    (`dispatch.rs:678–688`). The read `show` builds `item_not_found` with the
+    item scope for an item of the other kind (`dispatch.rs:330`).
+28. `human_admin::mutation_success` prints only the envelope message, the
+    effects line and the data DTO's fields (`human_admin.rs:139`), so a
+    title or status is never printed by a mutation. `preview` already
+    formats `PreviewDetailsDto::Repair` (`:62`). C1's incomplete-read note
+    helpers are private to `human.rs` (`:24–34`). `render::field` is
+    `pub(super)` (`render.rs:158`).
+29. The help JSON has no `kind` field (`startup.rs:140–147`). A mutation is
+    recognized by its `--request-id` option.
+30. C2's exit table is pinned to its own audit section and counts
+    (`tests/cli/exits.rs:601`). C2's no-op and privacy inventories filter on
+    `delivered_by == "C2"` (`tests/cli/human.rs:50`,
     `tests/cli/privacy.rs:413`). C1's dispatch and boundary inventories
     filter on C1.
-21. The native workflow already runs `--bin manyhands-cli --test cli --test cli_remote`
+31. The native workflow already runs `--bin manyhands-cli --test cli --test cli_remote`
     (`.github/workflows/build.yml:115`).
-22. The pre-existing CLI tests that name a C3 verb are the `DESIGN` table in
-    `catalog_tests.rs:64`, which keeps its `"C3"` row, and three help goldens:
-    `help_root.json`, `help_root_text.txt` and `help_resource_ticket.json`.
-    Tests that iterate planned verbs (`parse_tests.rs:216`,
-    `startup_tests.rs:332`, `:371`) still pass over C4 and C5.
+32. Pre-existing CLI tests that a C3 verb touches:
+    - the `DESIGN` table (`catalog_tests.rs:64`), which keeps its `"C3"` row;
+    - three help goldens: `help_root.json`, `help_root_text.txt` and
+      `help_resource_ticket.json`;
+    - tests that iterate every available or planned verb without a Cycle
+      filter. They extend to C3's verbs and pass unchanged:
+      `startup_tests.rs:181–184`, `:272`, `:332`, `:371`;
+      `catalog_tests.rs:137`; `parse_tests.rs:216`.
+33. C2's repository fixture writes `core.autocrlf = false` into the test home
+    (`tests/cli/repository.rs:50–54`). `require_no_system_identity`
+    (`tests/cli/repository.rs:14`) refuses a machine whose system Git
+    configuration sets an identity.
 
 **This repository (for the dogfooding step).**
 
-23. The open Wave 03 Cycle tickets have no `deps`, `parent` or `slug` key:
+34. The open Wave 03 Cycle tickets have no `deps`, `parent` or `slug` key:
     - C4 `01M4CC0VMWEQQ9G4W0DAG7ADPY`;
     - C5 `01M4CC0VMXTNXNH78C11DYXS8H`;
     - D3 `01M4CC0VN0MFTGKQ4HGTTC5H63`;
@@ -168,23 +259,22 @@ re-checks them before any code.
     - G1 `01M4CC0VN4H9AC0Q3KA6E1QERC`;
     - the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY`.
 
-    Each lives only on its own branch and worktree.
-24. On 2026-10-24 the G1 worktree held an uncommitted edit of its title
-    (appending " External Edit") and an untracked `ticket.md~`. Every other
-    worktree in fact 23 was clean.
+    Each lives only on its own branch and worktree. Its file holds quoted
+    values, `manyhands_*` keys first, and unknown `wave` and `cycle`.
+35. On 2026-10-24 the G1 worktree held an uncommitted title edit and an
+    untracked `ticket.md~`. The owner cleaned it the same day, and it was
+    re-checked clean at `7b306d1`. Every worktree in fact 34 was then clean.
 
 ## Module Layout
 
 New bin-private modules, declared in `src/bin/manyhands-cli.rs` with
-`#[path = "manyhands-cli/<name>.rs"] mod <name>;`, each with a
-`*_tests.rs` beside it:
+`#[path = "manyhands-cli/<name>.rs"] mod <name>;`, each with a `*_tests.rs`
+beside it:
 
 - `authoring.rs`: per-verb glue for the eleven mutations, built as
-  `admin.rs` is. It reuses `admin::flags`, `admin::input_object`,
-  `admin::mutation_root` and C2's input-failure refusal.
-- `fill.rs`: the save patch (R-4). It holds a pure function from
-  "the input's fields plus the item read" to a draft, unit-tested without a
-  repository, and a thin wrapper that does the read.
+  `admin.rs` is.
+- `fill.rs`: the save patch (R-4). It is a pure merge from "the input's fields
+  plus the item read" to a draft, plus one read wrapper.
 - `human_authoring.rs`: the human text for `path observe` and
   `ticket check`.
 
@@ -194,9 +284,9 @@ Changed:
 - `parse.rs`: the usage-text rule (R-2) and C3's selector rules.
 - `input.rs`: list readers (R-3).
 - `dispatch.rs`: one arm per verb.
-
-`admin.rs` changes only by making its private helpers `input_failure` and `name`
-`pub(crate)`.
+- `admin.rs`: makes its private helpers `input_failure` and `name`
+  `pub(crate)`.
+- `human.rs`: makes its incomplete-read note helper `pub(super)`.
 
 ## Command Catalog (R-1)
 
@@ -217,12 +307,11 @@ Changed:
 | `ticket repair` | `Mutation { confirmed: true, input: Required }` | `--repo` | 6 |
 
 Every C3 entry is `Available("C3")` from the task that dispatches it, with its
-input schema, example and goldens. Until then it stays
-`planned(…, "C3")` and answers `command_unavailable`. All thirteen require
-`--repo`, so `catalog_repository_rules_and_planned_metadata_match_the_design`
-holds without an edit. The mutations carry C2's mutation options
-(`--input` where required, `--request-id`, `--prepare`, `--confirm`), and
-those with `--id` add C1's `ID`.
+input schema, example and goldens. Until then it stays `planned(…, "C3")` and
+answers `command_unavailable`. Each literal entry keeps its planned summary
+text. All thirteen require `--repo`, so
+`catalog_repository_rules_and_planned_metadata_match_the_design` holds
+without an edit.
 
 ## Grammar And Per-Verb Rules
 
@@ -243,32 +332,33 @@ Values:
 
 - `--id` parses as C1's `item_id`. A malformed one is `invalid_id`, exit 2,
   after the service opens. For a mutation it is built with `mutate::refusal`,
-  so that a valid request ID is retained.
-- `--repo` for a mutation is joined to the invocation directory as C2 does
+  keeping a valid request ID.
+- `--repo` for a mutation is joined to the invocation directory
   (`admin::mutation_root`). The library refuses a linked worktree's root
   with `not_repository_root`.
 - `--path` on `path observe` is repository-relative. `--context` is a
-  worktree path, relative to the invocation directory, passed to the library
-  as `document show --path --context` passes it.
-- `--deps` on `ticket check` takes one value: a comma-separated list of
-  canonical ULIDs. `--parent` takes one ULID. A malformed or empty element is
-  `invalid_id` (R-6).
+  worktree path, relative to the invocation directory, passed as
+  `document show --path --context` passes it.
+- `--deps` takes one comma-separated list of canonical ULIDs, and `--parent`
+  one ULID. A malformed or empty element is `invalid_id`. As with every C1
+  option, a repeated `--deps` keeps its last value; its help summary says to
+  give it once.
 
 ## Input
 
-Reading, BOM handling, duplicate-key refusal and error details are C2's
-(`input::read`, `input::parse`), unchanged. Content validation stays the
-library's. The CLI checks shape, and it parses `item_id` because the library
-input is typed `ItemId`.
+Reading, BOM handling, duplicate-key refusal and error details are C2's,
+unchanged. Content validation stays the library's. The CLI checks shape,
+and it parses `item_id` because the library input is typed `ItemId`.
 
-**List readers (R-3).** `InputObject` gains two readers:
+**List readers (R-3).** `InputObject` gains:
 
-- `optional_string_list(field) -> Result<Option<Vec<String>>, InputError>`;
-- `nullable_string_list(field) -> Result<ListChange, InputError>`, where
-  `ListChange` is `Missing | Null | Value(Vec<String>)`.
+- `optional_string_list(field) -> Result<Option<Vec<String>>, InputError>`,
+  which refuses `null`;
+- `tristate_list(field) -> Result<ListChange, InputError>`, where `ListChange`
+  is `Missing | Null | Value(Vec<String>)`.
 
-Both refuse a non-array or a non-string element as a wrong type. Neither
-de-duplicates or sorts, since that is the library's canonical form.
+Both refuse a non-array, and a non-string element, as a wrong type. Neither
+de-duplicates or sorts.
 
 **Fields.** "Optional" means the key may be missing. "Nullable" means `null`
 is a value with its own meaning (R-5).
@@ -280,87 +370,94 @@ is a value with its own meaning (R-5).
 | `document save` | `observation`: string, required. `title`, `body`: strings, optional. |
 | `document move` | `observation`, `destination_path`, `destination_observation`: strings, required. |
 | `document repair`, `ticket repair` | `path`, `observation`, `source`: strings, required. |
-| `ticket create` | `item_id`: string, required, a canonical ULID. `title`, `type`, `status`: strings, required. `project`, `team`, `body`: strings, optional; a missing `body` is empty. `deps`: array of strings, optional. `parent`: string, optional. `initials`: string, optional. |
+| `ticket create` | `item_id`: string, required, a canonical ULID. `title`, `type`, `status`: strings, required. `project`, `team`, `body`, `initials`: strings, optional; a missing `body` is empty. `deps`: array of strings or `null`, optional; missing, `null` and `[]` all mean none. `parent`: string or `null`, optional; missing and `null` mean none. |
 | `ticket save` | `observation`: string, required. `title`, `type`, `status`, `body`: strings, optional. `project`, `team`: string or `null`, optional; `null` clears. `deps`: array of strings or `null`, optional; missing leaves them as they are, `null` or `[]` clears them. `parent`: string or `null`, optional; `null` clears it. |
 | `ticket slug-assign` | `observation`: string, required. `initials`: string, optional. |
 
-`item_id` that is not a canonical ULID is `invalid_input`, naming the field.
-An input selector stays `invalid_id`. `deps` and `parent` text is passed
-through, and the library refuses a malformed entry with
-`invalid_relationship`. No input field may carry a closure field or `slug`.
-`closed_at`, `closed_by`, `slug` and every other unknown key are refused as
-unknown.
+- `item_id` that is not a canonical ULID is `invalid_input`, naming the
+  field. A selector stays `invalid_id`.
+- `deps` and `parent` text passes through, and the library refuses a
+  malformed entry with `invalid_relationship`. The same text in
+  `ticket check`'s flags is `invalid_id`, because flags are parsed by the
+  CLI.
+- `closed_at`, `closed_by`, `slug` and every other unknown key are refused
+  as unknown.
 
 **Schemas.** One closed schema per input-taking verb in `schemas/input/v1/`,
-named `<resource>_<verb>.schema.json` with hyphens as underscores: nine files,
-`folder_create` to `ticket_slug_assign`. `index_refresh` and `index_rebuild`
-take no input and have none. Nullable fields use `"type": ["string", "null"]`
-or `["array", "null"]`, and lists use `items`. The checker supports both
-(`tests/support/schema.rs:93`, `:237`), and C2's `remote_select.schema.json`
-already uses a type list. One example input per schema is in
-`tests/fixtures/cli_input_v1/<stem>.json` (R-13).
+named `<resource>_<verb>.schema.json` with hyphens as underscores: nine
+files. The index verbs take no input. Nullable fields use
+`"type": ["string", "null"]` or `["array", "null"]`, and lists use `items`.
+The checker supports both (`tests/support/schema.rs:93`, `:237`), and C2's
+`remote_select.schema.json` already uses a type list. One example input per
+schema is in `tests/fixtures/cli_input_v1/<stem>.json` (R-13).
 
-## The Save Patch (R-4, Cycle Decision 2)
+## The Save Patch (R-4, Cycle Decisions 2 And 5)
 
 `fill.rs` builds the draft that `document save` and `ticket save` give the
 library.
 
 1. **When.** A read happens only when at least one draft field is omitted:
-   - for documents: `title` or `body`;
-   - for tickets: `title`, `type`, `status`, `body`, `project` or `team`.
+   - for documents, `title` or `body`;
+   - for tickets, `title`, `type`, `status`, `body`, `project` or `team`.
 
-   With every draft field present, no read happens and the draft is the
-   input's.
-2. **The read.** The CLI calls
-   `service.resolve_repository(root)`, then `service.show_item(&repo, &id)`.
-   Each happens once per invocation, before `mutate::run`, so bounded retries
-   reuse the same draft.
-3. **Filling.** Each omitted field takes the item's value:
-   - `title`, `type`, `status` and `body` must be present in the read;
-   - an omitted `project` or `team` takes the read's value, which may be
-     absent;
-   - a `null` `project` or `team` is `None`;
-   - `deps` and `parent` are never filled. Missing is
-     `RelationshipWrite::Unchanged`, which the library carries through as
-     the file has it.
-4. **Refusals.** The CLI answers `item_not_found` in these cases, matching
-   `save::read_item`:
-   - a read of an item of the other kind;
-   - a read without a field the draft needs (a nonconforming item has none).
-
-   A read that fails passes its code, message, scope and recovery actions
-   through under the mutation's command name. The CLI keeps the parsed or
-   allocated request ID, as C2 does for refusals after opening, and sets every
-   effect to `not_requested`.
+   With every draft field present, no read happens.
+2. **Order.** `admin::flags` parses the request ID first and, for an
+   interactive call without one, allocates it and writes `request: <ULID>`
+   to stderr. The input is read next. Only then does the CLI call
+   `service.resolve_repository(root)` and `service.show_item(&repo, &id)`,
+   once per invocation and before `mutate::run`, so bounded retries reuse
+   the same draft.
+3. **Filling.**
+   - Each omitted field takes the read's value.
+   - `title`, `type`, `status` and `body` are present on any conforming item
+     (fact 8).
+   - An omitted `project` or `team` takes the read's value, which is absent
+     only when the key is absent.
+   - A `null` `project` or `team` is `None`.
+   - `deps` and `parent` are never filled: missing is
+     `RelationshipWrite::Unchanged`.
+4. **Refusals (decision 5).** The read's answer passes through under the
+   mutation's command name.
+   - A read that fails gives `ReadError::to_envelope(<command>)`, with its
+     code, message, scope and recovery actions, for example
+     `repository_not_registered` with `index.rebuild`.
+   - An item of the other kind gives `item_not_found` with the item scope,
+     built as C1's `show` builds it (`dispatch.rs:330`).
+   - In both cases the CLI keeps the parsed or allocated request ID and sets
+     every effect to `not_requested`. The CLI RFC's refusal rule is amended
+     for this.
 5. **The observation.** The caller's `observation` goes to the library
-   unchanged. The CLI never compares it with the read's token. The library
-   alone decides staleness, no-op, replay and mismatch.
+   unchanged. The CLI never compares it with the read's token: a retry after
+   a lost result reads the file the request itself wrote, and a comparison
+   would turn that replay into `external_change`.
 
-**Required outcomes.** Each row has a test in Task 3 or Task 5.
+**Required outcomes.** "Equal" means equal parsed values: every `show_item`
+field and every `unknown_metadata` entry. Bytes are compared only for the
+body, and for files the library itself wrote (fact 9). Each row has a test
+in Task 3 (documents) and Task 5 (tickets), on an item the library created
+unless the row says otherwise.
 
 | Sequence | Outcome |
 | --- | --- |
-| Save with only `body`, the observation current | One checkpoint; the other fields and every unknown key byte-identical. |
-| Save with every draft field omitted | `noop`, no commit, the file byte-identical. |
+| Save with only `body`, the observation current | One checkpoint. Every other value and unknown key equal; the body byte for byte. |
+| Save with every draft field omitted, on an item the library wrote | `noop`, no commit, the file byte-identical. |
+| Save with every draft field omitted, on a hand-written document | One checkpoint that only normalizes the front matter: values equal. |
 | A third party changed `title`; the caller saves only `body` with the old token | `external_change`, exit 3; nothing written. |
 | The output of a successful save is lost; same request, same input | The stored result is replayed; one commit. |
-| As the row above, but a third party changed an omitted field after the save | `request_mismatch`; one commit; `request show` returns the stored result. This is the replay limit of decision 2. |
-| `ticket save --id <a document's ID>` with a field omitted | `item_not_found`, exit 2, no request record. |
-| `project: null` | The `project` key is removed; nothing else changes. |
-| `deps: []` and `deps: null` | Both remove the `deps` key. |
-| `deps` omitted | The `deps` key is byte-identical. |
-
-Why the CLI does not compare tokens: a retry after a lost result reads the
-file the request itself wrote. A comparison would turn that retry into an
-`external_change` instead of a replay.
+| As the row above, but a third party then changed an omitted field | `request_mismatch`; one commit; `request show` returns the stored result (decision 2's replay limit). |
+| A library actor's save stops after its checkpoint; the CLI retries the same request with a field omitted | The fill reads what that attempt committed, the digest matches, and discovery completes with no second commit. |
+| `ticket save --id <a document's ID>` with a field omitted | `item_not_found`, exit 2, item scope, no request record. |
+| `project: null` | `project` absent afterwards; every other value equal. |
+| `deps: []` and `deps: null` | `deps` absent afterwards. |
+| `deps` omitted | `deps` equal. |
 
 ## Reads
 
-**`path observe` (R-7).** `observe_path(&repo, context, path)`, as
-`document show --path` resolves its repository. The data is
-`PathObservationDto` (schema `path_observation`). The CLI adds no rule: a
-canonical path that another item holds in the named context is reported as
-what is there. Human output, one escaped field per line:
+**`path observe` (R-7).** `observe_path(&repo, context, path)`, resolving the
+repository as `document show --path` does. The data is `PathObservationDto`
+(schema `path_observation`). The CLI adds no rule: another item's path in
+the named context is reported as what is there. Human output, one escaped
+field per line:
 
 ```text
 path: docs/plans/x.md
@@ -371,23 +468,28 @@ context: <worktree> (<branch>)
 
 Its uses:
 
-- the absent token that `document move` needs for its destination, observed
-  in the document's context (the worktree `document show --id` reports, or
-  the root when it has none);
-- the token of a nonconforming file on primary that repair needs. That is the
-  same token `document show --path` gives.
+- the absent token that `document move` needs, observed in the document's
+  context. That is the worktree `document show --id` reports, or the root
+  when the document has none;
+- the token of a nonconforming file on primary that repair needs. That is
+  the same token `document show --path` gives.
 
 **`ticket check` (R-6).**
 `check_ticket_relationships(&repo, &id, &ProposedRelationships { deps, parent })`.
 The data is `RelationshipCheckDto` (schema `relationship_check`).
 
-- A proposed cycle is reported in `data.rejection`. It is still a read
-  success: `ok`, exit 0.
-- Human output lists the proposed deps and parent with their resolution and
-  the unresolved IDs. When `rejection` is set, it ends with the line
-  `rejected: <code>: <id> <id> …`.
-- When `complete` is false or the index is not current, the note C1 writes
-  for incomplete reads goes to stderr.
+- It checks the ticket with exactly the proposed relationships (fact 7). An
+  omitted `--deps` proposes no dependencies and an omitted `--parent` no
+  parent, as `ticket create` writes them.
+- To preview a `ticket save` that changes one of them, pass the other's
+  current value too, as `ticket show` gives it. For the same complete
+  proposal, `ticket check` and the save give the same rejection.
+- A proposed cycle is reported in `data.rejection`, and the answer is still
+  a read success: `ok`, exit 0.
+- Human output lists the proposed deps and parent, the unresolved IDs and,
+  when set, a final line `rejected: <code>: <id> <id> …`.
+- When `complete` is false or the index is not current, C1's incomplete-read
+  note goes to stderr.
 
 ## Index Verbs (R-8)
 
@@ -396,41 +498,38 @@ The data is `RelationshipCheckDto` (schema `relationship_check`).
 `Mutation::IndexRebuild(IndexRebuildInput { root })` through `mutate::run`,
 with `Plan { identity_prompt: false, retry: true }`.
 
-- They take no input. JSON and non-interactive calls need `--request-id`,
-  like every F2 mutation.
-- Human success is `mutation_success`: the envelope message and the effects
-  line. The data is null.
-- The recovery actions `index.refresh` and `index.rebuild` that C1 reads
-  offer now name available commands. A caller following one supplies a
-  request ID.
+- They take no input. JSON and non-interactive calls need `--request-id`.
+- Human success is `mutation_success`, and the data is null.
+- The recovery actions `index.refresh` and `index.rebuild` now name
+  available commands. A caller following one supplies a request ID.
+- Neither contacts a remote. The test configures a remote whose refs differ,
+  and asserts that `refs/remotes` is unchanged.
 
 ## Repair
 
-`document repair` and `ticket repair` are C2's confirmed flow, unchanged:
+`document repair` and `ticket repair` use C2's confirmed flow, unchanged:
 
-- `--prepare` returns the repair preview (schema `repair_preview`), which
-  states whether an ID is adopted;
+- `--prepare` returns the repair preview (`repair_preview`), which states
+  whether an ID is adopted;
 - `--confirm <id> --request-id <id>` executes it;
 - an interactive human invocation shows the preview on the terminal and asks
   `Proceed? [y/N]`.
 
-The corrected `source` is never echoed. The preview and result carry `id`,
-`path`, `adoption` or `adopted`, and `primary_changed`. A repaired document is
-listed twice until its context merges, as F2 recorded.
+The source may come from `--input -` while consent comes from the terminal
+(C2 contract item 6). The source is never echoed. A repaired document is
+listed twice until its context merges (F2).
 
 ## Identity Recovery (R-9)
 
-No C3 verb prompts for identity: `Plan { identity_prompt: false }`
-throughout.
+No C3 verb prompts for identity: `Plan { identity_prompt: false }`.
 
 - A save, create, move, slug assignment or repair with no usable identity
-  answers the library's `identity_required`, exit 3, with the
-  `repo.identity_set` recovery action. Human stderr lists that action, as for
-  any recovery.
+  answers `identity_required`, exit 3, with `repo.identity_set`.
 - After `repo identity-set`, the same command with the same request ID
-  succeeds. F2 deletes the record of a request refused this way (fact 11).
-- `initials_required` on `ticket create` is the same pattern. Its remedies
-  are `initials` in the input or `repo identity-set` with `initials`.
+  succeeds (fact 11).
+- `initials_required` on `ticket create` follows the same pattern. Task 0
+  confirms that its record is freed too. The retry adds `initials` to the
+  input under the same request ID, or sets them with `repo identity-set`.
 
 ## Human Output
 
@@ -439,248 +538,323 @@ throughout.
   - `DocumentMutationDto { id, path }`;
   - `TicketMutationDto { id, path, slug, unresolved, rejected }`;
   - `RepairMutationDto { id, path, adopted }`.
-- `path observe` and `ticket check` get formatters in `human_authoring.rs`,
-  escaping each value with C1's field helper.
-- Progress stages go to stderr as in C2.
+- `path observe` and `ticket check` use `human_authoring.rs`, which escapes
+  every value with `render::field`.
+- Progress stages go to stderr in human mode, as in C2. A test asserts one.
 
 ## Exit Statuses
 
-Unchanged: C1's class mapping (`render::exit_status`). The codes each verb
-can return are Task 0's audit refresh. Notable ones:
+C1's class mapping is unchanged. The codes each verb can return are the
+output of Task 0's audit refresh.
 
-| Code | Exit |
+| Exit | Reached by |
 | --- | --- |
-| `relationship_cycle`, `occupied_path`, `slug_already_assigned` | 2 |
-| `external_change`, `identity_required`, `ticket_closed` | 3 |
-| `discovery_pending` | 4 |
+| 0, 2, 3 | Through the binary, for every class a C3 verb can produce. |
+| 4 | Listed in the exit table's reasons, backed by the R-11 test in which a library actor leaves a save partial and the CLI completes it (decision 6). |
+| 5 | Through the binary, holding the lease with `hold_lease_in_child_for_test` while a C3 save runs (fact 22). |
+| 130 | Through the pseudo-terminal, declining a repair's consent. |
+| 1 | A row or a reason, as Task 0 records. |
 
 ## Dogfooding (R-16, Cycle Decision 3)
 
-This runs in the final task, after the full gate, and only with the owner's
-go-ahead at that step. The go-ahead names the repository
-(`/home/vhodges/work/src/manyhands`), the default application data
-directory, the six saves and the six branch pushes.
+This runs in the final task, after the full gate.
 
-1. **Preflight, read-only.** For each target ticket in decision 3, check that
-   its worktree is clean with `git -C <worktree> status --short`. A worktree
-   that is not clean stops the step for the owner: at planning, G1's was not
-   (fact 24). Nothing is reverted or committed by hand.
-2. **Build.** `devenv shell -- cargo build --locked --bin manyhands-cli` in
+1. **Preflight, read-only, before asking.** For each target ticket in
+   decision 3, record:
+   - `git -C <worktree> status --short`;
+   - ahead/behind against `origin/manyhands/ticket/<id>`;
+   - `repo inspect` on the main checkout with the default data directory.
+
+   A worktree that is not clean is reported, and nothing is reverted.
+2. **The go-ahead.** Ask the owner, presenting the preflight's results and
+   naming:
+   - the repository `/home/vhodges/work/src/manyhands`;
+   - the default application data directory;
+   - the six saves and the six branch pushes;
+   - that each save re-emits that ticket's whole front matter in the
+     library's order and style (fact 9), with values unchanged.
+
+   Without the go-ahead, the step is owed. The Cycle may become review-ready,
+   but it is not closed or merged while the Wave's dogfooding evidence is
+   owed, unless the owner amends that evidence.
+3. **Build.** `devenv shell -- cargo build --locked --bin manyhands-cli` in
    the C3 worktree. Every following command is
    `<worktree>/target/debug/manyhands-cli --json` with
    `--repo /home/vhodges/work/src/manyhands`.
-3. **Refresh.** `index refresh` with a request ID from `id new`.
-4. **Record.** For each target ticket:
-   - `ticket show --id <id>` for its observation;
+4. **Refresh.** `index refresh` with a request ID from `id new`.
+5. **Record.** For each target:
+   - `ticket show --id <id>` for its observation and values;
    - `ticket save --id <id> --request-id <new> --input -` with only
-     `observation` and `deps`. Every draft field is omitted, so the save
-     patch fills them.
+     `observation` and `deps`.
 
-   Each save commits one checkpoint on that ticket's own branch.
-5. **Check.** `ticket blocked` lists each target with its recorded blockers.
-   `git -C <worktree> log -1 --format=%H` names each checkpoint, and
-   `git -C <worktree> diff HEAD~1 -- <ticket.md>` shows only the `deps` key
-   added.
-6. **Push** each changed ticket branch with
-   `git push origin manyhands/ticket/<id>`. Ticket branches are pushed by
-   standing habit, and the go-ahead names these pushes.
-7. **Switch.**
-   - Amend AGENTS.md's Dogfooding Workflow: ticket create and update use
-     `manyhands-cli ticket create` and `ticket save` against the main
-     checkout; comments stay canonical files until C4.
-   - Rewrite `.agents/skills/file-ticket/SKILL.md` around `id new`,
+   Each save commits one checkpoint on that ticket's branch. A `noop` for a
+   ticket that already holds exactly those deps counts as done. So a resume
+   after a stop runs the remaining saves with fresh request IDs.
+6. **Check by value.** For each target, `ticket show` gives every value,
+   unknown key and the body equal to step 5's read, with `deps` added.
+   `ticket blocked` lists each target with its recorded blockers.
+7. **Push.** Push each changed ticket branch with
+   `git push origin manyhands/ticket/<id>`.
+8. **Switch.** Only after every save and check succeeded:
+   - **AGENTS.md's Dogfooding Workflow:**
+     - ticket create and ticket update use `manyhands-cli ticket create` and
+       `ticket save` against the main checkout, run with
+       `devenv shell -- cargo run --locked --bin manyhands-cli -- …` from
+       an up-to-date main;
+     - before a `ticket save` of one's own Cycle ticket, commit one's own
+       edits to its `ticket.md`, because the save commits into that active
+       worktree;
+     - closure stays a canonical-file edit until C5's `ticket close`, and
+       comments stay canonical files until C4's `comment add`.
+   - **`.agents/skills/file-ticket/SKILL.md`** is rewritten around `id new`,
      `ticket create`, `ticket show` and `ticket save`.
+   - **`working-on-a-ticket`** is deliberately unchanged in C3. Its status
+     edits and closure run from sandbox clones in loop mode, where the main
+     checkout's registration is absent. AGENTS.md names it as the
+     exception until that skill is revised.
+   - **`implementing-a-cycle`** already says "using supported CLI
+     operations", so it needs no edit.
+   - **`planning-a-cycle`** keeps comments as canonical files, which stays
+     true until C4.
 
-Any answer other than success, or a no-op for a ticket that already has
-those deps, stops the sequence:
+   The switch's commit gets its own independent review before
+   review-ready.
 
-- it is recorded in the ledger and reported to the owner;
+**Stop rules.** Any of the following stops the sequence before any further
+save or push:
+
+- an answer other than `ok`, or other than step 5's `noop`;
+- a failed value check;
+- a rejected push.
+
+When the sequence stops:
+
+- the failure is recorded in the ledger and reported to the owner;
 - nothing is worked around with Git or a hand edit;
-- the switch in step 7 is not made until every save has succeeded.
+- the switch in step 8 is not made.
 
 The library writes the checkpoint commits with its own message, so they carry
 no `Co-Authored-By` trailer.
 
 ## Testing
 
-All new tests are modules of the existing `cli` target (R-15), so the native
-workflow's list needs no change. Each verb task adds its own files:
+All new tests are modules of the existing `cli` target (R-15). Fixtures
+write `core.autocrlf = false` and no identity into the test home, as C2's
+repository fixture does (fact 33). Each verb task adds:
 
 | File | Covers |
 | --- | --- |
-| `tests/cli/authoring_reads.rs` | `path observe` (absent and present paths, a named context, another item's file in a context, an inactive context's `invalid_path`), `ticket check` (resolved, unresolved, cycle rejection, malformed `--deps`). |
-| `tests/cli/index.rs` | Refresh and rebuild; index loss and whole-file corruption (R-12); nothing canonical changes. |
-| `tests/cli/folders.rs` | Create, no-op, occupied path, path outside `docs/`. |
-| `tests/cli/documents.rs` | Create, save (the save-patch table), move (collision, stale destination, no-op), offline checkpoints, stale writes. |
-| `tests/cli/ticket_authoring.rs` | Create with deps, parent and initials; save (the save-patch table, relationships); slug-assign; cycles; unresolved targets; a closed ticket; `slug_already_assigned`; identity and initials recovery (R-18). |
-| `tests/cli/repair.rs` | Prepare/confirm, interactive consent through the pseudo-terminal (Unix), adoption, adoption retry (R-11), invalid and malformed repair, `identity_ambiguous`, a closed ticket. |
-| `tests/cli/authoring_exits.rs` | The C3 exit table (R-10), the no-op inventory (R-14), privacy (R-17), human mode and the examples (R-13). |
+| `tests/cli/authoring_reads.rs` | `path observe`: an absent path, a present path, a named context, another item's file in a context, an inactive context, escaping paths, and a path holding escape sequences shown escaped. `ticket check`: resolved, unresolved, a dependency cycle and a parent cycle, an omitted option proposing none, malformed and empty elements. Both reads write nothing. |
+| `tests/cli/index.rs` | Refresh and rebuild; never fetching; index loss and whole-file corruption (R-12); a replay of each. |
+| `tests/cli/folders.rs` | Create, no-op, occupied, outside `docs/`, replay. |
+| `tests/cli/documents.rs` | Create (with an escaping path and a used path), save (the save-patch table for documents), move (collision, stale destination, a destination that gained a file after it was observed, a document with no context, its own path, an escaping destination), offline checkpoints, stale writes, replays, the interrupted save, cache loss, progress. |
+| `tests/cli/ticket_authoring.rs` | Create with deps, parent and initials, including `null`; save (the save-patch table for tickets, relationships); a ticket in this project's format (fact 34) saved with only `observation` and `deps`; slug-assign; dependency and parent cycles on create and on save; `ticket check` agreeing with a save; unresolved targets; a closed ticket; `slug_already_assigned`; closure and `slug` keys refused; replays; identity and initials recovery (R-18). |
+| `tests/cli/repair.rs` | Prepare and confirm, previews for both repairs, adoption, adoption retry (R-11), invalid and malformed repair, `identity_ambiguous`, a closed ticket, cache loss, and pseudo-terminal consent with the source piped through `--input -` (Unix). |
+| `tests/cli/authoring_exits.rs` | The C3 exit table (R-10), `busy` with the lease holder, the confirmed-flag check for all eleven mutations, `invalid_input` for each input-taking verb, the no-op inventory (R-14), human mode for all thirteen verbs, privacy (R-17) and the examples (R-13). |
 
-Fixtures reuse:
+**Replays.** Each of the eleven mutations has a lost-output case: the same
+request and input sent again, answered from the record, with no second
+effect.
 
-- `tests/support/cli.rs`: `CliEnv`, `run_cli`, `run_cli_with_stdin`,
-  `assert_cli_golden`;
-- `tests/support/mod.rs`: `enabled_repository`;
-- `tests/support/items.rs`: `contract_repository`, `relationship_repository`,
-  `ticket_source`, `document_source`;
-- `FailOnce`.
+**Cache loss.** These follow F2's cache-loss rows; Task 0 records their
+codes:
 
-**Library-level actors (R-11).** For a case the binary cannot produce, the
-test opens `FailOnce::at(point).open_service(<the CLI's data directory>)`,
-runs the library call with the request ID and input the CLI will then send,
-and asserts the partial result. It then runs the CLI with the same request
-and input, and asserts completion and the commit count. There are two cases:
+- a committed `document save` and a committed `ticket save`, retried under
+  the same request after the database is deleted and `index rebuild` runs,
+  write no second commit;
+- a repair's `--confirm` after cache loss answers `confirmation_not_found`.
+
+**Library-level actors (R-11).** Built with `execute_with` or
+`execute_confirmed` on a `FailOnce` service over the CLI's data directory,
+scoped in a block (fact 12):
 
 - commit success, refresh failure: a `document save` at
-  `BeforeIndexTransactionCommit`;
-- adoption retry: a `document repair` at the fault point that F2's
-  `a_repair_stopped_after_its_write_is_completed_by_its_retry_with_the_same_id`
-  uses. Task 0 reads which it is.
+  `BeforeIndexTransactionCommit`. The CLI retries with `title` omitted, and
+  the branch tip is read with `git2` before and after;
+- adoption retry: a `document repair` at
+  `AfterOwnedWriteBeforeLifecyclePersistence`, built with
+  `support::repair::Shelf` (fact 19).
 
-**Index loss and corruption (R-12).** Both cases run in a repository holding
-one document and one ticket:
+**Index loss and corruption (R-12).** In a repository holding one document
+and one ticket:
 
-- remove the database file under `MANYHANDS_DATA_DIR`;
-- overwrite it with 4 KiB of non-SQLite bytes.
+- remove `manyhands.sqlite3-wal` and `manyhands.sqlite3-shm`, then delete
+  `manyhands.sqlite3`. `document list` answers `repository_not_registered`
+  with `index.rebuild`;
+- remove the same two files, then overwrite `manyhands.sqlite3` with 4096
+  bytes of `0xA5`. `document list` answers `index_unavailable`.
 
-Each runs `index rebuild --repo` and asserts `ok`. `document list` and
-`ticket list` then list both items. A recursive byte comparison of the
-worktree and `git for-each-ref` output are equal before and after. Task 0
-reads the database file's name.
+Each then runs `index rebuild --repo` and asserts:
 
-**Goldens.** As C2: `tests/fixtures/cli_v1/`, registered in `CLI_CASES` or
-`CLI_TEXT_CASES`, and updated with `MANYHANDS_UPDATE_GOLDEN=1`, never under
-`CI`. Every regenerated golden's diff is read before commit. Each verb gets a
-JSON success golden and at least one refusal golden. The two repairs also get
-a preview golden. Human text goldens cover the two reads and one mutation
-success.
+- `ok`;
+- both items listed again;
+- worktree bytes and `git for-each-ref` output equal to before.
 
-**Isolation (R-18).** As C2:
+**Goldens.** As C2:
 
-- children start through `cli_command`, without a controlling terminal;
-- the pseudo-terminal helper is used only for the repair consent cases;
-- no test touches the developer's keys, global Git configuration or
+- registered in `CLI_CASES` or `CLI_TEXT_CASES`;
+- updated with `MANYHANDS_UPDATE_GOLDEN=1`, never under `CI`;
+- every diff read before commit.
+
+Each verb has a JSON success golden and at least one refusal golden. Both
+repairs have a preview golden. Each verb has a human text golden. The plan
+names each in its task.
+
+**Isolation (R-18).**
+
+- Children start through `cli_command` without a controlling terminal. The
+  pseudo-terminal helper is used only for the repair consent cases.
+- No test touches the developer's keys, global Git configuration or
   application data.
+- The identity-required cases call `require_no_system_identity()`.
 
-The identity-required cases need a machine whose system Git configuration
-sets no identity (C2 R-17). Elsewhere they fail with a message saying so.
-
-**Native.** Linux locally. The `cli` target is already in the native list.
-Pseudo-terminal cases are `#[cfg(unix)]`. Native CI runs on main after merge.
+**Native.** Linux locally; the `cli` target is already in the native list.
+Pseudo-terminal cases are `#[cfg(unix)]`, and the `pty` import is gated too.
+Windows repair consent is a native manual check, as C2's prompts were.
+Native CI runs on main after merge.
 
 ## Named Edits To Pre-Existing Tests
 
 | Edit | Task | File and change |
 | --- | --- | --- |
-| E1 | 1–6 | The help goldens `tests/fixtures/cli_v1/help_root.json`, `help_root_text.txt` and `help_resource_ticket.json` are regenerated as each C3 verb becomes available. The diff of each may change only that verb's availability, delivering Cycle, repository rule and options. |
+| E1 | 1–6 | The help goldens `tests/fixtures/cli_v1/help_root.json`, `help_root_text.txt` and `help_resource_ticket.json` are regenerated as each C3 verb becomes available. The diff may change only that verb's availability, repository rule and options. Its summary text and delivering Cycle stay as they were. |
 
-No other pre-existing test changes (fact 22). Task 0 proves it again with the
-grep in the plan. A hit outside E1 stops for an owner ruling. New tests are
-additions, including the C3 counterparts of C2's usage-privacy, no-op, privacy
-and exit inventories.
+No other pre-existing test changes. The unfiltered tests in fact 32 extend
+to C3's verbs and pass unchanged. Task 0 proves it with the plan's grep, and
+a hit outside fact 32 stops for an owner ruling.
 
 ## Document Amendments
 
-Made in Task 8, except where noted:
+Task 8 makes these, except where noted.
 
-- **CLI contract RFC** (`docs/RFC/cli-contract.md`), "Amended 2026-10-24 by
-  C3":
-  - the taxonomy rows of the thirteen verbs, with selectors and input fields;
-  - the save patch and its replay limit;
-  - `path observe` and `ticket check` grammar (R-6, R-7);
-  - index verbs needing `--request-id`;
-  - identity recovery without a prompt;
-  - the input-schema table extended;
-  - "C3 verbs are available; C4–C5 remain planned".
-- **Relationships RFC**: `ticket check`'s flags, and `deps: []` or `null`
-  clearing, restated as the CLI's input.
-- **Wave 03**: C3 section, "Amended 2026-10-24 by C3". It records:
-  - decisions 1–4;
-  - `ticket check` and `path observe` as delivered;
-  - the known limits.
-- **API audit**: the C3 refresh section (Task 0), and the C3 rows updated in
-  place.
-- **AGENTS.md** and **`file-ticket` skill**: the dogfooding switch (Task 9,
-  after the saves succeed).
-- **The C3 ticket**: its Added Scope corrected, since initials and the prefix
-  shipped in C2; its planning boxes ticked (Task 9).
+**CLI contract RFC**, "Amended 2026-10-24 by C3":
+
+- the taxonomy rows of the thirteen verbs, with selectors and input fields;
+- "C3 verbs are available; C4–C5 remain planned";
+- the save patch, its refusals and its replay limit (decisions 2 and 5);
+- the CLI-built refusal rule (R-6 section): the fill read's answer passes
+  through under the mutation's name (decision 5);
+- `path observe` and `ticket check` grammar and semantics;
+- index verbs needing `--request-id`;
+- identity recovery without a prompt;
+- the C3 rows of the input-schema table;
+- the cache-loss paragraph: F2's codes replace `recovery_required` for C3's
+  verbs, citing F2's "Departures from the RFCs";
+- `folder create` works on primary only (F2);
+- the evidence paragraph: the C3 test files and the example inputs.
+
+**Relationships RFC:**
+
+- `ticket check`'s flags and semantics;
+- `deps` and `parent` accepting `null` on create and save.
+
+**Wave 03:** the C3 section, "Amended 2026-10-24 by C3", records decisions
+1–6, the delivery and the known limits.
+
+**API audit:** the C3 refresh section (Task 0) and the C3 rows updated in
+place.
+
+**AGENTS.md** and the **`file-ticket` skill:** the dogfooding switch, in
+Task 9 after the saves succeed.
+
+**The C3 ticket:** its Added Scope is corrected, since initials and the
+prefix shipped in C2, and its planning boxes are ticked (Task 9).
 
 ## Rulings
 
 Each ruling is listed with its cost if wrong.
 
 - **R-1 Catalog.** Literal `Available("C3")` entries, flipped in the task
-  that dispatches the verb. *Cost:* none beyond C2's pattern.
-- **R-2 Usage privacy.** The condition at `parse.rs:120` becomes
-  `spec.delivered_by() != "C1"`. C1 reads keep clap's text, which C1 goldens
-  pin. *Cost:* C3's read verbs lose clap's detailed usage hint, though their
-  values are not secret.
-- **R-3 List readers.** Two accessors in `input.rs`, with no
+  that dispatches the verb, with planned summaries kept. *Cost:* none.
+- **R-2 Usage privacy.** `parse.rs:120` becomes
+  `spec.delivered_by() != "C1"`. Its test uses a stray positional value,
+  which clap does echo. *Cost:* C3's reads lose clap's detailed usage hint.
+- **R-3 List readers.** `optional_string_list` and `tristate_list`, with no
   de-duplication. *Cost:* small.
-- **R-4 The save patch.** The fill rules and refusals above. *Cost if wrong:*
-  a retry after a third party changed an omitted field answers
-  `request_mismatch` (decision 2). A wrong fill would change a field the
-  caller did not name; the required-outcomes table guards it.
-- **R-5 Optionality.** Where the CLI RFC is ambiguous:
+- **R-4 The save patch.** The fill rules above, with decision 5's refusals.
+  *Cost if wrong:* decision 2's replay limit. A wrong fill would change a
+  value the caller did not name, which the required-outcomes table guards
+  against.
+- **R-5 Optionality.** Where the RFCs leave room:
   - `document save`'s `body` is optional, as `ticket save`'s is;
   - `ticket create`'s `body` defaults to empty;
-  - `deps: []` clears, as the relationships RFC says.
+  - `null`, `[]` and missing mean "none" on create, as the relationships
+    RFC's "an empty list or null clears it" reads for a new ticket.
 
-  *Cost:* narrowing an optional field later is a new input version.
+  *Cost:* narrowing an optional field later needs a new input version.
 - **R-6 `ticket check`.**
-  - `--deps` is comma-separated, because `OptionSpec` has no repeatable
-    form.
+  - It proposes exactly what it is given (fact 7).
+  - `--deps` is a comma-separated list, and a repeat keeps the last, as
+    C1's options do.
   - At least one of `--deps` and `--parent` is required.
-  - A rejection is a read success, exit 0, reported in `data.rejection`.
+  - A rejection is a read success with exit 0, reported in
+    `data.rejection`.
 
   *Cost:* a script must inspect `rejection`, not the exit code. Changing the
   exit later changes a published outcome.
-- **R-7 `path observe`.** Flags as `show --path --context`, with no CLI
-  rule about whose file is at the path (multi-item note). *Cost:* none.
+- **R-7 `path observe`.** Flags as `show --path --context`, with no CLI rule
+  about whose file is at the path. *Cost:* none.
 - **R-8 Index verbs.** Unconfirmed mutations with no input, needing
   `--request-id` in JSON. *Cost:* agents following `index.rebuild` must
   allocate an ID.
 - **R-9 Identity.** A pass-through, with no prompt. *Cost:* an interactive
   user runs `repo identity-set` and repeats the command.
-- **R-10 Exit table.** `tests/cli/authoring_exits.rs`, pinned to the audit
-  section "C3 exit-coverage union" by set equality. C2's table is
-  untouched. *Cost:* two tables to keep.
-- **R-11 Library-level actors.** For interrupted cases, as C2's key-deletion
-  retry. *Cost:* the interruption is not produced by the binary itself.
-- **R-12 Corruption evidence.** Only deletion and whole-file replacement.
-  The partial form is `01M4PB82`'s (decision 1). *Cost:* that form remains
-  unrecoverable from the CLI.
+- **R-10 Exit table.** `tests/cli/authoring_exits.rs`, pinned by set
+  equality to the audit section "C3 exit-coverage union". Exit 4 is a
+  reason backed by the R-11 test (decision 6). C2's table is untouched.
+  *Cost:* two tables to keep.
+- **R-11 Library-level actors.** Used for the two interrupted cases. The CLI
+  retry of the interrupted save omits a field, so the fill is exercised.
+  *Cost:* the interruption itself is not produced by the binary.
+- **R-12 Corruption evidence.** Deletion and whole-file replacement only,
+  with the WAL files removed first. The partial form belongs to `01M4PB82`
+  (decision 1). *Cost:* that form remains unrecoverable from the CLI.
 - **R-13 Documented examples.** The example inputs are the documented
-  examples. `every_c3_example_input_runs` runs each against a fixture and
-  checks the outcome the CLI RFC's amendment gives for it. *Cost:* the
-  examples are files, not prose in the RFC, which links to them.
-- **R-14 No-op inventory.** A no-op is a fresh request that writes nothing.
-  Task 0 lists which of the eleven mutations can be one, from their bindings.
-  Each is given a case, and each that cannot gets a reason. *Cost:* none.
+  examples. `every_c3_example_input_runs` owns the outcome table, and the
+  CLI RFC's amendment copies and links it. *Cost:* the examples are files,
+  not prose.
+- **R-14 No-op inventory.** A no-op is a fresh request that writes nothing,
+  on an item that has an editing context (fact 17). Task 0 lists which of
+  the eleven mutations can be one; slug-assign can (fact 16). Each that
+  cannot has a reason. *Cost:* none.
 - **R-15 Test layout.** New modules in the `cli` target. *Cost:* the target
   grows. A new target would need a CI list change.
-- **R-16 Dogfooding.** The procedure above, with its stop rules. *Cost:*
-  real-repository effects. These are bounded to six ticket branches and
-  gated by the owner's go-ahead.
-- **R-17 Privacy.** A sentinel body, title and source run through every
-  input-taking C3 verb in both modes, including a refusal after the fill
-  read. The sentinel appears in no stdout, stderr or file under the data
-  directory. It does appear in `document show` / `ticket show` output, which
-  are reads of the source. *Cost:* none.
-- **R-18 Identity machine.** The identity cases need no system identity
-  (C2 R-17). Elsewhere they fail with an explanatory message, not a skip.
-  *Cost:* a developer machine with `/etc/gitconfig` identity cannot run
-  them.
+- **R-16 Dogfooding.** The procedure above: preflight before the go-ahead,
+  checks by value, stop and resume rules, the switch's scope and its own
+  review. *Cost:* real-repository effects, bounded to six ticket branches
+  and gated by the go-ahead. Each changed ticket's front matter is
+  re-emitted.
+- **R-17 Privacy.** The data directory is checked with
+  `assert_request_stores_exclude`, because the index rightly stores titles
+  (fact 20).
+  - Sentinels in `body` and `source` are checked in stdout, stderr and the
+    request stores.
+  - Sentinels in `title`, `path`, `initials` and `deps` are checked in
+    stdout and stderr of CLI-built refusals and library answers, but not in
+    the reads that return them by design.
+
+  This covers every input-taking verb in both modes, including a refusal
+  after the fill read. *Cost:* none.
+- **R-18 Identity machine.** The identity cases call
+  `require_no_system_identity()` (C2 R-17), which fails with its message, not
+  a skip, on a machine whose system configuration sets an identity.
+  *Cost:* such a machine cannot run them.
 
 ## Known Limits
 
 - Decision 1's three defects, each on its ticket.
 - Decision 2's replay limit.
+- Every write re-emits the front matter (fact 9), and saving a hand-written
+  document commits that normalization.
+- A no-op save of an item without an editing context still creates that
+  context (fact 17).
+- A partial save offers `operation.resume`, which is C4's verb. Until then,
+  the same request's retry completes it (fact 21).
 - A repaired document is listed twice until its context merges (F2).
-- An empty folder is invisible to Git; `folder list` lists it after the
-  refresh `folder create` makes (F2).
-- `identity_required` leaves an editing context's worktree with no commit,
-  which the next successful save reuses (F2, fact 11).
+- An empty folder is not visible to Git. `folder list` lists it after the
+  refresh that `folder create` makes (F2).
+- `identity_required` leaves an editing context with no commit, which the
+  next successful save reuses (fact 11).
 - Item reads answer `item_not_found` for an item whose context is
   duplicated or mismatched (ticket `01M5B163PQTE9C1T6NMHATR3KX`). The save
   patch inherits that answer.
@@ -688,28 +862,27 @@ Each ruling is listed with its cost if wrong.
 ## Alternatives Rejected
 
 - **Complete drafts on save.** Exact replay, but it departs from the CLI RFC
-  and makes every edit name every field (decision 2).
-- **A library patch.** A prerequisite ticket, contradicting F2's split
   (decision 2).
-- **`body_path` or `--body-file`.** It would be a second body channel. The
-  CLI RFC carries bodies only as JSON strings, and `jq --rawfile` builds the
-  input.
-- **A repeatable `--dep`.** `OptionSpec` has no repeatable form, and adding
-  one changes every option constant for one verb.
-- **Exit 3 for a `ticket check` rejection.** That would make a read fail
-  for reporting what it was asked (R-6).
-- **A separate test target.** It would need a CI list change and gives
-  nothing a module does not.
+- **A library patch.** It needs a prerequisite ticket and contradicts F2's
+  split (decision 2).
+- **Forcing fill refusals into R-6's closed shape.** A wrong-kind ID has no
+  fitting code there (decision 5).
+- **`body_path` or `--body-file`.** A second body channel. Bodies are JSON
+  strings, and `jq --rawfile` builds the input.
+- **A repeatable `--dep`.** `OptionSpec` has no repeatable form.
+- **Exit 3 for a `ticket check` rejection.** It would make a read fail for
+  answering what it was asked (R-6).
+- **A separate test target.** It needs a CI list change and gains nothing.
 
 ## Risks
 
 | Risk | Control |
 | --- | --- |
-| The fill changes a field the caller did not name. | The required-outcomes table, byte comparisons, and unknown keys preserved. |
-| A body or source reaches a diagnostic. | R-17 sentinel test over every verb and mode; `fields()` sees only content-free DTOs. |
-| A verb is advertised before it works. | R-1: availability flips in the dispatching task, and `internal_error` for an unrouted verb is caught by its tests. |
-| Help goldens drift beyond the verb's own lines. | E1's diff rule, read before commit. |
-| Feature-dependent failures surface only at the end (C2's `preserve_order`). | Part gates include `--all-features`. |
-| The full suite outlasts a tool timeout. | It runs detached, with a two-hour budget (C2 ledger). |
-| Dogfooding commits a stray edit. | Preflight stops on an unclean worktree (fact 24). |
-| A library gap appears mid-task. | Stop; a separate ticket under track rule 5. |
+| The fill changes a value the caller did not name. | The required-outcomes table, compared by value. |
+| A body or source reaches a diagnostic. | R-17 over every verb and mode. Mutation output prints only content-free DTOs. |
+| A verb is advertised before it works. | R-1: availability flips in the dispatching task. |
+| Help goldens drift beyond the verb's own lines. | E1's diff rule. |
+| Feature-dependent failures surface late (C2's `preserve_order`). | Part gates include `--all-features`. |
+| The full suite outlasts a tool timeout. | It runs detached, with a two-hour budget. |
+| Dogfooding commits a stray edit or reformats files unexpectedly. | A preflight before the go-ahead; the go-ahead names the re-emission; checks by value. |
+| A library gap appears mid-task. | Stop, and raise a separate ticket under track rule 5. |

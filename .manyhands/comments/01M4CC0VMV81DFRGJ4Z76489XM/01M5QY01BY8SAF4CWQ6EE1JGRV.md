@@ -38,14 +38,39 @@ Stated before the questions, and not objected to:
 - bodies travel as JSON strings only;
 - identity recovery is a pass-through.
 
-**Found in planning.** The G1 worktree holds an uncommitted title edit
-(" External Edit") and an untracked `ticket.md~`. The dogfooding preflight
-stops on it, and nothing was touched.
+**Found in planning.** The G1 worktree held an uncommitted title edit
+(" External Edit") and an untracked `ticket.md~`. The owner cleaned it on
+2026-10-24, and it was re-checked clean at `7b306d1`. The dogfooding preflight
+stays.
 
-**Review rounds.** Pending: one source-and-feasibility reviewer and one
-contract-and-consistency reviewer.
+**Review round 1, at `6c25c43`.**
 
-**Open questions.** None yet. Any that review raises will be listed here
-before presentation.
+- **Contract and consistency:** 38 findings, 2 blocking, 21 important and
+  15 minor.
+- **Source and feasibility:** 22 findings, 2 blocking, 7 important and
+  13 minor.
+
+What the findings changed:
+
+- the fill read's refusals;
+- `null` on create;
+- outcomes stated by value, because every write re-emits the front matter;
+- privacy checked in the request stores;
+- the dogfooding preflight, value checks, stop and resume rules, and the
+  scope and review of the switch;
+- replay and cache-loss cases;
+- corrected fixtures and codes.
+
+Not applied, because the source showed otherwise: contract findings 10 and
+33, and source finding 20(b).
+
+**Owner decisions after review, 2026-10-24.**
+
+5. The fill read's answer passes through under the mutation's name, and the
+   CLI RFC's refusal rule is amended.
+6. Exit 4 is a reason entry backed by the library-actor test. Exit 5 is
+   reached through the binary.
+
+**Open questions.** None. The scoped re-review of the revisions is next.
 
 **Proposed execution.** Subagent-driven, as C2 was.
