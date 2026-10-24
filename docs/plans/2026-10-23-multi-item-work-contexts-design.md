@@ -145,8 +145,20 @@ The index upgrades in place with the existing column-check pattern
   branch's changed comments on an item the branch did not change. It exists
   because `discovered_comments` hangs off an item row, and it is never a copy
   of the item.
+- `discovered_items.change`, one of `added`, `modified` or `moved` for a
+  `changed` row and null otherwise. It is what the classification above
+  found: `modified` when the merge base had the item at that path, `moved`
+  when the branch deleted its earlier path, `added` otherwise.
 - `discovered_items.primary_state` (`absent`, `identical`, `different`, null
-  for primary's rows) and `discovered_items.primary_compared_oid`.
+  for primary's rows), `discovered_items.primary_compared_oid` and
+  `discovered_items.primary_path`. Primary's own copy of an item that has an
+  active context is not stored, as today
+  (`leave_active_items_to_their_contexts`), so the context's row records
+  where primary has it.
+- `discovered_comments.contributed`, defaulting to 1. A `changed` or
+  `comments` row stores the comments its branch changed (1) and, so that a
+  reply keeps its parent, their unchanged ancestors (0). Every comment of an
+  `own` or primary row is 1.
 - `contexts.merged_into_primary`, null for primary.
 - A new `discovered_deletions (context_id, item_id, kind, canonical_path,
   UNIQUE(context_id, item_id))` table.
@@ -158,9 +170,10 @@ The upgrade sets `refresh_required`. The index stays disposable: deleting it
 and rebuilding gives the same result. Ticket `01M4EHGE7YFBPRHY20X178572K`
 (version the index) replaces column checks later; this design adds one more.
 
-The snapshot check (`src/repository.rs:6813`, "stored item ID is not
-globally unique") becomes: unique within each context, and exactly one
-effective copy per item ID.
+The repository snapshot (`read_repository_snapshot`, `src/repository.rs:6573`)
+feeds refresh results, remote state and promotion. It reads `own` rows only,
+so its check that item IDs are globally unique (`:6813`) is unchanged.
+Contributed rows serve the reads.
 
 ## Effective copy
 
@@ -172,10 +185,14 @@ item ID:
 2. Otherwise primary's row.
 3. Otherwise a `changed` row, from the context whose branch ULID sorts first.
 
-`comments` rows never compete. Every other `changed` row, and primary's row
-when rule 1 applied and primary's copy differs, is a version. Comments follow
-the same rule per comment ID, where "own" means the own context of the
-comment's item.
+`comments` rows never compete. Every other `changed` row is a version. When
+rule 1 applied and the row's `primary_state` is `different`, primary's copy
+is a version too, at `primary_path`.
+
+Comments follow the same rule per comment ID, counting only comments stored
+as contributed. "Own" means the own context of the comment's item. An own
+context's comments replace primary's, as today, so primary's copy of such a
+comment is never a version.
 
 The "index is behind" signal treats a `changed` row as legitimate. Today it
 treats any item found only in another item's worktree as stale.
@@ -207,7 +224,9 @@ in". Show reads it from the index too; a read does not scan.
 
 CLI: `document show` and `ticket show` accept `--context` with `--id`, as they
 already do with `--path`. `--id X --context W` returns X's copy in context W,
-whether effective or a version. A context holding no copy of X, including
+whether effective or a version. For an item with an own context, naming the
+repository root reads primary's copy at `primary_path`. A context holding no
+copy of X, including
 one that deleted it, returns the existing not-found result; the deletion is
 visible in `versions`.
 
