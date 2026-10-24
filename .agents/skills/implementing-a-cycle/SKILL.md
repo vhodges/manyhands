@@ -14,13 +14,14 @@ verification.
 Read current `AGENTS.md`, the ticket/comments, approved Cycle/design/plan, and
 any execution ledger. Confirm implementation authorization and the execution
 method; preserve approvals and user decisions already given. If approval is
-missing, use `starting-a-cycle` to finish the reviewable artifacts first.
+missing, use `planning-a-cycle` to finish the reviewable artifacts first.
 
 **Before new implementation, perform the
-[worktree and rebase preflight](../starting-a-cycle/references/worktree-preflight.md).**
-Fetch current main and rebase the existing ticket branch onto it even if planning
-previously rebased it. A clean, current-base no-op is valid. Reconcile changed
-commit IDs and plan assumptions without restarting completed tasks.
+[worktree and merge preflight](references/worktree-preflight.md).**
+Fetch current main and merge it into the existing ticket branch, even if
+planning already merged it. Never rebase. If the branch is already current,
+the merge is a no-op, and that is fine. Reconcile the plan's assumptions with
+what main changed, without restarting completed tasks.
 
 Use a durable, plan-specific ledger for task state, commit ranges, decisions,
 review findings, and verification. Trust recorded completed work and inspect

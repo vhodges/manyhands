@@ -2,7 +2,7 @@
 
 ## Local evidence
 
-Read the rebased `AGENTS.md`. Run local/agent Rust commands through Devenv. Before
+Read current main's `AGENTS.md`. Run local/agent Rust commands through Devenv. Before
 submitting Rust changes, require success from:
 
 ```sh
@@ -37,8 +37,8 @@ Obtain independent whole-branch review against the approved requirements.
 Resolve findings and verify fixes; retain the evidence and any stated limits.
 
 When push/PR is authorized, inspect remote changes and publish the reviewed
-branch. Follow the starting skill's non-fast-forward procedure; do not infer
-force-push authorization. Use a body file or structured argument for PR prose.
+branch. If the push is not a fast-forward, follow the publishing section of
+[the preflight](worktree-preflight.md); do not infer force-push authorization. Use a body file or structured argument for PR prose.
 Describe the problem, resulting behavior, scope, verification, and remaining gates.
 
 Run the relevant native CI matrix and inspect actual build and test results on
