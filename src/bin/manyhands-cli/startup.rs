@@ -14,9 +14,11 @@ use super::{
     dispatch,
     parse::{self, Action, HelpTarget, Invocation},
     render::{self, Human, Output},
+    terminal::Terminal,
 };
 
 pub trait Startup {
+    fn open_terminal(&mut self) -> Option<Box<dyn Terminal>>;
     fn start_transport(&mut self) -> Result<(), ()>;
     fn open_service(&mut self) -> Result<RepositoryService, ReadError>;
 }
@@ -68,7 +70,7 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             let name = command_name(command);
             let extra = match command.availability {
                 Availability::Planned(cycle) => Some(format!("{name} arrives with {cycle}.")),
-                Availability::Available => None,
+                Availability::Available(_) => None,
             };
             render::failure_output(
                 json,
@@ -77,6 +79,28 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
             )
         }
         Action::Run { command, args } => {
+            // Read commands may have no clap arguments at all. Check their kind
+            // before looking up the prompting-only flag.
+            let terminal = if command.prompts() && !json && !args.get_flag("non-interactive") {
+                startup.open_terminal()
+            } else {
+                None
+            };
+            let interactive = terminal.is_some();
+            if let Err(detail) = parse::mode_rules(command, &args, interactive) {
+                // IDs are parsed only after service opening, in dispatch.
+                // Every early refusal retains C1's null request ID.
+                return render::failure_output(
+                    json,
+                    &Envelope::failure(
+                        command_name(command),
+                        Scope::default(),
+                        render::USAGE_CODE,
+                        Vec::new(),
+                    ),
+                    Some(detail),
+                );
+            }
             if startup.start_transport().is_err() {
                 return render::failure_output(
                     json,
@@ -85,7 +109,16 @@ pub fn run(invocation: Invocation, startup: &mut dyn Startup) -> Output {
                 );
             }
             match startup.open_service() {
-                Ok(service) => dispatch::dispatch(command, &args, json, &service),
+                Ok(service) => dispatch::dispatch(
+                    command,
+                    &args,
+                    &mut crate::mutate::Session {
+                        json,
+                        interactive,
+                        terminal,
+                    },
+                    &service,
+                ),
                 Err(error) => {
                     render::failure_output(json, &error.to_envelope(command_name(command)), None)
                 }
@@ -138,11 +171,8 @@ fn help_output(json: bool, target: HelpTarget) -> Output {
             .iter()
             .map(|spec| HelpCommandDto {
                 command: command_name(spec),
-                available: spec.availability == Availability::Available,
-                delivered_by: match spec.availability {
-                    Availability::Available => "C1",
-                    Availability::Planned(cycle) => cycle,
-                },
+                available: matches!(spec.availability, Availability::Available(_)),
+                delivered_by: spec.delivered_by(),
                 summary: spec.summary,
                 repository: spec.repo.map(|rule| match rule {
                     RepoRule::Required => catalog::REPOSITORY_VALUES[0],
@@ -200,7 +230,7 @@ fn text_help(target: &HelpTarget, commands: &[&CommandSpec]) -> String {
         for command in commands {
             catalog_help.push_str(&format!("  {}  {}", command_name(command), command.summary));
             match command.availability {
-                Availability::Available => catalog_help.push_str(" Available now."),
+                Availability::Available(_) => catalog_help.push_str(" Available now."),
                 Availability::Planned(cycle) => {
                     catalog_help.push_str(&format!(" Arrives with {cycle}."))
                 }

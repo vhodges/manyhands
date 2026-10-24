@@ -2,7 +2,7 @@ use std::ffi::OsString;
 
 use clap::{Arg, ArgAction, ArgMatches, Command};
 
-use super::catalog::{self, Availability, CommandSpec};
+use super::catalog::{self, Availability, CommandSpec, Kind};
 
 #[derive(Debug)]
 pub struct Invocation {
@@ -42,7 +42,7 @@ pub fn command() -> Command {
         .subcommand_required(false);
     for (name, summary) in [
         ("json", "Write a JSON result."),
-        ("non-interactive", "Run without prompts (no effect in C1)."),
+        ("non-interactive", "Run without terminal prompts."),
         ("help", "Show help."),
         ("version", "Show the version."),
     ] {
@@ -64,7 +64,7 @@ pub fn command() -> Command {
         for spec in catalog::resource_commands(spec.resource) {
             let mut verb = base_command(spec.verb).about(spec.summary);
             match spec.availability {
-                Availability::Available => {
+                Availability::Available(_) => {
                     for option in spec.options {
                         let name = option.name.strip_prefix("--").expect("catalog long option");
                         let mut arg = Arg::new(name).long(name).help(option.summary);
@@ -117,6 +117,12 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
         Ok(matches) => matches,
         Err(error) => {
             let target = raw_target(&args);
+            let detail = if matches!(&target,HelpTarget::Command(spec) if spec.delivered_by()=="C2")
+            {
+                "Invalid command options. Use --help for accepted options.".to_owned()
+            } else {
+                error.render().to_string()
+            };
             let action = if raw_help {
                 Action::Help(target)
             } else {
@@ -125,7 +131,7 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
                         HelpTarget::Command(command) => Some(command),
                         _ => None,
                     },
-                    detail: error.render().to_string(),
+                    detail,
                 }
             };
             return Invocation {
@@ -160,7 +166,7 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
         if let Some((command, args)) = selected {
             match command.availability {
                 Availability::Planned(_) => Action::Unavailable { command },
-                Availability::Available => match validate(command, args) {
+                Availability::Available(_) => match validate(command, args) {
                     Ok(()) => Action::Run {
                         command,
                         args: args.clone(),
@@ -203,13 +209,32 @@ fn validate(command: &CommandSpec, args: &ArgMatches) -> Result<(), String> {
         ("ticket", "list") if args.get_flag("ready") && args.get_flag("blocked") => {
             return Err("--ready conflicts with --blocked.".to_owned());
         }
-        ("host", "inspect") => {
-            authority(
-                args.get_one::<String>("authority")
-                    .expect("required authority"),
-            )?;
+        ("host", "inspect" | "observe") => {
+            if let Some(text) = args.get_one::<String>("authority") {
+                authority(text)?;
+            }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Rules checked by startup after the mode is known. Errors hold usage detail
+/// for human stderr.
+pub fn mode_rules(spec: &CommandSpec, args: &ArgMatches, interactive: bool) -> Result<(), String> {
+    if !matches!(spec.kind, Kind::Mutation { .. }) {
+        return Ok(());
+    }
+    let prepare = args.get_flag("prepare");
+    let request_id = args.contains_id("request-id");
+    if prepare && request_id {
+        return Err("--prepare conflicts with --request-id.".to_owned());
+    }
+    if prepare && args.contains_id("confirm") {
+        return Err("--prepare conflicts with --confirm.".to_owned());
+    }
+    if !interactive && !prepare && !request_id {
+        return Err("--request-id is required for a non-interactive mutation.".to_owned());
     }
     Ok(())
 }

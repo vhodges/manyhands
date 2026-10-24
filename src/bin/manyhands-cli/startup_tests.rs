@@ -10,11 +10,18 @@ use serde_json::{Value, json};
 #[derive(Default)]
 struct FakeStartup {
     calls: Vec<&'static str>,
+    terminal_present: bool,
     transport_fails: bool,
     service: Option<RepositoryService>,
 }
 
 impl Startup for FakeStartup {
+    fn open_terminal(&mut self) -> Option<Box<dyn Terminal>> {
+        self.calls.push("terminal");
+        self.terminal_present
+            .then(|| Box::new(crate::terminal::FakeTerminal::default()) as Box<dyn Terminal>)
+    }
+
     fn start_transport(&mut self) -> Result<(), ()> {
         self.calls.push("transport");
         if self.transport_fails {
@@ -45,6 +52,78 @@ fn output_json(output: &Output) -> Value {
     assert!(output.stderr.is_empty());
     assert_eq!(output.stdout.last(), Some(&b'\n'));
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+#[test]
+fn early_mutation_refusals_keep_ids_null_and_preserve_startup_order() {
+    for request_id in ["01M4CC0VMTTNKVYS6XWQG4CK1N", "invalid-id-sentinel"] {
+        for (extra, transport_fails, code, status, stages) in [
+            (vec!["--unknown"], false, ResultCode::UsageError, 2, vec![]),
+            (vec!["--prepare"], false, ResultCode::UsageError, 2, vec![]),
+            (
+                vec!["--prepare", "--confirm", request_id],
+                false,
+                ResultCode::UsageError,
+                2,
+                vec![],
+            ),
+            (
+                vec![],
+                true,
+                ResultCode::InternalError,
+                1,
+                vec!["transport"],
+            ),
+            (
+                vec![],
+                false,
+                ResultCode::Busy,
+                5,
+                vec!["transport", "service"],
+            ),
+        ] {
+            for json in [false, true] {
+                let mut args = vec![
+                    "repo",
+                    "identity-set",
+                    "--repo",
+                    "missing-root",
+                    "--input",
+                    "missing-input",
+                    "--request-id",
+                    request_id,
+                ];
+                args.extend_from_slice(&extra);
+                let mut startup = FakeStartup {
+                    transport_fails,
+                    ..Default::default()
+                };
+                let output = run(invocation(&args, json), &mut startup);
+                let mut expected = stages.clone();
+                if !json && extra.first() != Some(&"--unknown") {
+                    expected.insert(0, "terminal");
+                }
+                assert_eq!(startup.calls, expected);
+                assert_eq!(output.status, status);
+                if json {
+                    let value = output_json(&output);
+                    assert_eq!(value["code"], code.as_str());
+                    assert!(value["request_id"].is_null());
+                    assert!(value["operation_id"].is_null() && value["data"].is_null());
+                    assert_eq!(
+                        value["scope"],
+                        serde_json::to_value(Scope::default()).unwrap()
+                    );
+                } else {
+                    assert!(output.stdout.is_empty());
+                    let stderr = String::from_utf8(output.stderr).unwrap();
+                    assert!(stderr.contains(&format!("code: {}\n", code.as_str())));
+                    assert!(!stderr.contains(request_id));
+                    assert!(!stderr.contains("request: "));
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -101,10 +180,9 @@ fn service_free_actions_never_call_startup_in_either_mode() {
 
 #[test]
 fn every_available_run_starts_transport_before_service_and_maps_open_failure() {
-    for command in catalog::COMMANDS
-        .iter()
-        .filter(|spec| spec.availability == Availability::Available)
-    {
+    for command in catalog::COMMANDS.iter().filter(|spec| {
+        matches!(spec.availability, Availability::Available(_)) && spec.kind == catalog::Kind::Read
+    }) {
         for json in [false, true] {
             let mut startup = FakeStartup::default();
             let output = run(
@@ -191,8 +269,8 @@ fn successful_startup_dispatches_id_new() {
 fn expected_command(spec: &catalog::CommandSpec) -> Value {
     json!({
         "command": format!("{} {}", spec.resource, spec.verb),
-        "available": spec.availability == Availability::Available,
-        "delivered_by": match spec.availability { Availability::Available => "C1", Availability::Planned(cycle) => cycle },
+        "available": matches!(spec.availability, Availability::Available(_)),
+        "delivered_by": spec.delivered_by(),
         "summary": spec.summary,
         "repository": match spec.repo { Some(RepoRule::Required) => Some("required"), Some(RepoRule::Refused) => Some("refused"), None => None },
         "options": spec.options.iter().map(|option| json!({"name": option.name, "value": option.value, "required": option.required, "summary": option.summary})).collect::<Vec<_>>()
@@ -389,5 +467,183 @@ fn usage_and_unavailable_have_canonical_names_empty_recovery_and_human_only_extr
                 assert!(text.contains(extra));
             }
         }
+    }
+}
+
+static LOCAL_MUTATION: CommandSpec = CommandSpec {
+    resource: "test",
+    verb: "mutate",
+    summary: "Test-local mutation.",
+    availability: Availability::Available("C2"),
+    repo: None,
+    options: &[catalog::REQUEST_ID, catalog::PREPARE, catalog::CONFIRM],
+    kind: catalog::Kind::Mutation {
+        confirmed: true,
+        input: catalog::InputRule::Refused,
+    },
+};
+
+fn prompting_invocation(command: &'static CommandSpec, args: &[&str], json: bool) -> Invocation {
+    use clap::{Arg, ArgAction, Command};
+    let mut parser = Command::new(command.verb).arg(
+        Arg::new("non-interactive")
+            .long("non-interactive")
+            .action(ArgAction::SetTrue),
+    );
+    for option in command.options {
+        let name = option.name.strip_prefix("--").unwrap();
+        parser = parser.arg(Arg::new(name).long(name).action(if option.value.is_some() {
+            ArgAction::Set
+        } else {
+            ArgAction::SetTrue
+        }));
+    }
+    Invocation {
+        json,
+        action: Action::Run {
+            command,
+            args: parser
+                .try_get_matches_from(std::iter::once(command.verb).chain(args.iter().copied()))
+                .unwrap(),
+        },
+    }
+}
+
+#[test]
+fn a_prompting_command_opens_the_terminal_before_the_transport() {
+    let mut startup = FakeStartup {
+        terminal_present: true,
+        ..FakeStartup::default()
+    };
+    let output = run(
+        prompting_invocation(&LOCAL_MUTATION, &[], false),
+        &mut startup,
+    );
+    assert_eq!(startup.calls, ["terminal", "transport", "service"]);
+    assert_eq!(output.status, 5); // Fake service refusal: mode validation passed.
+}
+
+#[test]
+fn no_read_opens_the_terminal() {
+    for command in catalog::COMMANDS
+        .iter()
+        .filter(|spec| spec.kind == catalog::Kind::Read)
+    {
+        let mut startup = FakeStartup {
+            terminal_present: true,
+            ..FakeStartup::default()
+        };
+        let output = run(
+            Invocation {
+                json: false,
+                action: Action::Run {
+                    command,
+                    args: clap::ArgMatches::default(),
+                },
+            },
+            &mut startup,
+        );
+        assert_eq!(startup.calls, ["transport", "service"]);
+        assert_eq!(output.status, 5);
+    }
+}
+
+#[test]
+fn json_and_non_interactive_never_open_the_terminal() {
+    for (json, args) in [
+        (true, vec!["--prepare"]),
+        (false, vec!["--prepare", "--non-interactive"]),
+    ] {
+        let mut startup = FakeStartup {
+            terminal_present: true,
+            ..FakeStartup::default()
+        };
+        let output = run(
+            prompting_invocation(&LOCAL_MUTATION, &args, json),
+            &mut startup,
+        );
+        assert_eq!(startup.calls, ["transport", "service"]);
+        assert_eq!(output.status, 5);
+    }
+}
+
+#[test]
+fn a_mode_rule_failure_is_usage_and_starts_nothing() {
+    let mut startup = FakeStartup::default();
+    let output = run(
+        prompting_invocation(&LOCAL_MUTATION, &[], false),
+        &mut startup,
+    );
+    assert_eq!(startup.calls, ["terminal"]);
+    assert_eq!(output.status, 2);
+    assert!(output.stdout.is_empty());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("code: usage_error\n")
+    );
+}
+
+#[test]
+fn confirm_without_request_id_requires_interactive_mode() {
+    for terminal_present in [false, true] {
+        for json in [false, true] {
+            for non_interactive in [false, true] {
+                let mut args = vec!["--confirm", "01M4CC0VMTTNKVYS6XWQG4CK1N"];
+                if non_interactive {
+                    args.push("--non-interactive");
+                }
+                let mut startup = FakeStartup {
+                    terminal_present,
+                    ..FakeStartup::default()
+                };
+                let output = run(
+                    prompting_invocation(&LOCAL_MUTATION, &args, json),
+                    &mut startup,
+                );
+                let tries_terminal = !json && !non_interactive;
+                let interactive = tries_terminal && terminal_present;
+                let mut calls = Vec::new();
+                if tries_terminal {
+                    calls.push("terminal");
+                }
+                if interactive {
+                    calls.extend(["transport", "service"]);
+                }
+                assert_eq!(startup.calls, calls);
+                assert_eq!(output.status, if interactive { 5 } else { 2 });
+                if json {
+                    let value = output_json(&output);
+                    assert_eq!(value["code"], "usage_error");
+                    assert_eq!(value["command"], "test mutate");
+                    assert_eq!(
+                        value["scope"],
+                        serde_json::to_value(Scope::default()).unwrap()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unlocking_reads_decide_mode_without_mutation_arguments() {
+    static UNLOCKING: CommandSpec = CommandSpec {
+        resource: "host",
+        verb: "observe",
+        summary: "Test unlocking read.",
+        availability: Availability::Available("C2"),
+        repo: None,
+        options: &[],
+        kind: catalog::Kind::UnlockingRead,
+    };
+    for terminal_present in [false, true] {
+        let mut startup = FakeStartup {
+            terminal_present,
+            ..FakeStartup::default()
+        };
+        let output = run(prompting_invocation(&UNLOCKING, &[], false), &mut startup);
+        assert_eq!(startup.calls, ["terminal", "transport", "service"]);
+        assert_eq!(output.status, 5);
     }
 }

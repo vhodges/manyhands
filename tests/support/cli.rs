@@ -3,7 +3,7 @@
 use std::{
     ffi::OsStr,
     fs,
-    io::Read,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc,
@@ -59,7 +59,33 @@ pub struct CliRun {
 
 pub fn cli_command(args: &[&OsStr], env: &CliEnv) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_manyhands-cli"));
-    command.args(args).env_remove("MANYHANDS_DATA_DIR");
+    command.args(args);
+    cli_environment(&mut command, env);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe; this closure allocates nothing
+        // and touches no locks inherited from the multithreaded test process.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0000_0008); // DETACHED_PROCESS
+    }
+    command
+}
+
+pub fn cli_environment(command: &mut Command, env: &CliEnv) {
+    command.env_remove("MANYHANDS_DATA_DIR");
     if env.use_data_dir {
         command.env("MANYHANDS_DATA_DIR", &env.data);
     }
@@ -98,11 +124,28 @@ pub fn cli_command(args: &[&OsStr], env: &CliEnv) -> Command {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    command
 }
 
 pub fn run_cli(args: &[&OsStr], env: &CliEnv) -> CliRun {
-    let mut child = cli_command(args, env).spawn().unwrap();
+    collect_cli(cli_command(args, env).spawn().unwrap())
+}
+
+pub fn run_cli_with_stdin(args: &[&OsStr], env: &CliEnv, stdin: &[u8]) -> CliRun {
+    let mut child = cli_command(args, env)
+        .stdin(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut pipe = child.stdin.take().unwrap();
+    let bytes = stdin.to_vec();
+    let writer = thread::spawn(move || {
+        let _ = pipe.write_all(&bytes);
+    });
+    let result = collect_cli(child);
+    writer.join().unwrap();
+    result
+}
+
+pub fn collect_cli(mut child: std::process::Child) -> CliRun {
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
     let (sender, receiver) = mpsc::channel();
@@ -129,7 +172,7 @@ pub fn run_cli(args: &[&OsStr], env: &CliEnv) -> CliRun {
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("CLI exceeded 30 seconds: {args:?}");
+            panic!("CLI exceeded 30 seconds");
         }
         thread::sleep(Duration::from_millis(5));
     };
@@ -172,6 +215,40 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "host_observe",
+    "host_approve_prepare",
+    "host_approve",
+    "host_approve_host_mismatch",
+    "host_approve_host_replacement_required",
+    "host_replace_prepare",
+    "host_replace",
+    "key_import",
+    "key_generate",
+    "key_generate_unlock_required",
+    "key_select",
+    "key_clear",
+    "key_remove",
+    "key_delete_prepare",
+    "key_delete",
+    "repo_create_prepare",
+    "repo_create_empty_prepare",
+    "repo_create",
+    "repo_enable_prepare",
+    "repo_enable",
+    "repo_create_identity_required",
+    "repo_enable_identity_required",
+    "repo_remove_prepare",
+    "repo_remove",
+    "repo_identity_set_prepare",
+    "repo_identity_set",
+    "remote_add",
+    "remote_select",
+    "remote_select_clear",
+    "remote_remove_prepare",
+    "remote_remove",
+    "request_show",
+    "request_show_accepted",
+    "request_cancel",
     "cli_document_list",
     "cli_document_show",
     "cli_document_show_nonconforming",
@@ -225,6 +302,10 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "host_observe_text",
+    "repo_create_prepare_text",
+    "remote_add_text",
+    "remote_select_identity_required_text",
     "help_root_text",
     "version_text",
     "ticket_list_text",

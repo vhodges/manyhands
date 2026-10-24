@@ -7,6 +7,8 @@ use manyhands::{
     repository::{ReadError, RepositoryService},
     results::ResultCode,
 };
+#[path = "manyhands-cli/admin.rs"]
+mod admin;
 
 #[path = "manyhands-cli/catalog.rs"]
 mod catalog;
@@ -14,12 +16,24 @@ mod catalog;
 mod dispatch;
 #[path = "manyhands-cli/human.rs"]
 mod human;
+#[path = "manyhands-cli/human_admin.rs"]
+mod human_admin;
+#[path = "manyhands-cli/input.rs"]
+mod input;
+#[path = "manyhands-cli/mutate.rs"]
+mod mutate;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
+#[path = "manyhands-cli/progress.rs"]
+mod progress;
+#[path = "manyhands-cli/prompt.rs"]
+mod prompt;
 #[path = "manyhands-cli/render.rs"]
 mod render;
 #[path = "manyhands-cli/startup.rs"]
 mod startup;
+#[path = "manyhands-cli/terminal.rs"]
+mod terminal;
 
 fn main() {
     let args: Vec<OsString> = std::env::args_os().collect();
@@ -30,9 +44,13 @@ fn main() {
 struct RealStartup;
 
 impl startup::Startup for RealStartup {
+    fn open_terminal(&mut self) -> Option<Box<dyn terminal::Terminal>> {
+        terminal::open()
+    }
+
     fn start_transport(&mut self) -> Result<(), ()> {
-        // SAFETY: only argument collection and parsing have run; they start no
-        // threads or native Git activity. Service opening follows this call.
+        // SAFETY: only argument parsing and controlling-terminal opening have run;
+        // neither starts threads or native Git activity. Service opening follows.
         unsafe { manyhands::runtime::initialize_git_transport_before_threads() }.map_err(|_| ())
     }
 

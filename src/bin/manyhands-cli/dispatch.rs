@@ -185,6 +185,46 @@ fn host_inspect(
     ))
 }
 
+pub fn host_observe(
+    service: &RepositoryService,
+    session: &mut crate::mutate::Session,
+    args: &ArgMatches,
+) -> Output {
+    use crate::{admin, catalog, mutate, prompt::TerminalProvider, terminal::Terminal};
+    use manyhands::repository::keys::SessionCredentials;
+    use std::{cell::Cell, io::Write};
+    let spec = catalog::find("host", "observe").expect("host observe catalog entry");
+    let root = match admin::mutation_root(session, spec, args, None) {
+        Ok(root) => root,
+        Err(out) => return out,
+    };
+    let authority = match args
+        .get_one::<String>("authority")
+        .map(|text| parse::authority(text))
+        .transpose()
+    {
+        Ok(value) => value.map(|(host, port)| SshAuthority { host, port }),
+        Err(_) => {
+            return mutate::refusal(session, "host observe", None, ResultCode::UsageError, None);
+        }
+    };
+    if !session.json {
+        let _ = writeln!(std::io::stderr().lock(), "progress: connecting");
+    }
+    let supplied = Cell::new(false);
+    let terminal = if session.interactive {
+        session
+            .terminal
+            .as_deref_mut()
+            .map(|t| t as &mut dyn Terminal)
+    } else {
+        None
+    };
+    let mut credentials = SessionCredentials::new(TerminalProvider::new(terminal, &supplied));
+    let envelope = service.observe_host(&root, authority.as_ref(), &mut credentials);
+    render::observation_output(session.json, &envelope, supplied.get())
+}
+
 fn index_status(
     service: &RepositoryService,
     args: &ArgMatches,
@@ -449,11 +489,55 @@ fn ticket_find(
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
-    json: bool,
+    session: &mut crate::mutate::Session,
     service: &RepositoryService,
 ) -> Output {
+    let json = session.json;
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "repo create" => return crate::admin::repo_create(service, session, command, args),
+        "repo enable" => return crate::admin::repo_enable(service, session, command, args),
+        "repo remove" => return crate::admin::repo_remove(service, session, command, args),
+        "repo identity-set" => {
+            return crate::admin::repo_identity_set(service, session, command, args);
+        }
+        "remote add" => return crate::admin::remote_add(service, session, command, args),
+        "remote remove" => return crate::admin::remote_remove(service, session, command, args),
+        "remote select" => return crate::admin::remote_select(service, session, command, args),
+        "key import" => return crate::admin::key_import(service, session, command, args),
+        "key generate" => return crate::admin::key_generate(service, session, command, args),
+        "key select" => return crate::admin::key_select(service, session, command, args),
+        "key clear" => return crate::admin::key_clear(service, session, command, args),
+        "key remove" => return crate::admin::key_remove(service, session, command, args),
+        "key delete" => return crate::admin::key_delete(service, session, command, args),
+        "request show" | "request cancel" => {
+            let id = match crate::admin::request_id(session, command, args) {
+                Ok(Some(id)) => id,
+                Err(output) => return output,
+                Ok(None) => {
+                    return crate::mutate::refusal(
+                        session,
+                        &name,
+                        None,
+                        ResultCode::InvalidId,
+                        None,
+                    );
+                }
+            };
+            return if command.verb == "show" {
+                render::envelope_output(
+                    json,
+                    &service.show_request(id),
+                    crate::human_admin::request,
+                )
+            } else {
+                render::envelope_output(
+                    json,
+                    &service.cancel_request(id),
+                    crate::human_admin::cancel,
+                )
+            };
+        }
         "ticket ready" => {
             return read_output(&name, json, ticket_ready(service, args), human::item_list);
         }
@@ -541,6 +625,9 @@ pub fn dispatch(
         "key public" => {
             return read_output(&name, json, key_public(service, args), human::public_key);
         }
+        "host observe" => return host_observe(service, session, args),
+        "host approve" => return crate::admin::host_approve(service, session, command, args),
+        "host replace" => return crate::admin::host_replace(service, session, command, args),
         "host list" => return read_output(&name, json, host_list(service), human::host_list),
         "host inspect" => {
             return read_output(

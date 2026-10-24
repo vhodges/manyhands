@@ -172,7 +172,7 @@ fn every_c1_verb_redacts_secrets_and_preserves_repository_in_both_modes() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|entry| entry["available"] == true)
+        .filter(|entry| entry["available"] == true && entry["delivered_by"] == "C1")
         .map(|entry| entry["command"].as_str().unwrap().to_owned())
         .collect();
     let covered: BTreeSet<_> = calls

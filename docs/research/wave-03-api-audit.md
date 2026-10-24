@@ -22,6 +22,213 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Wave 03 CLI Cycle C2 refresh (2026-10-20)
+
+Task 0 performed this refresh on **2026-10-22**, at implementation baseline
+`967b192dfda5f46f36a2602ea10de0475fd77759`, with `origin/main` at
+`d7962c3615786ca663662b0debb9460769308a57`. The heading keeps the approved
+plan's date. All eighteen existing C2 CLI rows below are updated in place.
+This is CLI Cycle C2, not the historical cross-cutting C2 section below.
+**Amended 2026-10-20 by C2:** Task 11 closes these eighteen CLI implementation
+rows with actual binary-test evidence. This amendment retains the plan's date;
+owner clarifications remain dated **2026-10-22**, with actual implementation
+dates in the ledger. Historical missing-boundary claims do not apply to these
+refreshed rows. The governing contract is the
+[C2 Cycle](../Cycles/wave-03-cli-02-repository-and-credentials.md); detailed
+baseline and test-impact evidence is in the
+[execution ledger](../plans/2026-10-20-wave-03-cli-02-repository-and-credentials-execution.md).
+
+The four authorized baseline commands passed through Devenv: all-feature
+locked check, `cargo fmt --check`, all-target/all-feature locked clippy with
+`-D warnings`, and the targeted locked tests: CLI bin **79**, `cli` **64**,
+`read_contract` **71**, `mutation_contract` **44** (**258 total**, zero failed,
+ignored or filtered). These are Linux baseline checks, not C2 acceptance or
+native CI. No production source, dependency or pre-existing test changed.
+
+Prerequisites and accepted defect:
+
+- `01M5CVB2DTK8EQKG3FMYMWNTMX`, merge
+  `7d6dba44b62b1460cf60282a4828c9cd013fda5c`: enable registers an enabled but
+  unregistered repository. Its registration-only preview still requires an
+  identity to fill the published preview, but marks it `written_locally: false`
+  (`mutation/bind/repo.rs:1405–1439`).
+- `01M5B0Z6PNP7X4WH4JV3N0VQJ6`, merge
+  `0b2366453cb0228aaeb341c51a2dad963df4990f`, implementation
+  `a0e9a8d97c780746406aec5d8608b9ae7fc38d3d`: create/enable publish the committed
+  configuration entry to Git's index. Source-inspected regression tests
+  `tests/repository_enablement/enablement_index.rs:33–101` assert a current
+  entry and successful subsequent publication selection for absent/empty
+  creation and born/unborn enablement. Index publication is best effort;
+  foreign index locks remain an explicitly tested exception, not a guarantee
+  of success under every filesystem condition. These prerequisite tests were
+  inspected, not rerun by Task 0.
+- `01M5E6DYJ6GN7DMW4424TH3V78` remains deferred by decision 9. A wrong
+  passphrase maps to `transport_unavailable`, exit 5; an authentication
+  rejection after supplying a passphrase maps to `unlock_failed`, exit 3.
+  Evidence: `transport/remote.rs:744–773`, `mutation/outcome.rs:109–154`, and
+  `tests/ssh_transport/session.rs:184–213,227–235` (source inspection only).
+
+#### C2 implementation evidence closure
+
+**Amended 2026-10-20 by C2.** The existing inventory rows below now name their
+test files. `tests/cli_remote/journeys.rs` proves empty and existing-history
+onboarding, and Unix generated-key onboarding, entirely through CLI JSON with
+explicit request IDs and prepare/confirm where required. Final observation
+authenticates with the selected key and matches the pin; repo list contains
+the root. Every child uses the isolated helper's bounded pipe-EOF check.
+`tests/cli/prompts.rs` proves piped JSON alongside terminal identity/consent;
+`tests/cli/privacy.rs` executes every local verb in both modes (Unix-only
+generation/deletion), with real host execution scans in `cli_remote/hosts.rs`
+and secret scans in `cli_remote/unlock.rs`. Refusals/previews alone do not
+satisfy the successful-execution inventory.
+
+`tests/cli/exits.rs` accounts for exactly **49 F2 / 52 CLI-inclusive codes**:
+every code is a binary row or one of five individually reasoned exceptions
+(`confirmation_expired`, `registration_pending`, `discovery_pending`,
+`remote_unavailable`, `push_rejected`). There are no staged codes; named SSH
+references are checked against actual test functions. All exit classes are
+represented on Unix; Windows terminal execution remains manual evidence.
+Schemas and confirmed flags are checked by `tests/cli/input_schemas.rs` and
+`tests/cli/mutation.rs`, and both-mode/no-op evidence by `tests/cli/human.rs`.
+Task 11's named test run passed **167 cli + 30 cli_remote** cases on Linux;
+the execution ledger records the later Part C gate separately. This closes API
+implementation/evidence gaps, not the Cycle: controller Part C reviews and
+Task 12 final verification remain required. Native workflow registration is
+present, but native execution is post-merge and separately authorized.
+
+**Owner clarification, 2026-10-22 — missing-source import:** `key import`
+successfully registers a missing/unavailable private source and reports its
+state. Direct missing-file import was an incorrect exit fixture, not a new
+library gap; it does **not** add `key_unavailable` to import's audited set.
+`tests/cli/keys.rs` proves that success. `tests/cli_remote/hosts.rs` proves
+`key_unavailable` cross-platform when observing with a selected missing source,
+before connection or prompting; Unix `tests/cli/exits.rs` additionally proves
+unsafe-store deletion refusal. The audited union remains unchanged.
+
+#### C2 signature and result-set key
+
+Paths in this key are relative to `src/repository/`. All signatures are
+`RepositoryService` methods. In the inventory, **F2(V, I)** means a
+`Mutation::V(I)` passed to these exact methods (not to the older domain API):
+
+```rust
+prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto>
+execute<P: SessionCredentialProvider>(
+    &self, call: MutationCall, credentials: &mut SessionCredentials<P>,
+    progress: &mut dyn ProgressSink, cancel: &CancellationToken,
+) -> Envelope<MutationDataDto>
+show_request(&self, request_id: RequestId) -> Envelope<RequestDto>
+cancel_request(&self, request_id: RequestId) -> Envelope<CancelDto>
+observe_host<P: SessionCredentialProvider>(
+    &self, root: &Path, authority: Option<&SshAuthority>,
+    credentials: &mut SessionCredentials<P>,
+) -> Envelope<HostObservationDto>
+```
+
+Locations: `mutation/confirm.rs:286`, `execute.rs:45–51`, `mod.rs:367`,
+`progress.rs:366`, `bind/host.rs:904–909`. None returns `Result`.
+`MutationCall` has public `request_id: RequestId`,
+`confirmation: Option<ConfirmationId>`, and `mutation: Mutation`.
+
+Each row's **codes** is the union of its named sets and explicit additions;
+these enumerate top-level F2 envelope codes across prepare, execute, retries
+and replay, not just literal codes in the per-verb binding. No result stored
+inside successful `request show` data expands that read's top-level set.
+
+- **S** retains the C1 definition below: `ok`, `busy`, `index_unavailable`,
+  `internal_error`. Request/confirmation reads and writes supply the three
+  failures (`read/mod.rs:257–272,430–451`, `mutation/records.rs:810–816`).
+- **M** = S + `request_mismatch`, `cancelled`. These are the shared mutation
+  paths (`mutation/execute.rs:83–147,222–232,249–283`,
+  `replay.rs:133–153`, `reenter.rs:92–189`). Cancellation here is before
+  acceptance; C2 does not install a handler that cancels its token.
+- **C** = `confirmation_required`, `confirmation_not_found`,
+  `confirmation_mismatch`, `confirmation_used`, `confirmation_expired`,
+  `external_change`. Only confirmed commands add C
+  (`mutation/confirm.rs:393–428`, `execute.rs:277–280`).
+- **U** = `not_confirmable`. Unconfirmed mutation commands add U: both
+  `prepare` and a first execution presenting a confirmation refuse it
+  (`mutation/confirm.rs:295–301,399–403`). Confirmed commands do not add U.
+- **P0** = `invalid_path`, `not_repository`, `bare_repository`,
+  `repository_inaccessible`: domain root-selection failures
+  (`../repository.rs:9570–9634`). **P** = P0 + `not_repository_root`: F1
+  resolution or the identity binding's explicit root check.
+- **R** = P + `repository_not_registered`, `repository_not_enabled`:
+  `mutation/bind/mod.rs:90–123` and `read/resolve.rs:228–242`. Create/enable
+  and identity setting do not require an existing registration; removal
+  consumes an absent registration as a no-op rather than returning these
+  two registration codes.
+- **T** = `invalid_remote`, `publication_remote_required`, `no_selected_key`,
+  `key_unavailable`, `external_change`, `key_rejected`, `unlock_required`,
+  `unlock_failed`, `index_unavailable`, `recovery_required`,
+  `transport_unavailable`, `remote_unavailable`, `push_rejected`,
+  `internal_error`. This is the transport failure vocabulary explicitly
+  forwarded by the host bindings (`bind/host.rs:657–677,965–987`), using
+  `mutation/outcome.rs:109–154`. `push_rejected` is a mapped defensive arm;
+  a verification-only connection does not push; `tests/cli/exits.rs` gives it
+  an unreachable reason rather than inventing a push fixture.
+
+Shared outcome evidence: `mutation/outcome.rs:41–101` maps repository errors;
+`157–190` maps key-material errors; `235–243` maps remote changes;
+`256–333` maps key generation/registry/deletion and registration removal;
+`400–518` maps publication/enablement commits, registration and discovery
+handoffs. The inventory follows binding overrides: `remote select` converts
+`InvalidIdentity` to `identity_required` (`bind/remote.rs:556–559`);
+generation converts its own `AlreadyCreated` to `ok`
+(`bind/key.rs:805–813`); deletion's missing domain review and unexpected
+domain cancellation become `internal_error` (`bind/key.rs:1248–1273,1407–1413`).
+Key-registry metadata failures can produce `invalid_input` even on commands
+whose typed input has no free-form field: the marked-change decoder, removal's
+stored selection flag and deletion's preflight registration decoder use
+`InvalidSharedKeyMetadata` (`keys/registry.rs:348–369,620,774–789`).
+Unrelated authoring/synchronization arms in shared mappers are not C2 codes.
+Replay can add `recovery_required` when a previously reported commit is no
+longer reachable (`mutation/replay.rs:38–53`); settlement and recovery offering
+do not replace a result's code (`settle.rs:86–107`, `reply.rs:113–170`).
+
+**Host trust overrides are important.** An approval reports a different
+presented key as `host_mismatch`, not `host_approval_required`
+(`bind/host.rs:608–619`). Observe converts both approval/replacement-required
+transport errors to successful observation data (`953–960`). Only approve's
+preview produces `host_replacement_required` (`834–859`). Authentication
+requires a matching pin, the exact approval on that connection, or libgit2's
+own trusted `known_hosts` path (`transport/callbacks.rs:119–141`). An isolated
+unpinned observation stops at host verification, before any unlock prompt.
+
+#### C2 exit-coverage union
+
+The eighteen F2 row sets expand to the following **49 codes**. C2's exit
+table plus its individually justified `REASONS` account for this union;
+SSH cases may supply the designated coverage. A code's inclusion is not a
+claim that a normal CLI fixture can force every defensive/race/backend path.
+
+```text
+already_applied bare_repository busy cancelled
+confirmation_expired confirmation_mismatch confirmation_not_found
+confirmation_required confirmation_used discovery_pending external_change
+host_mismatch host_replacement_required identity_required index_unavailable
+internal_error invalid_configuration invalid_input invalid_path invalid_remote
+key_not_deletable
+key_not_found key_rejected key_unavailable no_selected_key not_confirmable
+not_repository not_repository_root occupied_path ok publication_remote_in_use
+publication_remote_required push_rejected recovery_required registration_pending
+remote_name_conflict remote_unavailable repository_inaccessible
+repository_not_enabled repository_not_registered request_mismatch request_not_found
+selected_key_in_use transport_unavailable unlock_failed unlock_required
+worktree_conflicted worktree_not_clean wrong_branch
+```
+
+Additionally, the CLI owns the eight codes in design R-6: `usage_error`,
+`command_unavailable`, `invalid_path`, `invalid_input`, `invalid_id`,
+`cancelled`, `unlock_required`, `internal_error`. Their union with the F2 set
+is **52 codes**. Keep the three CLI-only additions explicit when building the
+coverage table: `command_unavailable` covers the pre-delivery catalog guard,
+not a delivered C2 F2 call. Startup errors remain C1's. Library cancellation
+and prompt cancellation have different origins but share exit 130; a
+dismissed unlock is `unlock_required`, exit 3. Outcome classification takes
+precedence over code class: partial is exit 4, including `request_mismatch`
+after an accepted request has durable effects (`src/results.rs:282–290`).
+
 ### Wave 03 CLI Cycle C1 refresh (2026-10-18)
 
 Task 0 rechecked the approved 2026-10-18 C1 contract on 2026-10-19 at
@@ -71,7 +278,8 @@ Signature/result key for refreshed rows:
   with `index_unavailable` (R-2). This does not change F1.
 
 `path observe` and `ticket check` move to CLI C3. F2's `request show`,
-`request cancel` and `host observe` are planned CLI C2 commands;
+`request cancel` and `host observe` were planned CLI C2 commands at C1's refresh
+(amended 2026-10-20 by C2: now implemented with evidence below);
 `operation abandon` is planned for C4. Their rows below record availability,
 not new C1 dispatches. The original inventory also lacked `ticket slug-assign`;
 its planned C3 row completes the approved catalog without duplicating a verb.
@@ -574,28 +782,28 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `repo list` — C1/D1 | F1 `list_repositories() -> R<RepositoryListDto>` (`read/admin.rs:210`); codes S | All registrations ordered by root; stored accessibility/configuration/index state | Read session: yes; registry loss cannot infer unknown registrations | No consent/refresh; complete stored list | Fixed problems; no unlock or network | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `repo inspect` — C1/D1 | F1 `inspect_repository(path: &Path) -> R<RepositoryInspectionDto>` (`read/admin.rs:273`); codes S + P | Exact root or linked worktree owner; registration optional; no separate resolver | Read session: yes, registration lookup; Git inspection itself needs none; no enable/scan | No consent, progress or cancellation | Remotes redacted by F1; fixed errors | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `repo create` — W3-03/07 | `create_and_enable` E-enable; CreateRepositoryRequest → EnableRepositoryOutcome | Empty/unused target + primary + optional identity; absent-parent observation missing | Op ID; init Git/config/local identity/checkpoint/register/index; partial outcomes C1 | No public prepare/confirm/expiry; C2; preview must not init | Local Git identity, not SSH; no global write; C0 | partially-present | W1-02/05; W3-02/03; R-admin |
-| `repo enable` — W3-03/07 | `enable` E-enable; EnableRepositoryRequest → EnableRepositoryOutcome | Exact root, checked-out primary/clean state; observations not frontend token | Op ID; config/exclude/init checkpoint/registry; AlreadyEnabled/IdentityRequired/pending | C2 absent consent/progress/cancel | Optional explicit local name/email; no invented identity; C3/C0 | partially-present | W1-02/05; W3-02/03; R-admin |
-| `repo remove` — W3-03/07 | `remove_registration(RemoveRegistrationRequest)` plus F2 `prepare`/`execute` with `RepoRemoveInput`; `registration_removal.rs`, `bind/repo_remove.rs` | Exact stored root supports missing directory/`.git`; live aliases canonicalize; binding passes observed ID/time stamp to guarded deletion | Op ID; root-scoped transactional cleanup; request/confirmation receipts survive; matching replay works without disk state; direct unknown-missing calls remain invalid | F2 confirmation required; registry-only path preserves unrelated unfinished work; CLI verb remains C2 | No SSH; fixed result messages; files/drafts/key/trust state preserved | Required all-feature Devenv gates and independent review passed; native evidence pending post-merge | [Ticket 01M4R19P943QZKHHKRXV2D2TP2 evidence](../plans/2026-10-19-missing-repository-registration-removal-execution.md); C2 exposure; R-admin |
+| `repo create` — C2 | F2(RepoCreate, RepoCreateInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:76–86` | Empty/absent root; **codes M + C + P0 +** `already_applied, invalid_input, occupied_path, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Request digest, preview observation, init/config/index/registration; replay checks commit reachability; create delegates enablement after initialization | Yes; `prepare` is local and initializes nothing | Supplied/effective identity, repository-local writes; no SSH; input `ticket_slug_prefix` maps to `slug_prefix` | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5–6, 11; R-admin |
+| `repo enable` — C2 | F2(RepoEnable, RepoEnableInput); `root: PathBuf, primary_branch: String, identity: Option<CommitIdentity>, slug_prefix: Option<String>`; `mutation/bind/repo.rs:91–101` | Existing root; **codes M + C + P0 +** `already_applied, invalid_input, identity_required, wrong_branch, worktree_not_clean, worktree_conflicted, invalid_configuration, invalid_remote, recovery_required, registration_pending, discovery_pending` | Exact preview and request digest; registration-only path from `01M5CVB2`; configuration index from `01M5B0Z6`; no second commit on replay | Yes; identity required if preview has none to display, even registration-only | No global identity write; no SSH; prefix checked by library | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/prompts.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 6, 11; R-admin |
+| `repo remove` — C2 | F2(RepoRemove, RepoRemoveInput); `root: PathBuf`; `mutation/bind/repo_remove.rs:30–32` | Exact stored root also supports missing directory/`.git`; **codes M + C + P +** `already_applied, recovery_required` | Guarded registration removal; receipts survive; matching replay works without disk; files/drafts/key/trust state preserved | Yes; registry-only cleanup; binding `73–115,139–187,209–239` | No SSH or key access; fixed public errors | CLI evidence closed: `tests/cli/repository.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 6, 11; [missing-root evidence](../plans/2026-10-19-missing-repository-registration-removal-execution.md); R-admin |
 | `repo identity` — C1/D1 | F1 `repository_identity(repo: &ResolvedRepository) -> R<IdentityDto>` (`read/admin.rs:325`); `ok`, `repository_inaccessible`, `internal_error` | Resolved repository; effective name/email/source/initials | Read session: no in method; yes in CLI resolution; no identity write | No consent/progress | Non-secret Git identity, not SSH identity | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `repo identity-set` — W3-03/07 | Missing public setter; private identity resolver/config provider and hidden testing methods not APIs | Existing local config; exact identity/config observation needed | Request ID/digest absent; explicit repo-local write only, never global | Required exact confirmation missing; C2 | Non-secret name/email; C0 errors | absent | W3-03 public identity boundary, W3-02 safety; R-admin |
+| `repo identity-set` — C2 | F2(RepoIdentitySet, RepoIdentitySetInput); `root: PathBuf, name: String, email: String, initials: InitialsChange`; `mutation/bind/repo_identity.rs:74–81` | Root need not be registered; **codes M + C + P +** `already_applied, invalid_input, recovery_required` | Exact local identity observation; atomic local config replacement; no operation journal; `InitialsChange::{Unchanged, Clear, Set(String)}` | Yes; `observe`, `call`, `preview` at `182–209,239–274,420–459` | Non-secret identity only; never global Git config | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/prompts.rs`, `tests/cli/human.rs` | F2; C2 Tasks 5, 11; R-admin |
 | `remote list` — C1/D1 | F1 `list_remotes_redacted(repo: &ResolvedRepository) -> R<RemoteListDto>` (`read/admin.rs:360`); `ok`, `repository_inaccessible`, `internal_error` | Resolved root; sorted names, selection and publication eligibility | Read session: no in method; yes in CLI resolution; local Git/config only | No consent/refresh | F1 redacts URLs and whole remote-helper locations | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `remote add` — W3-03/07 | `add_remote` E-remotes; AddRemoteRequest → RemoteOutcome | Named Git config URL; conflict if name has other URL | Op ID binds name/URL digest; local config/cache changed, no implicit select; C1 | C2 request/preflight/progress missing | No SSH contact; input URL/error redaction C0 | partially-present | W1-02/05; W3-02/03; R-admin |
-| `remote remove` — W3-03/07 | `remove_remote` E-remotes; RemoveRemoteRequest → RemoteOutcome | Named remote; selected removal blocked until clear; no observation token | Op ID; Git config/cache mutation with pending discovery; C6 invalidation | Required polling/publication preview/confirmation missing C2 | No SSH; never echo endpoint credentials C0 | partially-present | W1-02/05, W2-04 state; W3-02/03; R-admin |
-| `remote select` — W3-03/07 | `set_publication_remote` E-remotes; optional name → PublicationRemoteOutcome | Valid config/primary/clean config path; SSH fetch/effective push URLs | Op ID; canonical config checkpoint plus registration/index; no network | C2 missing token/preview; configuration invalidates queued state C6 | Git identity for commit; not SSH unlock; sanitize URL C0 | partially-present | W1-02/05, W2-04 state; W3-02/03; R-admin |
+| `remote add` — C2 | F2(RemoteAdd, RemoteAddInput); `root: PathBuf, name: String, url: String`; `mutation/bind/remote.rs:50–54` | Registered root and valid name/URL; **codes M + U + R +** `already_applied, invalid_remote, remote_name_conflict, recovery_required, external_change, discovery_pending` | Request binds raw URL digest; config change and index handoff; no implicit select; `167–175,212–249,294–307,320–398` | No; prepare/confirmation supplied answer `not_confirmable` | No network; DTO location redacted, no backend text | CLI evidence closed: `tests/cli/mutation.rs`, `tests/cli/remotes.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 5, 11; R-admin |
+| `remote remove` — C2 | F2(RemoteRemove, RemoteRemoveInput); `root: PathBuf, name: String`; `mutation/bind/remote.rs:757–760` | Registered root; **codes M + C + R +** `already_applied, invalid_remote, publication_remote_in_use, recovery_required, discovery_pending` | Preview covers remote/tracking refs/upstreams; publication remote refused; `923–1211,1232–1270,1384–1556` | Yes; preview's `publication_affected` remains false | No network; preserves unrelated refs/config under F2's removal rules | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 7, 11; R-admin; existing removal defect remains separate |
+| `remote select` — C2 | F2(RemoteSelect, RemoteSelectInput); `root: PathBuf, name: Option<String>`; `mutation/bind/remote.rs:410–413` | Registered root, primary, clean configuration, eligible SSH endpoints; **codes M + U + R +** `already_applied, invalid_remote, identity_required, wrong_branch, worktree_not_clean, invalid_configuration, recovery_required, external_change, registration_pending, discovery_pending` | `None` clears selection; configuration checkpoint and registration/index handoff; shared `bind/save.rs`; `468–475,522–560,678–704` | No; prepare answers `not_confirmable` | Commit identity required, no SSH unlock/network | CLI evidence closed: `tests/cli/remotes.rs`, `tests/cli/exits.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 7, 11; R-admin |
 | `key list` — C1/D1 | F1 `list_keys() -> R<KeyListDto>` (`read/credentials.rs:190`); codes S | Application-global registrations, selection, ownership, fingerprint and source states | Read session: yes; stored metadata only | No consent/progress | Opens no key file; public DTO fields only | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `key show` — C1/D1 | F1 `show_key(id: SharedKeyId) -> R<KeyDto>` (`read/credentials.rs:203`); codes S + `key_not_found` | Exact canonical key ULID; application-global | Read session: yes; stored registration only | No consent/progress | No private-key parsing or bytes | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `key generate` — W3-03/07 | `generate_shared_key` E-keygen + KeyStore; Created/AlreadyCreated/RecoveryRequired | App-owned generated paths, explicit label/protection | Op ID/owned creation evidence; interruption retains files; non-secret protection replay gap C1 | No RFC confirmation ID/expiry; no progress/cancel mid-write; C2 | Passphrase is SecretPassphrase input, terminal provider missing; no passphrase digest C3 | partially-present | W2-02; W3-02/03; R-admin |
-| `key import` — W3-03/07 | `register_shared_key` E-keyreg, Imported ownership by adapter | Invocation-relative paths need normalization to absolute source refs; no private copy | No op/request ID; dedup normalized private source; lost registry not durable retry proof | C2 adapter validation/replay missing | No unlock; optional bounded public fingerprint read; C3 | partially-present | W2-01; W3-02/03; R-admin |
-| `key select` — W3-03/07 | `select_shared_key` E-keyreg → SharedKeySelectionOutcome | Opaque key ID; pending material blocks; single shared selection | No request ID; transaction changes shared state/remote observations; C6 | No token/progress; queued/active invalidation adapter missing | Session rechecks at use, no commit identity change C3 | partially-present | W2-01/04; W3-02/03; R-admin |
-| `key clear` — W3-03/07 | `clear_shared_key_selection` E-keyreg | Shared selection, no repository target | No request; Cleared/AlreadyCleared, invalidates state; no cross-process secret IPC | C2; frontend safe invalidation C6 needed | Explicit session clear after safe worker use C3/C6 | partially-present | W2-01/02/04; W3-02/03; R-admin |
-| `key remove` — W3-03/07 | `unregister_shared_key` E-keyreg | Exact key; selected/pending material blocks | No request; registration-only deletion; generated/imported files remain | C2; distinct from generated deletion consent | No private deletion/read; C3 | partially-present | W2-01; W3-02/03; R-admin |
-| `key delete` — W3-03/07 | `review_generated_key_deletion`/`delete_generated_key` E-keydelete | Exact owned pair + file identity/creation evidence; imported or selected rejected | Op ID, fresh review on interruption; Deletes files/ownership/registration; RecoveryRequired partial | One-use review + confirmed bool, cancellation before access; **not** ten-minute token C2 | No passphrase needed; protected-store effects; C3 | partially-present | W2-02; W3-02/03; R-admin |
+| `key generate` — C2 | F2(KeyGenerate, KeyGenerateInput); `store: KeyStore, label: String, protection: KeyProtection`; `mutation/bind/key.rs:610–614` | Application-global; **codes M + U +** `invalid_input, key_unavailable, key_not_found, key_not_deletable, external_change, recovery_required` | Request binds label/protection mode, never passphrase; own completed generation reports `ok`, not `already_applied`; `776–859,906–991`; material/storage errors via `outcome.rs:157–190` | No; prepare reads no protection, answers `not_confirmable` | Protected generation requires terminal in C2 (`unlock_required` is CLI-built); key-file tests Unix-only; no secret persisted | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/prompts.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 9, 11; R-admin |
+| `key import` — C2 | F2(KeyImport, KeyImportInput); `label: String, private_key_path: PathBuf, public_key_path: Option<PathBuf>`; `mutation/bind/key.rs:91–95` | Application-global normalized paths; **codes M + U +** `already_applied, invalid_input, external_change` | Imported ownership; marked registry transaction and source dedup; no private copy; missing sources register successfully; `271–360,395–429,495–515`; `keys/registry.rs:106–245` | No | No unlock; only public metadata inspection; CLI joins relative paths to invocation directory | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs`; owner fixture correction 2026-10-22, no `key_unavailable` added | F2; C2 Tasks 8, 11; R-admin |
+| `key select` — C2 | F2(KeySelect, KeySelectInput); `id: SharedKeyId`; `mutation/bind/key.rs:98–100` | Application-global selection; **codes M + U +** `already_applied, key_not_found, invalid_input, external_change, recovery_required` | Marked registry transaction; pending material refuses; stale selection is `external_change`; `keys/registry.rs:391–487` | No | No unlock or identity change; selection rechecked at transport use | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/privacy.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 8, 11; R-admin |
+| `key clear` — C2 | F2(KeyClear, KeyClearInput); empty public struct; `mutation/bind/key.rs:104` | Application-global, no selector/input; **codes M + U +** `already_applied, invalid_input, external_change` | Marked selection clearing; no-op when already clear; `keys/registry.rs:505–581`; shared stored-metadata errors may be `invalid_input` | No | No secret read; no cross-process secret IPC | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/privacy.rs`, `tests/cli/human.rs` | F2; C2 Tasks 8, 11; R-admin |
+| `key remove` — C2 | F2(KeyRemove, KeyRemoveInput); `id: SharedKeyId`; `mutation/bind/key.rs:108–110` | Application-global; **codes M + U +** `already_applied, invalid_input, key_not_found, selected_key_in_use, recovery_required` | Registration-only removal; first missing ID refused, accepted disappearance is a no-op; `bind/key.rs:364–380,495–503`; `keys/registry.rs:584–625` | No; distinct from deletion | Generated/imported files remain; no unlock | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 8, 11; R-admin |
+| `key delete` — C2 | F2(KeyDelete, KeyDeleteInput); `store: KeyStore, id: SharedKeyId`; `mutation/bind/key.rs:1008–1011` | Application-global owned pair; **codes M + C +** `already_applied, invalid_input, key_not_found, key_not_deletable, selected_key_in_use, key_unavailable, recovery_required` | Fresh domain review under accepted F2 consent; resumes partial deletion; `1237–1439,1489–1643`; material errors via `outcome.rs:157–190` with binding overrides | Yes; imported or selected key refused at prepare | No passphrase needed; only generated files may be deleted; CLI deletion tests Unix-only | CLI evidence closed: `tests/cli/keys.rs`, `tests/cli/exits.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 8, 11; R-admin |
 | `key public` — C1/D1 | F1 `public_key_text(id: SharedKeyId) -> R<PublicKeyDto>` (`read/credentials.rs:218`); codes S + `key_not_found`, `public_key_unavailable` | Exact key ULID; current public text/fingerprint and registration match | Read session: yes, then bounded public-file read | No consent/progress | Canonical public encoding; private paths refused; no private bytes | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `host list` — C1/D1 | F1 `list_host_pins() -> R<HostPinListDto>` (`read/credentials.rs:248`); codes S | Application-global pins ordered by host/port; reapproval marker | Read session: yes; no contact or pin write | No consent/progress | Non-secret authorities and fingerprints | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `host inspect` — C1/D1 | F1 `inspect_host(authority: &SshAuthority) -> R<HostPinDto>` (`read/credentials.rs:259`); codes S + `authority_not_found` | Application-global; no `--repo`; F1 normalizes host/address | Read session: yes, including invalid/unmatchable authorities | No consent/progress; no network observation | Non-secret pin only | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `host approve` — W3-03/07 | `verify_ssh_transport` E-ssh with HostApproval expected None | Exact configured SSH authority/presented fingerprint, transport rechecks | No op/request ID; authenticated pin write only; no fetch/push | Exact approval supported, RFC prepare/expiry/intent binding missing C2 | Selected-key session + masked provider; C3 | partially-present | W2-03; W3-02/03; R-admin |
-| `host replace` — W3-03/07 | `verify_ssh_transport` E-ssh with HostApproval expected old pin | Exact authority/old/new fingerprint; re-observe before pin persistence | No op/request ID; pin replacement; changed trust rejects C3 | No generic yes; missing confirmation service C2 | Selected-key session, no raw backend output C3/C0 | partially-present | W2-03; W3-02/03; R-admin |
+| `host approve` — C2 | F2(HostApprove, HostApproveInput); `root: PathBuf, authority: SshAuthority, algorithm: String, fingerprint: String`; `mutation/bind/host.rs:92–100` | Configured SSH authority; **codes M + C + R + T +** `already_applied, invalid_input, invalid_configuration, host_mismatch, host_replacement_required` | Request/confirmation bind exact key; observe again and authenticate before pin write; no fetch/push; `430–679,740–887` | Yes; prepare is local, another existing pin requires replace | Session credential provider; dismissal `unlock_required`; wrong passphrase currently `transport_unavailable` | CLI evidence closed: `tests/cli_remote/hosts.rs`, `tests/cli_remote/unlock.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 10–11; R-admin; `01M5E6DY` deferred |
+| `host replace` — C2 | F2(HostReplace, HostReplaceInput); approve fields plus `old_fingerprint: String`; `mutation/bind/host.rs:105–112` | Exact old pin and requested key; **codes M + C + R + T +** `already_applied, invalid_input, invalid_configuration, host_mismatch` | Same authenticated pin-write boundary; wrong old pin is `invalid_input` at preview; changed observation is `external_change` | Yes; exact replacement, no generic approval | Selected-key session, no raw backend output; no automatic retry of wrong unlock | CLI evidence closed: `tests/cli_remote/hosts.rs`, `tests/cli/human.rs`, `tests/cli/input_schemas.rs` | F2; C2 Tasks 10–11; R-admin |
 | `document list` — C1/D1 | F1 `list_documents(repo: &ResolvedRepository) -> R<ItemListDto>` (`read/items.rs:1662`); codes SR | Effective copies, path then ID; includes nonconforming entries | Read session: yes; index metadata only; freshness/completeness explicit | No consent/refresh/provisioning | No body/source in list | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `document show` — C1/D1 | F1 `show_item(repo: &ResolvedRepository, id: &ItemId) -> R<ItemDto>` (`read/items.rs:1784`), or `show_path(repo: &ResolvedRepository, context: Option<&Path>, path: &Path) -> R<ItemDto>` (`:1853`); codes SR + `repository_inaccessible`, with `item_not_found` by ID, `invalid_path`/`path_not_found` by path | Canonical ID or exact path and optional context; C1 wrong-kind check adds `item_not_found` | Read session: yes on valid input; guarded file read, no context provisioning | No consent/repair | Requested body/source and unknown metadata; fixed errors | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `folder list` — C1/D1 | F1 `list_document_folders(repo: &ResolvedRepository) -> R<DocumentFolderListDto>` (`read/items.rs:1672`); codes SR | Primary `docs/` folders, sorted path, empty flag | Read session: yes; index only, no live directory scan | No consent/create/refresh | Metadata only | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
@@ -636,9 +844,9 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `poll once` — W3-06/12 | `poll_publication_remote(PollPublicationRemoteRequest, session)` → Complete/IndexPending of NotEligible or Polled(RemotePollReport); automatic_poll_eligibility | Root/op ID/invocation/approval/restart; frozen derived refs/endpoints/key, local re-observation | Authenticated fetch/clean FF/materialization/index once; latest report replay, older terminal outcome with empty targets; no push/checkpoint/merge/cleanup C4 | Durable yield/cancel at safe points and bounded read-only transfer probes; partial report preserves changes; no resident worker | Caller-owned selected-key session/host re-observation C3; request has no Debug, reports fixed metadata | domain-delivered; whole-poll SSH/native acceptance pending | W2-08 Tasks 1–6; W3-02/06 adapter and W3-12 scheduling remain; R-domain |
 | `operation list` — C1/D1 | F1 `list_operations(repo: &ResolvedRepository) -> R<OperationListDto>` (`read/status.rs:755`); codes SR | Outstanding local/remote/promotion/closure and application key-material records; ID order | Read session: yes; stored state only, not writable legacy recovery listing | No consent/resume/reconciliation | Fixed fields; no original body or key material | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `operation show` — C1/D1 | F1 `show_operation(repo: &ResolvedRepository, id: OperationId) -> R<OperationDto>` (`read/status.rs:799`); codes SR + `operation_not_found` | Exact canonical operation ID; includes finished records | Read session: yes; stored state, no live re-observation | No consent/resume inferred | Fixed fields; no original input reconstruction | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `request show` — C2 | F2 `show_request`; added to C1 catalog as planned (decision 12) | Request store; C2 publishes CLI selectors | F2 read, not an F1 C1 dispatch | Planned-command help only in C1 | F2 redacted result DTO | F2 API present; CLI planned | F2 boundary; C2 consumer |
-| `request cancel` — C2 | F2 `cancel_request`; added to C1 catalog as planned (decision 12) | Running request; C2 publishes CLI selectors | F2 cancellation boundary, not a C1 read | C2 cancellation rules | Fixed acknowledgement | F2 API present; CLI planned | F2 boundary; C2 consumer |
-| `host observe` — C2 | F2 `observe_host`; added to C1 catalog as planned (decision 12) | Network host-key observation, distinct from local `host inspect` | F2 boundary, no C1 network call | C2 owns credentials/observation flow | Public host fingerprint; F2 privacy contract | F2 API present; CLI planned | F2 boundary; C2 consumer |
+| `request show` — C2 | `show_request(&self, request_id: RequestId) -> Envelope<RequestDto>`; `mutation/mod.rs:367–377` | Application-level canonical request ID; **codes S +** `request_not_found` | Reads record only; stored result has its own nested code, not this read's code; no replay/resume | None; `--request-id` selector, no `--repo` | No credential or network access | CLI evidence closed: `tests/cli/requests.rs`, `tests/cli/human.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 5, 11 |
+| `request cancel` — C2 | `cancel_request(&self, request_id: RequestId) -> Envelope<CancelDto>`; `mutation/progress.rs:366–481` | Application-level canonical request ID; **codes S +** `request_not_found` | Accepted local C2 commands report `requested: false`; finished records remain; safe-point commands set cancellation flag | None; selector is `--request-id`, not a new mutation intent | Fixed acknowledgement, no credential or network access | CLI evidence closed: `tests/cli/requests.rs`, `tests/cli/human.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 5, 11 |
+| `host observe` — C2 | `observe_host<P: SessionCredentialProvider>(&self, root: &Path, authority: Option<&SshAuthority>, credentials: &mut SessionCredentials<P>) -> Envelope<HostObservationDto>`; `mutation/bind/host.rs:904–1009` | Registered repository and optional configured authority; **codes S + R + T +** `invalid_input, invalid_configuration` | Networked read, no request ID, progress sink or pin write; untrusted/rotated host returned as success data | None; no prepare/confirm; may prompt to unlock when authentication is reached | Public host fingerprint; no unlock for isolated unpinned observation; caller's known-host trust can allow authentication | CLI evidence closed: `tests/cli_remote/hosts.rs` (including cross-platform missing selected source), `tests/cli_remote/unlock.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 10–11; R-admin |
 | `operation abandon` — C4 | F2 `Command::OperationAbandon` through prepare/execute; added as planned (decision 12) | Deliberate abandonment, distinct from status read | F2 request/replay boundary; no C1 mutation | C4 publishes CLI confirmation rules | Fixed result/preview | F2 API present; CLI planned | F2 boundary; C4 consumer |
 | `operation resume` — W3-05/06/11 | Missing generic deliberate resume; exact local calls E-recovery / restart_remote_observation E-reserve only | Exact existing action/target; original input may be needed | C1 domain replay is not permission for other action; cache loss blocks if unprovable | C2 accepted consent eligible remainder only; progress/cancel needed | Future selected-key/trust if network; no secret/body record | partially-present | W3-02 adapter over W2-05…10; consumers W3-05/06; R-adapter + R-domain |
 | `conflict show` — W3-01/11 | Missing public conflict operation/path/base/local/remote read; no domain conflict record yet | Op ID/path observations, owned/noncanonical conflict kind | Read preserved sources; actual index state not marker-text heuristic | No consent/implicit staging/resolution | Requested comparison source allowed; errors redacted C0 | pending-Wave-02 | W2-06 domain, W3-01 DTO; R-read + R-domain |

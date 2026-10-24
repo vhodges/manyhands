@@ -24,6 +24,28 @@ mod content;
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/exits.rs"]
+mod exits;
+#[path = "cli/human.rs"]
+mod human;
+#[path = "cli/input_schemas.rs"]
+mod input_schemas;
+#[path = "cli/keys.rs"]
+mod keys;
+#[path = "cli/mutation.rs"]
+mod mutation;
+#[path = "cli/privacy.rs"]
+mod privacy;
+#[cfg(unix)]
+#[path = "cli/prompts.rs"]
+mod prompts;
+#[path = "cli/remotes.rs"]
+mod remotes;
+#[path = "cli/repository.rs"]
+mod repository;
+#[path = "cli/requests.rs"]
+mod requests;
+
 #[path = "cli/relationships.rs"]
 mod relationships;
 
