@@ -1,7 +1,7 @@
 ---
 title: "Multi-Item Work Contexts Implementation Plan"
 date: 2026-10-23
-status: "draft, awaiting owner review"
+status: "approved 2026-10-23, not started"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -47,7 +47,8 @@ only).
 - JSON additions stay within v1, and the closed schemas in `schemas/v1/` are
   updated in place. New fields: `ItemDto.versions`,
   `ItemDto.primary_comparison`, `ItemContextDto.merged_into_primary`,
-  `CommentDto.context`, `CommentDto.versions` and `DocumentFolderDto.context`.
+  `ItemDto.context_changes`, `CommentDto.context`, `CommentDto.versions` and
+  `DocumentFolderDto.context`.
 - The repository snapshot (`read_repository_snapshot`) reads `own` rows only.
 - The poll gate `conforming_context_tree` does not change.
 - Run only the relevant tests between tasks. The full suite and every gate
@@ -2075,7 +2076,9 @@ co-author line. Name each test and the one-item assumption it made.
   - `pub struct PrimaryComparisonDto { pub state: PrimaryComparisonState, pub compared_head_oid: Option<String> }`;
   - `ItemDto.versions: Vec<ItemVersionDto>`, `ItemDto.primary_comparison: Option<PrimaryComparisonDto>`, `ItemContextDto.merged_into_primary: Option<bool>`, `DocumentFolderDto.context: Option<ItemContextDto>`;
   - `pub(super) enum StoredRole { Own, Changed(ItemChange), Comments }` and `StoredItem.role`, `StoredItem.primary: Option<StoredPrimary>`;
-  - `pub(super) fn versions(stored: &[StoredItem], deletions: &[StoredDeletion], root: Option<&StoredContext>, effective: &StoredItem) -> Vec<ItemVersionDto>`.
+  - `pub(super) fn versions(stored: &[StoredItem], deletions: &[StoredDeletion], root: Option<&StoredContext>, effective: &StoredItem) -> Vec<ItemVersionDto>`;
+  - `pub struct ContextChangeDto { pub id: String, pub kind: ItemDtoKind, pub title: Option<String>, pub path: String, pub change: ItemChange, pub effective: bool }` and `ItemDto.context_changes: Vec<ContextChangeDto>`;
+  - `pub(super) fn context_changes(repo: &ResolvedRepository, stored: &[StoredItem], effective: &[&StoredItem], deletions: &[StoredDeletion], own: &StoredItem) -> Vec<ContextChangeDto>`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2200,6 +2203,34 @@ fn two_branches_adding_one_id_keep_the_earlier_and_flag_the_other() {
 }
 
 #[test]
+fn an_item_read_from_its_own_worktree_lists_what_else_its_branch_changed() {
+    let (fixture, enabled, worktree) = repository();
+    write(&worktree, "docs/plans/design.md", &document_source(NEW, "Design", ""));
+    write(&worktree, "docs/shared.md", &document_source(DOCUMENT_C, "Shared, edited", ""));
+    refresh_completely(&enabled.service, &fixture.root);
+    let repo = repo(&enabled, &fixture.root);
+    let own = enabled.service.show_item(&repo, &DOCUMENT_A.parse().unwrap()).unwrap();
+    let changes: Vec<_> = own
+        .context_changes
+        .iter()
+        .map(|change| (change.id.as_str(), change.path.as_str(), change.title.as_deref(), change.change, change.effective))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (NEW, "docs/plans/design.md", Some("Design"), ItemChange::Added, true),
+            (DOCUMENT_C, "docs/shared.md", Some("Shared, edited"), ItemChange::Modified, false),
+        ]
+    );
+    // The list carries the same, and an item read from primary has none.
+    let list = enabled.service.list_documents(&repo).unwrap();
+    let listed = list.items.iter().find(|item| item.id.as_deref() == Some(DOCUMENT_A)).unwrap();
+    assert_eq!(listed.context_changes, own.context_changes);
+    let shared = enabled.service.show_item(&repo, &DOCUMENT_C.parse().unwrap()).unwrap();
+    assert!(shared.context_changes.is_empty());
+}
+
+#[test]
 fn the_folder_list_includes_a_branchs_new_folders_with_their_context() {
     let (fixture, enabled, worktree) = repository();
     write(&worktree, "docs/plans/new.md", &document_source(NEW, "New", ""));
@@ -2305,8 +2336,32 @@ pub struct PrimaryComparisonDto {
   of it").
 - `DocumentFolderDto` gains `pub context: Option<ItemContextDto>` ("null for
   primary's folders; the context whose changed documents need this folder").
+- `ItemDto` gains `pub context_changes: Vec<ContextChangeDto>` ("for an item
+  read from its own worktree, every other document or ticket its branch
+  changed or deleted, in path order; empty for any other item"), with:
+
+```rust
+/// A document or ticket that an item's own worktree changed, besides the
+/// item itself: what to review alongside it. `title` is null for a
+/// deletion. `effective` says that this branch's copy is the item's
+/// effective copy, as for a document only this branch has; otherwise the
+/// copy is one of that item's versions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextChangeDto {
+    pub id: String,
+    pub kind: ItemDtoKind,
+    pub title: Option<String>,
+    /// Relative to the item's `context.worktree`, with forward slashes.
+    pub path: String,
+    /// `added`, `modified`, `moved` or `deleted`.
+    pub change: ItemChange,
+    pub effective: bool,
+}
+```
+
 - Every `ItemDto { … }` literal in `src/repository/read/` gets
-  `versions: Vec::new(), primary_comparison: None` (`grep -n "ItemDto {" src/repository/read`).
+  `versions: Vec::new(), primary_comparison: None, context_changes: Vec::new()`
+  (`grep -n "ItemDto {" src/repository/read`).
 - Every `ItemContextDto { … }` literal gets its `merged_into_primary`.
 - Export `ItemChange`, `ItemVersionDto`, `PrimaryComparisonDto` and
   `PrimaryComparisonState` wherever `ItemContextKind` is re-exported.
@@ -2343,7 +2398,27 @@ to `required`, and to `properties`:
 }
 ```
 
-Use the `$ref` form the file already uses for `context` and `problems`. In
+Use the `$ref` form the file already uses for `context` and `problems`.
+Add `"context_changes"` to `required` too, with:
+
+```json
+"context_changes": {
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["id", "kind", "title", "path", "change", "effective"],
+    "properties": {
+      "id": { "type": "string" },
+      "kind": { "type": "string", "enum": ["document", "ticket"] },
+      "title": { "type": ["string", "null"] },
+      "path": { "type": "string" },
+      "change": { "type": "string", "enum": ["added", "modified", "moved", "deleted"] },
+      "effective": { "type": "boolean" }
+    }
+  }
+}
+``` In
 `schemas/v1/document_folder.schema.json`, add `"context"` to `required` and
 `"context": { "oneOf": [{ "type": "null" }, { "$ref": "item_context.schema.json" }] }`.
 
@@ -2369,10 +2444,12 @@ pub(super) struct StoredPrimary {
     pub(super) path: Option<String>,
 }
 
-/// An item a context's branch deleted.
+/// A document or ticket a context's branch deleted. Comment deletions are
+/// not read: a comment's versions come from the comment reads.
 pub(super) struct StoredDeletion {
     pub(super) context: StoredContext,
     pub(super) id: String,
+    pub(super) kind: ItemDtoKind,
     pub(super) path: String,
 }
 
@@ -2412,8 +2489,9 @@ fn stored_primary_state(state: &str) -> Result<PrimaryComparisonState, ReadError
 - Add `stored_deletions(connection, repo) -> Result<Vec<StoredDeletion>, ReadError>`
   selecting `contexts.kind, contexts.branch, contexts.worktree_path,
   contexts.head_oid, contexts.merged_into_primary, discovered_deletions.item_id,
-  discovered_deletions.canonical_path` for the registration, ordered by
-  worktree then path.
+  discovered_deletions.kind, discovered_deletions.canonical_path` for the
+  registration, with `discovered_deletions.kind != 'comment'`, ordered by
+  worktree then path. Read `kind` with `ItemDtoKind::from_stored`.
 - Add `stored_root_context(connection, repo) -> Result<Option<StoredContext>, ReadError>`.
   It selects the context row whose `worktree_path` is `repo.root()` as text.
 
@@ -2522,18 +2600,65 @@ pub(super) fn primary_comparison(row: &StoredItem) -> Option<PrimaryComparisonDt
         compared_head_oid: primary.compared_head_oid.clone(),
     })
 }
+
+/// What else `own`'s worktree changed, when `own` is read from the worktree
+/// created for it: each other row a branch changed there and each document
+/// or ticket it deleted, in path order. Empty for any other item.
+/// `effective` holds one row per ID, as `effective_rows` gives them.
+pub(super) fn context_changes(
+    repo: &ResolvedRepository,
+    stored: &[StoredItem],
+    effective: &[&StoredItem],
+    deletions: &[StoredDeletion],
+    own: &StoredItem,
+) -> Vec<ContextChangeDto> {
+    if own.role != StoredRole::Own || !is_own_worktree_row(repo, own) {
+        return Vec::new();
+    }
+    let worktree = &own.context.worktree;
+    let mut changes: Vec<ContextChangeDto> = stored
+        .iter()
+        .filter(|row| &row.context.worktree == worktree)
+        .filter_map(|row| match row.role {
+            StoredRole::Changed(change) => Some(ContextChangeDto {
+                id: row.id.clone(),
+                kind: row.kind,
+                title: Some(row.title.clone()),
+                path: row.path.clone(),
+                change,
+                effective: effective.iter().any(|chosen| std::ptr::eq(*chosen, row)),
+            }),
+            _ => None,
+        })
+        .chain(deletions.iter().filter(|deletion| &deletion.context.worktree == worktree).map(|deletion| {
+            ContextChangeDto {
+                id: deletion.id.clone(),
+                kind: deletion.kind,
+                title: None,
+                path: deletion.path.clone(),
+                change: ItemChange::Deleted,
+                effective: false,
+            }
+        }))
+        .collect();
+    changes.sort_by(|left, right| left.path.cmp(&right.path));
+    changes
+}
 ```
 
 If the crate's edition or MSRV rejects `if … && let`, write it as a nested
 `if let`.
 
 In `show_item`, after `item.observation = Some(observation);`, load
-`stored_deletions` and `stored_root_context`. Set
-`item.versions = versions(&stored, &deletions, root.as_ref(), row)` and
-`item.primary_comparison = primary_comparison(row)`. In `list_items`, load
-both once per list and set the same two fields on each listed item from its
-effective row. Do it where the list maps each effective row to
-`stored_item_dto`.
+`stored_deletions` and `stored_root_context`. Then set:
+
+- `item.versions = versions(&stored, &deletions, root.as_ref(), row)`;
+- `item.primary_comparison = primary_comparison(row)`;
+- `item.context_changes = context_changes(repo, &stored, &effective_rows(repo, &stored).0, &deletions, row)`.
+
+In `list_items`, load the deletions, the root context and `effective_rows`
+once per list. Set the same three fields on each listed item from its
+effective row, where the list maps each effective row to `stored_item_dto`.
 
 - [ ] **Step 6: List contributed folders**
 
@@ -2859,6 +2984,11 @@ fn show_by_id_with_a_context_reads_that_contexts_copy() {
     let effective = checked(&env, &fixture.root, &["document", "show", "--id", items::DOCUMENT_A], "ok", 0, Some("item.schema.json"), item_scope(repo.scope(), items::DOCUMENT_A));
     assert_eq!(effective["data"]["context"]["kind"], "primary");
     assert_eq!(effective["data"]["versions"][0]["change"], "modified");
+    // The context's own item lists what else its branch changed.
+    let own = checked(&env, &fixture.root, &["document", "show", "--id", items::DOCUMENT_B], "ok", 0, Some("item.schema.json"), item_scope(repo.scope(), items::DOCUMENT_B));
+    assert_eq!(own["data"]["context_changes"][0]["id"], items::DOCUMENT_A);
+    assert_eq!(own["data"]["context_changes"][0]["change"], "modified");
+    assert_eq!(own["data"]["context_changes"][0]["path"], "docs/guide.md");
     let version = checked(
         &env,
         &fixture.root,
@@ -2991,10 +3121,13 @@ git commit -m "feat: show an item's copy in a named context by ID" -m "Co-Author
 
 **Interfaces:**
 - Consumes: `ItemDto.versions`, `ItemDto.primary_comparison`,
-  `ItemContextDto.merged_into_primary` (Task 5); `ItemLocator::Inspect`.
-- Produces: `pub(crate) fn contributed_from(item: &ItemDto) -> Option<&str>`,
-  `pub(crate) fn version_label(version: &ItemVersionDto) -> String` and
-  `pub(crate) fn primary_comparison_label(comparison: &PrimaryComparisonDto, merged: Option<bool>) -> String`.
+  `ItemDto.context_changes`, `ItemContextDto.merged_into_primary` (Task 5);
+  `ItemLocator::Inspect`.
+- Produces:
+  - `pub(crate) fn contributed_from(item: &ItemDto) -> Option<&str>`;
+  - `pub(crate) fn version_label(version: &ItemVersionDto) -> String`;
+  - `pub(crate) fn primary_comparison_label(comparison: &PrimaryComparisonDto, merged: Option<bool>) -> String`;
+  - `pub(crate) fn context_change_label(change: &ContextChangeDto) -> String`.
 
 - [ ] **Step 1: Write the failing model tests**
 
@@ -3039,7 +3172,24 @@ fn the_primary_comparison_says_what_and_against_which_commit() {
     let absent = PrimaryComparisonDto { state: PrimaryComparisonState::Absent, compared_head_oid: None };
     assert_eq!(primary_comparison_label(&absent, Some(false)), "Not in primary");
 }
+
+#[test]
+fn a_context_change_is_labelled_with_its_change_path_and_title() {
+    let change = ContextChangeDto {
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FD9".to_owned(),
+        kind: ItemDtoKind::Document,
+        title: Some("Design".to_owned()),
+        path: "docs/plans/design.md".to_owned(),
+        change: ItemChange::Added,
+        effective: true,
+    };
+    assert_eq!(context_change_label(&change), "Added docs/plans/design.md: Design");
+    let deleted = ContextChangeDto { title: None, change: ItemChange::Deleted, effective: false, ..change };
+    assert_eq!(context_change_label(&deleted), "Deleted docs/plans/design.md");
+}
 ```
+
+Add `ContextChangeDto` and `ItemDtoKind` to the test module's `use` line.
 
 If `test_support` has no `item_dto` builder, build an `ItemDto` the way the
 existing desktop model tests do (`grep -rn "ItemDto {" src/desktop`).
@@ -3047,7 +3197,7 @@ existing desktop model tests do (`grep -rn "ItemDto {" src/desktop`).
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `devenv shell -- cargo test --locked --features desktop,desktop-test-support --lib desktop::model::item`
-Expected: compile errors for the three functions.
+Expected: compile errors for the four functions.
 
 - [ ] **Step 3: Implement the model functions**
 
@@ -3090,9 +3240,25 @@ pub(crate) fn primary_comparison_label(comparison: &PrimaryComparisonDto, merged
         _ => text,
     }
 }
+
+/// One line per item a worktree's branch changed besides its own item.
+pub(crate) fn context_change_label(change: &ContextChangeDto) -> String {
+    let what = match change.change {
+        ItemChange::Added => "Added",
+        ItemChange::Modified => "Modified",
+        ItemChange::Moved => "Moved",
+        ItemChange::Deleted => "Deleted",
+        // A context change is never primary's copy.
+        ItemChange::Primary => "Changed",
+    };
+    match &change.title {
+        Some(title) => format!("{what} {}: {title}", change.path),
+        None => format!("{what} {}", change.path),
+    }
+}
 ```
 
-- [ ] **Step 4: Write the failing view test**
+- [ ] **Step 4: Write the failing view tests**
 
 In `src/desktop/view/item_tests.rs`, using the file's `shell`, `open`,
 `ticket` and `shown` helpers:
@@ -3121,6 +3287,34 @@ fn an_item_changed_on_another_branch_lists_that_version(cx: &mut TestAppContext)
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Edited on the branch"));
     assert_eq!(shell.label("provenance-worktree", cx), Some(key(&worktree)));
 }
+
+/// A ticket read from its own worktree lists the documents its branch
+/// added or edited, and each opens read-only from that worktree: a Cycle's
+/// design and plan reviewed from its ticket.
+#[gpui_kit::test]
+fn a_ticket_lists_what_else_its_branch_changed(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, SAVED, "To be saved", "");
+    });
+    shell.fixture.save_ticket(&root, SAVED, "Saved");
+    let worktree = root.join(".manyhands/worktrees").join(SAVED);
+    let design = "docs/plans/design.md";
+    std::fs::create_dir_all(worktree.join("docs/plans")).unwrap();
+    std::fs::write(
+        worktree.join(design),
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: 01ARZ3NDEKTSV4RRFFQ69G5FD9\ntitle: Design\n---\n# Design\n",
+    )
+    .unwrap();
+    shell.fixture.refresh(&root);
+
+    open(&shell, ticket(&root, SAVED), cx);
+    let item = shown(&shell, &root, SAVED);
+    assert_eq!(shell.rows("context-change", cx), item.context_changes.iter().map(context_change_label).collect::<Vec<_>>());
+    assert_eq!(shell.rows("context-change", cx), ["Added docs/plans/design.md: Design"]);
+    shell.click("context-change-0", cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Design"));
+    assert_eq!(shell.label("provenance-worktree", cx), Some(key(&worktree)));
+}
 ```
 
 `shell.rows` and `shell.click` stand for the harness's row and click
@@ -3139,6 +3333,12 @@ helpers: use the names `documents_tests.rs` and `tabs_tests.rs` use.
     `ItemLocator::Inspect { worktree: version.context.worktree.clone(), path: version.path.clone() }.in_repository(repo)`
     through the same open action other provenance links use. A `Deleted`
     version is listed but not clickable, because there is no file to open.
+  - when `item.context_changes` is not empty, add a `v_flex` with id
+    `"context-changes-section"`: a heading "Changed on this branch", then one
+    clickable row per change, with id `("context-change", ix)` and text
+    `context_change_label(change)`. A row opens
+    `ItemLocator::Inspect { worktree: item.context.worktree.clone(), path: change.path.clone() }.in_repository(repo)`
+    in the same way. A `Deleted` change is listed but not clickable.
 - `src/desktop/view/documents.rs`: when `contributed_from(item)` is
   `Some(branch)`, the document node's label is `"{title} · {branch}"`. Make
   the same change in `flatten` in `documents_tests.rs`, if it builds labels
@@ -3152,7 +3352,7 @@ inspected items and keep it read-only.
 - [ ] **Step 6: Run the desktop tests**
 
 Run: `devenv shell -- cargo test --locked --features desktop,desktop-test-support --lib desktop::`
-Expected: PASS, with the desktop test count up by four.
+Expected: PASS, with the desktop test count up by six.
 
 Run: `devenv shell -- cargo clippy --features desktop --locked -- -D warnings`
 Expected: no warnings.
@@ -3219,10 +3419,11 @@ After the 2026-10-20 amendment line under the command list:
 Amended 2026-10-23 by ticket `01M5NKA3MY7CW4D90M866YS946`: `document show`
 and `ticket show` accept `--context` with `--id`, reading that context's
 copy of the item, effective or not. Naming the root for an item read from its
-own worktree reads primary's copy. Item DTOs gain `versions` and
-`primary_comparison`, item contexts gain `merged_into_primary`, comments gain
-`context` and `versions`, and folders gain `context`. All are additions
-within v1. Two problem codes are added: `context_changes_unavailable` and
+own worktree reads primary's copy. Item DTOs gain `versions`,
+`primary_comparison` and `context_changes`. The last lists, for an item read
+from its own worktree, the other documents and tickets its branch changed.
+Item contexts gain `merged_into_primary`, comments gain `context` and
+`versions`, and folders gain `context`. All are additions within v1. Two problem codes are added: `context_changes_unavailable` and
 `context_changes_over_budget`.
 ```
 
@@ -3239,8 +3440,10 @@ Under "Navigation and item identity":
 Amended 2026-10-23 by ticket `01M5NKA3MY7CW4D90M866YS946`: the document tree
 lists documents that exist only on another item's branch, labelled with that
 branch. An item's provenance lists its other copies under "Also changed in"
-and, when read from its own worktree, how it compares with primary. A copy
-opens read-only, labelled with its context.
+and, when read from its own worktree, how it compares with primary. An item
+read from its own worktree also lists, under "Changed on this branch", the
+other documents and tickets its branch changed, so a Cycle's documents can be
+reviewed from its ticket. A copy opens read-only, labelled with its context.
 ```
 
 - [ ] **Step 5: Run the benchmark after the change**

@@ -43,6 +43,11 @@ Product owner, 2026-10-23, in a design session:
 - Incremental re-indexing of primary is out of scope and gets its own ticket.
 - `01M4EPRY203WRKEDQH8403T35B`, "Say when an item's effective copy differs
   from primary", is folded in.
+- An item read from its own worktree lists the other items its branch
+  changed. A Cycle ticket then shows its design, plan and RFC edits in one
+  place for review.
+- Sequencing: this lands after the remaining CLI and desktop Cycles and
+  before G1.
 
 ## Expected Behavior
 
@@ -64,8 +69,11 @@ Product owner, 2026-10-23, in a design session:
   that context.
 - Item and list reads carry the versions as an addition within v1.
   `show --id … --context` reads one version.
+- An item read from its own worktree carries `context_changes`: every other
+  document or ticket its branch changed or deleted.
 - The desktop marks branch-only documents and items changed elsewhere, and
-  shows a version read-only.
+  shows a version read-only. A ticket's "Changed on this branch" section
+  opens each of its branch's other changes read-only.
 - The poll's materialization gate (`conforming_context_tree`) is unchanged.
 
 ## Acceptance Criteria
@@ -79,9 +87,10 @@ Product owner, 2026-10-23, in a design session:
   differs from primary, a draft identical to primary, an item that exists
   only in its worktree, and a merged worktree whose primary copy has since
   changed. The stored commit is the primary head the refresh observed.
-- Read tests for precedence, versions, `--context` and the relationship
-  queries.
-- Desktop tests for the marks and the read-only version view.
+- Read tests for precedence, versions, `context_changes`, `--context` and
+  the relationship queries.
+- Desktop tests for the marks, the read-only version view and "Changed on
+  this branch".
 - An index from the current build upgrades in place, and a refresh adds the
   contributions.
 - Tests that pin the one-item rule are changed deliberately, each with its
@@ -107,5 +116,12 @@ Product owner, 2026-10-23, in a design session:
   slows the status step but does not change its result.
 - `01M4EHGE7YFBPRHY20X178572K` (version the index): this ticket adds one more
   column-check upgrade.
-- Should land before C3 (`01M4CC0VMV81DFRGJ4Z76489XM`) plans its authoring
-  verbs, which editing contributed items will build on.
+- C3 (`01M4CC0VMV81DFRGJ4Z76489XM`) does not wait for this ticket. Comment
+  `01M5NVMGZ1BXK1P15RZNNYX06B` on C3 says what C3 should keep open for it.
+
+## Design and plan
+
+- Design: `docs/plans/2026-10-23-multi-item-work-contexts-design.md`,
+  approved 2026-10-23.
+- Plan: `docs/plans/2026-10-23-multi-item-work-contexts-implementation.md`,
+  approved 2026-10-23. The execution method is chosen when work starts.

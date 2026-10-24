@@ -1,7 +1,7 @@
 ---
 title: "Multi-Item Work Contexts Design"
 date: 2026-10-23
-status: "draft, awaiting owner review"
+status: "approved 2026-10-23"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -48,6 +48,10 @@ Product owner, 2026-10-23:
 6. **Fold in `01M4EPRY203W`.** The comparison of an item's worktree copy with
    its primary copy uses the same machinery and changes the read contract
    once.
+7. **Review a context's changes from its item.** An item read from its own
+   worktree lists the other items its branch changed. A Cycle ticket then
+   shows its design, plan and RFC edits in one place, and the desktop opens
+   each read-only.
 
 ## Terms
 
@@ -218,9 +222,22 @@ closed JSON schemas are updated in place:
   which can now differ from the list's `context`. Also `CommentDto.versions`,
   shaped like an item's.
 - `DocumentFolderDto.context`: null for primary's folders.
+- `ItemDto.context_changes`: for an item read from its own worktree, every
+  other document or ticket its branch changed or deleted, in path order. Each
+  entry has:
+  - `id` and `kind`;
+  - `title`, null for a deletion;
+  - `path`;
+  - `change`: `added`, `modified`, `moved` or `deleted`;
+  - `effective`: whether that branch's copy is the item's effective copy,
+    as for a document only the branch has.
 
-List reads carry `versions` from the index, so a list can say "also changed
-in". Show reads it from the index too; a read does not scan.
+  The list is empty for any other item. Comments the branch changed are not
+  listed here; they show on their own items.
+
+List reads carry `versions` and `context_changes` from the index, so a list
+can say "also changed in". Show reads them from the index too; a read does
+not scan.
 
 CLI: `document show` and `ticket show` accept `--context` with `--id`, as they
 already do with `--path`. `--id X --context W` returns X's copy in context W,
@@ -241,6 +258,10 @@ visible in `versions`.
   the commit compared.
 - Opening a version shows it read-only, labelled with its context. Editing
   is D3's and Level 2's.
+- An item read from its own worktree has a "Changed on this branch" section
+  listing its `context_changes`. Each opens read-only from that worktree, so
+  a Cycle's documents can be reviewed from its ticket. A deletion is listed
+  but does not open.
 
 ## Unchanged
 
@@ -299,10 +320,10 @@ New tests:
   - a worktree whose branch changed nothing reads only its own item's files.
 - Comparison: the four cases from `01M4EPRY203W` are distinguishable, and the
   stored OID is primary's head at the refresh.
-- Reads: precedence, `versions`, `primary_comparison`, `--id … --context`,
-  per-comment context, and relationship queries.
-- Desktop: the branch mark, "also changed in", the primary comparison, and
-  the read-only version view.
+- Reads: precedence, `versions`, `primary_comparison`, `context_changes`,
+  `--id … --context`, per-comment context, and relationship queries.
+- Desktop: the branch mark, "also changed in", the primary comparison, the
+  read-only version view, and "Changed on this branch".
 - Upgrade: an index from the current build opens, its rows read as `own`,
   and a refresh adds contributions.
 - The poll tests stay unchanged.
@@ -333,8 +354,8 @@ The plan confirms the list against current main.
 - **Git workflow** ("Context Branches and Worktrees"): one context owns one
   item, but its branch may carry changes to others, and these merge with it.
 - **CLI contract**: `--context` with `--id`, and the new fields.
-- **Desktop**: the branch mark, "also changed in", the primary comparison and
-  the read-only version view.
+- **Desktop**: the branch mark, "also changed in", the primary comparison,
+  the read-only version view, and "Changed on this branch".
 
 ## Constraints left for Level 2
 
