@@ -156,9 +156,10 @@ impl DraftRow {
         }
     }
 
-    /// A draft file that could not be read. An unreadable draft's row. One another process holds offers no
-    /// Discard…, as a readable one open elsewhere does not: the store's
-    /// listing probes every draft's lock, readable or not.
+    /// The row of a draft file that could not be read. One that another
+    /// process holds offers no Discard…, just as a readable draft open
+    /// elsewhere does not: the store's listing probes every draft's lock,
+    /// readable or not.
     pub(crate) fn unreadable(id: DraftId, reason: UnreadableReason, held: Held) -> Self {
         let state = RowState::Unreadable(reason);
         let mut actions = row_actions(&state, None);
