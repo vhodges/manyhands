@@ -1,0 +1,66 @@
+{
+  "code": "ok",
+  "command": "repo enable",
+  "data": {
+    "command": "repo enable",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "identity": {
+        "email": "repository@example.invalid",
+        "name": "Repository Person",
+        "source": "supplied",
+        "written_locally": true
+      },
+      "primary_branch": "main",
+      "root": "<repository>",
+      "slug_prefix": "mh"
+    },
+    "effects": [
+      {
+        "effect": "identity_written"
+      },
+      {
+        "effect": "worktree_exclusion_written"
+      },
+      {
+        "effect": "configuration_written"
+      },
+      {
+        "effect": "initialization_committed"
+      },
+      {
+        "effect": "repository_registered"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

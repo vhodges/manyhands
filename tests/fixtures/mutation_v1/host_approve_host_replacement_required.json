@@ -1,0 +1,43 @@
+{
+  "code": "host_replacement_required",
+  "command": "host approve",
+  "data": {
+    "algorithm": "ssh-ed25519",
+    "fingerprint": "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaA",
+    "host": "git.example.invalid",
+    "pinned_algorithm": "ssh-ed25519",
+    "pinned_fingerprint": "SHA256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbA",
+    "port": 2222
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The host's key differs from the approved one and must be replaced.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "host.replace",
+      "arguments": {
+        "authority": "git.example.invalid:2222",
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

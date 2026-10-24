@@ -121,6 +121,7 @@ pub(super) async fn serve(
             _ = shutdown.changed() => break,
             result = listener.accept() => {
                 let Ok((socket, _)) = result else { break };
+                shared.sockets.fetch_add(1, Ordering::SeqCst);
                 let shared = shared.clone();
                 sessions.spawn(async move {
                     if boundary(&shared, FixtureBoundary::Handshake).await.is_err() { return; }
@@ -182,6 +183,9 @@ impl Handler for Restricted {
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         boundary(&self.shared, FixtureBoundary::Authentication).await?;
+        self.shared
+            .authentication_attempts
+            .fetch_add(1, Ordering::SeqCst);
         if user == "fixture"
             && !self.shared.reject.load(Ordering::SeqCst)
             && key == &*self.shared.allowed.lock().unwrap()
@@ -189,6 +193,9 @@ impl Handler for Restricted {
             self.shared.accepted.lock().unwrap().push(key.to_bytes()?);
             Ok(Auth::Accept)
         } else {
+            self.shared
+                .rejected_authentications
+                .fetch_add(1, Ordering::SeqCst);
             Ok(Auth::reject())
         }
     }
@@ -245,6 +252,7 @@ impl Handler for Restricted {
         }
         self.shared.helpers.fetch_add(1, Ordering::SeqCst);
         self.shared.active_helpers.fetch_add(1, Ordering::SeqCst);
+        self.shared.helper_audits.lock().unwrap().0 += 1;
         let shared = self.shared.clone();
         let handle = session.handle();
         let task = tokio::spawn(async move {
@@ -313,11 +321,14 @@ async fn relay(
     let mut status = None;
     let mut transfer_started = false;
     let mut transfer_checked = false;
+    let mut transferred = 0;
+    let mut pack_bytes = UploadPackBytes::default();
     let mut advertisement_checked = false;
     let mut hostile_pending = Vec::new();
     let mut hostile_sideband_sent = false;
     let mut commands = ReceiveCommands::default();
     let mut race_prefix = Vec::new();
+    let mut abandoned = false;
     loop {
         if status.is_some() && !output_open {
             break;
@@ -330,7 +341,12 @@ async fn relay(
                     Ok(0) | Err(_) => { input.take(); },
                     Ok(count) => {
                         transfer_started = true;
-                        if receiving && commands.feed(&incoming[..count]).is_err() { break; }
+                        if receiving {
+                            if commands.feed(&incoming[..count]).is_err() { break; }
+                            // Capture each complete command's old direct tip before
+                            // forwarding it or applying the deterministic receive race.
+                            commands.observe_old_oids(&shared.repository);
+                        }
                         let race_pending = receiving && shared.receive_race.lock().unwrap().is_some();
                         let payload = if race_pending {
                             race_prefix.extend_from_slice(&incoming[..count]);
@@ -353,6 +369,23 @@ async fn relay(
                 match result {
                     Ok(0) | Err(_) => output_open = false,
                     Ok(count) => {
+                        if transfer_started && !receiving {
+                            let gate = {
+                                let mut hold = shared.transfer_hold.lock().unwrap();
+                                if hold.as_ref().is_some_and(|h| transferred >= h.after_bytes) {
+                                    hold.take()
+                                } else { None }
+                            };
+                            if let Some(hold) = gate {
+                                if hold.gate.reached.send(()).is_err() { break; }
+                                let released = tokio::select! {
+                                    result = hold.gate.release => result.is_ok(),
+                                    _ = shutdown.changed() => false,
+                                    _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                                };
+                                if !released { break; }
+                            }
+                        }
                         if !advertisement_checked {
                             advertisement_checked = true;
                             if boundary(&shared, FixtureBoundary::Advertisement).await.is_err() { break; }
@@ -360,6 +393,12 @@ async fn relay(
                         if transfer_started && !transfer_checked {
                             transfer_checked = true;
                             if boundary(&shared, FixtureBoundary::Transfer).await.is_err() { break; }
+                        }
+                        if transfer_started && !receiving
+                            && matches!(*shared.fault.lock().unwrap(), Some(Fault::DisconnectAfterTransferBytes(after)) if transferred >= after)
+                        {
+                            shared.byte_disconnects.fetch_add(1, Ordering::SeqCst);
+                            break;
                         }
                         if receiving && !commands.updates.is_empty() && matches!(*shared.fault.lock().unwrap(), Some(Fault::Disconnect(FixtureBoundary::AfterReceivePack))) {
                             // Wait for the actual helper to commit its ref update, then lose
@@ -383,11 +422,27 @@ async fn relay(
                             match hostile_packets(&mut hostile_pending, marker.as_bytes(), &mut hostile_sideband_sent) { Ok(bytes) => bytes, Err(_) => break }
                         } else { outgoing[..count].to_vec() };
                         if payload.is_empty() { continue; }
+                        // The client shares this process. Where libgit2's socket is
+                        // inheritable (no SOCK_CLOEXEC on macOS; Windows handles), this
+                        // helper holds a copy, so an abandoned client never closes the
+                        // connection and a full send would wait on the helper forever.
+                        // Ending the relay kills the helper and releases that copy.
+                        // On Windows other inheritors can still hold it, so the
+                        // abandoned channel gets no further session messages.
                         let sent = tokio::select! {
                             result = handle.data(id, payload) => result,
                             _ = shutdown.changed() => break,
+                            _ = tokio::time::sleep(Duration::from_secs(5)) => { abandoned = true; break },
                         };
                         if sent.is_err() { break; }
+                        if transfer_started && !receiving {
+                            transferred += count;
+                            // Observation only: never modify forwarded bytes or
+                            // change behavior for other fixture protocol cases.
+                            if let Ok(bytes) = pack_bytes.feed(&outgoing[..count]) {
+                                shared.upload_pack_bytes.fetch_add(bytes, Ordering::SeqCst);
+                            }
+                        }
                     }
                 }
             },
@@ -397,7 +452,24 @@ async fn relay(
             }
         }
     }
+    let audit_released = if receiving && receive_effect_proven(&shared, &commands, &status) {
+        let hold = shared.receive_audit_hold.lock().unwrap().take();
+        if let Some(hold) = hold {
+            let reached = hold.events.send(super::ReceiveAuditEvent::PublicationHeld);
+            reached.is_ok()
+                && tokio::select! {
+                    released = hold.release => released.is_ok(),
+                    _ = shutdown.changed() => false,
+                    _ = tokio::time::sleep(Duration::from_secs(20)) => false,
+                }
+        } else {
+            true
+        }
+    } else {
+        true
+    };
     let code = match status {
+        Some(Ok(_)) if !audit_released => 1,
         Some(Ok(status)) => status.code().unwrap_or(1) as u32,
         _ => {
             let _ = child.kill().await;
@@ -411,22 +483,35 @@ async fn relay(
         } else {
             let repo = git2::Repository::open_bare(&shared.repository).ok();
             let mut updates = shared.receive_updates.lock().unwrap();
-            updates.extend(commands.updates.into_iter().map(|mut update| {
-                update.accepted = code == 0
-                    && update.old_oid != update.new_oid
-                    && repo
-                        .as_ref()
-                        .and_then(|repo| repo.refname_to_id(&update.reference).ok())
-                        == Some(update.new_oid);
-                update
-            }));
+            updates.extend(
+                commands
+                    .updates
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, mut update)| {
+                        update.accepted = code == 0
+                            && repo.as_ref().is_some_and(|repo| {
+                                update_effect_proven(
+                                    repo,
+                                    &update,
+                                    commands.old_oid_matches.get(index) == Some(&true),
+                                )
+                            });
+                        update
+                    }),
+            );
+            shared.receive_updates_changed.notify_all();
         }
     }
-    let _ = handle.exit_status_request(id, code).await;
-    let _ = handle.eof(id).await;
-    let _ = handle.close(id).await;
+    if !abandoned {
+        let _ = handle.exit_status_request(id, code).await;
+        let _ = handle.eof(id).await;
+        let _ = handle.close(id).await;
+    }
     shared.active_helpers.fetch_sub(1, Ordering::SeqCst);
     shared.completed_helpers.fetch_add(1, Ordering::SeqCst);
+    shared.helper_audits.lock().unwrap().1 += 1;
+    shared.helper_audits_changed.notify_all();
 }
 
 // Receive-pack report-status is pkt-line framed, possibly nested in sideband 1.
@@ -471,6 +556,90 @@ fn hostile_packets(
     Ok(output)
 }
 
+/// Count only complete sideband-1 payloads of the forwarded upload response.
+/// A partial packet is retained until its remainder is forwarded; progress and
+/// ACK/control packets count zero. No bytes are synthesized or rewritten.
+#[derive(Default)]
+struct UploadPackBytes {
+    pending: Vec<u8>,
+    invalid: bool,
+}
+impl UploadPackBytes {
+    fn feed(&mut self, bytes: &[u8]) -> Result<usize, FixtureError> {
+        if self.invalid {
+            return Err(FixtureError);
+        }
+        let result = self.count(bytes);
+        if result.is_err() {
+            // Unsupported output never counts and cannot grow the observer's
+            // buffer for the remainder of an unrelated fixture relay.
+            self.invalid = true;
+            self.pending.clear();
+        }
+        result
+    }
+    fn count(&mut self, bytes: &[u8]) -> Result<usize, FixtureError> {
+        self.pending.extend_from_slice(bytes);
+        let mut payload = 0;
+        while self.pending.len() >= 4 {
+            let size = fixed(usize::from_str_radix(
+                fixed(std::str::from_utf8(&self.pending[..4]))?,
+                16,
+            ))?;
+            let size = if size == 0 {
+                4
+            } else if (4..=65_520).contains(&size) {
+                size
+            } else {
+                return Err(FixtureError);
+            };
+            if self.pending.len() < size {
+                break;
+            }
+            if self.pending.get(4) == Some(&1) && size > 4 {
+                payload += size - 5;
+            }
+            self.pending.drain(..size);
+        }
+        Ok(payload)
+    }
+}
+pub(super) fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
+    let mut response = b"0008NAK\n".to_vec();
+    for (band, body) in [
+        (2, b"progress text".as_slice()),
+        (1, b"PACKowned payload".as_slice()),
+        (2, b"more progress".as_slice()),
+        (1, b"continued pack payload".as_slice()),
+    ] {
+        response.extend_from_slice(format!("{:04x}", body.len() + 5).as_bytes());
+        response.push(band);
+        response.extend_from_slice(body);
+    }
+    response.extend_from_slice(b"0000");
+    for width in [1, 2, 3, 7, 16_384] {
+        let mut parser = UploadPackBytes::default();
+        let mut total = 0;
+        for bytes in response.chunks(width) {
+            total += parser.feed(bytes)?;
+        }
+        assert_eq!(
+            total,
+            b"PACKowned payload".len() + b"continued pack payload".len()
+        );
+        assert!(parser.pending.is_empty());
+    }
+    let mut parser = UploadPackBytes::default();
+    assert_eq!(parser.feed(b"0008NAK\n0000")?, 0);
+    assert_eq!(parser.feed(b"0009\x01PA")?, 0); // incomplete payload not forwarded in full
+    assert_eq!(parser.feed(b"CK")?, 4);
+    let mut malformed = UploadPackBytes::default();
+    assert!(malformed.feed(b"ffff").is_err());
+    assert!(malformed.feed(&response).is_err());
+    assert!(malformed.pending.is_empty());
+    Ok(())
+}
+
 // Only the bounded command prefix is parsed. Pack bytes remain opaque and are
 // forwarded in their original order without buffering or modification.
 #[derive(Default)]
@@ -478,8 +647,21 @@ struct ReceiveCommands {
     pending: Vec<u8>,
     finished: bool,
     updates: Vec<ReceiveUpdate>,
+    old_oid_matches: Vec<bool>,
 }
 impl ReceiveCommands {
+    fn observe_old_oids(&mut self, path: &Path) {
+        if self.old_oid_matches.len() == self.updates.len() {
+            return;
+        }
+        let repo = git2::Repository::open_bare(path).ok();
+        for update in &self.updates[self.old_oid_matches.len()..] {
+            self.old_oid_matches.push(repo.as_ref().is_some_and(|repo| {
+                repo.find_reference(&update.reference)
+                    .is_ok_and(|reference| reference.target() == Some(update.old_oid))
+            }));
+        }
+    }
     fn feed(&mut self, bytes: &[u8]) -> Result<(), FixtureError> {
         if self.finished {
             return Ok(());
@@ -544,11 +726,50 @@ fn receive_effect_proven(
         .is_some_and(|status| status.as_ref().is_ok_and(|status| status.success()))
         && git2::Repository::open_bare(&shared.repository).is_ok_and(|repo| {
             !commands.updates.is_empty()
-                && commands.updates.iter().all(|update| {
-                    update.old_oid != update.new_oid
-                        && repo.refname_to_id(&update.reference).ok() == Some(update.new_oid)
+                && commands.updates.iter().enumerate().all(|(index, update)| {
+                    update_effect_proven(
+                        &repo,
+                        update,
+                        commands.old_oid_matches.get(index) == Some(&true),
+                    )
                 })
         })
+}
+
+fn update_effect_proven(
+    repo: &git2::Repository,
+    update: &ReceiveUpdate,
+    old_oid_matched: bool,
+) -> bool {
+    update.old_oid != update.new_oid
+        && if update.new_oid.is_zero() {
+            old_oid_matched
+                && matches!(repo.find_reference(&update.reference), Err(error) if error.code() == git2::ErrorCode::NotFound)
+        } else {
+            repo.refname_to_id(&update.reference).ok() == Some(update.new_oid)
+        }
+}
+
+pub(super) fn deletion_effect_proof(path: &Path, oid: git2::Oid) -> Result<(), FixtureError> {
+    let repo = fixed(git2::Repository::open_bare(path))?;
+    let name = super::ObservationRef::RemoteDocument.name();
+    let mut deletion = ReceiveUpdate {
+        reference: name.into(),
+        old_oid: oid,
+        new_oid: git2::Oid::zero(),
+        accepted: false,
+    };
+    fixed(repo.reference(name, oid, true, "owned proof test"))?;
+    assert!(!update_effect_proven(&repo, &deletion, true)); // still present
+    fixed(fixed(repo.find_reference(name))?.delete())?;
+    assert!(!update_effect_proven(&repo, &deletion, false)); // fabricated old OID
+    assert!(update_effect_proven(&repo, &deletion, true)); // actual guarded absence
+    deletion.old_oid = git2::Oid::zero();
+    assert!(!update_effect_proven(&repo, &deletion, true)); // no-op is not deletion
+    deletion.old_oid = oid;
+    fixed(repo.reference_symbolic(name, "refs/heads/missing", true, "owned proof test"))?;
+    assert!(!update_effect_proven(&repo, &deletion, true)); // dangling != absent
+    Ok(())
 }
 
 pub(super) fn receiver_command_fragmentation() -> Result<(), FixtureError> {
@@ -583,22 +804,16 @@ pub(super) fn receiver_command_fragmentation() -> Result<(), FixtureError> {
 fn apply_receive_race(
     shared: &Shared,
     commands: &ReceiveCommands,
-    (expected, competing): (git2::Oid, git2::Oid),
+    (reference, expected, competing): (String, git2::Oid, git2::Oid),
 ) -> bool {
     if commands.updates.len() != 1
-        || commands.updates[0].reference != "refs/heads/main"
+        || commands.updates[0].reference != reference
         || commands.updates[0].old_oid != expected
     {
         return false;
     }
     git2::Repository::open_bare(&shared.repository).is_ok_and(|repo| {
-        repo.reference_matching(
-            "refs/heads/main",
-            competing,
-            true,
-            expected,
-            "owned receive race",
-        )
-        .is_ok()
+        repo.reference_matching(&reference, competing, true, expected, "owned receive race")
+            .is_ok()
     })
 }

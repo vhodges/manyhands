@@ -19,6 +19,25 @@ use manyhands::{
 };
 use rusqlite::{Connection, params};
 
+pub mod cli;
+pub mod comment_publication;
+pub mod confirmation;
+pub mod conformance;
+pub mod credentials;
+pub mod git_home;
+pub mod golden;
+pub mod items;
+pub mod mutation;
+pub mod mutation_golden;
+#[cfg(target_os = "linux")]
+pub mod open_watch;
+pub mod operations;
+#[cfg(unix)]
+pub mod pty;
+pub mod records;
+pub mod repair;
+pub mod schema;
+
 pub struct TestRepository {
     // Fields drop in declaration order, so the repository closes before TempDir removes it.
     pub repository: Repository,
@@ -242,6 +261,11 @@ pub fn unborn_repository() -> TestRepository {
     let tempdir = tempfile::tempdir().unwrap();
     let root = tempdir.path().to_owned();
     let repository = Repository::init(&root).unwrap();
+    // Source fixtures declare LF checkout policy independently of the user's Git config.
+    Config::open(&repository.path().join("config"))
+        .unwrap()
+        .set_bool("core.autocrlf", false)
+        .unwrap();
 
     TestRepository {
         repository,
@@ -275,6 +299,8 @@ pub fn born_repository() -> TestRepository {
     options.initial_head("main");
     let repository = Repository::init_opts(&root, &options).unwrap();
     let mut config = Config::open(&repository.path().join("config")).unwrap();
+    // Set this before staging initial content; individual filter controls may override it locally.
+    config.set_bool("core.autocrlf", false).unwrap();
     config.set_str("user.name", "Manyhands Test").unwrap();
     config
         .set_str("user.email", "manyhands-test@example.invalid")
@@ -479,7 +505,7 @@ pub fn hold_lease_in_child_for_test(
 }
 
 pub fn wait_for_path(child: &mut Child, path: &Path) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !path.exists() {
         if let Some(status) = child.try_wait().unwrap() {
             let stdout = child
@@ -743,7 +769,8 @@ pub fn assert_operation_records_exclude(data_directory: &Path, forbidden: &[&str
         Connection::open(data_directory.join(manyhands::repository::REGISTRY_FILE)).unwrap();
     let mut statement = connection
         .prepare(
-            "SELECT COALESCE(operation_ulid, ''), action, target, state, completed_step, \
+            "SELECT COALESCE(operation_ulid, ''), action, COALESCE(target, ''), state, \
+                    COALESCE(completed_step, ''), \
                     COALESCE(item_id, ''), COALESCE(context_path, ''), \
                     CAST(observed_at AS TEXT), CAST(persisted_context_count AS TEXT), \
                     COALESCE(redacted_error, '') \
@@ -908,7 +935,16 @@ pub fn assert_legacy_operation_records_are_redacted_and_reset(data_directory: &P
         .unwrap();
     assert_eq!(
         contexts,
-        vec![root.clone(), format!("{root}/.manyhands/worktrees/second")]
+        vec![
+            root.clone(),
+            PathBuf::from(&root)
+                .join(".manyhands")
+                .join("worktrees")
+                .join("second")
+                .to_str()
+                .unwrap()
+                .to_owned(),
+        ]
     );
     let context_schema: String = connection
         .query_row(

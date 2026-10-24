@@ -1,0 +1,35 @@
+{
+  "code": "remote_branch_deleted",
+  "command": "item sync",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The published branch was deleted on the remote.",
+  "operation_id": "<operation>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "request.cancel",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAW"
+  }
+}

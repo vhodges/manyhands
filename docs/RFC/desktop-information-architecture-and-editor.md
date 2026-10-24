@@ -48,6 +48,10 @@ status and latest content/metadata change time. Both lists include visible
 nonconforming and inaccessible entries with a reason and recovery action.
 An empty result, a scan still running, and a failed/stale scan are distinct.
 No boards, project rollups or configurable docking system are required.
+Short codes, ready and blocked filters and a ticket's dependencies, parent and
+children are shown as the
+[ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#desktop)
+defines; tabs and every mutation still key on the canonical ULID.
 
 Ticket lists default to lifecycle-open tickets, with visible Closed/All filters.
 Closure is determined by lifecycle metadata, independently of free-form status.

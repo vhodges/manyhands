@@ -1,9 +1,10 @@
 ---
+id: 01M46N0H47M7CBM2DZ3MC2TWGZ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T18:25:26Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M46N0H47M7CBM2DZ3MC2TWGZ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T18:25:26Z"
 ---
 
 The user explicitly accepted the documented backend limits: 10 seconds per TCP
