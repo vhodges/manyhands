@@ -58,7 +58,6 @@ impl DraftRegistry {
     /// with no live session, left nothing unsaved and is not a failure; a
     /// live session's `NotFound` is reported. If the registry is gone,
     /// every failure is reported.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by Task 9's quit; tests until then.
     pub(crate) fn flush_all(
         &mut self,
         cx: &mut Context<Self>,
@@ -89,6 +88,14 @@ impl DraftRegistry {
                         .collect()
                 })
                 .unwrap_or(failed)
+        })
+    }
+
+    /// Whether a session's newest text is not yet stored, or a store call
+    /// holds its claim: quitting flushes them all first.
+    pub(crate) fn unsaved(&self) -> bool {
+        self.sessions.values().any(|live| {
+            live.session.busy() || !matches!(live.session.recovery_state(), RecoveryState::Saved(_))
         })
     }
 

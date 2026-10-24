@@ -186,6 +186,277 @@ async fn quit_now_quits_while_the_job_is_held(cx: &mut TestAppContext) {
     .await;
 }
 
+/// Quitting with a session whose newest text is not yet stored: it is
+/// flushed first, under "Saving drafts for recovery" and Quit now, before
+/// D1's phases. A failed flush asks with Quit anyway and Cancel.
+mod saving_drafts {
+    use gpui_kit::{TestAppContext, test::TestWindowExt};
+    use manyhands::drafts::{DraftFields, DraftId, DraftTarget, ItemKind};
+
+    use super::QuitPhase;
+    use crate::desktop::{
+        services::ReadKind,
+        test_support::{drafts::stored_body, fixtures::Fixture},
+        view::{
+            harness::Shell,
+            quit::{DraftsNotSaved, SAVING_DRAFTS},
+        },
+    };
+
+    const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+
+    fn fields(body: &str) -> DraftFields {
+        DraftFields::Ticket {
+            title: "Draft title".to_owned(),
+            ticket_type: "task".to_owned(),
+            status: "open".to_owned(),
+            project: None,
+            team: None,
+            deps: Vec::new(),
+            parent: None,
+            body: body.to_owned(),
+        }
+    }
+
+    fn phase(shell: &Shell, cx: &mut TestAppContext) -> QuitPhase {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.quit_phase())
+    }
+
+    /// A session begun with "First body", stored at revision 1.
+    async fn begun(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
+        let drafts = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let target = DraftTarget {
+            repository: "/a/repository".to_owned(),
+            item_kind: ItemKind::Ticket,
+            item_id: TICKET.parse().unwrap(),
+            comment: None,
+        };
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin(target, None, fields("First body"), cx)
+        });
+        shell.run(cx);
+        match begun.await {
+            Ok(id) => id,
+            Err(kind) => panic!("the draft must begin: {kind:?}"),
+        }
+    }
+
+    /// A session whose newest text, "Newer body", is in memory only: its
+    /// write is not yet due.
+    async fn unsaved(shell: &Shell, cx: &mut TestAppContext) -> DraftId {
+        let id = begun(shell, cx).await;
+        let drafts = shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        drafts.update(cx, |registry, cx| {
+            registry.edit(id, fields("Newer body"), cx)
+        });
+        shell.run(cx);
+        id
+    }
+
+    fn body(shell: &Shell, id: DraftId) -> Option<String> {
+        stored_body(&shell.fixture.draft_store(), id)
+    }
+
+    /// `secondary-q` with the write held: "Saving drafts for recovery" and
+    /// a focused Quit now, no quit, and a close request refused the same
+    /// way; on release the text is stored and the app quits.
+    #[gpui_kit::test]
+    async fn quitting_saves_an_unsaved_draft_first(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert_eq!(
+            shell
+                .workspace
+                .read_with(cx, |workspace, cx| workspace.finishing_text(cx)),
+            Some(SAVING_DRAFTS.to_owned())
+        );
+        assert_eq!(SAVING_DRAFTS, "Saving drafts for recovery");
+        assert_eq!(
+            shell.label("quit-finishing", cx).as_deref(),
+            Some(SAVING_DRAFTS)
+        );
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+        assert!(!shell.visual(cx).simulate_close());
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert_eq!(body(&shell, id).as_deref(), Some("First body"));
+
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+    }
+
+    /// The window's close request takes the same path as `secondary-q`.
+    #[gpui_kit::test]
+    async fn closing_the_window_saves_an_unsaved_draft_first(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        assert!(!shell.visual(cx).simulate_close());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        assert!(shell.present("quit-now", cx));
+
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+    }
+
+    /// Quit now does not wait for a write that never lands: the stored
+    /// revision is the last one written.
+    #[gpui_kit::test]
+    async fn quit_now_quits_while_drafts_are_saving(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        shell.click("quit-now", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(body(&shell, id).as_deref(), Some("First body"));
+        drop(gate);
+    }
+
+    /// With a job running too, the drafts are saved first; then quitting
+    /// is D1's "Finishing", and it quits once the job returns.
+    #[gpui_kit::test]
+    async fn saved_drafts_go_on_to_finishing(cx: &mut TestAppContext) {
+        use crate::desktop::{
+            services::{
+                JobKind,
+                requests::{Intent, Lane},
+            },
+            view::harness::wait_until,
+        };
+
+        cx.executor().allow_parking();
+        let fixture = Fixture::new();
+        let root = fixture.create_repository("a");
+        let shell = Shell::open(fixture, cx);
+        let id = unsaved(&shell, cx).await;
+        let held = shell.backend.hold_job(JobKind::IndexRefresh);
+        let job = shell.workspace.read_with(cx, |workspace, _| {
+            workspace.services().worker().submit(
+                Intent::IndexRefresh { root },
+                Lane::User,
+                None,
+                None,
+            )
+        });
+        held.wait_reached();
+        let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::SavingDrafts);
+        let _ = gate.send(());
+        shell.run(cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Finishing(job));
+        assert_eq!(body(&shell, id).as_deref(), Some("Newer body"));
+        assert_eq!(
+            shell.frame(cx, |window, _| window.find("quit-now").focused()),
+            Some(true)
+        );
+
+        held.release();
+        wait_until(cx, &shell.workspace, |workspace, _| {
+            workspace.quit_phase() == QuitPhase::Quit
+        })
+        .await;
+    }
+
+    /// A session already stored needs no flush: quitting is D1's, with no
+    /// write and no phase before it.
+    #[gpui_kit::test]
+    async fn a_stored_session_quits_at_once(cx: &mut TestAppContext) {
+        let shell = Shell::open(Fixture::new(), cx);
+        begun(&shell, cx).await;
+        let writes = shell.backend.reads_seen(ReadKind::DraftWrite);
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        assert_eq!(shell.backend.reads_seen(ReadKind::DraftWrite), writes);
+    }
+
+    /// `drafts/` read-only: the dialog says how many drafts were not
+    /// saved and names none. Cancel, the default (Enter), keeps the window
+    /// and focuses the draft's Retry; Quit anyway quits.
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    async fn a_draft_that_cannot_be_saved_asks_before_quitting(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::desktop::view::operations::draft_flush_id;
+
+        assert_eq!(
+            DraftsNotSaved { count: 1 }.message(),
+            "1 draft could not be saved for recovery"
+        );
+        assert_eq!(
+            DraftsNotSaved { count: 3 }.message(),
+            "3 drafts could not be saved for recovery"
+        );
+
+        let shell = Shell::open(Fixture::new(), cx);
+        let id = unsaved(&shell, cx).await;
+        let folder = shell.fixture.data_dir().join("drafts");
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        shell.keys("secondary-q", cx);
+        assert_eq!(
+            shell.label("drafts-not-saved-message", cx).as_deref(),
+            Some("1 draft could not be saved for recovery")
+        );
+        assert!(shell.present("drafts-not-saved-quit", cx));
+        assert!(shell.present("drafts-not-saved-cancel", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+
+        // Enter is Cancel.
+        shell.press("enter", cx);
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        assert_eq!(
+            shell.frame(cx, |window, _| window
+                .find(draft_flush_id(id, "retry"))
+                .focused()),
+            Some(true)
+        );
+
+        // Cancel by its button does the same.
+        shell.keys("secondary-q", cx);
+        assert!(shell.present("drafts-not-saved-message", cx));
+        shell.click("drafts-not-saved-cancel", cx);
+        assert!(!shell.present("drafts-not-saved-message", cx));
+        assert_eq!(phase(&shell, cx), QuitPhase::Running);
+        assert_eq!(
+            shell.frame(cx, |window, _| window
+                .find(draft_flush_id(id, "retry"))
+                .focused()),
+            Some(true)
+        );
+
+        shell.keys("secondary-q", cx);
+        shell.click("drafts-not-saved-quit", cx);
+        assert_eq!(phase(&shell, cx), QuitPhase::Quit);
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+}
+
 /// A window over a fixture with two repositories, `a` and `b`, whose
 /// startup reads have run.
 struct Shell {
