@@ -203,6 +203,11 @@ impl DraftRegistry {
     /// Creates a draft of `target` at revision 1, claimed, and its
     /// session: D3's first edit. On failure nothing is stored, and the
     /// caller keeps the text and may begin again.
+    ///
+    /// A caller that drops the task after the create ran but before the
+    /// session is inserted releases the claim: revision 1 stays on disk as
+    /// an unclaimed draft. No text is lost; the next listing offers it for
+    /// recovery.
     #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
     pub(crate) fn begin(
         &mut self,
@@ -246,9 +251,15 @@ impl DraftRegistry {
         let Some(live) = self.sessions.get_mut(&id) else {
             return;
         };
+        let before = live.session.recovery_state();
         live.session.edit(current, now);
+        // Views show the state, not the text: a keystroke that leaves the
+        // state as it was redraws nothing.
+        let changed = live.session.recovery_state() != before;
         self.schedule(id, cx);
-        cx.notify();
+        if changed {
+            cx.notify();
+        }
     }
 
     /// Whether the newest text of `id` is safe in the store; `None` when

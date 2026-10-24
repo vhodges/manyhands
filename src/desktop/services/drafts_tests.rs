@@ -562,3 +562,82 @@ async fn a_failed_flush_shows_an_entry_with_retry_and_no_draft_text(cx: &mut Tes
         (2, format!("{SENTINEL} body"))
     );
 }
+
+/// The folder sync fails after the rename: the new revision is stored, but
+/// the write counts as failed and `flushed` stays. A retry rewrites that
+/// same revision: it gets past the store's check of a lower revision (an
+/// `Io` refusal) to the sync, and stores nothing newer. The library keeps
+/// a failure point for the store's life, so this test cannot see the
+/// retry succeed; the model's
+/// `a_failed_write_can_be_taken_again_without_an_edit` pins the landing.
+#[gpui_kit::test]
+async fn a_write_stored_before_its_folder_sync_failed_is_failed_and_retried_at_its_revision(
+    cx: &mut TestAppContext,
+) {
+    use manyhands::drafts::{FailureAction, FailurePoint};
+
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, None, cx).await;
+    // Clones share the failure point: the desktop's store fails too.
+    let _ = fixture.draft_store().with_failure_point_for_testing(
+        FailurePoint::SyncFolder,
+        FailureAction::Fail(DraftErrorKind::NoSpace),
+    );
+
+    drafts.update(cx, |registry, cx| {
+        registry.edit(id, ticket_body("replaced"), cx)
+    });
+    cx.executor().advance_clock(IDLE);
+    cx.run_until_parked();
+    assert_eq!(
+        state(&drafts, id, cx),
+        RecoveryState::Failed(DraftErrorKind::NoSpace)
+    );
+    assert_eq!(
+        stored(&fixture.draft_store(), id),
+        (2, "replaced".to_owned())
+    );
+
+    let retried = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    cx.run_until_parked();
+    assert_eq!(retried.await, Err(DraftErrorKind::NoSpace));
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 2);
+    assert_eq!(
+        stored(&fixture.draft_store(), id),
+        (2, "replaced".to_owned())
+    );
+}
+
+/// An edit tells the views only when the session's recovery state
+/// changes: the first edit after a write, not every keystroke.
+#[gpui_kit::test]
+async fn edits_notify_only_when_the_recovery_state_changes(cx: &mut TestAppContext) {
+    use std::{cell::Cell, rc::Rc};
+
+    let fixture = Fixture::new();
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, None, cx).await;
+    let notified = Rc::new(Cell::new(0));
+    let _observe = cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(&drafts, move |_, _| notified.set(notified.get() + 1))
+    });
+
+    for body in ["a", "b", "c"] {
+        drafts.update(cx, |registry, cx| registry.edit(id, ticket_body(body), cx));
+    }
+    cx.run_until_parked();
+    // Saved to Pending, once.
+    assert_eq!(notified.get(), 1);
+
+    cx.executor().advance_clock(IDLE);
+    cx.run_until_parked();
+    // Pending to Saved, when the write lands.
+    assert_eq!(notified.get(), 2);
+    assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
+}

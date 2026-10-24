@@ -232,9 +232,15 @@ fn a_failed_write_can_be_taken_again_without_an_edit() {
     let (_data, mut session) = session(None, t0);
     session.edit(fields("a"), t0);
     let _write = session.next_write().unwrap();
+    // As a folder sync that failed after the rename answers: the store
+    // may hold revision 2, but the session keeps what was proven.
     session.write_landed(failed(DraftErrorKind::NoSpace));
+    assert_eq!(session.flushed(), 1);
     let retry = session.next_write().unwrap();
     assert_eq!(retry.revision, 2);
+    session.write_landed(landed(&retry));
+    assert_eq!(session.flushed(), 2);
+    assert!(matches!(session.recovery_state(), RecoveryState::Saved(_)));
 }
 
 /// `Saved` only when the newest revision is written and nothing failed;
