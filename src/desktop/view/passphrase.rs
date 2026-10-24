@@ -29,6 +29,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex,
         input::{Input, InputEvent, InputState},
         v_flex,
@@ -180,6 +181,22 @@ impl PassphraseDialog {
         cx.notify();
     }
 
+    /// Quitting saves drafts first: empties the input, lets it go and
+    /// gives the prompt back unanswered, to be held while the drafts are
+    /// saved. The caller closes the dialog.
+    pub(crate) fn withdraw(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PromptRequest> {
+        self._enter = None;
+        if let Some(input) = self.input.take() {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+        self.prompt.take()
+    }
+
     /// Empties the input and lets it go, then replies, once. False when
     /// the prompt was already answered.
     fn answer(&mut self, reply: PromptReply, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -215,15 +232,28 @@ fn text(id: &'static str, value: impl Into<String>) -> impl IntoElement {
         .child(value)
 }
 
+/// A dialog button. Enter on it presses it: its wrapper takes the dialog's
+/// Enter (`Confirm`, dispatched on key down) before the dialog, whose
+/// `on_ok` would submit. Enter in the input, or with no button focused,
+/// still submits.
 fn button(
     id: &'static str,
     label: &'static str,
     primary: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let button = Button::new((id, 0usize)).label(label).on_click(on_click);
+    let on_click = std::rc::Rc::new(on_click);
+    let on_enter = on_click.clone();
+    let button = Button::new((id, 0usize))
+        .label(label)
+        .on_click(move |event, window, cx| on_click(event, window, cx));
     let button = if primary { button.primary() } else { button };
-    div().id(id).test_support().aria_label(label).child(button)
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(label)
+        .on_action(move |_: &Confirm, window, cx| on_enter(&ClickEvent::default(), window, cx))
+        .child(button)
 }
 
 impl Render for PassphraseDialog {

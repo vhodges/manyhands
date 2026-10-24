@@ -21,7 +21,10 @@ use gpui_kit::{
     },
     div, px, size,
 };
-use manyhands::repository::{RepositoryError, RepositoryErrorKind, RepositoryService};
+use manyhands::{
+    drafts::DraftStore,
+    repository::{RepositoryError, RepositoryErrorKind, RepositoryService},
+};
 
 use keys::Quit;
 use services::{LibraryBackend, Services};
@@ -82,10 +85,12 @@ fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context
     Root::new(workspace, window, cx)
 }
 
-/// The production services: the library, with no delays, and its
-/// worker.
+/// The production services: the library and the draft store in the
+/// default data directory, with no delays, and its worker. A store that
+/// cannot open leaves the desktop running without drafts.
 fn library_services(service: RepositoryService, cx: &mut App) -> Services {
-    Services::start(Arc::new(LibraryBackend::new(service)), cx)
+    let drafts = DraftStore::open_default();
+    Services::start(Arc::new(LibraryBackend::new(service, drafts)), cx)
 }
 
 fn open_main_window(services: Services, cx: &mut App) -> WindowHandle<Root> {

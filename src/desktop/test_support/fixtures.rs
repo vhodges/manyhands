@@ -8,11 +8,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use manyhands::{
     canonical::ItemId,
+    drafts::{DraftError, DraftStore},
     repository::{
         CancellationToken, CommitIdentity, ConfirmationId, DocumentCreateInput, DocumentDraft,
         FailurePoint, FolderCreateInput, IndexRefreshInput, InitialsChange, KeyGenerateInput,
@@ -56,6 +57,10 @@ pub(crate) struct Fixture {
     // directories are removed, unless a backend still shares it. A test
     // keeps the fixture for as long as anything it built can read.
     service: Arc<RepositoryService>,
+    /// The draft store in the data directory, opened by the first backend
+    /// or test that asks, so a test can change `drafts/` before. Every
+    /// backend and the test share it, and so its claims.
+    drafts: OnceLock<Result<DraftStore, DraftError>>,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -72,6 +77,7 @@ impl Fixture {
         let service = Arc::new(RepositoryService::open_at(data.path()).unwrap());
         Self {
             service,
+            drafts: OnceLock::new(),
             data,
             home,
             repositories,
@@ -82,13 +88,31 @@ impl Fixture {
         &self.service
     }
 
-    /// A delaying backend over this fixture's own service and home: the
-    /// desktop under test and the fixture see the same service.
+    /// A delaying backend over this fixture's own service, draft store
+    /// and home: the desktop under test and the fixture see the same
+    /// service and store.
     pub(crate) fn delaying_backend(&self) -> Arc<DelayingBackend> {
         Arc::new(DelayingBackend::new(
             self.service.clone(),
             self.home().to_owned(),
+            self.drafts_opened(),
         ))
+    }
+
+    /// `DraftStore::open_in` of the data directory, the first time.
+    fn drafts_opened(&self) -> Result<DraftStore, DraftError> {
+        self.drafts
+            .get_or_init(|| DraftStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The draft store the desktop under test shares, for a test to store
+    /// drafts in. Panics if it did not open.
+    pub(crate) fn draft_store(&self) -> DraftStore {
+        match self.drafts_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's draft store must open: {error}"),
+        }
     }
 
     pub(crate) fn data_dir(&self) -> &Path {

@@ -19,6 +19,7 @@ use std::{
 };
 
 use manyhands::{
+    drafts::{DraftError, DraftErrorKind},
     repository::{
         HostObservationDto, OperationAction, OperationDto, OperationFamily, OperationId,
         OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
@@ -32,7 +33,7 @@ use super::{
     stamp::{Generations, RepoKey, Stamp, ViewScope},
 };
 use crate::desktop::services::{
-    ReadResult,
+    DraftStoreUnavailable, ReadResult,
     prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     worker::WorkerEvent,
@@ -43,6 +44,28 @@ pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not ava
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
 pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
+/// The persistent entry of a draft store that did not open.
+pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
+
+/// The store-unavailable entry's text: the fixed sentence and the store's
+/// fixed reason, never a path.
+pub(crate) fn drafts_unavailable(reason: DraftStoreUnavailable) -> String {
+    format!("{DRAFTS_UNAVAILABLE}: {reason}")
+}
+
+/// The launch's entry: how many drafts it found that no one here holds.
+pub(crate) fn recovered_drafts(count: usize) -> String {
+    format!("Recovered drafts: {count}")
+}
+
+/// A failing session's entry text: its item's title as read, never the
+/// draft's (ruling R25), and the store's fixed reason.
+pub(crate) fn draft_flush_failed(title: &str, kind: DraftErrorKind) -> String {
+    format!(
+        "Recovery copy of {title} not saved: {}",
+        DraftError { kind }
+    )
+}
 
 impl Rows for OperationListDto {
     fn is_empty(&self) -> bool {
@@ -62,6 +85,8 @@ pub(crate) struct Operations {
     /// The passphrase the running job asks for, until the workspace takes
     /// it to show. It holds no secret: only where the reply goes.
     prompt: Option<PromptRequest>,
+    /// Quitting is saving drafts (`QuitPhase::SavingDrafts`).
+    saving_drafts: bool,
     /// How many removals were recorded (`removals`).
     removals: u64,
     /// The last host observation's answer, by its request: what the Hosts
@@ -211,6 +236,23 @@ impl Operations {
     /// The prompt waiting to be shown, taken: whoever takes it answers it.
     pub(crate) fn take_prompt(&mut self) -> Option<PromptRequest> {
         self.prompt.take()
+    }
+
+    /// A prompt taken and withdrawn unanswered from its dialog, to be
+    /// shown or answered later. One worker asks one prompt at a time, so
+    /// nothing else waits here.
+    pub(crate) fn hold_prompt(&mut self, prompt: PromptRequest) {
+        self.prompt = Some(prompt);
+    }
+
+    /// Whether quitting is saving drafts: no confirmation opens in front
+    /// of Quit now.
+    pub(crate) fn saving_drafts(&self) -> bool {
+        self.saving_drafts
+    }
+
+    pub(crate) fn set_saving_drafts(&mut self, saving: bool) {
+        self.saving_drafts = saving;
     }
 
     /// Hides a request that is no longer queued or running.

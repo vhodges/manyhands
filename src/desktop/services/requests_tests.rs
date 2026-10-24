@@ -2,7 +2,7 @@ use std::{collections::HashSet, path::Path};
 
 use manyhands::{
     repository::{
-        InitialsChange, OperationId, SharedKeyId,
+        InitialsChange, OperationId, RelationshipWrite, SharedKeyId,
         keys::{KeyStore, SecretPassphrase},
         transport::SshAuthority,
     },
@@ -11,6 +11,8 @@ use manyhands::{
 
 use super::{Intent, NotBuilt};
 use crate::desktop::{services::KeyStoreUnavailable, test_support::fixtures::Fixture};
+
+const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 
 fn authority() -> SshAuthority {
     SshAuthority {
@@ -95,12 +97,32 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             operation_id: OperationId::new(),
         },
         Intent::OperationAbandon {
-            root,
+            root: root.clone(),
             operation_id: OperationId::new(),
+        },
+        Intent::DocumentSave {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+            title: "Title".to_owned(),
+            body: "Body".to_owned(),
+            observation: Some("observation".to_owned()),
+        },
+        Intent::TicketSave {
+            root,
+            id: ITEM.parse().unwrap(),
+            title: "Title".to_owned(),
+            ticket_type: "task".to_owned(),
+            status: "open".to_owned(),
+            project: None,
+            team: None,
+            body: "Body".to_owned(),
+            deps: RelationshipWrite::Unchanged,
+            parent: RelationshipWrite::Unchanged,
+            observation: "observation".to_owned(),
         },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 19, "one intent of every variant");
+    assert_eq!(listed.len(), 21, "one intent of every variant");
     intents
 }
 
@@ -125,6 +147,8 @@ fn variant(intent: &Intent) -> usize {
         Intent::HostReplace { .. } => 16,
         Intent::OperationResume { .. } => 17,
         Intent::OperationAbandon { .. } => 18,
+        Intent::DocumentSave { .. } => 19,
+        Intent::TicketSave { .. } => 20,
     }
 }
 
@@ -175,6 +199,8 @@ fn every_intent_builds_its_own_command() {
         "host replace",
         "operation resume",
         "operation abandon",
+        "document save",
+        "ticket save",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -227,8 +253,8 @@ fn changes_items_names_the_intents_that_can_change_items() {
     for intent in every_intent(&root) {
         let expected = match variant(&intent) {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
-            // OperationResume, OperationAbandon.
-            0 | 1 | 7 | 8 | 17 | 18 => true,
+            // OperationResume, OperationAbandon, DocumentSave, TicketSave.
+            0 | 1 | 7 | 8 | 17..=20 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,

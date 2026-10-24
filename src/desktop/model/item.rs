@@ -10,7 +10,7 @@ use manyhands::{
         CommentDto, CommentListDto, DependencyTreeDto, ItemContextDto, ItemContextKind, ItemDto,
         ItemDtoKind, ItemListDto, ProblemDto,
     },
-    results::ProblemCode,
+    results::{ProblemCode, ResultCode},
 };
 use serde_json::Value;
 
@@ -204,6 +204,17 @@ impl ItemView {
 
     pub(crate) fn item(&self) -> &ListState<ItemDto> {
         &self.item
+    }
+
+    /// The item as the last load gave it, as a draft's target state takes
+    /// it: the item, or the code of the read that failed. `None` while the
+    /// first load is in flight or stayed busy.
+    pub(crate) fn item_read(&self) -> Option<Result<&ItemDto, ResultCode>> {
+        match &self.item {
+            ListState::Ready { rows, .. } => Some(Ok(rows)),
+            ListState::Failed(failure) => Some(Err(failure.code)),
+            _ => None,
+        }
     }
 
     pub(crate) fn comments(&self) -> Option<&ListState<CommentListDto>> {

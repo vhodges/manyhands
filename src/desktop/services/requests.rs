@@ -14,19 +14,19 @@ use std::path::{Path, PathBuf};
 
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, IndexRebuildInput,
-        IndexRefreshInput, InitialsChange, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
-        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, OperationAbandonInput,
-        OperationId, OperationResumeInput, ProgressStage, RemoteAddInput, RemoteRemoveInput,
-        RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-        RequestId, SharedKeyId,
-        keys::{KeyProtection, KeyStore, SecretPassphrase},
-        transport::SshAuthority,
+        ConfirmationId, InitialsChange, OperationId, ProgressStage, RelationshipWrite, RequestId,
+        SharedKeyId, transport::SshAuthority,
     },
     results::{Effects, Outcome, RecoveryAction, ResultCode},
 };
 
-use super::{JobKind, KeyStoreUnavailable};
+use manyhands::canonical::ItemId;
+
+mod build;
+
+pub(crate) use build::NotBuilt;
+
+use super::JobKind;
 
 /// Which queue a job waits in. The worker always takes the next user job
 /// before any background job.
@@ -37,7 +37,8 @@ pub(crate) enum Lane {
 }
 
 /// One command the desktop can ask the library for, with the values it
-/// was asked with. One variant per command D1 offers.
+/// was asked with. One variant per command D1 offers, and the two saves
+/// of a draft.
 #[derive(Clone)]
 pub(crate) enum Intent {
     RepoCreate {
@@ -122,164 +123,34 @@ pub(crate) enum Intent {
         root: PathBuf,
         operation_id: OperationId,
     },
-}
-
-/// Why an intent could not be made into a command. Nothing was asked of
-/// the library.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum NotBuilt {
-    /// A protected key generation was given no passphrase: the user is to
-    /// enter it again.
-    MissingSecret,
-    /// A key command's store could not be found.
-    KeyStoreUnavailable,
-}
-
-impl From<KeyStoreUnavailable> for NotBuilt {
-    fn from(_: KeyStoreUnavailable) -> Self {
-        Self::KeyStoreUnavailable
-    }
-}
-
-fn identity(identity: &Option<(String, String)>) -> Option<CommitIdentity> {
-    identity.as_ref().map(|(name, email)| CommitIdentity {
-        name: name.clone(),
-        email: email.clone(),
-    })
+    /// A draft's revision saved as the document, from the observation
+    /// of the draft's base. It holds the body.
+    DocumentSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        body: String,
+        observation: Option<String>,
+    },
+    /// A draft's revision saved as the ticket. `deps` and `parent` are
+    /// left as the file has them when the draft did not change them
+    /// (ruling R13).
+    TicketSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        ticket_type: String,
+        status: String,
+        project: Option<String>,
+        team: Option<String>,
+        body: String,
+        deps: RelationshipWrite<Vec<String>>,
+        parent: RelationshipWrite<String>,
+        observation: String,
+    },
 }
 
 impl Intent {
-    /// The library command for one attempt. `secret` is the passphrase of
-    /// a protected key generation and is dropped by every other intent.
-    /// `store` is asked for only by the commands that need the key store.
-    pub(crate) fn build(
-        &self,
-        secret: Option<SecretPassphrase>,
-        store: impl FnOnce() -> Result<KeyStore, KeyStoreUnavailable>,
-    ) -> Result<Mutation, NotBuilt> {
-        Ok(match self {
-            Self::RepoCreate {
-                root,
-                primary_branch,
-                identity: id,
-                slug_prefix,
-            } => Mutation::RepoCreate(RepoCreateInput {
-                root: root.clone(),
-                primary_branch: primary_branch.clone(),
-                identity: identity(id),
-                slug_prefix: slug_prefix.clone(),
-            }),
-            Self::RepoEnable {
-                root,
-                primary_branch,
-                identity: id,
-                slug_prefix,
-            } => Mutation::RepoEnable(RepoEnableInput {
-                root: root.clone(),
-                primary_branch: primary_branch.clone(),
-                identity: identity(id),
-                slug_prefix: slug_prefix.clone(),
-            }),
-            Self::RepoRemove { root } => {
-                Mutation::RepoRemove(RepoRemoveInput { root: root.clone() })
-            }
-            Self::RepoIdentitySet {
-                root,
-                name,
-                email,
-                initials,
-            } => Mutation::RepoIdentitySet(RepoIdentitySetInput {
-                root: root.clone(),
-                name: name.clone(),
-                email: email.clone(),
-                initials: initials.clone(),
-            }),
-            Self::RemoteAdd { root, name, url } => Mutation::RemoteAdd(RemoteAddInput {
-                root: root.clone(),
-                name: name.clone(),
-                url: url.clone(),
-            }),
-            Self::RemoteRemove { root, name } => Mutation::RemoteRemove(RemoteRemoveInput {
-                root: root.clone(),
-                name: name.clone(),
-            }),
-            Self::RemoteSelect { root, name } => Mutation::RemoteSelect(RemoteSelectInput {
-                root: root.clone(),
-                name: name.clone(),
-            }),
-            Self::IndexRefresh { root } => {
-                Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() })
-            }
-            Self::IndexRebuild { root } => {
-                Mutation::IndexRebuild(IndexRebuildInput { root: root.clone() })
-            }
-            Self::KeyGenerate { label, protected } => {
-                let protection = if *protected {
-                    KeyProtection::Passphrase(secret.ok_or(NotBuilt::MissingSecret)?)
-                } else {
-                    KeyProtection::Unencrypted
-                };
-                Mutation::KeyGenerate(KeyGenerateInput {
-                    store: store()?,
-                    label: label.clone(),
-                    protection,
-                })
-            }
-            Self::KeyImport {
-                label,
-                private_key_path,
-                public_key_path,
-            } => Mutation::KeyImport(KeyImportInput {
-                label: label.clone(),
-                private_key_path: private_key_path.clone(),
-                public_key_path: public_key_path.clone(),
-            }),
-            Self::KeySelect { id } => Mutation::KeySelect(KeySelectInput { id: *id }),
-            Self::KeyClear => Mutation::KeyClear(KeyClearInput {}),
-            Self::KeyRemove { id } => Mutation::KeyRemove(KeyRemoveInput { id: *id }),
-            Self::KeyDelete { id } => Mutation::KeyDelete(KeyDeleteInput {
-                store: store()?,
-                id: *id,
-            }),
-            Self::HostApprove {
-                root,
-                authority,
-                algorithm,
-                fingerprint,
-            } => Mutation::HostApprove(HostApproveInput {
-                root: root.clone(),
-                authority: authority.clone(),
-                algorithm: algorithm.clone(),
-                fingerprint: fingerprint.clone(),
-            }),
-            Self::HostReplace {
-                root,
-                authority,
-                algorithm,
-                fingerprint,
-                old_fingerprint,
-            } => Mutation::HostReplace(HostReplaceInput {
-                root: root.clone(),
-                authority: authority.clone(),
-                algorithm: algorithm.clone(),
-                fingerprint: fingerprint.clone(),
-                old_fingerprint: old_fingerprint.clone(),
-            }),
-            Self::OperationResume { root, operation_id } => {
-                Mutation::OperationResume(OperationResumeInput {
-                    root: root.clone(),
-                    operation_id: *operation_id,
-                })
-            }
-            Self::OperationAbandon { root, operation_id } => {
-                Mutation::OperationAbandon(OperationAbandonInput {
-                    root: root.clone(),
-                    operation_id: *operation_id,
-                })
-            }
-        })
-    }
-
     /// Whether the command needs confirmation: `prepare` previews it, and
     /// `execute` runs it only with the confirmation the preview gave. The
     /// library's own list; a test holds the two together.
@@ -303,7 +174,9 @@ impl Intent {
             | Self::KeySelect { .. }
             | Self::KeyClear
             | Self::KeyRemove { .. }
-            | Self::OperationResume { .. } => false,
+            | Self::OperationResume { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. } => false,
         }
     }
 
@@ -330,6 +203,8 @@ impl Intent {
             Self::HostReplace { .. } => "Replace host key",
             Self::OperationResume { .. } => "Resume operation",
             Self::OperationAbandon { .. } => "Abandon operation",
+            Self::DocumentSave { .. } => "Save document",
+            Self::TicketSave { .. } => "Save ticket",
         }
     }
 
@@ -348,7 +223,9 @@ impl Intent {
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
-            | Self::OperationAbandon { root, .. } => Some(root),
+            | Self::OperationAbandon { root, .. }
+            | Self::DocumentSave { root, .. }
+            | Self::TicketSave { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -378,7 +255,9 @@ impl Intent {
             | Self::OperationResume { .. }
             | Self::OperationAbandon { .. }
             | Self::RepoCreate { .. }
-            | Self::RepoEnable { .. } => true,
+            | Self::RepoEnable { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -417,6 +296,8 @@ impl Intent {
             Self::HostReplace { .. } => JobKind::HostReplace,
             Self::OperationResume { .. } => JobKind::OperationResume,
             Self::OperationAbandon { .. } => JobKind::OperationAbandon,
+            Self::DocumentSave { .. } => JobKind::DocumentSave,
+            Self::TicketSave { .. } => JobKind::TicketSave,
         }
     }
 }

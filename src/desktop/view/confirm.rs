@@ -25,6 +25,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex, v_flex,
     },
     div,
@@ -59,6 +60,8 @@ pub(crate) const PINNED_KEY: &str = "Pinned key";
 /// A repository removal's preview, which says it changes no file and
 /// nothing Git holds, says so in words too (design, Repositories).
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
+/// A removal keeps the drafts of the repository's items (design, Tabs).
+pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay in Drafts.";
 
 /// The answers that mean the preview no longer stands: the dialog offers
 /// Prepare again.
@@ -128,9 +131,10 @@ fn open(
     window: &mut Window,
     cx: &mut App,
 ) {
-    // Quitting waits for a job with "Finishing" and Quit now in view:
-    // nothing opens in front of them, and no request could be sent.
-    if services.worker().quitting() {
+    // Quitting waits for drafts or a job with Quit now in view: nothing
+    // opens in front of it, and once the worker quits no request could be
+    // sent.
+    if services.worker().quitting() || services.operations().read(cx).saving_drafts() {
         return;
     }
     let title = intent.label();
@@ -598,17 +602,26 @@ impl ConfirmDialog {
         disabled: bool,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
+        let on_click = std::rc::Rc::new(on_click);
+        let on_enter = on_click.clone();
         let button = Button::new((id, 0usize))
             .label(label)
             .disabled(disabled)
-            .on_click(on_click);
+            .on_click(move |event, window, cx| on_click(event, window, cx));
         let button = if primary { button.primary() } else { button };
-        div()
-            .id(id)
-            .test_support()
-            .aria_label(label)
-            .child(button)
-            .into_any_element()
+        // Enter on a focused button presses that button: its wrapper takes
+        // the dialog's Enter (`Confirm`, dispatched on key down) before the
+        // dialog, whose `on_ok` would confirm. A disabled button cannot take
+        // the focus. With no button focused, Enter is the dialog's.
+        let wrapper = div().id(id).test_support().aria_label(label);
+        match disabled {
+            true => wrapper,
+            false => wrapper.on_action(move |_: &Confirm, window, cx| {
+                on_enter(&ClickEvent::default(), window, cx)
+            }),
+        }
+        .child(button)
+        .into_any_element()
     }
 
     fn preview_body(&self, cx: &App) -> Option<impl IntoElement + use<>> {
@@ -622,6 +635,8 @@ impl ConfirmDialog {
             }
             _ => None,
         };
+        let drafts = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_))
+            .then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
         Some(
             v_flex()
                 .gap_1()
@@ -643,6 +658,7 @@ impl ConfirmDialog {
                         .map(|(ix, (name, value))| named(("confirm-detail", ix), name, &value)),
                 )
                 .children(note)
+                .children(drafts)
                 .child(
                     text(
                         "confirm-expires",

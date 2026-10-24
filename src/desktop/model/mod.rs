@@ -1,6 +1,7 @@
 //! GPUI-free view state.
 
 pub(crate) mod documents;
+pub(crate) mod drafts;
 pub(crate) mod find;
 pub(crate) mod item;
 pub(crate) mod list_state;

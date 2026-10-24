@@ -31,7 +31,7 @@ use super::{CANCEL, REFUSED, UNLOCK, label_for};
 use crate::desktop::{
     keys::Quit,
     services::{
-        JobKind,
+        JobKind, ReadKind,
         prompts::{PromptReply, PromptRequest},
         requests::{Intent, Lane, RequestState},
     },
@@ -399,6 +399,100 @@ async fn closing_the_window_answers_an_open_prompt_unavailable(cx: &mut TestAppC
         workspace.quit_phase() == QuitPhase::Quit
     })
     .await;
+}
+
+/// Quitting saves an unsaved draft first: an open prompt's dialog closes,
+/// so nothing stands in front of Quit now, but the prompt is held, not
+/// answered. When the drafts are saved and quitting proceeds, it is
+/// answered `Unavailable`.
+#[gpui_kit::test]
+async fn a_prompt_held_while_drafts_save_is_answered_once_quitting_proceeds(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::SavingDrafts);
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(shell.present("quit-now", cx));
+    assert!(asked.waiting(), "the prompt is held, not answered");
+
+    let _ = gate.send(());
+    shell.run(cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Quit);
+    assert_eq!(asked.answered(), "unavailable");
+}
+
+/// A prompt that arrives while drafts save is held: no dialog, no answer,
+/// until quitting proceeds and answers it `Unavailable`.
+#[gpui_kit::test]
+async fn a_prompt_arriving_while_drafts_save_is_held(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+
+    let mut asked = ask(&shell, "primary", cx);
+    let operations = shell.operations(cx);
+    wait_until(cx, &operations, |operations, _| operations.has_prompt()).await;
+    shell.run(cx);
+    assert!(asked.waiting(), "the prompt is held, not answered");
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    let _ = gate.send(());
+    shell.run(cx);
+    assert_eq!(asked.answered(), "unavailable");
+}
+
+/// Quitting abandoned: with `drafts/` read-only the flush fails and the
+/// dialog asks; Cancel shows the prompt held meanwhile again, unanswered,
+/// and it is still the prompt's own to answer.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_prompt_held_while_drafts_save_shows_again_on_cancel(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    cx.executor().allow_parking();
+    let shell = Shell::open(Fixture::new(), cx);
+    shell.unsaved_draft(cx).await;
+    let mut asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    let folder = shell.fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+    shell.visual(cx).dispatch_action(Quit);
+    shell.run(cx);
+    assert!(shell.present("drafts-not-saved-message", cx));
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(asked.waiting(), "the prompt is held through the dialog");
+
+    shell.click("drafts-not-saved-cancel", cx);
+    shell.run(cx);
+    assert!(!shell.present("drafts-not-saved-message", cx));
+    assert!(shell.present("passphrase-dialog", cx));
+    assert!(asked.waiting(), "Cancel shows the prompt, unanswered");
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Running);
+
+    shell.keys("escape", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 
 /// A prompt that arrives once quitting has begun is answered

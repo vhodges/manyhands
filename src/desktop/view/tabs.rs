@@ -6,7 +6,10 @@
 //! keeps the last title (ruling R-B5). Closing drops only that tab's state.
 
 use super::{
-    item::ItemPane, relationships::OpenRelated, scroll::ContentScroll, workspace::Workspace,
+    item::{DraftDiscarded, ItemPane, ReviewInDrafts},
+    relationships::OpenRelated,
+    scroll::ContentScroll,
+    workspace::Workspace,
 };
 use crate::desktop::{
     model::{
@@ -43,7 +46,9 @@ pub(crate) struct TabContent {
     panes: HashMap<TabId, Entity<ItemPane>>,
     focus: HashMap<TabId, FocusHandle>,
     close_focus: HashMap<TabId, FocusHandle>,
-    related: HashMap<TabId, Subscription>,
+    /// Each pane's related item opened, its Review in Drafts, and its
+    /// restored draft discarded.
+    related: HashMap<TabId, [Subscription; 3]>,
     scroll: ContentScroll,
 }
 
@@ -59,6 +64,18 @@ impl TabContent {
     }
     pub(super) fn active(&self) -> Option<TabId> {
         self.tabs.active()
+    }
+    pub(super) fn pane(&self, id: TabId) -> Option<&Entity<ItemPane>> {
+        self.panes.get(&id)
+    }
+
+    /// The open tab of `key`.
+    pub(super) fn find(&self, key: &TabKey) -> Option<TabId> {
+        self.tabs
+            .tabs()
+            .iter()
+            .find(|(_, open)| open == key)
+            .map(|(id, _)| *id)
     }
 
     #[cfg(test)]
@@ -91,7 +108,13 @@ impl TabContent {
             let related = cx.subscribe(&pane, |this, _, event: &OpenRelated, cx| {
                 this.open_item(event.0.clone(), cx)
             });
-            self.related.insert(id, related);
+            let review = cx.subscribe(&pane, |this, _, event: &ReviewInDrafts, cx| {
+                this.review_in_drafts(event.0, cx)
+            });
+            let discarded = cx.subscribe(&pane, |this, _, _: &DraftDiscarded, cx| {
+                this.draft_discarded(cx)
+            });
+            self.related.insert(id, [related, review, discarded]);
             self.panes.insert(id, pane);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());
@@ -204,8 +227,8 @@ impl TabContent {
                                 .ghost()
                                 .label("×")
                                 .accessibility_label(close_label(&title))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.close_tab(id, cx)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.close_tab(id, window, cx);
                                 })),
                         ),
                 ),

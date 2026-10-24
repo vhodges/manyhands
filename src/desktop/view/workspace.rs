@@ -23,6 +23,7 @@ use gpui_kit::{
 pub(crate) use super::quit::QuitPhase;
 use super::{
     documents::DocumentsPane,
+    drafts::{DraftsEvent, DraftsPage},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
     sidebar::RepositoriesPane,
@@ -40,11 +41,19 @@ pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
 #[cfg(test)]
 use gpui_kit::App;
+use manyhands::drafts::DraftId;
 
-/// The existing tabs and cached Settings entity share one content region.
+/// The tabs, the cached Settings entity and the cached Drafts page share
+/// one content region; `content.rs` routes between them.
 struct ContentArea {
     tabs: TabContent,
     settings: Entity<SettingsHost>,
+    drafts: Entity<DraftsPage>,
+    /// A tab's Review in Drafts, for the next frame to open.
+    review: Option<DraftId>,
+    /// A tab's restored draft was discarded: the next frame focuses the
+    /// tab's content.
+    refocus: bool,
 }
 
 pub(crate) struct Workspace {
@@ -75,12 +84,16 @@ pub(crate) struct Workspace {
     _find_events: Subscription,
     content: ContentArea,
     _settings_events: Subscription,
+    _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
     quit: QuitPhase,
     quit_focus: FocusHandle,
     /// The dialog layer owns the open passphrase dialog.
     passphrase: Option<WeakEntity<PassphraseDialog>>,
+    /// While drafts are saved for quitting, and their dialog asks, a
+    /// prompt waits with the request model, neither shown nor answered.
+    prompts_held: bool,
     /// Launch refreshes are submitted once, after the first repository list.
     launched: bool,
     pending_reads: HashMap<RepoKey, Task<()>>,
@@ -89,6 +102,8 @@ pub(crate) struct Workspace {
     control_focus: HashMap<String, FocusHandle>,
     control_drawn: HashSet<String>,
     _operations: Subscription,
+    /// A session's recovery state shows in the operation area.
+    _drafts: Subscription,
     _focus_lost: Subscription,
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
@@ -109,6 +124,7 @@ impl Workspace {
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
+        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -161,6 +177,16 @@ impl Workspace {
                 SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
             },
         );
+        let drafts_page = {
+            let services = services.clone();
+            let scroll = tabs.scroll().clone();
+            cx.new(|cx| DraftsPage::new(services, scroll, cx))
+        };
+        let drafts_events = cx.subscribe_in(
+            &drafts_page,
+            window,
+            |this, _, event: &DraftsEvent, window, cx| this.drafts_event(event, window, cx),
+        );
         let mut workspace = Self {
             services,
             regions,
@@ -183,12 +209,20 @@ impl Workspace {
                 .map(|id| (id, cx.focus_handle()))
                 .collect(),
             _find_events: find_events,
-            content: ContentArea { tabs, settings },
+            content: ContentArea {
+                tabs,
+                settings,
+                drafts: drafts_page,
+                review: None,
+                refocus: false,
+            },
             _settings_events: settings_events,
+            _drafts_events: drafts_events,
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),
             passphrase: None,
+            prompts_held: false,
             launched: false,
             pending_reads: HashMap::new(),
             abandon_focus: HashMap::new(),
@@ -196,6 +230,7 @@ impl Workspace {
             control_focus: HashMap::new(),
             control_drawn: HashSet::new(),
             _operations: operations,
+            _drafts: drafts,
             _focus_lost: focus_lost,
             _ticket_events: ticket_events,
             repositories_pane,

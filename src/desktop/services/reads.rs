@@ -88,6 +88,12 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
+    /// A reader of its own, outside a read job: the draft registry's
+    /// re-read after a save.
+    pub(super) fn new(backend: Arc<dyn Backend>, timers: BackgroundExecutor) -> Self {
+        Self { backend, timers }
+    }
+
     /// One call of the job: awaits the gate of `kind`, asked for now that
     /// the job has reached it, then calls `f`, retrying it on `busy` after
     /// each of `BUSY_RETRY_DELAYS`.

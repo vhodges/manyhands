@@ -1,4 +1,5 @@
-//! One ordered load per tab, stamped by the existing ItemView model.
+//! One ordered load per tab, stamped by the existing ItemView model. A load
+//! that lands has an attached draft's target state computed again.
 
 use std::path::PathBuf;
 
@@ -110,6 +111,9 @@ impl ItemPane {
             cx,
             |this: &mut Self, stamp, reads, cx| {
                 if this.model.apply_reads(stamp, reads) {
+                    // An attached draft is classified against the new read;
+                    // its text and base stay as they are.
+                    this.draft.reads_landed();
                     cx.notify();
                 }
             },

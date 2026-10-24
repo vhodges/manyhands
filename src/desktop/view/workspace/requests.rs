@@ -13,7 +13,7 @@ use crate::desktop::{
     },
 };
 use gpui_kit::{App, Context, FocusHandle, Window, component::WindowExt};
-use manyhands::repository::OperationId;
+use manyhands::{drafts::DraftId, repository::OperationId};
 use std::path::PathBuf;
 
 impl Workspace {
@@ -139,10 +139,32 @@ impl Workspace {
         id: DesktopRequestId,
         cx: &mut Context<Self>,
     ) {
-        self.services.operations().update(cx, |operations, cx| {
+        let dismissed = self.services.operations().update(cx, |operations, cx| {
             operations.dismiss(id);
             cx.notify();
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Dismissed))
         });
+        // A pending save dismissed is over (ruling R22).
+        if dismissed {
+            self.services
+                .drafts()
+                .update(cx, |registry, cx| registry.dismissed(id, cx));
+        }
+    }
+
+    /// A failing session's Retry: writes its newest revision now. The
+    /// entry shows how it went, and goes once a write lands.
+    pub(in crate::desktop::view) fn retry_draft_flush(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) {
+        self.services
+            .drafts()
+            .update(cx, |registry, cx| registry.flush_now(id, cx))
+            .detach();
     }
 
     pub(in crate::desktop::view) fn resume(

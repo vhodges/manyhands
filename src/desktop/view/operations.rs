@@ -7,7 +7,11 @@
 //! request stays expanded, with its message, code, effects and recovery
 //! actions, until it is dismissed. A queued request, or a running one the
 //! library has not accepted, offers Cancel; an accepted one reads
-//! "Finishing".
+//! "Finishing". A draft store that did not open keeps an entry with its
+//! fixed reason at the top, with no Dismiss; so does each session whose
+//! recovery copy could not be written, named by its item's title as read,
+//! with Retry, until a write lands. The launch's "Recovered drafts" entry
+//! (`recovered`) follows the store's, with Review and Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -31,14 +35,20 @@ use gpui_kit::{
     },
     div,
 };
-use manyhands::results::{Effects, Outcome, RecoveryAction};
+use manyhands::{
+    drafts::DraftId,
+    results::{Effects, Outcome, RecoveryAction},
+};
+
+mod recovered;
 
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, recovery_label, resume_offer,
+            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, draft_flush_failed,
+            drafts_unavailable, recovery_label, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -142,6 +152,11 @@ pub(crate) fn request_id(id: DesktopRequestId, part: &str) -> String {
 
 pub(crate) fn recovery_id(id: DesktopRequestId, n: usize) -> String {
     format!("request-{}-recovery-{n}", id.0)
+}
+
+/// The element ids of a failing session's entry.
+pub(crate) fn draft_flush_id(id: DraftId, part: &str) -> String {
+    format!("draft-flush-{id}-{part}")
 }
 
 type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
@@ -310,9 +325,58 @@ impl Workspace {
         }
     }
 
+    /// A failing draft's Retry. The drafts-not-saved dialog's Cancel gives
+    /// the focus to its wrapper, which then draws a ring and is pressed by
+    /// Enter or Space; Tab reaches the Kit button inside, which draws its
+    /// own. A pointer's click is the button's only.
+    fn draft_flush_retry(
+        &self,
+        id: DraftId,
+        focus: &FocusHandle,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let retry = draft_flush_id(id, "retry");
+        let ring = cx.theme().ring;
+        div()
+            .id(ElementId::from(retry.clone()))
+            .test_support()
+            .aria_label(super::sidebar::RETRY)
+            .relative()
+            .rounded_sm()
+            .track_focus(focus)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.is_keyboard() {
+                    this.retry_draft_flush(id, cx)
+                }
+            }))
+            .child(
+                Button::new(ElementId::NamedChild(
+                    std::sync::Arc::new(ElementId::from(retry.clone())),
+                    "button".into(),
+                ))
+                .label(super::sidebar::RETRY)
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_draft_flush(id, cx)),
+                ),
+            )
+            .children(focus.is_focused(window).then(|| {
+                div()
+                    .id(format!("{retry}-focus-ring"))
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .rounded_sm()
+                    .border_2()
+                    .border_color(ring)
+            }))
+            .into_any_element()
+    }
+
     /// The "This session" section.
     pub(super) fn session_section(
         &mut self,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let requests: Vec<_> = self
@@ -324,10 +388,33 @@ impl Workspace {
             .filter(|request| !matches!(request.state, RequestState::Dismissed))
             .map(|request| request.id)
             .collect();
+        let unavailable = self.services().drafts().read(cx).unavailable();
+        let recovered = self.recovered_entry(cx);
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
-            .child(div().text_sm().child(THIS_SESSION));
+            .child(div().text_sm().child(THIS_SESSION))
+            // Persistent: the store stays closed for the session, so the
+            // entry offers no Dismiss.
+            .children(
+                unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
+            )
+            .children(recovered);
+        let failures = self.services().drafts().read(cx).flush_failures();
+        for (id, title, kind) in failures {
+            // Until a later flush succeeds: no Dismiss.
+            let retry = draft_flush_id(id, "retry");
+            let focus = self.control_focus_for(retry.clone(), cx);
+            section = section.child(
+                h_flex()
+                    .gap_2()
+                    .child(text(
+                        draft_flush_id(id, "entry"),
+                        draft_flush_failed(&title, kind),
+                    ))
+                    .child(self.draft_flush_retry(id, &focus, window, cx)),
+            );
+        }
         if requests.is_empty() {
             section = section.child(
                 text("session-empty", NO_REQUESTS)
@@ -494,6 +581,7 @@ impl Workspace {
                     let focused = focus.is_focused(window);
                     let target = (root.clone(), operation_id);
                     let origin = focus.clone();
+                    let (pressed, pressed_origin) = (target.clone(), origin.clone());
                     controls = controls.child(
                         div()
                             .id(("pending-abandon", index))
@@ -502,6 +590,20 @@ impl Workspace {
                             .track_focus(&focus)
                             .rounded_sm()
                             .when_focused(focused, cx)
+                            // The focus the confirmation gives back on Escape is the
+                            // wrapper's: Enter or Space presses Abandon there too. A
+                            // pointer's click is the button's.
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if event.is_keyboard() {
+                                    this.abandon(
+                                        pressed.0.clone(),
+                                        &pressed.1,
+                                        pressed_origin.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                }
+                            }))
                             .child(
                                 Button::new(("pending-abandon-button", index))
                                     .danger()
