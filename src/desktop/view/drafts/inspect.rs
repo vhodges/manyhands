@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 use manyhands::drafts::{DraftId, TargetState};
 
-use super::{DraftsPage, INSPECT, Slot, actions::action_ix};
+use super::{DraftsPage, INSPECT, Slot, row_actions::action_ix};
 use crate::desktop::{
     keys::{CloseInspect, DRAFT_INSPECT_CONTEXT},
     view::draft_comparison::{DraftComparisonView, FieldIds, draft_fields},

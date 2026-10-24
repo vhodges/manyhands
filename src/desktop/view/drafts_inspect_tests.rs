@@ -143,10 +143,10 @@ fn export_raw_writes_an_unreadable_drafts_bytes(cx: &mut TestAppContext) {
 #[cfg(unix)]
 #[gpui_kit::test]
 fn a_failed_export_leaves_an_existing_file_unchanged(cx: &mut TestAppContext) {
-    use std::os::unix::fs::PermissionsExt;
+    use crate::desktop::test_support::drafts::{FolderMode, superuser};
 
     // Permissions do not bind the superuser.
-    if unsafe { libc::geteuid() } == 0 {
+    if superuser() {
         return;
     }
     let fixture = Fixture::new();
@@ -157,16 +157,14 @@ fn a_failed_export_leaves_an_existing_file_unchanged(cx: &mut TestAppContext) {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("One.md");
     std::fs::write(&path, b"kept as it was").unwrap();
-    std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let _read_only = FolderMode::set(folder.path(), 0o555);
 
     shell.click(row_id(id, "export"), cx);
     let chosen = path.clone();
     cx.simulate_new_path_selection(move |_| Some(chosen));
     shell.run(cx);
-    let notice = shell.label(row_id(id, "notice"), cx);
-    std::fs::set_permissions(folder.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(
-        notice,
+        shell.label(row_id(id, "notice"), cx),
         Some(export_failed(manyhands::drafts::DraftErrorKind::Access))
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"kept as it was");

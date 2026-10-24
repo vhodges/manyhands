@@ -1,20 +1,19 @@
-//! What can be done with a draft from its row on the Drafts page, and from
-//! the restored draft section of its tab: Restore, Export…, Export raw…
-//! and Discard….
+//! What can be done with a draft both from its row on the Drafts page and
+//! from the restored draft section of its tab: Export…, Export raw… and
+//! Discard…. The page's own use of them is `row_actions`.
 //!
 //! Export asks the platform's save dialog where, with a name from the
 //! draft's title, then writes the draft's Markdown, or an unreadable
 //! file's bytes as they are, through a temporary file in the chosen
-//! folder and a rename: a failed export never truncates a file already
-//! there (ruling R11). A failure reads a fixed sentence, with no path and
-//! no text from the system. Discard asks first in a dialog that names the
-//! draft, its own surface; Escape or Cancel discards nothing, and the
-//! focus goes back to the Discard that opened it.
+//! folder and a rename, and syncs the folder: a failed export never
+//! truncates a file already there (ruling R11). A failure reads a fixed
+//! sentence, with no path and no text from the system. Discard asks first
+//! in a dialog that names the draft, its own surface. Its default is
+//! Cancel: Enter, Escape and Cancel discard nothing, and the focus goes
+//! back to the Discard that opened it; only Confirm discards.
 //!
 //! Neither dialog opens while quitting waits for drafts or a job, with
-//! Quit now in view, nor over another dialog. Restore leaves the page
-//! through its host, which opens the item's tab (ruling R25); the page
-//! never hides itself.
+//! Quit now in view, nor over another dialog.
 
 use std::{
     future::Future,
@@ -24,7 +23,7 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ClickEvent, Context, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    App, ClickEvent, FocusHandle, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{
         WindowExt,
@@ -33,23 +32,12 @@ use gpui_kit::{
     },
     div,
 };
-use manyhands::{
-    canonical::ItemId,
-    drafts::{Draft, DraftError, DraftErrorKind, DraftFields, DraftId, DraftTarget, ItemKind},
-    repository::ItemDtoKind,
-};
+use manyhands::drafts::{Draft, DraftError, DraftErrorKind, DraftFields, DraftId};
 
-use super::{ACTIONS, DraftsEvent, DraftsPage, Slot};
 use crate::desktop::{
-    model::{
-        navigation::{ItemLocator, OpenTarget},
-        tabs::TabKey,
-    },
+    model::drafts::{DraftRow, RowState},
     services::Services,
-    view::{
-        confirm::CANCEL,
-        item::{NOT_DISCARDED, refused_label},
-    },
+    view::confirm::CANCEL,
 };
 
 pub(crate) const EXPORT: &str = "Export…";
@@ -98,7 +86,8 @@ pub(crate) fn export_failed(kind: DraftErrorKind) -> String {
 }
 
 /// Writes `bytes` to `path` through a temporary file in its folder and a
-/// rename, so a failure leaves a file already at `path` as it was. On
+/// rename, so a failure leaves a file already at `path` as it was, then
+/// syncs the folder so the rename lasts, as the store does. On
 /// Unix the file is the owner's only; the user may widen it. Blocking
 /// file I/O.
 pub(crate) fn export_to(path: &Path, bytes: &[u8]) -> Result<(), DraftErrorKind> {
@@ -114,6 +103,10 @@ pub(crate) fn export_to(path: &Path, bytes: &[u8]) -> Result<(), DraftErrorKind>
     file.write_all(bytes).map_err(kind)?;
     file.as_file().sync_all().map_err(kind)?;
     file.persist(path).map_err(|failed| kind(failed.error))?;
+    // The file is written and in place: a folder that cannot be synced
+    // fails nothing.
+    #[cfg(unix)]
+    let _ = std::fs::File::open(folder).and_then(|folder| folder.sync_all());
     Ok(())
 }
 
@@ -188,6 +181,17 @@ pub(crate) fn may_open(services: &Services, window: &mut Window, cx: &mut App) -
         || window.has_active_dialog(cx))
 }
 
+/// What the Discard dialog calls a draft, as its row shows it: its own
+/// title, else its kind ("Ticket", "Comment on <item title>"); `None` for
+/// one that cannot be read. The page and the tab name drafts alike.
+pub(crate) fn draft_name(row: &DraftRow) -> Option<String> {
+    match row.state {
+        RowState::Unreadable(_) => None,
+        _ if !row.title.is_empty() => Some(row.title.clone()),
+        _ => Some(row.kind_label.clone()),
+    }
+}
+
 /// The Discard dialog's message, naming the draft; `None` for a draft that
 /// cannot be read.
 pub(crate) fn discard_message(name: Option<&str>) -> String {
@@ -204,8 +208,10 @@ pub(crate) fn discard_message(name: Option<&str>) -> String {
 type Confirm = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Opens the Discard dialog naming `name`, unless a dialog may not open
-/// now. Confirm, by click or Enter, calls `confirm`; Escape or Cancel
-/// discards nothing. Either way the focus goes back to `origin`.
+/// now. Only Confirm, by click (or Enter on the focused button), calls
+/// `confirm`; the default is Cancel, so Enter, Escape and Cancel
+/// discard nothing (as Keep draft and quit'"'"'s Cancel are the defaults of
+/// D2'"'"'s other dialogs). Either way the focus goes back to `origin`.
 pub(crate) fn open_discard(
     name: Option<String>,
     origin: FocusHandle,
@@ -220,16 +226,13 @@ pub(crate) fn open_discard(
     let confirm: Confirm = Rc::new(confirm);
     let message = discard_message(name.as_deref());
     window.open_dialog(cx, move |base, _, _| {
-        let (enter, close) = (confirm.clone(), origin.clone());
+        let close = origin.clone();
         base.title(DISCARD_TITLE)
             .close_button(false)
             .overlay_closable(false)
             .child(discard_body(&message, &confirm))
-            // Enter: Discard; the Kit closes the dialog.
-            .on_ok(move |_, window, cx| {
-                enter(window, cx);
-                true
-            })
+            // Enter: Cancel, the default; the Kit closes the dialog.
+            .on_ok(|_, _, _| true)
             // Escape: close with nothing discarded.
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&close, cx))
@@ -283,151 +286,4 @@ fn discard_body(message: &str, confirm: &Confirm) -> impl IntoElement + use<> {
                     |_, window, cx| window.close_dialog(cx),
                 )),
         )
-}
-
-/// The desktop's item kind of a draft's.
-fn dto_kind(kind: ItemKind) -> ItemDtoKind {
-    match kind {
-        ItemKind::Document => ItemDtoKind::Document,
-        ItemKind::Ticket => ItemDtoKind::Ticket,
-    }
-}
-
-/// The tab a draft of `target` is restored in, opened through its item
-/// locator (ruling R25).
-fn open_target(target: &DraftTarget) -> OpenTarget {
-    let id: ItemId = target.item_id.clone();
-    ItemLocator::Identified {
-        kind: dto_kind(target.item_kind),
-        id,
-    }
-    .in_repository(&target.repository)
-}
-
-/// The position of the action `part` in `ACTIONS`.
-pub(super) fn action_ix(part: &str) -> usize {
-    ACTIONS
-        .iter()
-        .position(|(name, _)| *name == part)
-        .expect("a row action")
-}
-
-impl DraftsPage {
-    /// Restore: claims the draft and attaches it to its item's tab, which
-    /// the host then opens and focuses. A refusal is said on the row.
-    pub(super) fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
-        let Some(draft) = self.slot(id).and_then(|slot| slot.draft.as_ref()) else {
-            return;
-        };
-        let target = open_target(&draft.target);
-        if !self.restoring.insert(id) {
-            return;
-        }
-        let tab = TabKey::for_target(&target);
-        self.notices.remove(&id);
-        let drafts = self.services.drafts().clone();
-        let restore = drafts.update(cx, |registry, cx| registry.restore(id, tab, cx));
-        cx.spawn(async move |page, cx| {
-            let restored = restore.await;
-            let shown = page.update(cx, |page, cx| {
-                page.restoring.remove(&id);
-                match restored {
-                    Ok(_) => cx.emit(DraftsEvent::Open(target)),
-                    Err(refused) => {
-                        page.notices.insert(id, refused_label(refused));
-                    }
-                }
-                cx.notify();
-            });
-            // The page went while the claim was taken: nothing opens the
-            // tab, so the draft is let go of and offered again.
-            if let (Err(_), Ok(restored)) = (shown, restored) {
-                drafts.update(cx, |registry, cx| {
-                    registry.release_when_stored(restored, cx)
-                });
-            }
-        })
-        .detach();
-    }
-
-    /// Export… or Export raw…: a draft restored here exports its newest
-    /// text; another readable one as listed; an unreadable one its bytes.
-    pub(super) fn export(&mut self, id: DraftId, window: &mut Window, cx: &mut Context<Self>) {
-        if !may_open(&self.services, window, cx) {
-            return;
-        }
-        let drafts = self.services.drafts().clone();
-        let (name, bytes) = match self.slot(id) {
-            Some(Slot {
-                draft: Some(draft), ..
-            }) => {
-                let draft = drafts
-                    .read(cx)
-                    .session(id)
-                    .map(|session| session.draft())
-                    .unwrap_or_else(|| draft.clone());
-                let bytes = manyhands::drafts::markdown(&draft).into_bytes();
-                (suggested_name(&draft), Task::ready(Ok(bytes)))
-            }
-            Some(_) => (
-                raw_name(id),
-                drafts.update(cx, |registry, cx| registry.raw_bytes(id, cx)),
-            ),
-            None => return,
-        };
-        let export = export(name, bytes, cx);
-        cx.spawn(async move |page, cx| {
-            let exported = export.await;
-            let _ = page.update(cx, |page, cx| {
-                if let Some(label) = exported.label() {
-                    page.notices.insert(id, label);
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    /// Discard…: asks first, naming the draft by its title, a comment's
-    /// by its kind.
-    pub(super) fn discard(&mut self, id: DraftId, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(slot), Some(focus)) = (self.slot(id), self.focus.get(&id)) else {
-            return;
-        };
-        let readable = slot.draft.is_some();
-        let name = match (readable, slot.row.title.is_empty()) {
-            (false, _) => None,
-            (true, false) => Some(slot.row.title.clone()),
-            (true, true) => Some(slot.row.kind_label.clone()),
-        };
-        let origin = focus.actions[action_ix("discard")].clone();
-        let page = cx.entity().downgrade();
-        open_discard(name, origin, &self.services, window, cx, move |_, cx| {
-            let _ = page.update(cx, |page, cx| page.discard_confirmed(id, readable, cx));
-        });
-    }
-
-    /// Discards the draft `id`: through its session when restored here,
-    /// else from the store. A failure is said on the row; the draft is
-    /// then released, still stored, and listed again.
-    fn discard_confirmed(&mut self, id: DraftId, readable: bool, cx: &mut Context<Self>) {
-        let drafts = self.services.drafts().clone();
-        let held_here = drafts.read(cx).session(id).is_some();
-        let discard = drafts.update(cx, |registry, cx| match held_here {
-            true => registry.discard(id, cx),
-            false => registry.discard_stored(id, readable, cx),
-        });
-        self.notices.remove(&id);
-        cx.spawn(async move |page, cx| {
-            if let Err(kind) = discard.await {
-                let _ = page.update(cx, |page, cx| {
-                    let reason = DraftError { kind };
-                    page.notices
-                        .insert(id, format!("{NOT_DISCARDED}: {reason}"));
-                    cx.notify();
-                });
-            }
-        })
-        .detach();
-    }
 }

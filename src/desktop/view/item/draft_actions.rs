@@ -4,24 +4,32 @@
 //! Export… writes the session's newest text as Markdown where the save
 //! dialog says, and the section says what it came to. Discard… asks
 //! first, naming the draft; Confirm ends the session and deletes the
-//! draft, and the section goes with the session. A discard that fails
-//! has released the draft, still stored: the banner says so, and offers
-//! the draft again once the store is listed.
+//! draft, and the section goes with the session: the tab's content takes
+//! the focus (`DraftDiscarded`). A discard that fails has released the
+//! draft, still stored: the banner says so, and offers the draft again
+//! once the store is listed.
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, ElementId, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
+    AnyElement, ClickEvent, Context, ElementId, EventEmitter, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{button::Button, h_flex},
     div,
 };
-use manyhands::drafts::{DraftFields, DraftId, markdown};
+use manyhands::drafts::{DraftId, Held, markdown};
 
 use super::{ItemPane, draft::button, text};
-use crate::desktop::view::drafts::actions::{
-    EXPORT, export, may_open, open_discard, suggested_name,
+use crate::desktop::{
+    model::drafts::DraftRow,
+    view::drafts::actions::{EXPORT, draft_name, export, may_open, open_discard, suggested_name},
 };
 
 pub(crate) const DISCARD: &str = "Discard…";
+
+/// The section's Discard… ended the session: the tab's content is to take
+/// the focus, the section and its Discard… being gone.
+pub(crate) struct DraftDiscarded;
+
+impl EventEmitter<DraftDiscarded> for ItemPane {}
 
 impl ItemPane {
     /// Export… and Discard… for the session `id`, and what the last
@@ -91,37 +99,27 @@ impl ItemPane {
         .detach();
     }
 
-    /// Discard…: asks first, naming the draft by its own title, as its
-    /// own section does.
+    /// Discard…: asks first, naming the draft as its row on the Drafts
+    /// page does: its title, else its kind.
     fn discard_draft(&mut self, id: DraftId, window: &mut Window, cx: &mut Context<Self>) {
         let registry = self.services.drafts().read(cx);
         let Some(session) = registry.session(id) else {
             return;
         };
-        let name = match session.current() {
-            DraftFields::Document { title, .. } | DraftFields::Ticket { title, .. } => {
-                title.clone()
-            }
-            DraftFields::Comment { .. } => session.item_title().to_owned(),
-        };
+        let row = DraftRow::readable(&session.draft(), Held::Here, String::new());
+        let name = draft_name(&row);
         let Some(origin) = self.draft.discard_focus.clone() else {
             return;
         };
         let pane = cx.entity().downgrade();
-        open_discard(
-            Some(name),
-            origin,
-            &self.services,
-            window,
-            cx,
-            move |_, cx| {
-                let _ = pane.update(cx, |pane, cx| pane.discard_confirmed(id, cx));
-            },
-        );
+        open_discard(name, origin, &self.services, window, cx, move |_, cx| {
+            let _ = pane.update(cx, |pane, cx| pane.discard_confirmed(id, cx));
+        });
     }
 
-    /// Ends the session `id` and deletes its draft. A failure is said in
-    /// the banner: the draft is released, still stored.
+    /// Ends the session `id` and deletes its draft; the tab's content then
+    /// takes the focus. A failure is said in the banner: the draft is
+    /// released, still stored.
     fn discard_confirmed(&mut self, id: DraftId, cx: &mut Context<Self>) {
         let discard = self
             .services
@@ -129,9 +127,11 @@ impl ItemPane {
             .update(cx, |registry, cx| registry.discard(id, cx));
         self.draft.exported = None;
         cx.spawn(async move |pane, cx| {
-            if let Err(kind) = discard.await {
-                let _ = pane.update(cx, |pane, cx| pane.discard_failed(kind, cx));
-            }
+            let discarded = discard.await;
+            let _ = pane.update(cx, |pane, cx| match discarded {
+                Ok(()) => cx.emit(DraftDiscarded),
+                Err(kind) => pane.discard_failed(kind, cx),
+            });
         })
         .detach();
     }

@@ -14,10 +14,12 @@
 //! hides the page itself (a later dock may keep it in view). Restore, once
 //! the draft is claimed, asks the host to open its item's tab, which the
 //! host does through `open_item`, leaving the page. Inspect opens a panel
-//! under its row; Export… and Discard… are `actions`, shared with the tab.
+//! under its row; Restore, Export… and Discard… are `row_actions`, the
+//! last two through the `actions` shared with the tab.
 
 pub(crate) mod actions;
 mod inspect;
+mod row_actions;
 mod rows;
 
 use std::{
@@ -88,6 +90,20 @@ pub(crate) enum DraftsEvent {
     Open(OpenTarget),
 }
 
+/// What the last action on a row came to, in words: fixed sentences, or
+/// a refusal's.
+struct Notice {
+    text: String,
+    /// A Restore refused as open elsewhere.
+    restore: bool,
+}
+
+/// A discarded row, and the rows to focus once it has gone, in order.
+struct Refocus {
+    removed: DraftId,
+    next: Vec<DraftId>,
+}
+
 /// One row, the draft it shows when readable, and its item's reads.
 struct Slot {
     row: DraftRow,
@@ -115,7 +131,9 @@ pub(crate) struct DraftsPage {
     /// The drafts being restored: one Restore at a time each.
     restoring: HashSet<DraftId>,
     /// What the last action on a row came to, in words, by draft.
-    notices: HashMap<DraftId, String>,
+    notices: HashMap<DraftId, Notice>,
+    /// Where the focus goes once a discarded row has gone.
+    refocus: Option<Refocus>,
     /// The row the Inspect panel is open on, and the panel's focus.
     inspecting: Option<DraftId>,
     inspect_focus: FocusHandle,
@@ -139,6 +157,7 @@ impl DraftsPage {
             focus_row: None,
             restoring: HashSet::new(),
             notices: HashMap::new(),
+            refocus: None,
             inspecting: None,
             inspect_focus: cx.focus_handle().tab_stop(true),
             built: None,
@@ -170,6 +189,7 @@ impl DraftsPage {
             self.shown = false;
             self.slots.clear();
             self.notices.clear();
+            self.refocus = None;
             self.inspecting = None;
             cx.notify();
         }
@@ -350,6 +370,7 @@ impl Render for DraftsPage {
         if !self.shown {
             return div().id("drafts-hidden").into_any_element();
         }
+        self.apply_refocus(window, cx);
         let body = self.body(window, cx);
         v_flex()
             .id("drafts")
@@ -392,3 +413,7 @@ mod actions_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "drafts_inspect_tests.rs"]
 mod inspect_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "drafts_discard_tests.rs"]
+mod discard_tests;

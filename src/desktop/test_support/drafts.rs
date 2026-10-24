@@ -200,6 +200,7 @@ const HOLDING: &str = "manyhands-test-draft-holder-claimed";
 /// claims test holds one: the claim is let go of when this is dropped.
 pub(crate) struct HeldElsewhere {
     child: std::process::Child,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
 }
 
 /// The holder, in a process of its own over the parent's data directory:
@@ -252,12 +253,54 @@ pub(crate) fn hold_elsewhere(fixture: &Fixture, id: DraftId) -> HeldElsewhere {
             break;
         }
     }
-    HeldElsewhere { child }
+    HeldElsewhere { child, stdout }
 }
 
 impl Drop for HeldElsewhere {
     fn drop(&mut self) {
+        use std::io::Read;
+
         drop(self.child.stdin.take());
+        // Read to its end, so the child's last lines find a reader.
+        let mut rest = Vec::new();
+        let _ = self.stdout.read_to_end(&mut rest);
         let _ = self.child.wait();
     }
+}
+
+/// A folder held at a mode for a test: its mode as it was comes back on
+/// drop, a panic's included, so the temporary folder can be removed.
+#[cfg(unix)]
+pub(crate) struct FolderMode {
+    folder: PathBuf,
+    was: u32,
+}
+
+#[cfg(unix)]
+impl FolderMode {
+    pub(crate) fn set(folder: &Path, mode: u32) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let was = std::fs::metadata(folder).unwrap().permissions().mode();
+        std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode)).unwrap();
+        Self {
+            folder: folder.to_owned(),
+            was,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for FolderMode {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&self.folder, std::fs::Permissions::from_mode(self.was));
+    }
+}
+
+/// Whether the tests run as the superuser, whom modes do not bind.
+#[cfg(unix)]
+pub(crate) fn superuser() -> bool {
+    // SAFETY: `geteuid` reads the process's effective user ID; it has no
+    // preconditions and cannot fail.
+    unsafe { libc::geteuid() == 0 }
 }

@@ -17,12 +17,14 @@ use manyhands::{
 };
 
 use super::{
+    OPEN_ELSEWHERE,
     actions::{DISCARD_CONFIRM, OPEN_ELSEWHERE_RETRY, discard_message},
     row_id,
     tests::{ONE, TWO, actions, drafts_shown, open, registry, ticket, with_ticket},
 };
 use crate::desktop::{
     model::tabs::TabKey,
+    services::ReadKind,
     test_support::{
         drafts::{held, hold_elsewhere, store_draft},
         fixtures::Fixture,
@@ -57,6 +59,7 @@ fn restore_from_the_page_shows_the_items_tab_with_the_draft_attached(cx: &mut Te
 
     shell.click(row_id(id, "restore"), cx);
     assert!(!drafts_shown(&shell, cx), "the page is left");
+    assert!(focused(&shell, ("tab", 0usize), cx), "the tab is focused");
     let opened = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.opened(cx));
@@ -165,31 +168,60 @@ fn discard_of_a_draft_restored_here_ends_its_session(cx: &mut TestAppContext) {
     assert!(!shell.present("draft-banner", cx));
 }
 
-/// Restore met by a claim another process holds just then says it may be
-/// tried again, and still offers Restore; once let go, Restore succeeds.
+/// Restore met by a claim another process holds only for a moment says it
+/// may be tried again: the store, listed again, finds the draft unheld,
+/// so Restore stays offered, and the second try restores it.
 #[gpui_kit::test]
 fn restore_met_by_a_passing_claim_elsewhere_may_be_tried_again(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let a = with_ticket(&fixture, "a", ONE, "One");
     let id = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Mine");
     let shell = Shell::open(fixture, cx);
-    // Listed unclaimed at launch; claimed elsewhere only afterwards.
+    // Listed unclaimed at launch; claimed elsewhere only for the claim.
+    let holder = hold_elsewhere(&shell.fixture, id);
+    let claim = shell.backend.hold_read(ReadKind::Drafts);
+    let listing = shell.backend.hold_read(ReadKind::Drafts);
+    shell.keys("secondary-shift-d", cx);
+
+    shell.click(row_id(id, "restore"), cx);
+    drop(claim);
+    shell.run(cx);
+    assert!(drafts_shown(&shell, cx));
+    assert_eq!(
+        shell.label(row_id(id, "notice"), cx).as_deref(),
+        Some(OPEN_ELSEWHERE_RETRY)
+    );
+    drop(holder);
+    drop(listing);
+    shell.run(cx);
+    assert!(shell.present(row_id(id, "restore"), cx));
+    shell.click(row_id(id, "restore"), cx);
+    assert!(!drafts_shown(&shell, cx));
+    let tab = TabKey::for_target(&ticket(&a, ONE));
+    let attached = registry(&shell, cx).read_with(cx, |registry, _| registry.attached(&tab));
+    assert_eq!(attached, Some(id));
+}
+
+/// Restore met by a claim another window keeps: the store, listed again,
+/// reads the row as open elsewhere, offering Inspect and Export only.
+#[gpui_kit::test]
+fn restore_met_by_a_lasting_claim_elsewhere_reads_open_elsewhere(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = with_ticket(&fixture, "a", ONE, "One");
+    let id = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Mine");
+    let shell = Shell::open(fixture, cx);
     let holder = hold_elsewhere(&shell.fixture, id);
     shell.keys("secondary-shift-d", cx);
 
     shell.click(row_id(id, "restore"), cx);
     assert!(drafts_shown(&shell, cx));
     assert_eq!(
-        shell.label(row_id(id, "notice"), cx).as_deref(),
-        Some(OPEN_ELSEWHERE_RETRY)
+        shell.label(row_id(id, "state"), cx).as_deref(),
+        Some(OPEN_ELSEWHERE)
     );
-    assert!(shell.present(row_id(id, "restore"), cx));
+    assert_eq!(actions(&shell, id, cx), ["inspect", "export"]);
+    assert!(!shell.present(row_id(id, "notice"), cx));
     drop(holder);
-    shell.click(row_id(id, "restore"), cx);
-    assert!(!drafts_shown(&shell, cx));
-    let tab = TabKey::for_target(&ticket(&a, ONE));
-    let attached = registry(&shell, cx).read_with(cx, |registry, _| registry.attached(&tab));
-    assert_eq!(attached, Some(id));
 }
 
 /// Each row button, clicked, does what it says: Inspect opens the panel,

@@ -33,6 +33,7 @@ pub(super) use details::text;
 #[cfg(test)]
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{EDITOR_LATER, NOT_DISCARDED, ReviewInDrafts, refused_label};
+pub(crate) use draft_actions::DraftDiscarded;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =

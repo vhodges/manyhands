@@ -7,7 +7,8 @@
 //! that already has one in this process is refused, before the claim and
 //! again once it lands. A draft gone since the listing is no longer kept,
 //! and the store is listed again. A draft another process holds may be a
-//! passing collision with a probe: the answer says so, and Restore may be
+//! passing collision with a probe: the answer says so, the store is listed
+//! again so that a hold that lasts reads as one, and Restore may be
 //! tried again.
 //!
 //! A tab is attached by its key. The session may go on under another
@@ -137,7 +138,12 @@ impl DraftRegistry {
                         self.reload_listing(cx);
                         RestoreRefused::NoLongerKept
                     }
-                    DraftErrorKind::OpenElsewhere => RestoreRefused::OpenElsewhere,
+                    // Listed again: a hold that lasts then reads as open
+                    // elsewhere, and a passing probe as unheld.
+                    DraftErrorKind::OpenElsewhere => {
+                        self.reload_listing(cx);
+                        RestoreRefused::OpenElsewhere
+                    }
                     kind => RestoreRefused::Failed(kind),
                 });
             }

@@ -87,12 +87,24 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Opens the Drafts page a tab's Review in Drafts asked for. While a
+    /// A tab's restored draft was discarded from its section, which went
+    /// with its Discard…: the next frame focuses the tab's content, as a
+    /// tab closed with its draft does.
+    pub(in crate::desktop::view) fn draft_discarded(&mut self, cx: &mut Context<Self>) {
+        self.content.refocus = true;
+        cx.notify();
+    }
+
+    /// Opens the Drafts page a tab's Review in Drafts asked for, and
+    /// focuses a tab whose draft was discarded. While a
     /// dialog is open the request waits, as D1's actions do not act behind
     /// one; the frame after the dialog closes opens it.
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
+        }
+        if std::mem::take(&mut self.content.refocus) {
+            self.focus_region(Region::Content, window, cx);
         }
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);

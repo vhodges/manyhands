@@ -6,7 +6,7 @@
 //! keeps the last title (ruling R-B5). Closing drops only that tab's state.
 
 use super::{
-    item::{ItemPane, ReviewInDrafts},
+    item::{DraftDiscarded, ItemPane, ReviewInDrafts},
     relationships::OpenRelated,
     scroll::ContentScroll,
     workspace::Workspace,
@@ -46,8 +46,9 @@ pub(crate) struct TabContent {
     panes: HashMap<TabId, Entity<ItemPane>>,
     focus: HashMap<TabId, FocusHandle>,
     close_focus: HashMap<TabId, FocusHandle>,
-    /// Each pane's related item opened, and its Review in Drafts.
-    related: HashMap<TabId, [Subscription; 2]>,
+    /// Each pane's related item opened, its Review in Drafts, and its
+    /// restored draft discarded.
+    related: HashMap<TabId, [Subscription; 3]>,
     scroll: ContentScroll,
 }
 
@@ -110,7 +111,10 @@ impl TabContent {
             let review = cx.subscribe(&pane, |this, _, event: &ReviewInDrafts, cx| {
                 this.review_in_drafts(event.0, cx)
             });
-            self.related.insert(id, [related, review]);
+            let discarded = cx.subscribe(&pane, |this, _, _: &DraftDiscarded, cx| {
+                this.draft_discarded(cx)
+            });
+            self.related.insert(id, [related, review, discarded]);
             self.panes.insert(id, pane);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());

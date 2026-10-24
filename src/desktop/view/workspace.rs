@@ -51,6 +51,9 @@ struct ContentArea {
     drafts: Entity<DraftsPage>,
     /// A tab's Review in Drafts, for the next frame to open.
     review: Option<DraftId>,
+    /// A tab's restored draft was discarded: the next frame focuses the
+    /// tab's content.
+    refocus: bool,
 }
 
 pub(crate) struct Workspace {
@@ -211,6 +214,7 @@ impl Workspace {
                 settings,
                 drafts: drafts_page,
                 review: None,
+                refocus: false,
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,

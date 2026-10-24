@@ -4,7 +4,7 @@
 //! A row is a focusable stop of its own, then its actions, each a Kit
 //! button in a focus-tracking wrapper with the content region's scroll
 //! marker. Show and Retry act here; Restore, Export…, Export raw… and
-//! Discard… are the page's `actions`, and Inspect opens its panel under
+//! Discard… are the page's `row_actions`, and Inspect opens its panel under
 //! the row. What the last of them came to is said on the row.
 
 use std::sync::Arc;
@@ -159,10 +159,20 @@ impl DraftsPage {
             .filter(|ix| offered(row, ACTIONS[*ix].0) && (ACTIONS[*ix].0 != "show" || tab))
             .map(|ix| self.action(id, ix, &focus.actions[ix], cx))
             .collect::<Vec<_>>();
+        // A Restore refused as open elsewhere is moot once the listing
+        // says another window holds the draft: the row says so itself.
+        let elsewhere = matches!(
+            row.state,
+            RowState::Readable {
+                held: Held::Elsewhere,
+                ..
+            }
+        );
         let notice = self
             .notices
             .get(&id)
-            .map(|notice| text(row_id(id, "notice"), notice.clone()).text_sm());
+            .filter(|notice| !(notice.restore && elsewhere))
+            .map(|notice| text(row_id(id, "notice"), notice.text.clone()).text_sm());
         let inspect = self.inspect_panel(slot, cx);
         let mut element = v_flex()
             .id(row_id(id, "row"))
