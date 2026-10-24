@@ -13,6 +13,7 @@ use std::fmt;
 
 use gpui_kit::{Context, Task};
 use manyhands::{
+    canonical::ItemId,
     drafts::{DraftError, DraftErrorKind, DraftId, DraftStore, Entry, Held, ItemKind, Listing},
     repository::ItemDtoKind,
     results::ResultCode,
@@ -148,6 +149,8 @@ impl DraftRegistry {
             return None;
         }
         let kind = item_kind(kind);
+        // An ID the item type does not take names no stored draft.
+        let id: ItemId = id.parse().ok()?;
         self.listing.rows()?.iter().find_map(|listing| {
             let Entry::Draft(draft) = &listing.entry else {
                 return None;
@@ -157,7 +160,7 @@ impl DraftRegistry {
                 && target.comment.is_none()
                 && target.item_kind == kind
                 && target.repository == *repo
-                && target.item_id.to_string() == id)
+                && target.item_id == id)
                 .then_some(listing.id)
         })
     }

@@ -144,6 +144,15 @@ fn stored_for_finds_an_unclaimed_ticket_draft_by_repository_kind_and_id(cx: &mut
             registry.stored_for(&repo, ItemDtoKind::Ticket, "01ARZ3NDEKTSV4RRFFQ69G5FG1"),
             None
         );
+        // Not an item ID: lowercase is not canonical, and text is not one.
+        assert_eq!(
+            registry.stored_for(&repo, ItemDtoKind::Ticket, &TICKET.to_lowercase()),
+            None
+        );
+        assert_eq!(
+            registry.stored_for(&repo, ItemDtoKind::Ticket, "not an id"),
+            None
+        );
         assert_eq!(
             registry.stored_for(&"/another".to_owned(), ItemDtoKind::Ticket, TICKET),
             None
@@ -192,7 +201,12 @@ fn stored_for_answers_none_before_the_listing_lands(cx: &mut TestAppContext) {
 #[cfg(unix)]
 #[gpui_kit::test]
 fn a_store_that_cannot_be_protected_still_opens_the_window(cx: &mut TestAppContext) {
-    use crate::desktop::{model::operations::DRAFTS_UNAVAILABLE, view::harness::Shell};
+    use gpui_kit::ElementId;
+
+    use crate::desktop::{
+        model::operations::DRAFTS_UNAVAILABLE,
+        view::{harness::Shell, operations::DISMISS},
+    };
 
     let fixture = Fixture::new();
     let elsewhere = tempfile::tempdir().unwrap();
@@ -201,8 +215,22 @@ fn a_store_that_cannot_be_protected_still_opens_the_window(cx: &mut TestAppConte
 
     let expected = format!("{DRAFTS_UNAVAILABLE}: The drafts folder could not be protected.");
     assert_eq!(shell.label("drafts-unavailable", cx), Some(expected));
-    assert!(!shell.present("drafts-unavailable-dismiss", cx));
-    assert!(shell.requests(cx, |_| true).is_empty());
+    // Every control the "This session" section draws is labeled: the
+    // entry is drawn there, and nothing there reads Dismiss.
+    let section = ElementId::from("session-section");
+    let labels: Vec<String> = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .filter(|snapshot| snapshot.path().contains(&section))
+            .filter_map(|snapshot| snapshot.label().map(str::to_owned))
+            .collect()
+    });
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with(DRAFTS_UNAVAILABLE))
+    );
+    assert!(!labels.iter().any(|label| label == DISMISS));
     assert_eq!(shell.backend.reads_seen(ReadKind::Drafts), 0);
 
     let drafts = shell
