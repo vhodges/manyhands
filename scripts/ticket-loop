@@ -10,7 +10,9 @@
 #
 # The ticket list is one ticket ID per line, in priority order; `#` starts a
 # comment. Touch .manyhands/loop/STOP in the clone to stop after the current
-# run. See .agents/skills/working-on-a-ticket/SKILL.md, "Loop mode".
+# run. Each run's log in .manyhands/loop/logs grows as the agent works;
+# --follow shows it live. See .agents/skills/working-on-a-ticket/SKILL.md,
+# "Loop mode".
 
 set -euo pipefail
 export LC_ALL=C
@@ -65,6 +67,7 @@ Usage: scripts/ticket-loop [options]
   --exit-when-idle   exit instead of sleeping when no ticket can move
   --strict           work only on the first unfinished ticket; never skip past it
   --status           show each ticket's state and exit
+  --follow           follow the newest run's log, moving to each new run's log
   --dry-run          show what the next run would do, and exit
   --login            sign the harness in once, under the loop's own login
   --check            check the setup and the sandbox, and run a trivial prompt
@@ -461,7 +464,9 @@ build_command() {
     local prompt=$1 last_message=$2
     case $harness in
         claude)
-            command=(claude -p "$prompt" --permission-mode bypassPermissions --output-format text)
+            # stream-json, unlike text, writes each step as it happens.
+            command=(claude -p "$prompt" --permission-mode bypassPermissions
+                --output-format stream-json --verbose)
             if [[ -n $model ]]; then command+=(--model "$model"); fi ;;
         codex)
             command=(codex exec -C "$LOOP_CLONE" --dangerously-bypass-approvals-and-sandbox
@@ -473,6 +478,76 @@ build_command() {
             if [[ -n $model ]]; then command+=(-m "$model"); fi
             command+=("$prompt") ;;
     esac
+}
+
+LOG_FORMATTER=$(cat <<'JS'
+const [harness, lastFile] = process.argv.slice(1);
+const fs = require('fs');
+const clean = s => String(s)
+    .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+const out = s => process.stdout.write(clean(s) + '\n');
+const clock = () => new Date().toTimeString().slice(0, 8);
+const oneLine = (s, n) => {
+    s = String(s).replace(/\s*\n\s*/g, '; ');
+    return s.length > n ? s.slice(0, n) + '...' : s;
+};
+const text = c => typeof c === 'string' ? c
+    : Array.isArray(c) ? c.map(x => x.type === 'text' ? x.text : `[${x.type}]`).join('\n') : '';
+const excerpt = (s, mark) => {
+    const lines = s.replace(/\n+$/, '').split('\n');
+    const shown = lines.slice(0, 12).map(l => `    ${mark}${oneLine(l, 200)}`);
+    if (lines.length > 12) shown.push(`    ... ${lines.length - 12} more lines`);
+    return shown.join('\n');
+};
+const describe = (i = {}) => oneLine(i.command ?? i.file_path ?? i.path ?? i.pattern
+    ?? i.skill ?? i.url ?? i.description ?? JSON.stringify(i), 300);
+
+const claude = e => {
+    const who = e.parent_tool_use_id ? '[subagent] ' : '';
+    switch (e.type) {
+    case 'system':
+        if (e.subtype === 'init') out(`[${clock()}] session ${e.session_id}, model ${e.model}`);
+        break;
+    case 'assistant':
+        for (const c of e.message?.content ?? []) {
+            if (c.type === 'text' && c.text.trim()) out(`\n${who}${c.text.trim()}\n`);
+            if (c.type === 'tool_use') out(`[${clock()}] ${who}${c.name}: ${describe(c.input)}`);
+        }
+        break;
+    case 'user':
+        for (const c of Array.isArray(e.message?.content) ? e.message.content : [])
+            if (c.type === 'tool_result') out(excerpt(text(c.content), c.is_error ? 'error: ' : ''));
+        break;
+    case 'rate_limit_event': {
+        const r = e.rate_limit_info ?? {};
+        if (!String(r.status).startsWith('allowed'))
+            out(`[${clock()}] rate limit ${r.status} (${r.rateLimitType}), resets ${new Date(r.resetsAt * 1000).toLocaleString()}`);
+        break;
+    }
+    case 'result':
+        if (lastFile && typeof e.result === 'string') fs.writeFileSync(lastFile, clean(e.result) + '\n');
+        out(`[${clock()}] ${e.subtype}${e.is_error ? ', error' : ''}: ${e.num_turns} turns in ${Math.round((e.duration_ms ?? 0) / 1000)} s`);
+        if (e.is_error && e.result) out(e.result);
+        break;
+    }
+};
+
+require('readline').createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line', line => {
+    if (harness !== 'claude') return out(line);
+    let event;
+    try { event = JSON.parse(line); } catch { return out(line); }
+    if (!event || typeof event !== 'object') return out(line);
+    try { claude(event); } catch (err) { out(`(log formatter: ${err.message}) ${oneLine(line, 300)}`); }
+});
+JS
+)
+
+# Passes a harness's output through as it arrives, for a log that can be
+# followed. Claude's stream-json becomes readable text, and its final message
+# goes to the file named by $1. Terminal escape codes are dropped throughout.
+format_output() {
+    node -e "$LOG_FORMATTER" "$harness" "${1:-}"
 }
 
 looks_rate_limited() {
@@ -494,7 +569,7 @@ run_agent() {
     if (( dry_run )); then
         printf 'would run, logging to %s:\n' "$log"
         printf '  %q' timeout -k 60 "$RUN_TIMEOUT" "${box[@]}" "${command[@]}"
-        printf '\n'
+        printf ' 2>&1 | format_output > %q\n' "$log"
         return 0
     fi
     runs=$(( $(state_number "$id" runs) + 1 ))
@@ -504,7 +579,8 @@ run_agent() {
     before=$(git -C "$(worktree_of "$id")" rev-parse HEAD)
     say "run $runs on $id with $harness; log: $log"
     status=0
-    timeout -k 60 "$RUN_TIMEOUT" "${box[@]}" "${command[@]}" >"$log" 2>&1 </dev/null || status=$?
+    timeout -k 60 "$RUN_TIMEOUT" "${box[@]}" "${command[@]}" </dev/null 2>&1 |
+        format_output "$last_message" >"$log" || status=$?
     after=$(git -C "$(worktree_of "$id")" rev-parse HEAD)
     # The skill's last line, allowing for Markdown emphasis or code marks.
     final=$(cat "$last_message" "$log" 2>/dev/null |
@@ -607,7 +683,7 @@ find_bubblewrap() {
 
 preflight() {
     local tool
-    for tool in git gh timeout flock awk rsync; do
+    for tool in git gh timeout flock awk rsync node; do
         command -v "$tool" >/dev/null || die "$tool is not on PATH"
     done
     find_bubblewrap
@@ -646,7 +722,8 @@ check_setup() {
     say "harness probe ($harness, using the loop's own login):"
     build_command 'Reply with exactly: ticket-loop check ok' "$LOOP_DIR/logs/check.last"
     local answer
-    answer=$(timeout 300 "${box[@]}" "${command[@]}" </dev/null 2>&1 | tail -n 3 || true)
+    answer=$(timeout 300 "${box[@]}" "${command[@]}" </dev/null 2>&1 |
+        format_output "$LOOP_DIR/logs/check.last" | tail -n 3 || true)
     printf '%s\n' "$answer"
     if [[ $answer == *"ticket-loop check ok"* ]]; then
         say "ok: $harness answered from inside the sandbox"
@@ -654,6 +731,37 @@ check_setup() {
         say "FAIL: no answer; if $harness is not signed in, run: scripts/ticket-loop --login --harness $harness"
     fi
     rm -f "$LOOP_DIR/logs/check.last"
+}
+
+# Follows the newest run log, and moves to each new run's log as it starts.
+# It only reads, so it can run beside a running loop.
+follow_logs() {
+    local current="" newest waited=0 lines=40
+    local -a logs
+    tail_pid=""
+    trap '[[ -z $tail_pid ]] || kill "$tail_pid" 2>/dev/null' EXIT
+    trap 'exit 0' INT TERM
+    while :; do
+        # Logs are named from a UTC stamp, so the last in order is the newest.
+        logs=("$LOOP_DIR"/logs/*.log)
+        newest=${logs[-1]}
+        if [[ -e $newest && $newest != "$current" ]]; then
+            if [[ -n $tail_pid ]]; then
+                kill "$tail_pid" 2>/dev/null || true
+                wait "$tail_pid" 2>/dev/null || true
+            fi
+            current=$newest
+            say "following $current"
+            tail -n "$lines" -f "$current" &
+            tail_pid=$!
+            # A run that starts while we watch is shown from its beginning.
+            lines=+1
+        elif [[ ! -e $newest ]] && (( ! waited )); then
+            say "no run logs yet in $LOOP_DIR/logs; waiting for one"
+            waited=1
+        fi
+        sleep 2
+    done
 }
 
 pass() {
@@ -707,7 +815,7 @@ pass() {
 
 main() {
     harness=$DEFAULT_HARNESS model="" list_file="" once=0 exit_when_idle=0 strict=0
-    status_only=0 dry_run=0 check=0 sign_in=0 reset_id="" notify_command=""
+    status_only=0 dry_run=0 check=0 sign_in=0 follow=0 reset_id="" notify_command=""
     while (( $# )); do
         case $1 in
             --harness) harness=${2:?}; shift ;;
@@ -717,6 +825,7 @@ main() {
             --exit-when-idle) exit_when_idle=1 ;;
             --strict) strict=1 ;;
             --status) status_only=1 ;;
+            --follow) follow=1 ;;
             --dry-run) dry_run=1 ;;
             --check) check=1 ;;
             --login) sign_in=1 ;;
@@ -731,6 +840,7 @@ main() {
         shift
     done
     case " ${HARNESSES[*]} " in *" $harness "*) ;; *) die "unknown harness: $harness" ;; esac
+    if (( follow )); then follow_logs; fi
     preflight
     if [[ -n $reset_id ]]; then
         rm -f "$(state_file "$reset_id")"
