@@ -28,6 +28,7 @@ use gpui_kit::{
     component::{
         WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm as DialogConfirm,
         h_flex, v_flex,
     },
     div,
@@ -239,11 +240,16 @@ pub(crate) fn open_discard(
     });
 }
 
+/// A dialog button. Enter on it presses it: its wrapper takes the dialog's
+/// Enter (`Confirm`, dispatched on key down) before the dialog, whose
+/// default it would otherwise give.
 fn dialog_button(
     id: &'static str,
     label: &'static str,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    let on_click = Rc::new(on_click);
+    let on_enter = on_click.clone();
     let mut button = Button::new(format!("{id}-button")).label(label);
     if id == "discard-draft-confirm" {
         button = button.danger();
@@ -252,7 +258,10 @@ fn dialog_button(
         .id(id)
         .test_support()
         .aria_label(label)
-        .child(button.on_click(on_click))
+        .on_action(move |_: &DialogConfirm, window, cx| {
+            on_enter(&ClickEvent::default(), window, cx)
+        })
+        .child(button.on_click(move |event, window, cx| on_click(event, window, cx)))
 }
 
 fn discard_body(message: &str, confirm: &Confirm) -> impl IntoElement + use<> {

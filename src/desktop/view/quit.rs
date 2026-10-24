@@ -32,6 +32,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex, v_flex,
     },
     div,
@@ -181,14 +182,20 @@ fn not_saved_body(message: &str, choose: &Choose) -> impl IntoElement + use<> {
             NotSavedChoice::Cancel => button.primary(),
             NotSavedChoice::QuitAnyway => button.danger(),
         };
+        let press = Rc::new(move |window: &mut Window, cx: &mut App| {
+            window.close_dialog(cx);
+            choose(choice, window, cx);
+        });
+        let enter = press.clone();
+        // Enter on a focused button presses that button: its wrapper takes
+        // the dialog's Enter (`Confirm`, on key down), whose default is
+        // Cancel.
         div()
             .id(id)
             .test_support()
             .aria_label(label)
-            .child(button.on_click(move |_: &ClickEvent, window, cx| {
-                window.close_dialog(cx);
-                choose(choice, window, cx);
-            }))
+            .on_action(move |_: &Confirm, window, cx| enter(window, cx))
+            .child(button.on_click(move |_: &ClickEvent, window, cx| press(window, cx)))
     };
     v_flex()
         .id("drafts-not-saved-dialog")

@@ -13,6 +13,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex, v_flex,
     },
     div,
@@ -86,13 +87,28 @@ fn body(item: &str, choose: &Choose, cx: &App) -> impl IntoElement + use<> {
         if choice == Some(CloseWithDraft::KeepDraft) {
             button = button.primary();
         }
-        if let Some(choice) = choice {
-            button = button.on_click(move |_: &ClickEvent, window, cx| {
+        let press = choice.map(|choice| {
+            Rc::new(move |window: &mut Window, cx: &mut App| {
                 window.close_dialog(cx);
                 choose(choice, window, cx);
-            });
+            })
+        });
+        if let Some(press) = press.clone() {
+            button = button.on_click(move |_: &ClickEvent, window, cx| press(window, cx));
         }
-        div().id(id).test_support().aria_label(label).child(button)
+        // Enter on a focused button presses that button: its wrapper takes
+        // the dialog's Enter (`Confirm`, on key down), whose default is
+        // Keep draft. Save, unavailable, takes it and does nothing.
+        div()
+            .id(id)
+            .test_support()
+            .aria_label(label)
+            .on_action(move |_: &Confirm, window, cx| {
+                if let Some(press) = &press {
+                    press(window, cx)
+                }
+            })
+            .child(button)
     };
     v_flex()
         .id("close-draft-dialog")

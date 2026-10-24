@@ -96,6 +96,9 @@ pub(super) struct TabDraft {
     pub(super) exported: Option<String>,
     /// The section's Discard…, where the dialog gives the focus back.
     pub(super) discard_focus: Option<gpui_kit::FocusHandle>,
+    /// The section's actions row, scrolled into view when the focus is
+    /// in it.
+    pub(super) actions_focus: Option<gpui_kit::FocusHandle>,
     /// The session and revision it was computed for, and the state.
     target: Option<(DraftId, u64, TargetState)>,
 }

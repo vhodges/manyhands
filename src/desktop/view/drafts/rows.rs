@@ -7,7 +7,7 @@
 //! Discard… are the page's `row_actions`, and Inspect opens its panel under
 //! the row. What the last of them came to is said on the row.
 
-use std::sync::Arc;
+use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
@@ -29,6 +29,9 @@ use crate::desktop::{
     },
     view::draft_comparison::target_label,
 };
+
+/// What a row action does, pressed by its button or its wrapper.
+type RowAction = dyn Fn(&mut DraftsPage, &mut Window, &mut Context<DraftsPage>);
 
 /// A row's state in words: who holds it first, then where its item
 /// stands.
@@ -198,7 +201,9 @@ impl DraftsPage {
         element.into_any_element()
     }
 
-    /// The action `ACTIONS[ix]` of row `id`.
+    /// The action `ACTIONS[ix]` of row `id`. Tab reaches the Kit button;
+    /// a focus given back to the wrapper (Escape from Inspect or from
+    /// Discard's dialog) is pressed by Enter or Space there too.
     fn action(
         &self,
         id: DraftId,
@@ -208,36 +213,34 @@ impl DraftsPage {
     ) -> AnyElement {
         let (part, label) = ACTIONS[ix];
         let wrapper = ElementId::from(row_id(id, part));
-        let mut button = Button::new(ElementId::NamedChild(
+        let act: Rc<RowAction> = match part {
+            "show" => Rc::new(move |this, _, cx| this.show_tab_of(id, cx)),
+            "retry" => Rc::new(move |this, _, cx| this.retry(id, cx)),
+            "restore" => Rc::new(move |this, _, cx| this.restore(id, cx)),
+            "inspect" => Rc::new(move |this, window, cx| this.inspect(id, window, cx)),
+            "export" | "export-raw" => Rc::new(move |this, window, cx| this.export(id, window, cx)),
+            "discard" => Rc::new(move |this, window, cx| this.discard(id, window, cx)),
+            _ => Rc::new(|_, _, _| {}),
+        };
+        let pressed = act.clone();
+        let button = Button::new(ElementId::NamedChild(
             Arc::new(wrapper.clone()),
             "button".into(),
         ))
-        .label(label);
-        button = match part {
-            "show" => button
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.show_tab_of(id, cx))),
-            "retry" => {
-                button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.retry(id, cx)))
-            }
-            "restore" => button
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(id, cx))),
-            "inspect" => button.on_click(
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.inspect(id, window, cx)),
-            ),
-            "export" | "export-raw" => button.on_click(
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.export(id, window, cx)),
-            ),
-            "discard" => button.on_click(
-                cx.listener(move |this, _: &ClickEvent, window, cx| this.discard(id, window, cx)),
-            ),
-            _ => button,
-        };
+        .label(label)
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| act(this, window, cx)));
         div()
             .id(wrapper)
             .test_support()
             .aria_label(label)
             .relative()
             .track_focus(focus)
+            // Only the keyboard: a pointer's click is the button's.
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    pressed(this, window, cx)
+                }
+            }))
             .child(button)
             .child(self.scroll.marker_within(focus))
             .into_any_element()

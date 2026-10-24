@@ -40,16 +40,28 @@ impl ItemPane {
             .discard_focus
             .get_or_insert_with(|| cx.focus_handle())
             .clone();
+        let row = self
+            .draft
+            .actions_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
         let exported = self
             .draft
             .exported
             .clone()
             .map(|exported| text("draft-export-result", exported).text_sm());
+        // Tab reaches the Kit button; the focus Discard's dialog gives back
+        // to the wrapper is pressed by Enter or Space there too.
         let discard = div()
             .id("draft-discard")
             .test_support()
             .aria_label(DISCARD)
             .track_focus(&focus)
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    this.discard_draft(id, window, cx)
+                }
+            }))
             .child(
                 Button::new(ElementId::from("draft-discard-button"))
                     .label(DISCARD)
@@ -57,7 +69,12 @@ impl ItemPane {
                         this.discard_draft(id, window, cx)
                     })),
             );
+        // Below a long section and its comparison: the focus in the row
+        // scrolls it into view.
         h_flex()
+            .id("draft-actions")
+            .relative()
+            .track_focus(&row)
             .flex_wrap()
             .gap_2()
             .child(button(
@@ -69,6 +86,7 @@ impl ItemPane {
             ))
             .child(discard)
             .children(exported)
+            .child(self.scroll.marker_within(&row))
             .into_any_element()
     }
 
