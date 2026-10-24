@@ -2,7 +2,7 @@
 id: 01M5MHQ16VD0P2RTGY8PMRYWGY
 title: Parsing reorders an item's unknown front-matter keys
 type: defect
-status: implementing
+status: waiting
 project: manyhands
 team: core
 manyhands_managed: true
