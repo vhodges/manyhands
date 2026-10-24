@@ -57,7 +57,10 @@ ticket comment needs nothing more; cite its ID in your next comment.
 
 **Approval:** GitHub does not let the owner approve their own PR, so approval
 is an explicit statement such as "approved", in one of those three places.
-It counts only if it is newer than the PR's last commit. A comment that is
+It counts only if it is newer than the PR's last commit. When finding that
+commit, skip commits that only add comments from a person: the owner's
+comment reaches the branch in a commit of its own, a little newer than the
+comment, and that commit changes nothing to approve. A comment that is
 ambiguous, or that asks for anything, is feedback, not approval.
 
 Before any run changes anything, and that includes resume runs:
