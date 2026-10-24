@@ -1,0 +1,55 @@
+{
+  "code": "ok",
+  "command": "host approve",
+  "data": {
+    "command": "host approve",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "algorithm": "ssh-ed25519",
+      "fetch": true,
+      "fingerprint": "<fingerprint>",
+      "host": "127.0.0.1",
+      "pinned_algorithm": null,
+      "pinned_fingerprint": null,
+      "port": 0,
+      "push": true,
+      "reapproval_required": false,
+      "root": "<repository>"
+    },
+    "effects": [
+      {
+        "effect": "host_pinned"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

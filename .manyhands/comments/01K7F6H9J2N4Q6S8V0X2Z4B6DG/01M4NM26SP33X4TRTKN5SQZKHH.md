@@ -1,9 +1,10 @@
 ---
+id: 01M4NM26SP33X4TRTKN5SQZKHH
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DG
+created_at: 2026-10-11T14:04:12Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4NM26SP33X4TRTKN5SQZKHH"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DG"
-created_at: "2026-10-11T14:04:12Z"
 ---
 
 Planning checkpoint: reused this ticket's registered worktree and branch. Fresh

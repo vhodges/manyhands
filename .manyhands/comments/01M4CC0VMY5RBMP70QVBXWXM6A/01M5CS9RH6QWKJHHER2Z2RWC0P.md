@@ -1,9 +1,10 @@
 ---
+id: 01M5CS9RH6QWKJHHER2Z2RWC0P
+item_id: 01M4CC0VMY5RBMP70QVBXWXM6A
+created_at: 2026-10-20T13:51:31Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5CS9RH6QWKJHHER2Z2RWC0P"
-item_id: "01M4CC0VMY5RBMP70QVBXWXM6A"
-created_at: "2026-10-20T13:51:31Z"
 ---
 
 Closed on 2026-10-20 by the product owner, who asked for the local merge to

@@ -1,14 +1,14 @@
 ---
+id: 01M4GD0KKXW684QBA49F6EX3WE
+title: Save must leave the Git index current for the paths it commits
+type: defect
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-10T03:34:03Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4GD0KKXW684QBA49F6EX3WE"
-title: "Save must leave the Git index current for the paths it commits"
-type: "defect"
-status: "closed"
-closed_at: "2026-10-10T03:34:03Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
-project: "manyhands"
-team: "core"
 ---
 
 A normal save commits its owned paths but never rewrites the on-disk Git index

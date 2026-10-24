@@ -1,9 +1,10 @@
 ---
+id: 01M55D122NBP1DRKW8KDSV3GSJ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+created_at: 2026-10-17T18:20:00Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M55D122NBP1DRKW8KDSV3GSJ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-created_at: "2026-10-17T18:20:00Z"
 ---
 
 Planning checkpoint. I reused this ticket's existing branch and worktree. The

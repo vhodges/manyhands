@@ -1,3 +1,12 @@
+---
+title: "Wave 03 F1 execution ledger"
+date: 2026-10-07
+author: "Vince Hodges <vince@imbas.ca> && Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J8ERGBDRGKVGWTG5W0"
+---
+
 # Wave 03 F1 execution ledger
 
 Ticket: `01M4CC0VMQ7R15A7M9SPN3KB67`

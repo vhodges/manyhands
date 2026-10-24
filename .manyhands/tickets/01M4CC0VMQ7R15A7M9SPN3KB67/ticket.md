@@ -1,16 +1,16 @@
 ---
+wave: '03'
+cycle: F1
+id: 01M4CC0VMQ7R15A7M9SPN3KB67
+title: 'Wave 03 F1: Headless Read Boundary And Result Model'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-08T21:30:10Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-title: "Wave 03 F1: Headless Read Boundary And Result Model"
-type: "cycle"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "F1"
-closed_at: "2026-10-08T21:30:10Z"
-closed_by: "Vince Hodges <vince@imbas.ca>"
 ---
 
 Establish the headless front-end boundary both tracks read

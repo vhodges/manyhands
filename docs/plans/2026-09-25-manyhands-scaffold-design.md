@@ -1,3 +1,12 @@
+---
+title: "Manyhands Initial Scaffold Design"
+date: 2026-09-25
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J45PSGHTXYM8NNC9X7"
+---
+
 # Manyhands Initial Scaffold Design
 
 ## Goal

@@ -1,3 +1,12 @@
+---
+title: "Cross-Platform Build Design"
+date: 2026-09-28
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J56J5DSEZBVVMJKNC5"
+---
+
 # Cross-Platform Build Design
 
 ## Goal

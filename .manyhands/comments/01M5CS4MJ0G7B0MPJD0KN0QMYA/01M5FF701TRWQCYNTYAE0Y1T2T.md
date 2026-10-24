@@ -1,9 +1,10 @@
 ---
+id: 01M5FF701TRWQCYNTYAE0Y1T2T
+item_id: 01M5CS4MJ0G7B0MPJD0KN0QMYA
+created_at: 2026-10-21T14:52:58Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5FF701TRWQCYNTYAE0Y1T2T"
-item_id: "01M5CS4MJ0G7B0MPJD0KN0QMYA"
-created_at: "2026-10-21T14:52:58Z"
 ---
 
 ## Owner approval, closure and authorized delivery

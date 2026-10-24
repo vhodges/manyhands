@@ -442,14 +442,24 @@ canonical mutation or resident process.
 
 ### C2: CLI Repository And Credential Administration
 
-**Planned document:** `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`
+**Cycle document:** `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`
+
+**Amended 2026-10-20 by C2.** The Cycle, design and plan were approved on
+2026-10-22. Prerequisite `01M5B0Z6PNP7X4WH4JV3N0VQJ6` (create/enable leave
+the committed configuration in the Git index) merged before approval, so remote
+selection follows onboarding without an external Git workaround (decision 1).
+Delivery is one Cycle in three independently checked/reviewed Parts (decision 4):
+A, mutation layer/terminal/repository/remote/request verbs; B, keys/passphrase
+entry; C, hosts/SSH unlock/exit journeys. Task 12 still owns final Cycle verification.
 
 **Purpose:** Make repository onboarding and SSH setup usable without GUI or
 external Git/key-generation commands.
 
 **In scope:** Create/enable/remove, confirmed local identity, remote add/remove/
 publication selection, key generation/import/select/clear/unregister/delete,
-host approve/replace, terminal secret interaction and noninteractive recovery.
+host observe/approve/replace, request show/cancel, terminal secret interaction
+and noninteractive recovery. Include optional `ticket_slug_prefix` on create/
+enable and optional nullable `initials` on identity-set (decision 5).
 Apply the approved missing-identity input refinement. Use F2 for request IDs,
 confirmation, replay and the identity/host bridges.
 
@@ -461,6 +471,14 @@ cancelled/wrong unlock, exact host replacement, imported-key non-deletion,
 generated-key deletion retry and configuration failures. Publish schemas for
 each new verb; prove no prompt consumes JSON/body stdin or persists a secret.
 
+**Amended 2026-10-20 by C2 (decision 9):** wrong unlock proves the current
+`transport_unavailable`/exit 5, no pin, no automatic retry and a human hint after
+supplying a passphrase. `unlock_failed`/exit 3 is proven with the right passphrase
+and a server that rejects the key. Library defect `01M5E6DYJ6GN7DMW4424TH3V78`
+owns the future wrong-passphrase code change; C2 does not wait for it. Cancelled
+unlock remains `unlock_required`/exit 3, distinct from pre-execute prompt
+cancellation (`cancelled`/130).
+
 ### C3: CLI Authoring And Discovery Maintenance
 
 **Planned document:** `docs/Cycles/wave-03-cli-03-authoring-and-discovery.md`
@@ -471,8 +489,9 @@ available for agents and project dogfooding.
 **In scope:** Document/ticket create/save, document move, folder creation,
 explicit repair/adoption, index refresh/rebuild and identity recovery, over
 the F2 bridges.
-Ticket create and save take `deps` and `parent`; add `ticket slug-assign`,
-initials on `repo identity-set` and the prefix on `repo create`/`enable`.
+Ticket create and save take `deps` and `parent`; add `ticket slug-assign`.
+**Amended 2026-10-20 by C2 (decision 5):** repository-local initials and the
+create/enable prefix ship in C2 with their administration verbs, not in C3.
 Record the Wave 03 Cycle dependencies in the project's own tickets when these
 operations meet this gate. Preserve unknown metadata, ULIDs and body content; use actual
 context provisioning and source/destination observations. Empty folders are

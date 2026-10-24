@@ -1,7 +1,25 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
-    Available,
+    /// Available, with the Cycle that delivered it.
+    Available(&'static str),
     Planned(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRule {
+    Required,
+    Refused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Read,
+    /// A read that can ask to unlock a key: `host observe`.
+    UnlockingRead,
+    Mutation {
+        confirmed: bool,
+        input: InputRule,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +44,19 @@ pub struct CommandSpec {
     pub availability: Availability,
     pub repo: Option<RepoRule>,
     pub options: &'static [OptionSpec],
+    pub kind: Kind,
+}
+
+impl CommandSpec {
+    pub fn delivered_by(&self) -> &'static str {
+        match self.availability {
+            Availability::Available(cycle) | Availability::Planned(cycle) => cycle,
+        }
+    }
+
+    pub fn prompts(&self) -> bool {
+        matches!(self.kind, Kind::Mutation { .. } | Kind::UnlockingRead)
+    }
 }
 
 pub const REPOSITORY_VALUES: &[&str] = &["required", "refused"];
@@ -52,6 +83,30 @@ const REPO: OptionSpec = option(
 );
 const ID: OptionSpec = option("--id", Some("ULID"), true, "Canonical item ULID.");
 const KEY_ID: OptionSpec = option("--key-id", Some("ULID"), true, "Canonical key ULID.");
+pub const INPUT: OptionSpec = option(
+    "--input",
+    Some("file|-"),
+    false,
+    "Read one JSON input object from a file or stdin (-).",
+);
+pub const REQUEST_ID: OptionSpec = option(
+    "--request-id",
+    Some("ULID"),
+    false,
+    "Canonical request ULID.",
+);
+pub const PREPARE: OptionSpec = option(
+    "--prepare",
+    None,
+    false,
+    "Prepare a confirmation preview without executing the mutation.",
+);
+pub const CONFIRM: OptionSpec = option(
+    "--confirm",
+    Some("ULID"),
+    false,
+    "Execute with a prepared confirmation ULID.",
+);
 const STATUS: OptionSpec = option(
     "--status",
     Some("text"),
@@ -144,9 +199,10 @@ const fn available(
         resource,
         verb,
         summary,
-        availability: Availability::Available,
+        availability: Availability::Available("C1"),
         repo: Some(repo),
         options,
+        kind: Kind::Read,
     }
 }
 
@@ -163,10 +219,21 @@ const fn planned(
         availability: Availability::Planned(cycle),
         repo: None,
         options: &[],
+        kind: Kind::Read,
     }
 }
 
 use RepoRule::{Refused, Required};
+const MUTATION_INPUT: &[OptionSpec] = &[
+    REPO,
+    OptionSpec {
+        required: true,
+        ..INPUT
+    },
+    REQUEST_ID,
+    PREPARE,
+    CONFIRM,
+];
 
 /// The approved command catalog, ordered by delivering Cycle.
 pub const COMMANDS: &[CommandSpec] = &[
@@ -337,24 +404,261 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
     ),
     available("id", "new", "Generate a new item ID.", Refused, &[]),
-    planned("repo", "create", "Create a repository.", "C2"),
-    planned("repo", "enable", "Enable Manyhands in a repository.", "C2"),
-    planned("repo", "remove", "Remove a repository registration.", "C2"),
-    planned("repo", "identity-set", "Set repository identity.", "C2"),
-    planned("remote", "add", "Add a repository remote.", "C2"),
-    planned("remote", "remove", "Remove a repository remote.", "C2"),
-    planned("remote", "select", "Select a repository remote.", "C2"),
-    planned("key", "generate", "Generate a key.", "C2"),
-    planned("key", "import", "Import a key.", "C2"),
-    planned("key", "select", "Select a key for a repository.", "C2"),
-    planned("key", "clear", "Clear a repository's selected key.", "C2"),
-    planned("key", "remove", "Remove a key registration.", "C2"),
-    planned("key", "delete", "Delete a key.", "C2"),
-    planned("host", "approve", "Approve a host pin.", "C2"),
-    planned("host", "replace", "Replace a host pin.", "C2"),
-    planned("host", "observe", "Observe a host key.", "C2"),
-    planned("request", "show", "Show a request.", "C2"),
-    planned("request", "cancel", "Cancel a request.", "C2"),
+    CommandSpec {
+        resource: "repo",
+        verb: "create",
+        summary: "Create a repository.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "enable",
+        summary: "Enable Manyhands in a repository.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "remove",
+        summary: "Remove a repository registration.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "identity-set",
+        summary: "Set repository identity.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "add",
+        summary: "Add a repository remote.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "remove",
+        summary: "Remove a repository remote.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "select",
+        summary: "Select a repository remote.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "generate",
+        summary: "Generate a key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "import",
+        summary: "Import a key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "select",
+        summary: "Select a key for a repository.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[KEY_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "clear",
+        summary: "Clear a repository's selected key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "remove",
+        summary: "Remove a key registration.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[KEY_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "key",
+        verb: "delete",
+        summary: "Delete a key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[KEY_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "host",
+        verb: "approve",
+        summary: "Approve a host pin.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "host",
+        verb: "replace",
+        summary: "Replace a host pin.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "host",
+        verb: "observe",
+        summary: "Observe a host key.",
+        availability: Availability::Available("C2"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            option(
+                "--authority",
+                Some("host[:port]"),
+                false,
+                "Select a publication remote authority to observe.",
+            ),
+        ],
+        kind: Kind::UnlockingRead,
+    },
+    CommandSpec {
+        resource: "request",
+        verb: "show",
+        summary: "Show a request.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[OptionSpec {
+            required: true,
+            ..REQUEST_ID
+        }],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "request",
+        verb: "cancel",
+        summary: "Cancel a request.",
+        availability: Availability::Available("C2"),
+        repo: Some(Refused),
+        options: &[OptionSpec {
+            required: true,
+            ..REQUEST_ID
+        }],
+        kind: Kind::Read,
+    },
     planned("folder", "create", "Create a document folder.", "C3"),
     planned("document", "create", "Create a document.", "C3"),
     planned("document", "save", "Save a document.", "C3"),

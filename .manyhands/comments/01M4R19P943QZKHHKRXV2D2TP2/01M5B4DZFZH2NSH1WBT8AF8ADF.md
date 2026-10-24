@@ -1,9 +1,10 @@
 ---
+id: 01M5B4DZFZH2NSH1WBT8AF8ADF
+item_id: 01M4R19P943QZKHHKRXV2D2TP2
+created_at: 2026-10-19T22:27:35Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M5B4DZFZH2NSH1WBT8AF8ADF"
-item_id: "01M4R19P943QZKHHKRXV2D2TP2"
-created_at: "2026-10-19T22:27:35Z"
 ---
 
 ## Final local verification — review-ready

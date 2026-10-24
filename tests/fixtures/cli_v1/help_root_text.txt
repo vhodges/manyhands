@@ -20,7 +20,7 @@ Commands:
 
 Options:
       --json             Write a JSON result.
-      --non-interactive  Run without prompts (no effect in C1).
+      --non-interactive  Run without terminal prompts.
       --help             Show help.
       --version          Show the version.
 
@@ -53,24 +53,24 @@ Command catalog:
   operation list  List repository operations. Available now.
   operation show  Show a repository operation. Available now.
   id new  Generate a new item ID. Available now.
-  repo create  Create a repository. Arrives with C2.
-  repo enable  Enable Manyhands in a repository. Arrives with C2.
-  repo remove  Remove a repository registration. Arrives with C2.
-  repo identity-set  Set repository identity. Arrives with C2.
-  remote add  Add a repository remote. Arrives with C2.
-  remote remove  Remove a repository remote. Arrives with C2.
-  remote select  Select a repository remote. Arrives with C2.
-  key generate  Generate a key. Arrives with C2.
-  key import  Import a key. Arrives with C2.
-  key select  Select a key for a repository. Arrives with C2.
-  key clear  Clear a repository's selected key. Arrives with C2.
-  key remove  Remove a key registration. Arrives with C2.
-  key delete  Delete a key. Arrives with C2.
-  host approve  Approve a host pin. Arrives with C2.
-  host replace  Replace a host pin. Arrives with C2.
-  host observe  Observe a host key. Arrives with C2.
-  request show  Show a request. Arrives with C2.
-  request cancel  Cancel a request. Arrives with C2.
+  repo create  Create a repository. Available now.
+  repo enable  Enable Manyhands in a repository. Available now.
+  repo remove  Remove a repository registration. Available now.
+  repo identity-set  Set repository identity. Available now.
+  remote add  Add a repository remote. Available now.
+  remote remove  Remove a repository remote. Available now.
+  remote select  Select a repository remote. Available now.
+  key generate  Generate a key. Available now.
+  key import  Import a key. Available now.
+  key select  Select a key for a repository. Available now.
+  key clear  Clear a repository's selected key. Available now.
+  key remove  Remove a key registration. Available now.
+  key delete  Delete a key. Available now.
+  host approve  Approve a host pin. Available now.
+  host replace  Replace a host pin. Available now.
+  host observe  Observe a host key. Available now.
+  request show  Show a request. Available now.
+  request cancel  Cancel a request. Available now.
   folder create  Create a document folder. Arrives with C3.
   document create  Create a document. Arrives with C3.
   document save  Save a document. Arrives with C3.

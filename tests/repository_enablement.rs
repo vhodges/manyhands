@@ -22,6 +22,9 @@ mod support;
 #[path = "repository_enablement/enablement_index.rs"]
 mod enablement_index;
 
+#[path = "repository_enablement/unusable_identity.rs"]
+mod unusable_identity;
+
 fn isolated_effective_config(source: &str) -> (tempfile::TempDir, Config) {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("global.gitconfig");
