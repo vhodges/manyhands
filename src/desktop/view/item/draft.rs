@@ -12,7 +12,8 @@
 //! The section shows the draft's own fields read-only, whether its newest
 //! text is saved for recovery (Retry on a failed write), where the item
 //! stands against it (Retry on a failed read) and, when the item changed,
-//! Compare, which expands the comparison inline. Edit and Save wait for
+//! Compare, which expands the comparison inline, and Export… and Discard…,
+//! the Drafts page's own (`draft_actions`). Edit and Save wait for
 //! the editor. A reload of the tab recomputes where the item stands; it
 //! never touches the draft's text or base.
 
@@ -28,8 +29,8 @@ use gpui_kit::{
 };
 use manyhands::{
     drafts::{
-        DraftError, DraftErrorKind, DraftFields, DraftId, Field, RefusalReason, Restore,
-        TargetState, classify, restore_policy,
+        DraftError, DraftErrorKind, DraftId, RefusalReason, Restore, TargetState, classify,
+        restore_policy,
     },
     repository::ItemDto,
 };
@@ -45,7 +46,8 @@ use crate::desktop::{
     services::drafts::RestoreRefused,
     view::{
         confirm::local_time,
-        draft_comparison::{DraftComparisonView, field_name, field_value, target_label},
+        draft_comparison::{DraftComparisonView, FieldIds, draft_fields, target_label},
+        drafts::actions::OPEN_ELSEWHERE_RETRY,
         relationships::OpenRelated,
         sidebar::RETRY,
     },
@@ -67,16 +69,12 @@ pub(crate) const NOT_DISCARDED: &str = "Draft not discarded";
 pub(crate) const DRAFT_ACTIONS: [&str; 2] = ["Edit", "Save"];
 pub(crate) const EDITOR_LATER: &str = "Available with the editor in a later release";
 
-/// The ticket fields a draft's section names, in order, between its title
-/// and its body.
-const NAMED: [Field; 6] = [
-    Field::Type,
-    Field::Status,
-    Field::Project,
-    Field::Team,
-    Field::Deps,
-    Field::Parent,
-];
+/// The restored draft section's own fields.
+const SECTION_FIELDS: FieldIds = FieldIds {
+    title: "draft-title",
+    field: "draft-field",
+    body: "draft-body",
+};
 
 /// The banner's Review in Drafts: the Drafts page is to open on this
 /// draft's row.
@@ -84,15 +82,20 @@ pub(crate) struct ReviewInDrafts(pub DraftId);
 
 impl EventEmitter<ReviewInDrafts> for ItemPane {}
 
-/// A pane's draft state: what Restore answered, a failed discard, and
-/// where the item stands against the attached session, kept until the tab
-/// reads again or the session changes.
+/// A pane's draft state: what Restore answered, a failed discard, what
+/// the last export came to, Discard's focus, and where the item stands
+/// against the attached session, kept until the tab reads again or the
+/// session changes.
 #[derive(Default)]
 pub(super) struct TabDraft {
     restoring: bool,
     refused: Option<RestoreRefused>,
     discard_failed: Option<DraftErrorKind>,
     comparing: bool,
+    /// What the last export came to, in words.
+    pub(super) exported: Option<String>,
+    /// The section's Discard…, where the dialog gives the focus back.
+    pub(super) discard_focus: Option<gpui_kit::FocusHandle>,
     /// The session and revision it was computed for, and the state.
     target: Option<(DraftId, u64, TargetState)>,
 }
@@ -105,18 +108,20 @@ impl TabDraft {
 }
 
 /// The text of a refusal.
-fn refused_label(refused: RestoreRefused) -> String {
+pub(crate) fn refused_label(refused: RestoreRefused) -> String {
     match refused {
         RestoreRefused::AnotherOpen => ANOTHER_OPEN.to_owned(),
         RestoreRefused::NoLongerKept => NO_LONGER_KEPT.to_owned(),
         RestoreRefused::NotThisItem => NOT_THIS_ITEM.to_owned(),
-        RestoreRefused::OpenElsewhere => error_text(DraftErrorKind::OpenElsewhere),
+        // Perhaps only a passing probe of its lock: Restore may be tried
+        // again.
+        RestoreRefused::OpenElsewhere => OPEN_ELSEWHERE_RETRY.to_owned(),
         RestoreRefused::Failed(kind) => error_text(kind),
     }
 }
 
 /// The store's fixed sentence for `kind`.
-fn error_text(kind: DraftErrorKind) -> String {
+pub(super) fn error_text(kind: DraftErrorKind) -> String {
     DraftError { kind }.to_string()
 }
 
@@ -132,7 +137,7 @@ pub(crate) fn recovery_label(state: RecoveryState) -> String {
     }
 }
 
-fn button(
+pub(super) fn button(
     id: &'static str,
     label: &'static str,
     on_click: impl Fn(&ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
@@ -342,10 +347,11 @@ impl ItemPane {
                 .border_1()
                 .border_color(cx.theme().border)
                 .child(div().text_xs().child(RESTORED_DRAFT))
-                .child(fields(&mine, cx))
+                .child(draft_fields(SECTION_FIELDS, &mine, cx))
                 .child(self.recovery_line(id, recovery, cx))
                 .children(target)
                 .children(compare)
+                .child(self.draft_actions(id, cx))
                 .child(later(cx))
                 .into_any_element(),
         )
@@ -390,32 +396,6 @@ impl ItemPane {
             .child(text("draft-target", target_label(state)).text_sm())
             .children(retry)
     }
-}
-
-/// The draft's own fields, read-only: its title, a ticket's named fields,
-/// and its body.
-fn fields(fields: &DraftFields, cx: &App) -> impl IntoElement + use<> {
-    let named: &[Field] = match fields {
-        DraftFields::Ticket { .. } => &NAMED,
-        _ => &[],
-    };
-    v_flex()
-        .gap_1()
-        .child(text("draft-title", field_value(fields, Field::Title)).text_lg())
-        .children(named.iter().enumerate().map(|(ix, field)| {
-            text(
-                ("draft-field", ix),
-                format!("{}: {}", field_name(*field), field_value(fields, *field)),
-            )
-            .text_sm()
-        }))
-        .child(
-            text("draft-body", field_value(fields, Field::Body))
-                .text_sm()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().border),
-        )
 }
 
 /// Edit and Save, unavailable until the editor arrives.

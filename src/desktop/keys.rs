@@ -49,6 +49,8 @@ gpui_kit::actions!(
         ScrollToTop,
         /// Scroll the content region to its bottom.
         ScrollToBottom,
+        /// Close the Drafts page's Inspect panel.
+        CloseInspect,
     ]
 );
 
@@ -64,6 +66,10 @@ pub(crate) const CONTENT_CONTEXT: &str = "Content";
 /// The key context of the Why blocked panel, where PageUp, PageDown, Home
 /// and End scroll it.
 pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
+
+/// The key context of the Drafts page's Inspect panel, where Escape
+/// closes it.
+pub(crate) const DRAFT_INSPECT_CONTEXT: &str = "DraftInspect";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -93,6 +99,7 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("pagedown", ScrollPageDown, Some(WHY_BLOCKED_CONTEXT)),
         KeyBinding::new("home", ScrollToTop, Some(WHY_BLOCKED_CONTEXT)),
         KeyBinding::new("end", ScrollToBottom, Some(WHY_BLOCKED_CONTEXT)),
+        KeyBinding::new("escape", CloseInspect, Some(DRAFT_INSPECT_CONTEXT)),
     ]);
 }
 

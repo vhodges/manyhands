@@ -38,6 +38,7 @@ mod flush;
 mod restore;
 mod retire;
 mod save;
+mod stored;
 
 pub(crate) use restore::RestoreRefused;
 

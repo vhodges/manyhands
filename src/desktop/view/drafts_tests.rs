@@ -159,6 +159,9 @@ fn stray(fixture: &Fixture, bytes: Option<&[u8]>) -> (DraftId, PathBuf) {
     (id, path)
 }
 
+/// What a readable row offers once its item is read, Restore aside.
+const REFUSED: [&str; 3] = ["inspect", "export", "discard"];
+
 const NEWER: &[u8] = br#"{"format": "manyhands-draft", "version": 2, "id": "kept as it is"}"#;
 
 /// Every target state and every unreadable reason, one row each, with its
@@ -197,16 +200,17 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
     let root = key(&a);
 
     let mut rows: Vec<(DraftId, &str, Vec<&str>)> = Vec::new();
+    let restorable = || [&["restore"][..], &REFUSED].concat();
     let current = store_draft(&fixture, &a, ItemDtoKind::Ticket, CURRENT_ID, "Mine");
-    rows.push((current, CURRENT, vec!["restore", "inspect", "discard"]));
+    rows.push((current, CURRENT, restorable()));
     let changed = store_draft(&fixture, &a, ItemDtoKind::Ticket, CHANGED_ID, "Mine");
     fixture.save_ticket(&a, CHANGED_ID, "Theirs");
-    rows.push((changed, CHANGED, vec!["restore", "inspect", "discard"]));
+    rows.push((changed, CHANGED, restorable()));
     // Its text is the item's own.
     let saved_base = base_of(&fixture, &a, SAVED_ID);
     let saved_text = saved_base.fields.clone();
     let saved = store(&fixture, &root, SAVED_ID, Some(saved_base), saved_text);
-    rows.push((saved, ALREADY_SAVED, vec!["restore", "inspect", "discard"]));
+    rows.push((saved, ALREADY_SAVED, restorable()));
     let mut unverified_base = base_of(&fixture, &a, UNVERIFIED_ID);
     unverified_base.observation = None;
     let unverified = store(
@@ -216,21 +220,17 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
         Some(unverified_base),
         ticket_fields("Unverified", "Mine"),
     );
-    rows.push((
-        unverified,
-        UNVERIFIED,
-        vec!["restore", "inspect", "discard"],
-    ));
+    rows.push((unverified, UNVERIFIED, restorable()));
     let closed = store_draft(&fixture, &a, ItemDtoKind::Ticket, CLOSED_ID, "Mine");
-    rows.push((closed, TICKET_CLOSED, vec!["inspect", "discard"]));
+    rows.push((closed, TICKET_CLOSED, REFUSED.to_vec()));
     let gone = store_draft(&fixture, &a, ItemDtoKind::Ticket, GONE_ID, "Mine");
-    rows.push((gone, ITEM_NOT_FOUND, vec!["inspect", "discard"]));
+    rows.push((gone, ITEM_NOT_FOUND, REFUSED.to_vec()));
     let broken = store_draft(&fixture, &a, ItemDtoKind::Ticket, BROKEN_ID, "Mine");
-    rows.push((broken, NONCONFORMING, vec!["inspect", "discard"]));
+    rows.push((broken, NONCONFORMING, REFUSED.to_vec()));
     let busy = store_draft(&fixture, &b, ItemDtoKind::Ticket, BUSY_ID, "Mine");
-    rows.push((busy, READ_FAILED, vec!["inspect", "discard", "retry"]));
+    rows.push((busy, READ_FAILED, [&REFUSED[..], &["retry"]].concat()));
     let loose = store_draft(&fixture, &c, ItemDtoKind::Ticket, LOOSE_ID, "Mine");
-    rows.push((loose, REPOSITORY_UNAVAILABLE, vec!["inspect", "discard"]));
+    rows.push((loose, REPOSITORY_UNAVAILABLE, REFUSED.to_vec()));
     let orphan = store_target(
         &fixture,
         DraftTarget {
@@ -247,7 +247,7 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
             body: "A reply".to_owned(),
         },
     );
-    rows.push((orphan, PARENT_NOT_FOUND, vec!["inspect", "discard"]));
+    rows.push((orphan, PARENT_NOT_FOUND, REFUSED.to_vec()));
     let reply = store_target(
         &fixture,
         DraftTarget {
@@ -264,7 +264,7 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
             body: "A comment".to_owned(),
         },
     );
-    rows.push((reply, CURRENT, vec!["inspect", "discard"]));
+    rows.push((reply, CURRENT, REFUSED.to_vec()));
 
     // The item gone in a commit; the item made unreadable by its ID; the
     // repository no longer registered.
@@ -353,11 +353,11 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
             state(&shell, id, cx),
             Some(format!("{CANNOT_READ}: {reason}"))
         );
-        assert_eq!(actions(&shell, id, cx), ["discard"]);
+        assert_eq!(actions(&shell, id, cx), ["export-raw", "discard"]);
     }
 }
 
-/// While its item is read, a row says so and offers Inspect and Discard.
+/// While its item is read, a row says so and offers Inspect, Export, Discard.
 #[gpui_kit::test]
 fn a_row_being_checked_says_so(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -367,7 +367,7 @@ fn a_row_being_checked_says_so(cx: &mut TestAppContext) {
     let _held = shell.backend.hold_read(ReadKind::Item);
     shell.keys("secondary-shift-d", cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(CHECKING));
-    assert_eq!(actions(&shell, id, cx), ["inspect", "discard"]);
+    assert_eq!(actions(&shell, id, cx), REFUSED.to_vec());
 }
 
 /// A draft restored in this window reads so and offers Show, which shows
@@ -386,7 +386,7 @@ fn a_draft_restored_here_offers_show_which_focuses_its_tab(cx: &mut TestAppConte
 
     shell.keys("secondary-shift-d", cx);
     assert_eq!(state(&shell, id, cx).as_deref(), Some(RESTORED_HERE));
-    assert_eq!(actions(&shell, id, cx), ["show", "inspect", "discard"]);
+    assert_eq!(actions(&shell, id, cx), [&["show"][..], &REFUSED].concat());
 
     shell.click(row_id(id, "show"), cx);
     assert!(!drafts_shown(&shell, cx));

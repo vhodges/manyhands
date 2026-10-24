@@ -3,13 +3,15 @@
 //! `reads` owns the ordered per-tab read and refresh job, `status` its loading
 //! and recovery controls, `details` the identity/provenance/metadata, `source`
 //! the retained read-only textarea, `discussion` the comment thread, and
-//! `draft` the banner of a stored draft and the section of one restored here.
+//! `draft` the banner of a stored draft and the section of one restored here,
+//! with `draft_actions` its Export… and Discard….
 //! Relationships remain in the sibling view. All children use the same entity,
 //! stamped model and subscriptions; none writes the item.
 
 mod details;
 mod discussion;
 mod draft;
+mod draft_actions;
 mod reads;
 mod source;
 mod status;
@@ -30,7 +32,7 @@ use crate::desktop::{
 pub(super) use details::text;
 #[cfg(test)]
 pub(crate) use draft::NOT_SAVED;
-pub(crate) use draft::{EDITOR_LATER, ReviewInDrafts};
+pub(crate) use draft::{EDITOR_LATER, NOT_DISCARDED, ReviewInDrafts, refused_label};
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =

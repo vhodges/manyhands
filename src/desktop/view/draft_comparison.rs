@@ -1,9 +1,10 @@
-//! A draft's target state in words, and its three-way comparison: one row
-//! per field with the draft's value, the item's now and the base's, and
-//! who changed it. The tab's Compare shows it; so will the Drafts page's
+//! A draft's target state in words, its own fields read-only, and its
+//! three-way comparison: one row per field with the draft's value, the
+//! item's now and the base's, and who changed it. The tab's restored
+//! draft section and Compare show them, and so does the Drafts page's
 //! Inspect. It knows nothing of where it is drawn.
 //!
-//! It shows draft text and is drawn only in a draft's own section; the
+//! It shows draft text and is drawn only on a draft's own surfaces; the
 //! comparison holds that text and derives no `Debug`.
 
 use gpui_kit::{
@@ -180,6 +181,64 @@ impl DraftComparisonView {
             }),
         )
     }
+}
+
+/// The ticket fields a draft's own fields name, in order, between its
+/// title and its body.
+const NAMED: [Field; 6] = [
+    Field::Type,
+    Field::Status,
+    Field::Project,
+    Field::Team,
+    Field::Deps,
+    Field::Parent,
+];
+
+/// The element IDs of a draft's own fields: its title, each named field
+/// by its index, and its body.
+pub(crate) struct FieldIds {
+    pub title: &'static str,
+    pub field: &'static str,
+    pub body: &'static str,
+}
+
+/// A draft's own fields, read-only: its title, a ticket's named fields,
+/// and its body. The tab's restored draft section and the Drafts page's
+/// Inspect both show them, each under its own IDs.
+pub(crate) fn draft_fields(
+    ids: FieldIds,
+    fields: &DraftFields,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let named: &[Field] = match fields {
+        DraftFields::Ticket { .. } => &NAMED,
+        _ => &[],
+    };
+    v_flex()
+        .gap_1()
+        .child(labeled(ids.title, field_value(fields, Field::Title)).text_lg())
+        .children(named.iter().enumerate().map(|(ix, field)| {
+            text(
+                (ids.field, ix),
+                format!("{}: {}", field_name(*field), field_value(fields, *field)),
+            )
+            .text_sm()
+        }))
+        .child(
+            labeled(ids.body, field_value(fields, Field::Body))
+                .text_sm()
+                .p_2()
+                .border_1()
+                .border_color(cx.theme().border),
+        )
+}
+
+fn labeled(id: &'static str, value: String) -> impl IntoElement + Styled + use<> {
+    div()
+        .id(id)
+        .test_support()
+        .aria_label(value.clone())
+        .child(value)
 }
 
 fn text(

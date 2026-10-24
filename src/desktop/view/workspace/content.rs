@@ -100,7 +100,8 @@ impl Workspace {
     }
 
     /// What the Drafts page asks: Show shows and focuses the tab its draft
-    /// is restored in.
+    /// is restored in; a Restore opens and focuses its item's tab, which
+    /// leaves the page.
     pub(super) fn drafts_event(
         &mut self,
         event: &DraftsEvent,
@@ -113,6 +114,10 @@ impl Workspace {
                     self.show_tab(id, cx);
                     self.focus_region(Region::Content, window, cx);
                 }
+            }
+            DraftsEvent::Open(target) => {
+                self.open_item(target.clone(), cx);
+                self.focus_region(Region::Content, window, cx);
             }
         }
     }

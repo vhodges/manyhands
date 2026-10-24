@@ -191,3 +191,73 @@ pub(crate) fn second_actor(fixture: &Fixture, actor: Actor<'_>) {
         "the child ran no test:\n{stdout}"
     );
 }
+
+const HOLD: &str = "MANYHANDS_TEST_DRAFT_HOLDER_DATA";
+const HOLD_ID: &str = "MANYHANDS_TEST_DRAFT_HOLDER_ID";
+const HOLDING: &str = "manyhands-test-draft-holder-claimed";
+
+/// Another Manyhands process holding a draft's claim, as the library's
+/// claims test holds one: the claim is let go of when this is dropped.
+pub(crate) struct HeldElsewhere {
+    child: std::process::Child,
+}
+
+/// The holder, in a process of its own over the parent's data directory:
+/// claims the draft, says so, and holds the claim until stdin closes.
+/// Does nothing unless the parent named a draft.
+#[test]
+fn draft_holder_child() {
+    use std::io::{Read, Write};
+
+    let Some(data) = std::env::var_os(HOLD) else {
+        return;
+    };
+    let store = DraftStore::open_in(Path::new(&data)).unwrap();
+    let id: DraftId = std::env::var(HOLD_ID).unwrap().parse().unwrap();
+    let _claim = store.claim(id).expect("the draft must be claimed");
+    println!("{HOLDING}");
+    std::io::stdout().flush().unwrap();
+    let mut rest = String::new();
+    std::io::stdin().read_to_string(&mut rest).unwrap();
+}
+
+/// Claims the draft `id` in a child process of the test binary, and
+/// returns once the child holds it.
+pub(crate) fn hold_elsewhere(fixture: &Fixture, id: DraftId) -> HeldElsewhere {
+    use std::io::{BufRead, BufReader};
+
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "desktop::test_support::drafts::draft_holder_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(HOLD, fixture.data_dir())
+        .env(HOLD_ID, id.to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut seen = String::new();
+    loop {
+        let mut line = String::new();
+        if stdout.read_line(&mut line).unwrap() == 0 {
+            panic!("the holder ended before claiming:\n{seen}");
+        }
+        seen.push_str(&line);
+        // libtest names the test on the same line, before the marker.
+        if line.trim_end().ends_with(HOLDING) {
+            break;
+        }
+    }
+    HeldElsewhere { child }
+}
+
+impl Drop for HeldElsewhere {
+    fn drop(&mut self) {
+        drop(self.child.stdin.take());
+        let _ = self.child.wait();
+    }
+}

@@ -366,10 +366,10 @@ impl DraftSession {
         }
     }
 
-    /// Where the item stands against this session's newest text and base,
-    /// as `item` reads it now. Only an item's draft has a session.
-    pub(crate) fn classify(&self, item: Result<&ItemDto, ResultCode>) -> TargetState {
-        let draft = Draft {
+    /// The session's newest text as a draft: what Export writes. Its
+    /// revision is the newest in memory, which may not yet be stored.
+    pub(crate) fn draft(&self) -> Draft {
+        Draft {
             id: self.id,
             revision: self.revision,
             created_at: self.created_at,
@@ -377,8 +377,13 @@ impl DraftSession {
             target: self.target.clone(),
             base: self.base.clone(),
             current: self.current.clone(),
-        };
-        classify(&draft, item)
+        }
+    }
+
+    /// Where the item stands against this session's newest text and base,
+    /// as `item` reads it now. Only an item's draft has a session.
+    pub(crate) fn classify(&self, item: Result<&ItemDto, ResultCode>) -> TargetState {
+        classify(&self.draft(), item)
     }
 
     pub(crate) fn recovery_state(&self) -> RecoveryState {

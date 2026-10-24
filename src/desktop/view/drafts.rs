@@ -11,11 +11,19 @@
 //! content router in `workspace/content.rs` shows and hides it, and asks
 //! it for its first control's focus. It does not assume it fills the
 //! content region. Show asks the host to show a tab, as an event; it never
-//! hides the page itself (a later dock may keep it in view).
+//! hides the page itself (a later dock may keep it in view). Restore, once
+//! the draft is claimed, asks the host to open its item's tab, which the
+//! host does through `open_item`, leaving the page. Inspect opens a panel
+//! under its row; Export… and Discard… are `actions`, shared with the tab.
 
+pub(crate) mod actions;
+mod inspect;
 mod rows;
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use gpui_kit::{
     Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render,
@@ -32,6 +40,7 @@ use super::{confirm::local_time, scroll::ContentScroll, sidebar::RETRY};
 use crate::desktop::{
     model::{
         drafts::DraftRow,
+        navigation::OpenTarget,
         stamp::{Generations, Stamp, ViewScope},
         tabs::TabKey,
     },
@@ -52,12 +61,16 @@ pub(crate) const SHOW: &str = "Show";
 pub(crate) const INSPECT: &str = "Inspect";
 pub(crate) const DISCARD: &str = "Discard…";
 
+pub(crate) use actions::{EXPORT, EXPORT_RAW};
+
 /// A row's actions, by element part and label, in the order a row shows
 /// them (an already saved draft shows Discard first).
-pub(crate) const ACTIONS: [(&str, &str); 5] = [
+pub(crate) const ACTIONS: [(&str, &str); 7] = [
     ("restore", RESTORE),
     ("show", SHOW),
     ("inspect", INSPECT),
+    ("export", EXPORT),
+    ("export-raw", EXPORT_RAW),
     ("discard", DISCARD),
     ("retry", RETRY),
 ];
@@ -71,6 +84,8 @@ pub(crate) fn row_id(id: DraftId, part: &str) -> String {
 pub(crate) enum DraftsEvent {
     /// Show and focus this tab: a draft restored here.
     Show(TabKey),
+    /// Open and focus this item's tab: its draft was restored into it.
+    Open(OpenTarget),
 }
 
 /// One row, the draft it shows when readable, and its item's reads.
@@ -85,7 +100,7 @@ struct Slot {
 /// draft across listings.
 struct RowFocus {
     row: FocusHandle,
-    actions: [FocusHandle; 5],
+    actions: [FocusHandle; ACTIONS.len()],
 }
 
 pub(crate) struct DraftsPage {
@@ -97,6 +112,13 @@ pub(crate) struct DraftsPage {
     focus: HashMap<DraftId, RowFocus>,
     /// The row to focus first: the draft the page was opened on.
     focus_row: Option<DraftId>,
+    /// The drafts being restored: one Restore at a time each.
+    restoring: HashSet<DraftId>,
+    /// What the last action on a row came to, in words, by draft.
+    notices: HashMap<DraftId, String>,
+    /// The row the Inspect panel is open on, and the panel's focus.
+    inspecting: Option<DraftId>,
+    inspect_focus: FocusHandle,
     /// The registry's listing count the rows were built from.
     built: Option<u64>,
     _registry: Subscription,
@@ -115,6 +137,10 @@ impl DraftsPage {
             generations: Generations::default(),
             focus: HashMap::new(),
             focus_row: None,
+            restoring: HashSet::new(),
+            notices: HashMap::new(),
+            inspecting: None,
+            inspect_focus: cx.focus_handle().tab_stop(true),
             built: None,
             _registry: registry,
         }
@@ -143,6 +169,8 @@ impl DraftsPage {
         if self.shown {
             self.shown = false;
             self.slots.clear();
+            self.notices.clear();
+            self.inspecting = None;
             cx.notify();
         }
     }
@@ -192,6 +220,8 @@ impl DraftsPage {
             .collect();
         let ids: Vec<DraftId> = self.slots.iter().map(|slot| slot.row.id).collect();
         self.focus.retain(|id, _| ids.contains(id));
+        self.notices.retain(|id, _| ids.contains(id));
+        self.inspecting = self.inspecting.filter(|id| ids.contains(id));
         for id in ids {
             self.focus.entry(id).or_insert_with(|| RowFocus {
                 row: cx.focus_handle().tab_stop(true),
@@ -354,3 +384,11 @@ mod entry_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "drafts_held_tests.rs"]
 mod held_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "drafts_actions_tests.rs"]
+mod actions_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "drafts_inspect_tests.rs"]
+mod inspect_tests;

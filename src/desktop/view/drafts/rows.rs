@@ -3,8 +3,9 @@
 //!
 //! A row is a focusable stop of its own, then its actions, each a Kit
 //! button in a focus-tracking wrapper with the content region's scroll
-//! marker. Show and Retry act here; Restore, Inspect and Discard are wired
-//! by the page's actions (Task 11).
+//! marker. Show and Retry act here; Restore, Export…, Export raw… and
+//! Discard… are the page's `actions`, and Inspect opens its panel under
+//! the row. What the last of them came to is said on the row.
 
 use std::sync::Arc;
 
@@ -49,11 +50,17 @@ pub(crate) fn state_label(row: &DraftRow) -> String {
     }
 }
 
-fn offered(actions: RowActions, part: &str) -> bool {
+/// Whether `row` offers the action `part`. Export is offered on every
+/// row: Export… for a readable draft, Export raw… for an unreadable one.
+fn offered(row: &DraftRow, part: &str) -> bool {
+    let actions: RowActions = row.actions;
+    let readable = matches!(row.state, RowState::Readable { .. });
     match part {
         "restore" => actions.restore,
         "show" => actions.show,
         "inspect" => actions.inspect,
+        "export" => readable,
+        "export-raw" => !readable,
         "discard" => actions.discard,
         "retry" => actions.retry,
         _ => false,
@@ -149,8 +156,14 @@ impl DraftsPage {
         }
         let actions = order
             .into_iter()
-            .filter(|ix| offered(row.actions, ACTIONS[*ix].0) && (ACTIONS[*ix].0 != "show" || tab))
-            .map(|ix| self.action(id, ix, &focus.actions[ix], cx));
+            .filter(|ix| offered(row, ACTIONS[*ix].0) && (ACTIONS[*ix].0 != "show" || tab))
+            .map(|ix| self.action(id, ix, &focus.actions[ix], cx))
+            .collect::<Vec<_>>();
+        let notice = self
+            .notices
+            .get(&id)
+            .map(|notice| text(row_id(id, "notice"), notice.clone()).text_sm());
+        let inspect = self.inspect_panel(slot, cx);
         let mut element = v_flex()
             .id(row_id(id, "row"))
             .test_support()
@@ -166,6 +179,8 @@ impl DraftsPage {
             .child(text(row_id(id, "state"), state_label(row)).text_sm())
             .children(note)
             .child(h_flex().gap_2().flex_wrap().children(actions))
+            .children(notice)
+            .children(inspect)
             .child(self.scroll.marker(&focus.row));
         if focus.row.is_focused(window) {
             element = element.border_2().border_color(ring);
@@ -194,7 +209,17 @@ impl DraftsPage {
             "retry" => {
                 button.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.retry(id, cx)))
             }
-            // Restore, Inspect and Discard arrive with the page's actions.
+            "restore" => button
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(id, cx))),
+            "inspect" => button.on_click(
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.inspect(id, window, cx)),
+            ),
+            "export" | "export-raw" => button.on_click(
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.export(id, window, cx)),
+            ),
+            "discard" => button.on_click(
+                cx.listener(move |this, _: &ClickEvent, window, cx| this.discard(id, window, cx)),
+            ),
             _ => button,
         };
         div()
