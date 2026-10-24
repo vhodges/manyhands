@@ -364,8 +364,9 @@ fn author_is_created_by_which_is_never_unknown_metadata() {
 fn unknown_metadata_is_in_key_order_whatever_order_the_file_has_it_in() {
     let (fixture, enabled) = repository_with_ticket();
     let root = &fixture.root;
-    // `created_by` sits among the unknown keys: the parser takes the first,
-    // and the read takes the second, which names nobody.
+    // `created_by` sits among the unknown keys. The parser takes the first
+    // comment's as its author. The second's names nobody, so the parser
+    // leaves it among the unknown keys and the read takes it out.
     write_comment(
         root,
         TICKET_A,
