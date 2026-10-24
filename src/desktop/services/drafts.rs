@@ -17,7 +17,7 @@
 //! came meanwhile.
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     sync::Arc,
 };
@@ -98,6 +98,9 @@ pub(crate) struct DraftRegistry {
     /// The session each item tab holds, by the ID it was restored under;
     /// `attached` follows it to the ID it goes on under.
     attached: HashMap<TabKey, DraftId>,
+    /// Sessions whose tab is gone and whose release waits for their text
+    /// to be stored, by the ID they were released under.
+    releasing: BTreeSet<DraftId>,
 }
 
 /// A session and the tasks that write it.
@@ -123,6 +126,7 @@ impl DraftRegistry {
             saves: BTreeMap::new(),
             moved: BTreeMap::new(),
             attached: HashMap::new(),
+            releasing: BTreeSet::new(),
         }
     }
 

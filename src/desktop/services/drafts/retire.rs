@@ -239,6 +239,7 @@ impl DraftRegistry {
                 self.moved.insert(id, new);
                 self.sessions.insert(new, live);
                 self.schedule(new, cx);
+                self.release_if_pending(new, cx);
             }
             Err(error) => {
                 // The text stays in memory, failed for its own reason, over

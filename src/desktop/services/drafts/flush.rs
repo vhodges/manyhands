@@ -183,5 +183,6 @@ impl DraftRegistry {
         live.session.write_landed(result);
         self.schedule(id, cx);
         cx.notify();
+        self.release_if_pending(id, cx);
     }
 }

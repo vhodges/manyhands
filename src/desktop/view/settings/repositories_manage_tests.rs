@@ -818,3 +818,57 @@ fn a_repository_leaving_the_list_releases_its_sessions(cx: &mut TestAppContext) 
     assert!(matches!(held(&store, draft), Some(Held::No)));
     assert_eq!(stored_body(&store, draft).as_deref(), Some("Draft body"));
 }
+
+/// A removal whose release cannot write the newest text: the tabs close
+/// and the session stays live with its failure. Once Retry in the
+/// operation area stores the text, the release completes: the draft is
+/// listed unclaimed with that text, and no session is left.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_release_that_failed_during_removal_completes_once_retry_stores_the_text(
+    cx: &mut TestAppContext,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::desktop::{model::drafts::RecoveryState, view::operations::draft_flush_id};
+
+    cx.executor().allow_parking();
+    let (shell, root, draft) = with_restored_draft(cx);
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    let mut fields = drafts.read_with(cx, |registry, _| {
+        registry.session(draft).unwrap().current().clone()
+    });
+    if let manyhands::drafts::DraftFields::Ticket { body, .. } = &mut fields {
+        *body = "Newest body".to_owned();
+    }
+    drafts.update(cx, |registry, cx| registry.edit(draft, fields, cx));
+    let folder = shell.fixture.data_dir().join("drafts");
+    let mode = fs::metadata(&folder).unwrap().permissions().mode();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+
+    shell.keys("secondary-,", cx);
+    manage(&shell, &root, cx);
+    shell.click("remove-submit", cx);
+    shell.click("confirm-ok", cx);
+    let id = removals(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    shell.run(cx);
+    assert_eq!(tabs(&shell, cx), 0);
+    assert!(session_live(&shell, draft, cx), "the text is still held");
+    assert!(matches!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(draft)),
+        Some(RecoveryState::Failed(_))
+    ));
+    assert!(shell.present(draft_flush_id(draft, "retry"), cx));
+
+    fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+    shell.click(draft_flush_id(draft, "retry"), cx);
+    shell.run(cx);
+    assert!(!session_live(&shell, draft, cx));
+    assert!(!shell.present(draft_flush_id(draft, "entry"), cx));
+    let store = shell.fixture.draft_store();
+    assert!(matches!(held(&store, draft), Some(Held::No)));
+    assert_eq!(stored_body(&store, draft).as_deref(), Some("Newest body"));
+}

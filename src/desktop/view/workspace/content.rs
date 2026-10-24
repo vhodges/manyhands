@@ -142,9 +142,9 @@ impl Workspace {
             return false;
         }
         let workspace = cx.entity().downgrade();
-        close_draft::open(title, window, cx, move |choice, _, cx| {
+        close_draft::open(title, window, cx, move |choice, window, cx| {
             let _ = workspace.update(cx, |workspace, cx| {
-                workspace.close_with_draft(id, draft, choice, cx)
+                workspace.close_with_draft(id, draft, choice, window, cx)
             });
         });
         false
@@ -154,12 +154,14 @@ impl Workspace {
     /// closes the tab once the draft is written and let go of; a failed
     /// write leaves the tab open with the failure. Discard closes it once
     /// the draft is deleted; a failed discard leaves it open and says so,
-    /// the draft let go of and listed again.
+    /// the draft let go of and listed again. A tab closed here gives the
+    /// focus to the content region, as `secondary-w` does.
     fn close_with_draft(
         &mut self,
         id: TabId,
         draft: DraftId,
         choice: CloseWithDraft,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let drafts = self.services.drafts().clone();
@@ -172,11 +174,12 @@ impl Workspace {
                 drafts.update(cx, |registry, cx| registry.discard(draft, cx))
             }
         };
-        cx.spawn(async move |workspace, cx| {
+        cx.spawn_in(window, async move |workspace, cx| {
             let closed = closing.await;
-            let _ = workspace.update(cx, |workspace, cx| match closed {
+            let _ = workspace.update_in(cx, |workspace, window, cx| match closed {
                 Ok(()) => {
                     if workspace.content.tabs.close(id) {
+                        workspace.focus_region(Region::Content, window, cx);
                         cx.notify();
                     }
                 }

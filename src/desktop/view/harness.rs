@@ -176,6 +176,19 @@ impl Shell {
         })
     }
 
+    /// Whether the element `id` is a button that does not say it takes
+    /// input. The Kit's button reports no disabled flag (its snapshot's
+    /// `disabled()` is `None` either way), so a test pairs this with a
+    /// click that changes nothing.
+    pub(crate) fn inert_button(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.frame(cx, |window, _| {
+            window.try_find(id).is_some_and(|button| {
+                button.role() == Some(gpui_kit::Role::Button) && button.disabled() != Some(false)
+            })
+        })
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();

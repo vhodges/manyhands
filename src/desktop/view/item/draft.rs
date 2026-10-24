@@ -161,9 +161,10 @@ impl ItemPane {
             .services
             .drafts()
             .update(cx, |registry, cx| registry.restore(id, tab, cx));
+        let drafts = self.services.drafts().clone();
         cx.spawn(async move |pane, cx| {
             let restored = restore.await;
-            let _ = pane.update(cx, |pane, cx| {
+            let shown = pane.update(cx, |pane, cx| {
                 pane.draft.restoring = false;
                 match restored {
                     Ok(_) => {
@@ -177,6 +178,14 @@ impl ItemPane {
                 }
                 cx.notify();
             });
+            // The tab closed, or its repository went, while the claim was
+            // taken: nothing shows the session, so it is let go of and the
+            // draft offered again.
+            if let (Err(_), Ok(restored)) = (shown, restored) {
+                drafts.update(cx, |registry, cx| {
+                    registry.release_when_stored(restored, cx)
+                });
+            }
         })
         .detach();
     }

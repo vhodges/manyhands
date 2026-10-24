@@ -219,6 +219,15 @@ impl DraftRegistry {
         self.sessions.remove(&current);
         self.saves.retain(|_, record| record.draft != current);
         self.detach_ended();
+        let ended: Vec<DraftId> = self
+            .releasing
+            .iter()
+            .copied()
+            .filter(|pending| self.current_id(*pending).is_none())
+            .collect();
+        for pending in ended {
+            self.releasing.remove(&pending);
+        }
         self.reload_listing(cx);
         cx.notify();
         Some(Ok(()))
@@ -227,8 +236,8 @@ impl DraftRegistry {
     /// Releases every session attached to a tab of `root`, as its tabs
     /// close: a removal's completion, or the repository leaving the list.
     /// Each is written first and kept, never discarded; one whose write
-    /// fails stays, failed, with its text, attached for when the tab
-    /// opens again.
+    /// fails stays, failed, with its text, and is let go of once a later
+    /// write (its timer, Retry, a flush) stores it.
     pub(crate) fn release_repository(&mut self, root: &str, cx: &mut Context<Self>) {
         let ids: Vec<DraftId> = self
             .attached
@@ -237,7 +246,28 @@ impl DraftRegistry {
             .filter_map(|(_, id)| self.current_id(*id))
             .collect();
         for id in ids {
-            self.release(id, cx).detach();
+            self.release_when_stored(id, cx);
+        }
+    }
+
+    /// Lets go of the session `id`, whose tab is gone: now if its text
+    /// can be written, otherwise as soon as a later write stores it. Until
+    /// then it stays live, with its failure and Retry in the operation
+    /// area.
+    pub(crate) fn release_when_stored(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        self.releasing.insert(id);
+        self.release(id, cx).detach();
+    }
+
+    /// A write of `id` landed: a release waiting for its text to be
+    /// stored completes if it now is.
+    pub(super) fn release_if_pending(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let pending = self
+            .releasing
+            .iter()
+            .any(|pending| self.current_id(*pending) == Some(id));
+        if pending {
+            let _ = self.let_go(id, Ok(()), cx);
         }
     }
 

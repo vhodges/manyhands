@@ -805,6 +805,7 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
     );
     assert_eq!(strip(&shell, cx), ["One", "Two"], "nothing closed yet");
 
+    assert!(shell.inert_button("close-draft-save-button", cx));
     shell.click("close-draft-save-button", cx);
     assert!(close_dialog_shown(&shell, cx), "Save does nothing");
     shell.click("close-draft-cancel-button", cx);
@@ -854,6 +855,10 @@ fn keep_draft_releases_the_claim_and_the_draft_is_listed_again(cx: &mut TestAppC
     shell.run(cx);
     assert!(!close_dialog_shown(&shell, cx));
     assert_eq!(strip(&shell, cx), ["Two"]);
+    assert!(
+        tab_focused(&shell, 0, cx),
+        "focus goes to the tab shown now"
+    );
     let store = shell.fixture.draft_store();
     assert!(matches!(held(&store, draft), Some(Held::No)));
     assert_eq!(stored_body(&store, draft).as_deref(), Some("Kept body"));
@@ -878,6 +883,10 @@ fn discard_deletes_only_that_draft(cx: &mut TestAppContext) {
     shell.run(cx);
     assert!(!close_dialog_shown(&shell, cx));
     assert_eq!(strip(&shell, cx), ["Two"]);
+    assert!(
+        tab_focused(&shell, 0, cx),
+        "focus goes to the tab shown now"
+    );
     let store = shell.fixture.draft_store();
     assert!(held(&store, draft).is_none(), "the draft is gone");
     assert!(matches!(held(&store, other), Some(Held::No)));

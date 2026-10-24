@@ -148,8 +148,16 @@ fn restore_attaches_the_draft_and_writes_nothing_to_the_repository(cx: &mut Test
     assert_eq!(notes, [EDITOR_LATER, EDITOR_LATER]);
     assert!(!shell.present("draft-banner", cx), "the draft is restored");
 
-    // Save does nothing: the store still holds the draft, claimed here.
-    shell.click(("draft-later-button", 1usize), cx);
+    // Edit and Save are buttons that take no input: pressed, nothing
+    // changes, and the store still holds the draft, claimed here.
+    for ix in 0..DRAFT_ACTIONS.len() {
+        assert!(shell.inert_button(("draft-later-button", ix), cx));
+        shell.click(("draft-later-button", ix), cx);
+    }
+    assert_eq!(
+        label(&shell, "draft-body", cx).as_deref(),
+        Some("Draft body")
+    );
     assert!(matches!(
         held(&shell.fixture.draft_store(), id),
         Some(Held::Here)
@@ -326,4 +334,36 @@ async fn a_refresh_after_another_save_keeps_the_text_and_reads_changed(cx: &mut 
         Some("Draft body")
     );
     assert_eq!(attached(&shell, &document, cx), Some(id));
+}
+
+/// The tab closes while its Restore's claim is held: when the claim lands
+/// nothing shows the session, so it is let go of and the draft is offered
+/// again, unclaimed.
+#[gpui_kit::test]
+fn a_restore_that_lands_after_its_tab_closed_lets_the_draft_go(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let id = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Draft body");
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root), cx);
+
+    let claim = shell.backend.hold_read(ReadKind::Drafts);
+    restore(&shell, cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(!shell.present("item-view", cx), "the tab closed at once");
+    drop(claim);
+    shell.run(cx);
+
+    let drafts = registry(&shell, cx);
+    assert!(drafts.read_with(cx, |registry, _| registry.session(id).is_none()));
+    assert!(attached(&shell, &ticket(&root), cx).is_none());
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), id),
+        Some(Held::No)
+    ));
+    open(&shell, ticket(&root), cx);
+    assert!(
+        shell.present("draft-banner", cx),
+        "the draft is offered again"
+    );
 }
