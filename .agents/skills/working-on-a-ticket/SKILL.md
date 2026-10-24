@@ -44,9 +44,9 @@ Read these four things:
 **Owner input** comes from three places:
 
 - the chat, if the owner is watching;
-- a ticket comment from a person. An agent's comment has a `created_by`
-  ending in `<noreply@anthropic.com>`; any other comment, including one with
-  no `created_by`, is from a person;
+- a ticket comment from a person. An agent signs its comments with a
+  `noreply@` address, for example `<noreply@anthropic.com>`. Any other
+  comment, including one with no `created_by`, is from a person;
 - a PR comment. The `gh` account is the owner's, and you never post PR
   comments, so any comment there is from a person.
 
@@ -160,6 +160,28 @@ subagent is available, say so in the PR.
 4. Once the owner approves, close the ticket in canonical form, commit and
    push. Stop: `closed, awaiting merge PR #n`. The owner merges.
 
+## Loop mode (`MANYHANDS_LOOP=1`)
+
+`scripts/ticket-loop` runs you in a sandbox inside its own clone, with no
+GitHub credentials. It does the network work before and after each run. When
+`MANYHANDS_LOOP=1` is set, these rules replace the matching steps above:
+
+- **Before the run:**
+  - The driver has fetched `origin`, created the ticket's worktree in the
+    clone, and fast-forwarded the worktree where it could.
+  - Don't fetch.
+  - Merge `origin/manyhands/ticket/<id>`, which carries the owner's pushed
+    comments, and `origin/main`, both as they stand.
+- **PR state:** read it from the JSON file named by `MANYHANDS_LOOP_PR_STATE`.
+  `[]` means there is no PR. Don't call `gh`.
+- **Pushing:** commit, but don't push. The driver pushes the ticket branch
+  after the run.
+- **Opening the PR (§7, step 3):** write the PR body to the file named by
+  `MANYHANDS_LOOP_PR_BODY`, then stop with `review_ready`. The driver opens
+  the PR.
+- **Owner input:** only ticket comments and PR comments count. The owner is
+  not watching the chat.
+
 ## Never
 
 - rebase or force-push;
@@ -177,6 +199,7 @@ subagent is available, say so in the PR.
 - `implementing, next: <step>`
 - `waiting`
 - `blocked by <id>`
-- `review_ready PR #n`
+- `review_ready PR #n`, or plain `review_ready` in loop mode before the PR
+  exists
 - `closed, awaiting merge PR #n`
 - `closed`

@@ -46,8 +46,10 @@ Write each comment to
   that binary is missing, run
   `devenv shell -- cargo run --locked --bin manyhands-cli -- id new`.
 - **The time:** take it from `date -u +%Y-%m-%dT%H:%M:%SZ`.
-- **`created_by`:** your own model identity, as in your commit trailer, so
-  that it ends in `<noreply@anthropic.com>`.
+- **`created_by`:** your model's name and its vendor's `noreply@` address, as
+  in your commit trailer, for example
+  `Claude Opus 5.5 <noreply@anthropic.com>`. The `noreply@` address marks the
+  comment as an agent's.
 - **`parent_id`:** include it only on a reply.
 
 ```markdown
