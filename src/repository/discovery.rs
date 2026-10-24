@@ -159,7 +159,7 @@ impl UnknownMetadata {
     pub(super) fn from_ticket(ticket: &canonical::Ticket) -> Self {
         let mut unknown = ticket.unknown.clone();
         for key in canonical::RELATIONSHIP_KEYS {
-            unknown.remove(key);
+            unknown.shift_remove(key);
         }
         Self::from_yaml(&unknown)
     }
