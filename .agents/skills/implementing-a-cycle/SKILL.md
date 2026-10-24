@@ -51,17 +51,24 @@ remaining work; do not silently abandon it or redo verified tasks.
 At plan checkpoints update the ticket/comments using supported CLI operations,
 or the canonical filesystem schema while those commands are unavailable. Record
 progress, decisions, blockers, test evidence, and review readiness. Keep the ticket
-open through implementation and unresolved review/platform gates.
+open through implementation and unresolved review findings.
 
 ## 3. Verify and deliver
 
 Follow [verification and delivery](references/verification-and-delivery.md).
 Run the required Devenv checks for Rust changes, exercise supported front ends,
 and obtain independent final review of the complete branch and deferred findings.
-Report native platform limitations honestly; workflow YAML and Linux success do
-not prove Windows/macOS behavior.
 
-Carry authorized work through review fixes and CI failures. Push/create a PR,
+A Cycle is review-ready and mergeable on its local Devenv gates. Native CI is
+not a gate before merge: it runs after merge, on main, and only when the owner
+approves dispatching it.
+
+- A native failure found after merge is follow-on work in a separate session.
+  Do not hold or reopen the merged Cycle for it.
+- Report native limitations honestly. Workflow YAML and Linux success do not
+  prove Windows or macOS behavior.
+
+Carry authorized work through review fixes. Push/create a PR,
 merge, close the ticket, and remove the worktree only at their applicable
 authorization/lifecycle stages. Skill invocation or plan approval alone does not
 grant those permissions; existing explicit authorization need not be requested
