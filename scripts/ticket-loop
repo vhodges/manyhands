@@ -198,7 +198,8 @@ setup_clone() {
     for pattern in .manyhands/worktrees/ .manyhands/loop/; do
         grep -qxF "$pattern" "$exclude" 2>/dev/null || printf '%s\n' "$pattern" >>"$exclude"
     done
-    mkdir -p "$LOOP_DIR/logs" "$LOOP_DIR/pr" "$LOOP_DIR/state" "$LOOP_CACHE/xdg" "$LOOP_CACHE/cargo"
+    mkdir -p "$LOOP_DIR/logs" "$LOOP_DIR/pr" "$LOOP_DIR/state" "$LOOP_CACHE/xdg" "$LOOP_CACHE/cargo" \
+        "$LOOP_CACHE/manyhands-data"
     if [[ ! -f $LOOP_DIR/tickets.txt ]]; then
         printf '# One ticket ID per line, in priority order.\n' >"$LOOP_DIR/tickets.txt"
     fi
@@ -277,13 +278,23 @@ open_pr() {
 }
 
 update_owner_worktree() {
-    local id=$1 worktree
+    local id=$1 worktree branch before
     worktree="$OWNER_REPO/.manyhands/worktrees/$id"
+    branch=$(branch_of "$id")
     [[ -d $worktree ]] || return 0
-    git -C "$OWNER_REPO" fetch -q origin "$(branch_of "$id")" 2>/dev/null || return 0
-    [[ $(git -C "$worktree" symbolic-ref --short HEAD 2>/dev/null) == "$(branch_of "$id")" ]] || return 0
+    # Fast-forward to the remote-tracking branch, not FETCH_HEAD: each
+    # worktree has its own FETCH_HEAD, so it never sees the repository's.
+    git -C "$OWNER_REPO" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null ||
+        return 0
+    [[ $(git -C "$worktree" symbolic-ref --short HEAD 2>/dev/null) == "$branch" ]] || return 0
     if is_clean "$worktree"; then
-        fast_forward "$worktree" FETCH_HEAD || true
+        before=$(git -C "$worktree" rev-parse HEAD)
+        fast_forward "$worktree" "refs/remotes/origin/$branch" || true
+        if [[ $(git -C "$worktree" rev-parse HEAD) != "$before" ]]; then
+            say "updated your worktree for $id"
+        elif ! git -C "$worktree" merge-base --is-ancestor "refs/remotes/origin/$branch" HEAD; then
+            say "your worktree for $id cannot fast-forward to origin; not updating it"
+        fi
     else
         say "your worktree for $id has local changes; not updating it"
     fi
@@ -455,6 +466,8 @@ build_sandbox() {
         --setenv MANYHANDS_LOOP_PR_BODY "$LOOP_DIR/pr/$id.body"
         --setenv XDG_CACHE_HOME "$LOOP_CACHE/xdg"
         --setenv CARGO_HOME "$LOOP_CACHE/cargo"
+        # manyhands-cli's default data folder is under the read-only home.
+        --setenv MANYHANDS_DATA_DIR "$LOOP_CACHE/manyhands-data"
         --setenv NO_COLOR 1
         --chdir "$LOOP_CLONE" --)
 }
