@@ -76,9 +76,13 @@ pub(crate) struct DraftSession {
     /// A base change not yet taken by a write: due at once.
     rebased_at: Option<Instant>,
     saving: Option<Saving>,
-    /// The claim is out of its slot to retire the saved revision: no
-    /// write is taken until it comes back or the session is stored again.
+    /// A store call has the claim out of its slot, or is making a new one:
+    /// the saved revision retiring, or the text being stored again. No
+    /// write is taken until it lands.
     retiring: bool,
+    /// The session's draft is gone and its text was not stored again: the
+    /// next write stores it again as a new draft, over `base`.
+    unclaimed: bool,
     /// Shared with the write in flight; taken out to retire or discard.
     claim: Arc<Mutex<Option<DraftClaim>>>,
 }
@@ -137,6 +141,7 @@ impl DraftSession {
             rebased_at: None,
             saving: None,
             retiring: false,
+            unclaimed: false,
             claim: Arc::new(Mutex::new(Some(claim))),
         }
     }
@@ -170,6 +175,21 @@ impl DraftSession {
     /// Whether the saved revision is retiring.
     pub(crate) fn retiring(&self) -> bool {
         self.retiring
+    }
+
+    /// Whether the session's draft is gone with its text unstored: its
+    /// next write is a store again.
+    pub(crate) fn unclaimed(&self) -> bool {
+        self.unclaimed
+    }
+
+    /// The text is being stored again as a new draft: it takes the text,
+    /// as a write does, and no write is taken until it lands.
+    pub(crate) fn begin_store_again(&mut self) {
+        self.retiring = true;
+        self.first_unflushed_at = None;
+        self.last_change_at = None;
+        self.rebased_at = None;
     }
 
     /// The claim's slot, shared with every store call on it: a discard
@@ -234,6 +254,7 @@ impl DraftSession {
         self.writing = None;
         self.failure = None;
         self.retiring = false;
+        self.unclaimed = false;
         self.first_unflushed_at = None;
         self.last_change_at = None;
         self.rebased_at = None;
@@ -245,11 +266,14 @@ impl DraftSession {
         }
     }
 
-    /// The text could not be stored again: it stays in memory, failed.
-    /// No claim is left to write through, so every write answers
-    /// `NotFound` until the session ends.
-    pub(crate) fn recreate_failed(&mut self, kind: DraftErrorKind) {
+    /// The text could not be stored again, for `kind`. It stays in memory,
+    /// failed for that reason, over `base`, the base the save left; the
+    /// next write (an edit's timer, Retry, a flush or a save) stores it
+    /// again.
+    pub(crate) fn recreate_failed(&mut self, kind: DraftErrorKind, base: Option<DraftBase>) {
         self.retiring = false;
+        self.unclaimed = true;
+        self.base = base;
         self.failure = Some(kind);
     }
 
@@ -294,10 +318,11 @@ impl DraftSession {
     }
 
     /// The newest revision to write now, whether or not it is due. `None`
-    /// when it is written already, a write is in flight or the saved
-    /// revision retires.
+    /// when it is written already, a write is in flight, the saved
+    /// revision retires, or there is no claim to write through
+    /// (`unclaimed`: the registry stores the text again instead).
     pub(crate) fn next_write(&mut self) -> Option<PendingWrite> {
-        if self.busy() || self.revision <= self.flushed {
+        if self.busy() || self.unclaimed || self.revision <= self.flushed {
             return None;
         }
         self.writing = Some(self.revision);

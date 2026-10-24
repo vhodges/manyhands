@@ -409,3 +409,36 @@ fn a_kept_retirement_hands_the_claim_back() {
     session.write_landed(write.write());
     assert!(matches!(session.recovery_state(), RecoveryState::Saved(_)));
 }
+
+/// Review fix 1: a store again that failed keeps the text, its own error
+/// and the base the save left; it takes no write through the empty slot
+/// and is not due until the next change, which the registry stores again.
+#[test]
+fn a_failed_store_again_keeps_its_text_error_and_moved_base() {
+    let t0 = Instant::now();
+    let (_data, mut session) = session(Some(base("Item title")), t0);
+    let slot = session.begin_retire();
+    session.edit(fields("typed while retiring"), t0);
+    drop(slot.lock().unwrap().take());
+    session.begin_store_again();
+    session.recreate_failed(DraftErrorKind::Access, Some(base("Saved title")));
+
+    assert!(session.unclaimed());
+    assert!(!session.busy());
+    assert_eq!(
+        session.recovery_state(),
+        RecoveryState::Failed(DraftErrorKind::Access)
+    );
+    assert_eq!(session.flush_due(), None);
+    assert!(session.next_write().is_none());
+    assert!(matches!(
+        session.base(),
+        Some(DraftBase { fields: DraftFields::Document { title, .. }, .. }) if title == "Saved title"
+    ));
+    assert!(matches!(
+        session.current(),
+        DraftFields::Document { body, .. } if body == "typed while retiring"
+    ));
+    session.edit(fields("later"), t0);
+    assert!(session.flush_due().is_some());
+}

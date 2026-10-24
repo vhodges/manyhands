@@ -13,38 +13,30 @@
 //!   failed: nothing is retired. The session is rebased onto the new base,
 //!   which raises its revision, and is written at once.
 //!
-//! While the revision retires no write is taken; edits are still taken in
-//! memory. An edit that lands after the retirement was decided is never
-//! lost: if the store kept the draft, the claim goes back and the session
-//! is rebased; if the draft was deleted, or the retirement failed (the
-//! store consumed the claim and released the draft), the newer text is
-//! stored again as a new draft over the new base and the session goes on
-//! under that draft's ID. A failed retirement with nothing newer releases
-//! the session; its revision stays on disk, unclaimed, and loses nothing.
+//! The completion of a committed save, the retirement and storing newer
+//! text again, is `retire.rs`. No draft text is ever left only in memory
+//! with no way to store it.
 //!
 //! A pending checkpoint keeps the save (R22) until a Retry of the same
 //! request finishes it, the request is dismissed, or its operation is
 //! abandoned. A completion for a draft discarded meanwhile, or for a
 //! request whose save is over, changes nothing.
 
-use std::path::PathBuf;
-
-use futures::future::FutureExt;
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId, Retired},
-    repository::{ItemDto, MutationDataDto},
-    results::{Envelope, ResultCode},
+    drafts::{DraftErrorKind, DraftFields, DraftId},
+    repository::MutationDataDto,
+    results::Envelope,
 };
 
-use super::{DraftRegistry, Live, off_thread};
+use super::{DraftRegistry, Live, off_thread, retire::take};
 use crate::desktop::{
     model::drafts::{
         RecoveryState, Saving,
-        save::{SaveVerdict, base_after_save, save_intent, save_verdict},
+        save::{SaveVerdict, save_intent, save_verdict},
     },
     services::{
-        ReadKind, ReadResult, Reader,
+        ReadKind,
         requests::{DesktopRequestId, Lane},
     },
 };
@@ -52,17 +44,11 @@ use crate::desktop::{
 /// A save sent and not yet applied: the revision it saved and the fields
 /// it sent. It holds draft text and derives no `Debug`.
 pub(super) struct SaveRecord {
-    draft: DraftId,
-    revision: u64,
-    fields: DraftFields,
+    pub(super) draft: DraftId,
+    pub(super) revision: u64,
+    pub(super) fields: DraftFields,
     /// The operation a pending answer named: abandoning it ends the save.
-    operation: Option<String>,
-}
-
-/// What the completion does next.
-enum Settle {
-    Done,
-    Wait(futures::future::Shared<Task<()>>),
+    pub(super) operation: Option<String>,
 }
 
 impl DraftRegistry {
@@ -78,7 +64,10 @@ impl DraftRegistry {
         id: DraftId,
         cx: &mut Context<Self>,
     ) -> Task<Option<DesktopRequestId>> {
-        let Some(live) = self.sessions.get_mut(&id) else {
+        let Some(live) = self
+            .current_id(id)
+            .and_then(|id| self.sessions.get_mut(&id))
+        else {
             return Task::ready(None);
         };
         let session = &mut live.session;
@@ -115,6 +104,10 @@ impl DraftRegistry {
         flushed: Result<(), DraftErrorKind>,
         cx: &mut Context<Self>,
     ) -> Send {
+        // The flush may have stored the text again under a new ID.
+        let Some(id) = self.current_id(id) else {
+            return Send::Refused;
+        };
         let Some(live) = self.sessions.get_mut(&id) else {
             return Send::Refused;
         };
@@ -163,10 +156,17 @@ impl DraftRegistry {
         envelope: &Envelope<MutationDataDto>,
         cx: &mut Context<Self>,
     ) {
-        let Some(record) = self.saves.get_mut(&request) else {
+        let Some(draft) = self.saves.get(&request).map(|record| record.draft) else {
             return;
         };
-        let draft = record.draft;
+        // The session may go on under another ID; one discarded meanwhile
+        // changes nothing.
+        let Some(draft) = self.current_id(draft) else {
+            self.saves.remove(&request);
+            return;
+        };
+        let record = self.saves.get_mut(&request).expect("looked up above");
+        record.draft = draft;
         let Some(live) = self.sessions.get_mut(&draft) else {
             self.saves.remove(&request);
             return;
@@ -229,17 +229,24 @@ impl DraftRegistry {
 
     /// Discards the session `id`'s draft: the session ends now, and its
     /// draft is deleted once any store call on its claim has landed. A
-    /// save still in flight changes nothing when it finishes. On failure
-    /// the store has released the draft, which stays on disk.
+    /// retirement the store kept, or a store again that made a new draft,
+    /// puts its claim back in the session's slot, so that draft is
+    /// discarded too. A save still in flight changes nothing when it
+    /// finishes. On failure the store has released the draft, which stays
+    /// on disk.
     #[cfg_attr(not(test), allow(dead_code))] // Called by Task 8's tabs; tests until then.
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
-        let Some(live) = self.sessions.remove(&id) else {
+        let Some(live) = self
+            .current_id(id)
+            .and_then(|current| self.sessions.remove(&current))
+        else {
             return Task::ready(Err(DraftErrorKind::NotFound));
         };
+        let id = live.session.id();
         self.saves.retain(|_, record| record.draft != id);
         cx.notify();
         let Live { session, write, .. } = live;
@@ -263,188 +270,6 @@ impl DraftRegistry {
         })
     }
 
-    /// A committed save of `record`: reads the item again, then settles
-    /// the session.
-    #[allow(clippy::result_large_err)] // The library's read error, as every read gives it.
-    fn complete(&mut self, record: SaveRecord, cx: &mut Context<Self>) {
-        let Some(live) = self.sessions.get(&record.draft) else {
-            return;
-        };
-        let target = live.session.target();
-        let root = PathBuf::from(&target.repository);
-        let item = target.item_id.clone();
-        let reader = Reader::new(self.backend.clone(), cx.background_executor().clone());
-        let read = cx.background_executor().spawn(async move {
-            reader
-                .call(ReadKind::DraftItem, move |service| {
-                    let repo = service.resolve_repository(&root)?;
-                    service.show_item(&repo, &item)
-                })
-                .await
-        });
-        cx.spawn(async move |registry, cx| {
-            let read = read.await;
-            let Ok(Some(base)) = registry.update(cx, |registry, _| {
-                let live = registry.sessions.get(&record.draft)?;
-                let previous = live.session.base()?;
-                Some(base_after_save(&record.fields, read_item(&read), previous))
-            }) else {
-                return;
-            };
-            loop {
-                let step = registry.update(cx, |registry, cx| {
-                    registry.settle(record.draft, record.revision, &base, cx)
-                });
-                match step {
-                    Ok(Settle::Wait(write)) => write.await,
-                    Ok(Settle::Done) | Err(_) => return,
-                }
-            }
-        })
-        .detach();
-    }
-
-    /// Retires revision `saved` if it is still the session's newest, in
-    /// memory and in the store; otherwise rebases the session onto `base`.
-    /// Waits first for any write in flight.
-    fn settle(
-        &mut self,
-        id: DraftId,
-        saved: u64,
-        base: &DraftBase,
-        cx: &mut Context<Self>,
-    ) -> Settle {
-        let Some(live) = self.sessions.get_mut(&id) else {
-            return Settle::Done;
-        };
-        if live.session.busy()
-            && let Some(write) = live.write.clone()
-        {
-            return Settle::Wait(write);
-        }
-        let session = &mut live.session;
-        session.set_saving(None);
-        if session.revision() != saved || session.flushed() != saved {
-            // Newer text, or a base change, came after the save: it is not
-            // retired, and takes the base the save left.
-            session.rebase(base.clone(), cx.background_executor().now());
-            self.schedule(id, cx);
-            cx.notify();
-            return Settle::Done;
-        }
-        let slot = session.begin_retire();
-        let base = base.clone();
-        // The slot is taken off the foreground: no write holds it now,
-        // and none starts while the session retires.
-        let work = off_thread(
-            &self.backend,
-            ReadKind::DraftWrite,
-            move |_| take(&slot)?.retire(saved),
-            cx,
-        );
-        let task = cx
-            .spawn(async move |registry, cx| {
-                let result = work.await;
-                let _ = registry.update(cx, |registry, cx| {
-                    registry.retire_landed(id, saved, base, result, cx)
-                });
-            })
-            .shared();
-        live.write = Some(task);
-        Settle::Done
-    }
-
-    fn retire_landed(
-        &mut self,
-        id: DraftId,
-        saved: u64,
-        base: DraftBase,
-        result: Result<Retired, DraftError>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(live) = self.sessions.get_mut(&id) else {
-            // Discarded meanwhile: a kept claim is released with its draft.
-            return;
-        };
-        let newer = live.session.revision() != saved;
-        match result {
-            Ok(Retired::Kept(claim)) => {
-                live.session.retire_kept(claim);
-                live.session.rebase(base, cx.background_executor().now());
-                self.schedule(id, cx);
-            }
-            // Deleted, or the store consumed the claim and released the
-            // draft: newer text is stored again; otherwise the session is
-            // over.
-            Ok(Retired::Deleted) | Err(_) if newer => self.store_again(id, base, cx),
-            Ok(Retired::Deleted) | Err(_) => {
-                self.sessions.remove(&id);
-            }
-        }
-        cx.notify();
-    }
-
-    /// Stores the session's text as a new draft over `base`, after its
-    /// draft retired under an edit. Writes stay blocked until it lands.
-    fn store_again(&mut self, id: DraftId, base: DraftBase, cx: &mut Context<Self>) {
-        let Some(live) = self.sessions.get_mut(&id) else {
-            return;
-        };
-        let session = &live.session;
-        let (target, current, from) = (
-            session.target().clone(),
-            session.current().clone(),
-            session.revision(),
-        );
-        let create = off_thread(
-            &self.backend,
-            ReadKind::Drafts,
-            move |store| store.create(target, Some(base), current),
-            cx,
-        );
-        let task = cx
-            .spawn(async move |registry, cx| {
-                let created = create.await;
-                let _ = registry.update(cx, |registry, cx| {
-                    registry.stored_again(id, from, created, cx)
-                });
-            })
-            .shared();
-        live.write = Some(task);
-    }
-
-    fn stored_again(
-        &mut self,
-        id: DraftId,
-        from: u64,
-        created: Result<DraftClaim, DraftError>,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(mut live) = self.sessions.remove(&id) else {
-            // Discarded meanwhile: the new draft is released, kept on disk.
-            return;
-        };
-        match created {
-            Ok(claim) => {
-                let now = cx.background_executor().now();
-                live.session.recreated(claim, from, now);
-                live.write = None;
-                live.timer = None;
-                let new = live.session.id();
-                self.sessions.insert(new, live);
-                self.schedule(new, cx);
-            }
-            Err(error) => {
-                // The text stays in memory, shown as failed.
-                live.session.recreate_failed(error.kind);
-                live.write = None;
-                self.sessions.insert(id, live);
-            }
-        }
-        cx.notify();
-    }
-
-    /// Whether the registry holds no session and no save: for a test.
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         self.sessions.is_empty() && self.saves.is_empty()
@@ -463,26 +288,6 @@ enum Send {
     Refused,
     /// An edit came after the flush: flush again.
     Again,
-}
-
-/// The claim, taken out of its slot. Blocking only while a write holds
-/// the slot; the callers wait for that before.
-fn take(slot: &std::sync::Mutex<Option<DraftClaim>>) -> Result<DraftClaim, DraftError> {
-    slot.lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .take()
-        .ok_or(DraftError {
-            kind: DraftErrorKind::NotFound,
-        })
-}
-
-/// The registry's read of an item, as `classify` takes one.
-fn read_item(read: &ReadResult<ItemDto>) -> Result<&ItemDto, ResultCode> {
-    match read {
-        ReadResult::Ok(item) => Ok(item),
-        ReadResult::Busy => Err(ResultCode::Busy),
-        ReadResult::Failed(failure) => Err(failure.code),
-    }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

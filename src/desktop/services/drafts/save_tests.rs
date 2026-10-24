@@ -17,8 +17,8 @@ use std::{
 use gpui_kit::{Entity, TestAppContext};
 use manyhands::{
     drafts::{
-        Draft, DraftBase, DraftFields, DraftId, DraftStore, DraftTarget, Entry, Held, ItemKind,
-        TargetState, classify,
+        Draft, DraftBase, DraftErrorKind, DraftFields, DraftId, DraftStore, DraftTarget, Entry,
+        Held, ItemKind, TargetState, classify,
     },
     repository::{
         CancellationToken, DocumentDraft, DocumentSaveInput, FailurePoint, ItemDto, Mutation,
@@ -577,7 +577,7 @@ async fn a_second_save_while_one_is_in_flight_is_not_sent(cx: &mut TestAppContex
     let fixture = Fixture::new();
     let (backend, services) = start(&fixture, cx);
     let drafts = services.drafts().clone();
-    let (_root, id) = document_draft(&fixture, &services, cx).await;
+    let (root, id) = document_draft(&fixture, &services, cx).await;
     edit(&drafts, id, document_fields("Saved title", "Body"), cx);
     let held = backend.hold_job(JobKind::DocumentSave);
     let request = save(&drafts, id, cx).await.expect("the save is sent");
@@ -587,6 +587,12 @@ async fn a_second_save_while_one_is_in_flight_is_not_sent(cx: &mut TestAppContex
     assert!(save(&drafts, id, cx).await.is_none());
     held.release();
     finished(&services, request, 1, cx).await;
+
+    // The newer text survives the first save, over its moved base, and the
+    // session may save again.
+    assert!(session_live(&drafts, id, cx));
+    holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, id, "Newer title");
+    assert!(save(&drafts, id, cx).await.is_some());
 }
 
 /// A Retry of a save that retired its revision is answered from F2's
@@ -784,5 +790,178 @@ async fn abandoning_a_pending_saves_operation_lets_another_be_sent(cx: &mut Test
     assert!(session_live(&drafts, id, cx));
     assert!(stored(&fixture.draft_store(), id).is_some());
     assert!(drafts.read_with(cx, |registry, _| registry.saves.is_empty()));
+    assert!(save(&drafts, id, cx).await.is_some());
+}
+
+/// Starts a save whose retirement waits at the `DraftWrite` gate, with an
+/// edit made after it was decided. Gives the request, the held
+/// retirement, and the `Drafts` gate holding the store again when `hold`.
+async fn retiring_under_an_edit(
+    backend: &DelayingBackend,
+    services: &Services,
+    id: DraftId,
+    hold_store_again: bool,
+    cx: &mut TestAppContext,
+) -> (
+    futures::channel::oneshot::Sender<()>,
+    Option<futures::channel::oneshot::Sender<()>>,
+) {
+    let drafts = services.drafts().clone();
+    edit(&drafts, id, document_fields("Saved title", "Body"), cx);
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    let retire = backend.hold_read(ReadKind::DraftWrite);
+    let store_again = hold_store_again.then(|| backend.hold_read(ReadKind::Drafts));
+    finished(services, request, 1, cx).await;
+    edit(
+        &drafts,
+        id,
+        document_fields("Typed while retiring", "Body"),
+        cx,
+    );
+    (retire, store_again)
+}
+
+/// Review fix 1: a store again that fails keeps the text with its own
+/// error over the moved base, and the next flush stores it again; it is
+/// never left only in memory.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_store_again_that_failed_is_stored_by_the_next_flush(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (root, id) = document_draft(&fixture, &services, cx).await;
+    let (retire, store_again) = retiring_under_an_edit(&backend, &services, id, true, cx).await;
+    retire.send(()).unwrap();
+    cx.run_until_parked();
+
+    let folder = fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    store_again.unwrap().send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Failed(DraftErrorKind::Access))
+    );
+    // While the store keeps failing, a flush says why: never `NotFound`.
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    assert_eq!(all.await, vec![(id, DraftErrorKind::Access)]);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+    // Retry stores it again, as a new draft over the moved base.
+    let retry = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    cx.run_until_parked();
+    assert_eq!(retry.await, Ok(()));
+    let new = drafts
+        .read_with(cx, |registry, _| registry.current_id(id))
+        .expect("the session goes on");
+    assert_ne!(new, id);
+    holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, new, "Typed while retiring");
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    assert_eq!(all.await, Vec::new());
+}
+
+/// Review fix 2: a flush of every session started while a revision
+/// retires under an edit follows the session to its new draft, and an
+/// edit by the old ID reaches it.
+#[gpui_kit::test]
+async fn the_old_id_reaches_a_session_stored_again(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (root, id) = document_draft(&fixture, &services, cx).await;
+    let (retire, _) = retiring_under_an_edit(&backend, &services, id, false, cx).await;
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    retire.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(all.await, Vec::new());
+
+    let new = drafts
+        .read_with(cx, |registry, _| registry.current_id(id))
+        .expect("the session goes on");
+    assert_ne!(new, id);
+    holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, new, "Typed while retiring");
+
+    edit(&drafts, id, document_fields("After the move", "Body"), cx);
+    let flush = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    cx.run_until_parked();
+    assert_eq!(flush.await, Ok(()));
+    holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, new, "After the move");
+    assert!(matches!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Saved(_))
+    ));
+}
+
+/// Review minor 1: a discard while the text is being stored again
+/// discards the new draft too; nothing comes back.
+#[gpui_kit::test]
+async fn a_discard_during_a_store_again_discards_the_new_draft(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (_root, id) = document_draft(&fixture, &services, cx).await;
+    let (retire, store_again) = retiring_under_an_edit(&backend, &services, id, true, cx).await;
+    retire.send(()).unwrap();
+    cx.run_until_parked();
+
+    let discarded = drafts.update(cx, |registry, cx| registry.discard(id, cx));
+    cx.run_until_parked();
+    store_again.unwrap().send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(discarded.await, Ok(()));
+    assert!(fixture.draft_store().list().unwrap().is_empty());
+    assert!(drafts.read_with(cx, |registry, _| registry.is_idle()));
+}
+
+/// Review minor 2: dismissing a pending save from the operation area, as
+/// the user does, ends that save.
+#[gpui_kit::test]
+async fn dismissing_a_pending_save_in_the_operation_area_lets_another_be_sent(
+    cx: &mut TestAppContext,
+) {
+    use crate::desktop::view::{harness::Shell, operations::request_id};
+
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.create_document(&root, DOCUMENT, DOCUMENT_PATH, "Item title");
+    let shell = Shell::open(fixture, cx);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let drafts = services.drafts().clone();
+    let id = begin(
+        &shell.fixture,
+        &services,
+        &root,
+        ItemKind::Document,
+        DOCUMENT,
+        cx,
+    )
+    .await;
+    edit(&drafts, id, document_fields("Saved title", "Body"), cx);
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    finished(&services, request, 1, cx).await;
+    assert!(save(&drafts, id, cx).await.is_none());
+
+    shell.click(request_id(request, "dismiss"), cx);
+    assert!(session_live(&drafts, id, cx));
+    assert!(stored(&shell.fixture.draft_store(), id).is_some());
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
     assert!(save(&drafts, id, cx).await.is_some());
 }
