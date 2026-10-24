@@ -7,7 +7,8 @@
 //! request stays expanded, with its message, code, effects and recovery
 //! actions, until it is dismissed. A queued request, or a running one the
 //! library has not accepted, offers Cancel; an accepted one reads
-//! "Finishing".
+//! "Finishing". A draft store that did not open keeps an entry with its
+//! fixed reason at the top, with no Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -38,7 +39,8 @@ use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, recovery_label, resume_offer,
+            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, drafts_unavailable, recovery_label,
+            resume_offer,
         },
         stamp::RepoKey,
     },
@@ -324,10 +326,16 @@ impl Workspace {
             .filter(|request| !matches!(request.state, RequestState::Dismissed))
             .map(|request| request.id)
             .collect();
+        let unavailable = self.services().drafts().read(cx).unavailable();
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
-            .child(div().text_sm().child(THIS_SESSION));
+            .child(div().text_sm().child(THIS_SESSION))
+            // Persistent: the store stays closed for the session, so the
+            // entry offers no Dismiss.
+            .children(
+                unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
+            );
         if requests.is_empty() {
             section = section.child(
                 text("session-empty", NO_REQUESTS)

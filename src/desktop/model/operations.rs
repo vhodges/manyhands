@@ -32,7 +32,7 @@ use super::{
     stamp::{Generations, RepoKey, Stamp, ViewScope},
 };
 use crate::desktop::services::{
-    ReadResult,
+    DraftStoreUnavailable, ReadResult,
     prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     worker::WorkerEvent,
@@ -43,6 +43,14 @@ pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not ava
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
 pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
+/// The persistent entry of a draft store that did not open.
+pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
+
+/// The store-unavailable entry's text: the fixed sentence and the store's
+/// fixed reason, never a path.
+pub(crate) fn drafts_unavailable(reason: DraftStoreUnavailable) -> String {
+    format!("{DRAFTS_UNAVAILABLE}: {reason}")
+}
 
 impl Rows for OperationListDto {
     fn is_empty(&self) -> bool {

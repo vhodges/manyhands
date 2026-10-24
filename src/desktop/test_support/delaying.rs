@@ -12,9 +12,14 @@ use std::{
 };
 
 use futures::channel::oneshot;
-use manyhands::repository::{RepositoryService, keys::KeyStore};
+use manyhands::{
+    drafts::{DraftError, DraftStore},
+    repository::{RepositoryService, keys::KeyStore},
+};
 
-use crate::desktop::services::{Backend, JobKind, KeyStoreUnavailable, ReadGate, ReadKind};
+use crate::desktop::services::{
+    Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+};
 
 /// How many times a test can put another real service in place.
 const REPLACEMENTS: usize = 8;
@@ -27,6 +32,9 @@ pub(crate) struct DelayingBackend {
     /// it.
     replacements: [OnceLock<RepositoryService>; REPLACEMENTS],
     home: PathBuf,
+    /// The real store over the fixture's data directory, or why it did
+    /// not open.
+    drafts: Result<DraftStore, DraftStoreUnavailable>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Holds taken after a job's library call returns.
@@ -39,12 +47,18 @@ pub(crate) struct DelayingBackend {
 }
 
 impl DelayingBackend {
-    /// A backend over `service`, with its key store in `home`.
-    pub(crate) fn new(service: Arc<RepositoryService>, home: PathBuf) -> Self {
+    /// A backend over `service` and the draft store's open result, with
+    /// its key store in `home`.
+    pub(crate) fn new(
+        service: Arc<RepositoryService>,
+        home: PathBuf,
+        drafts: Result<DraftStore, DraftError>,
+    ) -> Self {
         Self {
             service,
             replacements: Default::default(),
             home,
+            drafts: drafts.map_err(DraftStoreUnavailable::from),
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
@@ -145,6 +159,10 @@ impl Backend for DelayingBackend {
 
     fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable> {
         KeyStore::for_home(&self.home).map_err(|_| KeyStoreUnavailable)
+    }
+
+    fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable> {
+        self.drafts.as_ref().map_err(|unavailable| *unavailable)
     }
 
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {

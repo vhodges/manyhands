@@ -6,6 +6,7 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod drafts;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod requests;
@@ -15,10 +16,16 @@ use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
-use manyhands::repository::{RepositoryService, keys::KeyStore};
+use manyhands::{
+    drafts::{DraftError, DraftStore},
+    repository::{RepositoryService, keys::KeyStore},
+};
 
 use crate::desktop::model::operations::Operations;
+use drafts::DraftRegistry;
 use worker::WorkerHandle;
+
+pub(crate) use drafts::DraftStoreUnavailable;
 
 pub(crate) use reads::{ReadFailure, ReadResult, Reader};
 
@@ -56,6 +63,15 @@ pub(crate) enum ReadKind {
     Keys,
     Hosts,
     Prepare,
+    /// The draft store's listing and claims.
+    Drafts,
+    /// A draft's revision written to the store.
+    #[allow(dead_code)] // Task 6's flush writes under it.
+    DraftWrite,
+    /// The registry's re-read of an item after a save, apart from `Item`,
+    /// which the repository's tabs reload under at the same time.
+    #[allow(dead_code)] // Task 7's save completion reads under it.
+    DraftItem,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.
@@ -81,6 +97,10 @@ pub(crate) enum JobKind {
     HostReplace,
     OperationResume,
     OperationAbandon,
+    #[allow(dead_code)] // Task 7's document save runs under it.
+    DocumentSave,
+    #[allow(dead_code)] // Task 7's ticket save runs under it.
+    TicketSave,
     ObserveHost,
 }
 
@@ -99,6 +119,11 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// tests.
     fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable>;
 
+    /// The draft store, opened in the application data directory in
+    /// production and in the fixture's in tests; otherwise why it did not
+    /// open.
+    fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable>;
+
     /// Awaited inside the read's future, before the blocking library call.
     fn read_gate(&self, _kind: ReadKind) -> Option<ReadGate> {
         None
@@ -115,11 +140,17 @@ pub(crate) trait Backend: Send + Sync + 'static {
 /// The production backend: the library, with no delays.
 pub(crate) struct LibraryBackend {
     service: RepositoryService,
+    drafts: Result<DraftStore, DraftStoreUnavailable>,
 }
 
 impl LibraryBackend {
-    pub(crate) fn new(service: RepositoryService) -> Self {
-        Self { service }
+    /// A backend over `service` and the draft store's open result: the
+    /// desktop starts whether or not the store opened.
+    pub(crate) fn new(service: RepositoryService, drafts: Result<DraftStore, DraftError>) -> Self {
+        Self {
+            service,
+            drafts: drafts.map_err(DraftStoreUnavailable::from),
+        }
     }
 }
 
@@ -131,6 +162,10 @@ impl Backend for LibraryBackend {
     fn key_store(&self) -> Result<KeyStore, KeyStoreUnavailable> {
         KeyStore::for_current_user().map_err(|_| KeyStoreUnavailable)
     }
+
+    fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable> {
+        self.drafts.as_ref().map_err(|unavailable| *unavailable)
+    }
 }
 
 /// The handle views hold. Cloning it shares the backend, the worker
@@ -140,6 +175,8 @@ pub(crate) struct Services {
     backend: Arc<dyn Backend>,
     worker: WorkerHandle,
     operations: Entity<Operations>,
+    /// The drafts this session knows of, shared by every view.
+    drafts: Entity<DraftRegistry>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -151,7 +188,8 @@ impl Services {
     /// that applies its events to the request model. Every event waiting
     /// is applied in one update with one notify, so the views read what a
     /// batch changed once, not once per event. The task ends when the
-    /// worker does, after the last handle is dropped.
+    /// worker does, after the last handle is dropped. The draft store is
+    /// listed once, at launch.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
@@ -174,12 +212,18 @@ impl Services {
             }
         })
         .detach();
-        Self {
+        let drafts = cx.new(|_| DraftRegistry::new(backend.drafts().err()));
+        let services = Self {
             backend,
             worker,
             operations,
+            drafts: drafts.clone(),
             launch_refresh: true,
-        }
+        };
+        drafts.update(cx, |registry, cx| {
+            registry.reload_listing(&services, cx);
+        });
+        services
     }
 
     /// The same services, with no refresh at launch: for a test that
@@ -206,6 +250,11 @@ impl Services {
     /// This session's requests, as the worker's events left them.
     pub(crate) fn operations(&self) -> &Entity<Operations> {
         &self.operations
+    }
+
+    /// The drafts this session knows of.
+    pub(crate) fn drafts(&self) -> &Entity<DraftRegistry> {
+        &self.drafts
     }
 
     #[cfg(test)]

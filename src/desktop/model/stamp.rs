@@ -42,6 +42,9 @@ pub(crate) enum ViewScope {
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
     Confirmation,
+    /// The draft registry's listing of the store. One scope: a new listing
+    /// drops the last.
+    Drafts,
 }
 
 /// A scope and the generation it was at when the request was made.
