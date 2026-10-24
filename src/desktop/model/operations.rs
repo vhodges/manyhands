@@ -19,6 +19,7 @@ use std::{
 };
 
 use manyhands::{
+    drafts::{DraftError, DraftErrorKind},
     repository::{
         HostObservationDto, OperationAction, OperationDto, OperationFamily, OperationId,
         OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
@@ -50,6 +51,15 @@ pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
 /// fixed reason, never a path.
 pub(crate) fn drafts_unavailable(reason: DraftStoreUnavailable) -> String {
     format!("{DRAFTS_UNAVAILABLE}: {reason}")
+}
+
+/// A failing session's entry text: its item's title as read, never the
+/// draft's (ruling R25), and the store's fixed reason.
+pub(crate) fn draft_flush_failed(title: &str, kind: DraftErrorKind) -> String {
+    format!(
+        "Recovery copy of {title} not saved: {}",
+        DraftError { kind }
+    )
 }
 
 impl Rows for OperationListDto {

@@ -8,7 +8,9 @@
 //! actions, until it is dismissed. A queued request, or a running one the
 //! library has not accepted, offers Cancel; an accepted one reads
 //! "Finishing". A draft store that did not open keeps an entry with its
-//! fixed reason at the top, with no Dismiss.
+//! fixed reason at the top, with no Dismiss; so does each session whose
+//! recovery copy could not be written, named by its item's title as read,
+//! with Retry, until a write lands.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -32,15 +34,18 @@ use gpui_kit::{
     },
     div,
 };
-use manyhands::results::{Effects, Outcome, RecoveryAction};
+use manyhands::{
+    drafts::DraftId,
+    results::{Effects, Outcome, RecoveryAction},
+};
 
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, drafts_unavailable, recovery_label,
-            resume_offer,
+            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, draft_flush_failed,
+            drafts_unavailable, recovery_label, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -144,6 +149,11 @@ pub(crate) fn request_id(id: DesktopRequestId, part: &str) -> String {
 
 pub(crate) fn recovery_id(id: DesktopRequestId, n: usize) -> String {
     format!("request-{}-recovery-{n}", id.0)
+}
+
+/// The element ids of a failing session's entry.
+pub(crate) fn draft_flush_id(id: DraftId, part: &str) -> String {
+    format!("draft-flush-{id}-{part}")
 }
 
 type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
@@ -336,6 +346,28 @@ impl Workspace {
             .children(
                 unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
             );
+        let failures = self.services().drafts().read(cx).flush_failures();
+        for (id, title, kind) in failures {
+            // Until a later flush succeeds: no Dismiss.
+            let retry = draft_flush_id(id, "retry");
+            let focus = self.control_focus_for(retry.clone(), cx);
+            section = section.child(
+                h_flex()
+                    .gap_2()
+                    .child(text(
+                        draft_flush_id(id, "entry"),
+                        draft_flush_failed(&title, kind),
+                    ))
+                    .child(button(
+                        retry,
+                        super::sidebar::RETRY,
+                        Some(&focus),
+                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            this.retry_draft_flush(id, cx)
+                        }),
+                    )),
+            );
+        }
         if requests.is_empty() {
             section = section.child(
                 text("session-empty", NO_REQUESTS)

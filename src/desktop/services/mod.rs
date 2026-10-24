@@ -66,7 +66,6 @@ pub(crate) enum ReadKind {
     /// The draft store's listing and claims.
     Drafts,
     /// A draft's revision written to the store.
-    #[allow(dead_code)] // Task 6's flush writes under it.
     DraftWrite,
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
@@ -212,7 +211,7 @@ impl Services {
             }
         })
         .detach();
-        let drafts = cx.new(|_| DraftRegistry::new(backend.drafts().err()));
+        let drafts = cx.new(|_| DraftRegistry::new(backend.clone()));
         let services = Self {
             backend,
             worker,

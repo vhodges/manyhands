@@ -89,6 +89,8 @@ pub(crate) struct Workspace {
     control_focus: HashMap<String, FocusHandle>,
     control_drawn: HashSet<String>,
     _operations: Subscription,
+    /// A session's recovery state shows in the operation area.
+    _drafts: Subscription,
     _focus_lost: Subscription,
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
@@ -109,6 +111,7 @@ impl Workspace {
         let operations = cx.observe_in(services.operations(), window, |this, _, window, cx| {
             this.operations_changed(window, cx)
         });
+        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -196,6 +199,7 @@ impl Workspace {
             control_focus: HashMap::new(),
             control_drawn: HashSet::new(),
             _operations: operations,
+            _drafts: drafts,
             _focus_lost: focus_lost,
             _ticket_events: ticket_events,
             repositories_pane,

@@ -1,18 +1,26 @@
 //! The draft store in the desktop: the launch listing, a stale listing
-//! dropped, a store that cannot open, and the stored draft of an item.
+//! dropped, a store that cannot open, the stored draft of an item, and
+//! sessions flushed on their schedule, at once, and after a failure.
 //!
 //! Draft types derive no `Debug`, so the listing is read through `match`.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{Entity, TestAppContext};
 use manyhands::{
-    drafts::{DraftFields, DraftId, DraftStore, DraftTarget, Entry, ItemKind, Listing},
+    drafts::{
+        BaseContext, ContextKind, Draft, DraftBase, DraftErrorKind, DraftFields, DraftId,
+        DraftStore, DraftTarget, Entry, ItemKind, Listing,
+    },
     repository::ItemDtoKind,
 };
 
+use super::DraftRegistry;
 use crate::desktop::{
-    model::list_state::ListState,
+    model::{
+        drafts::{IDLE, RecoveryState},
+        list_state::ListState,
+    },
     services::{ReadKind, Services},
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
     view::harness::key,
@@ -243,4 +251,314 @@ fn a_store_that_cannot_be_protected_still_opens_the_window(cx: &mut TestAppConte
             None
         );
     });
+}
+
+/// The ticket's fields with `body`.
+fn ticket_body(body: &str) -> DraftFields {
+    match ticket_fields() {
+        DraftFields::Ticket {
+            title,
+            ticket_type,
+            status,
+            project,
+            team,
+            deps,
+            parent,
+            ..
+        } => DraftFields::Ticket {
+            title,
+            ticket_type,
+            status,
+            project,
+            team,
+            deps,
+            parent,
+            body: body.to_owned(),
+        },
+        _ => unreachable!(),
+    }
+}
+
+/// The item as read when the draft began, titled `title`.
+fn ticket_base(title: &str) -> DraftBase {
+    DraftBase {
+        observation: Some("observation".to_owned()),
+        path: format!(".manyhands/tickets/{TICKET}.md"),
+        context: BaseContext {
+            kind: ContextKind::Primary,
+            branch: Some("main".to_owned()),
+            worktree: "/a/repository".to_owned(),
+            head_oid: None,
+        },
+        source: None,
+        fields: match ticket_fields() {
+            DraftFields::Ticket {
+                ticket_type,
+                status,
+                project,
+                team,
+                deps,
+                parent,
+                ..
+            } => DraftFields::Ticket {
+                title: title.to_owned(),
+                ticket_type,
+                status,
+                project,
+                team,
+                deps,
+                parent,
+                body: "Item body".to_owned(),
+            },
+            _ => unreachable!(),
+        },
+    }
+}
+
+/// Begins a draft through the registry and waits for it.
+async fn begin(
+    drafts: &Entity<DraftRegistry>,
+    base: Option<DraftBase>,
+    cx: &mut TestAppContext,
+) -> DraftId {
+    let begun = drafts.update(cx, |registry, cx| {
+        registry.begin(ticket_target("/a/repository"), base, ticket_fields(), cx)
+    });
+    cx.run_until_parked();
+    match begun.await {
+        Ok(id) => id,
+        Err(kind) => panic!("the draft must begin: {kind:?}"),
+    }
+}
+
+/// The stored revision of `id` and its body.
+fn stored(store: &DraftStore, id: DraftId) -> (u64, String) {
+    let listing = store.list().unwrap();
+    match listing.iter().find(|listing| listing.id == id) {
+        Some(Listing {
+            entry:
+                Entry::Draft(Draft {
+                    revision,
+                    current: DraftFields::Ticket { body, .. },
+                    ..
+                }),
+            ..
+        }) => (*revision, body.clone()),
+        _ => panic!("the draft must be stored"),
+    }
+}
+
+fn state(drafts: &Entity<DraftRegistry>, id: DraftId, cx: &TestAppContext) -> RecoveryState {
+    drafts
+        .read_with(cx, |registry, _| registry.recovery_state(id))
+        .expect("the session must be live")
+}
+
+/// A held write: the session reads `Pending` and the store keeps revision
+/// 1; once released, it reads `Saved` and the store holds the newest
+/// revision, written once.
+#[gpui_kit::test]
+async fn a_held_write_is_pending_until_it_lands_with_the_newest_revision(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, None, cx).await;
+    assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
+
+    let release = backend.hold_read(ReadKind::DraftWrite);
+    drafts.update(cx, |registry, cx| {
+        registry.edit(id, ticket_body("second"), cx);
+        registry.edit(id, ticket_body("newest"), cx);
+    });
+    cx.executor().advance_clock(IDLE - Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 0);
+
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 1);
+    assert_eq!(state(&drafts, id, cx), RecoveryState::Pending);
+    assert_eq!(
+        stored(&fixture.draft_store(), id),
+        (1, "Draft body".to_owned())
+    );
+
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
+    assert_eq!(stored(&fixture.draft_store(), id), (3, "newest".to_owned()));
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 1);
+}
+
+/// `flush_now` writes at once, with no clock advanced, and waits for a
+/// write in flight before writing what came after it.
+#[gpui_kit::test]
+async fn flush_now_writes_the_newest_revision_after_a_write_in_flight(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, None, cx).await;
+
+    let release = backend.hold_read(ReadKind::DraftWrite);
+    drafts.update(cx, |registry, cx| {
+        registry.edit(id, ticket_body("held"), cx)
+    });
+    cx.executor().advance_clock(IDLE);
+    cx.run_until_parked();
+    drafts.update(cx, |registry, cx| {
+        registry.edit(id, ticket_body("after"), cx)
+    });
+    let flushed = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    cx.run_until_parked();
+    assert_eq!(state(&drafts, id, cx), RecoveryState::Pending);
+
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(flushed.await, Ok(()));
+    assert_eq!(stored(&fixture.draft_store(), id), (3, "after".to_owned()));
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 2);
+
+    // Nothing new: a flush writes nothing.
+    let again = drafts.update(cx, |registry, cx| registry.flush_now(id, cx));
+    cx.run_until_parked();
+    assert_eq!(again.await, Ok(()));
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 2);
+}
+
+/// `flush_all` writes every session now and answers the ones that failed.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn flush_all_answers_each_session_that_failed(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let first = begin(&drafts, None, cx).await;
+    let second = begin(&drafts, None, cx).await;
+    drafts.update(cx, |registry, cx| {
+        registry.edit(first, ticket_body("one"), cx);
+        registry.edit(second, ticket_body("two"), cx);
+    });
+
+    let folder = fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    let mut failed = all.await;
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    failed.sort_by_key(|(id, _)| *id);
+    let mut expected = vec![
+        (first, DraftErrorKind::Access),
+        (second, DraftErrorKind::Access),
+    ];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(failed, expected);
+
+    let all = drafts.update(cx, |registry, cx| registry.flush_all(cx));
+    cx.run_until_parked();
+    assert_eq!(all.await, Vec::new());
+    assert_eq!(stored(&fixture.draft_store(), first).1, "one");
+    assert_eq!(stored(&fixture.draft_store(), second).1, "two");
+}
+
+/// A store that did not open begins no session.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn an_unavailable_store_begins_no_session(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), fixture.data_dir().join("drafts")).unwrap();
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let begun = services.drafts().update(cx, |registry, cx| {
+        registry.begin(ticket_target("/a/repository"), None, ticket_fields(), cx)
+    });
+    assert_eq!(
+        begun.await.err(),
+        Some(DraftErrorKind::ProtectionUnavailable)
+    );
+}
+
+/// `drafts/` made read-only: the operation area names the item by its
+/// title as read, gives the store's fixed reason and offers Retry; with
+/// the mode restored, Retry writes and the entry goes. Draft text, its
+/// body and its own title, is in no entry.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_failed_flush_shows_an_entry_with_retry_and_no_draft_text(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::desktop::{
+        model::operations::draft_flush_failed, view::harness::Shell,
+        view::operations::draft_flush_id,
+    };
+
+    const SENTINEL: &str = "SENTINEL-9b1e";
+
+    let shell = Shell::open(Fixture::new(), cx);
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    let id = begin(&drafts, Some(ticket_base("Item title")), cx).await;
+    let text = match ticket_body(&format!("{SENTINEL} body")) {
+        DraftFields::Ticket {
+            ticket_type,
+            status,
+            project,
+            team,
+            deps,
+            parent,
+            body,
+            ..
+        } => DraftFields::Ticket {
+            title: format!("{SENTINEL} title"),
+            ticket_type,
+            status,
+            project,
+            team,
+            deps,
+            parent,
+            body,
+        },
+        _ => unreachable!(),
+    };
+    drafts.update(cx, |registry, cx| registry.edit(id, text, cx));
+
+    let folder = shell.fixture.data_dir().join("drafts");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+
+    let expected = draft_flush_failed("Item title", DraftErrorKind::Access);
+    assert_eq!(
+        expected,
+        "Recovery copy of Item title not saved: Access to the drafts folder was denied."
+    );
+    assert_eq!(shell.label(draft_flush_id(id, "entry"), cx), Some(expected));
+    assert!(shell.present(draft_flush_id(id, "retry"), cx));
+    let labels: Vec<String> = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .filter_map(|snapshot| snapshot.label().map(str::to_owned))
+            .collect()
+    });
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.starts_with("Recovery copy of"))
+    );
+    assert!(!labels.iter().any(|label| label.contains(SENTINEL)));
+
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+    shell.click(draft_flush_id(id, "retry"), cx);
+    assert!(!shell.present(draft_flush_id(id, "entry"), cx));
+    assert!(matches!(state(&drafts, id, cx), RecoveryState::Saved(_)));
+    assert_eq!(
+        stored(&shell.fixture.draft_store(), id),
+        (2, format!("{SENTINEL} body"))
+    );
 }
