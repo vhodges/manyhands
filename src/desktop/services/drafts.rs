@@ -16,7 +16,11 @@
 //! gate. The result lands back on the session, which schedules whatever
 //! came meanwhile.
 
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+    sync::Arc,
+};
 
 use futures::future::Shared;
 use gpui_kit::{Context, Task};
@@ -31,16 +35,18 @@ use manyhands::{
 };
 
 mod flush;
+mod restore;
 mod retire;
 mod save;
 
-use super::{
-    Backend, ReadFailure, ReadKind, Services, requests::DesktopRequestId, worker::WorkerHandle,
-};
+pub(crate) use restore::RestoreRefused;
+
+use super::{Backend, ReadFailure, ReadKind, requests::DesktopRequestId, worker::WorkerHandle};
 use crate::desktop::model::{
     drafts::{DraftSession, RecoveryState},
     list_state::ListState,
     stamp::{Generations, RepoKey, Stamp, ViewScope},
+    tabs::TabKey,
 };
 
 /// Why the draft store did not open: the desktop's copy of the error's
@@ -70,7 +76,7 @@ fn item_kind(kind: ItemDtoKind) -> ItemKind {
 }
 
 /// The drafts this session knows of, the sessions it has begun and their
-/// saves in flight. Later it also holds the tabs they are attached to.
+/// saves in flight, and the tabs they are attached to.
 pub(crate) struct DraftRegistry {
     backend: Arc<dyn Backend>,
     /// Where saves are sent.
@@ -89,6 +95,9 @@ pub(crate) struct DraftRegistry {
     /// text was stored again as a new draft. A caller holding the old ID
     /// reaches the session through `current_id`.
     moved: BTreeMap<DraftId, DraftId>,
+    /// The session each item tab holds, by the ID it was restored under;
+    /// `attached` follows it to the ID it goes on under.
+    attached: HashMap<TabKey, DraftId>,
 }
 
 /// A session and the tasks that write it.
@@ -113,6 +122,7 @@ impl DraftRegistry {
             sessions: BTreeMap::new(),
             saves: BTreeMap::new(),
             moved: BTreeMap::new(),
+            attached: HashMap::new(),
         }
     }
 
@@ -124,23 +134,23 @@ impl DraftRegistry {
     /// Lists the store again; an earlier listing is dropped when it
     /// completes. The listing already shown stays until the new one
     /// lands. A store that did not open is not listed.
-    pub(crate) fn reload_listing(&mut self, services: &Services, cx: &mut Context<Self>) -> Stamp {
+    pub(crate) fn reload_listing(&mut self, cx: &mut Context<Self>) -> Stamp {
         let stamp = self.generations.next(ViewScope::Drafts);
         if self.unavailable.is_some() {
             self.listing_read = None;
             return stamp;
         }
-        self.listing_read = Some(services.draft_read(
-            ReadKind::Drafts,
-            stamp.clone(),
-            DraftStore::list,
-            cx,
-            |registry: &mut Self, stamp, result, cx| {
-                if registry.apply_listing(stamp, result) {
+        let list = off_thread(&self.backend, ReadKind::Drafts, DraftStore::list, cx);
+        let asked = stamp.clone();
+        self.listing_read = Some(cx.spawn(async move |registry, cx| {
+            let result = list.await;
+            // The registry lives as long as the services.
+            let _ = registry.update(cx, |registry, cx| {
+                if registry.apply_listing(asked, result) {
                     cx.notify();
                 }
-            },
-        ));
+            });
+        }));
         stamp
     }
 
@@ -181,7 +191,6 @@ impl DraftRegistry {
     /// this process has not claimed and can read. `None` while the store
     /// is unavailable or not yet listed. A comment's draft is not the
     /// item's.
-    #[cfg_attr(not(test), allow(dead_code))] // Asked by a tab's banner; tests until then.
     pub(crate) fn stored_for(
         &self,
         repo: &RepoKey,
@@ -287,7 +296,6 @@ impl DraftRegistry {
 
     /// Whether the newest text of `id` is safe in the store; `None` when
     /// this process has no session of it.
-    #[cfg_attr(not(test), allow(dead_code))] // Shown by Task 8's tab; tests until then.
     pub(crate) fn recovery_state(&self, id: DraftId) -> Option<RecoveryState> {
         self.sessions
             .get(&self.current_id(id)?)
@@ -332,28 +340,6 @@ fn off_thread<V: 'static, T: Send + 'static>(
         })?;
         f(store)
     })
-}
-
-impl Services {
-    /// Runs `f` against the draft store on the background executor, after
-    /// the gate of `kind`, and hands its result to `apply` on the asking
-    /// entity, with `stamp`. A store that did not open answers with why.
-    /// `apply` is not called if the entity is gone.
-    pub(crate) fn draft_read<V: 'static, T: Send + 'static>(
-        &self,
-        kind: ReadKind,
-        stamp: Stamp,
-        f: impl FnOnce(&DraftStore) -> Result<T, DraftError> + Send + 'static,
-        cx: &mut Context<V>,
-        apply: impl FnOnce(&mut V, Stamp, Result<T, DraftError>, &mut Context<V>) + 'static,
-    ) -> Task<()> {
-        let read = off_thread(&self.backend, kind, f, cx);
-        cx.spawn(async move |entity, cx| {
-            let result = read.await;
-            // The entity may be gone; then nobody wants the result.
-            let _ = entity.update(cx, |entity, cx| apply(entity, stamp, result, cx));
-        })
-    }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

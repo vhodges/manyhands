@@ -59,6 +59,8 @@ pub(crate) const PINNED_KEY: &str = "Pinned key";
 /// A repository removal's preview, which says it changes no file and
 /// nothing Git holds, says so in words too (design, Repositories).
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
+/// A removal keeps the drafts of the repository's items (design, Tabs).
+pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay in Drafts.";
 
 /// The answers that mean the preview no longer stands: the dialog offers
 /// Prepare again.
@@ -622,6 +624,8 @@ impl ConfirmDialog {
             }
             _ => None,
         };
+        let drafts = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_))
+            .then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
         Some(
             v_flex()
                 .gap_1()
@@ -643,6 +647,7 @@ impl ConfirmDialog {
                         .map(|(ix, (name, value))| named(("confirm-detail", ix), name, &value)),
                 )
                 .children(note)
+                .children(drafts)
                 .child(
                     text(
                         "confirm-expires",

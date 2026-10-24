@@ -1,7 +1,9 @@
 //! GPUI views.
 
+pub(crate) mod close_draft;
 pub(crate) mod confirm;
 pub(crate) mod documents;
+pub(crate) mod draft_comparison;
 pub(crate) mod find;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) mod harness;

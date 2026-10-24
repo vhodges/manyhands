@@ -16,8 +16,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-use manyhands::drafts::{
-    DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId, DraftTarget, Written,
+use manyhands::{
+    drafts::{
+        Draft, DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId,
+        DraftTarget, TargetState, Written, classify,
+    },
+    repository::ItemDto,
+    results::ResultCode,
 };
 use time::OffsetDateTime;
 
@@ -66,6 +71,8 @@ pub(crate) struct DraftSession {
     revision: u64,
     /// The newest revision written.
     flushed: u64,
+    /// When the draft was first stored, as its file says.
+    created_at: OffsetDateTime,
     flushed_at: OffsetDateTime,
     /// The revision being written.
     writing: Option<u64>,
@@ -133,6 +140,7 @@ impl DraftSession {
             current: draft.current.clone(),
             revision: draft.revision,
             flushed: draft.revision,
+            created_at: draft.created_at,
             flushed_at: draft.flushed_at,
             writing: None,
             failure: None,
@@ -248,6 +256,7 @@ impl DraftSession {
         let newer = self.revision > from;
         self.id = draft.id;
         self.base = draft.base.clone();
+        self.created_at = draft.created_at;
         self.flushed = draft.revision;
         self.flushed_at = draft.flushed_at;
         self.revision = draft.revision;
@@ -352,6 +361,21 @@ impl DraftSession {
             }
             Err(error) => self.failure = Some(error.kind),
         }
+    }
+
+    /// Where the item stands against this session's newest text and base,
+    /// as `item` reads it now. Only an item's draft has a session.
+    pub(crate) fn classify(&self, item: Result<&ItemDto, ResultCode>) -> TargetState {
+        let draft = Draft {
+            id: self.id,
+            revision: self.revision,
+            created_at: self.created_at,
+            flushed_at: self.flushed_at,
+            target: self.target.clone(),
+            base: self.base.clone(),
+            current: self.current.clone(),
+        };
+        classify(&draft, item)
     }
 
     pub(crate) fn recovery_state(&self) -> RecoveryState {

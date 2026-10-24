@@ -9,6 +9,7 @@ use std::{fs, path::Path, time::Duration};
 use gpui_kit::TestAppContext;
 use manyhands::{
     canonical::CONFIG_PATH,
+    drafts::Held,
     repository::{
         CommitIdentity, IdentityDto, InitialsChange, ItemDtoKind, LeaseKind, Mutation,
         RepoIdentitySetInput, RepoRemoveInput, RepositoryService,
@@ -23,11 +24,12 @@ use super::{
 use crate::desktop::{
     model::navigation::{OpenTarget, Resolution},
     services::requests::{DesktopRequestId, Intent},
-    test_support::fixtures::{
-        Fixture, identity, item_id, remove_registration, set_identity_through,
+    test_support::{
+        drafts::{Actor, held, second_actor, store_draft, stored_body},
+        fixtures::{Fixture, identity, item_id, remove_registration, set_identity_through},
     },
     view::{
-        confirm::{CONFIRM, FILES_REMAIN, PREPARE_AGAIN},
+        confirm::{CONFIRM, DRAFTS_REMAIN, FILES_REMAIN, PREPARE_AGAIN},
         harness::{Shell, key, wait_until},
     },
 };
@@ -746,4 +748,73 @@ fn the_sidebar_remove_of_a_registration_already_gone_lets_the_entry_go(cx: &mut 
     );
     assert_eq!(selected(&shell, cx), None);
     assert!(!shell.present("selection-unavailable", cx));
+}
+
+/// Whether `id` is a live session of this process.
+fn session_live(shell: &Shell, id: manyhands::drafts::DraftId, cx: &mut TestAppContext) -> bool {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace.services().drafts().read(cx).session(id).is_some()
+    })
+}
+
+/// A ticket with a stored draft, restored in its tab.
+fn with_restored_draft(
+    cx: &mut TestAppContext,
+) -> (Shell, std::path::PathBuf, manyhands::drafts::DraftId) {
+    let fixture = Fixture::new();
+    let root = with_ticket(&fixture);
+    let draft = store_draft(&fixture, &root, ItemDtoKind::Ticket, ONE, "Draft body");
+    let shell = Shell::open(fixture, cx);
+    open_ticket(&shell, &root, cx);
+    shell.click("draft-restore-button", cx);
+    assert!(session_live(&shell, draft, cx), "the draft is restored");
+    (shell, root, draft)
+}
+
+/// Removing a repository through Settings closes its tabs and keeps its
+/// draft: the session is flushed and released, never discarded, and the
+/// confirmation says drafts stay.
+#[gpui_kit::test]
+async fn removing_a_repository_keeps_its_restored_draft(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, draft) = with_restored_draft(cx);
+    shell.keys("secondary-,", cx);
+    manage(&shell, &root, cx);
+    shell.click("remove-submit", cx);
+    assert_eq!(
+        shell.label("confirm-drafts-note", cx).as_deref(),
+        Some(DRAFTS_REMAIN)
+    );
+    assert_eq!(
+        DRAFTS_REMAIN,
+        "Drafts of this repository's items stay in Drafts."
+    );
+
+    shell.click("confirm-ok", cx);
+    let id = removals(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    shell.run(cx);
+    assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
+    assert_eq!(tabs(&shell, cx), 0);
+    assert!(!session_live(&shell, draft, cx));
+    let store = shell.fixture.draft_store();
+    assert!(matches!(held(&store, draft), Some(Held::No)));
+    assert_eq!(stored_body(&store, draft).as_deref(), Some("Draft body"));
+}
+
+/// A repository that leaves the list, its registration removed by
+/// another process, releases its sessions the same way.
+#[gpui_kit::test]
+fn a_repository_leaving_the_list_releases_its_sessions(cx: &mut TestAppContext) {
+    let (shell, root, draft) = with_restored_draft(cx);
+    second_actor(&shell.fixture, Actor::Unregister(&root));
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.run(cx);
+    assert_eq!(tabs(&shell, cx), 0);
+    assert!(!session_live(&shell, draft, cx));
+    let store = shell.fixture.draft_store();
+    assert!(matches!(held(&store, draft), Some(Held::No)));
+    assert_eq!(stored_body(&store, draft).as_deref(), Some("Draft body"));
 }

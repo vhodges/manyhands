@@ -6,21 +6,28 @@ use std::{fs, path::PathBuf, time::Duration};
 
 use gpui_kit::{Entity, TestAppContext, component::input::TextareaState, test::TestWindowExt};
 use manyhands::{
+    drafts::{DraftFields, DraftId, Held},
     repository::{ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
     results::ResultCode,
 };
 
 use super::SHOWN;
 use crate::desktop::{
-    model::navigation::OpenTarget,
+    model::{navigation::OpenTarget, tabs::TabKey},
     services::{
         ReadKind,
+        drafts::DraftRegistry,
         requests::{DesktopRequestId, Intent, Lane},
     },
-    test_support::fixtures::{Fixture, item_id},
+    test_support::{
+        drafts::{held, store_draft, stored_body},
+        fixtures::{Fixture, item_id},
+    },
     view::{
+        close_draft::{DISCARD, KEEP_DRAFT, SAVE},
+        confirm::CANCEL,
         harness::{Shell, key},
-        item::NOT_REFRESHED,
+        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED},
         workspace::{REGIONS, Region},
     },
 };
@@ -734,4 +741,190 @@ fn each_close_control_follows_its_tab_and_names_it(cx: &mut TestAppContext) {
     assert!(tab_focused(&shell, 0, cx));
     shell.press("enter", cx);
     assert_eq!(shown(&shell, cx), Some(0));
+}
+
+/// Repository `a` holding One and Two, with a stored draft of One that
+/// is restored in One's tab; Two's tab is open beside it, shown second.
+struct Restored {
+    shell: Shell,
+    a: PathBuf,
+    draft: DraftId,
+}
+
+fn restored(cx: &mut TestAppContext) -> Restored {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ONE, "One", "");
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    let draft = store_draft(&fixture, &a, ItemDtoKind::Ticket, ONE, "Draft body");
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    shell.click("draft-restore-button", cx);
+    assert!(shell.present("draft-section", cx), "the draft is restored");
+    open(&shell, ticket(&a, TWO), cx);
+    shell.click(("tab", 0usize), cx);
+    Restored { shell, a, draft }
+}
+
+fn drafts(shell: &Shell, cx: &mut TestAppContext) -> Entity<DraftRegistry> {
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone())
+}
+
+fn close_dialog_shown(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    shell.present("close-draft-dialog", cx)
+}
+
+/// The tab's Close and `secondary-w` both ask first for a tab with a
+/// draft attached, and close a tab without one at once. The dialog offers
+/// Keep draft, Discard and Cancel, and Save unavailable; Cancel, Escape
+/// and Save keep the tab and its draft.
+#[gpui_kit::test]
+fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut TestAppContext) {
+    let Restored { shell, a, draft } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    assert_eq!(
+        shell.label("close-draft-keep", cx).as_deref(),
+        Some(KEEP_DRAFT)
+    );
+    assert_eq!(
+        shell.label("close-draft-discard", cx).as_deref(),
+        Some(DISCARD)
+    );
+    assert_eq!(
+        shell.label("close-draft-cancel", cx).as_deref(),
+        Some(CANCEL)
+    );
+    assert_eq!(shell.label("close-draft-save", cx).as_deref(), Some(SAVE));
+    assert_eq!(
+        shell.label("close-draft-save-note", cx).as_deref(),
+        Some(EDITOR_LATER)
+    );
+    assert_eq!(strip(&shell, cx), ["One", "Two"], "nothing closed yet");
+
+    shell.click("close-draft-save-button", cx);
+    assert!(close_dialog_shown(&shell, cx), "Save does nothing");
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+
+    shell.keys("secondary-3", cx);
+    shell.keys("secondary-w", cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.keys("escape", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+    assert!(tab_focused(&shell, 0, cx), "focus goes back to the tab");
+    let tab = TabKey::for_target(&ticket(&a, ONE));
+    assert_eq!(
+        drafts(&shell, cx).read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(draft)
+    );
+
+    // Two has no draft: it closes at once, by click and by key.
+    shell.click(("tab-close", 1usize), cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["One"]);
+    open(&shell, ticket(&a, TWO), cx);
+    shell.keys("secondary-3 secondary-w", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["One"]);
+}
+
+/// Keep draft, the default, flushes and releases the claim: the tab
+/// closes, the store lists the draft unclaimed with its newest text, and
+/// opening the item again offers it.
+#[gpui_kit::test]
+fn keep_draft_releases_the_claim_and_the_draft_is_listed_again(cx: &mut TestAppContext) {
+    let Restored { shell, a, draft } = restored(cx);
+    let registry = drafts(&shell, cx);
+    let mut fields = registry.read_with(cx, |registry, _| {
+        registry.session(draft).unwrap().current().clone()
+    });
+    if let DraftFields::Ticket { body, .. } = &mut fields {
+        *body = "Kept body".to_owned();
+    }
+    registry.update(cx, |registry, cx| registry.edit(draft, fields, cx));
+
+    shell.click(("tab-close", 0usize), cx);
+    shell.press("enter", cx);
+    shell.run(cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["Two"]);
+    let store = shell.fixture.draft_store();
+    assert!(matches!(held(&store, draft), Some(Held::No)));
+    assert_eq!(stored_body(&store, draft).as_deref(), Some("Kept body"));
+    assert!(registry.read_with(cx, |registry, _| registry.session(draft).is_none()));
+
+    open(&shell, ticket(&a, ONE), cx);
+    assert!(
+        shell.present("draft-banner", cx),
+        "the draft is offered again"
+    );
+    assert!(!shell.present("draft-section", cx));
+}
+
+/// Discard deletes that draft only: another item's stored draft stays.
+#[gpui_kit::test]
+fn discard_deletes_only_that_draft(cx: &mut TestAppContext) {
+    let Restored { shell, a, draft } = restored(cx);
+    let other = store_draft(&shell.fixture, &a, ItemDtoKind::Ticket, TWO, "Other body");
+
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-discard-button", cx);
+    shell.run(cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["Two"]);
+    let store = shell.fixture.draft_store();
+    assert!(held(&store, draft).is_none(), "the draft is gone");
+    assert!(matches!(held(&store, other), Some(Held::No)));
+    assert_eq!(stored_body(&store, other).as_deref(), Some("Other body"));
+}
+
+/// Keep with a drafts folder that cannot be written: the flush fails, so
+/// the tab stays open and its section shows the failure, with the text
+/// still in memory.
+#[cfg(unix)]
+#[gpui_kit::test]
+fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut TestAppContext) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Restored { shell, a, draft } = restored(cx);
+    let registry = drafts(&shell, cx);
+    let mut fields = registry.read_with(cx, |registry, _| {
+        registry.session(draft).unwrap().current().clone()
+    });
+    if let DraftFields::Ticket { body, .. } = &mut fields {
+        *body = "Unsaved body".to_owned();
+    }
+    registry.update(cx, |registry, cx| registry.edit(draft, fields, cx));
+    let folder = shell.fixture.data_dir().join("drafts");
+    let mode = fs::metadata(&folder).unwrap().permissions().mode();
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o500)).unwrap();
+
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-keep-button", cx);
+    shell.run(cx);
+    fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(strip(&shell, cx), ["One", "Two"], "the tab stays open");
+    let recovery = shell.label("draft-recovery", cx).unwrap();
+    assert!(recovery.starts_with(NOT_SAVED), "{recovery}");
+    assert!(shell.present("draft-recovery-retry", cx));
+    assert_eq!(
+        shell.label("draft-body", cx).as_deref(),
+        Some("Unsaved body")
+    );
+    let tab = TabKey::for_target(&ticket(&a, ONE));
+    assert_eq!(
+        registry.read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(draft)
+    );
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), draft),
+        Some(Held::Here)
+    ));
 }

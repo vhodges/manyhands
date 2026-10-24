@@ -60,6 +60,9 @@ impl TabContent {
     pub(super) fn active(&self) -> Option<TabId> {
         self.tabs.active()
     }
+    pub(super) fn pane(&self, id: TabId) -> Option<&Entity<ItemPane>> {
+        self.panes.get(&id)
+    }
 
     #[cfg(test)]
     pub(super) fn keys(&self) -> Vec<TabKey> {
@@ -204,8 +207,8 @@ impl TabContent {
                                 .ghost()
                                 .label("×")
                                 .accessibility_label(close_label(&title))
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                    this.close_tab(id, cx)
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    this.close_tab(id, window, cx);
                                 })),
                         ),
                 ),

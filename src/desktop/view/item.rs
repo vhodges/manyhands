@@ -2,12 +2,14 @@
 //!
 //! `reads` owns the ordered per-tab read and refresh job, `status` its loading
 //! and recovery controls, `details` the identity/provenance/metadata, `source`
-//! the retained read-only textarea, and `discussion` the comment thread.
+//! the retained read-only textarea, `discussion` the comment thread, and
+//! `draft` the banner of a stored draft and the section of one restored here.
 //! Relationships remain in the sibling view. All children use the same entity,
 //! stamped model and subscriptions; none writes the item.
 
 mod details;
 mod discussion;
+mod draft;
 mod reads;
 mod source;
 mod status;
@@ -26,6 +28,9 @@ use crate::desktop::{
     services::{Services, requests::DesktopRequestId},
 };
 pub(super) use details::text;
+pub(crate) use draft::EDITOR_LATER;
+#[cfg(test)]
+pub(crate) use draft::NOT_SAVED;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =
@@ -51,7 +56,10 @@ pub(crate) struct ItemPane {
     /// Last source plus the same textarea entity, preserving selection/focus.
     source: Option<(String, Entity<TextareaState>)>,
     pub(super) scroll: ContentScroll,
+    draft: draft::TabDraft,
     _operations: Subscription,
+    /// A draft listed, restored or written redraws the banner and section.
+    _drafts: Subscription,
 }
 
 impl ItemPane {
@@ -65,6 +73,7 @@ impl ItemPane {
         let operations = cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
         });
+        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
@@ -74,7 +83,9 @@ impl ItemPane {
             refreshing: None,
             source: None,
             scroll,
+            draft: draft::TabDraft::default(),
             _operations: operations,
+            _drafts: drafts,
         };
         let stamp = pane.model.load();
         pane.read(stamp, cx);
@@ -114,6 +125,8 @@ impl Render for ItemPane {
         let identity = self.identity(item.as_ref(), cx);
         let status = self.status("item", self.model.item(), cx);
         let not_refreshed = self.not_refreshed(cx);
+        let banner = self.draft_banner(item.as_ref(), cx);
+        let section = self.draft_section(cx);
         let relationships = match &item {
             Some(_) => self.relationships_panel(window, cx),
             None => None,
@@ -139,6 +152,8 @@ impl Render for ItemPane {
             .child(identity)
             .child(status)
             .children(not_refreshed)
+            .children(banner)
+            .children(section)
             .children(body)
             .children(discussion)
             .child(self.later(cx))

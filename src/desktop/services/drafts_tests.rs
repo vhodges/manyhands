@@ -106,10 +106,10 @@ fn a_held_listing_never_lands_after_a_newer_one(cx: &mut TestAppContext) {
     let release = backend.hold_read(ReadKind::Drafts);
     let first = services
         .drafts()
-        .update(cx, |registry, cx| registry.reload_listing(&services, cx));
+        .update(cx, |registry, cx| registry.reload_listing(cx));
     services
         .drafts()
-        .update(cx, |registry, cx| registry.reload_listing(&services, cx));
+        .update(cx, |registry, cx| registry.reload_listing(cx));
     cx.run_until_parked();
     assert_eq!(listed(&services, cx), Some(Vec::new()));
 
@@ -172,7 +172,7 @@ fn stored_for_finds_an_unclaimed_ticket_draft_by_repository_kind_and_id(cx: &mut
     assert!(claim.is_ok());
     services
         .drafts()
-        .update(cx, |registry, cx| registry.reload_listing(&services, cx));
+        .update(cx, |registry, cx| registry.reload_listing(cx));
     cx.run_until_parked();
     services.drafts().read_with(cx, |registry, _| {
         assert_eq!(

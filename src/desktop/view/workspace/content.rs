@@ -7,10 +7,13 @@ use crate::desktop::{
         stamp::{RepoKey, SettingsPage, TabId},
     },
     services::requests::DesktopRequestId,
-    view::scroll::ContentScroll,
+    view::{
+        close_draft::{self, CloseWithDraft},
+        scroll::ContentScroll,
+    },
 };
-use gpui_kit::{AnyElement, App, Context, IntoElement, Window};
-use manyhands::repository::transport::SshAuthority;
+use gpui_kit::{AnyElement, App, Context, IntoElement, Window, component::WindowExt};
+use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
 use std::{collections::BTreeSet, path::PathBuf};
 
 enum ContentPage {
@@ -115,13 +118,86 @@ impl Workspace {
         }
     }
 
-    pub(in crate::desktop::view) fn close_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
-        if self.content.tabs.close(id) {
-            cx.notify();
+    /// Closes the tab `id`. A tab with a restored draft attached asks
+    /// first: Keep draft, Discard or Cancel. True when the tab closed now.
+    pub(in crate::desktop::view) fn close_tab(
+        &mut self,
+        id: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let attached = self.content.tabs.pane(id).and_then(|pane| {
+            let pane = pane.read(cx);
+            let draft = self.services.drafts().read(cx).attached(&pane.tab_key())?;
+            Some((draft, pane.tab_title()))
+        });
+        let Some((draft, title)) = attached else {
+            let closed = self.content.tabs.close(id);
+            if closed {
+                cx.notify();
+            }
+            return closed;
+        };
+        if window.has_active_dialog(cx) {
+            return false;
         }
+        let workspace = cx.entity().downgrade();
+        close_draft::open(title, window, cx, move |choice, _, cx| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.close_with_draft(id, draft, choice, cx)
+            });
+        });
+        false
     }
 
+    /// What the close dialog chose for the tab `id` and its draft. Keep
+    /// closes the tab once the draft is written and let go of; a failed
+    /// write leaves the tab open with the failure. Discard closes it once
+    /// the draft is deleted; a failed discard leaves it open and says so,
+    /// the draft let go of and listed again.
+    fn close_with_draft(
+        &mut self,
+        id: TabId,
+        draft: DraftId,
+        choice: CloseWithDraft,
+        cx: &mut Context<Self>,
+    ) {
+        let drafts = self.services.drafts().clone();
+        let closing = match choice {
+            CloseWithDraft::Cancel => return,
+            CloseWithDraft::KeepDraft => {
+                drafts.update(cx, |registry, cx| registry.release(draft, cx))
+            }
+            CloseWithDraft::Discard => {
+                drafts.update(cx, |registry, cx| registry.discard(draft, cx))
+            }
+        };
+        cx.spawn(async move |workspace, cx| {
+            let closed = closing.await;
+            let _ = workspace.update(cx, |workspace, cx| match closed {
+                Ok(()) => {
+                    if workspace.content.tabs.close(id) {
+                        cx.notify();
+                    }
+                }
+                Err(kind) if choice == CloseWithDraft::Discard => {
+                    if let Some(pane) = workspace.content.tabs.pane(id).cloned() {
+                        pane.update(cx, |pane, cx| pane.discard_failed(kind, cx));
+                    }
+                }
+                // The session shows the failed write.
+                Err(_) => {}
+            });
+        })
+        .detach();
+    }
+
+    /// Closes every tab of `root`. Their restored drafts are written and
+    /// let go of first, kept in Drafts, never discarded.
     pub(crate) fn close_repository(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.services
+            .drafts()
+            .update(cx, |registry, cx| registry.release_repository(root, cx));
         self.content.tabs.close_repository(root);
         cx.notify();
     }
@@ -140,8 +216,10 @@ impl Workspace {
         let Some(id) = self.content.tabs.active() else {
             return;
         };
-        self.close_tab(id, cx);
-        self.focus_region(Region::Content, window, cx);
+        // A dialog that asks first keeps the focus.
+        if self.close_tab(id, window, cx) {
+            self.focus_region(Region::Content, window, cx);
+        }
     }
 
     pub(super) fn reload_tabs(&mut self, changed: &BTreeSet<RepoKey>, cx: &mut Context<Self>) {

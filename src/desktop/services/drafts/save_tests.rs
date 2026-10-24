@@ -994,3 +994,47 @@ async fn flush_all_reports_a_live_sessions_not_found(cx: &mut TestAppContext) {
         Some(RecoveryState::Failed(DraftErrorKind::NotFound))
     );
 }
+
+/// A tab keeps its restored session when an edit made while the saved
+/// revision retired was stored again as a new draft: `attached` answers
+/// the ID the session goes on under.
+#[gpui_kit::test]
+async fn a_tab_keeps_its_session_when_its_text_is_stored_again(cx: &mut TestAppContext) {
+    use crate::desktop::{model::tabs::TabKey, test_support::drafts::store_draft};
+    use manyhands::repository::ItemDtoKind;
+
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.create_document(&root, DOCUMENT, DOCUMENT_PATH, "Item title");
+    let stored = store_draft(&fixture, &root, ItemDtoKind::Document, DOCUMENT, "Body");
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let tab = TabKey::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Document,
+        id: DOCUMENT.to_owned(),
+    };
+    let restored = drafts.update(cx, |registry, cx| registry.restore(stored, tab.clone(), cx));
+    cx.run_until_parked();
+    let id = match restored.await {
+        Ok(id) => id,
+        Err(refused) => panic!("the draft must be restored: {refused:?}"),
+    };
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(id)
+    );
+
+    let (retire, _) = retiring_under_an_edit(&backend, &services, id, false, cx).await;
+    retire.send(()).unwrap();
+    cx.run_until_parked();
+    let new = drafts
+        .read_with(cx, |registry, _| registry.current_id(id))
+        .expect("the session goes on");
+    assert_ne!(new, id);
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(new)
+    );
+    holds_newer_text_on_the_moved_base(&fixture, &root, DOCUMENT, new, "Typed while retiring");
+}

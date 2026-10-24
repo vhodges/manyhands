@@ -1,0 +1,427 @@
+//! A draft in an item's tab: the banner for a stored one, and the section
+//! of one restored here.
+//!
+//! The banner shows when the last listing holds a draft of this item that
+//! this process has not claimed. Nothing is restored on its own; Restore
+//! asks the registry to claim the draft and attach it to this tab, then
+//! opens the tab through its item locator (ruling R25). A refusal is
+//! shown in words; a draft another process holds may be tried again.
+//!
+//! The section shows the draft's own fields read-only, whether its newest
+//! text is saved for recovery (Retry on a failed write), where the item
+//! stands against it (Retry on a failed read) and, when the item changed,
+//! Compare, which expands the comparison inline. Edit and Save wait for
+//! the editor. A reload of the tab recomputes where the item stands; it
+//! never touches the draft's text or base.
+
+use gpui_kit::{
+    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt,
+    component::{
+        ActiveTheme, Disableable,
+        button::{Button, ButtonVariants},
+        h_flex, v_flex,
+    },
+    div,
+};
+use manyhands::{
+    drafts::{
+        DraftError, DraftErrorKind, DraftFields, DraftId, Field, RefusalReason, Restore,
+        TargetState, classify, restore_policy,
+    },
+    repository::ItemDto,
+};
+use time::format_description::well_known::Rfc3339;
+
+use super::{ItemPane, text};
+use crate::desktop::{
+    model::{
+        drafts::RecoveryState,
+        navigation::{ItemLocator, OpenTarget},
+        tabs::TabKey,
+    },
+    services::drafts::RestoreRefused,
+    view::{
+        confirm::local_time,
+        draft_comparison::{DraftComparisonView, field_name, field_value, target_label},
+        relationships::OpenRelated,
+        sidebar::RETRY,
+    },
+};
+
+pub(crate) const DRAFT_KEPT: &str = "A recovered draft of this item is kept";
+pub(crate) const RESTORE: &str = "Restore";
+pub(crate) const RESTORED_DRAFT: &str = "Restored draft";
+pub(crate) const SAVED_FOR_RECOVERY: &str = "Saved for recovery at";
+pub(crate) const NOT_YET_SAVED: &str = "Not yet saved for recovery";
+pub(crate) const NOT_SAVED: &str = "Recovery copy not saved";
+pub(crate) const COMPARE: &str = "Compare";
+pub(crate) const ANOTHER_OPEN: &str = "Another draft of this item is open";
+pub(crate) const NO_LONGER_KEPT: &str = "This draft is no longer kept";
+pub(crate) const NOT_THIS_ITEM: &str = "This draft is not of this item";
+pub(crate) const NOT_DISCARDED: &str = "Draft not discarded";
+/// The draft actions that wait for the editor.
+pub(crate) const DRAFT_ACTIONS: [&str; 2] = ["Edit", "Save"];
+pub(crate) const EDITOR_LATER: &str = "Available with the editor in a later release";
+
+/// The ticket fields a draft's section names, in order, between its title
+/// and its body.
+const NAMED: [Field; 6] = [
+    Field::Type,
+    Field::Status,
+    Field::Project,
+    Field::Team,
+    Field::Deps,
+    Field::Parent,
+];
+
+/// A pane's draft state: what Restore answered, a failed discard, and
+/// where the item stands against the attached session, kept until the tab
+/// reads again or the session changes.
+#[derive(Default)]
+pub(super) struct TabDraft {
+    restoring: bool,
+    refused: Option<RestoreRefused>,
+    discard_failed: Option<DraftErrorKind>,
+    comparing: bool,
+    /// The session and revision it was computed for, and the state.
+    target: Option<(DraftId, u64, TargetState)>,
+}
+
+impl TabDraft {
+    /// The tab read again: where the item stands is computed afresh.
+    pub(super) fn reads_landed(&mut self) {
+        self.target = None;
+    }
+}
+
+/// The text of a refusal.
+fn refused_label(refused: RestoreRefused) -> String {
+    match refused {
+        RestoreRefused::AnotherOpen => ANOTHER_OPEN.to_owned(),
+        RestoreRefused::NoLongerKept => NO_LONGER_KEPT.to_owned(),
+        RestoreRefused::NotThisItem => NOT_THIS_ITEM.to_owned(),
+        RestoreRefused::OpenElsewhere => error_text(DraftErrorKind::OpenElsewhere),
+        RestoreRefused::Failed(kind) => error_text(kind),
+    }
+}
+
+/// The store's fixed sentence for `kind`.
+fn error_text(kind: DraftErrorKind) -> String {
+    DraftError { kind }.to_string()
+}
+
+/// A recovery state in words.
+pub(crate) fn recovery_label(state: RecoveryState) -> String {
+    match state {
+        RecoveryState::Saved(at) => match at.format(&Rfc3339) {
+            Ok(at) => format!("{SAVED_FOR_RECOVERY} {}", local_time(&at)),
+            Err(_) => SAVED_FOR_RECOVERY.to_owned(),
+        },
+        RecoveryState::Pending => NOT_YET_SAVED.to_owned(),
+        RecoveryState::Failed(kind) => format!("{NOT_SAVED}: {}", error_text(kind)),
+    }
+}
+
+fn button(
+    id: &'static str,
+    label: &'static str,
+    on_click: impl Fn(&ClickEvent, &mut gpui_kit::Window, &mut App) + 'static,
+) -> impl IntoElement {
+    div().id(id).test_support().aria_label(label).child(
+        Button::new(ElementId::from(format!("{id}-button")))
+            .label(label)
+            .on_click(on_click),
+    )
+}
+
+impl ItemPane {
+    pub(in crate::desktop::view) fn tab_key(&self) -> TabKey {
+        TabKey::for_target(self.model.target())
+    }
+
+    /// Restores the stored draft `id` into this tab, once at a time.
+    fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let OpenTarget::Item {
+            repo,
+            kind,
+            id: item,
+        } = self.model.target().clone()
+        else {
+            return;
+        };
+        if self.draft.restoring {
+            return;
+        }
+        self.draft.restoring = true;
+        self.draft.refused = None;
+        self.draft.discard_failed = None;
+        let tab = self.tab_key();
+        let restore = self
+            .services
+            .drafts()
+            .update(cx, |registry, cx| registry.restore(id, tab, cx));
+        cx.spawn(async move |pane, cx| {
+            let restored = restore.await;
+            let _ = pane.update(cx, |pane, cx| {
+                pane.draft.restoring = false;
+                match restored {
+                    Ok(_) => {
+                        pane.draft.comparing = false;
+                        pane.draft.target = None;
+                        // Shown, as an item's tab is opened anywhere.
+                        let locator = ItemLocator::Identified { kind, id: item };
+                        cx.emit(OpenRelated(locator.in_repository(&repo)));
+                    }
+                    Err(refused) => pane.draft.refused = Some(refused),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The draft's discard failed: the store has let go of it, and it is
+    /// listed again.
+    pub(in crate::desktop::view) fn discard_failed(
+        &mut self,
+        kind: DraftErrorKind,
+        cx: &mut Context<Self>,
+    ) {
+        self.draft.discard_failed = Some(kind);
+        cx.notify();
+    }
+
+    /// The banner, when the last listing holds a draft of this item this
+    /// process has not claimed, and what the last Restore answered.
+    pub(super) fn draft_banner(
+        &self,
+        item: Option<&ItemDto>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let muted = cx.theme().muted_foreground;
+        let refused = self.draft.refused.map(|refused| {
+            text("draft-refused", refused_label(refused))
+                .text_sm()
+                .into_any_element()
+        });
+        let discard_failed = self.draft.discard_failed.map(|kind| {
+            text(
+                "draft-discard-failed",
+                format!("{NOT_DISCARDED}: {}", error_text(kind)),
+            )
+            .text_sm()
+            .into_any_element()
+        });
+        let offered = item.and_then(|item| {
+            let TabKey::Item { repo, kind, id } = self.tab_key() else {
+                return None;
+            };
+            let registry = self.services.drafts().read(cx);
+            let stored = registry.stored_for(&repo, kind, &id)?;
+            let (draft, held) = registry.listed(stored)?;
+            let state = classify(draft, Ok(item));
+            let policy = restore_policy(draft, &state, held);
+            Some((stored, state, policy))
+        });
+        let banner = offered.map(|(stored, state, policy)| {
+            let action = match policy {
+                // Held elsewhere may pass: Restore stays offered.
+                Restore::Allowed
+                | Restore::AllowedFlagged
+                | Restore::Refused(RefusalReason::OpenElsewhere) => button(
+                    "draft-restore",
+                    RESTORE,
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(stored, cx)),
+                )
+                .into_any_element(),
+                Restore::Refused(_) => text("draft-banner-state", target_label(&state))
+                    .text_xs()
+                    .text_color(muted)
+                    .into_any_element(),
+            };
+            h_flex()
+                .gap_2()
+                .child(text("draft-banner", DRAFT_KEPT).text_sm())
+                .child(action)
+                .into_any_element()
+        });
+        if banner.is_none() && refused.is_none() && discard_failed.is_none() {
+            return None;
+        }
+        Some(
+            v_flex()
+                .gap_1()
+                .p_2()
+                .border_1()
+                .border_color(cx.theme().border)
+                .children(banner)
+                .children(refused)
+                .children(discard_failed)
+                .into_any_element(),
+        )
+    }
+
+    /// The section of the draft restored in this tab.
+    pub(super) fn draft_section(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let tab = self.tab_key();
+        let registry = self.services.drafts().read(cx);
+        let id = registry.attached(&tab)?;
+        let session = registry.session(id)?;
+        let revision = session.revision();
+        let fresh =
+            matches!(&self.draft.target, Some((at, seen, _)) if *at == id && *seen == revision);
+        if !fresh && let Some(item) = self.model.item_read() {
+            self.draft.target = registry
+                .classify(id, item)
+                .map(|state| (id, revision, state));
+        }
+        let registry = self.services.drafts().read(cx);
+        let session = registry.session(id)?;
+        let mine = session.current().clone();
+        let base = session.base().map(|base| base.fields.clone());
+        let recovery = registry.recovery_state(id)?;
+        let state = self.draft.target.as_ref().map(|(_, _, state)| state);
+        let comparison = match state {
+            Some(TargetState::Changed {
+                theirs, comparison, ..
+            })
+            | Some(TargetState::Unverified { theirs, comparison }) => {
+                // With no base, the comparison was made from the item.
+                let base = base.as_ref().unwrap_or(theirs);
+                Some(DraftComparisonView::new(comparison, base, theirs, &mine))
+            }
+            _ => None,
+        };
+        let target = state.map(|state| self.target_line(state, cx));
+        let compare = comparison.map(|comparison| {
+            let expanded = self.draft.comparing;
+            v_flex()
+                .gap_2()
+                .child(button(
+                    "draft-compare",
+                    COMPARE,
+                    cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.draft.comparing = !this.draft.comparing;
+                        cx.notify();
+                    }),
+                ))
+                .children(expanded.then(|| comparison.render(cx)))
+        });
+        Some(
+            v_flex()
+                .id("draft-section")
+                .test_support()
+                .aria_label(RESTORED_DRAFT)
+                .gap_2()
+                .p_2()
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(div().text_xs().child(RESTORED_DRAFT))
+                .child(fields(&mine, cx))
+                .child(self.recovery_line(id, recovery, cx))
+                .children(target)
+                .children(compare)
+                .child(later(cx))
+                .into_any_element(),
+        )
+    }
+
+    fn recovery_line(
+        &self,
+        id: DraftId,
+        state: RecoveryState,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let retry = matches!(state, RecoveryState::Failed(_)).then(|| {
+            button(
+                "draft-recovery-retry",
+                RETRY,
+                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    this.services
+                        .drafts()
+                        .update(cx, |registry, cx| registry.flush_now(id, cx))
+                        .detach();
+                }),
+            )
+        });
+        h_flex()
+            .gap_2()
+            .child(text("draft-recovery", recovery_label(state)).text_sm())
+            .children(retry)
+    }
+
+    fn target_line(&self, state: &TargetState, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let retry = matches!(state, TargetState::ReadFailed(_)).then(|| {
+            button(
+                "draft-target-retry",
+                RETRY,
+                cx.listener(|this, _: &ClickEvent, _, cx| {
+                    this.reload(cx);
+                }),
+            )
+        });
+        h_flex()
+            .gap_2()
+            .child(text("draft-target", target_label(state)).text_sm())
+            .children(retry)
+    }
+}
+
+/// The draft's own fields, read-only: its title, a ticket's named fields,
+/// and its body.
+fn fields(fields: &DraftFields, cx: &App) -> impl IntoElement + use<> {
+    let named: &[Field] = match fields {
+        DraftFields::Ticket { .. } => &NAMED,
+        _ => &[],
+    };
+    v_flex()
+        .gap_1()
+        .child(text("draft-title", field_value(fields, Field::Title)).text_lg())
+        .children(named.iter().enumerate().map(|(ix, field)| {
+            text(
+                ("draft-field", ix),
+                format!("{}: {}", field_name(*field), field_value(fields, *field)),
+            )
+            .text_sm()
+        }))
+        .child(
+            text("draft-body", field_value(fields, Field::Body))
+                .text_sm()
+                .p_2()
+                .border_1()
+                .border_color(cx.theme().border),
+        )
+}
+
+/// Edit and Save, unavailable until the editor arrives.
+fn later(cx: &App) -> impl IntoElement + use<> {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .flex_wrap()
+        .gap_2()
+        .children(DRAFT_ACTIONS.iter().enumerate().map(|(ix, action)| {
+            v_flex()
+                .child(
+                    div()
+                        .id(("draft-later", ix))
+                        .test_support()
+                        .aria_label(*action)
+                        .child(
+                            Button::new(("draft-later-button", ix))
+                                .label(*action)
+                                .ghost()
+                                .disabled(true),
+                        ),
+                )
+                .child(
+                    text(("draft-later-note", ix), EDITOR_LATER)
+                        .text_xs()
+                        .text_color(muted),
+                )
+        }))
+}
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "draft_tests.rs"]
+mod tests;

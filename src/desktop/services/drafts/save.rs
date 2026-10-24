@@ -233,8 +233,8 @@ impl DraftRegistry {
     /// puts its claim back in the session's slot, so that draft is
     /// discarded too. A save still in flight changes nothing when it
     /// finishes. On failure the store has released the draft, which stays
-    /// on disk.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by Task 8's tabs; tests until then.
+    /// on disk: the session is over either way. The store is listed again
+    /// once it lands.
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
@@ -248,6 +248,7 @@ impl DraftRegistry {
         };
         let id = live.session.id();
         self.saves.retain(|_, record| record.draft != id);
+        self.detach_ended();
         cx.notify();
         let Live { session, write, .. } = live;
         let slot = session.claim_slot();
@@ -263,10 +264,15 @@ impl DraftRegistry {
                     cx,
                 )
             });
-            discard
+            let discarded = discard
                 .map_err(|_| DraftErrorKind::Io)?
                 .await
-                .map_err(|error| error.kind)
+                .map_err(|error| error.kind);
+            // Gone or released, the draft is listed as it now is.
+            let _ = registry.update(cx, |registry, cx| {
+                registry.reload_listing(cx);
+            });
+            discarded
         })
     }
 

@@ -5,6 +5,7 @@
 //! temporary directories.
 
 pub(crate) mod delaying;
+pub(crate) mod drafts;
 pub(crate) mod fixtures;
 pub(crate) mod snapshot;
 

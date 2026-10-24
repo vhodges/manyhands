@@ -246,7 +246,7 @@ impl Services {
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
-            registry.reload_listing(&services, cx);
+            registry.reload_listing(cx);
         });
         services
     }
