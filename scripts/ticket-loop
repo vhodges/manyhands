@@ -360,7 +360,44 @@ harness_environment() {
         claude) printf '%s\n' "CLAUDE_CONFIG_DIR=$home" ;;
         codex) printf '%s\n' "CODEX_HOME=$home" ;;
         opencode) printf '%s\n' "XDG_DATA_HOME=$home/data" "XDG_STATE_HOME=$home/state" \
-            "XDG_CONFIG_HOME=$home/config" ;;
+            "XDG_CONFIG_HOME=$home/config" "OPENCODE_CONFIG_DIR=$home/config/opencode" ;;
+    esac
+}
+
+# Copies your installed skills, plugins and their settings into the loop's own
+# harness folder, one way. Credentials, history and sessions are never copied.
+# It runs before every agent run, so anything a run changed there is reverted.
+sync_harness() {
+    local home="$LOOP_HARNESS_HOME/$harness" item
+    local -a copy=(rsync -a --copy-links --delete --exclude '*~')
+    case $harness in
+        claude)
+            mkdir -p "$home/plugins"
+            for item in plugins/cache plugins/marketplaces skills; do
+                if [[ -d $HOME/.claude/$item ]]; then
+                    "${copy[@]}" "$HOME/.claude/$item/" "$home/$item/"
+                fi
+            done
+            # These name their plugins by absolute path, so point them at the copies.
+            for item in plugins/installed_plugins.json plugins/known_marketplaces.json settings.json; do
+                if [[ -f $HOME/.claude/$item ]]; then
+                    sed "s#$HOME/.claude/#$home/#g" "$HOME/.claude/$item" >"$home/$item"
+                fi
+            done ;;
+        codex)
+            for item in skills plugins rules; do
+                if [[ -d $HOME/.codex/$item ]]; then
+                    "${copy[@]}" "$HOME/.codex/$item/" "$home/$item/"
+                fi
+            done
+            if [[ -f $HOME/.codex/config.toml ]]; then
+                sed "s#$HOME/.codex/#$home/#g" "$HOME/.codex/config.toml" >"$home/config.toml"
+            fi ;;
+        opencode)
+            mkdir -p "$home/config"
+            if [[ -d $HOME/.config/opencode ]]; then
+                "${copy[@]}" "$HOME/.config/opencode/" "$home/config/opencode/"
+            fi ;;
     esac
 }
 
@@ -369,6 +406,7 @@ login() {
     local -a environment
     mapfile -t environment < <(harness_environment "$harness")
     mkdir -p "$LOOP_HARNESS_HOME/$harness"
+    sync_harness
     say "signing $harness in for the loop, in $LOOP_HARNESS_HOME/$harness"
     case $harness in
         claude)
@@ -403,6 +441,10 @@ build_sandbox() {
     for setting in "${environment[@]}"; do
         box+=(--setenv "${setting%%=*}" "${setting#*=}")
     done
+    # The terminal multiplexer's variables name a socket the sandbox hides.
+    while IFS= read -r setting; do
+        box+=(--unsetenv "$setting")
+    done < <(compgen -e | grep '^HERDR_' || true)
     box+=(--unsetenv SSH_AUTH_SOCK --unsetenv DBUS_SESSION_BUS_ADDRESS
         --unsetenv GH_TOKEN --unsetenv GITHUB_TOKEN
         --setenv MANYHANDS_LOOP 1
@@ -446,6 +488,7 @@ run_agent() {
     write_pr_state "$id" || { warn "$id: cannot read its PR"; return 1; }
     # shellcheck disable=SC2059
     printf -v prompt "$PROMPT_TEMPLATE" "$id"
+    if (( ! dry_run )); then sync_harness; fi
     build_sandbox "$id"
     build_command "$prompt" "$last_message"
     if (( dry_run )); then
@@ -549,7 +592,7 @@ read_list() {
 
 preflight() {
     local tool
-    for tool in git gh bwrap timeout flock awk; do
+    for tool in git gh bwrap timeout flock awk rsync; do
         command -v "$tool" >/dev/null || die "$tool is not on PATH"
     done
     command -v "$harness" >/dev/null || die "harness $harness is not on PATH"
@@ -570,6 +613,7 @@ preflight() {
 
 check_setup() {
     local -a box command
+    sync_harness
     build_sandbox check
     say "sandbox probe:"
     "${box[@]}" sh -c '
