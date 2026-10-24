@@ -886,8 +886,13 @@ to write a draft for an item of this project's repository:
 4. Change the item with the CLI (`ticket save` or `document save`), then
    Refresh: the draft is unchanged and reads "The item changed"; Compare
    shows the field.
-5. Close the tab: Keep draft; the draft is listed again.
-6. Quit and relaunch: the draft is listed; Discard, confirm; it is gone.
+5. Close the tab (`secondary-w`; the dialog asks only for a tab with a
+   restored draft, so after step 3): Enter is Keep draft, the default;
+   the draft is listed again.
+6. Quit and relaunch: the draft is listed; Discard…: Enter alone is
+   Cancel, the default, and keeps it; Discard… again, Tab to Discard and
+   Enter; it is gone. After Escape from the dialog, check the focus on
+   Discard… is visible.
 7. `kill -9` the desktop with a draft restored; relaunch: the draft is
    listed.
 

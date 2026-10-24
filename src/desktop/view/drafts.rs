@@ -417,3 +417,7 @@ mod inspect_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "drafts_discard_tests.rs"]
 mod discard_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "drafts_privacy_tests.rs"]
+mod privacy_tests;
