@@ -89,7 +89,7 @@ impl Render for Workspace {
                     .flex_1()
                     .h_full(),
             );
-        let session = self.session_section(cx);
+        let session = self.session_section(window, cx);
         let pending = self.pending_section(window, cx);
         self.prune_abandon_focus();
         let operations = self

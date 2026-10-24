@@ -325,9 +325,58 @@ impl Workspace {
         }
     }
 
+    /// A failing draft's Retry. The drafts-not-saved dialog's Cancel gives
+    /// the focus to its wrapper, which then draws a ring and is pressed by
+    /// Enter or Space; Tab reaches the Kit button inside, which draws its
+    /// own. A pointer's click is the button's only.
+    fn draft_flush_retry(
+        &self,
+        id: DraftId,
+        focus: &FocusHandle,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let retry = draft_flush_id(id, "retry");
+        let ring = cx.theme().ring;
+        div()
+            .id(ElementId::from(retry.clone()))
+            .test_support()
+            .aria_label(super::sidebar::RETRY)
+            .relative()
+            .rounded_sm()
+            .track_focus(focus)
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.is_keyboard() {
+                    this.retry_draft_flush(id, cx)
+                }
+            }))
+            .child(
+                Button::new(ElementId::NamedChild(
+                    std::sync::Arc::new(ElementId::from(retry.clone())),
+                    "button".into(),
+                ))
+                .label(super::sidebar::RETRY)
+                .on_click(
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.retry_draft_flush(id, cx)),
+                ),
+            )
+            .children(focus.is_focused(window).then(|| {
+                div()
+                    .id(format!("{retry}-focus-ring"))
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .rounded_sm()
+                    .border_2()
+                    .border_color(ring)
+            }))
+            .into_any_element()
+    }
+
     /// The "This session" section.
     pub(super) fn session_section(
         &mut self,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Stateful<gpui_kit::Div> {
         let requests: Vec<_> = self
@@ -363,14 +412,7 @@ impl Workspace {
                         draft_flush_id(id, "entry"),
                         draft_flush_failed(&title, kind),
                     ))
-                    .child(button(
-                        retry,
-                        super::sidebar::RETRY,
-                        Some(&focus),
-                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.retry_draft_flush(id, cx)
-                        }),
-                    )),
+                    .child(self.draft_flush_retry(id, &focus, window, cx)),
             );
         }
         if requests.is_empty() {

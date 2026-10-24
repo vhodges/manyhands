@@ -26,7 +26,6 @@ use manyhands::{
 use super::Walk;
 use crate::desktop::{
     model::tabs::TabKey,
-    services::ReadKind,
     test_support::{
         drafts::{held, store_draft},
         fixtures::{Fixture, ticket_path, ticket_source},
@@ -38,7 +37,6 @@ use crate::desktop::{
             row_id,
         },
         harness::Shell,
-        quit::{QUIT_NOW, QuitPhase, SAVING_DRAFTS},
         workspace::{REGIONS, Region},
     },
 };
@@ -115,11 +113,36 @@ impl Walk {
         });
     }
 
+    /// From a wrapper drawing `ring`, Tab moves the focus to the Kit
+    /// button `button` inside it, which draws its own: the wrapper's ring
+    /// goes. The ring is drawn for the wrapper's own focus only.
+    fn ring_goes_for_the_button(
+        &self,
+        ring: impl Into<ElementId>,
+        button: impl Into<ElementId>,
+        region: Region,
+        cx: &mut TestAppContext,
+    ) {
+        let (ring, button) = (ring.into(), button.into());
+        self.ringed(ring.clone(), cx);
+        self.keys("tab", cx);
+        self.on(button.clone(), region, cx);
+        assert!(
+            !self.shell.present(ring.clone(), cx),
+            "{ring:?} is not drawn while {button:?} holds focus"
+        );
+    }
+
     /// Tab, within an open dialog, until `id` holds focus.
     fn tab_in_dialog(&self, id: &'static str, cx: &mut TestAppContext) {
         self.tab_to("tab", id, cx);
         self.in_dialog(id, cx);
     }
+}
+
+/// The Kit button inside the wrapper `wrapper`.
+pub(super) fn kit_button(wrapper: String) -> ElementId {
+    ElementId::NamedChild(std::sync::Arc::new(wrapper.into()), "button".into())
 }
 
 /// A repository `a` whose tickets One and Two each have a stored draft;
@@ -186,7 +209,12 @@ fn the_drafts_page_works_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.on("drafts-inspect", Region::Content, cx);
     walk.keys("escape", cx);
     walk.on(row_id(one, "inspect"), Region::Content, cx);
-    walk.ringed(inspect_ring, cx);
+    walk.ring_goes_for_the_button(
+        inspect_ring,
+        kit_button(row_id(one, "inspect")),
+        Region::Content,
+        cx,
+    );
 
     // Export…: the save dialog asks where; the file is written.
     let folder = tempfile::tempdir().unwrap();
@@ -256,9 +284,12 @@ fn the_drafts_page_works_by_keyboard_alone(cx: &mut TestAppContext) {
 }
 
 /// Restore by keyboard opens the item's tab with the draft attached;
-/// there, Compare opens the comparison; closing the tab asks, and Escape,
-/// Cancel and Keep draft (Enter, the default) each do what they say;
-/// restored again from the banner, Discard deletes the draft.
+/// there, Compare opens the comparison; the tab's Export… is on screen
+/// below it; the tab's Discard… is Escaped and Cancelled; closing the tab
+/// asks, and Escape, Cancel by Tab and Keep draft by one Tab (the first
+/// Tab stop) each do what they say (Enter alone, Keep draft, is
+/// `tabs_tests::keep_draft_releases_the_claim_and_the_draft_is_listed_again`);
+/// restored again from the banner, Discard by Tab deletes the draft.
 #[gpui_kit::test]
 fn restore_compare_and_close_work_by_keyboard_alone(cx: &mut TestAppContext) {
     let (walk, one, _) = two_drafts(cx);
@@ -301,7 +332,12 @@ fn restore_compare_and_close_work_by_keyboard_alone(cx: &mut TestAppContext) {
     assert!(!walk.shell.present("discard-draft-dialog", cx));
     assert_eq!(attached(&walk, cx), Some(one));
     walk.on("draft-discard", Region::Content, cx);
-    walk.ringed("draft-discard-focus-ring", cx);
+    walk.ring_goes_for_the_button(
+        "draft-discard-focus-ring",
+        "draft-discard-button",
+        Region::Content,
+        cx,
+    );
 
     // Close, Escape: the tab and its draft stay, focus back on the tab.
     walk.keys("secondary-3", cx);
@@ -364,86 +400,4 @@ fn restore_compare_and_close_work_by_keyboard_alone(cx: &mut TestAppContext) {
     walk.region(Region::Content, cx);
 }
 
-/// `secondary-q` with a draft's newest text unsaved and its write held:
-/// "Saving drafts for recovery", with Quit now holding focus and drawing
-/// its ring; Enter on it quits at once.
-#[gpui_kit::test]
-async fn quit_with_a_held_write_by_keyboard(cx: &mut TestAppContext) {
-    let shell = Shell::open(Fixture::new(), cx);
-    // No editor yet: the session's unsaved text is made as D3's editor
-    // will make it, through the registry.
-    shell.unsaved_draft(cx).await;
-    let gate = shell.backend.hold_read(ReadKind::DraftWrite);
-    let a = shell.fixture.data_dir().to_owned();
-    let walk = Walk::over(shell, a);
-
-    walk.keys("secondary-q", cx);
-    let phase = |cx: &mut TestAppContext| {
-        walk.shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.quit_phase())
-    };
-    assert_eq!(phase(cx), QuitPhase::SavingDrafts);
-    assert_eq!(
-        walk.shell.label("quit-finishing", cx).as_deref(),
-        Some(SAVING_DRAFTS)
-    );
-    assert_eq!(walk.shell.label("quit-now", cx).as_deref(), Some(QUIT_NOW));
-    walk.shell.frame(cx, |window, _| {
-        let quit_now = window.find("quit-now");
-        assert_eq!(quit_now.focused(), Some(true), "Quit now holds focus");
-        assert!(quit_now.visible(), "Quit now is on screen");
-        assert!(window.find("quit-now-focus-ring").visible());
-    });
-    walk.enter(cx);
-    assert_eq!(phase(cx), QuitPhase::Quit);
-    drop(gate);
-}
-
-/// `secondary-q` when a draft cannot be saved: the dialog holds focus;
-/// Enter is Cancel, which focuses the draft's Retry in the operation area;
-/// Quit anyway, reached by Tab and pressed by Enter, quits.
-#[gpui_kit::test]
-async fn a_draft_not_saved_on_quit_by_keyboard(cx: &mut TestAppContext) {
-    use manyhands::drafts::{DraftErrorKind, FailureAction, FailurePoint};
-
-    use crate::desktop::view::operations::draft_flush_id;
-
-    let shell = Shell::open(Fixture::new(), cx);
-    let id = shell.unsaved_draft(cx).await;
-    // Clones share the failure point: the window's store fails too.
-    let _failing = shell.fixture.draft_store().with_failure_point_for_testing(
-        FailurePoint::CreateTemp,
-        FailureAction::Fail(DraftErrorKind::NoSpace),
-    );
-    let a = shell.fixture.data_dir().to_owned();
-    let walk = Walk::over(shell, a);
-    let phase = |cx: &mut TestAppContext| {
-        walk.shell
-            .workspace
-            .read_with(cx, |workspace, _| workspace.quit_phase())
-    };
-
-    walk.keys("secondary-q", cx);
-    walk.dialog_open("drafts-not-saved-dialog", cx);
-    walk.enter(cx);
-    assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
-    assert_eq!(phase(cx), QuitPhase::Running);
-    walk.on(draft_flush_id(id, "retry"), Region::Operations, cx);
-
-    // One Tab, Enter: the first Tab stop is Cancel; it does not quit.
-    walk.keys("secondary-q", cx);
-    walk.dialog_open("drafts-not-saved-dialog", cx);
-    walk.keys("tab", cx);
-    walk.in_dialog("drafts-not-saved-cancel-button", cx);
-    walk.enter(cx);
-    assert!(!walk.shell.present("drafts-not-saved-dialog", cx));
-    assert_eq!(phase(cx), QuitPhase::Running);
-    walk.on(draft_flush_id(id, "retry"), Region::Operations, cx);
-
-    walk.keys("secondary-q", cx);
-    walk.dialog_open("drafts-not-saved-dialog", cx);
-    walk.tab_in_dialog("drafts-not-saved-quit-button", cx);
-    walk.enter(cx);
-    assert_eq!(phase(cx), QuitPhase::Quit);
-}
+mod quit;

@@ -2,7 +2,7 @@
 //! pressed by Enter, cancels in every phase that shows it (Preparing,
 //! Ready, Stale and Answered), where Enter used to give the dialog's own
 //! default: in Ready that confirmed the command. And the Abandon control
-//! the dialog gives the focus back to is pressed by Enter again.
+//! the dialog gives the focus back to is pressed by Enter or Space again.
 
 use std::{path::PathBuf, time::Duration};
 
@@ -90,14 +90,17 @@ fn cancel_by_tab_and_enter_submits_nothing_and_abandon_opens_again(cx: &mut Test
     walk.on(("pending-abandon", 0usize), Region::Operations, cx);
     assert!(walk.shell.present(("pending-row", 0usize), cx));
 
-    // The focus given back is the wrapper's: Enter presses Abandon.
-    walk.enter(cx);
-    assert!(walk.shell.present("confirm-dialog", cx));
-    walk.keys("escape", cx);
-    walk.on(("pending-abandon", 0usize), Region::Operations, cx);
-    walk.enter(cx);
-    assert!(walk.shell.present("confirm-dialog", cx));
-    walk.keys("escape", cx);
+    // The focus given back is the wrapper's: Enter and Space each press
+    // Abandon, after Cancel and after Escape.
+    for key in ["enter", "space", "enter", "space"] {
+        walk.shell.press(key, cx);
+        assert!(
+            walk.shell.present("confirm-dialog", cx),
+            "{key} presses Abandon"
+        );
+        walk.keys("escape", cx);
+        walk.on(("pending-abandon", 0usize), Region::Operations, cx);
+    }
     assert!(walk.shell.requests(cx, |_| true).is_empty());
 }
 
