@@ -48,8 +48,8 @@ Source inspected at main `25b9fcf`.
 - Canonical tests: a document, a ticket and a comment whose unknown keys
   follow their known keys serialize with the unknown keys in file order, and
   the output is still a fixed point.
-- Read tests: a comment's and a ticket's unknown metadata are reported in file
-  order.
+- Read tests: a comment's and a ticket's unknown metadata are reported in key
+  order, whatever their order in the file.
 - Ticket closure's preservation check (`closed_ticket_bytes`) and the existing
   golden files still pass; any golden that recorded the swapped order is
   updated, with the change explained.
