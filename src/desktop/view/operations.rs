@@ -539,6 +539,7 @@ impl Workspace {
                     let focused = focus.is_focused(window);
                     let target = (root.clone(), operation_id);
                     let origin = focus.clone();
+                    let (pressed, pressed_origin) = (target.clone(), origin.clone());
                     controls = controls.child(
                         div()
                             .id(("pending-abandon", index))
@@ -547,6 +548,20 @@ impl Workspace {
                             .track_focus(&focus)
                             .rounded_sm()
                             .when_focused(focused, cx)
+                            // The focus the confirmation gives back on Escape is the
+                            // wrapper's: Enter or Space presses Abandon there too. A
+                            // pointer's click is the button's.
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                if event.is_keyboard() {
+                                    this.abandon(
+                                        pressed.0.clone(),
+                                        &pressed.1,
+                                        pressed_origin.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                }
+                            }))
                             .child(
                                 Button::new(("pending-abandon-button", index))
                                     .danger()

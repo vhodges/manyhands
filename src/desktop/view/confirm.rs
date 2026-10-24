@@ -25,6 +25,7 @@ use gpui_kit::{
     component::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
+        dialog::Confirm,
         h_flex, v_flex,
     },
     div,
@@ -601,17 +602,26 @@ impl ConfirmDialog {
         disabled: bool,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> AnyElement {
+        let on_click = std::rc::Rc::new(on_click);
+        let on_enter = on_click.clone();
         let button = Button::new((id, 0usize))
             .label(label)
             .disabled(disabled)
-            .on_click(on_click);
+            .on_click(move |event, window, cx| on_click(event, window, cx));
         let button = if primary { button.primary() } else { button };
-        div()
-            .id(id)
-            .test_support()
-            .aria_label(label)
-            .child(button)
-            .into_any_element()
+        // Enter on a focused button presses that button: its wrapper takes
+        // the dialog's Enter (`Confirm`, dispatched on key down) before the
+        // dialog, whose `on_ok` would confirm. A disabled button cannot take
+        // the focus. With no button focused, Enter is the dialog's.
+        let wrapper = div().id(id).test_support().aria_label(label);
+        match disabled {
+            true => wrapper,
+            false => wrapper.on_action(move |_: &Confirm, window, cx| {
+                on_enter(&ClickEvent::default(), window, cx)
+            }),
+        }
+        .child(button)
+        .into_any_element()
     }
 
     fn preview_body(&self, cx: &App) -> Option<impl IntoElement + use<>> {
