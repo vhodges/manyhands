@@ -424,7 +424,7 @@ build_sandbox() {
     mapfile -t hidden < <(owner_harness_paths)
     hidden+=("${HIDDEN_PATHS[@]}" "$OWNER_REPO")
     mapfile -t environment < <(harness_environment "$harness")
-    box=(bwrap --die-with-parent --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp)
+    box=("$bwrap" --die-with-parent --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp)
     runtime="/run/user/$(id -u)"
     [[ -d $runtime ]] && box+=(--tmpfs "$runtime")
     for path in "${hidden[@]}"; do
@@ -590,11 +590,27 @@ read_list() {
     done <"$list_file"
 }
 
+# Sets bwrap to bubblewrap: from PATH, or else fetched from nixpkgs.
+find_bubblewrap() {
+    local store_path
+    if bwrap=$(command -v bwrap); then
+        return 0
+    fi
+    command -v nix >/dev/null ||
+        die "bwrap is not on PATH; install bubblewrap (on NixOS, add pkgs.bubblewrap to environment.systemPackages)"
+    say "bwrap is not on PATH; fetching bubblewrap from nixpkgs"
+    store_path=$(nix build --no-link --print-out-paths nixpkgs#bubblewrap 2>/dev/null | tail -n 1) ||
+        die "bwrap is not on PATH, and nix could not build nixpkgs#bubblewrap"
+    [[ -x $store_path/bin/bwrap ]] || die "nixpkgs#bubblewrap has no bin/bwrap"
+    bwrap=$store_path/bin/bwrap
+}
+
 preflight() {
     local tool
-    for tool in git gh bwrap timeout flock awk rsync; do
+    for tool in git gh timeout flock awk rsync; do
         command -v "$tool" >/dev/null || die "$tool is not on PATH"
     done
+    find_bubblewrap
     command -v "$harness" >/dev/null || die "harness $harness is not on PATH"
     case $LOOP_CLONE/ in "$OWNER_REPO"/*) die "LOOP_CLONE must not be inside OWNER_REPO" ;; esac
     case $OWNER_REPO/ in "$LOOP_CLONE"/*) die "OWNER_REPO must not be inside LOOP_CLONE" ;; esac
