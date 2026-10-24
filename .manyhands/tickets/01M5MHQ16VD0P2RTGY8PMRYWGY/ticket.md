@@ -2,9 +2,11 @@
 id: 01M5MHQ16VD0P2RTGY8PMRYWGY
 title: Parsing reorders an item's unknown front-matter keys
 type: defect
-status: review_ready
+status: closed
 project: manyhands
 team: core
+closed_at: 2026-10-24T20:25:25Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
