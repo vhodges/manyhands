@@ -4,9 +4,9 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, NextRegion, NextTab, OpenSelected, OpenSettings, PreviousRegion,
-        PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp, ScrollToBottom,
-        ScrollToTop,
+        FocusRepositories, NextRegion, NextTab, OpenDrafts, OpenSelected, OpenSettings,
+        PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp,
+        ScrollToBottom, ScrollToTop,
     },
     model::stamp::SettingsPage,
     view::{
@@ -44,6 +44,7 @@ pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tickets(window, cx);
+        self.apply_review(window, cx);
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
         }
@@ -152,6 +153,9 @@ impl Render for Workspace {
             }))
             .on_action(unless_dialog(cx, |this, _: &OpenSettings, window, cx| {
                 this.open_settings(SettingsPage::Repositories, window, cx)
+            }))
+            .on_action(unless_dialog(cx, |this, _: &OpenDrafts, window, cx| {
+                this.open_drafts(None, window, cx)
             }))
             .on_action(unless_dialog(cx, |this, _: &FindKey, window, cx| {
                 this.focus_find(window, cx)

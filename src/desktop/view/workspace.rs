@@ -23,6 +23,7 @@ use gpui_kit::{
 pub(crate) use super::quit::QuitPhase;
 use super::{
     documents::DocumentsPane,
+    drafts::{DraftsEvent, DraftsPage},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
     sidebar::RepositoriesPane,
@@ -40,11 +41,16 @@ pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
 #[cfg(test)]
 use gpui_kit::App;
+use manyhands::drafts::DraftId;
 
-/// The existing tabs and cached Settings entity share one content region.
+/// The tabs, the cached Settings entity and the cached Drafts page share
+/// one content region; `content.rs` routes between them.
 struct ContentArea {
     tabs: TabContent,
     settings: Entity<SettingsHost>,
+    drafts: Entity<DraftsPage>,
+    /// A tab's Review in Drafts, for the next frame to open.
+    review: Option<DraftId>,
 }
 
 pub(crate) struct Workspace {
@@ -75,6 +81,7 @@ pub(crate) struct Workspace {
     _find_events: Subscription,
     content: ContentArea,
     _settings_events: Subscription,
+    _drafts_events: Subscription,
     /// Fallback when the control holding focus is no longer drawn.
     last_region: Option<Region>,
     quit: QuitPhase,
@@ -167,6 +174,16 @@ impl Workspace {
                 SettingsEvent::Closed => this.focus_region(Region::Content, window, cx),
             },
         );
+        let drafts_page = {
+            let services = services.clone();
+            let scroll = tabs.scroll().clone();
+            cx.new(|cx| DraftsPage::new(services, scroll, cx))
+        };
+        let drafts_events = cx.subscribe_in(
+            &drafts_page,
+            window,
+            |this, _, event: &DraftsEvent, window, cx| this.drafts_event(event, window, cx),
+        );
         let mut workspace = Self {
             services,
             regions,
@@ -189,8 +206,14 @@ impl Workspace {
                 .map(|id| (id, cx.focus_handle()))
                 .collect(),
             _find_events: find_events,
-            content: ContentArea { tabs, settings },
+            content: ContentArea {
+                tabs,
+                settings,
+                drafts: drafts_page,
+                review: None,
+            },
             _settings_events: settings_events,
+            _drafts_events: drafts_events,
             last_region: Some(Region::Repositories),
             quit: QuitPhase::Running,
             quit_focus: cx.focus_handle().tab_stop(true),

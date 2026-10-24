@@ -28,9 +28,9 @@ use crate::desktop::{
     services::{Services, requests::DesktopRequestId},
 };
 pub(super) use details::text;
-pub(crate) use draft::EDITOR_LATER;
 #[cfg(test)]
 pub(crate) use draft::NOT_SAVED;
+pub(crate) use draft::{EDITOR_LATER, ReviewInDrafts};
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =

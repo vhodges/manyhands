@@ -58,6 +58,16 @@ impl DraftRegistry {
         self.current_id(*self.attached.get(tab)?)
     }
 
+    /// The tab the session of `id` is attached to, by the ID it goes on
+    /// under: where the Drafts page's Show goes.
+    pub(crate) fn tab_of(&self, id: DraftId) -> Option<TabKey> {
+        let id = self.current_id(id)?;
+        self.attached
+            .iter()
+            .find(|(_, attached)| self.current_id(**attached) == Some(id))
+            .map(|(tab, _)| tab.clone())
+    }
+
     /// The live session of `id`, or of the draft its text went on as.
     pub(crate) fn session(&self, id: DraftId) -> Option<&DraftSession> {
         self.sessions

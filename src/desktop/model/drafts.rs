@@ -29,7 +29,10 @@ use time::OffsetDateTime;
 use super::names::TicketName;
 use crate::desktop::services::requests::DesktopRequestId;
 
+pub(crate) mod rows;
 pub(crate) mod save;
+
+pub(crate) use rows::{DraftRow, RowActions, RowState};
 
 /// How long after the last edit a change is written.
 pub(crate) const IDLE: Duration = Duration::from_secs(1);

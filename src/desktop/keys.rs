@@ -32,6 +32,8 @@ gpui_kit::actions!(
         Rebuild,
         /// Open the settings.
         OpenSettings,
+        /// Show the Drafts page: the drafts kept for recovery.
+        OpenDrafts,
         /// Quit, once the running job has returned.
         Quit,
         /// Quit at once, without waiting for the running job.
@@ -80,6 +82,7 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-r", Refresh, None),
         KeyBinding::new("secondary-shift-r", Rebuild, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
         KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),

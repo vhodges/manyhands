@@ -85,6 +85,17 @@ pub(crate) struct DraftRegistry {
     unavailable: Option<DraftStoreUnavailable>,
     /// The last listing of the store.
     listing: ListState<Vec<Listing>>,
+    /// Why the last listing failed: the store's kind, whose fixed reason
+    /// the Drafts page shows.
+    listing_failure: Option<DraftErrorKind>,
+    /// How many listings have landed: a view rebuilds what it shows of
+    /// the listing when this moves.
+    listed: u64,
+    /// The drafts the first listing to land held: those this launch
+    /// recovered.
+    launch: Option<BTreeSet<DraftId>>,
+    /// The "Recovered drafts" entry was dismissed: for this session.
+    recovered_dismissed: bool,
     generations: Generations,
     /// Replacing a listing drops the previous one.
     listing_read: Option<Task<()>>,
@@ -120,6 +131,10 @@ impl DraftRegistry {
             backend,
             worker,
             listing: ListState::Loading,
+            listing_failure: None,
+            listed: 0,
+            launch: None,
+            recovered_dismissed: false,
             generations: Generations::default(),
             listing_read: None,
             sessions: BTreeMap::new(),
@@ -159,8 +174,8 @@ impl DraftRegistry {
     }
 
     /// A listing completed. False when it is no longer wanted. A store
-    /// that failed to list reads as a failed list; its error's text is
-    /// not kept.
+    /// that failed to list reads as a failed list, and keeps its kind for
+    /// `listing_failure`; its error's text is not kept.
     pub(crate) fn apply_listing(
         &mut self,
         stamp: Stamp,
@@ -169,12 +184,18 @@ impl DraftRegistry {
         if !self.generations.is_current(&stamp) {
             return false;
         }
+        self.listed += 1;
+        self.listing_failure = result.as_ref().err().map(|error| error.kind);
         self.listing = match result {
-            Ok(rows) => ListState::Ready {
-                rows,
-                complete: true,
-                index: None,
-            },
+            Ok(rows) => {
+                self.launch
+                    .get_or_insert_with(|| rows.iter().map(|listing| listing.id).collect());
+                ListState::Ready {
+                    rows,
+                    complete: true,
+                    index: None,
+                }
+            }
             // The store's kinds are not result codes: the list reads as
             // failed, as a read the library could not finish does.
             Err(_) => ListState::Failed(ReadFailure {
@@ -186,9 +207,43 @@ impl DraftRegistry {
     }
 
     /// The last listing of the store.
-    #[cfg_attr(not(test), allow(dead_code))] // Read by the Drafts page; tests until then.
     pub(crate) fn listing(&self) -> &ListState<Vec<Listing>> {
         &self.listing
+    }
+
+    /// Why the last listing failed, as the store's kind; `None` when it
+    /// did not.
+    pub(crate) fn listing_failure(&self) -> Option<DraftErrorKind> {
+        self.listing_failure
+    }
+
+    /// How many listings have landed.
+    pub(crate) fn listings_landed(&self) -> u64 {
+        self.listed
+    }
+
+    /// How many of the drafts the launch found are still stored and not
+    /// claimed by this process: the operation area's "Recovered drafts".
+    /// `None` until the launch listing lands, when there are none, and
+    /// once the entry is dismissed.
+    pub(crate) fn recovered(&self) -> Option<usize> {
+        if self.recovered_dismissed {
+            return None;
+        }
+        let launch = self.launch.as_ref()?;
+        let count = self
+            .listing
+            .rows()?
+            .iter()
+            .filter(|listing| listing.held != Held::Here && launch.contains(&listing.id))
+            .count();
+        (count > 0).then_some(count)
+    }
+
+    /// Dismisses the "Recovered drafts" entry until the next launch.
+    pub(crate) fn dismiss_recovered(&mut self, cx: &mut Context<Self>) {
+        self.recovered_dismissed = true;
+        cx.notify();
     }
 
     /// The newest stored draft of the item `id` of `kind` in `repo` that

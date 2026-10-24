@@ -1,4 +1,10 @@
-//! The single tabs/Settings router. Settings remains the visibility authority.
+//! The single content router: the tabs, Settings or the Drafts page
+//! (ruling R23). Settings and the Drafts page each own whether they are
+//! shown; this file is the only one that changes either. The selector is
+//! Settings when Settings is shown, else Drafts when the page is shown,
+//! else the tabs, and every transition here leaves at most one shown:
+//! `open_drafts` hides Settings, each Settings entry point hides the page
+//! first, and `show_tabs` hides both.
 
 use super::{ContentArea, Region, Workspace};
 use crate::desktop::{
@@ -9,6 +15,7 @@ use crate::desktop::{
     services::requests::DesktopRequestId,
     view::{
         close_draft::{self, CloseWithDraft},
+        drafts::DraftsEvent,
         scroll::ContentScroll,
     },
 };
@@ -19,12 +26,15 @@ use std::{collections::BTreeSet, path::PathBuf};
 enum ContentPage {
     Tabs,
     Settings,
+    Drafts,
 }
 
 impl ContentArea {
     fn page(&self, cx: &App) -> ContentPage {
         if self.settings.read(cx).is_shown() {
             ContentPage::Settings
+        } else if self.drafts.read(cx).is_shown() {
+            ContentPage::Drafts
         } else {
             ContentPage::Tabs
         }
@@ -32,6 +42,12 @@ impl ContentArea {
 
     fn show_tabs(&mut self, cx: &mut Context<Workspace>) {
         self.settings.update(cx, |settings, cx| settings.hide(cx));
+        self.hide_drafts(cx);
+    }
+
+    /// A Settings entry point: Settings is shown in place of the page.
+    fn hide_drafts(&mut self, cx: &mut Context<Workspace>) {
+        self.drafts.update(cx, |drafts, cx| drafts.hide(cx));
     }
 }
 
@@ -43,12 +59,66 @@ impl Workspace {
         &self.content.settings
     }
 
+    /// Shows the Drafts page in place of the tabs or Settings, focused on
+    /// the row of `focus` when it lists it, else its first row.
+    pub(in crate::desktop::view) fn open_drafts(
+        &mut self,
+        focus: Option<DraftId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.content
+            .settings
+            .update(cx, |settings, cx| settings.hide(cx));
+        self.content
+            .drafts
+            .update(cx, |drafts, cx| drafts.show(focus, window, cx));
+        self.focus_region(Region::Content, window, cx);
+    }
+
+    /// A tab's Review in Drafts: the page opens on that draft's row at
+    /// the next frame, which supplies its window.
+    pub(in crate::desktop::view) fn review_in_drafts(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.review = Some(id);
+        cx.notify();
+    }
+
+    /// Opens the Drafts page a tab's Review in Drafts asked for.
+    pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.content.review.take() {
+            self.open_drafts(Some(id), window, cx);
+        }
+    }
+
+    /// What the Drafts page asks: Show shows and focuses the tab its draft
+    /// is restored in.
+    pub(super) fn drafts_event(
+        &mut self,
+        event: &DraftsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            DraftsEvent::Show(key) => {
+                if let Some(id) = self.content.tabs.find(key) {
+                    self.show_tab(id, cx);
+                    self.focus_region(Region::Content, window, cx);
+                }
+            }
+        }
+    }
+
     pub(in crate::desktop::view) fn open_settings(
         &mut self,
         page: SettingsPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.content.hide_drafts(cx);
         let selection = self.navigation.selected().map(PathBuf::from);
         self.content.settings.update(cx, |settings, cx| {
             settings.set_selection(selection);
@@ -63,6 +133,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.content.hide_drafts(cx);
         self.content
             .settings
             .update(cx, |settings, cx| settings.inspect(root, window, cx));
@@ -75,6 +146,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.content.hide_drafts(cx);
         self.last_region = Some(Region::Content);
         self.content
             .settings
@@ -88,6 +160,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.content.hide_drafts(cx);
         self.last_region = Some(Region::Content);
         self.content.settings.update(cx, |settings, cx| {
             settings.check_host(root, authority, window, cx)
@@ -100,6 +173,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.content.hide_drafts(cx);
         self.last_region = Some(Region::Content);
         self.content
             .settings
@@ -112,8 +186,10 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Shows the tab `id`, and so the tabs.
     pub(in crate::desktop::view) fn show_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         if self.content.tabs.activate(id) {
+            self.content.show_tabs(cx);
             cx.notify();
         }
     }
@@ -219,7 +295,10 @@ impl Workspace {
     }
 
     pub(super) fn close_shown_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.content.page(cx), ContentPage::Settings) {
+        if matches!(
+            self.content.page(cx),
+            ContentPage::Settings | ContentPage::Drafts
+        ) {
             return;
         }
         let Some(id) = self.content.tabs.active() else {
@@ -236,21 +315,21 @@ impl Workspace {
     }
 
     pub(super) fn focus_content(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.content.page(cx) {
-            ContentPage::Settings => {
-                if let Some(focus) = self.content.settings.read(cx).first_focus() {
-                    window.focus(&focus, cx);
-                }
-            }
-            ContentPage::Tabs => {
-                let focus = self
-                    .content
-                    .tabs
-                    .shown_focus()
-                    .unwrap_or_else(|| self.regions[Region::Content.index()].clone());
-                window.focus(&focus, cx);
-            }
-        }
+        let region = || self.regions[Region::Content.index()].clone();
+        let focus = match self.content.page(cx) {
+            ContentPage::Settings => match self.content.settings.read(cx).first_focus() {
+                Some(focus) => focus,
+                None => return,
+            },
+            ContentPage::Drafts => self
+                .content
+                .drafts
+                .read(cx)
+                .first_focus()
+                .unwrap_or_else(region),
+            ContentPage::Tabs => self.content.tabs.shown_focus().unwrap_or_else(region),
+        };
+        window.focus(&focus, cx);
     }
 
     pub(super) fn content_scroll(&self) -> &ContentScroll {
@@ -259,6 +338,8 @@ impl Workspace {
 
     /// Keep selection construction and secret clearing in their existing frame
     /// order; leaving Settings does not replace its cached pages or scroll.
+    /// Leaving Keys for the tabs or the Drafts page empties a typed
+    /// passphrase alike.
     pub(super) fn content_body(
         &self,
         selection: AnyElement,
@@ -267,6 +348,12 @@ impl Workspace {
     ) -> Vec<AnyElement> {
         match self.content.page(cx) {
             ContentPage::Settings => vec![self.content.settings.clone().into_any_element()],
+            ContentPage::Drafts => {
+                self.content
+                    .settings
+                    .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
+                vec![self.content.drafts.clone().into_any_element()]
+            }
             ContentPage::Tabs => {
                 self.content
                     .settings
@@ -276,6 +363,11 @@ impl Workspace {
                 body
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drafts_shown(&self, cx: &App) -> bool {
+        matches!(self.content.page(cx), ContentPage::Drafts)
     }
 
     #[cfg(test)]

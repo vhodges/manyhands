@@ -6,6 +6,8 @@
 //! asks the registry to claim the draft and attach it to this tab, then
 //! opens the tab through its item locator (ruling R25). A refusal is
 //! shown in words; a draft another process holds may be tried again.
+//! Review in Drafts asks the workspace to open the Drafts page on the
+//! draft's row.
 //!
 //! The section shows the draft's own fields read-only, whether its newest
 //! text is saved for recovery (Retry on a failed write), where the item
@@ -15,7 +17,7 @@
 //! never touches the draft's text or base.
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement, IntoElement,
+    AnyElement, App, ClickEvent, Context, ElementId, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt,
     component::{
         ActiveTheme, Disableable,
@@ -51,6 +53,7 @@ use crate::desktop::{
 
 pub(crate) const DRAFT_KEPT: &str = "A recovered draft of this item is kept";
 pub(crate) const RESTORE: &str = "Restore";
+pub(crate) const REVIEW_IN_DRAFTS: &str = "Review in Drafts";
 pub(crate) const RESTORED_DRAFT: &str = "Restored draft";
 pub(crate) const SAVED_FOR_RECOVERY: &str = "Saved for recovery at";
 pub(crate) const NOT_YET_SAVED: &str = "Not yet saved for recovery";
@@ -74,6 +77,12 @@ const NAMED: [Field; 6] = [
     Field::Deps,
     Field::Parent,
 ];
+
+/// The banner's Review in Drafts: the Drafts page is to open on this
+/// draft's row.
+pub(crate) struct ReviewInDrafts(pub DraftId);
+
+impl EventEmitter<ReviewInDrafts> for ItemPane {}
 
 /// A pane's draft state: what Restore answered, a failed discard, and
 /// where the item stands against the attached session, kept until the tab
@@ -249,10 +258,16 @@ impl ItemPane {
                     .text_color(muted)
                     .into_any_element(),
             };
+            let review = button(
+                "draft-review",
+                REVIEW_IN_DRAFTS,
+                cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(ReviewInDrafts(stored))),
+            );
             h_flex()
                 .gap_2()
                 .child(text("draft-banner", DRAFT_KEPT).text_sm())
                 .child(action)
+                .child(review)
                 .into_any_element()
         });
         if banner.is_none() && refused.is_none() && discard_failed.is_none() {

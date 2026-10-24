@@ -53,6 +53,11 @@ pub(crate) fn drafts_unavailable(reason: DraftStoreUnavailable) -> String {
     format!("{DRAFTS_UNAVAILABLE}: {reason}")
 }
 
+/// The launch's entry: how many drafts it found that no one here holds.
+pub(crate) fn recovered_drafts(count: usize) -> String {
+    format!("Recovered drafts: {count}")
+}
+
 /// A failing session's entry text: its item's title as read, never the
 /// draft's (ruling R25), and the store's fixed reason.
 pub(crate) fn draft_flush_failed(title: &str, kind: DraftErrorKind) -> String {

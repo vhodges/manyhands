@@ -10,7 +10,8 @@
 //! "Finishing". A draft store that did not open keeps an entry with its
 //! fixed reason at the top, with no Dismiss; so does each session whose
 //! recovery copy could not be written, named by its item's title as read,
-//! with Retry, until a write lands.
+//! with Retry, until a write lands. The launch's "Recovered drafts" entry
+//! (`recovered`) follows the store's, with Review and Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
@@ -38,6 +39,8 @@ use manyhands::{
     drafts::DraftId,
     results::{Effects, Outcome, RecoveryAction},
 };
+
+mod recovered;
 
 use super::workspace::Workspace;
 use crate::desktop::{
@@ -337,6 +340,7 @@ impl Workspace {
             .map(|request| request.id)
             .collect();
         let unavailable = self.services().drafts().read(cx).unavailable();
+        let recovered = self.recovered_entry(cx);
         let mut section = v_flex()
             .id("session-section")
             .gap_1()
@@ -345,7 +349,8 @@ impl Workspace {
             // entry offers no Dismiss.
             .children(
                 unavailable.map(|reason| text("drafts-unavailable", drafts_unavailable(reason))),
-            );
+            )
+            .children(recovered);
         let failures = self.services().drafts().read(cx).flush_failures();
         for (id, title, kind) in failures {
             // Until a later flush succeeds: no Dismiss.
