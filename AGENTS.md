@@ -24,6 +24,10 @@
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
   devenv shell -- cargo test --all-features --locked
   ```
+  There is one exception, decided by the owner on 2026-10-24. A ticket worked
+  with the `working-on-a-ticket` skill runs `fmt`, `check` and `clippy` above
+  across the whole tree, but runs only the tests relevant to its change. The
+  full `cargo test` suite and native CI run after merge.
 - Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
 - Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 

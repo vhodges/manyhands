@@ -14,13 +14,14 @@ verification.
 Read current `AGENTS.md`, the ticket/comments, approved Cycle/design/plan, and
 any execution ledger. Confirm implementation authorization and the execution
 method; preserve approvals and user decisions already given. If approval is
-missing, use `starting-a-cycle` to finish the reviewable artifacts first.
+missing, use `planning-a-cycle` to finish the reviewable artifacts first.
 
 **Before new implementation, perform the
-[worktree and rebase preflight](../starting-a-cycle/references/worktree-preflight.md).**
-Fetch current main and rebase the existing ticket branch onto it even if planning
-previously rebased it. A clean, current-base no-op is valid. Reconcile changed
-commit IDs and plan assumptions without restarting completed tasks.
+[worktree and merge preflight](references/worktree-preflight.md).**
+Fetch current main and merge it into the existing ticket branch, even if
+planning already merged it. Never rebase. If the branch is already current,
+the merge is a no-op, and that is fine. Reconcile the plan's assumptions with
+what main changed, without restarting completed tasks.
 
 Use a durable, plan-specific ledger for task state, commit ranges, decisions,
 review findings, and verification. Trust recorded completed work and inspect
@@ -50,17 +51,24 @@ remaining work; do not silently abandon it or redo verified tasks.
 At plan checkpoints update the ticket/comments using supported CLI operations,
 or the canonical filesystem schema while those commands are unavailable. Record
 progress, decisions, blockers, test evidence, and review readiness. Keep the ticket
-open through implementation and unresolved review/platform gates.
+open through implementation and unresolved review findings.
 
 ## 3. Verify and deliver
 
 Follow [verification and delivery](references/verification-and-delivery.md).
 Run the required Devenv checks for Rust changes, exercise supported front ends,
 and obtain independent final review of the complete branch and deferred findings.
-Report native platform limitations honestly; workflow YAML and Linux success do
-not prove Windows/macOS behavior.
 
-Carry authorized work through review fixes and CI failures. Push/create a PR,
+A Cycle is review-ready and mergeable on its local Devenv gates. Native CI is
+not a gate before merge: it runs after merge, on main, and only when the owner
+approves dispatching it.
+
+- A native failure found after merge is follow-on work in a separate session.
+  Do not hold or reopen the merged Cycle for it.
+- Report native limitations honestly. Workflow YAML and Linux success do not
+  prove Windows or macOS behavior.
+
+Carry authorized work through review fixes. Push/create a PR,
 merge, close the ticket, and remove the worktree only at their applicable
 authorization/lifecycle stages. Skill invocation or plan approval alone does not
 grant those permissions; existing explicit authorization need not be requested
