@@ -18,12 +18,13 @@ use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{RepositoryService, keys::KeyStore},
+    repository::{MutationDataDto, RepositoryService, keys::KeyStore},
+    results::{Envelope, Outcome},
 };
 
 use crate::desktop::model::operations::Operations;
 use drafts::DraftRegistry;
-use worker::WorkerHandle;
+use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
 
@@ -69,7 +70,6 @@ pub(crate) enum ReadKind {
     DraftWrite,
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
-    #[allow(dead_code)] // Task 7's save completion reads under it.
     DraftItem,
 }
 
@@ -96,9 +96,7 @@ pub(crate) enum JobKind {
     HostReplace,
     OperationResume,
     OperationAbandon,
-    #[allow(dead_code)] // Task 7's document save runs under it.
     DocumentSave,
-    #[allow(dead_code)] // Task 7's ticket save runs under it.
     TicketSave,
     ObserveHost,
 }
@@ -189,10 +187,18 @@ impl Services {
     /// batch changed once, not once per event. The task ends when the
     /// worker does, after the last handle is dropped. The draft store is
     /// listed once, at launch.
+    ///
+    /// Each finished request is then passed to the draft registry, after
+    /// the request model has it: a save's answer applies to its draft, and
+    /// an abandoned operation ends the pending save it held. The registry
+    /// outlives tabs, so a save that finishes after its tab closed still
+    /// retires its revision.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
+        let drafts = cx.new(|_| DraftRegistry::new(backend.clone(), worker.clone()));
+        let registry = drafts.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -200,18 +206,38 @@ impl Services {
                     batch.push(event);
                 }
                 let applied = model.update(cx, |operations, cx| {
+                    let mut finished = Vec::new();
                     for event in batch {
+                        if let WorkerEvent::Finished(id, envelope) = &event
+                            && let Some(forward) = for_drafts(operations, *id, envelope)
+                        {
+                            finished.push(forward);
+                        }
                         operations.apply(event);
                     }
                     cx.notify();
+                    finished
                 });
-                if applied.is_err() {
+                let Ok(finished) = applied else {
                     break;
+                };
+                if finished.is_empty() {
+                    continue;
                 }
+                // The registry lives as long as the request model.
+                let _ = registry.update(cx, |registry, cx| {
+                    for forward in finished {
+                        match forward {
+                            ForDrafts::Save(id, envelope) => registry.finished(id, &envelope, cx),
+                            ForDrafts::Abandoned(operation) => {
+                                registry.operation_abandoned(&operation, cx)
+                            }
+                        }
+                    }
+                });
             }
         })
         .detach();
-        let drafts = cx.new(|_| DraftRegistry::new(backend.clone()));
         let services = Self {
             backend,
             worker,
@@ -259,5 +285,32 @@ impl Services {
     #[cfg(test)]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// What a finished request means to the draft registry.
+enum ForDrafts {
+    /// A save finished: its answer applies to its draft.
+    Save(requests::DesktopRequestId, Box<Envelope<MutationDataDto>>),
+    /// An `operation abandon` ended this operation: a pending save that
+    /// held it is over (ruling R22).
+    Abandoned(String),
+}
+
+fn for_drafts(
+    operations: &Operations,
+    id: requests::DesktopRequestId,
+    envelope: &Envelope<MutationDataDto>,
+) -> Option<ForDrafts> {
+    match &operations.request(id)?.intent {
+        requests::Intent::DocumentSave { .. } | requests::Intent::TicketSave { .. } => {
+            Some(ForDrafts::Save(id, Box::new(envelope.clone())))
+        }
+        requests::Intent::OperationAbandon { operation_id, .. }
+            if matches!(envelope.outcome, Outcome::Success | Outcome::Noop) =>
+        {
+            Some(ForDrafts::Abandoned(operation_id.to_string()))
+        }
+        _ => None,
     }
 }

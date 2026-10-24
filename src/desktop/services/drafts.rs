@@ -30,7 +30,11 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{Backend, ReadFailure, ReadKind, Services};
+mod save;
+
+use super::{
+    Backend, ReadFailure, ReadKind, Services, requests::DesktopRequestId, worker::WorkerHandle,
+};
 use crate::desktop::model::{
     drafts::{DraftSession, RecoveryState},
     list_state::ListState,
@@ -63,10 +67,12 @@ fn item_kind(kind: ItemDtoKind) -> ItemKind {
     }
 }
 
-/// The drafts this session knows of, and the sessions it has begun. Later
-/// it also holds the tabs they are attached to, and the saves in flight.
+/// The drafts this session knows of, the sessions it has begun and their
+/// saves in flight. Later it also holds the tabs they are attached to.
 pub(crate) struct DraftRegistry {
     backend: Arc<dyn Backend>,
+    /// Where saves are sent.
+    worker: WorkerHandle,
     /// Why the store did not open; `None` when it did.
     unavailable: Option<DraftStoreUnavailable>,
     /// The last listing of the store.
@@ -75,6 +81,8 @@ pub(crate) struct DraftRegistry {
     /// Replacing a listing drops the previous one.
     listing_read: Option<Task<()>>,
     sessions: BTreeMap<DraftId, Live>,
+    /// Saves sent and not yet applied, by request.
+    saves: BTreeMap<DesktopRequestId, save::SaveRecord>,
 }
 
 /// A session and the tasks that write it.
@@ -97,14 +105,16 @@ enum Flush {
 }
 
 impl DraftRegistry {
-    pub(crate) fn new(backend: Arc<dyn Backend>) -> Self {
+    pub(crate) fn new(backend: Arc<dyn Backend>, worker: WorkerHandle) -> Self {
         Self {
             unavailable: backend.drafts().err(),
             backend,
+            worker,
             listing: ListState::Loading,
             generations: Generations::default(),
             listing_read: None,
             sessions: BTreeMap::new(),
+            saves: BTreeMap::new(),
         }
     }
 
@@ -339,7 +349,7 @@ impl DraftRegistry {
         let Some(live) = self.sessions.get_mut(&id) else {
             return Flush::Done(Err(DraftErrorKind::NotFound));
         };
-        if live.session.writing()
+        if live.session.busy()
             && let Some(write) = live.write.clone()
         {
             return Flush::Wait {

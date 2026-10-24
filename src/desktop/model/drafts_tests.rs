@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use manyhands::drafts::{
     BaseContext, ContextKind, DraftBase, DraftError, DraftErrorKind, DraftFields, DraftStore,
-    DraftTarget, ItemKind, Written,
+    DraftTarget, ItemKind, Retired, Written,
 };
 use tempfile::TempDir;
 use time::OffsetDateTime;
@@ -316,4 +316,96 @@ fn the_item_is_named_by_its_base_title_or_its_id() {
 
     let (_data, untitled) = session(None, t0);
     assert_eq!(untitled.item_title(), TICKET);
+}
+
+/// While its revision retires, a session takes no write, and an edit made
+/// meanwhile is kept in memory, never dropped.
+#[test]
+fn a_retiring_session_takes_no_write_and_keeps_its_edits() {
+    let t0 = Instant::now();
+    let (_data, mut session) = session(Some(base("Item title")), t0);
+    let saved = session.revision();
+    let slot = session.begin_retire();
+    assert!(session.busy());
+    session.edit(fields("typed while retiring"), t0);
+    assert_eq!(session.flush_due(), None);
+    assert!(session.next_write().is_none());
+    assert!(matches!(
+        session.current(),
+        DraftFields::Document { body, .. } if body == "typed while retiring"
+    ));
+    // The retirement takes the claim; a newer revision in memory means
+    // the session is to be stored again.
+    let claim = slot.lock().unwrap().take().unwrap();
+    assert!(matches!(claim.retire(saved), Ok(Retired::Deleted)));
+    assert!(session.revision() > saved);
+}
+
+/// A session whose draft retired under an edit is stored again: it takes
+/// the new draft's claim and ID, and the edit made after that store
+/// began is written next, with the new base.
+#[test]
+fn a_session_stored_again_takes_the_new_claim_and_writes_what_came_after() {
+    let t0 = Instant::now();
+    let (data, mut session) = session(Some(base("Item title")), t0);
+    let old = session.id();
+    let slot = session.begin_retire();
+    session.edit(fields("typed while retiring"), t0);
+    drop(slot.lock().unwrap().take());
+
+    let store = DraftStore::open_in(data.path()).unwrap();
+    let from = session.revision();
+    let claim = match store.create(
+        session.target().clone(),
+        Some(base("Saved title")),
+        session.current().clone(),
+    ) {
+        Ok(claim) => claim,
+        Err(error) => panic!("the draft must be created: {error}"),
+    };
+    let new = claim.draft().id;
+    // Nothing came after the store began: nothing to write.
+    let mut quiet = DraftSession::new(
+        match store.create(session.target().clone(), None, fields("x")) {
+            Ok(claim) => claim,
+            Err(error) => panic!("{error}"),
+        },
+        t0,
+    );
+    let quiet_from = quiet.revision();
+    let quiet_slot = quiet.begin_retire();
+    let quiet_claim = quiet_slot.lock().unwrap().take().unwrap();
+    quiet.recreated(quiet_claim, quiet_from, t0);
+    assert!(!quiet.busy());
+    assert!(quiet.next_write().is_none());
+
+    session.edit(fields("typed while storing"), t0);
+    session.recreated(claim, from, t0);
+    assert_eq!(session.id(), new);
+    assert_ne!(session.id(), old);
+    assert!(!session.busy());
+    assert_eq!(session.recovery_state(), RecoveryState::Pending);
+    let write = session.next_write().unwrap();
+    assert_eq!(body(&write), "typed while storing");
+    assert!(matches!(
+        &write.base,
+        Some(DraftBase { fields: DraftFields::Document { title, .. }, .. }) if title == "Saved title"
+    ));
+    session.write_landed(write.write());
+    assert!(matches!(session.recovery_state(), RecoveryState::Saved(_)));
+}
+
+/// A kept retirement hands the claim back: writes resume.
+#[test]
+fn a_kept_retirement_hands_the_claim_back() {
+    let t0 = Instant::now();
+    let (_data, mut session) = session(Some(base("Item title")), t0);
+    let slot = session.begin_retire();
+    let claim = slot.lock().unwrap().take().unwrap();
+    session.edit(fields("newer"), t0);
+    session.retire_kept(claim);
+    assert!(!session.busy());
+    let write = session.next_write().unwrap();
+    session.write_landed(write.write());
+    assert!(matches!(session.recovery_state(), RecoveryState::Saved(_)));
 }

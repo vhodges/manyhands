@@ -14,17 +14,20 @@ use std::path::{Path, PathBuf};
 
 use manyhands::{
     repository::{
-        CommitIdentity, ConfirmationId, HostApproveInput, HostReplaceInput, IndexRebuildInput,
-        IndexRefreshInput, InitialsChange, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
-        KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, OperationAbandonInput,
-        OperationId, OperationResumeInput, ProgressStage, RemoteAddInput, RemoteRemoveInput,
-        RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-        RequestId, SharedKeyId,
+        CommitIdentity, ConfirmationId, DocumentDraft, DocumentSaveInput, HostApproveInput,
+        HostReplaceInput, IndexRebuildInput, IndexRefreshInput, InitialsChange, KeyClearInput,
+        KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
+        OperationAbandonInput, OperationId, OperationResumeInput, ProgressStage, RelationshipWrite,
+        RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput,
+        RepoIdentitySetInput, RepoRemoveInput, RequestId, SharedKeyId, TicketDraft,
+        TicketSaveInput,
         keys::{KeyProtection, KeyStore, SecretPassphrase},
         transport::SshAuthority,
     },
     results::{Effects, Outcome, RecoveryAction, ResultCode},
 };
+
+use manyhands::canonical::ItemId;
 
 use super::{JobKind, KeyStoreUnavailable};
 
@@ -37,7 +40,8 @@ pub(crate) enum Lane {
 }
 
 /// One command the desktop can ask the library for, with the values it
-/// was asked with. One variant per command D1 offers.
+/// was asked with. One variant per command D1 offers, and the two saves
+/// of a draft.
 #[derive(Clone)]
 pub(crate) enum Intent {
     RepoCreate {
@@ -121,6 +125,31 @@ pub(crate) enum Intent {
     OperationAbandon {
         root: PathBuf,
         operation_id: OperationId,
+    },
+    /// A draft's revision saved as the document, from the observation
+    /// of the draft's base. It holds the body.
+    DocumentSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        body: String,
+        observation: Option<String>,
+    },
+    /// A draft's revision saved as the ticket. `deps` and `parent` are
+    /// left as the file has them when the draft did not change them
+    /// (ruling R13).
+    TicketSave {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        ticket_type: String,
+        status: String,
+        project: Option<String>,
+        team: Option<String>,
+        body: String,
+        deps: RelationshipWrite<Vec<String>>,
+        parent: RelationshipWrite<String>,
+        observation: String,
     },
 }
 
@@ -277,6 +306,48 @@ impl Intent {
                     operation_id: *operation_id,
                 })
             }
+            Self::DocumentSave {
+                root,
+                id,
+                title,
+                body,
+                observation,
+            } => Mutation::DocumentSave(DocumentSaveInput {
+                root: root.clone(),
+                id: id.clone(),
+                draft: DocumentDraft {
+                    title: title.clone(),
+                    body: body.clone(),
+                },
+                observation: observation.clone(),
+            }),
+            Self::TicketSave {
+                root,
+                id,
+                title,
+                ticket_type,
+                status,
+                project,
+                team,
+                body,
+                deps,
+                parent,
+                observation,
+            } => Mutation::TicketSave(TicketSaveInput {
+                root: root.clone(),
+                id: id.clone(),
+                draft: TicketDraft {
+                    title: title.clone(),
+                    ticket_type: ticket_type.clone(),
+                    status: status.clone(),
+                    project: project.clone(),
+                    team: team.clone(),
+                    body: body.clone(),
+                },
+                deps: deps.clone(),
+                parent: parent.clone(),
+                observation: observation.clone(),
+            }),
         })
     }
 
@@ -303,7 +374,9 @@ impl Intent {
             | Self::KeySelect { .. }
             | Self::KeyClear
             | Self::KeyRemove { .. }
-            | Self::OperationResume { .. } => false,
+            | Self::OperationResume { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. } => false,
         }
     }
 
@@ -330,6 +403,8 @@ impl Intent {
             Self::HostReplace { .. } => "Replace host key",
             Self::OperationResume { .. } => "Resume operation",
             Self::OperationAbandon { .. } => "Abandon operation",
+            Self::DocumentSave { .. } => "Save document",
+            Self::TicketSave { .. } => "Save ticket",
         }
     }
 
@@ -348,7 +423,9 @@ impl Intent {
             | Self::HostApprove { root, .. }
             | Self::HostReplace { root, .. }
             | Self::OperationResume { root, .. }
-            | Self::OperationAbandon { root, .. } => Some(root),
+            | Self::OperationAbandon { root, .. }
+            | Self::DocumentSave { root, .. }
+            | Self::TicketSave { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -378,7 +455,9 @@ impl Intent {
             | Self::OperationResume { .. }
             | Self::OperationAbandon { .. }
             | Self::RepoCreate { .. }
-            | Self::RepoEnable { .. } => true,
+            | Self::RepoEnable { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -417,6 +496,8 @@ impl Intent {
             Self::HostReplace { .. } => JobKind::HostReplace,
             Self::OperationResume { .. } => JobKind::OperationResume,
             Self::OperationAbandon { .. } => JobKind::OperationAbandon,
+            Self::DocumentSave { .. } => JobKind::DocumentSave,
+            Self::TicketSave { .. } => JobKind::TicketSave,
         }
     }
 }

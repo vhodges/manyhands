@@ -93,7 +93,8 @@ pub(crate) enum QuitState {
 enum Work {
     Execute {
         request_id: RequestId,
-        intent: Intent,
+        /// Boxed: a ticket save's fields make an intent large.
+        intent: Box<Intent>,
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
         cancel: CancellationToken,
@@ -316,7 +317,7 @@ impl WorkerHandle {
         }));
         let work = Work::Execute {
             request_id,
-            intent,
+            intent: Box::new(intent),
             confirmation,
             secret,
             cancel: CancellationToken::new(),
@@ -456,7 +457,7 @@ fn submit(
     }));
     let work = Work::Execute {
         request_id,
-        intent,
+        intent: Box::new(intent),
         confirmation,
         secret,
         cancel: CancellationToken::new(),

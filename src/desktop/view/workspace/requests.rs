@@ -139,10 +139,19 @@ impl Workspace {
         id: DesktopRequestId,
         cx: &mut Context<Self>,
     ) {
-        self.services.operations().update(cx, |operations, cx| {
+        let dismissed = self.services.operations().update(cx, |operations, cx| {
             operations.dismiss(id);
             cx.notify();
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Dismissed))
         });
+        // A pending save dismissed is over (ruling R22).
+        if dismissed {
+            self.services
+                .drafts()
+                .update(cx, |registry, cx| registry.dismissed(id, cx));
+        }
     }
 
     /// A failing session's Retry: writes its newest revision now. The
