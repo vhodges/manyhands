@@ -447,6 +447,55 @@ fn document_title_update_validation_is_pathless() {
 }
 
 #[test]
+fn a_documents_unknown_keys_keep_their_file_order_after_its_known_keys() {
+    let source = "---\ntitle: CLI Contract RFC\ndate: 2026-10-05\nstatus: approved\n\
+         author: Ada\nmanyhands_managed: true\nmanyhands_kind: document\n\
+         id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\n---\n\n# CLI Contract RFC\n";
+
+    assert_serializes_to(
+        "docs/RFC/cli-contract.md",
+        source,
+        "---\ndate: 2026-10-05\nstatus: approved\nauthor: Ada\n\
+         id: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: CLI Contract RFC\n\
+         manyhands_managed: true\nmanyhands_kind: document\n---\n\n# CLI Contract RFC\n",
+    );
+}
+
+#[test]
+fn a_tickets_unknown_keys_keep_their_file_order_after_its_known_keys() {
+    let source = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\n\
+         id: 01ARZ3NDEKTSV4RRFFQ69G5FAX\ntitle: Shared-Key Registry\ntype: cycle\n\
+         status: closed\nproject: manyhands\nteam: core\nclosed_at: 2026-10-05T00:30:17Z\n\
+         closed_by: lin\nwave: '02'\ncycle: '01'\nestimate: 3\n---\n\nBody.\n";
+
+    assert_serializes_to(
+        ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FAX/ticket.md",
+        source,
+        "---\nwave: '02'\ncycle: '01'\nestimate: 3\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\n\
+         title: Shared-Key Registry\ntype: cycle\nstatus: closed\nproject: manyhands\n\
+         team: core\nclosed_at: 2026-10-05T00:30:17Z\nclosed_by: lin\n\
+         manyhands_managed: true\nmanyhands_kind: ticket\n---\n\nBody.\n",
+    );
+}
+
+#[test]
+fn a_comments_unknown_keys_keep_their_file_order_after_its_known_keys() {
+    let source = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAZ\nitem_id: 01ARZ3NDEKTSV4RRFFQ69G5FAW\n\
+         parent_id: 01ARZ3NDEKTSV4RRFFQ69G5FAY\ncreated_at: 2026-09-30T12:34:56Z\n\
+         created_by: Ada\nmood: calm\nreactions:\n- eyes\nedited: false\n\
+         manyhands_managed: true\nmanyhands_kind: comment\n---\n\nA reply.\n";
+
+    assert_serializes_to(
+        ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAW/01ARZ3NDEKTSV4RRFFQ69G5FAZ.md",
+        source,
+        "---\nmood: calm\nreactions:\n- eyes\nedited: false\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAZ\n\
+         item_id: 01ARZ3NDEKTSV4RRFFQ69G5FAW\nparent_id: 01ARZ3NDEKTSV4RRFFQ69G5FAY\n\
+         created_at: 2026-09-30T12:34:56Z\ncreated_by: Ada\nmanyhands_managed: true\n\
+         manyhands_kind: comment\n---\n\nA reply.\n",
+    );
+}
+
+#[test]
 fn canonical_paths_accept_only_matching_lexical_locations() {
     let document = document_source();
     let ticket = ticket_source("01K6YQ2A4D8F1H3J5K7M9N0P2Q");
@@ -714,6 +763,20 @@ fn assert_item_round_trip(path: &str, source: &str) {
     let serialized = serialize_item(&item).unwrap();
     assert!(serialized.ends_with(body));
     assert_eq!(parse_item(Path::new(path), &serialized).unwrap(), item);
+}
+
+/// The unknown keys come first, in the order `source` has them, and the
+/// known keys follow in their canonical order. Mapping equality ignores
+/// order, so the bytes are compared. Serializing what is written again
+/// changes nothing.
+fn assert_serializes_to(path: &str, source: &str, expected: &str) {
+    let item = parse_item(Path::new(path), source).unwrap();
+    let serialized = serialize_item(&item).unwrap();
+    assert_eq!(serialized, expected);
+
+    let reparsed = parse_item(Path::new(path), &serialized).unwrap();
+    assert_eq!(reparsed, item);
+    assert_eq!(serialize_item(&reparsed).unwrap(), serialized);
 }
 
 #[test]
@@ -1465,8 +1528,7 @@ fn relationship_fields_keep_their_values_through_serialization() {
 
 /// The front matter lines `serialize_item` writes in place of `extra` for a
 /// ticket laid out as the serializer lays one out: `extra` first, then the
-/// fields every ticket has. The parser keeps the order of the other keys
-/// only for a file in that layout.
+/// fields every ticket has.
 fn serialized_extra(extra: &str) -> String {
     let required = format!(
         "id: {RELATED_TICKET}\ntitle: Related\ntype: task\nstatus: open\n\
