@@ -71,6 +71,26 @@ Not applied, because the source showed otherwise: contract findings 10 and
 6. Exit 4 is a reason entry backed by the library-actor test. Exit 5 is
    reached through the binary.
 
-**Open questions.** None. The scoped re-review of the revisions is next.
+**Review round 2, scoped and adversarial, at `521b91b`.** 22 findings:
+1 blocking, 6 important and 15 minor.
+
+- The blocking finding: a read never offers `index.rebuild` for
+  `repository_not_registered`. So a save that omits a field answers
+  differently from one that sends every field.
+- The important findings:
+  - the six target branches are not on origin;
+  - dogfooding could commit an uncommitted edit;
+  - the resume rule;
+  - R-17 against data that echoes input;
+  - a partial save edited afterwards;
+  - the identity retry's observation.
+
+**Owner decision after round 2, 2026-10-24.**
+
+7. Accept the fill read's different answers and document them. Both cases
+   are tested. A library ticket to align the read is optional and not filed.
+
+**Open questions.** None. A third, scoped review of the round-2 revisions
+follows, because round 2 found a blocker.
 
 **Proposed execution.** Subagent-driven, as C2 was.

@@ -84,7 +84,8 @@ Every change of state is one F2 `prepare` or `execute`, and every read is one F1
 - **Goldens.**
   - Update with `MANYHANDS_UPDATE_GOLDEN=1`, never under `CI`.
   - Read every regenerated golden's diff before committing. For E1, the diff may change only the newly available verb's availability, repository rule and options.
-  - Register new cases in `CLI_CASES` or `CLI_TEXT_CASES` (`tests/support/cli.rs:217`, `:304`). Each task names its goldens.
+  - Register new cases in `CLI_CASES` or `CLI_TEXT_CASES` (`tests/support/cli.rs:217`, `:304`).
+  - Each verb's goldens follow the design's naming: `<resource>_<verb>_ok`, at least one `<resource>_<verb>_<code>`, and `<resource>_<verb>_text`, plus `<resource>_repair_preview` for the repairs. Hyphens become underscores. Each task names the refusal codes it pins.
 - **No subagents.** Implementers never dispatch subagents.
 - **Commits.** Commit at the end of every task. Messages end with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Ticket comments.** Add one at Task 0, at each task's completion, at each Part checkpoint, after dogfooding and at review-ready.
@@ -137,7 +138,8 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - Read `git show origin/main:AGENTS.md`.
   - For each of `01M4PB82G07RZSQMNJZN672S3W`, `01M4PB80T7SVB23TQ6466RDHCB` and `01M4PB7YZMBFAFFM94AZY08HWS`, run `git log --oneline origin/main --grep <ULID>`. A merged one changes a known limit and possibly R-12, and the controller rules before Task 1.
   - Record HEAD and `origin/main`.
-- [ ] **Step 2: Re-check every Baseline Fact** (1–33) against the source, and record each as confirmed or changed. Also record:
+- [ ] **Step 2: Re-check every Baseline Fact** (1–37) against the source, and record each as confirmed or changed. Also record:
+  - fact 17: whether a no-op save of an item without an editing context creates that context;
   - whether `initials_required` frees its request record as `identity_required` does (fact 11);
   - the codes F2's cache-loss tests give for a committed save retried after the database is lost (`tests/mutation_replay/cache_loss.rs`) and for a confirmation presented after it (`tests/mutation_confirmation.rs::a_confirmation_is_not_found_once_the_cache_is_lost`). Tasks 3, 5 and 6 assert them.
 
@@ -149,7 +151,13 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   grep -rn -E 'Availability::(Available|Planned)|available.*len\(\)|"available"\] == true' src/bin/manyhands-cli tests/cli
   ```
 
-  The first command is expected to hit `catalog.rs`, `catalog_tests.rs` and the three E1 goldens. The second is expected to hit only tests filtered to C1 or C2 and the unfiltered tests of fact 32. Any other hit stops for an owner ruling.
+  The first command is expected to hit `catalog.rs`, `catalog_tests.rs` and the three E1 goldens. Every hit of the second must be one of these:
+  - production code in `catalog.rs`, `parse.rs` or `startup.rs`;
+  - a test filtered to C1 or C2;
+  - one of fact 32's unfiltered tests;
+  - a test-local `CommandSpec` literal in `parse_tests.rs`, `startup_tests.rs`, `mutate_tests.rs` or `admin_tests.rs`.
+
+  Any other hit stops for an owner ruling.
 - [ ] **Step 4: Baseline checks.**
 
   ```sh
@@ -170,7 +178,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - baseline;
   - confirmed facts;
   - audit refresh;
-  - Cycle decisions 1–6, rulings R-1 to R-18 and named edit E1;
+  - Cycle decisions 1–7, rulings R-1 to R-18 and named edit E1;
   - the planning review record;
   - an empty task log.
 - [ ] **Step 7: Commit** `docs: record C3 baseline and refresh the API audit`. Add a ticket comment and push the ticket branch.
@@ -244,7 +252,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `ticket_check_reports_resolved_unresolved_and_a_dependency_cycle`. D (`RELATED_D`) already depends on C, and both are open, so proposing that C depend on D gives `ok`, exit 0, with `data.rejection.code == "relationship_cycle"`. An unknown ULID is listed in `unresolved`. The data validates against `relationship_check.schema.json`. Golden `ticket_check_rejected`.
   - `ticket_check_reports_a_parent_cycle`.
   - `ticket_check_proposes_exactly_what_it_is_given`. E and F (`RELATED_E`, `RELATED_F`) already form a dependency cycle and a parent cycle. For E, `--parent <RELATED_B>` alone reports no rejection, because the omitted `--deps` proposes none (fact 7). `--deps <RELATED_F>` reports the dependency cycle.
-  - `ticket_check_refuses_malformed_or_empty_elements`: `--deps A,,B` and `--deps not-a-ulid` are `invalid_id`, exit 2. Neither option given is `usage_error`. Golden `ticket_check_invalid_id`.
+  - `ticket_check_refuses_malformed_or_empty_elements`: `--deps <RELATED_A>,,<RELATED_B>` (two valid IDs around an empty element) and `--deps not-a-ulid` are `invalid_id`, exit 2. Neither option given is `usage_error`. Golden `ticket_check_invalid_id`.
   - `both_reads_write_nothing`: worktree bytes and `git for-each-ref` output are equal before and after every case above.
   - Human mode for both verbs, with text goldens `path_observe_text` and `ticket_check_text`, split streams and empty JSON stderr.
 - [ ] **Step 6: Implement the dispatch arms and the human text.**
@@ -276,7 +284,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   ```
 
   - `human_authoring.rs` writes the lines in the design's Reads section, escaping each value with `render::field` (fact 28).
-  - Make `human.rs`'s incomplete-read note helper `pub(super)`, and use it when `complete` is false or the index is not current.
+  - Make `human.rs`'s two note helpers, `incomplete` and `index_note` (`human.rs:24–34`), `pub(super)`. Use them as C1's list formatters do, when `complete` is false or the index is not current.
   - Unit tests: an escape sequence in a path, a rejection line, and an empty `unresolved`.
 - [ ] **Step 7: Regenerate the E1 goldens** with `MANYHANDS_UPDATE_GOLDEN=1`, through `tests/cli/help.rs`'s three golden tests. Read each diff: only the two verbs' availability, repository rule and options may change.
 - [ ] **Step 8: Run.**
@@ -304,8 +312,9 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `index_refresh_and_rebuild_succeed_and_change_nothing_canonical`: `ok`, `discovery: current`, null data; worktree and refs equal. Goldens `index_refresh_ok` and `index_rebuild_ok`.
   - `index_verbs_never_fetch`: configure a remote with `git2` that points at a local bare repository holding a branch the fixture does not have. After refresh and rebuild, `refs/remotes/*` is unchanged.
   - `index_verbs_need_a_request_id_without_a_terminal`: `--json` without `--request-id` is `usage_error`, exit 2.
-  - `index_rebuild_restores_a_deleted_database` (R-12, fact 18). Remove `manyhands.sqlite3-wal` and `manyhands.sqlite3-shm`, then delete `manyhands.sqlite3`. `document list --json` answers `repository_not_registered` with `index.rebuild`. `index rebuild` gives `ok`. `document list` and `ticket list` then list the fixture's items again. Worktree bytes and refs equal what they were before.
-  - `index_rebuild_restores_a_database_replaced_by_other_bytes`: remove the WAL files, then write 4096 bytes of `0xA5` over `manyhands.sqlite3`. `document list` answers `index_unavailable`, and the rest is as above. Refusal golden `document_list_index_unavailable`.
+  - `index_rebuild_restores_a_deleted_database` (R-12, fact 18). Remove `manyhands.sqlite3-wal` and `manyhands.sqlite3-shm`, then delete `manyhands.sqlite3`. `document list --json` answers `repository_not_registered` with `"recovery": []`, as the read gives it. `index rebuild` gives `ok`. `document list` and `ticket list` then list the fixture's items again. Worktree bytes and refs equal what they were before.
+  - `index_rebuild_restores_a_database_replaced_by_other_bytes`: remove the WAL files, then write 4096 bytes of `0xA5` over `manyhands.sqlite3`. `document list` answers `index_unavailable` with `index.rebuild`, and the rest is as above.
+  - Goldens: `index_refresh_ok`, `index_rebuild_ok`, `index_refresh_usage_error`, `index_refresh_text` and `index_rebuild_text`.
   - `index_verbs_replay_a_finished_request`: the same request again is answered from the record.
   - `index_verbs_refuse_input_and_id`: `--input -` and `--id` are usage errors.
   - Human mode for both verbs, with text goldens.
@@ -314,7 +323,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `folder_create_of_an_existing_folder_is_a_noop`: `docs/notes`, which the fixture holds, with a fresh request.
   - `folder_create_refuses_an_occupied_path_and_a_path_outside_docs`: `occupied_path` and `invalid_path` (fact 14), with nothing made. Golden `folder_create_occupied_path`.
   - `folder_create_replays_a_finished_request`.
-  - Human mode, with a text golden.
+  - Human mode, with golden `folder_create_text`.
 - [ ] **Step 3: Run the tests and see them fail** (`command_unavailable`):
 
   ```sh
@@ -390,7 +399,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   ```rust
   // fill.rs
   pub struct DocumentFields { pub title: Option<String>, pub body: Option<String> }
-  pub enum FillError { WrongKind }
+  pub enum FillError { Unfillable }
   pub fn needs_read_document(fields: &DocumentFields) -> bool;
   pub fn document_draft(fields: DocumentFields, read: Option<&ItemDto>) -> Result<DocumentDraft, FillError>;
   /// The one read: a ReadError, or an item of the other kind, becomes the
@@ -398,15 +407,21 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   /// (decision 5).
   pub fn read_item(service: &RepositoryService, session: &Session, spec: &CommandSpec,
       root: &Path, id: &ItemId, kind: ItemDtoKind, request_id: Option<RequestId>) -> Result<ItemDto, Output>;
+  /// `item_not_found` with the item scope and `request_id` kept: the answer
+  /// for any `FillError`, and for a read of the other kind.
+  pub fn item_not_found(session: &Session, spec: &CommandSpec, root: &Path, id: &ItemId,
+      request_id: Option<RequestId>) -> Output;
   ```
 
-  `read_item` builds a failure as `ReadError::to_envelope(<command>)`, with `request_id` set. A wrong kind is `ReadError::new(ResultCode::ItemNotFound).with_scope(<item scope>)`, as `dispatch.rs:330` builds it. It renders through `render::failure_output`. Task 5 adds `TicketFields` and `ticket_draft` beside these.
+  - `read_item` builds a failure as `ReadError::to_envelope(<command>)`, with `request_id` set. A wrong kind is `ReadError::new(ResultCode::ItemNotFound).with_scope(<item scope>)`, as `dispatch.rs:330` builds it. It renders through `render::failure_output`.
+  - A `FillError` from `document_draft` is turned into that same `item_not_found` by `fill::item_not_found(session, spec, root, id, request_id)`.
+  - Task 5 adds `TicketFields` and `ticket_draft` beside these.
 
 - [ ] **Step 1: Write the failing unit tests** in `fill_tests.rs`. They are pure, with no repository, and compare fields one by one, because drafts derive only `Clone` (fact 3):
   - both fields given: no read is needed, and the draft is the input's;
   - `title` omitted: it comes from the read;
   - `body` omitted: it comes from the read, byte for byte, including `""`;
-  - the read is a ticket: `WrongKind`.
+  - the read is a ticket, or lacks a field: `Unfillable`.
 - [ ] **Step 2: Run them and see them fail:** `devenv shell -- cargo test --locked --bin manyhands-cli fill::`.
 - [ ] **Step 3: Implement `fill.rs`.**
 
@@ -414,8 +429,8 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   pub fn needs_read_document(f: &DocumentFields) -> bool { f.title.is_none() || f.body.is_none() }
 
   pub fn document_draft(f: DocumentFields, read: Option<&ItemDto>) -> Result<DocumentDraft, FillError> {
-      if read.is_some_and(|item| item.kind != ItemDtoKind::Document) { return Err(FillError::WrongKind) }
-      let take = |given: Option<String>, current: Option<&String>| given.or_else(|| current.cloned()).ok_or(FillError::WrongKind);
+      if read.is_some_and(|item| item.kind != ItemDtoKind::Document) { return Err(FillError::Unfillable) }
+      let take = |given: Option<String>, current: Option<&String>| given.or_else(|| current.cloned()).ok_or(FillError::Unfillable);
       Ok(DocumentDraft {
           title: take(f.title, read.and_then(|i| i.title.as_ref()))?,
           body: take(f.body, read.and_then(|i| i.body.as_ref()))?,
@@ -423,7 +438,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   }
   ```
 
-  A conforming document always has `title` and `body` (fact 8). So the `ok_or` fails only for an item the read would already have refused, and it maps to the same `item_not_found`.
+  A nonconforming file reads as a bare item without `title` or `body` (`items.rs:1811–1822`). So the `ok_or` can fail. `document_save` maps every `FillError` to `fill::item_not_found`, which gives the same envelope as a wrong kind.
 - [ ] **Step 4: Run Step 2's command and see it pass.**
 - [ ] **Step 5: Write the failing binary tests for create** in `tests/cli/documents.rs`. The fixture is `contract_repository()`, with no remote and C2's `autocrlf` home.
   - `document_create_commits_one_checkpoint_offline`: the input is `{"item_id": <id new>, "path": "docs/new.md", "title", "body"}`. The answer is `ok`, exit 0, with `checkpoint: committed`, `publication: not_requested`, and one commit on `manyhands/document/<id>`. The data validates against `document_mutation.schema.json`. Golden `document_create_ok`.
@@ -440,7 +455,9 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `a_retry_after_lost_output_replays`.
   - `a_retry_after_another_actor_changed_an_omitted_field_is_request_mismatch`: one commit, and `request show` gives the stored result.
   - `a_document_save_of_a_ticket_id_is_item_not_found_with_its_scope`: `scope.item_id` is set and the request ID is kept (decision 5). Golden `document_save_item_not_found`.
-  - `a_save_of_an_unregistered_repository_passes_the_reads_answer`: `repository_not_registered`, with the `index.rebuild` recovery.
+  - `a_never_enabled_root_answers_by_whether_a_field_is_omitted` (decision 7): a `born_repository` that was never enabled. With `title` omitted the answer is `repository_not_registered`, exit 3, with `"recovery": []`. With every field sent it is `repository_not_enabled`, exit 2. Golden `document_save_repository_not_registered`.
+  - `a_lost_cache_answers_by_whether_a_field_is_omitted` (decision 7): delete the database as in Task 2. With `title` omitted the answer is `repository_not_registered` with `"recovery": []`. With every field sent it is `repository_not_registered` with `index.rebuild`.
+  - `a_partial_save_whose_omitted_field_was_then_edited_completes_when_every_field_is_resent`: set up as in Step 7, then edit the title in the context's worktree without committing. The CLI retry with `title` omitted answers `request_mismatch`. A retry with every field, valued from `git show <commit>:<path>`, completes with no second commit.
   - `a_body_round_trips_byte_for_byte` (Review Focus 1): the body is `"line one\r\nline two\rthree 🦀\nno final newline"`. After create and after a title-only save, the bytes after the front matter equal it exactly.
   - `a_committed_save_retried_after_cache_loss_makes_no_second_commit`: delete the database as in Task 2, run `index rebuild`, then retry the same request. The answer is Task 0's recorded code, and there is no second commit.
   - `a_human_save_reports_its_progress_on_stderr`: stderr has at least one `progress:` line. In JSON mode stderr is empty.
@@ -466,7 +483,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   assert_eq!(tip(&root), before);
   ```
 
-  `execute_with`'s signature is `tests/support/mutation.rs:487`. Copy its block scoping from `tests/cli/keys.rs:744–753`. The listed item afterwards is the saved one.
+  The document is one that `document create` made, so it has a context. `execute_with`'s signature is `tests/support/mutation.rs:487`. Copy its block scoping from `tests/cli/keys.rs:744–753`. The item listed afterwards is the saved one.
 - [ ] **Step 8: Add the move tests.** Each starts from a document made by `document create`, so it has a context, unless the case says otherwise.
   - `document_move_checkpoints_both_paths`.
   - `a_first_move_of_a_document_on_primary_uses_the_roots_token`: `docs/guide.md` has no context. Its destination token comes from `path observe` without `--context`, and the move succeeds.
@@ -477,7 +494,10 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `a_move_to_an_escaping_destination_is_refused` (Review Focus 2).
   - `a_stale_source_token_is_external_change`.
   - `a_move_replays_a_finished_request`.
-- [ ] **Step 9: Add human mode for each document verb:** one success, one refusal and one no-op, with text goldens `document_create_text`, `document_save_text` and `document_move_text`.
+- [ ] **Step 9: Add human mode for each document verb.** Each gets one success, one refusal and one no-op, with text goldens `document_create_text`, `document_save_text` and `document_move_text`. The JSON goldens are:
+  - `document_create_ok`, `document_create_occupied_path`;
+  - `document_save_ok`, `document_save_item_not_found`, `document_save_repository_not_registered`;
+  - `document_move_ok`, `document_move_occupied_path`.
 - [ ] **Step 10: Run the tests and see them fail:** `devenv shell -- cargo test --all-features --locked --test cli documents`.
 - [ ] **Step 11: Implement the three verbs in `authoring.rs`.**
   - **`document_create`** reads `item_id`, `path`, `title` and `body`. It parses `item_id` into `ItemId`; a failure is `invalid_input` naming the field. It builds `Mutation::DocumentCreate`.
@@ -567,7 +587,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - A missing `project` takes the read's value, including absent.
   - `project: null` is `None`.
   - Each of `title`, `type`, `status` and `body` omitted comes from the read.
-  - A document read is `WrongKind`.
+  - A document read is `Unfillable`.
   - When every field is given, no read is needed.
 - [ ] **Step 3: Run them and see them fail.**
 
@@ -585,6 +605,8 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
     - The data validates against `ticket_mutation.schema.json`. Golden `ticket_create_ok`.
   - `ticket_create_reads_null_deps_and_parent_as_none`.
   - `ticket_create_refuses_a_dependency_cycle_and_a_parent_cycle_before_any_context_exists`: `relationship_cycle`, exit 2. No `manyhands/ticket/<id>` branch and no worktree exist. Golden `ticket_create_relationship_cycle`.
+    - **Dependency cycle.** D already depends on `TICKET_ABSENT`, so creating `TICKET_ABSENT` with `deps: [RELATED_D]` closes the cycle.
+    - **Parent cycle.** First create a ticket P whose `parent` is a fresh ID X (an unresolved parent, accepted). Then create X with `parent: P`.
   - `ticket_save_refuses_a_dependency_cycle_and_a_parent_cycle`.
   - `ticket_check_and_ticket_save_agree`: for one complete proposal (deps and parent), the rejection IDs are equal.
   - `a_self_reference_is_a_cycle_of_one_and_a_repeat_is_removed` (Review Focus 4).
@@ -598,7 +620,13 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
     - a third party's change;
     - lost output and `request_mismatch`;
     - a document ID, giving `item_not_found`.
-  - `a_ticket_in_this_projects_format_takes_deps_from_a_save_of_only_observation_and_deps`. Write a ticket the way fact 34 describes: quoted values, `manyhands_*` keys first, unknown `wave` and `cycle`. Commit it in its own context. Save `{"observation", "deps": [<two IDs>]}`. Every value, unknown key and the body are equal, and `deps` is added.
+  - `a_ticket_in_this_projects_format_takes_deps_from_a_save_of_only_observation_and_deps`. The ticket exists only on its context branch, as the real targets do. Build it this way:
+    1. `ticket create` through the CLI, which makes the context;
+    2. overwrite its `ticket.md` in the context worktree with the format fact 34 describes: quoted values, `manyhands_*` keys first, unknown `wave` and `cycle`, and the same values;
+    3. commit it there with `git2`;
+    4. run `index refresh`.
+
+    Then save `{"observation", "deps": [<two IDs>]}`. Every compared field is equal, and `deps` is added.
   - `status_closed_is_ordinary_metadata`: `status: "closed"` saves, and `ticket list --closure open` still lists the ticket.
   - `a_lifecycle_closed_ticket_refuses_save_and_slug_assign`: `ticket_closed`, exit 3. Use `relationship_repository`'s closed ticket.
   - `slug_assign_adds_a_code_and_is_a_noop_when_repeated`: a ticket written without `slug` gets one. The same initials again give `noop` (fact 16).
@@ -611,7 +639,8 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `a_save_without_identity_is_identity_required_and_the_same_request_succeeds_after_identity_set`:
     - `ticket save` answers `identity_required`, exit 3, with `repo.identity_set` in its recovery;
     - run `repo identity-set` with prepare and confirm;
-    - the same `ticket save` and request ID then answers `ok`.
+    - read a fresh observation with `ticket show`, because the refused save left a new context (fact 11);
+    - the same `ticket save`, with the fresh observation and the same request ID, answers `ok`.
   - `a_create_without_initials_is_initials_required_and_the_same_request_succeeds_with_initials`: the identity's name yields no initials. Task 0 confirms that the record is freed.
 - [ ] **Step 7: Implement the three verbs,** reading fields as the design's Input table gives them.
   - **`ticket_create`:**
@@ -629,7 +658,12 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - **`ticket_slug_assign`:** `observation`, and optional `initials`.
 
   Add the catalog entries, dispatch arms, schemas and examples. The create and save schemas give `project` and `team` on save, and `parent` on both, the type `["string", "null"]`. `deps` gets `["array", "null"]` with `"items": {"type": "string"}`.
-- [ ] **Step 8: Add human mode for each ticket verb:** a success, a refusal and a no-op, with text goldens.
+- [ ] **Step 8: Add human mode for each ticket verb.** Each gets a success, a refusal and a no-op.
+  - Text goldens: `ticket_create_text`, `ticket_save_text` and `ticket_slug_assign_text`.
+  - JSON goldens:
+    - `ticket_create_ok` and `ticket_create_relationship_cycle`;
+    - `ticket_save_ok`, `ticket_save_item_not_found` and `ticket_save_ticket_closed`;
+    - `ticket_slug_assign_ok` and `ticket_slug_assign_slug_already_assigned`.
 - [ ] **Step 9: Run.**
 
   ```sh
@@ -672,7 +706,12 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
     Copy the shape from `tests/cli/prompts.rs`.
   - `without_a_terminal_a_repair_needs_a_confirmation`: `--request-id` without `--confirm` answers `confirmation_required`, exit 3.
   - `each_repair_replays_a_finished_request`.
-  - Human mode, with text goldens.
+  - Human mode.
+  - Goldens:
+    - `document_repair_preview`, `ticket_repair_preview`;
+    - `document_repair_ok`, `ticket_repair_ok`;
+    - `document_repair_identity_ambiguous`, `ticket_repair_external_change`;
+    - `document_repair_text`, `ticket_repair_text`.
 - [ ] **Step 2: Run the tests and see them fail:** `devenv shell -- cargo test --all-features --locked --test cli repair`.
 - [ ] **Step 3: Implement `document_repair` and `ticket_repair` in `authoring.rs`.**
   - Each reads `path`, `observation` and `source`, and builds `Mutation::DocumentRepair` or `Mutation::TicketRepair` with `Plan { identity_prompt: false, retry: true }`.
@@ -688,13 +727,16 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 **Files:**
 - Modify: `tests/cli/authoring_exits.rs`
 
-- [ ] **Step 1: Complete the exit table.** `REASONS` keeps only codes no fixture can reach, each with its reason. Exit 4 stays there (decision 6). Rename the no-op test to `c3_noop_inventory_accounts_for_all_eleven_mutations` and extend it to cover Part B.
+- [ ] **Step 1: Complete the exit table.**
+  - `REASONS` keeps only codes no fixture can reach, each with its reason. Exit 4 stays there (decision 6).
+  - As in C2, a `CLI_ONLY` list adds the CLI-built codes C3 verbs can give: `usage_error`, `invalid_input`, `invalid_id`, `invalid_path`, `cancelled` and `internal_error`. The rows and reasons must equal the audit block plus `CLI_ONLY`.
+  - Rename the no-op test to `c3_noop_inventory_accounts_for_all_eleven_mutations`, and extend it to cover Part B.
 - [ ] **Step 2: Add `every_input_taking_c3_verb_refuses_malformed_input`.** For each of the nine input-taking verbs, an unknown field and a wrong type each answer `invalid_input`, exit 2. Stderr names the field and never its value.
 - [ ] **Step 3: Add `every_c3_verb_runs_in_human_mode_with_split_streams`.** It reads the C3 verbs from `--help --json` (`delivered_by == "C3"`), and asserts by set equality that they are the design's thirteen. It names each verb's human test.
 - [ ] **Step 4: Add the privacy test** `no_c3_verb_echoes_a_sentinel` (R-17).
   - Every input-taking C3 verb runs in JSON and human mode, including a refusal after the fill read: `ticket save --id <a document's ID>` with `title` omitted.
   - The `body` and `source` sentinel `MANYHANDS-SENTINEL-7f3a` appears in no stdout or stderr, and `assert_request_stores_exclude` (fact 20) finds it in no request store.
-  - The `title`, `path`, `initials` and `deps` sentinels appear in no stdout or stderr except where a read returns them by design.
+  - The `title`, `path`, `initials` and `deps` sentinels appear in no diagnostic: no CLI-built refusal, no human stderr and no JSON `message`. Data fields that echo input by design are exempt (fact 37): `path`, `slug`, `unresolved` and `rejected`. So are the reads that return those values.
   - The inventory counts **successful executions**, as C2's privacy test does.
 - [ ] **Step 5: Add `every_c3_example_input_runs` (R-13).**
   - Each `tests/fixtures/cli_input_v1/<C3 stem>.json` runs through the binary against a fresh fixture, prepared as its row in the test's own outcome table says.
@@ -713,7 +755,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 - [ ] **Step 2: Amend the relationships RFC.**
   - `ticket check`'s flags and semantics;
   - `null` for `deps` and `parent` on create and save.
-- [ ] **Step 3: Amend Wave 03.** Add "Amended 2026-10-24 by C3" to the C3 section, recording decisions 1–6, the delivery and the known limits.
+- [ ] **Step 3: Amend Wave 03.** Add "Amended 2026-10-24 by C3" to the C3 section, recording decisions 1–7, the delivery and the known limits.
 - [ ] **Step 4: Check the API audit.** Every C3 row matches the code as built.
 - [ ] **Step 5: Check for stale text.** Grep the four files for "Planned for C3", "C3–C5 verbs remain cataloged" and "recovery_required" in the cache-loss paragraph. Commit `docs: amend the RFCs, Wave and audit for C3`, and add a ticket comment.
 
@@ -731,13 +773,18 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   ```
 
 - [ ] **Step 2: Run `git fetch origin` and `git merge-tree --write-tree HEAD origin/main`,** then the whole-branch reviews: spec, and quality of the actual code. Fix or rule every finding.
-- [ ] **Step 3: Dogfooding** (R-16, Cycle decision 3). Run the design's Dogfooding steps 1–7 exactly.
+- [ ] **Step 3: Dogfooding** (R-16, Cycle decision 3). Run the design's Dogfooding steps 1–7 exactly, with its stop and resume rules.
   - **Before asking:**
-    - the read-only preflight (step 1);
-    - the go-ahead (step 2), presenting the preflight's results and naming the front-matter re-emission.
+    - the build (step 1);
+    - the read-only preflight (step 2);
+    - the go-ahead (step 3), presenting the preflight's results and naming the six new remote branches with the commits they publish, and the front-matter re-emission.
   - **Without the go-ahead:** stop. Record the step as owed and continue to Step 5. The Cycle is not closed or merged while the step is owed.
-  - **With it:** record every command's envelope in the ledger, and add a ticket comment with the outcome. A stop rule stops the step.
-- [ ] **Step 4: Switch** (design Dogfooding step 8), only after every save and value check succeeded.
+  - **With it:**
+    - write each request ID and input to the ledger before sending it, and each mutation's envelope with the compared values after. Never record `body` or `source`;
+    - add a ticket comment with the outcome.
+
+    A stop rule stops the step. A resume follows the design's Resume rule.
+- [ ] **Step 4: Switch** (design Dogfooding step 8), only after every save, value check and push succeeded.
   - Amend AGENTS.md's Dogfooding Workflow, naming the binary, the commit-first rule, closure until C5, comments until C4, and the `working-on-a-ticket` exception.
   - Rewrite `.agents/skills/file-ticket/SKILL.md`.
   - Correct the C3 ticket's Added Scope and tick its planning boxes.
@@ -772,7 +819,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 | Never fetch | 2 |
 | Progress | 3 |
 | Prompts never read stdin | 6 |
-| Fill refusals (decision 5) | 3, 5 |
+| Fill refusals (decisions 5 and 7), fill before replay, partial-then-edited | 3, 5 |
 | Mutating-Cycle evidence row | 3, 5, 6 (stale writes, retry); 6 (consent, cancellation); 3 (progress); 7 (redaction) |
 | Help, version and C4/C5 unavailable | 1–6 (E1); pre-existing `help.rs` tests unchanged |
 | No display dependency, thread or process | 4, 7, 9 (`check-cli-no-gpui.sh` and the no-feature `--bin` check) |
