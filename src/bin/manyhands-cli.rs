@@ -10,6 +10,9 @@ use manyhands::{
 #[path = "manyhands-cli/admin.rs"]
 mod admin;
 
+#[path = "manyhands-cli/authoring.rs"]
+mod authoring;
+
 #[path = "manyhands-cli/catalog.rs"]
 mod catalog;
 #[path = "manyhands-cli/dispatch.rs"]

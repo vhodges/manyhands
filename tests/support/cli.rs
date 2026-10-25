@@ -215,6 +215,12 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "index_refresh_ok",
+    "index_rebuild_ok",
+    "index_refresh_usage_error",
+    "index_rebuild_usage_error",
+    "folder_create_ok",
+    "folder_create_occupied_path",
     "path_observe_ok",
     "path_observe_invalid_path",
     "ticket_check_ok",
@@ -306,6 +312,9 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "index_refresh_text",
+    "index_rebuild_text",
+    "folder_create_text",
     "path_observe_text",
     "ticket_check_text",
     "host_observe_text",

@@ -15,8 +15,8 @@ id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
 Task 0 baseline, in ticket worktree
 `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
-Task 0 is approved; Task 1 is implemented for independent review (see task log).
-Tasks 2–9 remain unstarted.
+Tasks 0–1 are approved; Task 2 is implemented for independent review (see task log).
+Tasks 3–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -442,7 +442,8 @@ review-ready or closure claim.
 | Task | State | Commit range | Verification | Review |
 | --- | --- | --- | --- | --- |
 | 0 | Complete | `ad4d3f0..7368902` | Baseline gates and 464 tests; documentation-only correction | Spec approved `d9e961d`; quality re-review approved `7368902`, per controller handoff |
-| 1 | Implemented | Base `7368902a677a8228813f21da8f74d3cafff68ec3`; completion is the commit carrying this entry | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Self-reviewed; independent spec/quality review pending |
+| 1 | Complete | `7368902a677a8228813f21da8f74d3cafff68ec3..8ae22ab9b34e52cf3404f74841cc5e1348ad393a` | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the owner's Task 2 brief |
+| 2 | Implemented | Base `8ae22ab9b34e52cf3404f74841cc5e1348ad393a`; completion is the commit carrying this entry | 13 index + 7 folders + 7 input-schema + 9 help = **36 passing**; check/fmt/clippy passed | Self-reviewed; independent spec/quality review pending |
 
 ## Task 1: path observe and ticket check
 
@@ -533,3 +534,134 @@ apart from the authorized E1 fixtures; source-test files only add new tests or
 registrations. No library, Cargo, output-schema or new-test-target change.
 No unresolved blocker. Ticket-only commit/push is authorized. Independent
 review of this task is the next gate; no Cycle closure or approval is claimed.
+
+## Task 2: index refresh, index rebuild and folder create
+
+Checkpoint recorded **2026-10-25T03:48:25Z**. The owner's fresh Task 2 brief
+explicitly reports **Task 1 spec and quality both APPROVED** at
+`8ae22ab9b34e52cf3404f74841cc5e1348ad393a`; the task table now records that
+approval. Fresh implementer, sequential work confined to this ticket worktree
+and branch, no subagents. Task 3 has not started.
+
+### Preflight and authority
+
+- Clean initial HEAD exactly matched the supplied base `8ae22ab9b34e52cf3404f74841cc5e1348ad393a`.
+  Fetched origin, read `git show origin/main:AGENTS.md`, and merged
+  `origin/main`: already up to date, HEAD unchanged. Worktree registration and
+  main ancestry were checked.
+- Read the handoff, ticket and all comments, Cycle, design, Task 2 plan and
+  execution ledger, retaining all five approved Task 0 corrections.
+- Checkpoint fetch and merge again found main unchanged at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+  `git merge-tree --write-tree HEAD origin/main` succeeded, tree
+  `8c97e736aeb0810c6d56217b626be7138b6784d5` (committed task base).
+
+### Implementation and source facts
+
+- Added the three public bin-private adapters in `authoring.rs`, its module
+  declaration and adjacent `cfg(test)` module, three dispatch arms, and literal
+  `Available("C3")` catalog entries preserving the planned summaries.
+- Both index adapters parse flags first, then `admin::mutation_root`, and
+  build the corresponding root-only mutation through `mutate::run` with
+  `identity_prompt: false`, `retry: true`, root cloning and the sleep hook.
+  They refuse input and ID selectors. Folder creation checks the closed input
+  object's required string `path` before root selection and builds
+  `FolderCreateInput` through the same driver. Admin changes are only the two
+  prescribed helper visibilities.
+- Added the closed draft-2020-12 `folder_create` input schema and example.
+  The actual example bytes run through the binary in the success fixture.
+  No new input-holding type or diagnostic formatting was introduced.
+- Task 0's index source facts remain authoritative: successful index mutations
+  have null data and discovery current (`mutation/bind/index.rs:80–88`), and
+  rebuild restores an unavailable index before binding (`mutation/execute.rs:83–141`).
+  The adapter passes through the approved rebuild root-selection exception.
+  Folder source inspected at `mutation/bind/folder.rs:100–177` maps invalid
+  paths, occupied paths and already-present folders as the binary tests assert.
+- Request replay checks use the published stored-result DTO, not an envelope:
+  `tests/fixtures/cli_v1/request_show.json` demonstrates the distinction. The
+  replay envelope is still compared in full to the original invocation.
+
+### Red/green and golden evidence
+
+1. Added eight index binary tests before implementation. The prescribed index
+   filter ran **5 existing passed / 8 new failed / 187 filtered**, each new
+   failure on `command_unavailable`. Both cache-loss tests first verified the
+   prescribed read refusal/recovery before reaching unavailable rebuild.
+2. Added five folder binary tests: **1 existing passed / 5 new failed / 194
+   filtered**, all on `command_unavailable`. Added the closed-input/privacy
+   case before implementation too; rerun **1 passed / 6 failed / 194 filtered**,
+   again only expected unavailable-command failures.
+3. Implemented the adapters. E1 was regenerated using only
+   `MANYHANDS_UPDATE_GOLDEN=1`, one newly available verb at a time: refresh,
+   rebuild, folder create. The help filter passed **9** each time. Read every
+   diff before enabling the next verb: only availability, repository rules and
+   options changed; summaries and `delivered_by: C3` stayed exact.
+   `help_resource_ticket.json` regenerated byte-identically.
+4. First index generation run had **11 passed / 2 failed**: the new replay and
+   human tests incorrectly treated `request show.data.result` as a full
+   envelope. Systematic debugging compared its actual DTO to the existing
+   request-show golden. Corrected only the new tests to compare the stored
+   result fields and use the replay envelope's operation ID. No production or
+   old-test fix was needed; no library/contract gap was found.
+5. Generated all nine new goldens (six JSON, three human text) using the update
+   variable. Read all nine files; only repository/request/operation IDs are
+   substituted. Generation passed **13 index / 7 folders**. Repeated both
+   filters without the variable: both passed.
+6. Self-review strengthened replay evidence: an unindexed new document stays
+   undiscovered after replay of either index verb, and an externally removed
+   empty folder is not recreated by finished-request replay. This proves no
+   second effect independently of clock granularity. Final scoped reruns
+   passed, with the original envelopes and request records unchanged.
+
+Every fixture uses `contract_repository`, an isolated `CliEnv` data directory
+and home with `core.autocrlf=false`, and detached-terminal CLI children.
+Services are dropped before children run or SQLite sidecars/database are
+removed. Cache tests remove WAL/SHM first, then delete the database or replace
+it with exactly 4096 bytes of `0xA5`. They pin respectively
+`repository_not_registered` with empty recovery and `index_unavailable` with
+`index.rebuild`, then recover both fixture documents and both tickets.
+Canonical/worktree snapshots and isolated `git for-each-ref` output stay equal.
+The bare-remote test supplies a branch absent locally and proves remote refs
+do not change. Folder tests prove actual emptiness, listing, no commit, the
+existing `docs/notes` fresh-request no-op, occupied/outside-docs refusals,
+replay, human output and malformed/duplicate/unknown/mistyped input privacy.
+
+### Final verification
+
+Only Task 2's integration filters and E1 help filter ran, all through Devenv
+with one positional filter per command. No full suite or native CI.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli index` | **13 passed**, 0 failed/ignored, 188 filtered; 8 new + 5 existing. |
+| `devenv shell -- cargo test --all-features --locked --test cli folders` | **7 passed**, 0 failed/ignored, 194 filtered; 6 new + 1 existing. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 194 filtered; includes the new schema/example automatically. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 192 filtered, final run without the update variable. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, including the final new replay assertions and the bin's cfg(test) module. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total: **36 passing integration tests**, including **14 new**. The one new
+adjacent unit case pins confirmation-flag grammar; it was compiled/linted by
+all-target clippy, but not executed because Task 2 authorizes only the named
+integration filters. Its execution remains with the planned CLI-unit checkpoint;
+it is not included in the 36 passing count.
+
+### Files and self-review
+
+- Created `src/bin/manyhands-cli/{authoring,authoring_tests}.rs`,
+  `tests/cli/{index,folders}.rs`, the folder schema/example and nine registered
+  output goldens.
+- Changed the specified binary module/admin/catalog/dispatch files and test
+  module/golden registrations, plus the two root-help E1 fixtures. The third
+  E1 fixture has no resulting diff.
+- Updated this ledger and canonical comment `01M5RJS0SF0XY1BYSADTTG5HEB`, whose
+  ID came from `./target/debug/manyhands-cli id new` and timestamp from `date -u`.
+- Self-review checked the adapter ordering and plans, closed input and error
+  privacy, actual filesystem/Git invariance, complete fixture item recovery,
+  finished replay effects, exact golden registrations and all E1 diffs.
+  No library, Cargo, output schema, new test target or unrelated old-test edit.
+  No unresolved blocker. Independent spec/quality review is the next gate.
+
+Task-only commit and ticket-only push are authorized. No PR, main integration,
+closure, cleanup, native CI, dogfooding or Task 3 work was performed.

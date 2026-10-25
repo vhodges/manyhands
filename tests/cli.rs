@@ -27,6 +27,11 @@ mod content;
 #[path = "cli/help.rs"]
 mod help;
 
+#[path = "cli/folders.rs"]
+mod folders;
+#[path = "cli/index.rs"]
+mod index;
+
 #[path = "cli/exits.rs"]
 mod exits;
 #[path = "cli/human.rs"]

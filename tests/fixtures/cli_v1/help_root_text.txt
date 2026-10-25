@@ -71,7 +71,7 @@ Command catalog:
   host observe  Observe a host key. Available now.
   request show  Show a request. Available now.
   request cancel  Cancel a request. Available now.
-  folder create  Create a document folder. Arrives with C3.
+  folder create  Create a document folder. Available now.
   document create  Create a document. Arrives with C3.
   document save  Save a document. Arrives with C3.
   document move  Move a document. Arrives with C3.
@@ -80,8 +80,8 @@ Command catalog:
   ticket save  Save a ticket. Arrives with C3.
   ticket repair  Repair a ticket. Arrives with C3.
   ticket slug-assign  Assign a ticket short code. Arrives with C3.
-  index refresh  Refresh the index. Arrives with C3.
-  index rebuild  Rebuild the index. Arrives with C3.
+  index refresh  Refresh the index. Available now.
+  index rebuild  Rebuild the index. Available now.
   path observe  Observe a path for authoring or repair. Available now.
   ticket check  Check ticket relationships. Available now.
   comment add  Add a comment. Arrives with C4.

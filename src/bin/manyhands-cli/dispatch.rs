@@ -549,6 +549,9 @@ pub fn dispatch(
             );
         }
         "repo create" => return crate::admin::repo_create(service, session, command, args),
+        "index refresh" => return crate::authoring::index_refresh(service, session, command, args),
+        "index rebuild" => return crate::authoring::index_rebuild(service, session, command, args),
+        "folder create" => return crate::authoring::folder_create(service, session, command, args),
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),
         "repo identity-set" => {
