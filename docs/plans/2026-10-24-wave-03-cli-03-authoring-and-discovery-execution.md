@@ -28,14 +28,16 @@ explicitly conveyed in the fresh Task 9 brief at
 Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Task 9's full verification
-is **not green** after an outside-C3 library-unit failure. The owner-authorized
-test-baseline correction now passes scoped verification. The controller reports
+CLI retries with its approved assertions unchanged. The owner has **accepted an
+explicit Task 9 verification exception**: the original failed full suite plus
+the scoped post-fix verification and check/fmt/clippy. The full suite itself
+remains historically non-green and was not rerun. The controller reports
 independent whole-branch **SPEC and QUALITY both APPROVED** over
 `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
 including the authorized test-baseline exception, with no actionable findings
-or new gaps. Owner full-suite disposition remains pending; dogfooding and the
-switch remain owed. This is not review-ready or full-gate completion.
+or new gaps. Dogfooding build/read-only preflight are complete with no blocker;
+the separate owner go-ahead for real mutations/publication is pending.
+Dogfooding and the switch remain owed. Task 9 is not complete or review-ready.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -480,6 +482,7 @@ review-ready or closure claim.
 | 9 verification | BLOCKED; gate evidence complete | Tested HEAD `f9618f76ce9608c9ccc42018701647d7b98bb642` | Check/fmt/clippy/CLI smoke/no-GPUI passed; sole full-suite invocation exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets, 6239s | Outside-C3 library assertion requires owner/controller disposition; whole-branch reviews pending; no review-ready claim |
 | 9 narrow test correction | Implemented; independent review and full-gate disposition pending | Base `f9618f76ce9608c9ccc42018701647d7b98bb642`; fix/evidence commit carrying the follow-up below | Exact test **1 passed**, then checkpoint module **46 passed**; fmt/check/clippy passed. Full suite **not rerun** | Explicit owner exception for this test baseline only; original **4528/1/1**, exit **101** remains the sole full-suite result |
 | 9 whole-branch reviews | SPEC and QUALITY APPROVED; remaining gates outstanding | `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef` | Prior full-suite **4528/1/1**, exit **101**, and scoped **46 distinct passing** retained; no new test run | Both independent approvals conveyed by controller, including the authorized baseline correction; no actionable findings/new gaps. Owner full-suite disposition and dogfooding/switch remain owed; not review-ready |
+| 9 verification exception / dogfood preflight | Verification accepted by explicit owner exception; build/read-only preflight complete | Base `a79a3bd6d3ac0453726d00908c286f69f2c30a8d` | Historical full suite **4528/1/1**, exit **101**, plus scoped **46 distinct passing** and check/fmt/clippy accepted; no second full run. CLI build and repo inspect passed; six targets clean | SPEC/QUALITY approvals retained. Separate dogfood go-ahead pending; saves/pushes and switch OWED; Task 9 not complete/review-ready |
 
 ## Part A approval and Task 5 preflight
 
@@ -2137,3 +2140,142 @@ UTC clock above. Only this ledger and that comment change.
 Status, diff, whitespace and the recent ten commits are inspected before the
 evidence-only commit with the required co-author trailer and ticket-only push.
 Postcommit merge-tree, remote HEAD and clean state are verified in the return.
+
+## Task 9 verification exception and read-only dogfooding preflight
+
+Recorded **2026-10-25T15:41:38Z**, from clean C3 HEAD
+`a79a3bd6d3ac0453726d00908c286f69f2c30a8d`. The owner answered **YES** to the
+controller's stated interpretation: accept the original full-suite evidence
+plus scoped post-fix results as an **explicit Task 9 verification exception**.
+This resolves the previously pending owner verification disposition only:
+
+- Original full suite at `f9618f7`: **4528 passed / 1 failed / 1 ignored**,
+  exit **101**, 6239s, retained historically. No claim that this run was green.
+- Authorized correction at `806057d3`: **46 distinct passing checkpoint tests**,
+  including the separately run exact test, plus passing check/fmt/clippy.
+- No second full-suite invocation. The historical hidden values remain unknown.
+- Whole-branch SPEC and QUALITY approvals over `ad4d3f0..806057d3`, recorded in
+  `a79a3bd6`, remain approved with no actionable findings or new gaps.
+
+The exception does **not** authorize dogfooding saves or target-branch pushes.
+Only design Dogfooding steps **1 (build)** and **2 (read-only preflight)** were
+performed. Dogfooding and switch remain **OWED**, with a separate go-ahead
+awaited. Task 9 remains incomplete and is not marked review-ready.
+
+### Build, default data path and repository inspection
+
+First ran, from the C3 worktree:
+
+`devenv shell -- cargo build --locked --bin manyhands-cli`
+
+**Exit 0**, Cargo dev-profile build finished in **0.28s**. Then invoked exactly:
+
+`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM/target/debug/manyhands-cli --json repo inspect --repo /home/vhodges/work/src/manyhands`
+
+**Exit 0**, `outcome: success`, `code: ok`, empty recovery; selected path and
+resolved root both **`/home/vhodges/work/src/manyhands`**. Inspection reports:
+
+- registered **true**, HEAD branch **main**;
+- configuration **valid**, primary branch **main**, publication remote **origin**,
+  no configuration problems;
+- identity **available**;
+- origin publication-eligible and selected;
+- all six effect categories **not_requested**, commit OID null, request and
+  operation IDs null. No index refresh or mutation was requested.
+
+Default application data directory: **`/home/vhodges/.local/share/manyhands`**.
+Resolved from the actual invocation environment (`HOME=/home/vhodges`,
+`XDG_DATA_HOME` unset, `MANYHANDS_DATA_DIR` unset) and source:
+`src/bin/manyhands-cli.rs:64–69` selects `open_default` without an override;
+`src/repository.rs:7217–7221` uses
+`ProjectDirs::from("com", "manyhands", "Manyhands").data_local_dir()`.
+The locked Linux directories mapping is documented in the C1 ledger fact 13
+and its implementation plan's default-directory test. The inspect DTO does not
+itself expose the data path. No other real-data CLI operation was performed.
+Only the explicit repo-inspect call may have touched default service/cache data;
+no body/source, credentials or secret contents were read or recorded.
+
+### Six target worktrees and refs
+
+Fetched origin first. `git worktree list --porcelain` mapped each target to
+its actual registered worktree. Every path below is absolute after prefixing
+**`/home/vhodges/work/src/manyhands/.manyhands/worktrees/`** to the full ticket ID.
+Every target branch is **`manyhands/ticket/<ID>`**. Read-only probes used
+`git -C <actual-worktree> status --porcelain`, `git for-each-ref`,
+`git rev-parse`, `git log --oneline origin/main..<branch>` and `git rev-list`;
+`GIT_OPTIONAL_LOCKS=0` prevented optional status index writes. All commands ran
+from the C3 workdir. No target body/source was read or target file changed.
+
+| Target | Ticket ID / worktree suffix | Local tip | Status | Origin tip | Upstream | Existing commits to publish |
+| --- | --- | --- | --- | --- | --- | ---: |
+| C4 | `01M4CC0VMWEQQ9G4W0DAG7ADPY` | `aac4217cfa6a951d3fb83ad26fd31e1030804dcb` | Clean (empty porcelain) | Absent | None | 2 |
+| C5 | `01M4CC0VMXTNXNH78C11DYXS8H` | `01d8a26e9d34a5821038ddb4cd4ea0653d571adc` | Clean (empty porcelain) | Absent | None | 2 |
+| D4 | `01M4CC0VN1KTQFSVR99378TDHV` | `f4513256a36aab6b0b0c50118ef76bed5f362ff6` | Clean (empty porcelain) | Absent | None | 1 |
+| D5 | `01M4CC0VN2K8DBHNMZ46NTX5JJ` | `03176b71e6072eb8380211cea2f677424350140c` | Clean (empty porcelain) | Absent | None | 3 |
+| D6 | `01M4CC0VN3VPVVQ3RNWJKXWEVX` | `e877e4b21747b77acddb6682b65287ffb480159a` | Clean (empty porcelain) | Absent | None | 1 |
+| G1 | `01M4CC0VN4H9AC0Q3KA6E1QERC` | `7b306d1f9542737155a25988fd8b6b726387a4be` | Clean (empty porcelain) | Absent | None | 1 |
+
+All six branches are **865 commits behind origin/main**. They were inspected
+only, not merged. The ten existing commits that target pushes would publish,
+in each branch's `git log --oneline origin/main..<branch>` order:
+
+```text
+C4:
+aac4217 Checkpoint ticket 01M4CC0VMWEQQ9G4W0DAG7ADPY
+6078dfa Checkpoint ticket 01M4CC0VMWEQQ9G4W0DAG7ADPY
+C5:
+01d8a26 Checkpoint ticket 01M4CC0VMXTNXNH78C11DYXS8H
+71aee19 Checkpoint ticket 01M4CC0VMXTNXNH78C11DYXS8H
+D4:
+f451325 Checkpoint ticket 01M4CC0VN1KTQFSVR99378TDHV
+D5:
+03176b7 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+6157418 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+81a2198 Checkpoint ticket 01M4CC0VN2K8DBHNMZ46NTX5JJ
+D6:
+e877e4b Checkpoint ticket 01M4CC0VN3VPVVQ3RNWJKXWEVX
+G1:
+7b306d1 Checkpoint ticket 01M4CC0VN4H9AC0Q3KA6E1QERC
+```
+
+### Proposed saves and separate owner go-ahead
+
+The proposed `deps` sets are exactly the approved design/owner list, not
+observed current ticket values; target ticket bodies/source were not read:
+
+| Target | Proposed dependency IDs |
+| --- | --- |
+| C4 | `01M4CC0VMV81DFRGJ4Z76489XM`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| C5 | `01M4CC0VMWEQQ9G4W0DAG7ADPY`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| D4 | `01M4CC0VN0MFTGKQ4HGTTC5H63` |
+| D5 | `01M4CC0VN1KTQFSVR99378TDHV`, `01M57SKVF6TQ3QM6AXJ35JGGSY` |
+| D6 | `01M4CC0VN2K8DBHNMZ46NTX5JJ` |
+| G1 | `01M4CC0VMXTNXNH78C11DYXS8H`, `01M4CC0VN3VPVVQ3RNWJKXWEVX` |
+
+**No preflight blocker found.** Separate go-ahead must name the main root and
+default data directory above, the explicit index refresh, six ticket saves and
+six pushes creating **`origin/manyhands/ticket/<ID>`** for the listed targets.
+Those pushes also publish the **ten existing commits** above, plus any new save
+checkpoints. Each save re-emits the whole front matter in the library's order
+and style; other values are preserved while `deps` changes. Approved checks
+compare values, including body digest/length, rather than front-matter bytes.
+
+The owner must also see the approved interrupted-save risk: a save stopped
+part-way, followed by an edit to its ticket, can leave a pending operation that
+blocks new domain work on this repository until the request's bytes are restored
+or C4's `operation abandon` becomes available. Early no-op/refusal and finished
+replay answers retain their existing behavior. Verification acceptance alone
+does not authorize these operations.
+
+### Evidence checkpoint
+
+Canonical comment **`01M5SVJZAQ75PHG9TM53X1S1AP`** was allocated with the absolute
+branch-built CLI's `--json id new`; timestamp from the actual UTC clock above.
+Only this ledger and the new comment change. No further Rust gates ran.
+Post-preflight `git fetch origin` and merge-tree passed; main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, merge-tree at the base is
+`73d1c80d6ca471f335987841a2dc580f43d21557`. The evidence commit uses the required
+co-author trailer and is pushed only to C3's ticket branch after diff/status/
+whitespace/recent-log review. Postcommit clean state and merge-tree are checked
+in the return. No actual refresh, saves, target pushes/merges, switch,
+AGENTS/skill edits, closure, cleanup, PR or native CI. Owner go-ahead awaits.
