@@ -20,11 +20,15 @@ approvals conveyed in the fresh Task 5 implementer brief at base `452f031`).
 Task 5 spec and quality are APPROVED, as conveyed in the fresh Task 6 brief at
 `6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. Task 6 spec and quality are APPROVED,
 as conveyed in the fresh Task 7 brief at `aab0e795d5245d0e0932d8ceff2501d06846d963`.
-Task 7 is implemented and checkpoint-verified; independent Part B review is pending.
+Task 7 / Part B spec and quality are **APPROVED**, explicitly conveyed in the
+fresh Task 8 brief at `9a2a5170c4704ef03420ef2276911c6b1bfa3959`, retaining
+the six checkpoint gates and 593 tests. Task 8's documentation amendments are
+implemented and source/document-validated; independent Task 8 review is pending.
 Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Tasks 8–9 remain unstarted.
+CLI retries with its approved assertions unchanged. Task 9 remains unstarted;
+its dogfooding authorization and evidence are still owed.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -463,6 +467,8 @@ review-ready or closure claim.
 | 6 | Implemented; independent review pending | Base `6d0ec5191bf4282e099b0d28dac4b37bb26112f3`; head is the `feat(cli): document and ticket repair` commit carrying this entry | **16 repair + 11 authoring-exits + 7 input-schema + 9 help = 43 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
 | 6 final | Complete, APPROVED | `6d0ec5191bf4282e099b0d28dac4b37bb26112f3..aab0e795d5245d0e0932d8ceff2501d06846d963` | Recorded 43 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 7 brief; supersedes historical pending row |
 | 7 | Implemented; Part B independent review pending | Base `aab0e795d5245d0e0932d8ceff2501d06846d963`; head is the `test(cli): C3 exit table, input, human, privacy and example evidence` commit carrying this entry | **15 authoring-exits passed**; six checkpoint gates passed; **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passing** | Self-reviewed; controller reviews actual Part B range `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD` after return; no approval claimed |
+| 7 final / Part B | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..9a2a5170c4704ef03420ef2276911c6b1bfa3959` | Recorded six gates and **593** tests retained, not rerun | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 8 brief; supersedes the historical pending row |
+| 8 | Implemented; independent review pending | Base `9a2a5170c4704ef03420ef2276911c6b1bfa3959`; head is the `docs: amend the RFCs, Wave and audit for C3` commit carrying this entry | Documentation/source checks: 38 changed links/anchors, 11 scoped amendment markers, 9 schema/example inventories and exact example outcomes, 13 available audit/catalog rows, unchanged **40/42** union, whitespace/scope/merge-tree | Self-reviewed; controller review after return. No Rust gate rerun for docs-only changes |
 
 ## Part A approval and Task 5 preflight
 
@@ -1735,3 +1741,84 @@ Part B spec/quality review **after return**, over
 Task-only commit and ticket-only push are authorized, with the prescribed message
 and co-author trailer. Task 8 has not started. No agents, PR, main integration,
 closure, cleanup, native CI or other-branch dogfooding operation occurred.
+
+## Part B approval and Task 8: document amendments
+
+Recorded **2026-10-25T05:43:16Z**. The owner's fresh Task 8 implementer brief
+explicitly conveys **Part B spec and quality APPROVED** at
+`9a2a5170c4704ef03420ef2276911c6b1bfa3959`, with the six checkpoint gates and
+**593 tests** recorded under Task 7. This supersedes its historical pending
+review status. Those results are retained evidence, not a Task 8 rerun.
+Decisions 1–7, R-1–R-18 and all narrow Task 0/3 owner rulings remain binding.
+
+### Preflight and scope
+
+- Started from the exact clean supplied base in the named ticket worktree and
+  branch. Read the handoff, current main's AGENTS.md, ticket and all comments,
+  Cycle/design/Task 8 plan, ledger and the four amendment files. Worked inline
+  with no agents.
+- Initial fetch/merge and the pre-checkpoint fetch/merge retained
+  `origin/main` at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merging it into
+  the ticket was already current. HEAD before/after remains the supplied base.
+  Ancestry passed; `git merge-tree --write-tree HEAD origin/main` returned
+  `55ddf7d3ced176ad5c9c5bdc94a0beaef11daed0` at that committed base.
+- The F1/F2 library, results/runtime and Cargo tree compare unchanged to the
+  Task 0 baseline. The actual C3 catalog, parser, dispatch, authoring/fill
+  adapters, read signatures, rebuild root path, schemas and Task 7 example
+  fixture/table were source-inspected. No signature/code-set discrepancy or
+  new contract decision was found.
+
+### Amendments
+
+1. `docs/RFC/cli-contract.md`: all eleven items of the design's amendment list
+   carry the specified date marker. The thirteen verbs' taxonomy and nine
+   closed schema/example rows match built inputs/selectors. Save fill/replay,
+   decision-7 refusals, read proposals/context paths, index request IDs,
+   identity recovery and primary-only folders are explicit. The cache-loss
+   paragraph uses F2 codes and links its Departures section. The evidence
+   paragraph copies Task 7's exact nine-case preparation/outcome table, all
+   ok/0, with observation-only substitutions and unchanged example source.
+2. `docs/RFC/ticket-relationships-and-short-codes.md`: available ticket-check
+   flags, complete-proposal/exit-0 rejection semantics, and create/save
+   omitted/null/empty-list relationship rules.
+3. `docs/Waves/wave-03-dogfooding.md`: only the C3 section amended, recording
+   decisions 1–7, delivered capability, retained checkpoint evidence, known
+   limits and the approved runtime qualifications: primary-only committed
+   move-to-self, HEAD-equal save no-ops, partial/exit-4 precedence, the
+   new-domain-operation fence and the rebuild root exception. Dogfooding is
+   explicitly **OWED** with Task 9 authorization still required.
+4. `docs/research/wave-03-api-audit.md`: all thirteen C3 rows updated in place
+   with built CLI adapters/selectors/availability and evidence references.
+   The Task 0 **40 library / 42 CLI-inclusive** union and every row's result
+   expression are byte-identical. C3 cache-loss examples now point to the
+   delivered binary tests; historical non-C3 inventory rows remain historical.
+
+### Validation and self-review
+
+- `git diff --check` passed. The complete four-file diff was reviewed against
+  the design's Document Amendments and Task 8's five steps.
+- A read-only Node assertion command passed: **38** added/changed relative
+  file links and heading/line anchors resolve; **11** CLI amendment markers;
+  **9** schema required/property inventories match their RFC rows and example
+  shapes; **9** outcome rows exactly equal the Task 7 source table; **13**
+  audit rows equal the available C3 catalog set, with unchanged per-row codes
+  and the **40/42** union. It also checked the specified stale phrases and
+  absence of the old generic cache-loss refusal in the CLI paragraph.
+  This is source/document validation, not execution of the Rust schema tests.
+- The first attempt to invoke that validation with `python3` could not start
+  because Python is absent from this shell. The equivalent stdlib-only Node
+  check above ran successfully; no environment or repository fix was made.
+- `git diff --exit-code 9a2a5170c4704ef03420ef2276911c6b1bfa3959 -- src tests schemas Cargo.toml Cargo.lock AGENTS.md .agents`
+  passed. No Rust, schema, test, AGENTS.md or skill edit; no Rust gate ran.
+- Canonical checkpoint comment: `01M5RSBAYZPZYR4G10ZAEF13YE`. Its ID came from
+  `devenv shell -- ./target/debug/manyhands-cli id new`, and its timestamp
+  from `date -u`. No new build was needed.
+
+Only the four named documents, this ledger and that new canonical comment
+are included in the task commit, with the prescribed co-author trailer.
+Status, diff and the last ten commits are inspected before staging those exact
+paths. Task-only commit and ticket-only push are authorized. Self-review found
+no unresolved Task 8 blocker; independent review belongs to the controller.
+Task 9 is not started. Full verification, whole-branch review and dogfooding
+remain owed; there is no Cycle-complete, native CI, PR, main integration,
+closure or cleanup claim.
