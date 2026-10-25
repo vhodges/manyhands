@@ -24,6 +24,9 @@ mod boundaries;
 #[path = "cli/content.rs"]
 mod content;
 
+#[path = "cli/documents.rs"]
+mod documents;
+
 #[path = "cli/help.rs"]
 mod help;
 

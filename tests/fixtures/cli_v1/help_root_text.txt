@@ -72,9 +72,9 @@ Command catalog:
   request show  Show a request. Available now.
   request cancel  Cancel a request. Available now.
   folder create  Create a document folder. Available now.
-  document create  Create a document. Arrives with C3.
-  document save  Save a document. Arrives with C3.
-  document move  Move a document. Arrives with C3.
+  document create  Create a document. Available now.
+  document save  Save a document. Available now.
+  document move  Move a document. Available now.
   document repair  Repair a document. Arrives with C3.
   ticket create  Create a ticket. Arrives with C3.
   ticket save  Save a ticket. Arrives with C3.

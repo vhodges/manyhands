@@ -104,7 +104,7 @@ These are inputs the spec implies but no table in it lists. Each has its test in
 
 1. **A body with CRLF line endings, a lone CR, non-BMP characters and no final newline.** `document create` and a body-only `document save` write it byte for byte. A save that omits `body` keeps it byte for byte. Task 3, Step 6.
 2. **A path that escapes the repository** (`../x.md`, an absolute path, or `docs/../../x.md`), given to `path observe --path`, `document create`'s `path` or `document move`'s `destination_path`. The library refuses it, nothing outside the repository is read or written, and the diagnostic does not echo it. Task 1, Step 5 and Task 3, Steps 5 and 8.
-3. **`document move` to the path the document already has.** With an editing context, it is a no-op and nothing is committed. A document on primary alone answers `external_change` (fact 15). Task 3, Step 8.
+3. **`document move` to the path the document already has.** With the document committed there, it is a no-op and nothing is committed, both in an editing context and on primary alone (`already_applied`, exit 0; owner-approved Task 3 correction to fact 15). The primary-only case creates no context. Task 3, Step 8.
 4. **`deps` that names the ticket itself, or repeats an entry.** A self-reference is `relationship_cycle` naming only the ticket. A repeat is removed silently and the rest sorted. `ticket check` agrees with both. Task 5, Step 5.
 5. **A path holding terminal escape sequences or a newline,** given to `path observe`. The human output and every diagnostic escape it, so it cannot repaint the terminal or forge a line. Task 1, Step 5.
 
@@ -502,7 +502,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `a_move_onto_a_file_is_occupied_path`: exit 2, with source and destination unchanged. Golden `document_move_occupied_path`.
   - `a_destination_token_from_the_wrong_context_is_external_change`.
   - `a_destination_that_gained_a_file_after_it_was_observed_is_external_change`.
-  - `a_move_to_its_own_path_is_a_noop`. With a context; also a document on primary alone, which answers `external_change` (fact 15, Review Focus 3).
+  - `a_move_to_its_own_path_is_a_noop`. With committed content in a context; also a committed document on primary alone, which answers `already_applied`/`noop`, exit 0, without creating a context (owner-approved Task 3 correction to fact 15, Review Focus 3).
   - `a_move_to_an_escaping_destination_is_refused` (Review Focus 2).
   - `a_stale_source_token_is_external_change`.
   - `a_move_replays_a_finished_request`.

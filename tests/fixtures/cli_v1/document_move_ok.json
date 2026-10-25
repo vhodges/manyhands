@@ -1,0 +1,30 @@
+{
+  "code": "ok",
+  "command": "document move",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FDN",
+    "path": "docs/moved.md"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDN",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FDN"
+  }
+}

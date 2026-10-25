@@ -215,6 +215,13 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "document_create_ok",
+    "document_create_occupied_path",
+    "document_save_ok",
+    "document_save_item_not_found",
+    "document_save_repository_not_registered",
+    "document_move_ok",
+    "document_move_occupied_path",
     "index_refresh_ok",
     "index_rebuild_ok",
     "index_refresh_usage_error",
@@ -312,6 +319,9 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "document_create_text",
+    "document_save_text",
+    "document_move_text",
     "index_refresh_text",
     "index_rebuild_text",
     "folder_create_text",

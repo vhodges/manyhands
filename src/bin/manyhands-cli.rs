@@ -17,6 +17,8 @@ mod authoring;
 mod catalog;
 #[path = "manyhands-cli/dispatch.rs"]
 mod dispatch;
+#[path = "manyhands-cli/fill.rs"]
+mod fill;
 #[path = "manyhands-cli/human.rs"]
 mod human;
 #[path = "manyhands-cli/human_admin.rs"]

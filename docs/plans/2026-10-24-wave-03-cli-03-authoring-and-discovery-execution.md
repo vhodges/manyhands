@@ -15,8 +15,11 @@ id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
 Task 0 baseline, in ticket worktree
 `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
-Tasks 0–1 are approved; Task 2 is implemented for independent review (see task log).
-Tasks 3–9 remain unstarted.
+Tasks 0–2 are approved (see task log). Task 3 is implemented and locally verified
+for independent controller reviews. Its two stops are resolved by explicit owner
+rulings: Partial/Incomplete assertion precedence, and primary-only committed
+move-to-self no-op. The interrupted-save checkpoint also passes through real
+CLI retries with its approved assertions unchanged. Tasks 4–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -59,10 +62,11 @@ comment `01M5RD6N6KZYYQBQMGPNXR3B66`. No separate build was needed.
 
 ## Confirmed facts
 
-All **37** design baseline facts were rechecked: **33 confirmed** (with the
-scope qualifications stated below), **1 previously unknown fact resolved**
-(17), and **3 corrected with explicit owner approval** (9, 19 and 21,
-including the post-quality-review correction to fact 9).
+All **37** design baseline facts were rechecked during Task 0: 33 confirmed,
+1 previously unknown fact resolved (17), and 3 corrected with explicit owner
+approval (9, 19 and 21, including the post-quality-review correction to fact 9).
+Task 3's binary evidence subsequently corrected fact 15 with owner approval;
+the current inventory is **32 confirmed / 1 resolved / 4 corrected**.
 Library paths abbreviated `mutation/`, `read/`, `discovery.rs` and
 `recovery.rs` are under `src/repository/`; `bind/` abbreviates
 `src/repository/mutation/bind/`. Bare filenames in grouped citations retain
@@ -87,7 +91,7 @@ source inspection unless the baseline test run is explicitly named.
 | 12 | Confirmed | Per-service failure hook at `src/repository.rs:4490`, wrapped by `tests/support/mod.rs:277–292`. Actor helpers are `tests/support/mutation.rs:487–534`; scoped CLI actor precedent at `tests/cli/keys.rs:743–762`. |
 | 13 | Confirmed | Listed code classes match `src/results.rs:537–661`. Envelope partial precedence is separate (`:273–288`); see fact 19. A class listing is not a claim that each C3 verb reaches every listed code. |
 | 14 | Confirmed | Document occupied path at `mutation/bind/document.rs:415–446`; folder occupied/invalid/no-op at `folder.rs:100–177`. |
-| 15 | Confirmed | Move-to-self uses only_at over the document branch and the committed-state rule (`mutation/bind/document.rs:512–553`). No document branch means external_change, not a primary-only no-op. |
+| 15 | Corrected during Task 3, owner-approved | Move-to-self uses only_at and the committed-state rule (`mutation/bind/document.rs:512–553`). `Position::of` falls back to primary HEAD when the document branch is absent (`mutation/evidence.rs:19–44`), so a primary-only committed move-to-self also returns already_applied/noop, exit 0, without context creation. Task 3 binary evidence exposed the missing fallback in the earlier audit; the owner approved the narrow correction. |
 | 16 | Confirmed | Matching composed and committed slug is already-applied; a different held code is slug_already_assigned (`mutation/bind/ticket.rs:1240–1290`). |
 | 17 | Resolved | A current-token save with no context provisions one before content comparison/checkpointing (`mutation/bind/document.rs:489–503`, `ticket.rs:601–634`; `src/repository.rs:2034–2065,2453–2492,2646–2678`). It can therefore create a context without adding a commit. An early stale-token already-applied answer need not provision one. Existing planned no-op fixtures already use contextual items. Source-derived, not a new context-specific test run. |
 | 18 | Confirmed | Filename `src/repository.rs:112`, WAL `discovery.rs:1539`; missing-registration read has no recovery (`read/resolve.rs:68–80,228–240`), mutation distinguishes never-enabled and offers rebuild for lost registration (`mutation/bind/mod.rs:93–123`, `outcome.rs:804–807`). Structural corruption detects non-database bytes (`src/repository.rs:5607–5621`). F2 removes sidecars but keeps locks (`tests/mutation_replay/index.rs:344–352`). |
@@ -443,7 +447,9 @@ review-ready or closure claim.
 | --- | --- | --- | --- | --- |
 | 0 | Complete | `ad4d3f0..7368902` | Baseline gates and 464 tests; documentation-only correction | Spec approved `d9e961d`; quality re-review approved `7368902`, per controller handoff |
 | 1 | Complete | `7368902a677a8228813f21da8f74d3cafff68ec3..8ae22ab9b34e52cf3404f74841cc5e1348ad393a` | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the owner's Task 2 brief |
-| 2 | Implemented | Base `8ae22ab9b34e52cf3404f74841cc5e1348ad393a`; completion is the commit carrying this entry | 13 index + 7 folders + 7 input-schema + 9 help = **36 passing**; check/fmt/clippy passed | Self-reviewed; independent spec/quality review pending |
+| 2 | Complete | `8ae22ab9b34e52cf3404f74841cc5e1348ad393a..66efd0629d73fa8d762921fd987d143604178175` | 13 index + 7 folders + 7 input-schema + 9 help = **36 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the Task 3 Step 0 brief |
+| 3 Step 0 | Complete; binary conversion passed | Base `66efd0629d73fa8d762921fd987d143604178175`; included in Task 3 completion | Exact checkpoint filter initially **1 passed / 0 failed / 201 filtered**, 5.72s; all five rows, six independent fixtures; passes again inside final documents filter through real CLI children | Owner approved correcting only extra failure-class assertions to partial/Incomplete precedence; table expectations unchanged |
+| 3 | Implemented; independent review pending | Base `66efd0629d73fa8d762921fd987d143604178175`; completion is the commit carrying this entry | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Self-reviewed; owner-approved Fact 15 correction applied narrowly; spec and quality controller reviews are next |
 
 ## Task 1: path observe and ticket check
 
@@ -665,3 +671,439 @@ it is not included in the 36 passing count.
 
 Task-only commit and ticket-only push are authorized. No PR, main integration,
 closure, cleanup, native CI, dogfooding or Task 3 work was performed.
+
+## Task 3 Step 0: interrupted-save checkpoint stopped
+
+Recorded **2026-10-25T03:57:05Z**. The controller's fresh Task 3 brief reports
+**Task 2 spec and quality both APPROVED** at
+`66efd0629d73fa8d762921fd987d143604178175`. Only Step 0 was authorized for this
+session segment, with a mandatory return before the remaining task.
+
+### Preflight and test scope
+
+- Work stayed in the named ticket worktree and branch. Initial status was clean
+  and HEAD matched the supplied base. Read handoff, current main AGENTS via
+  `git show origin/main:AGENTS.md`, ticket/comments, Cycle, design, Step 0 plan
+  and ledger. Worktree registration and main ancestry were checked.
+- Initial and checkpoint fetch/merge found `origin/main` unchanged at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; both merges answered already up
+  to date. HEAD remains the base. Checkpoint merge-tree succeeded with tree
+  `97a1668b094b6f87a28664248164abb992973546`.
+- Added only `tests/cli/documents.rs` and its module registration in the
+  existing `tests/cli.rs` target. The single test
+  `interrupted_saves_follow_the_required_outcomes` contains all five table
+  cases, with row 5 split into restoration after each refusal (six fixtures
+  planned). Execution is sequential and stops on the first failed assertion.
+- Each fixture uses library `DocumentCreate` to create the saved document
+  and a second contextual document, then arms `FailOnce` at
+  `BeforeIndexTransactionCommit` for a body-changing save. Assertions prove
+  partial/Incomplete, checkpoint committed, bytes equal to the Git blob,
+  accepted request and one pending journal row. A plain reopened service over
+  the same data drives retries through `support::mutation::execute_with`.
+- The omitted-title retry fills title from one `show_item` call, sends the
+  requested body, and preserves the original observation. The all-fields retry
+  sends the original full draft without a read. Other-work probes are index
+  refresh and a body-changing save of the second contextual document, not
+  early no-ops/refusals or finished replay. Snapshots include canonical and
+  linked-worktree bytes, HEADs, refs, indexes and status.
+
+### Commands and actual evidence
+
+`devenv shell -- cargo fmt` ran. The first exact test invocation did not
+compile because the new diagnostic attempted to serialize `RequestRecord`,
+which derives Debug/PartialEq but not Serialize. Source inspection at
+`mutation/records.rs:213–235` identified this as a new-test logging error.
+Only the diagnostic changed to print state/attempt/result; no assertion changed.
+Formatting and the exact command were repeated:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes
+```
+
+Result: **0 passed, 1 failed, 0 ignored, 201 filtered**, runtime **3.06s**.
+
+| Row | Observed evidence before stopping |
+| --- | --- |
+| 1: no further edit | Both new index refresh and another-item save returned `blocked` / `recovery_required`, class Blocked (CLI mapping 3). Full snapshots unchanged; original request Accepted, attempt 1, no result, one pending row. Both other request records absent. Original document branch stayed at two commits (create plus interrupted save). |
+| 2: unchanged omitted-field retry | Returned `success` / `ok`, discovery current; original request Finished, attempt 2, pending rows zero. Same branch tip, two commits, exact committed bytes retained; full snapshot also reported unchanged. Subsequent new refresh and another-item save both succeeded and finished their own records. Other document gained exactly one save commit. |
+| 3: edit omitted title then retry omitted | Returned `partial` / `request_mismatch`, **Incomplete**, with historical written/committed/pending effects. Snapshot unchanged; original request Accepted, attempt 1, result absent; one pending row. This matches the table's stated code/no-new-write/accepted-state outcome, but the new test additionally asserted **Input** and failed there. |
+| 4: edited file, all original fields | Authored, not executed. |
+| 5: restore after row 3 or 4 | Both variants authored, not executed. |
+
+Captured Git/file evidence from this run:
+
+| Row | Primary HEAD | Saved document branch checkpoint | File bytes after actor |
+| --- | --- | --- | --- |
+| 1 | `b2da376de44ffaafcfb6bffc65dd945f91d0c969` | `3cbbbc5af0dd1f0ad6c7d7f231dabc2e56491d91` | 157, equal to committed blob |
+| 2 | `636f38bc0fa1e507ef9dfe1e6d4337de6a27e584` | `96543ea8de0283e6a2b03f437b939a67729c1e10` | 157, equal to committed blob |
+| 3 | `2dd38bf4d481851a39e9e8a0781d8c33ec8bb75f` | `93c3a5168c97c2dae1575fee01d5b2f5cf791200` | 157, equal to committed blob before the deliberate title edit |
+
+The interrupted request ID is `01ARZ3NDEKTSV4RRFFQ69G5FX3`; other-work request
+IDs end in `FX4` and `FX5`. Row 2's other-document save checkpoint is
+`29f9b3a941c236aff83147e608475d817db78ad7`. Row 3's mismatch has no operation
+ID or recovery actions and reports commit `93c3a5168c97c2dae1575fee01d5b2f5cf791200`.
+These are temporary-fixture OIDs, not ticket-branch commits. Temporary fixture
+directories are dropped by the test harness; the evidence is retained here
+and in the failed-run transcript, not as retained runtime databases.
+
+### Diagnosis, self-review and controller question
+
+No genuine library/table discrepancy has yet been demonstrated. The new test
+over-specified row 3 by treating the code's Input classification as the
+envelope's class. `src/repository/mutation/replay.rs:123–153` explicitly carries
+durable effects from an accepted request into a mismatched reply, producing
+partial. `src/results.rs:273–288` gives Partial precedence as Incomplete;
+the existing CLI renderer maps this to exit 4. The actor itself has no process
+exit. The design row specifies `request_mismatch`, nothing written, record
+accepted; it does not specify Input or exit 2. Those stated facts held in the
+captured diagnostics, but the assertion stopped before their following checks.
+
+**Question for the controller/owner:** may the extra row-3 classification
+assertion (including the row-5 replay of that path) be corrected to the existing
+partial/Incomplete envelope rule, then the exact Step 0 test rerun with every
+approved table expectation unchanged? The test and table have not been changed
+to fit the runtime answer. The full-field path's extra class assertion has not
+been exercised and also awaits the controller's direction.
+
+Self-review compared all five authored cases to the table and reviewed the
+diagnostic source above. Final `git diff --check` and
+`devenv shell -- cargo fmt --check` passed; status confirmed exactly the four
+intended files and HEAD unchanged.
+No document-save implementation, library/Cargo/output-schema changes, other
+Task 3 steps, subagents, broader tests, native CI, commit or push. The new test,
+registration, this ledger and canonical comment `01M5RK8WM0C2S94ZZS19A7RXVQ`
+are left uncommitted. The comment ID came from the built CLI's `id new` and
+its timestamp from the actual UTC clock. This checkpoint is **STOPPED**, not
+READY, pending controller direction.
+
+## Task 3 Step 0 resumed: owner ruling and passing checkpoint
+
+Recorded **2026-10-25T04:01:33Z**. The owner explicitly approved correcting the
+extra failure-class assertions to the existing Partial/Incomplete precedence,
+including the unexecuted full-field path according to source, and rerunning
+only Step 0. Every approved table expectation must remain unchanged. The
+preceding stopped checkpoint and its diagnosis are retained as history; its
+controller question is now resolved.
+
+### Authorized correction and source check
+
+Only four class values changed in the test: the row-3 mismatch and its row-5
+restoration precondition changed Input to Incomplete; the row-4 full-draft
+refusal and its row-5 restoration precondition changed Blocked to Incomplete.
+No result code, file/HEAD/commit assertion, request-state assertion, fixture,
+table or production code changed.
+
+The full-field source trace was checked before editing:
+
+- `mutation/bind/document.rs:916–933` delegates re-entry/rerun to shared save
+  handling.
+- `mutation/bind/save.rs:388–496` reports the domain error together with
+  recorded commit evidence. Its stopped-effects helper (`:548–568`) retains
+  the checkpoint while the operation is in flight.
+- `mutation/outcome.rs:521–542` maps that checkpoint to written/committed/
+  discovery-pending effects. `mutation/reply.rs:154–161` classifies the
+  envelope from code and effects, and `results.rs:273–288` maps Partial to
+  Incomplete regardless of the code. The mismatch trace from the preceding
+  checkpoint remains applicable to the omitted-field path.
+
+### Verification and all-row evidence
+
+Ran exactly:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes
+```
+
+**Passed: 1 test, 0 failed, 0 ignored, 0 measured, 201 filtered; 5.72s.**
+This one sequential test executed **five table rows / six independent
+interruption fixtures**, covering both restoration paths in row 5.
+
+| Row | Passing assertions |
+| --- | --- |
+| 1 | New index refresh and another-item save both return recovery_required / Blocked (renderer class for exit 3). Full canonical/worktree snapshots unchanged; original request accepted and one pending row; original checkpoint/primary HEAD unchanged. |
+| 2 | Same request with omitted title filled by show_item returns success/ok and discovery current. Request finishes, pending count becomes zero, committed file bytes and checkpoint stay unchanged, and both subsequent new-work requests succeed. The other document gains its one new save commit. |
+| 3 | Uncommitted title edit followed by omitted-title retry returns request_mismatch / Incomplete. Full snapshot unchanged; request stays accepted with one pending row and unchanged checkpoint. |
+| 4 | The same edit followed by every original draft field returns external_change / Incomplete. Full snapshot unchanged; request stays accepted with one pending row and unchanged checkpoint. |
+| 5 | After each of rows 3 and 4, restoring the exact committed bytes then retrying with title omitted completes discovery and finishes the request, with zero pending rows and no second save commit. |
+
+Every fixture first proves the actor's partial/Incomplete result, committed
+checkpoint, file equality with the committed Git blob, accepted request and
+one pending operation. Saved-document commit count stays **two** (create plus
+interrupted save) through each retry; primary HEAD remains unchanged. The
+actor has no process exit. Step 12's binary retry evidence remains owed.
+
+### Return state and self-review
+
+- Resumed/checkpoint fetch and merge both found main unchanged at `e49f978`;
+  HEAD remains `66efd0629d73fa8d762921fd987d143604178175`. Merge-tree succeeded
+  with tree `97a1668b094b6f87a28664248164abb992973546`.
+- `devenv shell -- cargo fmt --check` and `git diff --check` passed. Self-review
+  confirms the sole Rust changes in this resumed segment are the four
+  owner-authorized class values; all approved table assertions are preserved.
+- Added canonical passing-checkpoint comment `01M5RKH2MWH74YBP39KX97MQBZ`,
+  using the built CLI's `id new` and the actual UTC clock. The earlier stop
+  comment remains as history.
+- Five files remain uncommitted: the new document test module, its existing
+  target registration, this ledger, and the two checkpoint comments. No
+  commit/push, broader test run, subagent or remaining Task 3 work occurred.
+
+**READY:** Step 0 passed, with no unresolved checkpoint issue. Return to the
+controller now; continue remaining Task 3 only when this same session is resumed.
+
+## Task 3 remaining steps: stopped on primary-only move-to-self
+
+Recorded **2026-10-25T04:11:35Z**. The controller authorized remaining Steps
+1–13 in this same session, with the Step 0 assertions (including the approved
+Incomplete correction) retained, Task 3 commit/ticket-only push after passing
+checks, and independent controller reviews before Task 4. The earlier Task 2
+approvals and Step 0 owner ruling remain recorded above.
+
+### Work completed before the stop
+
+- Added bin-private `fill.rs` and four pure tests in `fill_tests.rs`, plus the
+  module declaration. The prescribed red command
+  `devenv shell -- cargo test --locked --bin manyhands-cli fill::` failed on
+  the absent fill types/functions. After implementation the same command
+  passed **4 / 0 failed / 178 filtered**. The read wrapper was not yet called
+  by dispatch, so that intermediate run reported three dead-code warnings;
+  subsequent adapter compilation had no warnings.
+- Fill tests cover complete input/no read, omitted title, omitted body with
+  exact CRLF/lone-CR/non-BMP/no-final-newline bytes and empty body, and
+  wrong-kind/unfillable reads. The wrapper preserves read errors and request
+  IDs, scopes wrong-kind/missing-field refusals to the item, and sets all
+  refusal effects to not_requested.
+- Added 26 binary tests beside the existing Step 0 test. Exact red run:
+  `devenv shell -- cargo test --all-features --locked --test cli documents`:
+  **1 passed / 26 failed / 201 filtered**, 8.73s. All 26 new tests failed on
+  command_unavailable; the original Step 0 test passed.
+- Implemented the three authoring adapters/dispatch arms, closed input schemas
+  and examples. Flags precede input; save fills only omitted draft fields once
+  before the driver, preserves the caller's observation, and clones the full
+  draft for bounded retries. No identity prompts or library workaround.
+- Delivered literal catalog entries and regenerated E1 one verb at a time:
+  create, save, move. Each exact help-filter generation command used
+  `MANYHANDS_UPDATE_GOLDEN=1` and passed **9 tests / 219 filtered**. Inspected
+  each cumulative diff before enabling the next verb. Only the three document
+  commands' availability/repository/options changed in root JSON/text;
+  summaries and C3 delivery remain exact. Ticket help is byte-identical.
+- Converted Step 0's retries and other-new-work probes to isolated CLI children.
+  Its assertions are unchanged. A test-only BinaryAnswer decodes code,
+  outcome and discovery from schema-checked JSON, retains the raw envelope in
+  diagnostics, and maps the actual process status to the asserted failure
+  class. It does not execute a second library request. The interrupted actor
+  still uses FailOnce/DocumentCreate and plain services for state inspection.
+
+### First implemented run and mandatory stop
+
+```sh
+MANYHANDS_UPDATE_GOLDEN=1 devenv shell -- cargo test --all-features --locked --test cli documents
+```
+
+Result: **24 passed / 3 failed / 0 ignored / 201 filtered**, 11.20s.
+The binary `interrupted_saves_follow_the_required_outcomes` passed, including
+all five rows and both restoration paths; no Step 0 regression occurred.
+
+**Genuine contract discrepancy:**
+`documents::a_move_to_its_own_path_is_a_noop` first passes the contextual no-op
+case, then sends a fresh request for primary-only document
+`01ARZ3NDEKTSV4RRFFQ69G5FD0` (`docs/guide.md`) to its own path. The approved
+design Fact 15, implementation Step 8 and controller brief require
+external_change / exit 3 for this primary-only case. Actual binary output:
+
+```json
+{
+  "command": "document move",
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+  "operation_id": null,
+  "outcome": "noop",
+  "code": "already_applied",
+  "scope": {
+    "repository": "/tmp/.tmpNwXXU5",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+    "branch": null,
+    "worktree": null,
+    "remote": null
+  },
+  "effects": {
+    "write": "unchanged",
+    "checkpoint": "unchanged",
+    "discovery": "not_requested",
+    "publication": "not_requested",
+    "integration": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null
+  },
+  "data": { "id": "01ARZ3NDEKTSV4RRFFQ69G5FD0", "path": "docs/guide.md" },
+  "recovery": []
+}
+```
+
+Actual process status **0**, expected **3**. The error is returned from the
+test's existing checked helper before its final snapshot comparison, so no
+post-refusal snapshot assertion is claimed for this failed primary-only call.
+The contextual no-op snapshot assertion immediately before it passed.
+
+Source diagnosis confirms this is not a fixture's accidental editing context:
+
+1. `tests/support/items.rs:252–293` commits DOCUMENT_A on primary and refreshes;
+   it creates no item worktree. This test creates only DOCUMENT_NEW, a
+   different ID, before the primary-only call.
+2. `mutation/bind/document.rs:550–552` detects move-to-self and calls
+   `only_at`, then the already-applied rule.
+3. `only_at` (`:512–526`) calls `Position::of` for the document branch and
+   reads files from the returned base OID.
+4. Crucially, `mutation/evidence.rs:19–44` explicitly falls back to primary
+   HEAD when that branch does not exist (`:34–38`). Thus a missing document
+   branch does **not** make `only_at` false; it examines primary's committed
+   file. This detail was missed by the earlier Fact 15 audit.
+5. `document.rs:381–388` then applies the committed-content no-op rule in the
+   item's primary context. No new context/operation is reported.
+
+**Owner ruling requested:** approve documenting and testing the existing
+primary-only committed move-to-self no-op (and narrowly correcting Fact 15
+and directly dependent plan/Cycle/audit wording), or provide the intended
+resolution of this library/contract discrepancy. No production workaround,
+library change or expectation/table edit has been made to fit this answer.
+
+### The other two new-test failures in that same run
+
+These are recorded separately from the genuine contract discrepancy. No fix
+was made after the mandatory stop:
+
+- `document_verbs_have_human_success_refusal_and_noop_output` expects the
+  literal code `already_applied` in human stdout. Existing
+  `human_admin.rs:139–147` prints **“Already applied; nothing changed.”** and
+  metadata/data, not the code. The first (create) success golden was written;
+  the test stops on its human no-op assertion before save/move text cases.
+  This is a new-test output assumption, not a required-contract failure.
+- `document_create_replays_and_refuses_a_used_or_escaping_path` reaches the
+  malformed item_id case and correctly gets invalid_input, but incorrectly
+  expects JSON `message` to contain `item_id`. The existing refusal adapter
+  (`mutate.rs:273–301`, `render.rs:124–133`) passes the field-specific detail
+  only to human output; JSON keeps the fixed envelope message. The adapter
+  uses the existing InputError::InvalidValue with field item_id. The new test
+  should check the field-only detail in human output on resume, while keeping
+  the JSON invalid_input/request-ID/privacy assertions. No C2 driver change.
+
+### Preserved state, remaining work and self-review
+
+- Initial/resumed/checkpoint fetches and merges leave main at `e49f978`, HEAD
+  at `66efd0629d73fa8d762921fd987d143604178175`. Checkpoint merge-tree succeeds
+  with tree `97a1668b094b6f87a28664248164abb992973546`.
+- `git diff --check` passed. Self-review traced the genuine mismatch through
+  source and distinguished the two test-output assumptions above. Full final
+  fmt/check/clippy and the Step 12 input_schemas/fill reruns have **not** run
+  after these changes; the task is not review-ready.
+- Seven new JSON goldens and create's text golden were generated. The two
+  save/move text goldens are still owed. New output goldens have not completed
+  final review. The three input examples exist; create's actual example ran
+  through the binary, while save/move example runtime evidence remains owed
+  to the planned example checks. No output schema changed.
+- All work is uncommitted; no Task 3 commit/push. The Step 0 comments remain
+  preserved, and this stop adds canonical comment `01M5RM3EP5798TPZQQRB2H3456`,
+  ID from the built CLI and timestamp from the actual UTC clock.
+- No subagent, broad test suite, native CI, PR, main integration, ticket
+  closure, cleanup or Task 4 work occurred. No existing test body changed;
+  existing-test changes are registrations/additions and E1 only.
+
+Resume this same implementer only after the owner resolves the genuine
+primary-only move-to-self discrepancy. Do not change its expected outcome or
+the approved documents without that ruling.
+
+## Task 3 completion: owner ruling resolved, local gates passed
+
+Recorded **2026-10-25T04:19:30Z**. The owner explicitly approved accepting the
+existing **primary-only committed move-to-self `already_applied`/`noop`, exit
+0**, correcting Fact 15 and dependent wording/tests, with no library workaround.
+The owner also authorized correcting the two new-test output assumptions using
+the existing human/JSON contract and continuing the remaining Task 3 gates,
+goldens, ledger/comment, task commit and ticket-only push. This resolves the
+stop immediately above; its original source/binary evidence remains history.
+
+### Narrow corrections and verification
+
+- Corrected design Fact 15, the implementation plan's Review Focus 3 and
+  Step 8 bullet, the API audit's move no-op/inventory wording, and this ledger's
+  fact inventory. Added a superseding owner note beside the Cycle's historical
+  review record. No other approved policy or code-set count changed.
+- The primary-only test now requires the approved noop/exit 0, no commit OID,
+  no document branch or worktree before/after, and an identical repository/
+  linked-worktree snapshot. Its contextual no-op assertions remain intact.
+  This adds executed state evidence beyond the original stopped-run output.
+- Human no-op tests now require the existing exact leading message,
+  “Already applied; nothing changed.” Malformed item_id retains the JSON
+  invalid_input/request-ID/privacy checks and verifies the item_id-only detail
+  through human stderr. No production behavior changed for these corrections.
+- Regenerated the document goldens only with `MANYHANDS_UPDATE_GOLDEN=1`:
+  **27 passed / 0 failed / 201 filtered**, 10.41s, including the two previously
+  owed human cases. Read all **7 JSON + 3 text** goldens. Only root, request ID,
+  operation ID and checkpoint OID are replaced; item IDs, paths, effects,
+  outcome/code and recovery remain literal. All are registered.
+- The next input-schema run found an in-scope new-schema error: this task had
+  added a regex `pattern` on item_id, unsupported by the existing schema
+  checker's keyword set (`tests/support/schema.rs:99–166`). Result was **4
+  passed / 3 failed / 221 filtered**. Removed only that added keyword from
+  the new schema, retaining the planned required-string shape and the CLI's
+  canonical ItemId validation. The checker and every old test are unchanged.
+  The same filter then passed all 7 tests.
+- All-target clippy identified one needless borrow in the new fill read-error
+  wrapper. Removed that borrow only; the repeated prescribed clippy passed.
+  No pre-existing test lint or outside-file fix was needed.
+
+### Final commands and counts
+
+All Rust commands ran through Devenv in this ticket worktree. Tests used only
+the task's named targets/filters, one positional filter per command. Final
+golden-checking runs had no update variable.
+
+| Command | Final result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli documents` | **27 passed**, 0 failed/ignored, 201 filtered; final post-lint run 10.24s. Includes the binary Step 0 test and all five required rows/six fixtures, plus Step 7's separately named interruption case. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 221 filtered; includes all three new closed schemas and examples. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli fill::` | **4 passed**, 0 failed/ignored, 178 filtered; final post-lint run. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 219 filtered; final run without regeneration. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total **47 passing tests** in these final filters: 43 integration + 4 unit;
+**31 new tests** in Task 3 (27 document integration + 4 fill unit). Earlier
+baseline/task tests are not counted again. No broad/full suite or native CI.
+
+### Self-review, scope and return
+
+- Reviewed the thin adapters, flag/input/root/ID/fill ordering, one show read
+  only when needed, caller-token preservation, draft cloning before retries,
+  no identity prompts, closed input schemas and all ten output goldens.
+- The source-level fill tests remain repository-free. Binary tests cover
+  offline checkpoints, metadata/body preservation, exact unusual body bytes,
+  normalization, stale observations, replay/mismatch, wrong-kind scope and
+  request ID, both missing-registration paths, cache-loss replay, interrupted
+  saves, move collisions/context tokens, primary-only moves, malformed input,
+  human success/refusal/no-op and progress. Snapshots prove required refusal/
+  replay/no-op invariance; explicit branch/count/byte assertions prove no
+  second checkpoint. Step 0's approved assertions survived binary conversion.
+- The three input examples validate. Create's actual example bytes also run
+  through the binary. Task 7 owns the full R-13 examples table/runtime checks,
+  including the token-placeholder save/move examples; this is not claimed as
+  completed ahead of that task.
+- Reviewed E1's per-verb generation diffs and final golden reads: only the
+  root-help JSON/text files changed; ticket help remained identical. Existing
+  Rust tests/support only gained module/golden registrations. No library,
+  Cargo, output-schema, shared mutation-driver, old-test semantic edit, or
+  new integration target.
+- Final checkpoint fetch/merge leaves `origin/main` at
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge already current.
+  `git merge-tree --write-tree HEAD origin/main` succeeds with tree
+  `97a1668b094b6f87a28664248164abb992973546` at the unchanged task base.
+  Status, diff, whitespace and last ten commits inspected before committing.
+- This completion includes all earlier uncommitted Step 0 evidence/comments,
+  Task 2's reported spec/quality approvals, both owner rulings and canonical
+  completion comment `01M5RMHYBJED90MVAY9KR0S6PZ`. ID allocated by the built
+  CLI; timestamp taken from the actual UTC clock.
+
+No unresolved Task 3 blocker. Commit message:
+`feat(cli): document create, save and move with the save patch`, with the
+required co-author trailer. Publication is restricted to this ticket branch.
+Independent controller spec/quality reviews are next; Task 4 remains unstarted.
+No subagents, PR, main merge, ticket closure, cleanup or dogfooding operation.

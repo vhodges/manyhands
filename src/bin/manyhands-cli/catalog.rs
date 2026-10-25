@@ -671,9 +671,62 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Required,
         },
     },
-    planned("document", "create", "Create a document.", "C3"),
-    planned("document", "save", "Save a document.", "C3"),
-    planned("document", "move", "Move a document.", "C3"),
+    CommandSpec {
+        resource: "document",
+        verb: "create",
+        summary: "Create a document.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "document",
+        verb: "save",
+        summary: "Save a document.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "document",
+        verb: "move",
+        summary: "Move a document.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     planned("document", "repair", "Repair a document.", "C3"),
     planned("ticket", "create", "Create a ticket.", "C3"),
     planned("ticket", "save", "Save a ticket.", "C3"),

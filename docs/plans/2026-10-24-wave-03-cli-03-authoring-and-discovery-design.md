@@ -170,9 +170,13 @@ Task 0 re-checks all 37 facts before any code.
     - `folder create` outside `docs/`: `invalid_path`;
     - `folder create` of an existing folder: a no-op.
 15. A move to the document's own path takes the already-applied rule
-    (`document.rs:550–553`, `only_at` `:512–527`). It is a no-op only when
-    the document's branch tip holds the document there and nowhere else. A
-    document on primary alone answers `external_change`.
+    (`document.rs:550–553`, `only_at` `:512–527`). It is a no-op when the
+    document is committed there and nowhere else on its document branch, or
+    on primary when that branch is absent: `Position::of` falls back to
+    primary HEAD (`mutation/evidence.rs:19–44`). A primary-only committed
+    move-to-self therefore answers `already_applied`/`noop`, exit 0, without
+    creating a context. **Owner-approved Task 3 correction**, supported by
+    source inspection and the binary checkpoint recorded in the execution ledger.
 16. A slug assignment whose composed code equals the committed slug is
     already applied, a no-op (`ticket.rs:1247–1268`). `slug_already_assigned`
     needs a different code already in the file.

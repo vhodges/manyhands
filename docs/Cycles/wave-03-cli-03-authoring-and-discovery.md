@@ -460,6 +460,14 @@ no-op/refusal and finished-replay answers remain unchanged. Task 3's blocked
 requests ask for actual new work; its interrupted-save retry expectations
 are unchanged.
 
+**Task 3 owner correction:** the source-review claim above that move-to-self
+needs an editing context is superseded. A primary-only document committed at
+its current path also answers `already_applied`/`noop`, exit 0, without creating
+a context or commit. `Position::of` falls back to primary HEAD when the document
+branch is absent (`mutation/evidence.rs:19–44`). Design Fact 15 and the directly
+dependent plan/audit wording are corrected under explicit owner approval;
+the execution ledger records the source and binary evidence.
+
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing
 beyond the ticket branch, merging, closing and worktree cleanup each need
