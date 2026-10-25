@@ -195,14 +195,23 @@ fixtures use an existing editing context. “No change” here means no changed
 canonical bytes or new checkpoint: it does not promise zero application
 cache writes or zero same-byte filesystem writes.
 
+For both save verbs, the intended owned content must already be committed
+(HEAD-equal) for a no-op. Equality with the current worktree file alone is
+insufficient: a ticket save can skip rewriting matching parsed content yet
+still checkpoint an uncommitted edit (`src/repository.rs:2646–2691`). The
+checkpoint compares the resulting tree with HEAD (`:3561–3590`). The existing
+test `tests/mutation_replay/execute.rs:1041–1078` asserts a commit without a
+rewrite; Task 0 inspected this test source, not a new run. This qualification
+is the fifth owner-approved Task 0 ruling, following quality review.
+
 | Mutation | Fresh-request no-op capability and binding rule |
 | --- | --- |
 | `folder create` | Yes: an existing directory is `AlreadyPresent` and maps to `already_applied` after refresh (`bind/folder.rs:149–154`). The refresh still runs; no folder or checkpoint is added. |
 | `document create` | Yes: same ID, path and intended content committed in the effective/context copy; create also requires empty unknown metadata (`bind/document.rs:311–329,399–443`). Other content/path is occupied, not a no-op. |
-| `document save` | Yes: unchanged canonical content on a contextual item gives no new checkpoint; a stale token with the intended content committed also answers already-applied (`bind/document.rs:489–503`, `bind/save.rs:124–139`; `tests/mutation_replay/documents.rs:249–286`). A current-token domain save may rewrite identical bytes. Hand-written front-matter normalization is not a byte-preserving no-op. |
+| `document save` | Yes: the intended serialized content on the contextual item is already committed (HEAD-equal), so there is no new checkpoint; a stale token with intended content committed also answers already-applied (`bind/document.rs:489–503`, `bind/save.rs:124–139`; `tests/mutation_replay/documents.rs:249–286`). A current-token domain save may rewrite identical bytes; matching uncommitted content can still be checkpointed. Hand-written front-matter normalization is not a byte-preserving no-op. |
 | `document move` | Yes: the document is already at the destination, committed there and nowhere else on its document branch (`bind/document.rs:512–553`). Primary alone is not enough. |
 | `ticket create` | Yes: existing intended ticket committed, including the requested relationships; the already-written slug is retained rather than recomposed (`bind/ticket.rs:538–598`). |
-| `ticket save` | Yes: parsed fields and requested relationship changes equal what is already held; no file write or new checkpoint (`src/repository.rs:2646–2678`, `mutation/outcome.rs:492–495`). |
+| `ticket save` | Yes: parsed fields and requested relationships match the contextual file, and that intended content is already committed (HEAD-equal): no file rewrite or new checkpoint. Matching parsed content skips the rewrite, not the checkpoint; uncommitted content can still produce a commit (`src/repository.rs:2646–2691,3561–3590`; `tests/mutation_replay/execute.rs:1041–1078`). |
 | `ticket slug-assign` | Yes: the composed code equals the committed existing slug (`bind/ticket.rs:1247–1268`); a different code is `slug_already_assigned`. |
 | `document repair` | Yes: the contextual file exactly equals the corrected source and is committed (`bind/repair.rs:469–508,688–695`). A fresh execution can use its own confirmation obtained before another actor completed the repair; a new prepare after completion itself returns the no-op with no confirmation. Reusing a consumed confirmation under a different request is not this case. |
 | `ticket repair` | Yes: the same shared repair rule, preserving the source's required closure values. The primary nonconforming file remains available until integration (`bind/repair.rs:446–508,741–752`). |

@@ -215,8 +215,10 @@ Authority, in order:
   matter in the library's canonical order and style. Values, unknown keys,
   ULIDs and the body are preserved, but formatting is not. Saving a
   hand-written document commits that normalization even when no value
-  changes. A ticket save compares parsed values, and is a no-op when nothing
-  changed.
+  changes. A ticket save compares parsed values to decide whether to rewrite
+  the file, but still checkpoints it. For either save verb, no-op requires
+  the intended content already committed (HEAD-equal); matching uncommitted
+  content can skip a rewrite yet still create a checkpoint.
 - **Status text `closed` is ordinary metadata.** Neither save nor create can
   write closure fields.
 - **Empty folders.** They are local and invisible to Git until they hold
@@ -274,7 +276,7 @@ Authority, in order:
 
 | Wave exit evidence | Required proof |
 | --- | --- |
-| Offline checkpoints and no-ops | Through the binary, in a repository with no remote: `document create`, `document save`, `document move`, `ticket create`, `ticket save` and `ticket slug-assign` each commit one checkpoint on the item's branch. Effects say `publication: not_requested`, and the exit is 0. On an item the library wrote, a fresh request that writes what it already holds answers `noop` and makes no commit. A save that omits every draft field changes no value, unknown key or body byte. |
+| Offline checkpoints and no-ops | Through the binary, in a repository with no remote: `document create`, `document save`, `document move`, `ticket create`, `ticket save` and `ticket slug-assign` each commit one checkpoint on the item's branch. Effects say `publication: not_requested`, and the exit is 0. On a library-written item whose intended content is already committed (HEAD-equal), a fresh request that writes that content answers `noop` and makes no commit. A save that omits every draft field changes no value, unknown key or body byte. |
 | Stale writes | A stale observation on `document save`, `document move`, `ticket save`, `ticket slug-assign` and on repair's `--confirm` answers `external_change`, exit 3. The file's bytes, the branch tip and the worktree are unchanged. |
 | Invalid and malformed repair | A corrected source that is not conforming is refused at prepare with the binding's code, and nothing is written. A path that holds no nonconforming entry is refused. A corrected ID that another item holds is `identity_ambiguous` and creates no context. A repair keeps a closed ticket's closure fields. |
 | Adoption retry | A marker-only document is adopted under the ID its corrected source names. A library-level actor stops a repair after its write. The CLI completes it under the same request ID and confirmation, with one commit and the same ID. A replay of the finished repair writes nothing. |

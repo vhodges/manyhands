@@ -127,8 +127,13 @@ Task 0 re-checks all 37 facts before any code.
      (`will_write_destination`, `src/repository.rs:2265`). So saving a
      hand-written document commits a normalization, even with no value
      changed.
-   - A ticket save compares parsed items (`src/repository.rs:2646–2658`). A
-     save that changes no value is a no-op.
+   - A ticket save compares parsed items and skips rewriting equal content,
+     but still calls the checkpoint (`src/repository.rs:2646–2691`). For
+     either save verb, a no-op requires the intended owned content to be
+     already committed (HEAD-equal); the checkpoint compares against HEAD
+     (`:3561–3590`). A ticket save of matching uncommitted content can still
+     checkpoint without a rewrite (`tests/mutation_replay/execute.rs:1041–1078`). This
+     qualification was owner-approved after Task 0 quality review.
 10. An index binding answers with no `data` and `effects.discovery` `current`
     on success. `IndexRebuild` restores an unavailable index before its
     binding runs (`src/repository/mutation/execute.rs:96–141`,
@@ -533,7 +538,7 @@ unless the row says otherwise.
 | Sequence | Outcome |
 | --- | --- |
 | Save with only `body`, the observation current | One checkpoint. Every other value and unknown key equal; the body byte for byte. |
-| Save with every draft field omitted, on an item the library wrote | `noop`, no commit, the file byte-identical. |
+| Save with every draft field omitted, on a library-written item whose intended content is already committed (HEAD-equal) | `noop`, no commit, the file byte-identical. |
 | Save with every draft field omitted, on a hand-written document | One checkpoint that only normalizes the front matter: values equal. |
 | A third party changed `title`; the caller saves only `body` with the old token | `external_change`, exit 3; nothing written. |
 | The output of a successful save is lost; same request, same input | The stored result is replayed; one commit. |
@@ -996,8 +1001,10 @@ Each ruling is listed with its cost if wrong.
   CLI RFC's amendment copies and links it. *Cost:* the examples are files,
   not prose.
 - **R-14 No-op inventory.** A no-op is a fresh request that writes nothing,
-  on an item that has an editing context (fact 17). Task 0 lists which of
-  the eleven mutations can be one; slug-assign can (fact 16). Each that
+  on an item that has an editing context (fact 17). Save no-op fixtures also
+  require the intended content already committed (HEAD-equal, fact 9).
+  Task 0 lists which of the eleven mutations can be one; slug-assign can
+  (fact 16). Each that
   cannot has a reason. *Cost:* none.
 - **R-15 Test layout.** New modules in the `cli` target. *Cost:* the target
   grows. A new target would need a CI list change.

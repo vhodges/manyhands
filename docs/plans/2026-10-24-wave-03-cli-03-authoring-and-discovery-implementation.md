@@ -461,7 +461,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
     - a malformed `item_id` is `invalid_input`, and stderr does not contain it.
 - [ ] **Step 6: Add the save tests,** one per document row of the design's save-patch table. The second actor is `enabled.service` calling the library directly.
   - `a_body_only_save_keeps_every_other_value`: the item is made by `document create`. Compare by value, and the body byte for byte.
-  - `a_save_that_omits_every_field_is_a_noop_for_a_library_written_document`: `noop`, no commit, the file byte-identical.
+  - `a_save_that_omits_every_field_is_a_noop_for_a_library_written_document`: the intended content is already committed (HEAD-equal); `noop`, no commit, the file byte-identical.
   - `a_save_that_omits_every_field_normalizes_a_hand_written_document`: `docs/guide.md`. One commit, with values equal (fact 9).
   - `a_title_change_by_another_actor_makes_a_body_only_save_external_change`.
   - `a_retry_after_lost_output_replays`.

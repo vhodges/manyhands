@@ -58,9 +58,10 @@ comment `01M5RD6N6KZYYQBQMGPNXR3B66`. No separate build was needed.
 
 ## Confirmed facts
 
-All **37** design baseline facts were rechecked: **34 confirmed** (with the
+All **37** design baseline facts were rechecked: **33 confirmed** (with the
 scope qualifications stated below), **1 previously unknown fact resolved**
-(17), and **2 corrected with explicit owner approval** (19 and 21).
+(17), and **3 corrected with explicit owner approval** (9, 19 and 21,
+including the post-quality-review correction to fact 9).
 Library paths abbreviated `mutation/`, `read/`, `discovery.rs` and
 `recovery.rs` are under `src/repository/`; `bind/` abbreviates
 `src/repository/mutation/bind/`. Bare filenames in grouped citations retain
@@ -79,7 +80,7 @@ source inspection unless the baseline test run is explicitly named.
 | 6 | Confirmed | `read/items.rs:1963–1995,2115–2219` checks root/active context and canonical/listed-nonconforming path; no owner-item restriction. `mutation/bind/document.rs:556–566` compares the same context token; repair reads primary (`repair.rs:350–359`). |
 | 7 | Confirmed | `ProposedRelationships` has typed complete deps/parent (`read/items.rs:107–116`); the read checks exactly that proposal (`:1998–2054`). Rejection is data in a successful read. |
 | 8 | Confirmed, qualified | Conforming title/body are Some, including an empty body (`read/items.rs:1110–1154`); optional non-string project/team is invalid (`src/canonical.rs:1106–1122`). An already-indexed file that becomes nonconforming can return a bare DTO (`items.rs:1812–1822`) rather than directly failing. The approved fill step 4 already converts that unfillable DTO to item_not_found; no task change. |
-| 9 | Confirmed for saves | Unknown values and exact body survive serialization, with front matter re-emitted (`src/canonical.rs:911–980,1026–1063`; order test `tests/canonical_foundation.rs:449–461`). Documents write their destination (`src/repository.rs:2265–2296`); tickets compare parsed items (`:2646–2678`). This save rule is not a claim that repair normalizes its input: repair writes source verbatim (`mutation/bind/repair.rs:579–582`). |
+| 9 | Corrected, approved | Unknown values and exact body survive serialization, with front matter re-emitted (`src/canonical.rs:911–980,1026–1063`; order test `tests/canonical_foundation.rs:449–461`). Documents write their destination (`src/repository.rs:2265–2296`); tickets compare parsed items to decide rewriting, then still checkpoint (`:2646–2691`). Both save no-ops require intended content already committed (HEAD-equal); the checkpoint compares HEAD (`:3561–3590`). Matching uncommitted ticket content can be committed without a rewrite (`tests/mutation_replay/execute.rs:1041–1078`). Quality review found the missing qualification; the owner approved it as ruling 5 below. Repair still writes source verbatim (`mutation/bind/repair.rs:579–582`). |
 | 10 | Confirmed | Index success has no data, code ok and discovery current (`mutation/bind/index.rs:80–88`). Execute restores an unavailable index first (`mutation/execute.rs:83–141`). Rebuild root selection has the separately approved exception below. |
 | 11 | Confirmed | Identity refusal deletes the save record and retains its uncommitted context; retry uses a fresh observation (`tests/mutation_replay/execute.rs:1100–1182`). Tokens include branch name (`read/items.rs:1187–1217`). |
 | 12 | Confirmed | Per-service failure hook at `src/repository.rs:4490`, wrapped by `tests/support/mod.rs:277–292`. Actor helpers are `tests/support/mutation.rs:487–534`; scoped CLI actor precedent at `tests/cli/keys.rs:743–762`. |
@@ -369,12 +370,44 @@ The Cycle Review Record retains three independent planning-review rounds:
 38 contract-lens and 22 source-lens findings in round 1; 22 scoped/adversarial
 findings in round 2; 16 in round 3. Decisions 1–7 and R-1–R-18 were approved
 with the documents at `e7b2b71`. Round-3 edits had no further independent
-review. The optional decision-7 library ticket was not filed. No Task 0
-independent review has occurred; the controller must obtain it before Task 1.
+review. The optional decision-7 library ticket was not filed. Task 0's
+implementation-review status is recorded below.
+
+## Task 0 review and fifth owner ruling
+
+Recorded 2026-10-25T03:27:38Z, as conveyed by the controller/owner:
+
+- **Spec review:** approved `d9e961df04ee3b338247b0032d5194ecbc805923`.
+- **Quality review:** must-fix finding on the audit's document/ticket save
+  no-op wording and design Fact 9. Equality with the worktree file was
+  incorrectly sufficient for “no new checkpoint.”
+- **Verified mechanism:** ticket save conditionally rewrites at
+  `src/repository.rs:2646–2678`, then calls the checkpoint at `:2680–2691`.
+  The checkpoint compares the resulting tree against HEAD (`:3561–3590`).
+  `tests/mutation_replay/execute.rs:1041–1078` explicitly covers committing
+  matching uncommitted content without rewriting it. This test was
+  source-inspected, not rerun for the documentation correction.
+- **Fifth owner ruling:** qualify both save no-ops to require intended
+  content already committed (HEAD-equal). Matching uncommitted content may
+  skip rewriting yet still checkpoint. No new behavior or test is requested.
+- **Resolution:** the audit's two save no-op rows and shared precondition,
+  design Fact 9/save-patch row/R-14, directly dependent Cycle wording and
+  the plan's existing no-op fixture description now state that condition.
+  Fact 9 is marked corrected in the fact inventory. The **9 capable / 2
+  incapable** inventory and **40 library / 42 CLI-inclusive codes** are unchanged.
+- **Evidence retained:** baseline check/fmt/clippy and **464 tests**; no broad
+  rerun for documentation-only edits. Self-review `git diff --check` passed;
+  comparison with `d9e961d` confirms src/tests/Cargo unchanged. A separate fix commit follows
+  `d9e961d`, with its own diff/whitespace review and ticket-only push.
+  Canonical review comment: `01M5RHJZQ672X4JG8VPYVPM3P3` (ID from the built CLI).
+- **Next gate:** controller-requested re-review of the correction before
+  Task 1. The earlier spec approval is not claimed as approval of this fix,
+  and quality re-review is still pending.
 
 ## Task 0 self-review and checkpoint
 
-Completed 2026-10-25T02:54:18Z. Scope reviewed: the original audit, ledger and
+Initial checkpoint `d9e961d`, completed 2026-10-25T02:54:18Z. Scope reviewed:
+the original audit, ledger and
 canonical comment plus only the owner-authorized Cycle/design/plan corrections.
 All four stops were returned to the owner and resumed on explicit approval.
 No unresolved blocker remains. The source/test/Cargo tree is unchanged from
@@ -389,15 +422,16 @@ Read-only behind/ahead counts additionally confirmed all six dogfooding save
 targets are 865 commits behind origin/main and retain the unpublished counts
 in fact 36. These observations do not replace Task 9's fresh preflight.
 
-The Task 0 checkpoint is the commit containing this ledger and the canonical
-comment. The pre-checkpoint fetch and merge were repeated: origin/main stayed
+The initial Task 0 checkpoint is `d9e961df04ee3b338247b0032d5194ecbc805923`.
+Its pre-checkpoint fetch and merge were repeated: origin/main stayed
 at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, the merge was already current,
 and merge-tree was clean. The three defect searches still had no matches.
 `git diff --exit-code ad4d3f0 -- src tests Cargo.toml Cargo.lock` confirmed
 the source/test/Cargo baseline is unchanged.
 Publication is authorized only to `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`.
-Independent spec/quality reviews remain the controller's next step before
-Task 1; this is not a whole-Cycle review-ready or closure claim.
+Current review status is in the review record above; controller-requested
+re-review remains required before Task 1. This is not a whole-Cycle
+review-ready or closure claim.
 
 ## Task log
 
