@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3 CLI Authoring And Discovery Maintenance Design"
 date: 2026-10-24
-status: "approved"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,11 +12,39 @@ id: "01M5QY019WPP3AVCKD13XKMJNA"
 
 ## Execution Status
 
-**Approved by the product owner on 2026-10-24**, at `e7b2b71`, for
-subagent-driven execution. Implementation is authorized, and so is named
-edit E1. The Cycle's Status lists what the approval does not cover. Cycle
-decisions 1–7 and all three review rounds are applied. Nothing is
-implemented yet.
+**Review-ready, 2026-10-25.** The design was **approved by the product owner on
+2026-10-24**, at `e7b2b71`, for subagent-driven execution, including named edit E1.
+Cycle decisions 1–7 and the approved review rulings remain the contract.
+
+All thirteen approved verbs are implemented and reviewed:
+
+- document create, save, move and repair;
+- folder create;
+- ticket create, save, repair and slug-assign;
+- index refresh and rebuild;
+- path observe and ticket check.
+
+Tasks 0–8 reviews are complete. Whole-branch SPEC/QUALITY both approved
+`ad4d3f0..806057d3`; the separately reviewed switch SPEC/QUALITY both approved
+`8da3890..297bd781`, with no actionable findings, new gaps or questions.
+The six real dependency saves/value checks/pushes completed, recorded in
+`8da3890`; AGENTS.md/file-ticket switch completed in `297bd781` and takes effect
+from up-to-date main after merge. The C4 checker stop/resume history is retained.
+
+Verification is accepted by **explicit owner exception**, recorded in `5cba600`:
+the single full suite at `f9618f7` was **4528 passed / 1 failed / 1 ignored** across
+**43 targets**, exit **101**, 6239s. The authorized test-baseline correction at
+`806057d3` passed the exact test and then **46 distinct module tests**, plus
+check/fmt/clippy. No green full-suite result or second full run is claimed.
+Production library behavior is unchanged; the narrow pre-existing-test exception
+and diagnostic uncertainty are recorded in the
+[execution ledger](2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md).
+
+Task 9's authorized work through Step 5 is complete and review-ready. The ticket
+stays **open**; Step 6 closure and PR/merge/cleanup/native CI require separate
+authorization. Baseline facts and Known Limits below retain their approved
+planning wording; the ledger records Task 0's rechecks/resolutions and later
+implementation evidence. No contract is rewritten by this status update.
 
 ## Intent And Approval Boundary
 

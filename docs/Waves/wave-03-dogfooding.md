@@ -492,8 +492,13 @@ at `9a2a5170c4704ef03420ef2276911c6b1bfa3959` passed six local gates and
 **593 tests** (188 CLI unit, 290 CLI integration, 71 read-contract and
 44 mutation-contract), as recorded in the
 [execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md).
-This is delivered CLI capability and checkpoint evidence; Task 9's final
-verification, whole-branch review and dogfooding remain owed.
+This is the historical Task 8 checkpoint evidence. **Updated 2026-10-25:** C3
+is review-ready through Task 9 Step 5. Whole-branch SPEC/QUALITY approved
+`ad4d3f0..806057d3`, dogfooding completed in `8da3890`, and switch SPEC/QUALITY
+approved `8da3890..297bd781`. The owner accepted the original **4528 passed /
+1 failed / 1 ignored**, exit **101**, plus the authorized correction's **46
+distinct passing tests** and check/fmt/clippy as an explicit verification
+exception (`5cba600`). No green full-suite run or second full run is claimed.
 
 The product-owner decisions govern delivery:
 
@@ -516,7 +521,8 @@ The product-owner decisions govern delivery:
 4. **One Cycle in two Parts:** A delivers shared CLI changes, both reads,
    index/folder and document create/save/move; B delivers ticket authoring,
    both repairs and the remaining evidence. Each Part has an all-feature
-   checkpoint and independent review; the final dogfooding switch is still owed.
+   checkpoint and independent review; the final dogfooding switch is completed
+   and separately approved, as recorded below.
 5. **Fill-read failures pass through:** under the save command, retain the
    read's code, scope and recovery plus the request ID, with no effects.
    Wrong-kind/unfillable items give item-scoped `item_not_found`. The fill
@@ -598,13 +604,17 @@ Task 0/3 rulings and the library as built.
 - Native CI is post-merge and separately authorized. Windows repair consent
   remains a native manual check; Linux evidence does not satisfy it.
 
-**Dogfooding is OWED, not performed.** Task 9 must obtain its own authorization
-for the saves and pushes. Only after every save, value check and push succeeds
-does its separately reviewed switch amend AGENTS.md and the `file-ticket`
-skill. Those files are unchanged at Task 8. Comments remain canonical files
-until C4; closure remains canonical until C5. While the Wave's dogfooding
-evidence is owed, the Cycle may become review-ready but is not closed or
-merged unless the owner amends that evidence.
+**Dogfooding and switch complete, 2026-10-25.** The owner separately authorized
+the saves/pushes and the fresh resume after the recorded checker error. All six
+saves, value checks and pushes succeeded (`8da3890`); the subsequent AGENTS.md /
+file-ticket switch (`297bd781`) has separate SPEC/QUALITY approval. At the
+historical Task 8 checkpoint these steps were owed and those files unchanged.
+Comments remain canonical until C4; closure remains canonical until C5, with
+the explicit working-on-a-ticket exception. The normal main-based CLI workflow
+becomes available after C3 merges. C3 is review-ready with its ticket **open**;
+closure, PR, merge, cleanup and native CI require their own authorization. The
+approved rule still forbids closure/merge while dogfooding evidence is owed
+unless amended by the owner; that evidence is now met.
 
 ### C4: CLI Discussion, Synchronization And Conflict Recovery
 

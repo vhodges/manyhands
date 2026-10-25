@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3: CLI Authoring And Discovery Maintenance"
 date: 2026-10-24
-status: "approved"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,40 @@ id: "01M5QY018FX9D7N05BE3CSYXTC"
 # Wave 03 C3: CLI Authoring And Discovery Maintenance
 
 ## Status
+
+**Review-ready, 2026-10-25.** Tasks 0–8 and Task 9's authorized work through
+Step 5 are complete. All thirteen CLI verbs, evidence and document amendments
+are delivered on the ticket branch. The ticket remains **open**. Step 6 closure
+is a separately authorized lifecycle action, not outstanding implementation;
+no PR, merge, closure, cleanup or native CI is authorized by this status.
+
+Implementation outcome:
+
+- All Task 0–8 reviews are complete. Independent whole-branch **SPEC and QUALITY
+  both approved** `ad4d3f0..806057d3`, including the owner-authorized two-line
+  closure-test baseline correction; no actionable findings or new gaps.
+- The sole full suite at `f9618f7` completed **43 targets: 4528 passed / 1 failed /
+  1 ignored**, exit **101**, 6239s. After the authorized correction at `806057d3`,
+  the exact test passed, then **46 distinct checkpoint-module tests** passed,
+  along with check/fmt/clippy. The owner explicitly accepted that combined
+  evidence as the Task 9 verification exception, recorded in `5cba600`.
+  **The historical full-suite run was not green and was not rerun.**
+- Six authorized dependency saves, value checks and target pushes completed
+  in `8da3890`'s evidence. The checker stop, fresh preflight/approval and corrected
+  C4 recheck are preserved; C4 was never resent. All six target tips were verified
+  equal to their remote heads and worktrees clean.
+- Switch commit `297bd781` updates AGENTS.md and file-ticket and corrects the C3
+  ticket. Independent switch **SPEC and QUALITY both approved**
+  `8da3890..297bd781`, with no findings or questions. The normal CLI workflow
+  applies on up-to-date main after C3 merges; main is not claimed to have C3 yet.
+
+The [execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md)
+holds exact review ranges, per-target counts, failure/exception evidence,
+request IDs, six checkpoint/publication SHAs and the review-ready checkpoint.
+Known limits and design contracts below remain unchanged. Linux verification
+does not constitute native CI; native work is post-merge and separately approved.
+
+### Planning approval (historical, 2026-10-24)
 
 **Approved by the product owner on 2026-10-24**, together with the design
 and the implementation plan, at commit `e7b2b71`.
@@ -105,10 +139,10 @@ Authority, in order:
 
   C3 follows the later ticket text and the note on this ticket. See Explicit
   Exclusions.
-- **Entry-gate item 3.** The API audit has no C3 refresh section yet; Task 0
-  adds one.
-- **Entry-gate item 7.** Task 0 runs the required Rust checks at the
-  implementation baseline.
+- **Entry-gate item 3.** Task 0 added the C3 API-audit refresh; Task 8 reconciled
+  its thirteen rows with the delivered CLI.
+- **Entry-gate item 7.** Task 0's required baseline Rust checks and subsequent
+  verification are recorded in the execution ledger.
 - **Gate ticket.** `01M57SKVF6TQ3QM6AXJ35JGGSY` gates C4, C5 and D5, not C3.
 
 ## Scope

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3 Authoring And Discovery Execution Ledger"
 date: 2026-10-25
-status: "in-progress"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -39,8 +39,11 @@ or new gaps. Dogfooding steps **4–7 are complete** under the owner's fresh
 go-ahead: six saves/checks and six new remote branches, with local/remote tips
 verified equal and all targets clean. The C4 checker error, stop, read-only
 preflight and authorized correction are preserved below; C4 was never resent.
-The **switch is implemented and awaiting its separate independent SPEC/QUALITY
-review**. Task 9 is not complete or review-ready; ticket status remains open.
+The controller reports independent switch **SPEC and QUALITY both APPROVED** over
+`8da3890f2c4f2ac6199324163346f72eb13818f8..297bd7810190dc099d174648d582f81134b16fab`,
+with no findings or questions. **C3 is REVIEW-READY**: Task 9's authorized work
+through Step 5 is complete. Step 6 closure remains a separately authorized
+lifecycle action, not owed implementation; ticket status remains **open**.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -489,6 +492,7 @@ review-ready or closure claim.
 | 9 dogfood steps 4–7 | Owner authorized; STOPPED during C4 value check | Base `5cba600b562062d6809d9ce916e26b65ea1e204e` | Refresh and C4 save ok; C4 one checkpoint, clean, body/other compared values preserved. Checker incorrectly compared dependency DTO objects with strings | Dependency IDs in returned data match proposal, but checker failed; no checker fix/retry, C5 or later save, target push or switch. Controller/owner disposition required |
 | 9 dogfood steps 4–7 resumed | Complete under fresh owner go-ahead | C3 evidence commit carrying the final summary below; six library checkpoint SHAs recorded | C4 settled/no resend, corrected check passed; five remaining saves ok; all six exact deps/value/body checks passed; six new remote branches, verified local=remote and clean | Prior stop preserved. Verification exception and whole-branch approvals retained; switch and its review still owed, Task 9 not complete/review-ready |
 | 9 Step 4 switch | Implemented; separate switch review pending | Base `8da3890f2c4f2ac6199324163346f72eb13818f8`; `docs: switch ticket dogfooding to the CLI` commit carrying this entry | Documentation-only: 8 built CLI help contracts, 2 JSON input examples, nullable input variants, frontmatter/scope/whitespace checks passed; no mutations or Rust gates | Controller owns independent switch SPEC/QUALITY review after return; Task 9 not complete/review-ready, ticket open |
+| 9 final authorized scope / Step 5 | Complete, REVIEW-READY | Switch `297bd7810190dc099d174648d582f81134b16fab`; review-ready evidence commit carrying the final section below | Owner verification exception accepted; 43-target full-suite history **4528/1/1 exit 101**, exact **1** and module **46 distinct** passes plus check/fmt/clippy; six saves/checks/pushes complete; no new build/test run | All Task 0–8 reviews complete; whole-branch and separate switch SPEC/QUALITY APPROVED. No unresolved implementation findings. Step 6/PR/merge/closure/cleanup/native CI require separate authorization; ticket open |
 
 ## Part A approval and Task 5 preflight
 
@@ -2679,3 +2683,98 @@ or review-ready. The owner-accepted verification exception remains the original
 **4528/1/1, exit 101** plus scoped **46 distinct passing** and check/fmt/clippy;
 no claim of a green full-suite run and no second full run. No PR, main merge,
 closure, cleanup or native CI.
+
+## Task 9 Step 5: REVIEW-READY handoff
+
+Recorded **2026-10-25T21:51:15Z** at clean starting HEAD
+`297bd7810190dc099d174648d582f81134b16fab`. The controller explicitly conveys
+independent switch **SPEC APPROVED** and **QUALITY APPROVED** for
+`8da3890f2c4f2ac6199324163346f72eb13818f8..297bd7810190dc099d174648d582f81134b16fab`,
+with no findings or questions, and authorizes marking review-ready. These are
+conveyed independent reviews, not new reviews by this implementer.
+
+**All authorized implementation, verification, review, dogfooding and handoff
+work is complete through Task 9 Step 5.** Task 0–8 approvals stand. Whole-branch
+SPEC/QUALITY approval remains
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
+including the narrow authorized closure-test baseline correction, with no
+actionable findings or new gaps. The switch approvals above complete the final
+independent review gate. Historical pending/owed entries retain their dates and
+are superseded by this current status, not erased.
+
+### Final evidence and explicit verification exception
+
+- Sole full-suite invocation, tested HEAD **`f9618f76ce9608c9ccc42018701647d7b98bb642`**:
+  **43 targets; 4528 passed / 1 failed / 1 ignored**, exit **101**, **6239s**.
+  Log `/tmp/claude-1000/c3-full-suite.log`; the full per-target table, original
+  assertion/source references and actual-exit files are retained above.
+- Authorized correction **`806057d3223b9ac2e71fa3a28c3eba83de5c63ef`**: exact test
+  **1 passed**, then checkpoint module **46 passed**, zero failures/ignored in
+  both, plus check/fmt/clippy. The exact test overlaps the module: **46 distinct**,
+  not 47. The historical failure's hidden timestamps remain unknown.
+- Owner explicitly accepted the combined evidence as the **Task 9 verification
+  exception**, recorded in **`5cba600b562062d6809d9ce916e26b65ea1e204e`**. The
+  original full run is not relabeled green; **no second full run** occurred.
+  CLI smoke and no-GPUI checks passed in the original gate. Native CI is not
+  claimed and remains post-merge, separately authorized.
+- Six authorized dependency saves/value checks and pushes completed in the
+  evidence at **`8da3890f2c4f2ac6199324163346f72eb13818f8`**. All intended deps IDs
+  and other compared fields/body digests matched, each save committed once,
+  all six remote heads matched local tips and all target worktrees were clean.
+  Retained checkpoint/publication record:
+
+| Target | Checkpoint = verified local/remote tip |
+| --- | --- |
+| C4 | `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7` |
+| C5 | `f3985a26cb4220d3076135b55e47e9556f3d56db` |
+| D4 | `e4b48dd352d2603f9dc7e1e487e0339888f591d2` |
+| D5 | `7b2822c4a6fed76d64497de7e7524829b239a987` |
+| D6 | `48e7a1df93f2c293c71e9eee62a7623823c01f8d` |
+| G1 | `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28` |
+
+These are retained verified dogfooding results, not new target operations at this
+docs-only checkpoint. Request IDs, full mutation envelopes and pre-send inputs/
+compared values remain above. The C4 dependency-DTO comparator error, mandated
+stop, repeated read-only preflight, finished-request confirmation, fresh owner
+go-ahead and corrected successful recheck remain recorded. **C4 was never resent.**
+
+Switch commit **`297bd7810190dc099d174648d582f81134b16fab`** and its separate
+approved range complete the dogfooding workflow change. It applies on up-to-date
+main after merge; current main is not claimed to contain C3. No dogfooding or
+switch implementation remains owed.
+
+### Documentation checkpoint and lifecycle boundary
+
+Before marking review-ready, fetched origin and merged origin/main into C3:
+already up to date. Main remains `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, HEAD
+unchanged; merge-tree succeeded with tree
+`66b4225954d64214ba8f2c05ed8a744b6ebd8c81`. No moved-main impact or contract
+question arose. Final fetch/merge-tree and remote-head verification follow the
+documentation commit.
+
+Cycle/design/ledger current statuses are review-ready; the design no longer says
+nothing is implemented. The Wave's current C3 owed-status statements are updated,
+retaining the dated Task 8 checkpoint history. Design contracts, Known Limits,
+planning approval/review history and the original handoff remain unchanged.
+Documentation links, whitespace, allowed-file scope and unchanged/open ticket
+are checked; no build/test/Rust gate reruns for these documentation changes.
+The read-only `node target/c3-review-ready-validate.cjs` check passed: three
+review-ready document statuses, both added/changed relative links, unchanged
+design contract/Known Limits and Cycle scope/contract, Wave changes confined to
+C3 with its known limits intact, byte-preserved ledger history, unchanged open
+ticket and unchanged original handoff. Git whitespace and source/Cargo/skill/
+ticket scope comparisons also passed.
+
+Canonical review-ready comment **`01M5TGQR7ZBBJTMPEJ615G2HCY`**, from absolute CLI
+`--json id new`, uses the actual UTC timestamp above. Only Cycle, design, ledger,
+Wave C3 status and that comment are staged after status/diff/recent-ten-log
+inspection. Commit `docs: mark C3 review-ready` carries the required co-author
+trailer and is pushed only to C3. Final HEAD/remote equality and clean status are
+verified in the return.
+
+**No unresolved implementation findings or unfulfilled authorized-work gates.**
+The ticket remains **OPEN** with no closure fields. Task 9 Step 6 is **not
+authorized** and awaits owner lifecycle approval; it is not an implementation
+debt. Final owner acceptance, PR creation, merge, closure, cleanup and each native
+CI dispatch require their applicable separate approvals. No such action is
+performed or implied by review-ready status.
