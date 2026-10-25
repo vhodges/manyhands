@@ -215,6 +215,10 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "path_observe_ok",
+    "path_observe_invalid_path",
+    "ticket_check_ok",
+    "ticket_check_invalid_id",
     "host_observe",
     "host_approve_prepare",
     "host_approve",
@@ -302,6 +306,8 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "path_observe_text",
+    "ticket_check_text",
     "host_observe_text",
     "repo_create_prepare_text",
     "remote_add_text",

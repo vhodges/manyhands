@@ -15,6 +15,9 @@ mod support;
 #[path = "cli/admin.rs"]
 mod admin;
 
+#[path = "cli/authoring_reads.rs"]
+mod authoring_reads;
+
 #[path = "cli/boundaries.rs"]
 mod boundaries;
 

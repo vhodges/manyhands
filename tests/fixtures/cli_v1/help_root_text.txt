@@ -82,8 +82,8 @@ Command catalog:
   ticket slug-assign  Assign a ticket short code. Arrives with C3.
   index refresh  Refresh the index. Arrives with C3.
   index rebuild  Rebuild the index. Arrives with C3.
-  path observe  Observe a path for authoring or repair. Arrives with C3.
-  ticket check  Check ticket relationships. Arrives with C3.
+  path observe  Observe a path for authoring or repair. Available now.
+  ticket check  Check ticket relationships. Available now.
   comment add  Add a comment. Arrives with C4.
   item sync  Synchronize an item. Arrives with C4.
   repo sync  Synchronize a repository. Arrives with C4.

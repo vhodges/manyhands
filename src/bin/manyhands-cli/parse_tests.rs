@@ -690,3 +690,25 @@ fn mode_rules_exempt_reads_including_a_request_id_selector() {
         );
     }
 }
+#[test]
+fn a_c3_verbs_usage_error_never_echoes_a_value() {
+    let invocation = parse(
+        [
+            "manyhands-cli",
+            "ticket",
+            "check",
+            "--repo",
+            "r",
+            "--id",
+            "X",
+            "SECRET-VALUE",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect(),
+    );
+    let Action::Usage { detail, .. } = invocation.action else {
+        panic!("expected usage error");
+    };
+    assert!(!detail.contains("SECRET-VALUE"), "{detail}");
+}

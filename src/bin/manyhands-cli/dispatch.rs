@@ -1,6 +1,6 @@
 use super::{
     catalog::CommandSpec,
-    human, parse,
+    human, human_authoring, parse,
     render::{self, Output},
 };
 use clap::ArgMatches;
@@ -9,9 +9,10 @@ use manyhands::repository::{
     ClosureFilter, CommentListDto, CycleListDto, DependencyDirection, DependencyTreeDto,
     DocumentFolderListDto, HostPinDto, HostPinListDto, IdentityDto, IndexStatusDto, ItemDto,
     ItemDtoKind, ItemListDto, KeyDto, KeyListDto, OperationDto, OperationId, OperationListDto,
-    PlanDto, PollingStatusDto, PublicKeyDto, ReadError, ReadinessFilter, RemoteListDto,
-    RepositoryInspectionDto, RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId,
-    TicketFilter, transport::SshAuthority,
+    PathObservationDto, PlanDto, PollingStatusDto, ProposedRelationships, PublicKeyDto, ReadError,
+    ReadinessFilter, RelationshipCheckDto, RemoteListDto, RepositoryInspectionDto,
+    RepositoryListDto, RepositoryService, ResolvedRepository, SharedKeyId, TicketFilter,
+    transport::SshAuthority,
 };
 use manyhands::results::{Envelope, ResultCode, Scope};
 use std::path::{Path, PathBuf};
@@ -486,6 +487,42 @@ fn ticket_find(
     ))
 }
 
+fn path_observe(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<PathObservationDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let context = args.get_one::<String>("context").map(PathBuf::from);
+    let data = service.observe_path(&repo, context.as_deref(), Path::new(value(args, "path")?))?;
+    Ok(Envelope::read_success("path observe", repo.scope(), data))
+}
+
+fn ticket_check(
+    service: &RepositoryService,
+    args: &ArgMatches,
+) -> Result<Envelope<RelationshipCheckDto>, ReadError> {
+    let repo = resolve(service, args)?;
+    let id = item_id(args, &repo)?;
+    let parse_id = |text: &str| {
+        text.parse::<ItemId>()
+            .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
+    };
+    let deps = args
+        .get_one::<String>("deps")
+        .map(|text| text.split(',').map(parse_id).collect::<Result<Vec<_>, _>>())
+        .transpose()?
+        .unwrap_or_default();
+    let parent = args
+        .get_one::<String>("parent")
+        .map(|text| parse_id(text))
+        .transpose()?;
+    let data =
+        service.check_ticket_relationships(&repo, &id, &ProposedRelationships { deps, parent })?;
+    let mut scope = repo.scope();
+    scope.item_id = Some(id.to_string());
+    Ok(Envelope::read_success("ticket check", scope, data))
+}
+
 pub fn dispatch(
     command: &'static CommandSpec,
     args: &ArgMatches,
@@ -495,6 +532,22 @@ pub fn dispatch(
     let json = session.json;
     let name = format!("{} {}", command.resource, command.verb);
     match name.as_str() {
+        "path observe" => {
+            return read_output(
+                &name,
+                json,
+                path_observe(service, args),
+                human_authoring::path_observation,
+            );
+        }
+        "ticket check" => {
+            return read_output(
+                &name,
+                json,
+                ticket_check(service, args),
+                human_authoring::relationship_check,
+            );
+        }
         "repo create" => return crate::admin::repo_create(service, session, command, args),
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),

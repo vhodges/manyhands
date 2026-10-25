@@ -1246,19 +1246,63 @@
         "summary": "Rebuild the index."
       },
       {
-        "available": false,
+        "available": true,
         "command": "path observe",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--path",
+            "required": true,
+            "summary": "Repository-relative path to observe.",
+            "value": "path"
+          },
+          {
+            "name": "--context",
+            "required": false,
+            "summary": "Context worktree path; the repository root when omitted.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
         "summary": "Observe a path for authoring or repair."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket check",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--deps",
+            "required": false,
+            "summary": "Proposed dependencies, comma-separated; give once.",
+            "value": "ULID,..."
+          },
+          {
+            "name": "--parent",
+            "required": false,
+            "summary": "Proposed parent.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Check ticket relationships."
       },
       {

@@ -18,6 +18,8 @@ mod dispatch;
 mod human;
 #[path = "manyhands-cli/human_admin.rs"]
 mod human_admin;
+#[path = "manyhands-cli/human_authoring.rs"]
+mod human_authoring;
 #[path = "manyhands-cli/input.rs"]
 mod input;
 #[path = "manyhands-cli/mutate.rs"]

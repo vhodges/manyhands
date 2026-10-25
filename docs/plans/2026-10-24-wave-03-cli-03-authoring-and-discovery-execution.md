@@ -12,10 +12,11 @@ id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
 
 ## Baseline
 
-Task 0 only, in ticket worktree
+Task 0 baseline, in ticket worktree
 `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
-Task 0 is complete for independent review; Tasks 1–9 remain unstarted.
+Task 0 is approved; Task 1 is implemented for independent review (see task log).
+Tasks 2–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -400,9 +401,12 @@ Recorded 2026-10-25T03:27:38Z, as conveyed by the controller/owner:
   comparison with `d9e961d` confirms src/tests/Cargo unchanged. A separate fix commit follows
   `d9e961d`, with its own diff/whitespace review and ticket-only push.
   Canonical review comment: `01M5RHJZQ672X4JG8VPYVPM3P3` (ID from the built CLI).
-- **Next gate:** controller-requested re-review of the correction before
-  Task 1. The earlier spec approval is not claimed as approval of this fix,
-  and quality re-review is still pending.
+- **Final Task 0 approval:** the controller's Task 1 handoff explicitly
+  reports quality re-review approval of
+  `7368902a677a8228813f21da8f74d3cafff68ec3`, after the fifth owner ruling's
+  correction. Recorded during Task 1 on 2026-10-25. Together with spec
+  approval of `d9e961df04ee3b338247b0032d5194ecbc805923`, this clears the
+  Task 0 review gate. All five owner rulings above remain binding.
 
 ## Task 0 self-review and checkpoint
 
@@ -429,11 +433,103 @@ and merge-tree was clean. The three defect searches still had no matches.
 `git diff --exit-code ad4d3f0 -- src tests Cargo.toml Cargo.lock` confirmed
 the source/test/Cargo baseline is unchanged.
 Publication is authorized only to `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`.
-Current review status is in the review record above; controller-requested
-re-review remains required before Task 1. This is not a whole-Cycle
+Current review status is in the review record above; the controller has
+reported final Task 0 approval. This is not a whole-Cycle
 review-ready or closure claim.
 
 ## Task log
 
 | Task | State | Commit range | Verification | Review |
 | --- | --- | --- | --- | --- |
+| 0 | Complete | `ad4d3f0..7368902` | Baseline gates and 464 tests; documentation-only correction | Spec approved `d9e961d`; quality re-review approved `7368902`, per controller handoff |
+| 1 | Implemented | Base `7368902a677a8228813f21da8f74d3cafff68ec3`; completion is the commit carrying this entry | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Self-reviewed; independent spec/quality review pending |
+
+## Task 1: path observe and ticket check
+
+Checkpoint recorded **2026-10-25T03:36:25Z**. Fresh implementer worked only
+in the ticket worktree/branch; no subagents. The supplied Task 1 specification
+was the execution brief. Task 2 was not started.
+
+### Preflight and authority
+
+- Initial clean HEAD was `7368902a677a8228813f21da8f74d3cafff68ec3`.
+  Fetched origin, read `git show origin/main:AGENTS.md`, and merged
+  `origin/main`: already up to date; HEAD unchanged.
+- Read the handoff, ticket/comments, Cycle/design and this ledger's five
+  approved corrections. Final Task 0 quality approval is recorded above.
+- Before this checkpoint, fetched again. `origin/main` remains
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; its ancestry check passed.
+  `git merge-tree --write-tree HEAD origin/main` succeeded with tree
+  `2d628583a17bdf4d0e006477e7359e6be8b5d693` (committed task base).
+
+### Implementation and red/green evidence
+
+1. Added `a_c3_verbs_usage_error_never_echoes_a_value`, then made
+   `ticket check` available before the red run, as required to bypass
+   planned-command argument swallowing. The exact prescribed no-feature
+   command failed **0 passed / 1 failed / 172 filtered**, printing
+   `unexpected argument 'SECRET-VALUE' found`.
+2. Regenerated E1 with only `ticket check` made available. The help filter
+   passed **9** tests. Read its diff: only that verb's availability,
+   repository rule and options changed in the three authorized fixtures.
+3. Made `path observe` available; changed the usage mask from C2-only to
+   non-C1, and added the ticket-check proposal requirement. The same privacy
+   command passed **1 / 172 filtered**. Regenerated E1 again, adding only
+   path observe's metadata. Help again passed **9**. Both summaries and
+   `delivered_by: C3` are preserved; no other old fixture changed.
+4. Added ten real-binary cases before dispatch/formatters. The authoring-read
+   filter failed **0 passed / 10 failed / 177 filtered**, all on the expected
+   missing dispatch (`internal_error`, exit 1). Added the two thin F1 adapters
+   and escaped human formatters, with four formatter unit cases.
+5. The new fixtures were generated only with `MANYHANDS_UPDATE_GOLDEN=1`.
+   All ten authoring-read cases passed during generation and again without
+   the update variable. Reviewed all four new JSON and two new text fixtures;
+   only roots, refresh times and HEAD OIDs are substituted. Observation
+   tokens and relationship/rejection IDs remain exact.
+
+The read harness uses `CliEnv` and its detached terminal/config/data isolation,
+with test-home `core.autocrlf=false` and no home identity. Every invocation,
+including errors and human mode, snapshots root and linked-worktree bytes/state
+and runs isolated `git for-each-ref` before/after. All comparisons passed.
+The cases cover absent/file tokens, another item's file with a relative context,
+inactive context and escaping paths, control escaping, dependency and parent
+cycles, unresolved IDs, complete-proposal semantics, malformed/empty IDs, usage
+refusal, scopes, schemas, human goldens and empty JSON stderr. Rejections remain
+successful reads with exit 0. Incomplete/stale/never-refreshed notes reuse C1's
+helpers and are covered by the new formatter tests.
+
+### Final verification
+
+All commands ran through Devenv in this worktree; no broad/background suite.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli` | **177 passed**, 0 failed/ignored/filtered (172 existing + 5 new). |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_reads` | **10 passed**, 0 failed/ignored, 177 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 178 filtered. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed, after `devenv shell -- cargo fmt`. |
+
+### Files and self-review
+
+- Created `src/bin/manyhands-cli/human_authoring.rs`, its adjacent
+  `human_authoring_tests.rs`, and `tests/cli/authoring_reads.rs`.
+- Changed only Task 1's named existing Rust files: binary module declaration,
+  catalog, parser, dispatch, two human-helper visibilities, appended parser
+  test, integration module registration and golden-name registration.
+- Created `tests/fixtures/cli_v1/{path_observe_ok,path_observe_invalid_path,
+  ticket_check_ok,ticket_check_invalid_id}.json` and
+  `{path_observe_text,ticket_check_text}.txt`.
+- E1 only: `help_root.json`, `help_root_text.txt`, `help_resource_ticket.json`.
+- Updated this ledger and canonical comment `01M5RJ31V8TA9KFF44GJZD77H6`.
+  Its ID came from `./target/debug/manyhands-cli id new`, timestamp from
+  `date -u`; no dogfooding save was performed.
+
+Self-review checked the thin adapters against the specified F1 calls, scope
+construction and privacy, the test coverage above, all golden content, and the
+complete task diff. `git diff --check` passed. Existing tests are unchanged
+apart from the authorized E1 fixtures; source-test files only add new tests or
+registrations. No library, Cargo, output-schema or new-test-target change.
+No unresolved blocker. Ticket-only commit/push is authorized. Independent
+review of this task is the next gate; no Cycle closure or approval is claimed.

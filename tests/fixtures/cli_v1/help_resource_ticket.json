@@ -330,11 +330,36 @@
         "summary": "Assign a ticket short code."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket check",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--deps",
+            "required": false,
+            "summary": "Proposed dependencies, comma-separated; give once.",
+            "value": "ULID,..."
+          },
+          {
+            "name": "--parent",
+            "required": false,
+            "summary": "Proposed parent.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Check ticket relationships."
       },
       {
