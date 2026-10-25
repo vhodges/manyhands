@@ -17,10 +17,12 @@ Task 0 baseline, in ticket worktree
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
 Tasks 0–4 and Part A are approved (see task log; Part A spec and quality
 approvals conveyed in the fresh Task 5 implementer brief at base `452f031`).
-Task 5 is implemented and locally verified for independent review. Task 3's two stops are resolved by explicit owner
+Task 5 spec and quality are APPROVED, as conveyed in the fresh Task 6 brief at
+`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. Task 6 is implemented and locally
+verified for independent review. Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Tasks 6–9 remain unstarted.
+CLI retries with its approved assertions unchanged. Tasks 7–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -455,6 +457,8 @@ review-ready or closure claim.
 | 4 P2 follow-up | Implemented; re-review pending | Base/initial Task 4 head `329a1436f3671586382ca4c1f41b2c9a8ab8a699`; follow-up head is the `test(cli): prove C3 index-unavailable exit through refresh` commit carrying this entry | Expected red C1-command attribution failure; **11 authoring-exits passed**; all six checkpoint gates passed, **182 + 239 + 71 + 44 = 536** | Part A SPEC P2 corrected with a new Task 4 binary test; independent acceptance remains with controller |
 | 4 final / Part A | Complete, APPROVED | `7368902a677a8228813f21da8f74d3cafff68ec3..452f031fd06d3a39e2c5de6cfe711b74256ab8a1` | Six gates and **536** tests retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 5 brief; supersedes historical pending statuses above |
 | 5 | Implemented; independent review pending | Base `452f031fd06d3a39e2c5de6cfe711b74256ab8a1`; head is the `feat(cli): ticket create, save and slug-assign` commit carrying this entry | **27 input + 8 fill + 31 ticket-authoring + 7 schemas + 11 authoring-exits + 9 help = 93 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
+| 5 final | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..6d0ec5191bf4282e099b0d28dac4b37bb26112f3` | The recorded 93 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 6 brief; supersedes the historical pending row |
+| 6 | Implemented; independent review pending | Base `6d0ec5191bf4282e099b0d28dac4b37bb26112f3`; head is the `feat(cli): document and ticket repair` commit carrying this entry | **16 repair + 11 authoring-exits + 7 input-schema + 9 help = 43 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
 
 ## Part A approval and Task 5 preflight
 
@@ -1470,3 +1474,161 @@ controller. No unresolved blocker was found. Independent Task 5 spec/quality
 reviews are next; this is not whole-Cycle approval. Only the task commit and
 ticket-branch push are authorized. Task 6 remains unstarted; no agents, PR,
 main integration, closure, cleanup, native CI or dogfooding.
+
+## Task 6: document and ticket repair
+
+Checkpoint recorded **2026-10-25T05:13:46Z**. The fresh Task 6 brief explicitly
+conveys **Task 5 spec and quality APPROVED** at the exact supplied base
+`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. That approval supersedes the
+historical pending status above. Earlier owner rulings remain binding.
+
+### Preflight and scope
+
+- Clean starting HEAD matched the supplied base. Worktree registration and
+  branch were confirmed. Read the handoff, current main's AGENTS.md via
+  `git show origin/main:AGENTS.md`, the Cycle/design/plan and this ledger's
+  Task 0 rulings. Work ran inline without subagents in the specified worktree.
+- Initial and checkpoint fetch succeeded; `git merge origin/main` answered
+  already up to date both times. Main remains
+  `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Ancestry passed; both merge-tree
+  checks at the task base returned `38cb41dafc6a32cde566c5491410afdec14072dd`.
+- Implemented only the two repair adapters, catalog/dispatch, two closed
+  three-string input schemas/examples, the new repair test module and its
+  registrations, planned C3 exit/inventory extensions, E1 and task records.
+  Task 7's full inventory work and renaming remain for Task 7.
+
+### Implementation and binary evidence
+
+- Both adapters parse flags, then the required closed input object
+  (`path`, `observation`, `source`), then the root. A shared bin-private helper
+  builds the existing DocumentRepair/TicketRepair inputs through unchanged
+  `mutate::run`, with identity_prompt false and retry true. No input-holding
+  diagnostic/serialization type was introduced.
+- Both prepare previews validate against the existing repair_preview schema,
+  declare adoption and the supplied ID, and leave canonical/Git state unchanged.
+  Confirmed executions validate against repair_mutation, create one context
+  and one checkpoint under that ID, preserve source bytes exactly, and leave
+  primary bytes/HEAD unchanged. Both documented examples run with only their
+  observation placeholder replaced by a binary path-observe token.
+- Binary refusals distinguish invalid corrected sources (including malformed,
+  marker-only and wrong-kind source) as invalid_input; current conforming or
+  wrong-kind files, non-place paths and another ticket-directory ID as
+  not_repairable; missing files as path_not_found; escaping paths as invalid_path.
+  Existing canonical paths use real observations so staleness does not mask
+  those checks. ID collision returns identity_ambiguous without any context.
+  Closed-ticket repair preserves the closure byte-for-byte, and attempts to
+  drop or change it are refused.
+- Both stale-confirm cases return external_change with unchanged snapshots.
+  Missing consent returns confirmation_required. Changed input and consumed
+  consent under another request return confirmation_mismatch/confirmation_used.
+  The cache-loss fixture closes all service handles, removes WAL/SHM first,
+  deletes the database, rebuilds, then gets confirmation_not_found with
+  request.prepare; canonical/Git snapshots remain equal.
+- **Actor contract held unchanged.** A scoped FailOnce actor over the CLI data
+  directory prepared and executed document repair at
+  AfterOwnedWriteBeforeLifecyclePersistence: internal_error, partial,
+  FailureClass::Incomplete, written/pending, accepted request and zero commits.
+  This is actor evidence of envelope-to-exit-4 classification, not a process
+  exit claim. After that actor dropped, the CLI used the same input, request
+  and confirmation and completed the same operation with one commit and ID.
+  Finished replay returned the identical envelope with an unchanged snapshot.
+- Both repairs replay through the real CLI. Fresh-request no-ops use a second,
+  distinct confirmation prepared before the first repair: a new request
+  returns already_applied/noop with no commit or snapshot change. A subsequent
+  prepare also returns the no-op without a confirmation. This supplies reusable
+  Task 7 evidence without treating finished replay as a fresh no-op.
+- Unix-only PTY test and import: JSON source is piped on stdin; terminal `n`
+  gives cancelled/130, no request record or canonical/context changes; terminal
+  `y` succeeds for both repairs. Human success goldens and refusal split-stream
+  checks pass; human success has progress on stderr. JSON stderr is empty.
+  Isolated homes contain only autocrlf=false; Shelf and explicit cache-fixture
+  request-store scans reject source/file sentinels. No real application data,
+  keys, Git configuration or terminal was used.
+
+### Red/green and golden review
+
+1. Added all **16 new repair tests** before production changes. First compile
+   found one test-only type mismatch: failure_class returns Option. Wrapped
+   the expected Incomplete in Some, retaining the approved classification.
+2. The exact prescribed `repair` filter then ran **0 passed / 16 failed /
+   270 filtered**. Fifteen failures exposed command_unavailable; the PTY test
+   observed the unavailable child closing before its prompt. No pre-existing
+   test matched this filter at this base. The actor's partial-state assertions
+   passed before its unavailable CLI retry failed.
+3. Enabled document repair, regenerated E1 with MANYHANDS_UPDATE_GOLDEN=1,
+   and read the full diff; then enabled ticket repair and repeated. Each help
+   filter passed **9**. Only those verbs' availability, repository rule and
+   options changed; original summaries and C3 delivery remained exact. Root
+   help now has no planned C3 verb.
+4. First new-golden run: **14 passed / 2 failed**. Both were new-test setup
+   mistakes: the conforming-path case's synthetic token got external_change
+   before the content check (`bind/repair.rs:446–454`), and the human helper
+   incorrectly expected request-show's DTO to expose operation_id. Corrected
+   the first to a path-observe token, and the second to use the replay envelope
+   for operation/commit placeholders. Source inspection also placed wrong-kind
+   corrected source with invalid_input and wrong-kind current content with
+   not_repairable, as `bridges/repair.rs:146–198` distinguishes them. No library
+   behavior, required actor/replay outcome or pre-existing test was changed.
+5. Regeneration then passed **16 / 0 failed / 270 filtered**. Read all eight
+   new goldens (six JSON, two text), generated only through the update variable.
+   Only root, request, operation, commit, confirmation and expiry are replaced;
+   item IDs, adoption, paths, effects and recovery stay literal. Final runs
+   below passed without the update environment.
+
+### Exit and capability accounting
+
+Eight reached codes moved from reasons to C3 binary rows: cancelled,
+confirmation_required, confirmation_not_found, confirmation_mismatch,
+confirmation_used, identity_ambiguous, not_repairable and path_not_found.
+Linux accounting is **39 binary rows + 3 reasons = 42 codes**, still equal
+to **40 library codes union CLI_ONLY**, with disjointness and exact equality.
+The remaining reasons are discovery_pending (actor then CLI),
+registration_pending (failure seam) and confirmation_expired (library-only
+clock seam; no synthetic child expiry). On non-Unix, cancelled is explicitly
+a reason rather than fabricated executed PTY evidence (**38 + 4**).
+
+The existing internal_error binary row still means startup exit 1; the repair
+actor's partial internal_error is separately cited as exit-4 classification,
+never masquerading as a process row. The prepare inventory covers **all eleven
+mutations**: two repair previews and nine not_confirmable answers. The existing
+help-driven no-op inventory now covers **9 capable / 2 incapable** and retains
+the audit equality and all prior assertions. Task 7 owns its final rename and
+the complete human/privacy/examples inventories.
+
+### Final verification
+
+All Rust commands ran through Devenv with locked dependencies except fmt.
+Each test command had one positional filter; final golden checks had no update
+variable. No broad suite or native CI was run.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test cli repair` | **16 passed**, 0 failed/ignored, 270 filtered, 6.10s. |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_exits` | **11 passed**, 0 failed/ignored, 275 filtered, 4.01s. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 279 filtered, 0.76s; both new closed schemas/examples included. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 277 filtered, 0.09s. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, no warnings. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after formatting. |
+
+Total **43 distinct passing integration tests**, including **16 new tests**.
+Historical Task 5 and Part A results are retained, not recounted.
+
+### Self-review and return
+
+Reviewed the complete task diff for ordering, thin-adapter boundaries,
+confirmation reuse, scoped interruption, byte/commit/context invariants,
+input/source privacy, cfg-gated PTY portability, all eight new goldens and E1.
+The **24 changed files** are the three production modules; tests/cli.rs,
+tests/cli/repair.rs, tests/cli/authoring_exits.rs and tests/support/cli.rs;
+two input schemas and two examples; eight new output goldens and three E1
+goldens; this ledger and canonical comment `01M5RQNAFG9BHKQCWGGY2REGW8`.
+Its ID came from the built CLI's id new and timestamp from the UTC clock.
+
+No unresolved blocker or required-contract discrepancy was found. Existing
+test changes are registrations, explicitly planned C3 extensions and E1 only;
+no library, Cargo, output-schema, shared driver or test-target changes. Status,
+diff and last ten commits were inspected before staging owned paths. The task
+commit carries the required co-author trailer and is pushed only to this ticket
+branch. Independent controller reviews are next. Task 7 remains unstarted;
+no agents, PR, main integration, closure, cleanup, native CI or dogfooding.

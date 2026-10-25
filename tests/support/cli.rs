@@ -215,6 +215,12 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "document_repair_preview",
+    "ticket_repair_preview",
+    "document_repair_ok",
+    "ticket_repair_ok",
+    "document_repair_identity_ambiguous",
+    "ticket_repair_external_change",
     "ticket_create_ok",
     "ticket_create_relationship_cycle",
     "ticket_save_ok",
@@ -326,6 +332,8 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "document_repair_text",
+    "ticket_repair_text",
     "ticket_create_text",
     "ticket_save_text",
     "ticket_slug_assign_text",

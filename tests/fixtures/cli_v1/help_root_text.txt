@@ -75,10 +75,10 @@ Command catalog:
   document create  Create a document. Available now.
   document save  Save a document. Available now.
   document move  Move a document. Available now.
-  document repair  Repair a document. Arrives with C3.
+  document repair  Repair a document. Available now.
   ticket create  Create a ticket. Available now.
   ticket save  Save a ticket. Available now.
-  ticket repair  Repair a ticket. Arrives with C3.
+  ticket repair  Repair a ticket. Available now.
   ticket slug-assign  Assign a ticket short code. Available now.
   index refresh  Refresh the index. Available now.
   index rebuild  Rebuild the index. Available now.

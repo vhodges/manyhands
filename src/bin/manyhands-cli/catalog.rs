@@ -727,7 +727,18 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Required,
         },
     },
-    planned("document", "repair", "Repair a document.", "C3"),
+    CommandSpec {
+        resource: "document",
+        verb: "repair",
+        summary: "Repair a document.",
+        availability: Availability::Available("C3"),
+        repo: Some(RepoRule::Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "ticket",
         verb: "create",
@@ -762,7 +773,18 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Required,
         },
     },
-    planned("ticket", "repair", "Repair a ticket.", "C3"),
+    CommandSpec {
+        resource: "ticket",
+        verb: "repair",
+        summary: "Repair a ticket.",
+        availability: Availability::Available("C3"),
+        repo: Some(RepoRule::Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "ticket",
         verb: "slug-assign",

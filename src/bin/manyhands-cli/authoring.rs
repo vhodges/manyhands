@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    DocumentCreateInput, DocumentDraft, DocumentMoveInput, DocumentSaveInput, FolderCreateInput,
-    IndexRebuildInput, IndexRefreshInput, ItemDtoKind, Mutation, RelationshipWrite,
-    RepositoryService, RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
-    TicketSlugAssignInput,
+    DocumentCreateInput, DocumentDraft, DocumentMoveInput, DocumentRepairInput, DocumentSaveInput,
+    FolderCreateInput, IndexRebuildInput, IndexRefreshInput, ItemDtoKind, Mutation,
+    RelationshipWrite, RepositoryService, RequestId, TicketCreateInput, TicketDraft,
+    TicketRepairInput, TicketSaveInput, TicketSlugAssignInput,
 };
 use manyhands::results::ResultCode;
 
@@ -104,6 +104,96 @@ pub fn folder_create(
                 root: root.clone(),
                 path: path.clone(),
             })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn document_repair(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    repair(
+        service,
+        session,
+        spec,
+        args,
+        |root, path, observation, source| {
+            Mutation::DocumentRepair(DocumentRepairInput {
+                root,
+                path,
+                observation,
+                source,
+            })
+        },
+    )
+}
+
+pub fn ticket_repair(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    repair(
+        service,
+        session,
+        spec,
+        args,
+        |root, path, observation, source| {
+            Mutation::TicketRepair(TicketRepairInput {
+                root,
+                path,
+                observation,
+                source,
+            })
+        },
+    )
+}
+
+fn repair(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    build: impl Fn(PathBuf, PathBuf, String, String) -> Mutation,
+) -> Output {
+    let (flags, root, path, observation, source) = match (|| {
+        let flags = admin::flags(session, spec, args)?;
+        let object = admin::input_object(session, spec, args, flags.request_id)?;
+        let (path, observation, source) = (|| {
+            object.only(&["path", "observation", "source"])?;
+            Ok((
+                PathBuf::from(object.string("path")?),
+                object.string("observation")?,
+                object.string("source")?,
+            ))
+        })()
+        .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root, path, observation, source))
+    })() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            build(
+                root.clone(),
+                path.clone(),
+                observation.clone(),
+                source.clone(),
+            )
         },
         &mut std::thread::sleep,
     )

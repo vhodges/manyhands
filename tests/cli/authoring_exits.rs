@@ -1,4 +1,4 @@
-//! C3 Part A and ticket evidence. Repair obligations remain explicit.
+//! C3 per-task exit evidence. Task 7 owns the complete Part B inventories.
 use std::{
     collections::BTreeSet,
     fs,
@@ -33,6 +33,7 @@ const PART_A: &[&str] = &[
     "document move",
 ];
 const TICKETS: &[&str] = &["ticket create", "ticket save", "ticket slug-assign"];
+const REPAIRS: &[&str] = &["document repair", "ticket repair"];
 
 enum How {
     Binary(&'static str),
@@ -40,7 +41,6 @@ enum How {
         case: &'static str,
         reason: &'static str,
     },
-    Pending(&'static str),
     Source(&'static str),
 }
 
@@ -63,6 +63,47 @@ macro_rules! row {
 // These are references to real-binary assertions, not synthetic envelopes.
 // Shared fixture tests may provide more than one code; each code appears once.
 const ROWS: &[Row] = &[
+    #[cfg(unix)]
+    row!(
+        "cancelled",
+        130,
+        "interactive_consent_reads_the_source_from_stdin_and_the_answer_from_the_terminal"
+    ),
+    row!(
+        "confirmation_required",
+        3,
+        "without_a_terminal_a_repair_needs_a_confirmation"
+    ),
+    row!(
+        "confirmation_not_found",
+        3,
+        "a_confirmation_presented_after_cache_loss_is_confirmation_not_found"
+    ),
+    row!(
+        "confirmation_mismatch",
+        2,
+        "repair_confirmations_refuse_changed_input_and_another_request"
+    ),
+    row!(
+        "confirmation_used",
+        3,
+        "repair_confirmations_refuse_changed_input_and_another_request"
+    ),
+    row!(
+        "identity_ambiguous",
+        3,
+        "an_id_another_item_holds_is_identity_ambiguous_and_makes_no_context"
+    ),
+    row!(
+        "not_repairable",
+        2,
+        "a_path_with_no_nonconforming_entry_is_refused"
+    ),
+    row!(
+        "path_not_found",
+        2,
+        "a_path_with_no_nonconforming_entry_is_refused"
+    ),
     row!("ok", 0, "document_create_commits_one_checkpoint_offline"),
     row!(
         "already_applied",
@@ -220,67 +261,19 @@ const REASONS: &[Row] = &[
             "Folder creation's pre-directory stale mark needs an injected registration failure, unavailable in the CLI child: src/repository/bridges/folder.rs:504–520 and src/repository.rs:10780–10818. Ordinary saves instead report discovery_pending.",
         ),
     },
+    #[cfg(not(unix))]
     Row {
         code: "cancelled",
         exit: 130,
-        how: How::Pending(
-            "Part B, Task 6: decline repair consent through the PTY; C3 local operations have no post-acceptance safe point (Cycle cancellation evidence; src/bin/manyhands-cli/mutate.rs).",
-        ),
-    },
-    Row {
-        code: "confirmation_required",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 6: repair execution without consent; src/repository/mutation/execute.rs:277–280.",
-        ),
-    },
-    Row {
-        code: "confirmation_not_found",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 6: repair consent missing or lost with the cache; src/repository/mutation/confirm.rs:399–410.",
-        ),
-    },
-    Row {
-        code: "confirmation_mismatch",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 6: repair confirmation for different input; src/repository/mutation/confirm.rs:393–428.",
-        ),
-    },
-    Row {
-        code: "confirmation_used",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 6: consumed repair confirmation under another request; src/repository/mutation/confirm.rs:393–428.",
+        how: How::Source(
+            "Repair consent is exercised through the Unix-only PTY test interactive_consent_reads_the_source_from_stdin_and_the_answer_from_the_terminal. Windows consent remains the planned native manual check; C3 has no post-acceptance safe point.",
         ),
     },
     Row {
         code: "confirmation_expired",
         exit: 3,
-        how: How::Pending(
-            "Part B, Task 6: repair consent expiry; src/repository/mutation/confirm.rs:393–428. The ten-minute clock seam is library-only, so final coverage needs a reason rather than a fabricated binary case.",
-        ),
-    },
-    Row {
-        code: "identity_ambiguous",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 6: repair adopts an ID already held by another item; src/repository/mutation/bind/repair.rs:467–548.",
-        ),
-    },
-    Row {
-        code: "not_repairable",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 6: repair of conforming/non-place source; src/repository/mutation/bind/repair.rs:193–198,446–464.",
-        ),
-    },
-    Row {
-        code: "path_not_found",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 6: missing repair source path; src/repository/mutation/bind/repair.rs:350–371. path observe of an absent path is successful observation, not this code.",
+        how: How::Source(
+            "Repair consent expires after ten minutes; src/repository/mutation/confirm.rs:393–428. The clock seam is library-only; isolated CLI fixtures cannot advance it. No synthetic binary expiry is claimed.",
         ),
     },
 ];
@@ -338,7 +331,6 @@ fn every_c3_reference_names_an_existing_case() {
                 assert_case_exists(case);
                 assert!(!reason.is_empty());
             }
-            How::Pending(reason) => assert!(reason.starts_with("Part B, Task ")),
             How::Source(reason) => assert!(!reason.is_empty()),
             How::Binary(_) => panic!("binary evidence belongs in ROWS"),
         }
@@ -364,9 +356,17 @@ fn every_c3_exit_class_is_covered() {
                 ..
             }
         )));
-    assert!(REASONS.iter().any(|r| r.code == "cancelled"
-        && r.exit == 130
-        && matches!(r.how, How::Pending(reason) if reason.starts_with("Part B, Task 6"))));
+    #[cfg(unix)]
+    assert!(binary.contains(&130));
+    #[cfg(not(unix))]
+    assert!(
+        REASONS
+            .iter()
+            .any(|r| r.code == "cancelled" && r.exit == 130 && matches!(r.how, How::Source(_)))
+    );
+    // Fact 19 adds actor-only internal_error/partial evidence mapping to 4.
+    // The internal_error row remains the genuine startup binary exit 1.
+    assert_case_exists("a_repair_interrupted_after_its_write_is_completed_by_the_same_request");
     let all: BTreeSet<_> = ROWS.iter().chain(REASONS).map(|r| r.exit).collect();
     assert_eq!(all, [0, 1, 2, 3, 4, 5, 130].into_iter().collect());
 }
@@ -488,9 +488,25 @@ fn c3_confirmed_flags_match_prepare() {
     let commands = available_c3_mutations();
     assert_eq!(
         set(commands.iter().map(String::as_str)),
-        set(PART_A.iter().chain(TICKETS).copied())
+        set(PART_A.iter().chain(TICKETS).chain(REPAIRS).copied())
     );
     for command in commands {
+        if REPAIRS.contains(&command.as_str()) {
+            let f = super::repair::Fixture::new();
+            let (resource, _) = command.split_once(' ').unwrap();
+            let input = f.example(resource);
+            let before = support::repository_and_worktree_snapshot(&f.shelf.fixture);
+            let value = f.prepare(resource, &input);
+            assert_eq!(value["command"], command);
+            assert_eq!(value["data"]["details"]["adoption"], true);
+            assert!(value["data"]["confirmation_id"].is_string());
+            assert_eq!(
+                support::repository_and_worktree_snapshot(&f.shelf.fixture),
+                before
+            );
+            assert!(f.shelf.contexts().is_empty());
+            continue;
+        }
         let f = Fixture::new();
         let (resource, verb) = command.split_once(' ').unwrap();
         let mut extra = vec!["--prepare"];
@@ -549,6 +565,14 @@ fn c3_confirmed_flags_match_prepare() {
 
 const NOOPS: &[(&str, How)] = &[
     (
+        "document repair",
+        How::Binary("each_repair_has_a_fresh_request_noop_with_its_own_confirmation"),
+    ),
+    (
+        "ticket repair",
+        How::Binary("each_repair_has_a_fresh_request_noop_with_its_own_confirmation"),
+    ),
+    (
         "ticket create",
         How::Binary("ticket_verbs_have_human_success_refusal_and_fresh_noop_output"),
     ),
@@ -594,9 +618,12 @@ const NOOPS: &[(&str, How)] = &[
 fn c3_noop_inventory_accounts_for_part_a() {
     let commands = available_c3_mutations();
     let available = set(commands.iter().map(String::as_str));
-    assert_eq!(available, set(PART_A.iter().chain(TICKETS).copied()));
+    assert_eq!(
+        available,
+        set(PART_A.iter().chain(TICKETS).chain(REPAIRS).copied())
+    );
     assert_eq!(available, set(NOOPS.iter().map(|(verb, _)| *verb)));
-    assert_eq!(NOOPS.len(), 9);
+    assert_eq!(NOOPS.len(), 11);
     let capability = AUDIT
         .split("#### C3 no-op capability")
         .nth(1)
@@ -624,7 +651,7 @@ fn c3_noop_inventory_accounts_for_part_a() {
             _ => panic!("no-op inventory needs a case or incapability reason"),
         }
     }
-    assert_eq!(capable, 7);
+    assert_eq!(capable, 9);
 }
 
 const CREATE: &[u8] = include_bytes!("../fixtures/cli_input_v1/document_create.json");

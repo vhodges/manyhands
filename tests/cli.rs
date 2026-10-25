@@ -55,6 +55,8 @@ mod privacy;
 mod prompts;
 #[path = "cli/remotes.rs"]
 mod remotes;
+#[path = "cli/repair.rs"]
+mod repair;
 #[path = "cli/repository.rs"]
 mod repository;
 #[path = "cli/requests.rs"]

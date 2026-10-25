@@ -557,6 +557,10 @@ pub fn dispatch(
         }
         "document save" => return crate::authoring::document_save(service, session, command, args),
         "document move" => return crate::authoring::document_move(service, session, command, args),
+        "document repair" => {
+            return crate::authoring::document_repair(service, session, command, args);
+        }
+        "ticket repair" => return crate::authoring::ticket_repair(service, session, command, args),
         "ticket create" => return crate::authoring::ticket_create(service, session, command, args),
         "ticket save" => return crate::authoring::ticket_save(service, session, command, args),
         "ticket slug-assign" => {
