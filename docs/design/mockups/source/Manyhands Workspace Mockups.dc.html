@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><template id="__bundler_thumbnail" data-bg-color="#07596A"><svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect x="30" y="30" width="40" height="40" rx="8" fill="#E9AD36"></rect><rect x="38" y="38" width="10" height="24" rx="2" fill="#07596A"></rect><rect x="52" y="38" width="10" height="24" rx="2" fill="#07596A"></rect></svg></template><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap"><style>body{margin:0;background:#e9e7e2;font-family:'IBM Plex Sans',system-ui,sans-serif}a{color:#07596A}a:hover{color:#0a7a90}.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 14px}.dv-tid{font:600 10px ui-monospace,Menlo,monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}.dv-tname{font:600 14px/1.2 'IBM Plex Sans',system-ui,sans-serif;color:#1a1a1a}.dv-opts{display:flex;flex-wrap:wrap;gap:40px;align-items:flex-start}.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}.dv-oid{font:600 10.5px ui-monospace,Menlo,monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 13px/1.3 'IBM Plex Sans',system-ui,sans-serif;color:rgba(0,0,0,.6)}.dv-card{max-width:100%;border-radius:10px;box-shadow:0 2px 6px rgba(0,0,0,.12),0 20px 50px rgba(0,0,0,.18);overflow:hidden}.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}.dv-next{margin:26px 0 0;font:13px/1.5 'IBM Plex Sans',system-ui,sans-serif;color:rgba(0,0,0,.55)}</style></helmet>
+<section class="dv-turn" id="t2">
+  <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Light theme, closing a ticket, recovery states</span></div>
+  <ul style="margin:0 0 30px;padding:0 0 0 18px;font-size:13px;line-height:1.6;color:rgba(0,0,0,.7);max-width:1440px;columns:2;column-gap:40px">
+    <li>The light theme uses the same layout with a warm off-white palette. Switch themes live in Settings › Appearance, in any window.</li>
+    <li>"Close ticket…" in any ticket header opens the confirmation. It lists every step and every file that gets merged, including code. Confirming plays the steps through to the end.</li>
+    <li>Recovery has one home: the red "need attention" item in the footer. Each entry says what's wrong, confirms your work is safe, and gives one action. Activity shows the same actions.</li>
+    <li>When an item needs fixing, a banner appears above its editor: a conflict on MH-VH-6PJ, a missing type on "quick note from standup", or a file that isn't managed yet (notes-ssh.md).</li>
+  </ul>
+  <div class="dv-opts">
+    <div class="dv-opt" id="2a">
+      <div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Light theme · layout <a class="dv-oid" href="#1a">1a</a></div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" theme="light" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2b">
+      <div class="dv-olabel"><a class="dv-oid" href="#2b">2b</a>Light theme · Settings › Appearance · layout <a class="dv-oid" href="#1b">1b</a></div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" theme="light" sheet="settings" settings-section="appearance" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2c">
+      <div class="dv-olabel"><a class="dv-oid" href="#2c">2c</a>Close ticket · confirmation, with every effect listed before anything runs</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" dialog="close" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2d">
+      <div class="dv-olabel"><a class="dv-oid" href="#2d">2d</a>Close ticket · in progress</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" dialog="closeRunning" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2e">
+      <div class="dv-olabel"><a class="dv-oid" href="#2e">2e</a>Close ticket · failed at a step and can be retried. Nothing after the failed step ran.</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" dialog="closeFailed" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2f">
+      <div class="dv-olabel"><a class="dv-oid" href="#2f">2f</a>Needs attention popover, plus the conflict banner on the open ticket</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" attention="{{ true }}" open-code="MH-VH-6PJ" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2g">
+      <div class="dv-olabel"><a class="dv-oid" href="#2g">2g</a>Resolve a conflict: before / yours / theirs for each part, and a result preview</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" sheet="conflict" open-code="MH-VH-6PJ" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="2h">
+      <div class="dv-olabel"><a class="dv-oid" href="#2h">2h</a>Unlock your key (passphrase asked once per session)</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" dialog="unlock" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "light version of <a class="dv-oid" href="#2c">2c</a>" · "mock the ticket editor itself" · "show the Approve and merge flow for a document"</p>
+</section>
+<section class="dv-turn" id="t1">
+  <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Manyhands desktop workspace: layouts, docked tabs, sheets</span></div>
+  <div style="display:flex;gap:40px;align-items:flex-start;margin:0 0 30px;max-width:1440px">
+    <img src="assets/manyhands-logo.svg" alt="Manyhands" style="height:44px;flex:none">
+    <ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.6;color:rgba(0,0,0,.7);columns:2;column-gap:40px">
+      <li>Every window is clickable. Footer icons show/hide panels (left side = left and bottom docks, right side = right dock). Click repos, projects or teams to change the scope, sort ticket columns, expand folders, open and close tabs, split the editor.</li>
+      <li>One scope at a time. It appears in the title bar and in the footnote under the ticket list.</li>
+      <li>Plain language throughout: "Editing · saved on this computer", "2 to share", "Can't reach". Hover any repo, row or state pill to see the Git details (branch, worktree, remote).</li>
+      <li>Dark theme only, because the theme question was skipped. Linux client-side window controls. Brand amber marks focus and selection; the teal is lightened for dark backgrounds.</li>
+      <li>The ticket and document editors are placeholders, as you asked. Only the header and lifecycle actions are sketched (Save, Share, Close ticket / Approve and merge).</li>
+      <li>Sample data comes from Manyhands' own tickets and docs, plus three made-up repos (site, handbook, zorite fork) so the sync states and nonconforming items have something to show.</li>
+    </ul>
+  </div>
+  <div class="dv-opts">
+    <div class="dv-opt" id="1a">
+      <div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Classic: scope panels stacked left, lists right, activity bottom. Comfortable rows.</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="1b">
+      <div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Docked as tabs: Repos / Projects / Teams share one tabbed panel, Documents below it, wide Tickets dock right. Compact rows.</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="1c">
+      <div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Single sidebar: scope tabs above Tickets/Documents tabs. No right dock, Activity hidden, editor split in two.</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="c" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="1d">
+      <div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Add repository sheet (opens from + in Repositories). Switch between existing and new.</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="a" sheet="addRepo" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="1e">
+      <div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>Settings sheet · Sharing &amp; keys (opens from the gear in the footer)</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" sheet="settings" settings-section="keys" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+    <div class="dv-opt" id="1f">
+      <div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a>Settings sheet · Checking for updates (background polling per repo)</div>
+      <div class="dv-card" style="width:1440px;height:900px"><dc-import name="Workspace" variant="b" sheet="settings" settings-section="polling" style="width:1440px;height:900px" hint-size="1440px,900px"></dc-import></div>
+    </div>
+  </div>
+  <p class="dv-next">Try next: "go with <a class="dv-oid" href="#1b">1b</a> but use the comfortable rows from <a class="dv-oid" href="#1a">1a</a>" · "add a light theme" · "mock the ticket editor and Close ticket confirmation"</p>
+</section>
+</x-dc>
+</body>
+</html>
