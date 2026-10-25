@@ -18,8 +18,8 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
 
 ## Entry Gate
