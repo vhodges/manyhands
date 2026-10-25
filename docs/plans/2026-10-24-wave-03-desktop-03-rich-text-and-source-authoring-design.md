@@ -129,11 +129,15 @@ command was run. Line numbers are at that revision.
     (`mutation/dto.rs:906`, `:930`) return no new observation.
 16. Folder creation makes directories in the primary worktree, with no
     commit (`bridges/folder.rs:1-8`).
-    - Its hand-off is "any refresh's" (`command.rs:388-400`,
-      `hands_off_to_any_refresh`): it completes its row and marks the
-      registration stale if the refresh fails.
+    - It has no lifecycle row of its own. It marks the registration stale
+      before it makes anything, then refreshes under a refresh row, which
+      it closes on failure (`folder.rs:27-34`, `507-516`, `575-627`). That
+      is why its hand-off is "any refresh's" (`command.rs:388-400`).
     - Every other authoring command's hand-off is owed by its operation and
-      finished by `operation resume`.
+      finished by `operation resume`, which handles local hand-offs
+      (`resume.rs:6-8`).
+    - `refresh_repository` takes the repository lease itself
+      (`repository.rs:1339`).
 
 **Library: work contexts.**
 
@@ -188,11 +192,14 @@ command was run. Line numbers are at that revision.
 23. No base commit is recorded for a context.
     - A context's tip moves by saves, comment checkpoints, synchronization
       merges and poll fast-forwards.
-    - `publication_evidence_for` reads publication evidence, including a
-      verified push journal and `HistoryUnknown` after cache loss
-      (`remote/state.rs:2136-2160`, `5694-5760`).
-    - An unfinished closure (`ticket_closures` row before its terminal
-      step) or promotion owns the context (`closure/record.rs:741-752`).
+    - `RemoteSnapshot::publication_evidence_for` (`remote/state.rs:2111`)
+      reads publication evidence, including a verified push journal. It
+      answers `HistoryUnknown` after any remote re-selection or cache loss
+      (`state.rs:39-47`, `2153-2163`, `2244`), and nothing clears that.
+    - An unfinished closure or promotion owns the context:
+      `lifecycle_record::unfinished_record::<ClosureRecord | PromotionRecord>`
+      (`promotion/lifecycle_record.rs:317`), which covers every
+      non-terminal step.
 24. A removed worktree's `contexts` row is dropped by the next refresh
     (`repository.rs:6160-6211`).
 25. Journal steps and actions are fixed lists:
@@ -512,44 +519,57 @@ impl RepositoryService { pub fn release_context(&self, request: ReleaseContextRe
 **Domain**, in `src/repository/context_release.rs`. Ruling R-32 covers it.
 
 1. **Begin.** `begin_lifecycle` with `RepositoryOperation::ReleaseContext`
-   (action `release_context`). Under its lease, run every step below with
+   (action `release_context`). Under its lease, run steps 2–6 with
    lease-held variants of the cleanup primitives.
 2. **A new row** in which neither the worktree nor the branch exists
-   answers `AlreadyAbsent` and touches nothing.
-3. **Ownership.** If a non-terminal `ticket_closures` or promotion row
-   names the item, answer `recovery_required`. If the ticket is
-   lifecycle-closed, answer `ticket_closed`. Closure or promotion owns
-   that context.
-4. **Checks before anything is touched.** These run only on a new row:
+   answers `AlreadyAbsent`, touches nothing, and discards the row.
+3. **Ownership.** `unfinished_record` for a closure or promotion of the
+   item answers `recovery_required`. A lifecycle-closed ticket answers
+   `ticket_closed`. Closure or promotion owns that context.
+4. **Checks before anything is touched.** A refusal here discards the row,
+   because nothing was touched.
    - **(a) Worktree.** When the worktree exists, it is checked with an
      item-free precheck that tells two failures apart.
      - Any change, untracked or ignored file, hidden index bit or
        submodule change answers `worktree_not_clean`.
      - An identity, HEAD or lock mismatch answers `recovery_required`.
    - **(b) Branch.** `refs/heads/<primary branch>` must be checked out at
-     the root. The context branch tip must equal it, or be an ancestor of
-     it. Otherwise `external_change`.
-   - **(c) Publication.** `publication_evidence_for(kind, id)` must be
-     `NeverPublished`. No ref under `refs/remotes/**` may end in
-     `/manyhands/<kind>/<id>`. Otherwise `external_change`.
+     the root; otherwise `recovery_required`. The context branch tip must
+     equal it, or be an ancestor of it; otherwise `external_change`.
+   - **(c) Publication.** No ref under `refs/remotes/**` may end in
+     `/manyhands/<kind>/<id>`. `publication_evidence_for(kind, id)` must be
+     `NeverPublished`, or `HistoryUnknown` (R-43). Any proof of publication
+     answers `external_change`.
    - **(d) Synchronization.** No synchronization of the item may be
      pending (`reject_pending_synchronization_target`).
 5. **Remove the worktree**, when present, with the item-free lease-held
-   removal, then record `LocalStep::ContextWorktreeReleased`. Failure
-   point: `BeforeContextBranchRelease`.
+   removal, which re-runs (a) itself.
+   - `Changed` answers `worktree_not_clean`, and `RecoveryRequired`
+     answers `recovery_required`. In both cases nothing was removed and the
+     row is discarded.
+   - On success, record `LocalStep::ContextWorktreeReleased`.
+   - Failure point: `BeforeContextBranchRelease`.
 6. **Delete the branch**, when present. Re-check (b) and (c) against its
-   current tip, delete it oid-checked, then record
-   `LocalStep::ContextBranchReleased`. Failure point:
-   `AfterContextBranchRelease`.
-7. **Complete the row, then refresh.** A failed refresh marks the
-   registration stale and answers `IndexPending`, with nothing pending.
-   `hands_off_to_any_refresh` is true, as for folder creation (fact 16).
-   The stale `contexts` row is harmless meanwhile (fact 3) and is dropped
-   by the next refresh (fact 24).
+   current tip, then delete it with an oid check.
+   - A changed tip answers `external_change`. The row stays pending, the
+     worktree is already gone, and the user retries, or abandons the row
+     and Edits again.
+   - On success, record `LocalStep::ContextBranchReleased`.
+   - Failure point: `AfterContextBranchRelease`.
+7. **Hand off, as the saves do** (R-32).
+   - `handoff_post_authoritative` records `AuthoritativeObserved`, then
+     refreshes after the lease is given back.
+   - The answer is `Released` when the refresh succeeds.
+   - When it fails, the answer is `IndexPending`, with the row owed to
+     `operation resume`, which already handles local hand-offs (fact 16).
+   - `hands_off_to_any_refresh` is false.
 
-**Re-entry.** A pending row skips steps 2–4 and re-enters at whichever of
-steps 5–7 is unfinished. Both removals are idempotent. A pending row whose
-worktree and branch are already gone continues to step 7.
+**Re-entry.**
+- A pending row with no step, interrupted before step 5, runs from step 3
+  again.
+- A row with `ContextWorktreeReleased` skips (a) and goes to step 6.
+- A row with `ContextBranchReleased` goes to step 7.
+- Both removals are idempotent.
 
 **Remote state** is never touched: (c) guarantees there is none, and
 `retire_context` is not called. Abandon's `writes` arm touches nothing.
@@ -557,11 +577,15 @@ worktree and branch are already gone continues to step 7.
 **Binding:**
 - `Released` answers `ok`.
 - `AlreadyAbsent` answers `already_applied`.
-- `IndexPending` answers `discovery_pending`, with "any refresh" offered.
+- `IndexPending` answers `discovery_pending`, with `operation.resume`,
+  settled owed.
 - There is no data; write and checkpoint are `not_requested`.
 - `ended_without_checkpoint` is `DidNothing`.
 
-**Required outcomes**, test-first, with the same stop rule.
+**Required outcomes.** This is the contract for the release mechanism,
+after three review rounds. Task 2 writes these as tests first; if the
+library answers any row differently, the task stops for a ruling (R-4).
+The table is not edited to fit.
 
 | Case | Required answer |
 | --- | --- |
@@ -569,13 +593,15 @@ worktree and branch are already gone continues to step 7.
 | A never-created item's context | `ok`. |
 | Neither present | `already_applied`. |
 | A commit on the branch | `external_change`; nothing removed. |
-| A published branch, or publication history unknown | `external_change`. |
-| An untracked, modified or ignored file | `worktree_not_clean`. |
-| A non-primary branch checked out at the root, containing the context's commits | `external_change` (b), or `recovery_required` if primary is not checked out. |
-| An unfinished closure of the ticket | `recovery_required`. |
+| Publication proven (push journal, or a tracking ref) | `external_change`. |
+| Publication history unknown, no tracking ref, no commit of its own | `ok` (R-43). |
+| An untracked, modified or ignored file | `worktree_not_clean`; the row is discarded. |
+| Primary not checked out at the root | `recovery_required`; the row is discarded. |
+| An unfinished closure or promotion of the item | `recovery_required`. |
 | Another pending row on the root | `recovery_required`. |
 | Interrupted at `BeforeContextBranchRelease` | Other requests: `recovery_required`. Same ID: `ok`, branch gone. |
 | Interrupted at `AfterContextBranchRelease` | Same ID: `ok`; refresh done. |
+| Refresh fails after both removals | `discovery_pending` with `operation.resume`; resume completes it; other requests answer `recovery_required` until then. |
 | Interrupted at `BeforeRequestSettlement` | Same ID: `ok` or `already_applied`. |
 | A branch left without its worktree | `ok`. |
 | `context prepare` Edit after release | `ok`, `created: true`. |
@@ -611,8 +637,13 @@ worktree and branch are already gone continues to step 7.
   `set_markdown_style` and `clear_markdown_style`.
 - **Change.** On every `Changed` and every notify, the host compares
   `text()` with its last known text, length first (R-12). A difference
-  updates dirty (`text != baseline`) and feeds the draft's `edit`. Undo and
-  Redo therefore reach the draft too.
+  feeds the session, which:
+  - recomputes dirty: the text or any metadata field differs from the
+    baseline;
+  - calls the draft's `edit`.
+
+  Undo and Redo therefore reach the draft too. In the Review phase the feed
+  is suspended, and the review's own model holds the text (R-44).
 - **Style.** `view/editor/style.rs` maps `SyntaxStyle` to the theme.
 - **Keys** (R-8):
   - `zorite_editor::bind_keys(cx)` after `gpui_kit::init`, then `cmd-u`
@@ -695,6 +726,10 @@ so `model/link_rewrite.rs` rewrites the body for rendering only:
   `[[mh-link:<target>|<text>]]`.
 - Links with formatted text, `|`, `]` or a newline, and reference links,
   are left alone. Those stay inert, or for `http(s)` open as before.
+- **Every `mailto:` destination** has its query reduced to `subject` and
+  `body` in place, in the source text. That applies in any link, image or
+  reference definition, whatever its text. The viewer's own opener
+  therefore never sees another query.
 - The rewrite uses the `markdown` crate with the same parse options as the
   viewer: GFM, math and wiki links, copied from `view.rs` in Task 6.
 
@@ -716,10 +751,14 @@ so `model/link_rewrite.rs` rewrites the body for rendering only:
 **Containment** (R-34). A file is read only when all of these hold:
 1. Its canonical path is inside the canonical root of the tree it was found
    in.
-2. No component equals `.git` or `.manyhands`, ignoring ASCII case.
+2. No component of its path relative to that root equals `.git` or
+   `.manyhands`, ignoring ASCII case.
 3. Its symbolic links, if any, stay inside that root.
-4. After opening, the handle is a regular file whose identity (device and
-   inode, or the Windows file ID) equals the canonical path's.
+4. Before opening, `symlink_metadata` of the canonical path shows a regular
+   file. That identity (device and inode, or the Windows file ID) is
+   recorded. A FIFO, device or directory is never opened.
+5. The file is opened without following a final symbolic link. The handle's
+   identity must equal the recorded one.
 
 The read is `take(20 MiB + 1)`; more than 20 MiB is refused.
 
@@ -732,11 +771,14 @@ The read is `take(20 MiB + 1)`; more than 20 MiB is refused.
   - BMP `BM`.
 
   Anything else, SVG included, is refused.
-- Decoding uses the `image` crate directly, with `ImageReader::with_format`
-  and `Limits { max_image_width: 8192, max_image_height: 8192, max_alloc:
-  128 MiB }`.
-- For a GIF, only the first frame is decoded.
-- The frame is converted to BGRA and wrapped with `RenderImage::new`.
+- Decoding uses the `image` crate directly, with `ImageReader::with_format`.
+  The limits come from `Limits::default()` with `max_image_width` and
+  `max_image_height` set to `Some(4096)` and `max_alloc` to
+  `Some(96 MiB)`. A 4096 × 4096 RGBA image is 64 MiB. `Limits` is
+  non-exhaustive, so it cannot be built as a literal.
+- For a GIF, `read_image` decodes only the first frame.
+- The frame's channels are swapped to BGRA in place, then wrapped with
+  `RenderImage::new`.
 - Decodes run one at a time per tab. A tab holds at most 256 MiB of
   decoded images; beyond that, images show as source.
 - Misses and refusals are cached too, so the per-frame provider never
@@ -799,25 +841,31 @@ An `EditSession` records `provisioned` (the `created` answer), `saved` and
 
 ### Leaving (R-15, R-37, R-41)
 
-**Done or closing the tab:**
-- **Not dirty:** Done returns to Viewing, and the tab closes.
-- **Dirty, or a session still being stored:** the user is asked first.
-  - **Save** is enabled when not already saving.
+**Done or closing the tab.** Dirty means the text or any metadata field
+differs from the baseline.
+- **Not dirty, and no stored draft:** Done returns to Viewing, and the tab
+  closes.
+- **Dirty, a stored draft, or a session still being stored:** the user is
+  asked first. A new-item tab always has a stored draft, so it always asks.
+  - **Save** is enabled only when dirty and not saving (contract 4).
   - **Keep draft** is offered only when a draft is stored. While one is
     being stored, the dialog waits for it.
   - **Discard** and **Cancel** are always there.
 - Nothing typed is dropped without that choice.
 
-**Release on leave.** A session submits `Intent::ContextRelease` when all of
-these hold:
-1. It has `provisioned` and not `saved`.
+**Release on leave** (R-37). A session submits `Intent::ContextRelease`
+when all of these hold:
+1. **Either** the session has `provisioned` and not `saved`, **or** the
+   user discards an Edit draft, from the tab or the Drafts page (R-45).
 2. It leaves clean, or by Discard.
 3. No save of it is in flight. Discard is disabled while one is.
-4. The draft store lists no other draft of the item, from any process. Its
-   own discard has completed.
+4. The draft store answers, and lists no other draft of the item from any
+   process. Its own discard has completed. An unavailable or failed listing
+   means no release.
 
 A refusal appears in the operation area, and the context stays. Quit
-releases nothing.
+releases nothing. A tab closed while preparing releases the context only
+when the answer was `ok` with `created: true`.
 
 ### Save states (contract 8, R-14)
 
@@ -846,18 +894,24 @@ releases nothing.
   before Compare (R-17). It routes by classification (R-42):
   - **`NotCreated`:** `context prepare` with Create, as in Part C.
   - **Otherwise:** `context prepare` with Edit. After `ok`, re-read the
-    item.
-    - If its `source` equals the base's `source`, only the branch changed
-      the token. The base takes the read's observation and context.
-    - Otherwise the review opens.
+    item. The base takes the read's observation and context only when all
+    of these hold:
+    - the base had an observation;
+    - the read's `source` equals the base's `source`;
+    - `DraftFields::of(read)` equals the base's fields.
+
+    Then only the branch changed the token. Otherwise the review opens.
+  - **A Create answering `occupied_path`** (the index caught up with an
+    item that exists) goes to the Edit route and the review.
 
   The editor loads the draft's current text over the base's body. The tab
   is dirty, and Save is enabled.
 - **Save from a restored draft** (from the section or the close dialog)
   first runs Continue editing's steps, then saves. A context is therefore
   always provisioned through `context prepare`.
-- **The close dialog's Save** works. It is placed after Keep draft, which
-  stays the default and the first Tab stop (R-16).
+- **The close dialog's Save** works when the draft is dirty and nothing is
+  being saved. It is placed after Keep draft, which stays the default and
+  the first Tab stop (R-16).
   - It saves, then closes the tab once the draft retires. A refused save
     keeps the tab open.
   - `workspace/content.rs`'s match gains Save.
@@ -886,22 +940,50 @@ The review opens on:
 
 It re-reads the item and compares normalized bodies.
 
-- **Every field, the body included**, shows base, theirs and mine, with
-  Take theirs and Keep mine.
-- **Defaults.** A field changed only by theirs defaults to theirs. A field
-  changed only by mine defaults to mine. A field changed by both must be
-  chosen.
-- **Body.** The chosen body is set in the editor, which then stays editable
-  beside theirs, rendered.
+**The review's own model** (R-44). On opening, it takes three values for
+every field, the body included:
+- **mine:** the draft's current;
+- **theirs:** the read;
+- **base:** the draft's base.
+
+While the review is open, the draft feed is suspended. Nothing is written to
+the draft or the store until **Use these choices**.
+
+- **Every field** shows base, theirs and mine, with Take theirs and Keep
+  mine. A field changed only by theirs defaults to theirs, and one changed
+  only by mine defaults to mine. A field changed by both must be chosen.
+- **The body.** The chosen body is shown in the editor, which the user may
+  then edit. The edited text is kept in the review's model as the body's
+  "result".
+  - Switching the body's choice after an edit asks first: "Replace your
+    edits?".
 - **Use these choices** is enabled once every both-changed field has a
-  choice. It does three things:
+  choice. It does four things:
   1. the base becomes the read, normalized, with its observation;
-  2. current becomes the choices;
-  3. the editor is set with `set_text`, which restarts undo (R-18), and
-     its baseline becomes theirs.
-- **Cancel** changes nothing. Escape stays in the editor while the editor
-  has focus.
+  2. current becomes the chosen fields, and the body's result;
+  3. the draft is written, and the feed resumes;
+  4. the editor is set to the result with `set_text`, which restarts undo
+     (R-18), and its baseline becomes theirs.
+- **Cancel** restores mine in the editor, resumes the feed, and leaves the
+  draft and its file unchanged.
+- **Escape** stays in the editor while the editor has focus.
 - **A second change** by the other actor reopens the review on Save.
+
+**Required outcomes.** This is the contract for the review, after three
+review rounds. Task 12 writes these as tests first; a different result
+stops the task for a ruling.
+
+| Case | Required result |
+| --- | --- |
+| Open, Cancel | The draft file is byte-identical; the editor holds mine. |
+| Take theirs on the body, then Cancel | The draft file is byte-identical; the editor holds mine. |
+| Edit the body during the review, then Cancel | The draft file is byte-identical; the editor holds mine. |
+| Edit the body, then switch its choice | Asks first; No keeps the edits. |
+| Body changed only by them; title only by me; Use, Save | The saved file has their body and my title. |
+| Both changed the body; Take theirs, edit it, Use, Save | The saved body is the edited text. |
+| Both changed the title, no choice made | Use is disabled. |
+| Another change by them after Use | Save answers `external_change` and reopens the review. |
+| An unverified base (D2) | The review opens before any save, with the base's fields as base. |
 
 ## Part C: Metadata, Relationships And Creation
 
@@ -942,12 +1024,16 @@ It re-reads the item and compares normalized bodies.
       has no observation and no source, and holds the path and fields.
    3. Submit `Intent::ContextPrepare { intent: Create }`.
 
-   A crash at any point leaves a restorable draft.
+   A crash at any point leaves a restorable draft. If `begin_new` fails,
+   because the store is unavailable, Create stops before provisioning and
+   says crash recovery is needed to create an item (R-46).
 3. **Classification.** `is_new_item_base` marks such a base. D2 never
    writes one (fact 43), and a non-UTF-8 item is never drafted (fact 44).
    - A missing item classifies as `NotCreated`, which is restorable.
-   - An existing item classifies as `Unverified`, which goes to the Edit
-     route and the review (R-42).
+   - An existing item whose fields equal the draft's classifies as
+     `AlreadySaved`, and the draft retires.
+   - Any other existing item classifies as `Unverified`, which goes to the
+     Edit route and the review (R-42).
 4. **Save of a `NotCreated` draft** goes through
    `services/drafts/create.rs::create`. `for_drafts` routes create answers
    there.
@@ -1043,7 +1129,7 @@ It re-reads the item and compares normalized bodies.
   - the editor's handler, fed events directly;
   - the read view's `on_wiki_link` over a rewritten body;
   - `opened_url()` checked with unsafe targets first;
-  - decoding refusals: a many-frame GIF, an image over 8192 pixels and an
+  - decoding refusals: a many-frame GIF, an image over 4096 pixels and an
     SVG named `.png`.
 
   Real clicks are on the native checklist.
@@ -1216,10 +1302,26 @@ Each ruling reads: decision — why — cost if wrong.
 - **R-31** The read view rewrites qualifying links to the viewer's wiki form
   for rendering only — the viewer has no link hook — formatted-text and
   reference links stay as the viewer treats them.
-- **R-32** Release has ownership, (a)–(d), two removal steps and a hand-off
-  to any refresh, under one lease with lease-held cleanup variants — the
-  primitives take their own lease, and an owed hand-off would block the
-  root with nothing to resume it — a busy answer.
+- **R-32** Release has ownership, (a)–(d) and two removal steps, under one
+  lease with lease-held cleanup variants. It then hands off through
+  `handoff_post_authoritative`, owed to `operation resume`, as the saves
+  do. The primitives take their own lease, and a refresh cannot run
+  under the lease (fact 16). The cost is a `discovery_pending` that the
+  user resumes from the operation area.
+- **R-43** Release accepts publication history `HistoryUnknown` when no
+  tracking ref matches and the branch has no commit of its own. Every
+  remote re-selection sets that state permanently (fact 23), which would
+  otherwise disable release. At worst, an empty branch is left on a remote
+  where it was once pushed, holding nothing.
+- **R-44** The review holds mine, theirs, base and the body's result in its
+  own model; the draft feed is suspended until Use these choices — choosing
+  or toggling must never write to the draft (round 3) — none.
+- **R-45** Discarding an Edit draft, from the tab or the Drafts page,
+  requests a release under conditions 2–4 — restored drafts are the
+  commonest abandoned edits, and the library still refuses a context with
+  work — a release refused with its reason.
+- **R-46** Create needs a working draft store — the new item's draft must
+  exist before its context — a Create that waits for the store.
 - **R-33** Nearest-name for images walks `docs/` without following links,
   bounded and cached — no index of images exists — a missed image.
 - **R-34** The desktop reads image files under containment checks; the RFC
@@ -1254,6 +1356,13 @@ Each ruling reads: decision — why — cost if wrong.
 - An Edit left open at quit keeps its context.
 - A retried `context prepare` that answers `Reused` for a context it made is
   kept.
+- A context is kept in three more cases:
+  - a tab closed while its Edit was preparing, when the answer was
+    `discovery_pending`;
+  - a release that was refused, for example by another pending row;
+  - a never-created item's context whose release was refused.
+
+  The operation area shows each refusal.
 - Releasing a clean, unused context removes its directory even if another
   process uses it as its working directory. No file is lost: release
   refuses any change.
@@ -1316,5 +1425,6 @@ Reviewed by reading only, on 2026-10-24, against:
 | Round 1 source review, `b32c737` | 2 blocking, 13 important, 11 minor. | Settled | All checked against source and applied in `82b69be`. | — |
 | Round 1 contract review, `b32c737` | 5 blocking, 21 important, 14 minor; 8 questions. | Decision / settled | Decisions 8–11 asked and answered; the rest applied in `82b69be`. | — |
 | Round 2 scoped re-review, `82b69be` | 0 blocking, 8 important, 15 minor. | Settled | Applied here: E-21 and E-22; Continue editing re-read (R-42); routing by classification; single-text-node rewrite; background preparation (R-7); E-9; release-on-leave tests; filters; facts 4, 15, 42, 43; the minors. | This revision. |
-| Round 2 adversarial review, `82b69be` | 4 blocking, 11 important, 11 minor. | Settled | Applied here: R-20b to D2's rule; the body as a reviewed field; leaving on dirty (R-41); decode limits (R-39); ownership and the item-free precheck; release-on-leave conditions; prechecks on the first call only (R-2); the stranded-branch remedy (R-40); hand-off to any refresh; release re-entry; draft before prepare; Windows path refusals; primary-branch ancestry; publication evidence; link parse order; `mailto` queries; handle identity; case-insensitive `.git`; the nearest-match notice; Discard while saving. Release refusals that are retryable are retried by D1's busy rule. | This revision. |
-| Rulings R-1 to R-42 | Engineering choices. | Ruling | As stated. R-10 and R-28 to R-30 are retired. | — |
+| Round 2 adversarial review, `82b69be` | 4 blocking, 11 important, 11 minor. | Settled | Applied here: R-20b to D2's rule; the body as a reviewed field; leaving on dirty (R-41); decode limits (R-39); ownership and the item-free precheck; release-on-leave conditions; prechecks on the first call only (R-2); the stranded-branch remedy (R-40); a hand-off to any refresh (replaced in round 3 by an owed hand-off); release re-entry; draft before prepare; Windows path refusals; primary-branch ancestry; publication evidence; link parse order; `mailto` queries; handle identity; case-insensitive `.git`; the nearest-match notice; Discard while saving. Release refusals that are retryable are retried by D1's busy rule. | This revision. |
+| Round 3 scoped and adversarial review, `906d4b5` | 2 blocking (the release's refresh hand-off; the review's body choice), 5 important, 8 minor. | Settled | Both blocking mechanisms had blockers in round 2 too, so each is now stated as a required-outcome table, written test-first with a stop for a ruling (Tasks 2 and 12). The rest were applied: R-43 (unknown history), the `mailto` reduction everywhere, Continue editing's adoption condition, R-45, fact 16 and fact 23 corrected, release re-entry and failure mapping, routing on `occupied_path` and `AlreadySaved`, R-46, leaving with metadata changes and stored drafts, the image open checks and limits, plan consistency. **These round-3 edits had no independent review.** | This revision. |
+| Rulings R-1 to R-46 | Engineering choices. | Ruling | As stated. R-10 and R-28 to R-30 are retired. | — |

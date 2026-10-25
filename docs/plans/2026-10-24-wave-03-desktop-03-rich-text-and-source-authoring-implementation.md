@@ -358,24 +358,32 @@ devenv shell -- cargo run --locked --bin manyhands-cli -- help
     `RepositoryService::release_context`;
   - `RepositoryOperation::ReleaseContext`, action `release_context`;
   - `LocalStep::{ContextWorktreeReleased, ContextBranchReleased}`;
-  - `FailurePoint::BeforeContextBranchRelease`;
+  - `FailurePoint::{BeforeContextBranchRelease, AfterContextBranchRelease}`;
   - `OperationAction::ReleaseContext`;
   - `ContextReleaseInput`, `Mutation::ContextRelease`.
 - Consumes:
   - the cleanup primitives, through lease-held variants and a precheck
     that does not require the item (R-32);
   - `reject_pending_synchronization_target`;
-  - `handoff_post_authoritative`.
+  - `handoff_post_authoritative`, with the hand-off owed to
+    `operation resume`;
+  - `RemoteSnapshot::publication_evidence_for`;
+  - `lifecycle_record::unfinished_record`.
 
 - [ ] **Step 1: Write the outcome tests first.**
   - **Domain tests,** in `src/repository/context_release_tests.rs`, one per
-    check (a) to (e):
+    check (a) to (d), plus one for ownership:
     - each refusal leaves the worktree, branch and `contexts` row unchanged;
     - a Create context with no item is released;
     - a branch left without its worktree is released;
     - after a release, a `context prepare` Edit answers `created: true`;
-    - each of these refuses: an unfinished closure, an unknown publication
-      history, and a non-primary branch checked out at the root.
+    - each of these refuses: an unfinished closure or promotion, a proven
+      publication, and a non-primary branch checked out at the root;
+    - an unknown publication history with no tracking ref is released
+      (R-43).
+
+  These are the design's required-outcome table. A row that answers
+  differently stops the task for a ruling. The table is not edited to fit.
   - **Binding tests,** in `tests/mutation_bridges/context.rs`, one per row
     of the design's `context release` table, prefixed `release_`.
 
@@ -383,7 +391,8 @@ devenv shell -- cargo run --locked --bin manyhands-cli -- help
   action name, abandon `writes` arm, `OperationAction`, schemas and the
   binding.
   - The lease-held removal uses the item-free precheck.
-  - The hand-off goes to any refresh (R-32).
+  - The hand-off is owed to `operation resume`, and
+    `hands_off_to_any_refresh` is false (R-32).
   - Apply E-20, E-21 and E-22.
   - Add the second `HOMES` and `ROWS` rows (E-15) and the golden
     `context_release.json` (E-16).
@@ -395,6 +404,7 @@ devenv shell -- cargo test --locked --lib context_release
 devenv shell -- cargo test --locked --lib cleanup
 devenv shell -- cargo test --locked --lib recovery
 devenv shell -- cargo test --locked --lib read::status
+devenv shell -- cargo test --locked --lib mutation::
 devenv shell -- cargo test --locked --test mutation_bridges release_
 devenv shell -- cargo test --locked --test mutation_bridges keeps_the_rules_of_the_boundary
 devenv shell -- cargo test --locked --test read_contract published_enumerations_list_exactly_the_registered_values
@@ -415,8 +425,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
     `read_contract` and `local_authoring`.
   - The library unit tests: `--lib`.
 - [ ] **Step 3: Review.** A fresh reviewer reviews Part 0 as a library
-  change of its own: scope, both outcome tables, R-1 to R-5, R-32 and
-  E-15 to E-20. Use the adversarial brief on release and replay.
+  change of its own: scope, both outcome tables, R-1 to R-5, R-32, R-43
+  and E-15 to E-22. Use the adversarial brief on release and replay.
 - [ ] **Step 4: Ticket comment.** Desktop tasks start only after this
   review passes (decision 2).
 
@@ -506,7 +516,10 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
     (200 KiB; Review Focus 4)
   - `viewing_and_toggling_change_nothing_in_the_repository`
     (`RepositorySnapshot` before and after)
-- [ ] **Step 2: Implement.** Apply E-1 to E-5.
+- [ ] **Step 2: Implement.**
+  - Create `services/render_prep.rs`, with background `warm_parse` per body
+    version (R-7). Task 6 adds the link rewrite and image sources to it.
+  - Apply E-1 to E-5.
 - [ ] **Step 3: Verify.**
 
 ```sh
@@ -600,6 +613,8 @@ pub(crate) fn prepare(body: String, cx: &App) -> Task<Prepared>; // rewrite, ima
     - `an_unresolved_link_says_not_found`
   - `model/link_rewrite_tests.rs`:
     - `relative_and_mailto_links_become_mh_links_and_http_links_stay`
+    - `every_mailto_destination_is_reduced_even_when_not_rewritten`
+      (formatted text, reference definitions, images)
     - `links_with_formatted_text_pipes_brackets_or_references_stay`
     - `a_users_own_mh_link_is_a_path_link`
     - `the_rewrite_never_reaches_a_save`
@@ -640,12 +655,15 @@ pub(crate) struct ImageCache { /* src → Pending | Loaded(Arc<RenderImage>, f32
   - `model/resources_tests.rs`, over temporary trees:
     - `dot_dot_symlink_escape_git_and_other_worktrees_are_refused`
     - `a_case_variant_of_git_is_refused`
+    - `an_image_inside_a_context_worktree_is_allowed` (the check is relative
+      to the tree root)
+    - `a_fifo_or_directory_is_never_opened`
     - `a_handle_that_is_not_the_checked_file_is_refused`
     - `svg_named_png_is_not_an_image`
     - `oversized_files_are_not_read`
     - `each_supported_kind_is_sniffed`
     - `a_many_frame_gif_decodes_only_its_first_frame`
-    - `an_image_over_8192_pixels_is_refused`
+    - `an_image_over_4096_pixels_is_refused`
     - `the_per_tab_budget_stops_further_decodes`
   - `services/images_tests.rs`:
     - `a_local_png_loads_off_the_ui_thread_and_notifies`
@@ -746,6 +764,9 @@ pub(crate) struct EditSession { provisioned: bool, saved: bool, /* … */ }
   - `a_session_that_saved_keeps_its_context`
   - `done_after_an_edit_on_an_existing_context_releases_nothing`
   - `another_draft_of_the_item_prevents_release` (R-37)
+  - `an_unavailable_draft_listing_prevents_release`
+  - `discarding_a_restored_edit_draft_releases_its_context` (R-45)
+  - `a_metadata_change_alone_makes_leaving_ask`
   - `closing_the_tab_while_preparing_releases_the_context_it_made`
   - `leaving_a_dirty_editor_with_no_stored_draft_asks_first` (R-41: an
     unavailable store, and a first write held)
@@ -843,7 +864,14 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
 
 ## Task 12: Stale-Edit Review
 
-- [ ] **Step 1: Apply E-19, and write the tests first.**
+- [ ] **Step 1: Apply E-19, and write the tests first.** They cover every row
+  of the design's review outcome table (R-44). A row that answers
+  differently stops the task for a ruling, and the table is not edited to
+  fit. The tests:
+  - `cancel_after_taking_theirs_on_the_body_leaves_the_draft_file_byte_identical`
+  - `cancel_after_editing_the_body_restores_mine`
+  - `switching_the_body_choice_after_an_edit_asks_first`
+  - `an_edited_body_result_is_what_save_writes`
   - `a_stale_save_opens_the_review_and_leaves_the_draft_file_unchanged`
   - `one_sided_changes_default_and_both_changed_fields_must_be_chosen`
   - `taking_theirs_for_the_title_and_mine_for_the_body_saves_exactly_that`
@@ -938,7 +966,8 @@ impl DraftRegistry {
 - [ ] **Step 1: Tests first.**
   - In `src/drafts/compare_tests.rs`, new tests only:
     - `a_new_item_draft_of_a_missing_item_is_not_created_and_restorable`
-    - `a_new_item_draft_whose_item_exists_is_unverified`
+    - `a_new_item_draft_whose_item_exists_with_other_fields_is_unverified`
+    - `a_new_item_draft_whose_item_exists_with_equal_fields_is_already_saved`
     - `an_unverified_base_with_a_source_is_still_item_not_found_when_missing`
   - In `services/drafts/create_tests.rs`:
     - `create_completion_clears_the_marker_when_the_read_matches`
@@ -948,6 +977,9 @@ impl DraftRegistry {
     - `the_new_item_draft_is_stored_before_context_prepare` (R-20)
     - `an_occupied_path_for_this_drafts_own_item_becomes_a_review`
     - `a_marked_draft_whose_item_exists_routes_to_edit_and_review` (R-42)
+    - `continue_editing_a_not_created_draft_whose_item_appeared_routes_to_review`
+    - `create_stops_before_provisioning_when_the_store_is_unavailable`
+      (R-46)
     - `a_create_retried_after_a_lost_answer_creates_one_item` (worker
       `retry`)
     - `discarding_a_new_item_draft_releases_its_context`
@@ -1120,20 +1152,20 @@ git merge-tree --write-tree HEAD origin/main
 | Acceptance row or ruling | Task |
 | --- | --- |
 | Context prepare; R-1 to R-5 | 1 |
-| Context release; R-32 | 2 |
+| Context release; R-32, R-43 | 2 |
 | E-21, E-22 | 2 |
 | Load normalization; round trips | 3, 5 |
-| Read view; R-6, R-7 | 4 |
+| Read view; R-6, R-7 (warm) | 4 |
 | Shared undo; not dirty (editor); R-8, R-9, R-12 | 5 |
 | Links; R-31; background preparation (R-7) | 6 |
 | Images; R-33, R-34, R-39 | 7 |
-| Edit; release on leave; R-12, R-13, R-35, R-37, R-40, R-41 | 9 |
+| Edit; release on leave; R-12, R-13, R-35, R-37, R-40, R-41, R-45 | 9 |
 | Save; states; untouched bytes; not dirty (repository); R-11, R-14, R-15 | 10 |
 | Late results; recovery; R-16, R-17, R-19, R-38, R-42 (Continue editing) | 11 |
-| Stale edit; R-18, R-36 | 12 |
+| Stale edit; R-18, R-36, R-44 | 12 |
 | Metadata; R-27 | 13 |
 | Relationships; R-26 | 14 |
-| Create (drafts); R-20, R-20b, R-42 (routing) | 15 |
+| Create (drafts); R-20, R-20b, R-42 (routing), R-46 | 15 |
 | Create (dialogs); R-21, R-22 | 16 |
 | Move; folders; R-23, R-24 | 17 |
 | Repair; R-25 | 18 |

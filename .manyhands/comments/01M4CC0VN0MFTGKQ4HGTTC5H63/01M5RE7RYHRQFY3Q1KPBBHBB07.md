@@ -57,5 +57,17 @@ with no conflicts and no rebase.
 - The contract-level findings became decisions 8–11, asked and answered.
   The rest were applied in the revision.
 
-**Not done yet.** Round 2, a scoped re-review with the adversarial brief,
-is next. Nothing has been built or tested.
+**Review round 2, at `82b69be`.**
+- **Scoped re-review:** 0 blocking, 8 important, 15 minor.
+- **Adversarial review:** 4 blocking, 11 important, 11 minor.
+- All findings were applied in `906d4b5`.
+
+**Review round 3, at `906d4b5`.** 2 blocking, 5 important, 8 minor.
+- **The blockers** were the release's index hand-off, and the review's
+  body choice.
+- Both mechanisms also had blockers in round 2. So each is now stated as a
+  required-outcome table, written test-first with a stop for a ruling, in
+  Tasks 2 and 12.
+- The round-3 edits had no independent review.
+
+**Ready for approval.** Nothing has been built or tested.
