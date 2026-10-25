@@ -30,10 +30,12 @@ rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
 CLI retries with its approved assertions unchanged. Task 9's full verification
 is **not green** after an outside-C3 library-unit failure. The owner-authorized
-test-baseline correction now passes scoped verification; independent review and
-full-gate disposition remain pending. Original and post-fix evidence are below.
-Whole-branch reviews remain controller-owned and pending; dogfooding preflight,
-authorization and evidence are still owed.
+test-baseline correction now passes scoped verification. The controller reports
+independent whole-branch **SPEC and QUALITY both APPROVED** over
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
+including the authorized test-baseline exception, with no actionable findings
+or new gaps. Owner full-suite disposition remains pending; dogfooding and the
+switch remain owed. This is not review-ready or full-gate completion.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -477,6 +479,7 @@ review-ready or closure claim.
 | 8 final | Complete, APPROVED | `9a2a5170c4704ef03420ef2276911c6b1bfa3959..f9618f76ce9608c9ccc42018701647d7b98bb642` | Recorded documentation/source validation retained | Spec and quality **APPROVED**, explicitly conveyed in the fresh Task 9 brief; supersedes historical pending row |
 | 9 verification | BLOCKED; gate evidence complete | Tested HEAD `f9618f76ce9608c9ccc42018701647d7b98bb642` | Check/fmt/clippy/CLI smoke/no-GPUI passed; sole full-suite invocation exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets, 6239s | Outside-C3 library assertion requires owner/controller disposition; whole-branch reviews pending; no review-ready claim |
 | 9 narrow test correction | Implemented; independent review and full-gate disposition pending | Base `f9618f76ce9608c9ccc42018701647d7b98bb642`; fix/evidence commit carrying the follow-up below | Exact test **1 passed**, then checkpoint module **46 passed**; fmt/check/clippy passed. Full suite **not rerun** | Explicit owner exception for this test baseline only; original **4528/1/1**, exit **101** remains the sole full-suite result |
+| 9 whole-branch reviews | SPEC and QUALITY APPROVED; remaining gates outstanding | `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef` | Prior full-suite **4528/1/1**, exit **101**, and scoped **46 distinct passing** retained; no new test run | Both independent approvals conveyed by controller, including the authorized baseline correction; no actionable findings/new gaps. Owner full-suite disposition and dogfooding/switch remain owed; not review-ready |
 
 ## Part A approval and Task 5 preflight
 
@@ -2095,3 +2098,42 @@ paths, with the required co-author trailer. Ticket-only publication is authorize
 Independent fix/whole-branch reviews and owner full-gate disposition remain
 pending. No subagents, dogfood preflight, switch, PR, main integration, closure,
 cleanup or native CI.
+
+## Task 9 whole-branch SPEC and QUALITY approvals
+
+Recorded **2026-10-25T15:33:13Z**, on clean HEAD
+`806057d3223b9ac2e71fa3a28c3eba83de5c63ef`. The controller explicitly reports
+both independent whole-branch reviews **APPROVED** over the actual range
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`:
+
+- **SPEC: APPROVED.** Includes the owner-authorized test-baseline exception.
+- **QUALITY: APPROVED.** Includes the same correction and evidence.
+- **No actionable findings or new gaps** were reported by either review.
+
+These are controller-conveyed independent approvals, not new reviews performed
+by this implementer. They supersede the historical pending review statuses above
+for that exact range. Task 8's previously recorded approvals remain intact.
+
+### Remaining gates and unchanged evidence
+
+- **Owner full-suite disposition is still pending.** The sole full run at
+  `f9618f76ce9608c9ccc42018701647d7b98bb642` remains **4528 passed / 1 failed /
+  1 ignored**, exit **101**, 6239s. It is not relabeled green by review approval.
+- The authorized post-fix verification remains **46 distinct passing tests**
+  in the checkpoint module; its separate exact-test pass overlaps that set.
+  The historical failure's hidden timestamps remain unknown.
+- **Dogfooding and the switch remain owed.** No dogfood preflight has run.
+- **Not review-ready, not full-gate complete, not Task 9 complete.** The
+  controller will ask the owner for full-gate disposition next.
+
+This is a documentation-only evidence checkpoint. No Rust gate or full-suite
+command was rerun. The canonical comment **`01M5SV3J6G8XQJRGN56KCWE68Z`** uses
+an ID from `devenv shell -- ./target/debug/manyhands-cli id new` and the actual
+UTC clock above. Only this ledger and that comment change.
+
+`git fetch origin` succeeded; main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Precommit merge-tree passed with tree
+`3aa0a99452e5a693f0a4cac9146e5b0b2af08aad`; no main movement requires a merge.
+Status, diff, whitespace and the recent ten commits are inspected before the
+evidence-only commit with the required co-author trailer and ticket-only push.
+Postcommit merge-tree, remote HEAD and clean state are verified in the return.
