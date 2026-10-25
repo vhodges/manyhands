@@ -452,6 +452,7 @@ review-ready or closure claim.
 | 3 Step 0 | Complete; binary conversion passed | Base `66efd0629d73fa8d762921fd987d143604178175`; included in Task 3 completion | Exact checkpoint filter initially **1 passed / 0 failed / 201 filtered**, 5.72s; all five rows, six independent fixtures; passes again inside final documents filter through real CLI children | Owner approved correcting only extra failure-class assertions to partial/Incomplete precedence; table expectations unchanged |
 | 3 | Complete | `66efd0629d73fa8d762921fd987d143604178175..90c8e3ae15f9085c74b283c95bc557d60a7abc00` | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Spec and quality both **APPROVED**, explicitly conveyed in the controller's Task 4 brief; prior owner rulings retained |
 | 4 | Implemented; Part A independent review pending | Base `90c8e3ae15f9085c74b283c95bc557d60a7abc00`; head is the `test(cli): C3 Part A exit table and inventories` commit carrying this entry | **10 new focused tests passed**; all six checkpoint gates passed; **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535 passing** | Self-reviewed only; controller independently reviews actual Part A range `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` after return, then records the returned SHA and review outcome |
+| 4 P2 follow-up | Implemented; re-review pending | Base/initial Task 4 head `329a1436f3671586382ca4c1f41b2c9a8ab8a699`; follow-up head is the `test(cli): prove C3 index-unavailable exit through refresh` commit carrying this entry | Expected red C1-command attribution failure; **11 authoring-exits passed**; all six checkpoint gates passed, **182 + 239 + 71 + 44 = 536** | Part A SPEC P2 corrected with a new Task 4 binary test; independent acceptance remains with controller |
 
 ## Task 1: path observe and ticket check
 
@@ -1225,3 +1226,75 @@ schema, existing-test semantics or approved-document changes. Task 5 was not
 started. No subagents, PR, main integration, closure, cleanup, dogfooding or
 native CI. This is a locally verified Part A checkpoint for independent review,
 not a review approval or whole-Cycle completion claim.
+
+## Task 4 review follow-up: SPEC P2, C3 index-unavailable provenance
+
+Recorded **2026-10-25T04:44:19Z**, base
+`329a1436f3671586382ca4c1f41b2c9a8ab8a699`. The controller reported SPEC P2:
+the `index_unavailable` row referenced
+`index_rebuild_restores_a_database_replaced_by_other_bytes`, but that test
+asserts the refusal on **C1 `document list`** (`tests/cli/index.rs:211–216`)
+and subsequently succeeds with C3 rebuild. Verified the finding directly.
+The original 535-test gate was green, but did not establish C3 provenance
+for this row; the prior coverage claim is corrected by this follow-up.
+
+### Resolution and red/green evidence
+
+- Added only the new Task 4 test
+  `index_refresh_on_a_corrupt_database_is_index_unavailable` in
+  `tests/cli/authoring_exits.rs`, and repointed its existing exit-table row.
+  Task 2's `tests/cli/index.rs` is unchanged.
+- The fixture closes its service, removes SQLite WAL/SHM first, then replaces
+  the database with exactly 4096 bytes of `0xA5`. The binary invokes C3
+  `index refresh` with a valid request ID. It asserts code index_unavailable,
+  exit 3, exact command identity, retained request ID, index.rebuild recovery,
+  identical canonical/worktree snapshot and identical `refs/` output.
+- **Red:** initially exercised the existing row's C1 `document list`
+  invocation in the new fixture, retaining the required `command ==
+  "index refresh"` assertion. Ran
+  `devenv shell -- cargo test --all-features --locked --test cli authoring_exits::index_refresh_on_a_corrupt_database_is_index_unavailable`.
+  Result: **0 passed / 1 failed / 238 filtered**, 0.23s, exactly at command
+  identity: actual `document list`, expected `index refresh`. This is an
+  evidence-attribution regression demonstration, not a production defect or
+  library gap; code/exit alone would have passed the misleading old invocation.
+- **Green:** changed only the new fixture's invocation to `index refresh`
+  with `--request-id`; retained its assertions. After formatting the new
+  module, `devenv shell -- cargo test --all-features --locked --test cli authoring_exits`
+  passed **11 / 0 failed / 228 filtered**, 2.79s.
+
+### Revised-tree checkpoint gate
+
+The test artifact changed, so the plan's checkpoint gate was rerun **once** on
+the revised tree, with a 600-second tool timeout. All six commands passed:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.38s. |
+| `devenv shell -- cargo fmt --check` | Passed. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.14s. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 0.27s. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | **182 CLI unit + 239 CLI integration + 71 read-contract + 44 mutation-contract = 536 passed**; zero failed/ignored/measured/filtered. Durations respectively 0.25s / 51.19s / 11.22s / 8.62s. |
+
+The prior checkpoint had **535** tests; this adds exactly **one**, now **536**.
+The focused run is not added again to that total. No further broad run, full
+suite or native CI was performed.
+
+### Self-review and return boundary
+
+Self-review checked the precise command/result attribution, valid request ID,
+whole-file corruption boundary, recovery assertion, snapshot/ref invariance,
+row reference and additive test-only scope. Initial and checkpoint fetch/merge
+left main at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`, already current.
+Precommit merge-tree succeeded with tree
+`40154382afcb645ef95b13ccacfaec64a2460664`; status/diff/log and whitespace checks
+are inspected before the separate follow-up commit. Canonical comment
+`01M5RNZCK3GCXM70AN3DZXGTG7` uses the built CLI's ID and actual UTC clock.
+
+The follow-up commit contains this ledger, that comment and only
+`tests/cli/authoring_exits.rs`. SPEC P2 is implemented and locally verified;
+**independent re-review/acceptance remains pending**. The controller reviews
+the follow-up from `329a143` and the complete Part A range from `7368902` to
+the returned follow-up SHA. Ticket-only commit/push with the required co-author
+trailer; no Task 5, subagents, library/Cargo/schema/approved-document changes,
+completed Task 2 test edits, PR, main integration, closure, cleanup or dogfooding.

@@ -113,7 +113,7 @@ const ROWS: &[Row] = &[
     row!(
         "index_unavailable",
         3,
-        "index_rebuild_restores_a_database_replaced_by_other_bytes"
+        "index_refresh_on_a_corrupt_database_is_index_unavailable"
     ),
     row!(
         "external_change",
@@ -392,6 +392,42 @@ fn show(f: &Fixture) -> Value {
         "ok",
     )["data"]
         .clone()
+}
+
+#[test]
+fn index_refresh_on_a_corrupt_database_is_index_unavailable() {
+    let f = Fixture::new();
+    let before = support::repository_and_worktree_snapshot(&f.repo);
+    let refs = f.refs("refs/");
+    // Fixture::new drops its service. Remove WAL/SHM before replacing the whole
+    // database, preserving the approved corruption boundary (not partial damage).
+    for name in ["manyhands.sqlite3-wal", "manyhands.sqlite3-shm"] {
+        match fs::remove_file(f.data.path().join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("remove SQLite sidecar: {error}"),
+        }
+    }
+    fs::write(f.data.path().join("manyhands.sqlite3"), [0xA5; 4096]).unwrap();
+    let value = f.checked(
+        "index",
+        "refresh",
+        &["--request-id", REQUEST],
+        &[],
+        3,
+        "index_unavailable",
+    );
+    assert_eq!(value["command"], "index refresh");
+    assert_eq!(value["request_id"], REQUEST);
+    assert!(
+        value["recovery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| { action["action"] == "index.rebuild" })
+    );
+    assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
+    assert_eq!(f.refs("refs/"), refs);
 }
 
 #[test]
