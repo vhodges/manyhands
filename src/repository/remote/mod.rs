@@ -1,9 +1,24 @@
-mod observation;
+mod merge;
+pub(super) mod observation;
+mod poll;
 mod refs;
-mod sync;
+pub(super) mod sync;
+pub use merge::{
+    ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
+    ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,
+    ResolveSynchronizationRequest,
+};
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+pub use poll::{
+    AutomaticPollEligibility, PollCompletion, PollDisposition, PollIneligibility,
+    PollPublicationRemoteRequest, PollTargetReport, RemotePollError, RemotePollOutcome,
+    RemotePollReport, RemotePollResult,
+};
 pub use sync::{
-    PublishPendingReason, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+    EphemeralSynchronizationConflictSides, PublishPendingReason, SafePointRequest,
+    SynchronizationConflictInspection, SynchronizationConflictPath, SynchronizationError,
+    SynchronizationObserver, SynchronizationOutcome, SynchronizationResult,
+    SynchronizationSettings, SynchronizationStage,
 };
 #[cfg(test)]
 pub(crate) mod observation_tests;
@@ -23,6 +38,30 @@ pub use state::{
     RemotePollingValueError, RemotePublicationEvidence, RemoteRefObservation, RemoteSnapshot,
     SynchronizationTarget, SynchronizeRemoteRequest,
 };
+
+/// Fixture text for a worktree admin `gitdir` link naming `link` exactly.
+#[cfg(test)]
+pub(super) fn git_metadata_link_text(link: &std::path::Path) -> String {
+    let text = link.to_str().expect("fixture Git path must be UTF-8");
+    // libgit2 reads this field verbatim, then dirname scans only '/'. Encode
+    // Git metadata, not native path display; Unix backslashes are literal names.
+    #[cfg(windows)]
+    let text = {
+        use std::path::{Component, Prefix};
+        let text = match link.components().next() {
+            // Match Git's ordinary drive/UNC presentation, so '..' remains
+            // meaningful without discarding the UNC server/share root.
+            Some(Component::Prefix(prefix)) => match prefix.kind() {
+                Prefix::VerbatimDisk(_) => text[4..].to_owned(),
+                Prefix::VerbatimUNC(_, _) => format!(r"\\{}", &text[8..]),
+                _ => text.to_owned(),
+            },
+            _ => text.to_owned(),
+        };
+        text.replace('\\', "/")
+    };
+    format!("{text}\n")
+}
 
 #[cfg(test)]
 mod tests {

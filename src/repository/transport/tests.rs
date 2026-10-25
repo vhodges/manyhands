@@ -3,6 +3,21 @@ use super::trust::{HostTrustSnapshot, publish_reapproval_marker, read_reapproval
 use super::*;
 use crate::repository::{REGISTRY_FILE, RepositoryService};
 
+#[test]
+fn transport_poll_stop_is_sticky_and_independent_of_backend_error_code() {
+    let attempt = CallbackAttempt::default();
+    assert!(attempt.poll_progress(|| true));
+    assert!(!attempt.poll_progress(|| false));
+    assert!(!attempt.poll_progress(|| panic!("stopped callback must not be re-entered")));
+    assert!(attempt.poll_stopped());
+    let error = git2::Error::from_str("backend returned GenericError, not User");
+    assert_eq!(error.code(), git2::ErrorCode::GenericError);
+    assert_eq!(
+        super::remote::backend_failure(&attempt, &error, false),
+        SshTransportErrorKind::TransportUnavailable
+    );
+}
+
 fn prepared(path: &std::path::Path) -> PreparedSshAttempt {
     use crate::repository::keys::*;
     PreparedSshAttempt {
@@ -506,19 +521,10 @@ fn transport_two_services_racing_approvals_preserve_winner() {
         .map(|(index, service)| {
             let barrier = barrier.clone();
             std::thread::spawn(move || {
-                let host = authority(22);
-                let key = identity(index as u8 + 1);
-                let snapshot = service.read_host_trust(&host).unwrap();
+                let intent = OriginalHostApproval::new(service, index as u8 + 1);
                 barrier.wait();
-                (
-                    key.clone(),
-                    service.finalize_host_trust(
-                        &host,
-                        &snapshot,
-                        &key,
-                        Some(&approval(&host, None, &key)),
-                    ),
-                )
+                let result = intent.finalize();
+                (intent, result)
             })
         })
         .collect();
@@ -526,24 +532,125 @@ fn transport_two_services_racing_approvals_preserve_winner() {
         .into_iter()
         .map(|handle| handle.join().unwrap())
         .collect();
+    reconcile_original_host_approvals(data.path(), results);
+}
+
+struct OriginalHostApproval {
+    service: RepositoryService,
+    host: SshAuthority,
+    snapshot: HostTrustSnapshot,
+    key: HostKeyIdentity,
+    approval: HostApproval,
+}
+impl OriginalHostApproval {
+    fn new(service: RepositoryService, seed: u8) -> Self {
+        let host = authority(22);
+        let key = identity(seed);
+        let snapshot = service.read_host_trust(&host).unwrap();
+        assert_eq!(snapshot.pin, None);
+        let approval = approval(&host, None, &key);
+        Self {
+            service,
+            host,
+            snapshot,
+            key,
+            approval,
+        }
+    }
+
+    fn finalize(&self) -> Result<(), SshTransportErrorKind> {
+        self.service.finalize_host_trust(
+            &self.host,
+            &self.snapshot,
+            &self.key,
+            Some(&self.approval),
+        )
+    }
+}
+
+fn reconcile_original_host_approvals(
+    data: &std::path::Path,
+    results: Vec<(OriginalHostApproval, Result<(), SshTransportErrorKind>)>,
+) {
+    assert_eq!(results.len(), 2);
     assert_eq!(
         results.iter().filter(|(_, result)| result.is_ok()).count(),
         1
     );
-    assert_eq!(
-        results
-            .iter()
-            .filter(|(_, result)| *result == Err(SshTransportErrorKind::HostTrustChanged))
-            .count(),
-        1
-    );
-    let service = RepositoryService::open_at(data.path()).unwrap();
     let winner = results
-        .into_iter()
+        .iter()
         .find(|(_, result)| result.is_ok())
         .unwrap()
-        .0;
-    assert_eq!(service.read_host_pin(&authority(22)).unwrap(), Some(winner));
+        .0
+        .key
+        .clone();
+    for (intent, original) in &results {
+        // Live contention can exhaust the bounded cache lease before pin CAS.
+        // Only after both requests finish must the unchanged loser see the CAS
+        // refusal. No new snapshot, authority, identity, approval, or service.
+        assert!(matches!(
+            original,
+            Ok(())
+                | Err(SshTransportErrorKind::HostTrustChanged)
+                | Err(SshTransportErrorKind::RegistryUnavailable)
+        ));
+        assert_eq!(
+            intent.finalize(),
+            if original.is_ok() {
+                Ok(())
+            } else {
+                Err(SshTransportErrorKind::HostTrustChanged)
+            }
+        );
+        assert_eq!(
+            intent.service.read_host_pin(&intent.host).unwrap(),
+            Some(winner.clone())
+        );
+    }
+    drop(results);
+    let reopened = RepositoryService::open_at(data).unwrap();
+    assert_eq!(
+        reopened.read_host_pin(&authority(22)).unwrap(),
+        Some(winner)
+    );
+    let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM ssh_host_pins", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn transport_original_approval_reconciles_after_cache_lease_contention() {
+    use crate::repository::{RepositoryOperation, cache_write_guard};
+    let data = tempfile::tempdir().unwrap();
+    let winner = OriginalHostApproval::new(RepositoryService::open_at(data.path()).unwrap(), 1);
+    let loser = OriginalHostApproval::new(RepositoryService::open_at(data.path()).unwrap(), 2);
+    let winner_result = winner.finalize();
+    assert_eq!(winner_result, Ok(()));
+    let guard = cache_write_guard(
+        &data.path().join(REGISTRY_FILE),
+        data.path(),
+        RepositoryOperation::OpenRegistry,
+    )
+    .unwrap();
+    let worker = std::thread::spawn(move || {
+        let result = loser.finalize();
+        (loser, result)
+    });
+    let (loser, loser_result) = worker.join().unwrap();
+    assert_eq!(
+        loser_result,
+        Err(SshTransportErrorKind::RegistryUnavailable)
+    );
+    drop(guard);
+    reconcile_original_host_approvals(
+        data.path(),
+        vec![(winner, winner_result), (loser, loser_result)],
+    );
 }
 
 #[test]

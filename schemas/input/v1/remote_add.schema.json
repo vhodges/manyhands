@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Remote add input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "url"],
+  "properties": {
+    "name": {"type": "string"},
+    "url": {"type": "string"}
+  }
+}

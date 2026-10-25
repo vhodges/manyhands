@@ -1,0 +1,11 @@
+Fetch: true
+Host: 127.0.0.1
+Pinned algorithm: none
+Pinned fingerprint: none
+Port: 0
+Presented algorithm: ssh-ed25519
+Presented fingerprint: <presented>
+Push: true
+Reapproval required: false
+Input for host approve:
+{"algorithm":"ssh-ed25519","authority":"127.0.0.1:0","fingerprint":"<presented>"}

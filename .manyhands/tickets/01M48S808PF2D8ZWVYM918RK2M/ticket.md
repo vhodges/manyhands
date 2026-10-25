@@ -1,13 +1,15 @@
 ---
+wave: '03'
+id: 01M48S808PF2D8ZWVYM918RK2M
+title: 'Wave 03 readiness: editor feasibility and provisional API audit'
+type: exploration
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-07T01:47:29Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M48S808PF2D8ZWVYM918RK2M"
-title: "Wave 03 readiness: editor feasibility and provisional API audit"
-type: "exploration"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "03"
 ---
 
 Retire independent Wave 03 readiness risks while Wave 02 collaboration work
