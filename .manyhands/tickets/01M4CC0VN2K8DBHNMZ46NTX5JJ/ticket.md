@@ -1,14 +1,17 @@
 ---
+wave: '03'
+cycle: D5
+deps:
+- 01M4CC0VN1KTQFSVR99378TDHV
+- 01M57SKVF6TQ3QM6AXJ35JGGSY
+id: 01M4CC0VN2K8DBHNMZ46NTX5JJ
+title: 'Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VN2K8DBHNMZ46NTX5JJ"
-title: "Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "D5"
 ---
 
 Complete deliberate desktop collaboration lifecycles.
