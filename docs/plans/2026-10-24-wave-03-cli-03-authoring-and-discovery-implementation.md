@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3 CLI Authoring And Discovery Maintenance Implementation Plan"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,8 @@ id: "01M5QY01B09GY7DQ6DPWE2733H"
 # CLI Authoring And Discovery Maintenance Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Approved by the product owner on 2026-10-24** at `e7b2b71`, for **subagent-driven** execution. Implementation and named edit E1 are authorized. The Cycle's Status lists what is not.
 
 **Goal:** Add C3's thirteen verbs to `manyhands-cli`, so that an agent or a person can author documents and tickets, set relationships, repair and adopt files, and maintain the index without hand-editing canonical files. Then switch this project's ticket dogfooding to the CLI.
 

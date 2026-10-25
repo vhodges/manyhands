@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3: CLI Authoring And Discovery Maintenance"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,14 +12,23 @@ id: "01M5QY018FX9D7N05BE3CSYXTC"
 
 ## Status
 
-**Draft, for product-owner approval.**
+**Approved by the product owner on 2026-10-24**, together with the design
+and the implementation plan, at commit `e7b2b71`.
 
-- The owner answered four planning questions on 2026-10-24 (decisions 1–4),
-  two after the first review round (decisions 5–6), and one after the
-  second (decision 7).
-- Both review rounds' findings are applied (see the Review Record).
-- Nothing is approved and no implementation is authorized. No build or test
-  was run for these drafts.
+- **Execution.** Subagent-driven.
+- **Implementation is authorized**, including named edit E1.
+- **Not covered by the approval**, and each needing its own go-ahead:
+  - any push beyond the ticket branch;
+  - a pull request, a merge or closing the ticket;
+  - native CI;
+  - Task 9's dogfooding saves and pushes.
+
+The owner answered the planning questions on 2026-10-24: four before review
+(decisions 1–4), two after the first review round (decisions 5–6), and one
+after the second (decision 7). All three rounds' findings are applied (see
+the Review Record). The round-3 edits had no independent review, and the
+owner approved the documents as they stand. The optional library ticket of
+decision 7 was not filed. No build or test was run for planning.
 
 The other planning documents:
 

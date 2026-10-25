@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C3 CLI Authoring And Discovery Maintenance Design"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,11 +12,11 @@ id: "01M5QY019WPP3AVCKD13XKMJNA"
 
 ## Execution Status
 
-**Draft, for product-owner approval.** The planning questions are answered:
-Cycle decisions 1–4 before review, 5–6 after the first review round, and 7
-after the second. Both rounds' findings are applied (see the Cycle's Review
-Record). Nothing is approved or implemented. No build or test was run for
-this draft.
+**Approved by the product owner on 2026-10-24**, at `e7b2b71`, for
+subagent-driven execution. Implementation is authorized, and so is named
+edit E1. The Cycle's Status lists what the approval does not cover. Cycle
+decisions 1–7 and all three review rounds are applied. Nothing is
+implemented yet.
 
 ## Intent And Approval Boundary
 
