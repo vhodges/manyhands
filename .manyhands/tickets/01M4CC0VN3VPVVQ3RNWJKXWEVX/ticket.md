@@ -1,14 +1,16 @@
 ---
+wave: '03'
+cycle: D6
+deps:
+- 01M4CC0VN2K8DBHNMZ46NTX5JJ
+id: 01M4CC0VN3VPVVQ3RNWJKXWEVX
+title: 'Wave 03 D6: Desktop Background Polling And Shutdown'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VN3VPVVQ3RNWJKXWEVX"
-title: "Wave 03 D6: Desktop Background Polling And Shutdown"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "D6"
 ---
 
 Keep discovery current inside the desktop process while preserving
