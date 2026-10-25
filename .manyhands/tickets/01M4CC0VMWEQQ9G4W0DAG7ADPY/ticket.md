@@ -1,14 +1,17 @@
 ---
+wave: '03'
+cycle: C4
+deps:
+- 01M4CC0VMV81DFRGJ4Z76489XM
+- 01M57SKVF6TQ3QM6AXJ35JGGSY
+id: 01M4CC0VMWEQQ9G4W0DAG7ADPY
+title: 'Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMWEQQ9G4W0DAG7ADPY"
-title: "Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "C4"
 ---
 
 Let CLI users collaborate deliberately and recover incomplete work.
