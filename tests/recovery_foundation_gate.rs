@@ -276,7 +276,6 @@ fn authoring_context_and_save_wait_for_common_git_lease_then_replay_after_releas
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let context_operation = OperationId::new();
     let save_operation = OperationId::new();
     let context_target = || AuthoringTarget {
@@ -341,7 +340,6 @@ fn authoring_save_respects_an_in_process_repository_lease() {
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let repository = git2::Repository::open(&fixture.root).unwrap();
     let lock_path = repository.commondir().join("manyhands-operation.lock");
     let (acquired_sender, acquired) = mpsc::channel();
@@ -406,7 +404,6 @@ fn remove_remote_holds_the_lease_through_its_unselected_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -469,7 +466,6 @@ fn publication_selection_holds_the_lease_through_its_remote_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -544,14 +540,6 @@ fn assert_remote_configuration(
         .map(|remote| remote.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, remotes);
-}
-
-fn stage_configuration(fixture: &support::TestRepository) {
-    let mut index = fixture.repository.index().unwrap();
-    index
-        .add_path(std::path::Path::new(".manyhands/config.toml"))
-        .unwrap();
-    index.write().unwrap();
 }
 
 #[test]
@@ -1280,6 +1268,45 @@ fn registration_removal_requires_its_own_pending_record() {
 }
 
 #[test]
+fn registration_removal_after_restart_preserves_missing_root_recovery_evidence() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let root = fixture.root.canonicalize().unwrap();
+    let pending = OperationId::new();
+    service.with_registry_connection_for_testing(|connection| {
+        connection.execute("INSERT INTO operation_records(root_path,operation_ulid,action,state,observed_at) VALUES(?1,?2,'refresh','observed',1)", params![root.to_str().unwrap(), pending.to_string()]).unwrap();
+    }).unwrap();
+    drop(service);
+    drop(fixture.repository);
+    let displaced = tempfile::tempdir().unwrap();
+    std::fs::rename(&root, displaced.path().join("repository")).unwrap();
+    let before = support::confirmation::tree(displaced.path());
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let error = reopened
+        .remove_registration(RemoveRegistrationRequest {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(registered_repository_count(data.path()), 1);
+    let db = Connection::open(data.path().join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let found: (String, i64) = db
+        .query_row(
+            "SELECT state,observed_at FROM operation_records WHERE operation_ulid=?1",
+            [pending.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(found, ("observed".into(), 1));
+    assert_eq!(support::confirmation::tree(displaced.path()), before);
+}
+
+#[test]
 fn enable_replay_records_completed_lifecycle_once() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
@@ -1973,7 +2000,6 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&born);
     assert!(matches!(
         service
             .set_publication_remote(SetPublicationRemoteRequest {
@@ -2115,7 +2141,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     .unwrap()
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = authoring_target(
                     &fixture.root,
                     AuthoringKind::Document,
@@ -2151,7 +2176,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                 setup
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = document_request(&fixture.root, operation_id);
                 let first = support::FailOnce::at(point).open_service(data.path());
                 assert!(first.save_document(request.clone()).is_err(), "{name}");

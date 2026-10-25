@@ -4,6 +4,8 @@ date: 2026-10-05
 status: approved
 author: "Vince Hodges <vhodges@gmail.com> && Codex"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J983933AB0G40DK90W"
 ---
 
 # Manyhands Product Requirements Document

@@ -1,9 +1,10 @@
 ---
+id: 01M4DQC0XZ5V6ZCNGZM5K8SFV0
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T12:21:21Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4DQC0XZ5V6ZCNGZM5K8SFV0"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T12:21:21Z"
 ---
 
 Task 5 checkpoint (item lists and complete reads): complete at `bcbe2e6`,

@@ -249,19 +249,43 @@ They follow its target, JSON, error and exit rules.
 | `ticket cycles` | No input. Zero cycles is success with an empty result. |
 | `ticket plan`, `ticket critical-path` | Optional list filters for plan. |
 | `ticket find` | `--slug <text>`; returns every match. No match is success with an empty result, not an error. |
+| `ticket check` | Required `--repo`, `--id` and at least one of `--deps <ULID,...>` or `--parent <ULID>`. Read-only complete proposal; rejection is in `data.rejection` with `ok`, exit 0. |
 | `ticket slug-assign` | `--id` and `observation`; adds a generated slug to a ticket that has none. Optional `initials`. |
+
+**Amended 2026-10-24 by C3:** `ticket check` is available. It takes flags only,
+with no `--input`, request ID or confirmation. Give `--deps` once as a
+comma-separated list of canonical ULIDs; repeated flags keep the last value.
+Malformed or empty ULID elements, including an empty `--parent`, are
+`invalid_id`. The selected ID need not already exist. The read checks exactly
+the supplied proposal: omitted `--deps` proposes no dependencies, omitted
+`--parent` proposes no parent. It does not fill omitted relationships from
+the stored ticket. To preview a save changing only one, supply the other's
+current value from `ticket show` too. The same complete proposal yields the
+same rejection as the write, but a check rejection remains a successful
+read (`ok`, exit 0); inspect `data.rejection`. Unknown targets are reported
+as unresolved. The check uses the index without refreshing, writing or
+contacting a remote.
 
 Existing verbs change as follows.
 
-- `ticket create` and `ticket save` accept optional `deps` (a complete list
-  that replaces the stored one; an empty list or null clears it) and `parent`
-  (a ULID, or null to clear). `ticket create` accepts optional `initials`.
-  Neither accepts `slug`.
+- **Amended 2026-10-24 by C3:** `ticket create` and `ticket save` accept
+  optional `deps` (a complete array of ULID strings or null) and `parent`
+  (a ULID string or null) in their closed `--input` objects. On create,
+  missing/null/[] deps means none, and missing/null parent means none. On
+  save, an omitted relationship stays unchanged; null or [] clears deps,
+  and null clears parent. A supplied list replaces the stored list.
+  Relationship text is validated by the library (`invalid_relationship` for
+  malformed IDs), unlike the check flags' `invalid_id`. `ticket create`
+  also accepts optional `initials`. Neither accepts `slug`. See the
+  [C3 input schemas and examples](cli-contract.md#c3-authoring-options-and-input-schemas).
 - `ticket list` and `ticket show` include `slug`, `parent`, `deps`, readiness
   and any relationship problems. `ticket list` accepts `--slug` as a
   whole-code, case-insensitive filter and `--ready` / `--blocked`.
 - `repo create` and `repo enable` accept optional `ticket_slug_prefix`, shown
   in the confirmation preview and written to the tracked configuration.
+  **Amended 2026-10-20 by C2:** the input name is `ticket_slug_prefix`; the
+  published confirmation preview names that value `slug_prefix`. This keeps
+  F2's output contract unchanged; it does not rename the input or tracked key.
 - `repo identity` reports the effective initials and their source.
   `repo identity-set` accepts optional `initials`, written to repository-local
   Git configuration and never to global configuration.

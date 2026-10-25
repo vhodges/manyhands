@@ -8,13 +8,16 @@ autobins = false
 
 [features]
 default = []
-desktop = ["dep:gpui-kit"]
+desktop = ["dep:gpui-kit", "dep:futures"]
+desktop-test-support = ["desktop", "gpui-kit?/test-support"]
 editor-probe = ["desktop", "dep:zorite-editor"]
 
 [dependencies]
 blake3 = "1"
+clap = { version = "4", default-features = false, features = ["std", "help", "usage", "error-context"] }
 directories = "5"
 fs4 = "0.13"
+futures = { version = "0.3", optional = true }
 git2 = "0.20"
 gpui-kit = { version = "0.6", optional = true }
 libc = "0.2"
@@ -32,7 +35,7 @@ ulid = "1"
 
 [target.'cfg(windows)'.dependencies]
 libssh2-sys = { version = "=0.3.3", features = ["openssl-on-win32", "vendored-openssl"] }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_WindowsProgramming"] }
 
 [[bin]]
 name = "manyhands"
@@ -49,6 +52,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "process", "sync"
 
 [[test]]
 name = "ssh_fixture"
+harness = false
+
+[[test]]
+name = "cli_remote"
 harness = false
 
 [[test]]

@@ -3493,8 +3493,35 @@ fn assert_registration_cascade_is_root_scoped(
     first: &support::TestRepository,
     second: &support::TestRepository,
 ) {
-    let first_root = first.root.canonicalize().unwrap();
-    let second_root = second.root.canonicalize().unwrap();
+    assert_registration_cascade_paths(&first.root, &second.root, || {});
+}
+
+#[test]
+fn remove_registration_missing_roots_cascade_only_their_derived_rows() {
+    for git_only in [false, true] {
+        let first = support::born_repository();
+        let second = support::born_repository();
+        let root = first.root.canonicalize().unwrap();
+        let displaced = tempfile::tempdir().unwrap();
+        drop(first.repository);
+        drop(second.repository);
+        assert_registration_cascade_paths(&root, &second.root, || {
+            std::fs::rename(
+                if git_only {
+                    root.join(".git")
+                } else {
+                    root.clone()
+                },
+                displaced.path().join("moved"),
+            )
+            .unwrap();
+        });
+    }
+}
+
+fn assert_registration_cascade_paths(first: &Path, second: &Path, disappear: impl FnOnce()) {
+    let first_root = first.canonicalize().unwrap();
+    let second_root = second.canonicalize().unwrap();
     let data = tempfile::tempdir().unwrap();
     let service = RepositoryService::open_at(data.path()).unwrap();
 
@@ -3516,14 +3543,16 @@ fn assert_registration_cascade_is_root_scoped(
                 connection.execute("INSERT INTO discovered_comments (item_id, comment_id, canonical_path, created_at) VALUES (?1, ?2, 'comments/item.md', 1)", params![repository_id, format!("comment-{repository_id}")]).unwrap();
                 connection.execute("INSERT INTO problems (repository_id, code, guidance, observed_at) VALUES (?1, 'problem', 'repair', 1)", [repository_id]).unwrap();
                 connection.execute("INSERT INTO operation_records (repository_id, root_path, action, state, observed_at) VALUES (?1, ?2, 'refresh', 'completed', 1)", params![repository_id, if repository_id == 1 { first_root.to_str().unwrap() } else { second_root.to_str().unwrap() }]).unwrap();
+                connection.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at) VALUES(?1,?2,0,'origin','main','refs/heads/main','refs/remotes/origin/main','poll','poll','completed',1,1)", params![repository_id, support::operation_id().to_string()]).unwrap();
             }
         })
         .unwrap();
 
+    disappear();
     assert_eq!(
         service
             .remove_registration(manyhands::repository::RemoveRegistrationRequest {
-                root: first.root.clone(),
+                root: first.to_owned(),
                 operation_id: support::operation_id(),
             })
             .unwrap(),
@@ -3538,6 +3567,7 @@ fn assert_registration_cascade_is_root_scoped(
                 "discovered_comments",
                 "problems",
                 "operation_records",
+                "remote_operation_records",
             ] {
                 let count: i64 = connection
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
@@ -3546,6 +3576,10 @@ fn assert_registration_cascade_is_root_scoped(
                     .unwrap();
                 assert_eq!(count, 1, "unexpected surviving rows in {table}");
             }
+            let survivor: String = connection
+                .query_row("SELECT root_path FROM repositories", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(survivor, second_root.to_str().unwrap());
         })
         .unwrap();
 }
@@ -3554,8 +3588,6 @@ fn commit_primary_source(fixture: &support::TestRepository, path: &str, source: 
     let absolute = fixture.root.join(path);
     let mut index = fixture.repository.index().unwrap();
     index.read(true).unwrap();
-    // Enablement commits the configuration without refreshing this index.
-    index.add_path(Path::new(".manyhands/config.toml")).unwrap();
     match source {
         Some(source) => {
             fs::create_dir_all(absolute.parent().unwrap()).unwrap();

@@ -41,17 +41,28 @@ manyhands-cli [--json] [--non-interactive] <resource> <verb>
 are accepted before or after the subcommand. Unknown commands/options are usage
 errors. Repository-scoped commands require `--repo`; there is no implicit
 "most recently selected" repository. Paths resolve relative to the invocation
-directory, then normalize through the domain service. A linked worktree maps
-to its repository's common Git identity, while item operations still resolve
+directory, then normalize through the domain service. For reads, a linked
+worktree maps to its repository's common Git identity, while item operations still resolve
 their one canonical context. File paths inside input objects are documented
 as repository-relative or invocation-relative by their command.
+
+Amended 2026-10-20 by C2: ordinary mutation root resolution refuses a linked
+worktree's root with `not_repository_root`; C3's approved `index rebuild`
+exception is documented under [Index maintenance](#index-maintenance).
+Mutation roots are joined to the invocation directory,
+not canonicalized by the CLI: create can name an absent root, and remove can
+name the exact stored root of a missing registration directory.
 
 All item/comment identifiers are full canonical ULIDs. Titles and display
 abbreviations are never mutation selectors. Nonconforming resources without a
 valid ID are inspected/repaired by exact path plus observation token. Short IDs
 remain separate research; no lossy alias is introduced by this RFC.
 
-`--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
+Amended 2026-10-18 by C1: reads take their inputs as flags; `--input`,
+`--request-id`, `--prepare` and `--confirm` are mutation-only and are refused
+by C1 reads. `--non-interactive` is accepted but has no effect in C1.
+
+Mutation `--input` contains one UTF-8 JSON object, including Markdown bodies as strings.
 `-` consumes stdin once. Mutations do not accept bodies/passphrases in command
 arguments and do not launch an implicit `$EDITOR`. A caller can edit files
 with its own tools, then submit them. Unknown input fields and invalid enum
@@ -59,25 +70,51 @@ values are rejected to catch mistakes. Missing and explicit `null` differ:
 missing optional update fields leave values unchanged; `null` clears only a
 documented nullable field. Empty strings do not mean clear.
 
+Amended 2026-10-18 by C1: `MANYHANDS_DATA_DIR` is an advanced/testing override
+for the application data directory. Unset uses the platform default; a nonempty
+absolute path is used directly, and a relative path resolves against the
+invocation directory. An empty value is `invalid_path`, exit 2. Opening services
+may create/migrate this directory; help, version, usage errors and unavailable
+commands do not open it or initialize the Git transport.
+
 ## Command taxonomy
 
-`--repo` is required except for `repo list`, `key` commands, `host list`,
-`id new` and help/version operations. `--id` selects an item,
+`--repo` is required except for `repo list`, `key` commands, `host list`, `host inspect`,
+`request show`, `request cancel`, `id new` and help/version operations.
+Amended 2026-10-20 by C2: the request verbs refuse `--repo` and select the
+application-level record with required `--request-id`. `--id` selects an item,
 `--key-id` selects a key, and `--operation-id` selects an operation; their names
 are not interchangeable. Every verb has human and JSON output. Each row lists command-specific inputs;
 IDs, request IDs, observation and consent rules below apply where relevant.
+
+Amended 2026-10-18 by C1: `host inspect --authority <host[:port]>` reads
+application-global pins and refuses `--repo`; bracketed IPv6 is accepted and
+the port defaults to 22. `folder list` joins the reads. `document show` and
+`ticket show` require exactly one of `--id` or repository-relative `--path`;
+only `--path` accepts an optional `--context` worktree path. `path observe`
+and `ticket check` move to C3. F2's `request show`, `request cancel` and
+`host observe` join C2, and `operation abandon` joins C4.
+Amended 2026-10-20 by C2: all eighteen C2 verbs are available with the rules
+below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available;
+C4–C5 remain cataloged as planned until their delivering Cycles.
+
+Amended 2026-10-24 by C3: the C3 taxonomy rows below specify selectors and
+input fields. Every C3 verb requires `--repo`; only the four ID-selected
+mutations declare `--id`. No C3 mutation accepts `--context`. Input fields
+are JSON strings unless a different type is stated; bodies and repair sources
+have no argv, environment or secondary-file input channel.
 
 | Commands | Inputs and behavior |
 | --- | --- |
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
 | `repo inspect` | Selected path, configuration, primary, identity and observed problems. Does not enable it. |
-| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
-| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. |
+| `repo create`, `repo enable` | Input `primary_branch`, optional `identity: {name, email}` and `ticket_slug_prefix`. Supplied identity is included in the explicit confirmation preview and persisted only in repository-local config. Create requires an unused/empty target. Missing effective identity returns recovery before the initialization commit; never invent or write a global identity. |
+| `repo remove` | Remove registration only; preserve repository and drafts. Confirmation required. An unavailable repository can be selected by its exact stored root; unrelated unfinished work remains blocked. |
 | `repo identity` | Inspect effective name/email and source. |
-| `repo identity-set` | Input `name`, `email`; explicitly writes repository-local Git config, never global config. Confirmation required. |
+| `repo identity-set` | Input `name`, `email`, optional nullable `initials`; missing leaves initials unchanged, null clears, a string sets. Explicitly writes repository-local Git config, never global config. Confirmation required. |
 | `remote list` | Names, redacted locations and publication selection; never echo embedded credentials. |
 | `remote add` | Input `name`, `url`; add the named configuration, without implicit publication selection. |
-| `remote remove` | Input `name`; show publication/polling effects and require confirmation. |
+| `remote remove` | Input `name`; preview tracking-reference/upstream effects and require confirmation. The publication remote is refused with `publication_remote_in_use`, so preview `publication_affected` is always false. |
 | `remote select` | Input `name` (SSH only) or `null` to clear publication selection. |
 | `key list`, `key show` | Non-secret registrations, selection, ownership and fingerprint; show takes an opaque key ID. |
 | `key generate` | Input `label`, `protection` (`passphrase` or `none`); passphrase comes only from masked terminal interaction. |
@@ -85,26 +122,143 @@ IDs, request IDs, observation and consent rules below apply where relevant.
 | `key select`, `key clear` | Explicit shared selection or clearing; never changes Git commit identity. |
 | `key remove`, `key delete` | Unregister only, or separately delete owned generated files. Delete requires exact effect confirmation and cleared selection. Imported deletion is rejected. |
 | `key public` | Return public-key text/fingerprint if available; never private contents. |
-| `host list`, `host inspect` | Non-secret pins; inspect input `authority`; `--repo` identifies the relevant repository for an observation. |
-| `host approve`, `host replace` | Input exact authority and presented fingerprint; replacement also requires old fingerprint. Explicit confirmation and transport re-observation required. |
-| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. |
-| `folder create` | Input repository-relative `path` under `docs/`; local empty folder until content is added. |
-| `document create` | Input `item_id`, repository-relative `path`, `title`, `body`. Explicit IDs support safe automation retries. |
-| `document save` | Input `observation`, optional `title`, `body`; preserve unknown metadata. No implicit publication. |
-| `document move` | Input source `observation`, `destination_path`, `destination_observation`; preserve ID and checkpoint both paths. |
-| `document repair`, `ticket repair` | Input exact `path`, `observation`, corrected complete `source`; preview and explicit confirmation. Validate identity/schema and use an owned authoring context, never patch primary as a shortcut. |
-| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. |
-| `ticket create` | Input `item_id`, `title`, `type`, `status`, optional `project`, `team`, `body`. Closure metadata cannot be supplied; free-form status may be `closed` without making the ticket lifecycle-closed. |
-| `ticket save` | Input `observation` and changed metadata/body. `project`/`team` can be cleared with null. Project status does not control closure; `ticket close` owns `closed_at`/`closed_by`. Reopening is outside MVP. |
+| `host list`, `host inspect` | Non-secret application-global pins; inspect takes `--authority`, never `--repo`. No network observation. |
+| `host observe` | Required `--repo`, optional `--authority <host[:port]>` (bracketed IPv6, default port 22); observes configured SSH authorities without writing a pin. May unlock for authentication. Human output supplies the next approve/replace input object. |
+| `host approve`, `host replace` | Input exact `authority`, `algorithm`, `fingerprint`; replacement also requires `old_fingerprint`. Explicit confirmation, transport re-observation and authentication with the selected key are required before storing trust. |
+| `document list`, `document show` | Tree/list or complete item DTO, including source, metadata, observation and context. Show takes `--id` or `--path` with optional `--context`. |
+| `folder list` | List indexed document folders under `docs/`; no scan or refresh. |
+| `folder create` | Required `--input` with repository-relative `path` under `docs/`; primary-only local empty folder until content is added. |
+| `document create` | Required `--input` with `item_id` (canonical ULID), repository-relative `path`, `title`, `body`. Explicit IDs support safe automation retries; no `--id`. |
+| `document save` | Required `--id`, `--input` with `observation`, optional `title`, optional `body`; omitted draft fields are filled once. Preserve unknown metadata; no implicit publication. |
+| `document move` | Required `--id`, `--input` with source `observation`, repository-relative `destination_path`, `destination_observation` from the document's context (primary if none); preserve ID and checkpoint both paths. |
+| `document repair`, `ticket repair` | Required `--input` with exact repository-relative `path`, `observation`, corrected complete `source`; no `--id`. Preview and explicit confirmation, including ID adoption. Validate identity/schema and use an owned authoring context, never patch primary as a shortcut. |
+| `ticket list`, `ticket show` | Canonical metadata/body, context, conformity and observation. List includes closed tickets unless filtered. Show takes `--id` or `--path` with optional `--context`. |
+| `path observe` | Required `--path` (repository-relative), optional `--context` (invocation-relative worktree path, defaults to root). Read the path's observation, including an absent-path token; no mutation options. |
+| `ticket check` | Required `--id` and at least one of `--deps <ULID,...>` or `--parent <ULID>`. Read-only complete relationship proposal; rejection is data in `ok`, exit 0. |
+| `ticket create` | Required `--input` with `item_id` (canonical ULID), `title`, `type`, `status`; optional `project`, `team`, `body` (defaults empty), `initials`, `deps` (string array or null), `parent` (string or null). No `--id`. Closure metadata and `slug` cannot be supplied; free-form status `closed` does not lifecycle-close the ticket. |
+| `ticket save` | Required `--id`, `--input` with `observation`; optional `title`, `type`, `status`, `body`, nullable `project`/`team`, `deps` (string array or null), nullable `parent`. Omitted draft fields are filled once; omitted relationships remain unchanged. No `slug` or closure fields; lifecycle-closed tickets are refused. |
+| `ticket slug-assign` | Required `--id`, `--input` with `observation`, optional `initials`. Assign a generated code; a matching committed code is a no-op, a different held code is `slug_already_assigned`. Lifecycle-closed tickets are refused. |
 | `comment list` | `--id` selects the parent item; return one flat, ordered list of roots and replies with parent IDs and depth, then visible malformed entries. Replies are not nested. |
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`. One checkpoint then immediate configured sync; no-remote means local pending. |
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization. Unsaved caller files are not implicitly submitted. |
 | `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
-| `index status`, `index refresh`, `index rebuild` | Inspect cache freshness, or local scan/rebuild. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
+| `index status` | Inspect cache freshness; no mutation input. |
+| `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. |
+| `operation abandon` | Planned for C4: F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. |
+| `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select operation ID; inspect base/local/remote and expected path observations, then submit explicit resolutions. |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
+
+### Authoring reads
+
+Amended 2026-10-24 by C3: `path observe --repo <root> --path <path>
+[--context <worktree>]` reports what is at a canonical item path or listed
+nonconforming path, including another item's file in the named context. The
+context must be the repository root or an indexed active item context;
+an inactive context or escaping path is `invalid_path`. `--path` is relative
+to the repository; `--context` is relative to the invocation directory.
+Omitting context selects primary. For a move, observe the destination in the
+context returned by `document show --id`, or primary if the document has no
+context. Repair observes its nonconforming source on primary.
+
+`ticket check --repo <root> --id <ULID> [--deps <ULID,...>] [--parent <ULID>]`
+requires at least one relationship flag. Give `--deps` once; a repeated flag
+keeps its last value. Malformed or empty ULID elements are `invalid_id`.
+This checks exactly the complete proposal: omitted `--deps` means no deps,
+omitted `--parent` means no parent, rather than retaining stored values.
+To preview a save changing only one relationship, also supply the other's
+current value from `ticket show`. For the same complete proposal the check
+and write give the same rejection. Rejection appears in `data.rejection`
+inside a successful `ok` read, exit 0; callers must inspect it. Both reads
+refuse mutation options and perform no canonical write, refresh or network work.
+
+### Index maintenance
+
+Amended 2026-10-24 by C3: `index refresh` and `index rebuild` are unconfirmed
+F2 mutations, not reads. Each executes one local operation and exits, takes
+no `--input`, and requires `--request-id` in JSON/noninteractive execution.
+Following an `index.refresh` or `index.rebuild` recovery action therefore
+requires allocating an ID. Successful work returns `ok`, null data and
+discovery `current`; a fresh explicit index operation is not a no-op.
+
+The owner-approved Task 0 root-selection exception applies to `index rebuild`:
+its binding propagates only `repository_not_enabled` from ordinary root
+resolution, then checks the selected Git repository's own workdir. It does
+not promise `not_repository_root` for a linked root; an interior path is
+`invalid_path`. This source-inspected behavior is not proof of success for
+every linked-root situation; C3 passes it through without a root guard. See
+the [C3 API audit](../research/wave-03-api-audit.md#wave-03-cli-cycle-c3-refresh-2026-10-24).
+
+### Registration removal targeting
+
+Amended 2026-10-19 by defect ticket `01M4R19P943QZKHHKRXV2D2TP2`.
+Amended 2026-10-20 by C2: `repo remove` now exposes this library mutation contract.
+
+`repo remove` selects a registration before requiring a live Git repository.
+When the root is missing or its directory no longer contains `.git`, callers
+use the exact stored absolute root returned by `repo list` or a prior preview.
+This includes the stored Windows canonical prefix. Live relative paths and
+resolvable aliases retain normal canonicalization; a missing alias's former
+target is not guessed. An interior directory or linked worktree does not select
+its owner's registration for removal. Unknown missing paths retain
+`invalid_path`; permissions, broken Git indirection and corrupt metadata are
+errors, not evidence that a repository is absent.
+
+The same explicit confirmation is required for an unmounted and a deleted
+root. The preview identifies the stored root and registration time and lists
+registration, index, operation-record and remote-state removal. Repository
+files, Git state, recoverable drafts, shared keys and host trust are preserved.
+Cached accessibility from `repo list` is not used to authorize removal.
+
+A matching persisted request can replay after both the directory and the
+registration have gone. An accepted request whose removal completed but whose
+result was lost reconciles to `already_applied`; its own pending removal can
+retry under the same operation ID. Command, scope, target and digest checks
+still reject reuse of an ID for another request. Fresh execution compares the
+previewed registration again under the deletion guard. Registration stamps
+retain their existing ID/time semantics, including the separately documented
+same-second replacement limitation in the
+[implementation plan](../plans/2026-10-19-missing-repository-registration-removal-implementation.md).
+
+The registry-only path preserves unrelated unfinished local/remote operations,
+promotion/closure recovery and accepted requests. It returns `recovery_required`
+for those blockers, or the existing retryable busy result while an active poll
+is asked to yield. It never implicitly abandons that work. A live repository
+continues to require its Git lease. A root or lease replacement detected while
+acquiring guards produces a retryable busy result.
+
+### Onboarding identity
+
+Amended 2026-10-23 by defect ticket `01M5MAVV5CQE98Q9P2GG9T4FP9`.
+
+`repo create` and `repo enable` commit only as an identity Git carries
+unchanged. A name and an email each hold no control character. Git's
+signature must also give both back as they were supplied. Git refuses `<`
+and `>`, and trims white space and `, : ; " \ '` from either end. So a value
+that it would trim, or that trims to nothing, is refused too. An email
+needs no `@` here; `repo identity-set` keeps its stricter rule. A supplied
+identity that fails is `invalid_input` at preview and in the domain. One
+from Git's configuration counts as missing: inspection reports an identity
+as required, and the command answers `identity_required`. In both cases the
+refusal comes before any write. The first configuration level that holds a
+whole pair decides the identity, and no lower level stands in for it.
+The same resolver serves every command that commits as Git's configured
+identity. So item and comment saves, repair, and the publication-remote
+change also treat an unusable configured identity as missing, and
+`repo identity` reports it as `none`.
+
+Amended 2026-10-24 by C3: C3 adds no identity prompt. A missing usable identity
+on a save returns `identity_required` with `repo.identity_set`. After
+`repo identity-set`, read a fresh observation through `document show` or
+`ticket show`: the refused save can have allocated a new context covered by
+the token. Retry with that observation under the same request ID, which is
+free because the refused save deleted its record. `initials_required` on
+new ticket creation is refused before acceptance, so that ID is also free:
+set initials with `repo identity-set` or supply `initials` on the retry.
+
+### List ordering
 
 List ordering is deterministic: repositories by normalized root, documents by
 relative path then ID, tickets by latest content-change time descending then ID,
@@ -118,9 +272,15 @@ future additive contract, not an undocumented default limit.
 Repair cannot bypass identity uniqueness, a closed ticket's lifecycle fields,
 or the prohibition on reopening. Assigning an ID to marker-only content is an
 explicit adoption effect in the confirmation preview. Existing valid IDs remain
-unchanged. A document folder target resolves in the selected item's context
-when organizing an existing item, or in the documentation tree for an empty
-folder; creation never implies publication or a placeholder-file commit.
+unchanged.
+
+Amended 2026-10-24 by C3: `folder create` works on primary only, under `docs/`,
+with no item/context selector, following F2's
+[Departures from the RFCs](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md#departures-from-the-rfcs).
+An empty folder is local and invisible to Git until it holds tracked content;
+creation refreshes discovery but implies neither publication nor a
+placeholder-file commit. An existing directory is a fresh-request no-op
+that still refreshes discovery.
 
 The [ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#cli)
 extends this taxonomy, as amended on 2026-10-07. It adds `ticket ready`,
@@ -129,6 +289,89 @@ extends this taxonomy, as amended on 2026-10-07. It adds `ticket ready`,
 `ticket slug-assign`, and optional relationship, initials and prefix inputs
 on existing ticket, identity and repository verbs. `--id` still takes only a
 canonical ULID; a short code is a search key and is rejected as an item ID.
+
+## C2 mutation options and input schemas
+
+Amended 2026-10-20 by C2. Selectors remain flags; all other mutation values
+arrive in one `--input <file|->` JSON object. Every mutation declares
+`--prepare` and `--confirm <ULID>`; unconfirmed verbs answer `not_confirmable`.
+Request and confirmation IDs must be canonical ULIDs, as must `--key-id`.
+
+| Verbs | Required | Refused |
+| --- | --- | --- |
+| `repo create`, `repo enable`, `repo identity-set`, `remote add`, `remote remove`, `remote select`, `host approve`, `host replace` | `--repo`, `--input` | — |
+| `repo remove` | `--repo` | `--input` |
+| `key generate`, `key import` | `--input` | `--repo` |
+| `key select`, `key remove`, `key delete` | `--key-id` | `--repo`, `--input` |
+| `key clear` | — | `--repo`, `--input` |
+| `host observe` | `--repo` | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `request show`, `request cancel` | `--request-id` | `--repo`, `--input`, `--prepare`, `--confirm` |
+| Noninteractive/JSON mutation execution | `--request-id` | — |
+| Every mutation | — | `--prepare` with either `--request-id` or `--confirm` |
+
+Confirmed C2 mutations are repo create/enable/remove/identity-set, remote
+remove, key delete and host approve/replace. All other C2 mutations are
+unconfirmed. `--prepare` takes no request ID and allocates none.
+
+Each input-taking verb publishes a closed schema under `schemas/input/v1/`,
+named `<resource>_<verb>.schema.json` with hyphens replaced by underscores.
+The shared `commit_identity.schema.json` is reached by `$ref`. Required fields
+are listed below; optional does not mean nullable unless explicitly stated.
+
+| Verb | Input fields |
+| --- | --- |
+| `repo create`, `repo enable` | Required string `primary_branch`; optional object `identity` with required strings `name`, `email`; optional string `ticket_slug_prefix`. |
+| `repo identity-set` | Required strings `name`, `email`; optional string-or-null `initials` (unchanged/clear/set as above). |
+| `remote add` | Required strings `name`, `url`. |
+| `remote remove` | Required string `name`. |
+| `remote select` | Required string-or-null `name`; null clears the selection. |
+| `key generate` | Required string `label`; required `protection`: `passphrase` or `none`. |
+| `key import` | Required strings `label`, `private_key_path`; optional string `public_key_path`. Both paths are invocation-relative. |
+| `host approve` | Required strings `authority`, `algorithm`, `fingerprint`; authority uses the host selector's syntax. |
+| `host replace` | Approve fields plus required string `old_fingerprint`. |
+
+Input is read after service opening, once to EOF for stdin. A leading UTF-8
+BOM is skipped. Unreadable/empty/non-UTF-8 input, malformed JSON, non-object
+values, duplicate keys at any depth, unknown fields, missing required fields,
+wrong types and invalid enum values are `invalid_input`, exit 2. Human input
+diagnostics name the escaped field and problem, never its value. `passphrase`
+is an unknown field; input provides no secret channel. Content validation is
+the library's, not a second CLI policy.
+
+Input compatibility is distinct from output compatibility: adding an optional
+field or accepting a new enum value is non-breaking. Adding a required field,
+removing/renaming a field, narrowing a type/enum or changing its meaning requires
+a new input version. Input objects are closed, but only required fields occur
+in `required`; the output all-properties rule does not apply to optional input.
+Input `ticket_slug_prefix` maps to published preview field `slug_prefix`.
+
+## C3 authoring options and input schemas
+
+Amended 2026-10-24 by C3: the nine closed input schemas and example inputs
+below extend the C2 input contract. Required fields are strings; optional
+fields are strings unless marked nullable or arrays. `item_id` must be a
+canonical ULID (`invalid_input` if malformed); malformed `--id` is `invalid_id`.
+Relationship strings pass to the library, which returns `invalid_relationship`
+for malformed IDs, unlike `ticket check`'s CLI-parsed flags. Unknown fields,
+including `slug`, `closed_at` and `closed_by`, are refused as `invalid_input`.
+
+| Verb | Required input | Optional input and semantics | Schema / example |
+| --- | --- | --- | --- |
+| `folder create` | `path` | None. | [schema](../../schemas/input/v1/folder_create.schema.json) / [example](../../tests/fixtures/cli_input_v1/folder_create.json) |
+| `document create` | `item_id`, `path`, `title`, `body` | None. | [schema](../../schemas/input/v1/document_create.schema.json) / [example](../../tests/fixtures/cli_input_v1/document_create.json) |
+| `document save` | `observation` | `title`, `body`: omitted means unchanged; neither accepts null. | [schema](../../schemas/input/v1/document_save.schema.json) / [example](../../tests/fixtures/cli_input_v1/document_save.json) |
+| `document move` | `observation`, `destination_path`, `destination_observation` | None. | [schema](../../schemas/input/v1/document_move.schema.json) / [example](../../tests/fixtures/cli_input_v1/document_move.json) |
+| `document repair` | `path`, `observation`, `source` | None. | [schema](../../schemas/input/v1/document_repair.schema.json) / [example](../../tests/fixtures/cli_input_v1/document_repair.json) |
+| `ticket create` | `item_id`, `title`, `type`, `status` | `project`, `team`, `body`, `initials` (not nullable); absent body is empty. `deps`: string array or null, missing/null/[] means none. `parent`: string or null, missing/null means none. | [schema](../../schemas/input/v1/ticket_create.schema.json) / [example](../../tests/fixtures/cli_input_v1/ticket_create.json) |
+| `ticket save` | `observation` | `title`, `type`, `status`, `body` (not nullable); `project`, `team` string or null. Omitted draft fields unchanged; null clears nullable fields. `deps`: string array or null, omitted unchanged, null/[] clears. `parent`: string or null, omitted unchanged, null clears. | [schema](../../schemas/input/v1/ticket_save.schema.json) / [example](../../tests/fixtures/cli_input_v1/ticket_save.json) |
+| `ticket repair` | `path`, `observation`, `source` | None. | [schema](../../schemas/input/v1/ticket_repair.schema.json) / [example](../../tests/fixtures/cli_input_v1/ticket_repair.json) |
+| `ticket slug-assign` | `observation` | `initials` (not nullable). | [schema](../../schemas/input/v1/ticket_slug_assign.schema.json) / [example](../../tests/fixtures/cli_input_v1/ticket_slug_assign.json) |
+
+Only the two repairs are confirmed. All eleven mutations declare C2's
+prepare/confirm options; the other nine answer `not_confirmable` to prepare.
+Prepare takes no request ID; execution needs one in JSON/noninteractive mode.
+The index verbs have no input schema because they refuse input, and the two
+authoring reads take flags only.
 
 ## Observations, request identity and retries
 
@@ -139,7 +382,7 @@ creation explicitly expects absence. Stale observations produce
 `external_change`, preserving input and canonical state. There is no `--force`
 override. Caller-provided source/body never enters operation diagnostics.
 
-Every mutating invocation has a request ULID. JSON/noninteractive mutation
+Every mutating execution has a request ULID. JSON/noninteractive mutation
 requires caller-supplied `--request-id`; human interactive mode may allocate one
 and prints it before work begins. Reusing a request ID requires the same
 repository, command, target and semantic input. The adapter records non-secret
@@ -151,12 +394,80 @@ it MUST NOT persist a passphrase or a passphrase-derived digest.
 The same request after partial completion returns existing effects and resumes
 only eligible remaining work. Reusing it with different input is a conflict,
 never a new operation. Comment and item IDs also remain fixed across retries.
-After cache loss, if canonical/Git evidence cannot prove safe replay, return
-`recovery_required`; do not promise indefinite exactly-once execution from a
-rebuildable database. `operation resume` may need original input again and says
-so explicitly. It cannot silently reconstruct an unsaved body from an operation
-record. These are required adapter/domain additions, not guarantees of current
-Wave 01 request structs.
+
+Amended 2026-10-24 by C3: after cache loss C3 uses F2's specific codes, as
+recorded in its [Departures from the RFCs](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md#departures-from-the-rfcs):
+`repository_not_registered` before rebuild; afterwards `external_change` for
+intended content written but not committed, `confirmation_not_found` for lost
+confirmation (with `request.prepare`), and `already_applied`/`noop` for the
+proved committed end state. Committed saves with unchanged intended content
+make no second checkpoint after rebuild. A missing-registration fill read
+offers no recovery, while the full-field save offers `index.rebuild` (decision
+7). Whole-file corruption yields `index_unavailable` with `index.rebuild`;
+partial-page damage remains the known library limit `01M4PB82G07RZSQMNJZN672S3W`.
+No indefinite exactly-once guarantee follows from a rebuildable database.
+`operation resume` may need original input and cannot reconstruct an unsaved
+body from a record; it remains a C4 command.
+
+Amended 2026-10-20 by C2: only `execute` is automatically retried, and only
+when **(code is `busy` OR outcome is `partial`) AND the first recovery action
+is `request.retry` naming this request**. At most three further attempts follow
+100, 200 and 400 ms delays. Each uses the same command, target, input, request
+ID and confirmation as the preceding attempt, with no repeated consent or
+identity prompt. Stop at the first nonqualifying answer; return the last
+envelope unchanged. Human retries emit `progress: retrying` to stderr.
+Prepare, host observe and request show/cancel are never automatically retried;
+neither is `transport_unavailable` merely because it offers a retry action.
+One invocation keeps one credential session across its bounded retries.
+
+Protected key generation is excluded from automatic retry because its secret
+is moved into the first call. On a later invocation (R-19), an interactive
+retry asks for the passphrase again even for a finished request; if files were
+already written, the library registers them without using the new answer.
+A noninteractive retry is CLI-built `unlock_required`, without a library
+execute call. `request show` exposes the stored result of a finished request.
+
+### Save patch and replay limits
+
+Amended 2026-10-24 by C3 (decisions 2, 5 and 7): `document save` and
+`ticket save` accept patches over complete library drafts. Only when a draft
+field is omitted, the CLI resolves the repository and calls `show_item` once
+per invocation, after request-ID/input parsing and before the mutation driver.
+Documents fill `title`/`body`; tickets fill `title`/`type`/`status`/`body`/
+`project`/`team`. Omitted fields take the current value; null clears nullable
+`project`/`team`. With every draft field present there is no fill read.
+`deps`/`parent` are never filled: omitted relationships go to the library as
+unchanged, null clears, and an empty deps array also clears.
+
+The caller's observation passes through unchanged; the CLI neither replaces
+nor compares it with the fill read's token. Bounded retries reuse the same
+filled draft. A failed fill read retains its code, scope and recovery actions
+under the save command, with the parsed/allocated request ID and every effect
+`not_requested`. Wrong-kind or unfillable item DTOs produce item-scoped
+`item_not_found`, as C1 show does; see [CLI-built refusals](#cli-built-refusals-r-6).
+
+On a later invocation omitted fields are recomputed. After a successful save,
+a third-party change to an omitted field makes a retry `request_mismatch`,
+without repeating effects; `request show` still returns the stored result.
+The fill read precedes replay: if it now fails, the save returns that read
+failure rather than the finished result, which remains available through
+`request show`.
+
+An interrupted save's same-request omitted-field retry completes discovery
+without a second commit while the file still holds its intended bytes. If an
+omitted field is edited meanwhile, that retry gives `request_mismatch`; sending
+all original fields gives `external_change`. Both preserve the accepted record
+and completed effects (partial/exit 4). C3 recovery requires restoring the bytes
+the request committed; otherwise it awaits C4's `operation abandon`. The
+pending operation fences requests reaching a new domain operation with
+`recovery_required`, not early binding no-ops/refusals or finished replay.
+
+Unknown metadata values and body bytes are preserved; front matter is
+re-emitted in canonical style when rewritten. Saving a hand-written document
+can checkpoint normalization. For either save verb, no-op requires intended
+content already committed (HEAD-equal); equal uncommitted ticket values may
+skip a rewrite yet still checkpoint. A current-token no-change save can
+provision an editing context even without adding a commit.
 
 ## Consent and noninteractive input
 
@@ -167,6 +478,32 @@ terminal disables all prompts. A JSON command that needs a secret returns
 For protected keys, interactive one-shot commands unlock for that invocation.
 No pipe/argument/environment secret channel or desktop unlock sharing is
 included. There is no resident CLI credential session.
+
+Amended 2026-10-20 by C2: interactive mode means human output, no
+`--non-interactive`, and an available controlling terminal. All prompt I/O is
+on that terminal device, never stdin/stdout/stderr, so piped `--input -` and
+terminal prompts coexist. A new passphrase is masked and entered twice, with
+at most three attempts; exhaustion is `invalid_input`.
+
+For an interactive confirmed command without explicit `--prepare`/`--confirm`:
+prepare, display the preview on the terminal, ask `Proceed? [y/N]`, then execute
+with that confirmation only for `y`/`yes` (case-insensitive). A supplied request
+ID whose record already exists goes directly to execute without re-preview or
+consent; any lookup failure except `request_not_found` is returned unchanged.
+Unconfirmed commands execute directly. Explicit prepare/confirm never prompt
+for consent or identity; confirmed execution can still prompt to unlock.
+
+Create/enable with no input identity may ask for name/email only after prepare
+answers `identity_required`, then prepare again using the supplied identity.
+**Owner clarification, 2026-10-22:** every later invocation of that request,
+including an interactive retry, must provide the same identity in `--input`.
+Existing-record retries never reconstruct or prompt for it; the library decides
+replay or mismatch. Bounded retries within the original invocation reuse it.
+The CLI's note explains this without printing identity values. Library preview
+and result data retain their non-secret fields unchanged; CLI-written diagnostics
+never echo input values (except the escaped non-secret label in a new-passphrase
+prompt). Interactive execution without an ID allocates one and writes
+`request: <ULID>` immediately to stderr before library work.
 
 Two-phase confirmation makes automation explicit:
 
@@ -185,7 +522,9 @@ An expired or missing confirmation after cache loss requires a new preview.
 No global `--yes` can approve host trust, key deletion or a changed target.
 
 `host approve/replace` bind exact fingerprints separately from lifecycle
-consent, and persist trust only after the observed host presents them again.
+consent. Amended 2026-10-20 by C2 (F2 decision 6): trust is persisted only after
+the connection re-observes the expected algorithm/fingerprint **and authenticates
+with the selected key**. Merely seeing a host key does not store a pin.
 Republishing a remotely deleted previously published item branch also requires
 an explicit prepare/confirm effect summary; ordinary sync must not recreate it
 silently. Previewing arbitrary raw input does not make it valid or authorized.
@@ -199,6 +538,28 @@ process termination/broken output streams may prevent a final object; clients
 must use their request ID to inspect recovery. Human mode is readable prose
 plus stable IDs and actionable next steps; its layout is not a parsing API.
 
+Amended 2026-10-18 by C1: human successes write results to stdout; stale,
+never-refreshed or incomplete-list notes go to stderr. Human failures write
+their message, code and recovery actions to stderr, leaving stdout empty.
+JSON always writes one compact envelope and newline to stdout, with empty
+stderr. An output write/flush failure, including a broken pipe, exits 1
+without a panic or further diagnostic.
+
+Amended 2026-10-20 by C2: human progress stages go immediately to stderr once
+per stage change; host observe writes `progress: connecting` before its call.
+Failed writes of these early lines or the early request-ID note are ignored
+so they cannot stop in-flight work (R-9). Prompt write failure cancels the
+prompt. The final output write retains C1's exit-1 rule. JSON stderr stays empty.
+
+Amended 2026-10-18 by C1: JSON help and version are success envelopes named
+`cli help` and `cli version`, with empty scope and no requested effects.
+Help data lists commands, availability, delivering Cycle, summary, repository
+rule and options; planned commands have null repository and empty options.
+Version data contains `name` and package `version`; `schema_version` remains
+in the envelope. Usage errors name the recognized two-word command, or
+`cli usage` when no catalog command can be named. The bare invocation is root
+help and exits zero.
+
 All envelope fields below are required; nullable fields use JSON null. Version 1
 uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 
@@ -206,8 +567,8 @@ uses strings for IDs/OIDs/timestamps and never encodes an ID as a JSON number.
 | --- | --- |
 | `schema_version` | Integer `1`. |
 | `command` | Canonical two-word command string. |
-| `request_id` | ULID string or null for read-only/generated-help results. |
-| `operation_id` | Domain operation ID string or null when no operation began. |
+| `request_id` | ULID string, or null when none applies, including prepare, ordinary reads/help and pre-dispatch failures; request selectors and post-open refusal retention follow C2 below. |
+| `operation_id` | Domain operation ID string or null when no operation began; may be set on a refusal after acceptance (F2, amended 2026-10-20 by C2). |
 | `outcome` | `success`, `noop`, `partial`, `blocked`, `cancelled`, `error`. |
 | `code` | Stable lower_snake_case result/recovery code; never raw backend error text. |
 | `message` | Redacted human explanation, not a machine discriminator. |
@@ -297,10 +658,13 @@ Example: a comment checkpoint succeeded but configured publication failed:
 }
 ```
 
-The version 1 JSON Schemas are closed: every object they define sets
-`additionalProperties: false` and requires all of its properties, except the
-free-form objects (the envelope's `data`, `unknown_metadata` and a recovery
-action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
+Amended 2026-10-20 by C2: the version 1 **output** JSON Schemas in `schemas/v1/`
+are closed: every object they define sets `additionalProperties: false` and
+requires all its properties, except four free-form objects: the envelope's
+`data`, `unknown_metadata`, a recovery action's `arguments`, and request show's
+stored `result.data` (F2's fourth object). Input schemas live separately and
+allow the optional fields described above. The output compatibility rule is
+(product owner, 2026-10-08):
 
 - A schema describes exactly what the build that ships it produces.
 - Adding a field, an enumeration value or a result or problem code is a
@@ -319,6 +683,52 @@ action's `arguments`). The compatibility rule is (product owner, 2026-10-08):
   or effect values, or the meaning of a command input.
 
 ## Exit statuses and partial completion
+
+Amended 2026-10-18 by C1: `usage_error` covers unknown commands/options,
+missing or conflicting inputs and malformed option values. An approved verb
+delivered by a later Cycle returns `command_unavailable`; human stderr names
+that Cycle. Both are input failures (exit 2), with empty scope, null data,
+no recovery actions and their fixed code messages in JSON.
+
+### CLI-built refusals (R-6)
+
+Amended 2026-10-20 by C2. For C2 the CLI builds refusals before execute or in
+place of a library call; library envelopes pass through unchanged. The codes
+are `usage_error`, `command_unavailable`, `invalid_path`, `invalid_input`,
+`invalid_id`, `cancelled`, `unlock_required` and `internal_error`. They name
+the parsed command (or `cli usage`), have null `operation_id` and `data`, empty
+scope, no recovery actions, all effects `not_requested` and null `commit_oid`.
+JSON `message` is the fixed result-code message, never input or backend text.
+
+Amended 2026-10-24 by C3 (decisions 5 and 7): save-patch fill failures are an
+exception to the empty-scope/no-recovery rule. The read's envelope passes
+through under `document save` or `ticket save`, preserving its code, message,
+scope and recovery actions and retaining the parsed/allocated request ID;
+all effects are `not_requested`. Wrong-kind/unfillable items use item-scoped
+`item_not_found`. For a repository the index does not hold, a save omitting
+a draft field returns `repository_not_registered`, exit 3, with no recovery
+action. A full-field save instead returns `repository_not_enabled`, exit 2,
+for a never-enabled root; after cache loss it returns
+`repository_not_registered` with `index.rebuild`. This accepted difference
+does not add a library code or change the read contract.
+
+**Owner clarification, 2026-10-22:** every pre-dispatch error, including
+usage/mode, transport startup and service-opening failures, keeps
+`request_id: null` even if argv has a valid ID. IDs are parsed only after the
+service opens. A post-open CLI refusal retains a valid parsed or
+allocated-and-printed request ID; absent/malformed request IDs remain null.
+Checks are request ID, confirmation ID, key ID, input, key-store lookup, then
+prompts. Invalid IDs are `invalid_id`; malformed input or three exhausted
+identity/new-passphrase attempts are `invalid_input`; protected generation
+without a terminal is `unlock_required`; unavailable current-user key-store
+location is `internal_error`. No new output code/schema is introduced.
+
+Amended 2026-10-20 by C2: a wrong passphrase currently passes through as
+`transport_unavailable`, exit 5, pending defect `01M5E6DYJ6GN7DMW4424TH3V78`
+(decision 9). When this invocation supplied a passphrase, human stderr adds
+`hint: if the passphrase was wrong, run the command again`. JSON is unchanged,
+and no automatic retry sends the wrong answer again. `unlock_failed`, exit 3,
+is demonstrated by a server rejecting the key after the right passphrase.
 
 | Exit | Meaning |
 | --- | --- |
@@ -364,13 +774,26 @@ but resident CLI scheduling is outside the MVP. A possible future daemon is
 intended for server-side change watching and automation triggers, not ordinary
 user-machine polling; it requires a separate PRD/enhancement design.
 
-Ctrl-C requests safe-point cancellation and exits `130` after the final result
-when possible. Another forced termination is interruption, never evidence of
-rollback. Platform-native stop handling follows the runtime RFC.
+Amended 2026-10-20 by C2 (decision 6): before execute, declining consent,
+Ctrl-C or EOF at a prompt is CLI-built `cancelled`, exit 130. Only the unused
+prepare confirmation can remain, to expire. During a connection's unlock
+prompt, Ctrl-C/EOF dismisses the prompt; the library returns `unlock_required`,
+exit 3. C2 installs no process-wide Ctrl-C handler and has no safe point after
+acceptance. Outside prompts, termination is interruption, not rollback. C4
+owns safe-point Ctrl-C cancellation for synchronization.
+
+The accepted local-write interruption window (decision 8) remains: create,
+enable or remote select can stop between writing `.manyhands/config.toml` and
+committing it, leaving a dirty-worktree refusal on retry. Remove the uncommitted
+configuration for create/enable, or restore its committed content for remote
+select, then retry the same request. C4 owns later operation abandonment.
 
 ## Alternatives, risks and required evidence
 
-Structured file/stdin input is selected over large flag sets or an implicit
+Amended 2026-10-18 by C1: the structured-input rationale below applies to
+mutations; read inputs are flags.
+
+Structured file/stdin mutation input is selected over large flag sets or an implicit
 editor because it preserves multiline input and explicit concurrency tokens.
 One final JSON object is selected over streaming all commands because callers
 can inspect a single authoritative outcome.
@@ -392,5 +815,56 @@ strings. The background
 journey uses explicit `poll once` to prove the CLI counterpart; automatic
 scheduling is desktop-only. Verify safe cancellation and overlap with a desktop
 operation through the existing domain protocol, no resident worker after exit,
-and no display or desktop dependency. These are future acceptance obligations;
-the current `manyhands-cli` entry point is still an empty scaffold at the draft base.
+and no display or desktop dependency. Amended 2026-10-20 by C2: C1 reads and
+C2's eighteen administration verbs now run through the executable. C2's empty,
+existing-history and Unix generated-key onboarding journeys are in
+`tests/cli_remote/journeys.rs`; exit, stdin/PTY and privacy evidence is in
+`tests/cli/` and `tests/cli_remote/`. Synchronization and the remaining
+PRD journeys remain obligations of later Cycles. Native CI runs after merge;
+Windows prompting/key-file checks remain manual, not implied by Linux evidence.
+
+### C3 evidence and documented examples
+
+Amended 2026-10-24 by C3: all thirteen authoring/discovery verbs have real-binary
+human/JSON evidence in [authoring reads](../../tests/cli/authoring_reads.rs),
+[index](../../tests/cli/index.rs), [folders](../../tests/cli/folders.rs),
+[documents](../../tests/cli/documents.rs),
+[ticket authoring](../../tests/cli/ticket_authoring.rs),
+[repair](../../tests/cli/repair.rs) and
+[authoring exits](../../tests/cli/authoring_exits.rs). Closed inputs and examples
+are checked by [input schemas](../../tests/cli/input_schemas.rs); output goldens
+use the published v1 output schemas. The exit table accounts for the audit's
+40 library / 42 CLI-inclusive codes, with nine no-op-capable mutations and
+two explicit-index exceptions. Exit 4 is reasoned evidence backed by a library
+actor leaving a save partial and the CLI completing it; exit 5 is reached
+through a child-held lease, and repair cancellation/130 through a Unix PTY.
+The repair actor's partial `internal_error` classifies as exit 4, not an
+observed actor process exit. Windows repair consent remains a native manual
+check; native CI runs after merge with separate authorization.
+
+The nine linked example files in the input-schema table are the documented
+examples. This outcome table is copied from Task 7's authoritative table for
+[`every_c3_example_input_runs`](../../tests/cli/authoring_exits.rs#L1327)
+(the `EXAMPLES` table and its fixture preparation are in the same file):
+
+| Command | Fixture preparation | Code | Exit |
+| --- | --- | --- | --- |
+| `folder create` | absent docs/new-folder | `ok` | 0 |
+| `document create` | example ID and docs/new.md absent | `ok` | 0 |
+| `document save` | DOCUMENT_A on primary | `ok` | 0 |
+| `document move` | DOCUMENT_A; absent docs/moved.md on primary | `ok` | 0 |
+| `document repair` | marker-only file at example path | `ok` | 0 |
+| `ticket create` | example ID absent; relationship IDs unknown | `ok` | 0 |
+| `ticket save` | TICKET_A on primary | `ok` | 0 |
+| `ticket repair` | marker-only file at example ticket path | `ok` | 0 |
+| `ticket slug-assign` | open TICKET_C on primary, no slug | `ok` | 0 |
+
+Each case gets a fresh `contract_repository` fixture with no remote; repairs
+prepare and then confirm. The test validates the example before and after
+substituting only `observation` and `destination_observation` with current
+fixture tokens. Every other field, including IDs, paths, bodies and corrected
+source, remains unchanged, and the example files themselves are not rewritten.
+The [execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md#task-7-part-b-evidence-and-checkpoint)
+records the passed six-gate Part B checkpoint and 593 tests; Task 8's amendment
+does not rerun them. Final Cycle verification and authorized dogfooding remain
+Task 9 obligations.

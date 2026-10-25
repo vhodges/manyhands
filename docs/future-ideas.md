@@ -7,6 +7,8 @@ tags:
   - not scheduled
 author: "Vince Hodges <vince@imbas.ca>"
 manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4JADFCMEC8DHJRJBXNJ"
 ---
 # Future Ideas
 
@@ -142,3 +144,16 @@ anything launched alongside background polling in the desktop app.
 > alternative exists there.
 >
 > Happy to open a PR with this change if it is welcome.
+
+## Dockable Drafts panel
+
+*Noted 2026-10-22, from Wave 03 D2 planning.*
+
+**What.** The Drafts surface becomes a panel whose visibility can be
+toggled on and off and whose dock position can be set. The product owner
+expects it to become a ticket.
+
+**Where it starts.** D2 shows Drafts as a content page in place of the
+tabs (D2 design, Drafts page, ruling R23). D2 keeps the page's contents
+independent of where it is hosted, so the change is to the host and to the
+routing in `src/desktop/view/workspace/content.rs`, not to the page.

@@ -1,9 +1,10 @@
 ---
+id: 01M45WHG47VZWAWBVZFQ35FJVW
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DA
+created_at: 2026-10-05T11:17:38Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M45WHG47VZWAWBVZFQ35FJVW"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DA"
-created_at: "2026-10-05T11:17:38Z"
 ---
 
 Planning checkpoint: reused the pre-existing ticket worktree and branch and

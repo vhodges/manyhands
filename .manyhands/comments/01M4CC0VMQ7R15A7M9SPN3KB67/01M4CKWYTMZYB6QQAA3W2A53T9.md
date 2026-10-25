@@ -1,9 +1,10 @@
 ---
+id: 01M4CKWYTMZYB6QQAA3W2A53T9
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T02:01:27Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CKWYTMZYB6QQAA3W2A53T9"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T02:01:27Z"
 ---
 
 Approval checkpoint: the product owner decided all six open decisions as

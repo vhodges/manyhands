@@ -1084,6 +1084,55 @@ fn a_repo_remove_and_its_preview_match_their_schemas_and_goldens() {
 }
 
 const OPERATION_ABANDON_SCHEMA: &str = "operation_abandon_preview.schema.json";
+
+#[test]
+fn a_repo_remove_missing_root_and_its_preview_match_the_existing_wire_contract() {
+    for git_only in [false, true] {
+        let world = world_with_a_still_clock();
+        let displaced = tempfile::tempdir().unwrap();
+        std::fs::rename(
+            if git_only {
+                world.root.join(".git")
+            } else {
+                world.root.clone()
+            },
+            displaced.path().join("moved"),
+        )
+        .unwrap();
+        let remove = || {
+            Mutation::RepoRemove(RepoRemoveInput {
+                root: world.root.clone(),
+            })
+        };
+        let preview = world.service.prepare(&remove()).previewed();
+        assert_eq!(preview.outcome, Outcome::Success);
+        let enabled_at = match &preview.data.as_ref().unwrap().details {
+            manyhands::repository::PreviewDetailsDto::RepositoryRemoval(details) => {
+                details.enabled_at.clone().unwrap()
+            }
+            other => panic!("not a removal preview: {other:?}"),
+        };
+        assert_confirmed_contract_replacing(
+            "repo_remove_missing_preview",
+            &world.root,
+            REPOSITORY_REMOVAL_SCHEMA,
+            &[],
+            &[(&enabled_at, "<enabled-at>")],
+            &preview,
+        );
+        let confirmation = preview.data.as_ref().unwrap().confirmation_id.clone();
+        let removed =
+            mutation::execute_confirmed(&world.service, REQUEST_1, &confirmation, remove());
+        assert_eq!(removed.outcome, Outcome::Success);
+        assert_confirmed_contract(
+            "repo_remove_missing",
+            &world.root,
+            REPOSITORY_REMOVAL_SCHEMA,
+            &[],
+            &removed,
+        );
+    }
+}
 const OPERATION_SCHEMA: &str = "operation_mutation.schema.json";
 
 #[test]
@@ -1335,7 +1384,11 @@ fn golden_envelopes() -> Vec<(String, Value)> {
     let mutation = mutation::CASES
         .iter()
         .map(|case| (MUTATION_GOLDENS, mutation::fixture_directory(), case));
+    let cli = support::cli::CLI_CASES
+        .iter()
+        .map(|case| ("cli_v1", support::cli::cli_fixture_directory(), case));
     read.chain(mutation)
+        .chain(cli)
         .map(|(set, directory, case)| {
             (
                 format!("{set}/{case}"),
@@ -1454,8 +1507,10 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 44] = [
+const DATA_ROOTS: [&str; 46] = [
     "cancel.schema.json",
+    "cli_help.schema.json",
+    "cli_version.schema.json",
     "comment_list.schema.json",
     "cycle_list.schema.json",
     "dependency_tree.schema.json",
@@ -1655,7 +1710,15 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 4] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 6] = [
+    (
+        ResultCode::UsageError,
+        "a CLI parse result; no command of execute or prepare returns it",
+    ),
+    (
+        ResultCode::CommandUnavailable,
+        "a CLI parse result; no command of execute or prepare returns it",
+    ),
     (
         ResultCode::RemoteUnavailable,
         "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",

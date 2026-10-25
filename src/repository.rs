@@ -49,6 +49,7 @@ mod native_resolution;
 mod promotion;
 mod read;
 mod recovery;
+mod registration_removal;
 mod remote;
 mod ticket_guard;
 pub mod transport;
@@ -5012,6 +5013,16 @@ impl RepositoryService {
                         "the configured publication remote is unavailable or ineligible",
                     ));
                 }
+                if matches!(
+                    record.completed_step,
+                    Some(LocalStep::ConfigurationWritten | LocalStep::InitializationCommitted)
+                ) {
+                    // This operation wrote the configuration. A prior attempt
+                    // may have committed without publishing its index entry.
+                    // Repair only an absent entry, from current HEAD: never
+                    // regress later commits or overwrite subsequent staging.
+                    let _ = refresh_missing_configuration_index(&repository, &root);
+                }
                 ensure_worktree_exclusion(&repository, &root)?;
                 if record.completed_step == Some(LocalStep::AuthoritativeObserved) {
                     let commit_oid = repository
@@ -5039,8 +5050,17 @@ impl RepositoryService {
                         )))
                     };
                 }
+                // A repository enabled in Git that this data directory
+                // does not hold, enabled through another say, is
+                // registered here and indexed, as after a commit.
+                let newly_registered = registered_repository_id(
+                    &self.registry_path,
+                    &root,
+                    RepositoryOperation::Enable,
+                )
+                .is_err_and(|error| error.kind == RepositoryErrorKind::RepositoryNotRegistered);
                 self.reconcile_registration(&repository, &root, RepositoryOperation::Enable)?;
-                if record.is_pending {
+                if record.is_pending || newly_registered {
                     let commit_oid = repository
                         .head()
                         .and_then(|head| head.peel_to_commit())
@@ -5207,6 +5227,11 @@ impl RepositoryService {
                 };
             }
         };
+        // The commit is authoritative; this must stay outside the rollback
+        // closure. Like save, index publication is best effort and runs under
+        // our existing lease, before any post-commit interruption or handoff.
+        let _ =
+            refresh_configuration_index(&repository, commit_oid, IndexRefreshPolicy::ReplaceOwned);
         self.check_failure(
             FailurePoint::AfterInitializationCommit,
             RepositoryOperation::Enable,
@@ -5525,84 +5550,6 @@ impl RepositoryService {
             .lock()
             .expect("test owned-path hook lock")
             .push((Some(root), relative, boundary, Box::new(hook)));
-    }
-
-    pub fn remove_registration(
-        &self,
-        request: RemoveRegistrationRequest,
-    ) -> Result<RemoveRegistrationOutcome, RepositoryError> {
-        let root = &request.root;
-        self.require_index_available(RepositoryOperation::RemoveRegistration, Some(root))?;
-        let root = std::fs::canonicalize(root).map_err(|error| {
-            canonicalization_error(RepositoryOperation::RemoveRegistration, error)
-        })?;
-        if !root.is_dir() {
-            return Err(RepositoryError::new(
-                RepositoryOperation::RemoveRegistration,
-                None,
-                RepositoryErrorKind::InvalidPath,
-                "the selected path is not a directory",
-            ));
-        }
-        let root_path = registry_root_key(&root, RepositoryOperation::RemoveRegistration)?;
-        let repository = Repository::open(&root).map_err(|error| {
-            RepositoryError::git(
-                RepositoryOperation::RemoveRegistration,
-                Some(root.clone()),
-                error,
-            )
-        })?;
-        let _lease = repository_lease(&repository, &root, RepositoryOperation::RemoveRegistration)?;
-        let _cache_guard = cache_write_guard(
-            &self.registry_path,
-            &root,
-            RepositoryOperation::RemoveRegistration,
-        )?;
-        let mut connection = open_registry(&self.registry_path, &mut |_| {})
-            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        migrate_registry(&mut connection)
-            .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        let _record = begin_or_reconcile_operation(
-            &mut connection,
-            &root,
-            RepositoryOperation::RemoveRegistration,
-            request.operation_id,
-            "",
-        )
-        .map_err(|error| error.for_operation(RepositoryOperation::RemoveRegistration, &root))?;
-        self.check_failure(
-            FailurePoint::BeforeRegistrationRemovalTransaction,
-            RepositoryOperation::RemoveRegistration,
-            &root,
-        )?;
-        let transaction = connection.transaction().map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RemoveRegistration, &root)
-        })?;
-        transaction
-            .execute(
-                "DELETE FROM operation_records WHERE root_path = ?1",
-                [root_path],
-            )
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RemoveRegistration, &root)
-            })?;
-        let deleted = transaction
-            .execute("DELETE FROM repositories WHERE root_path = ?1", [root_path])
-            .map_err(|error| {
-                RepositoryError::sqlite(error)
-                    .for_operation(RepositoryOperation::RemoveRegistration, &root)
-            })?;
-        transaction.commit().map_err(|error| {
-            RepositoryError::sqlite(error)
-                .for_operation(RepositoryOperation::RemoveRegistration, &root)
-        })?;
-        Ok(if deleted == 0 {
-            RemoveRegistrationOutcome::NotRegistered
-        } else {
-            RemoveRegistrationOutcome::Removed
-        })
     }
 }
 
@@ -8679,6 +8626,61 @@ fn refresh_owned_index(
     added_paths: &[&Path],
     removed_source: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    refresh_owned_index_with_policy(
+        repository,
+        committed_index,
+        added_paths,
+        removed_source,
+        IndexRefreshPolicy::ReplaceOwned,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum IndexRefreshPolicy {
+    ReplaceOwned,
+    AddMissing,
+}
+
+fn refresh_configuration_index(
+    repository: &Repository,
+    commit: git2::Oid,
+    policy: IndexRefreshPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut committed = Index::new()?;
+    committed.read_tree(&repository.find_commit(commit)?.tree()?)?;
+    refresh_owned_index_with_policy(
+        repository,
+        &committed,
+        &[Path::new(canonical::CONFIG_PATH)],
+        None,
+        policy,
+    )
+}
+
+fn refresh_missing_configuration_index(
+    repository: &Repository,
+    root: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let head = repository.head()?.peel_to_commit()?;
+    let Some((blob, _)) = configuration_entry_from_tree(&head.tree()?) else {
+        return Ok(());
+    };
+    let path = root.join(canonical::CONFIG_PATH);
+    if regular_nonexecutable_file(&std::fs::symlink_metadata(&path)?)
+        && std::fs::read(path)? == repository.find_blob(blob)?.content()
+    {
+        refresh_configuration_index(repository, head.id(), IndexRefreshPolicy::AddMissing)?;
+    }
+    Ok(())
+}
+
+fn refresh_owned_index_with_policy(
+    repository: &Repository,
+    committed_index: &Index,
+    added_paths: &[&Path],
+    removed_source: Option<&Path>,
+    policy: IndexRefreshPolicy,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
 
     let index_path = repository.path().join("index");
@@ -8697,10 +8699,16 @@ fn refresh_owned_index(
     // writers cannot stage unrelated changes between the read and publication.
     // Serialize a detached index: repository-backed writes may zero unrelated
     // racy entries' stat fields. Never replace the live contents with read_tree.
-    let index_modified = std::fs::metadata(&index_path)?.modified()?;
+    let index_modified = match std::fs::metadata(&index_path) {
+        Ok(metadata) => Some(metadata.modified()?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let scratch = tempfile::tempdir_in(repository.path())?;
     let scratch_index = scratch.path().join("index");
-    std::fs::copy(&index_path, &scratch_index)?;
+    if index_modified.is_some() {
+        std::fs::copy(&index_path, &scratch_index)?;
+    }
     let mut index = Index::open(&scratch_index)?;
     let mut changed = false;
     if let Some(source) = removed_source
@@ -8710,6 +8718,11 @@ fn refresh_owned_index(
         changed = true;
     }
     for path in added_paths {
+        if matches!(policy, IndexRefreshPolicy::AddMissing)
+            && (0..=3).any(|stage| index.get_path(path, stage).is_some())
+        {
+            continue;
+        }
         let entry = committed_index
             .get_path(path, 0)
             .ok_or_else(|| git2::Error::from_str("the committed owned entry is missing"))?;
@@ -8746,7 +8759,9 @@ fn refresh_owned_index(
         file.write_all(&bytes)?;
         // Advancing the index timestamp could make an unchanged cached stat
         // entry stop being racy, hiding an unrelated same-stat worktree edit.
-        file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        if let Some(index_modified) = index_modified {
+            file.set_times(std::fs::FileTimes::new().set_modified(index_modified))?;
+        }
         file.sync_all()?;
         drop(lock.file.take());
         std::fs::rename(&lock.path, &index_path)?;
@@ -10472,7 +10487,23 @@ fn publication_remote_eligible_for(
     }))
 }
 
+/// The identity Git's configuration gives a commit, and the level it is
+/// from: the first level that holds both a name and an email decides.
+/// One that a commit would not carry unchanged is no identity, and no
+/// level below stands in for it.
 fn resolve_identity(
+    local_config: &Config,
+    effective_config: &Config,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<Option<(CommitIdentity, ConfigLevel)>, RepositoryError> {
+    Ok(
+        deciding_identity(local_config, effective_config, root, operation)?
+            .filter(|(identity, _)| commits_unchanged(identity)),
+    )
+}
+
+fn deciding_identity(
     local_config: &Config,
     effective_config: &Config,
     root: &Path,
@@ -10530,24 +10561,40 @@ fn complete_identity_at_level(
     })
 }
 
-#[allow(dead_code)] // Task 4 calls this before its first local config write.
+/// Refuses a supplied identity that a commit would not carry unchanged,
+/// before anything is written with it.
 fn validate_identity(
     identity: &CommitIdentity,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
-    if identity.name.is_empty()
-        || identity.email.is_empty()
-        || identity.name.contains('\0')
-        || identity.email.contains('\0')
-    {
+    if !commits_unchanged(identity) {
         return Err(RepositoryError::new(
             operation,
             None,
             RepositoryErrorKind::InvalidIdentity,
-            "commit identity name and email must be nonempty and NUL-free",
+            "commit identity name and email must be nonempty, hold no control character, and be \
+             ones a Git commit carries unchanged",
         ));
     }
     Ok(())
+}
+
+/// Whether a commit made as `identity` carries its name and its email as
+/// they are. Git refuses `<` and `>` in either, drops white space and
+/// `, : ; " \ '` from their ends, and refuses a value that is then empty.
+/// It writes a line break into the commit as it is, where no reader can
+/// parse it, so a value with a control character is not one either.
+fn commits_unchanged(identity: &CommitIdentity) -> bool {
+    let CommitIdentity { name, email } = identity;
+    if [name, email]
+        .iter()
+        .any(|value| value.chars().any(char::is_control))
+    {
+        return false;
+    }
+    Signature::new(name, email, &git2::Time::new(0, 0)).is_ok_and(|signature| {
+        signature.name() == Some(name.as_str()) && signature.email() == Some(email.as_str())
+    })
 }
 
 fn remote_info(repository: &Repository, root: &Path) -> Result<Vec<RemoteInfo>, RepositoryError> {
@@ -11005,6 +11052,108 @@ mod tests {
     }
 
     #[test]
+    fn enablement_index_preserves_changes_staged_after_validation() {
+        // Identity resolution runs after the clean-worktree check. Use the
+        // existing provider seam to model a Git writer staging at that point.
+        #[derive(Default)]
+        struct StageAfterValidation {
+            entries: Vec<String>,
+            modified: Option<std::time::SystemTime>,
+        }
+        impl IdentityConfigProvider for StageAfterValidation {
+            fn effective_config(
+                &mut self,
+                repository: &Repository,
+                root: &Path,
+                _operation: RepositoryOperation,
+            ) -> Result<Config, RepositoryError> {
+                std::fs::write(root.join("fixture.txt"), b"staged modification\n").unwrap();
+                std::fs::write(root.join("other.txt"), b"staged addition\n").unwrap();
+                let mut index = repository.index().unwrap();
+                index.add_path(Path::new("fixture.txt")).unwrap();
+                index.add_path(Path::new("other.txt")).unwrap();
+                index.write().unwrap();
+                self.entries = index.iter().map(|entry| format!("{entry:?}")).collect();
+                self.modified = Some(
+                    std::fs::metadata(repository.path().join("index"))
+                        .unwrap()
+                        .modified()
+                        .unwrap(),
+                );
+                std::fs::write(root.join("fixture.txt"), b"later unstaged modification\n").unwrap();
+                Ok(repository.config().unwrap())
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let root = create_born_repository(directory.path())
+            .canonicalize()
+            .unwrap();
+        let repository = Repository::open(&root).unwrap();
+        // This low-level fixture makes its baseline commit without an index.
+        let mut baseline = repository.index().unwrap();
+        baseline
+            .read_tree(&repository.head().unwrap().peel_to_tree().unwrap())
+            .unwrap();
+        baseline.write().unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let mut provider = StageAfterValidation::default();
+        let outcome = service
+            .enable_with_identity_provider(
+                EnableRepositoryRequest {
+                    root: root.clone(),
+                    primary_branch: "main".to_owned(),
+                    identity: None,
+                    operation_id: OperationId::new(),
+                },
+                None,
+                &mut provider,
+            )
+            .unwrap();
+        assert!(matches!(outcome, EnableRepositoryOutcome::Enabled { .. }));
+        let reopened = Repository::open(&root).unwrap();
+        let index = reopened.index().unwrap();
+        assert_eq!(
+            index
+                .iter()
+                .filter(|entry| entry.path != canonical::CONFIG_PATH.as_bytes())
+                .map(|entry| format!("{entry:?}"))
+                .collect::<Vec<_>>(),
+            provider.entries
+        );
+        assert_eq!(
+            std::fs::metadata(repository.path().join("index"))
+                .unwrap()
+                .modified()
+                .unwrap(),
+            provider.modified.unwrap()
+        );
+        let tree = reopened.head().unwrap().peel_to_tree().unwrap();
+        let path = Path::new(canonical::CONFIG_PATH);
+        assert_eq!(
+            index.get_path(path, 0).unwrap().id,
+            tree.get_path(path).unwrap().id()
+        );
+        assert_eq!(reopened.status_file(path).unwrap(), Status::CURRENT);
+        assert!(tree.get_path(Path::new("other.txt")).is_err());
+        assert_eq!(
+            reopened
+                .find_blob(tree.get_path(Path::new("fixture.txt")).unwrap().id())
+                .unwrap()
+                .content(),
+            b"fixture\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("fixture.txt")).unwrap(),
+            b"later unstaged modification\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("other.txt")).unwrap(),
+            b"staged addition\n"
+        );
+    }
+
+    #[test]
     fn concurrent_cross_root_operation_ids_yield_one_mismatch() {
         let first_directory = tempfile::tempdir().unwrap();
         let second_directory = tempfile::tempdir().unwrap();
@@ -11331,6 +11480,78 @@ mod tests {
                 RepositoryOperation::Enable
             )
             .is_ok()
+        );
+    }
+
+    /// What libgit2 1.9 makes a signature of: it refuses `<` and `>`
+    /// in either value, drops white space and `, : ; " \ '` from both
+    /// ends, and refuses a value that is then empty. It writes a line
+    /// break into the commit as it is, which no reader can then parse.
+    #[test]
+    fn identity_validation_refuses_what_a_commit_would_not_carry_unchanged() {
+        let plain = "Example Person";
+        let email = "example@example.invalid";
+        for (name, email) in [
+            ("Example Person <example@example.invalid>", email),
+            (plain, "<example@example.invalid>"),
+            ("Example > Person", email),
+            (plain, "example>@example.invalid"),
+            ("Example\nPerson", email),
+            (plain, "example@example.invalid\n"),
+            ("Example\tPerson", email),
+            (" Example Person", email),
+            ("Example Person,", email),
+            (plain, "'example@example.invalid'"),
+            (";", email),
+            (plain, " "),
+        ] {
+            let identity = CommitIdentity {
+                name: name.to_owned(),
+                email: email.to_owned(),
+            };
+            let error = validate_identity(&identity, RepositoryOperation::CreateAndEnable)
+                .expect_err(&format!("{name:?} {email:?}"));
+            assert_eq!(error.kind, RepositoryErrorKind::InvalidIdentity);
+        }
+
+        for (name, email) in [
+            (plain, email),
+            ("Ada O'Brien, Jr.", "ada.obrien@example.invalid"),
+            ("Zoë Example", "zoë@example.invalid"),
+            // An email need not hold an `@` for Git to commit as it.
+            ("Person", "person"),
+        ] {
+            let identity = CommitIdentity {
+                name: name.to_owned(),
+                email: email.to_owned(),
+            };
+            assert!(
+                validate_identity(&identity, RepositoryOperation::CreateAndEnable).is_ok(),
+                "{name:?} {email:?}"
+            );
+        }
+    }
+
+    /// The level that holds a whole pair decides it: one Git cannot commit
+    /// as is no identity, and a level below is not used in its place.
+    #[test]
+    fn identity_resolver_finds_none_where_the_deciding_pair_cannot_be_committed() {
+        let bracketed = "[user]\nname = \"Example <example@example.invalid>\"\n\
+                         email = example@example.invalid\n";
+        let complete = "[user]\nname = Global Name\nemail = global@example.invalid\n";
+        let resolved = |local: &str, global: &str| {
+            let (_local_directory, local) = isolated_config(ConfigLevel::Local, local);
+            let (_global_directory, global) = isolated_config(ConfigLevel::Global, global);
+            resolve_identity(&local, &global, Path::new("/"), RepositoryOperation::Enable)
+                .unwrap()
+                .map(|(identity, level)| (identity.name, level))
+        };
+
+        assert_eq!(resolved(bracketed, complete), None);
+        assert_eq!(resolved("", bracketed), None);
+        assert_eq!(
+            resolved("", complete),
+            Some(("Global Name".to_owned(), ConfigLevel::Global))
         );
     }
 

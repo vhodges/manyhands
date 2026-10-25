@@ -1,9 +1,10 @@
 ---
+id: 01M4CS1GSAH54VYMDD4X3CJXEC
+item_id: 01M4CC0VMQ7R15A7M9SPN3KB67
+created_at: 2026-10-08T03:31:19Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CS1GSAH54VYMDD4X3CJXEC"
-item_id: "01M4CC0VMQ7R15A7M9SPN3KB67"
-created_at: "2026-10-08T03:31:19Z"
 ---
 
 Implementation checkpoint: baseline.

@@ -1,0 +1,4 @@
+The request completed.
+request: <request-id>
+operation: <operation-id>
+effects: discovery=current

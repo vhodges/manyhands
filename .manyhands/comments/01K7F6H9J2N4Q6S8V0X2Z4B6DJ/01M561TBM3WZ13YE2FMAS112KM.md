@@ -1,9 +1,10 @@
 ---
+id: 01M561TBM3WZ13YE2FMAS112KM
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DJ
+created_at: 2026-10-17T23:05:43Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M561TBM3WZ13YE2FMAS112KM"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DJ"
-created_at: "2026-10-17T23:05:43Z"
 ---
 
 Task 3 checkpoint: the closure preflight and preview. The details are in

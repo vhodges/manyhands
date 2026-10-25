@@ -786,6 +786,18 @@ pub(crate) trait Binding {
     /// gave it, or the application.
     fn place(&self) -> Place<'_>;
 
+    /// Resolves the scope without changing the meaning of the caller's input.
+    /// Removal can match an exact stored root after disk state disappears. A
+    /// persisted scope is only an identity hint; normal digest/consent checks
+    /// still decide whether the record belongs to this call.
+    fn resolve_scope(
+        &mut self,
+        _service: &RepositoryService,
+        _persisted: Option<&ScopeKey>,
+    ) -> Result<Option<ScopeKey>, Answer> {
+        Ok(super::confirm::scope_key(self.place()))
+    }
+
     /// The request's target within its repository.
     fn target(&self) -> String;
 

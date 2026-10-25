@@ -498,6 +498,26 @@ impl SaveReport {
     }
 }
 
+/// The code and effects of an enablement that registered a repository
+/// enabled already, and wrote and committed nothing: `ok` once the index
+/// hand-off completed, and otherwise the hand-off owed. A registration
+/// is no effect the result shows: the answer carries it as a local
+/// change.
+pub(crate) fn registration_result(discovered: bool) -> (ResultCode, Effects) {
+    let (code, discovery) = if discovered {
+        (ResultCode::Ok, DiscoveryEffect::Current)
+    } else {
+        (ResultCode::DiscoveryPending, DiscoveryEffect::Pending)
+    };
+    let effects = Effects {
+        write: WriteEffect::Unchanged,
+        checkpoint: CheckpointEffect::Unchanged,
+        discovery,
+        ..Effects::not_requested()
+    };
+    (code, effects)
+}
+
 /// The effects of a save that stopped with an error while its operation
 /// was in flight, from what the repository shows: `commit` is the commit
 /// in range that left the file as the request intended, and `written` says
@@ -842,6 +862,9 @@ fn recovery(
         // nothing otherwise.
         ResultCode::Ok
         | ResultCode::AlreadyApplied
+        // A command line the CLI could not run: no action corrects it.
+        | ResultCode::UsageError
+        | ResultCode::CommandUnavailable
         | ResultCode::Cancelled
         | ResultCode::InternalError
         | ResultCode::InvalidInput

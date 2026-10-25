@@ -19,6 +19,7 @@ use manyhands::{
 };
 use rusqlite::{Connection, params};
 
+pub mod cli;
 pub mod comment_publication;
 pub mod confirmation;
 pub mod conformance;
@@ -31,6 +32,8 @@ pub mod mutation_golden;
 #[cfg(target_os = "linux")]
 pub mod open_watch;
 pub mod operations;
+#[cfg(unix)]
+pub mod pty;
 pub mod records;
 pub mod repair;
 pub mod schema;

@@ -1,9 +1,10 @@
 ---
+id: 01M4AZH9MXDN3J7T8HD4ASRT7Y
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DE
+created_at: 2026-10-07T11:12:51Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4AZH9MXDN3J7T8HD4ASRT7Y"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DE"
-created_at: "2026-10-07T11:12:51Z"
 ---
 
 Plan-ready for owner review; all three artifacts remain proposed:

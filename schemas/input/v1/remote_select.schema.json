@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Publication remote selection input",
+  "type": "object",
+  "properties": {"name": {"type": ["string", "null"]}},
+  "required": ["name"],
+  "additionalProperties": false
+}

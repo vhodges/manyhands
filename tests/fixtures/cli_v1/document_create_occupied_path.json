@@ -1,0 +1,30 @@
+{
+  "code": "occupied_path",
+  "command": "document create",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FDP",
+    "path": "docs/guide.md"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Something already exists at that path.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDP",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

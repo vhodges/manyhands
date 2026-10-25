@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Document creation input",
+  "type": "object",
+  "properties": {
+    "item_id": { "type": "string" },
+    "path": { "type": "string" },
+    "title": { "type": "string" },
+    "body": { "type": "string" }
+  },
+  "required": ["item_id", "path", "title", "body"],
+  "additionalProperties": false
+}

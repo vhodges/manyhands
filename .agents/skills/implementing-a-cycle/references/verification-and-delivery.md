@@ -2,7 +2,7 @@
 
 ## Local evidence
 
-Read the rebased `AGENTS.md`. Run local/agent Rust commands through Devenv. Before
+Read current main's `AGENTS.md`. Run local/agent Rust commands through Devenv. Before
 submitting Rust changes, require success from:
 
 ```sh
@@ -31,35 +31,61 @@ paths using their intended representation; avoid mixed-separator fixture strings
 Credential tests must use isolated homes and fixed-message assertions that never
 print secret buffers. Preserve production checks when fixing test assumptions.
 
-## Review, push, and native CI
+## Review and push
 
 Obtain independent whole-branch review against the approved requirements.
 Resolve findings and verify fixes; retain the evidence and any stated limits.
 
-When push/PR is authorized, inspect remote changes and publish the reviewed
-branch. Follow the starting skill's non-fast-forward procedure; do not infer
-force-push authorization. Use a body file or structured argument for PR prose.
-Describe the problem, resulting behavior, scope, verification, and remaining gates.
+A Cycle is review-ready and mergeable on its local Devenv gates once
+`git merge-tree --write-tree HEAD origin/main` shows that it merges cleanly.
+Native CI is not a gate before merge.
 
-Run the relevant native CI matrix and inspect actual build and test results on
-the intended commit. Use the native-Cargo exception only where repository
-instructions authorize it; local commands stay in Devenv. Include the affected
-library and integration tests, preserve existing platform/artifact coverage, and
-do not disable failing tests to make CI green.
+When push/PR is authorized:
 
-On CI failure, obtain the job logs and distinguish compilation, library tests,
-integration tests, and infrastructure. An early failure can hide later failing
-targets. Reproduce locally where meaningful, add or retain the covering regression,
-fix the demonstrated cause, review and push, then inspect the new native run.
-Continue until the authorized change passes or an actual blocker needs input.
-Record exact commit/run links; never report pending jobs as passed.
+- Inspect remote changes, then publish the reviewed branch.
+- If the push is not a fast-forward, follow the publishing section of
+  [the preflight](worktree-preflight.md). Do not infer force-push
+  authorization.
+- Write PR prose to a body file or pass it as a structured argument.
+- Describe the problem, the resulting behavior, the scope and the
+  verification, and say that native CI runs after merge.
+
+## Native CI, after merge
+
+Native CI runs after merge, on main (owner decision, 2026-10-17). The Build
+workflow runs only when dispatched by hand. Each dispatch needs the owner's
+approval; approval for one run does not carry over to the next. Dispatch it
+with `gh workflow run build.yml --ref <branch>`. A full run covers four
+targets and can take more than two hours.
+
+The workflow's native runners may run Cargo directly; local commands stay in
+Devenv. A new integration test target runs on the native targets only once it
+is in the workflow's test list. Inspect the actual build and test results on
+the intended commit. Record exact commit and run links. Never report pending
+jobs as passed.
+
+A native failure found after merge is follow-on work in a separate session.
+Do not hold or reopen the merged Cycle for it. In that session:
+
+- Obtain the job logs. Tell compilation, library-test, integration-test and
+  infrastructure failures apart. An early failure can hide later failing
+  targets.
+- Follow AGENTS.md's platform-failure steps:
+  1. Narrow the matrix to the failing platform, in a commit of its own.
+  2. Fix the demonstrated cause, and add or keep a covering regression test.
+  3. Run only the affected tests locally, through Devenv.
+  4. Push and dispatch again.
+  5. Once that run is green, restore the full matrix in a commit of its own
+     and run it once more.
+- Preserve existing platform and artifact coverage. Do not disable failing
+  tests to make CI green.
 
 ## Approved merge and closure
 
-Code review or green CI alone does not authorize merging. Once merge is approved,
-add the requested approval/verification comment and close the ticket in the final
-pre-merge update, following current `AGENTS.md`. Refresh stale test counts and
-platform evidence. Push that update and merge the exact intended PR head using
+Code review alone does not authorize merging. Once merge is approved, add the
+requested approval/verification comment and close the ticket in the final
+pre-merge update, following current `AGENTS.md`. Refresh stale test counts.
+Push that update and merge the exact intended PR head using
 normal repository rules; do not bypass required checks or use admin overrides.
 Verify the remote PR is merged and record its merge commit. Preserve unrelated
 edits in the main checkout; a remote merge does not require resetting local main.
