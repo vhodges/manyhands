@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ticket create input",
+  "type": "object",
+  "properties": {
+    "item_id": { "type": "string" },
+    "title": { "type": "string" },
+    "type": { "type": "string" },
+    "status": { "type": "string" },
+    "body": { "type": "string" },
+    "project": { "type": "string" },
+    "team": { "type": "string" },
+    "initials": { "type": "string" },
+    "deps": { "type": ["array", "null"], "items": { "type": "string" } },
+    "parent": { "type": ["string", "null"] }
+  },
+  "required": ["item_id", "title", "type", "status"],
+  "additionalProperties": false
+}

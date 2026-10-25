@@ -1,4 +1,4 @@
-//! C3 Part A evidence. Part B obligations remain explicit, not passing cases.
+//! C3 Part A and ticket evidence. Repair obligations remain explicit.
 use std::{
     collections::BTreeSet,
     fs,
@@ -32,6 +32,7 @@ const PART_A: &[&str] = &[
     "document save",
     "document move",
 ];
+const TICKETS: &[&str] = &["ticket create", "ticket save", "ticket slug-assign"];
 
 enum How {
     Binary(&'static str),
@@ -171,6 +172,36 @@ const ROWS: &[Row] = &[
         3,
         "document_create_without_identity_reaches_the_binary"
     ),
+    row!(
+        "initials_required",
+        3,
+        "a_create_without_initials_is_initials_required_and_the_same_request_succeeds_with_initials"
+    ),
+    row!(
+        "invalid_slug_configuration",
+        3,
+        "ticket_creation_with_bad_slug_configuration_is_refused_without_a_context"
+    ),
+    row!(
+        "invalid_relationship",
+        2,
+        "ticket_inputs_are_closed_typed_and_private_and_relationship_text_is_library_validated"
+    ),
+    row!(
+        "relationship_cycle",
+        2,
+        "ticket_create_refuses_a_dependency_cycle_and_a_parent_cycle_before_any_context_exists"
+    ),
+    row!(
+        "slug_already_assigned",
+        2,
+        "slug_assign_on_a_ticket_with_another_code_is_slug_already_assigned"
+    ),
+    row!(
+        "ticket_closed",
+        3,
+        "a_lifecycle_closed_ticket_refuses_save_and_slug_assign"
+    ),
 ];
 
 const REASONS: &[Row] = &[
@@ -250,48 +281,6 @@ const REASONS: &[Row] = &[
         exit: 2,
         how: How::Pending(
             "Part B, Task 6: missing repair source path; src/repository/mutation/bind/repair.rs:350–371. path observe of an absent path is successful observation, not this code.",
-        ),
-    },
-    Row {
-        code: "initials_required",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 5: ticket create cannot compose initials; src/repository/mutation/bind/ticket.rs:491–524,582–598.",
-        ),
-    },
-    Row {
-        code: "invalid_slug_configuration",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 5: ticket create/slug assignment configuration; src/repository/mutation/bind/ticket.rs:350–633,1240–1290.",
-        ),
-    },
-    Row {
-        code: "invalid_relationship",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 5: malformed ticket relationship input; src/repository/mutation/bind/ticket.rs:350–633,751–773.",
-        ),
-    },
-    Row {
-        code: "relationship_cycle",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 5: ticket create/save relationship rejection; src/repository/mutation/bind/ticket.rs:350–633,751–773. Part A ticket check returns ok with rejection data, not this top-level code.",
-        ),
-    },
-    Row {
-        code: "slug_already_assigned",
-        exit: 2,
-        how: How::Pending(
-            "Part B, Task 5: different held ticket slug; src/repository/mutation/bind/ticket.rs:1240–1290.",
-        ),
-    },
-    Row {
-        code: "ticket_closed",
-        exit: 3,
-        how: How::Pending(
-            "Part B, Task 5: save/slug assignment of a lifecycle-closed ticket; src/repository/mutation/bind/ticket.rs:601–633,1240–1290.",
         ),
     },
 ];
@@ -499,7 +488,7 @@ fn c3_confirmed_flags_match_prepare() {
     let commands = available_c3_mutations();
     assert_eq!(
         set(commands.iter().map(String::as_str)),
-        set(PART_A.iter().copied())
+        set(PART_A.iter().chain(TICKETS).copied())
     );
     for command in commands {
         let f = Fixture::new();
@@ -532,6 +521,17 @@ fn c3_confirmed_flags_match_prepare() {
                     json!({"observation":show(&f)["observation"],"destination_path":"docs/moved.md","destination_observation":destination["data"]["observation"]}),
                 )
             }
+            "ticket create" => Some(
+                serde_json::from_slice::<Value>(include_bytes!(
+                    "../fixtures/cli_input_v1/ticket_create.json"
+                ))
+                .unwrap(),
+            ),
+            "ticket save" | "ticket slug-assign" => {
+                extra.extend(["--id", items::TICKET_A]);
+                let item = f.checked("ticket", "show", &["--id", items::TICKET_A], &[], 0, "ok");
+                Some(json!({"observation":item["data"]["observation"]}))
+            }
             _ => panic!("unaccounted mutation {command}"),
         };
         let bytes = input
@@ -548,6 +548,18 @@ fn c3_confirmed_flags_match_prepare() {
 }
 
 const NOOPS: &[(&str, How)] = &[
+    (
+        "ticket create",
+        How::Binary("ticket_verbs_have_human_success_refusal_and_fresh_noop_output"),
+    ),
+    (
+        "ticket save",
+        How::Binary("a_ticket_save_omitting_every_field_is_a_committed_library_written_noop"),
+    ),
+    (
+        "ticket slug-assign",
+        How::Binary("slug_assign_adds_a_code_and_is_a_noop_when_repeated"),
+    ),
     (
         "folder create",
         How::Binary("folder_create_of_an_existing_folder_is_a_noop"),
@@ -582,9 +594,9 @@ const NOOPS: &[(&str, How)] = &[
 fn c3_noop_inventory_accounts_for_part_a() {
     let commands = available_c3_mutations();
     let available = set(commands.iter().map(String::as_str));
-    assert_eq!(available, set(PART_A.iter().copied()));
+    assert_eq!(available, set(PART_A.iter().chain(TICKETS).copied()));
     assert_eq!(available, set(NOOPS.iter().map(|(verb, _)| *verb)));
-    assert_eq!(NOOPS.len(), 6);
+    assert_eq!(NOOPS.len(), 9);
     let capability = AUDIT
         .split("#### C3 no-op capability")
         .nth(1)
@@ -612,7 +624,7 @@ fn c3_noop_inventory_accounts_for_part_a() {
             _ => panic!("no-op inventory needs a case or incapability reason"),
         }
     }
-    assert_eq!(capable, 4);
+    assert_eq!(capable, 7);
 }
 
 const CREATE: &[u8] = include_bytes!("../fixtures/cli_input_v1/document_create.json");

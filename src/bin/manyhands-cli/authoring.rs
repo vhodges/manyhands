@@ -4,15 +4,17 @@ use clap::ArgMatches;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
     DocumentCreateInput, DocumentDraft, DocumentMoveInput, DocumentSaveInput, FolderCreateInput,
-    IndexRebuildInput, IndexRefreshInput, ItemDtoKind, Mutation, RepositoryService, RequestId,
+    IndexRebuildInput, IndexRefreshInput, ItemDtoKind, Mutation, RelationshipWrite,
+    RepositoryService, RequestId, TicketCreateInput, TicketDraft, TicketSaveInput,
+    TicketSlugAssignInput,
 };
 use manyhands::results::ResultCode;
 
 use crate::{
     admin,
     catalog::CommandSpec,
-    fill::{self, DocumentFields},
-    input::InputError,
+    fill::{self, DocumentFields, TicketFields},
+    input::{InputError, ListChange, Tristate},
     mutate::{self, Plan, Session},
     render::Output,
 };
@@ -298,3 +300,209 @@ pub fn document_move(
 #[cfg(test)]
 #[path = "authoring_tests.rs"]
 mod tests;
+
+pub fn ticket_create(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let (flags, root, id, draft, deps, parent, initials) = match (|| {
+        let flags = admin::flags(session, spec, args)?;
+        let object = admin::input_object(session, spec, args, flags.request_id)?;
+        let (id, draft, deps, parent, initials) = (|| {
+            object.only(&[
+                "item_id", "title", "type", "status", "body", "project", "team", "deps", "parent",
+                "initials",
+            ])?;
+            let id = object.string("item_id")?.parse::<ItemId>().map_err(|_| {
+                InputError::InvalidValue {
+                    field: "item_id",
+                    allowed: &["a canonical ULID"],
+                }
+            })?;
+            let draft = TicketDraft {
+                title: object.string("title")?,
+                ticket_type: object.string("type")?,
+                status: object.string("status")?,
+                body: object.optional_string("body")?.unwrap_or_default(),
+                project: object.optional_string("project")?,
+                team: object.optional_string("team")?,
+            };
+            let deps = match object.tristate_list("deps")? {
+                ListChange::Missing | ListChange::Null => Vec::new(),
+                ListChange::Value(values) => values,
+            };
+            let parent = match object.tristate("parent")? {
+                Tristate::Missing | Tristate::Null => None,
+                Tristate::Value(value) => Some(value),
+            };
+            Ok((id, draft, deps, parent, object.optional_string("initials")?))
+        })()
+        .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root, id, draft, deps, parent, initials))
+    })() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::TicketCreate(TicketCreateInput {
+                root: root.clone(),
+                id: id.clone(),
+                draft: draft.clone(),
+                deps: deps.clone(),
+                parent: parent.clone(),
+                initials: initials.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn ticket_save(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let (flags, root, id, observation, draft, deps, parent) = match (|| {
+        let flags = admin::flags(session, spec, args)?;
+        let object = admin::input_object(session, spec, args, flags.request_id)?;
+        let (observation, fields, deps, parent) = (|| {
+            object.only(&[
+                "observation",
+                "title",
+                "type",
+                "status",
+                "body",
+                "project",
+                "team",
+                "deps",
+                "parent",
+            ])?;
+            let observation = object.string("observation")?;
+            let fields = TicketFields {
+                title: object.optional_string("title")?,
+                ticket_type: object.optional_string("type")?,
+                status: object.optional_string("status")?,
+                body: object.optional_string("body")?,
+                project: object.tristate("project")?,
+                team: object.tristate("team")?,
+            };
+            let deps = match object.tristate_list("deps")? {
+                ListChange::Missing => RelationshipWrite::Unchanged,
+                ListChange::Null => RelationshipWrite::Clear,
+                ListChange::Value(values) if values.is_empty() => RelationshipWrite::Clear,
+                ListChange::Value(values) => RelationshipWrite::Set(values),
+            };
+            let parent = match object.tristate("parent")? {
+                Tristate::Missing => RelationshipWrite::Unchanged,
+                Tristate::Null => RelationshipWrite::Clear,
+                Tristate::Value(value) => RelationshipWrite::Set(value),
+            };
+            Ok((observation, fields, deps, parent))
+        })()
+        .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        let id = document_id(session, spec, args, flags.request_id)?;
+        // Relationships remain library patches. Only the six draft fields are
+        // filled, once before the retry driver; retain the caller's observation.
+        let draft = if fill::needs_read_ticket(&fields) {
+            let (repo, item) = fill::read_item(
+                service,
+                session,
+                spec,
+                &root,
+                &id,
+                ItemDtoKind::Ticket,
+                flags.request_id,
+            )?;
+            fill::ticket_draft(fields, Some(&item))
+                .map_err(|_| fill::item_not_found(session, spec, &repo, &id, flags.request_id))?
+        } else {
+            fill::ticket_draft(fields, None)
+                .ok()
+                .expect("all six ticket fields are present")
+        };
+        Ok((flags, root, id, observation, draft, deps, parent))
+    })() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::TicketSave(TicketSaveInput {
+                root: root.clone(),
+                id: id.clone(),
+                observation: observation.clone(),
+                draft: draft.clone(),
+                deps: deps.clone(),
+                parent: parent.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}
+
+pub fn ticket_slug_assign(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let (flags, root, id, observation, initials) = match (|| {
+        let flags = admin::flags(session, spec, args)?;
+        let object = admin::input_object(session, spec, args, flags.request_id)?;
+        let (observation, initials) = (|| {
+            object.only(&["observation", "initials"])?;
+            Ok((
+                object.string("observation")?,
+                object.optional_string("initials")?,
+            ))
+        })()
+        .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        let id = document_id(session, spec, args, flags.request_id)?;
+        Ok((flags, root, id, observation, initials))
+    })() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    mutate::run(
+        service,
+        session,
+        spec,
+        flags,
+        Plan {
+            identity_prompt: false,
+            retry: true,
+        },
+        &mut |_| {
+            Mutation::TicketSlugAssign(TicketSlugAssignInput {
+                root: root.clone(),
+                id: id.clone(),
+                observation: observation.clone(),
+                initials: initials.clone(),
+            })
+        },
+        &mut std::thread::sleep,
+    )
+}

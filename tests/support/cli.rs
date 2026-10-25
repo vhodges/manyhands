@@ -215,6 +215,13 @@ pub fn json(run: &CliRun) -> Value {
 }
 
 pub const CLI_CASES: &[&str] = &[
+    "ticket_create_ok",
+    "ticket_create_relationship_cycle",
+    "ticket_save_ok",
+    "ticket_save_item_not_found",
+    "ticket_save_ticket_closed",
+    "ticket_slug_assign_ok",
+    "ticket_slug_assign_slug_already_assigned",
     "document_create_ok",
     "document_create_occupied_path",
     "document_save_ok",
@@ -319,6 +326,9 @@ pub const CLI_CASES: &[&str] = &[
     "version",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
+    "ticket_create_text",
+    "ticket_save_text",
+    "ticket_slug_assign_text",
     "document_create_text",
     "document_save_text",
     "document_move_text",

@@ -728,10 +728,63 @@ pub const COMMANDS: &[CommandSpec] = &[
         },
     },
     planned("document", "repair", "Repair a document.", "C3"),
-    planned("ticket", "create", "Create a ticket.", "C3"),
-    planned("ticket", "save", "Save a ticket.", "C3"),
+    CommandSpec {
+        resource: "ticket",
+        verb: "create",
+        summary: "Create a ticket.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "ticket",
+        verb: "save",
+        summary: "Save a ticket.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     planned("ticket", "repair", "Repair a ticket.", "C3"),
-    planned("ticket", "slug-assign", "Assign a ticket short code.", "C3"),
+    CommandSpec {
+        resource: "ticket",
+        verb: "slug-assign",
+        summary: "Assign a ticket short code.",
+        availability: Availability::Available("C3"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "index",
         verb: "refresh",

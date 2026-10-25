@@ -63,6 +63,9 @@ mod requests;
 #[path = "cli/relationships.rs"]
 mod relationships;
 
+#[path = "cli/ticket_authoring.rs"]
+mod ticket_authoring;
+
 #[test]
 fn fixture_directory_is_exactly_the_registered_cases() {
     let actual: BTreeSet<_> = fs::read_dir(cli_fixture_directory())

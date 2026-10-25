@@ -4,7 +4,7 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         DocumentDraft, ItemDto, ItemDtoKind, ReadError, RepositoryService, RequestId,
-        ResolvedRepository,
+        ResolvedRepository, TicketDraft,
     },
     results::{Effects, ResultCode},
 };
@@ -12,6 +12,7 @@ use manyhands::{
 use crate::{
     admin,
     catalog::CommandSpec,
+    input::Tristate,
     mutate::Session,
     render::{self, Output},
 };
@@ -19,6 +20,58 @@ use crate::{
 pub struct DocumentFields {
     pub title: Option<String>,
     pub body: Option<String>,
+}
+
+pub struct TicketFields {
+    pub title: Option<String>,
+    pub ticket_type: Option<String>,
+    pub status: Option<String>,
+    pub body: Option<String>,
+    pub project: Tristate,
+    pub team: Tristate,
+}
+
+pub fn needs_read_ticket(fields: &TicketFields) -> bool {
+    fields.title.is_none()
+        || fields.ticket_type.is_none()
+        || fields.status.is_none()
+        || fields.body.is_none()
+        || matches!(fields.project, Tristate::Missing)
+        || matches!(fields.team, Tristate::Missing)
+}
+
+pub fn ticket_draft(
+    fields: TicketFields,
+    read: Option<&ItemDto>,
+) -> Result<TicketDraft, FillError> {
+    if read.is_some_and(|item| item.kind != ItemDtoKind::Ticket) {
+        return Err(FillError::Unfillable);
+    }
+    let nullable = |field, current: fn(&ItemDto) -> Option<String>| match field {
+        Tristate::Missing => read.map(current).ok_or(FillError::Unfillable),
+        Tristate::Null => Ok(None),
+        Tristate::Value(value) => Ok(Some(value)),
+    };
+    Ok(TicketDraft {
+        title: fields
+            .title
+            .or_else(|| read.and_then(|item| item.title.clone()))
+            .ok_or(FillError::Unfillable)?,
+        ticket_type: fields
+            .ticket_type
+            .or_else(|| read.and_then(|item| item.ticket_type.clone()))
+            .ok_or(FillError::Unfillable)?,
+        status: fields
+            .status
+            .or_else(|| read.and_then(|item| item.status.clone()))
+            .ok_or(FillError::Unfillable)?,
+        body: fields
+            .body
+            .or_else(|| read.and_then(|item| item.body.clone()))
+            .ok_or(FillError::Unfillable)?,
+        project: nullable(fields.project, |item| item.project.clone())?,
+        team: nullable(fields.team, |item| item.team.clone())?,
+    })
 }
 
 pub enum FillError {

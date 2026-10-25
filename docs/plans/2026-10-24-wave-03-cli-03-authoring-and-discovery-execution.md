@@ -15,12 +15,12 @@ id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
 Task 0 baseline, in ticket worktree
 `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
-Tasks 0–3 are approved (see task log; Task 3 approvals conveyed in the Task 4
-controller brief). Task 4 is implemented and locally verified for independent
-controller Part A reviews. Task 3's two stops are resolved by explicit owner
+Tasks 0–4 and Part A are approved (see task log; Part A spec and quality
+approvals conveyed in the fresh Task 5 implementer brief at base `452f031`).
+Task 5 is implemented and locally verified for independent review. Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Tasks 5–9 remain unstarted.
+CLI retries with its approved assertions unchanged. Tasks 6–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -453,6 +453,27 @@ review-ready or closure claim.
 | 3 | Complete | `66efd0629d73fa8d762921fd987d143604178175..90c8e3ae15f9085c74b283c95bc557d60a7abc00` | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Spec and quality both **APPROVED**, explicitly conveyed in the controller's Task 4 brief; prior owner rulings retained |
 | 4 | Implemented; Part A independent review pending | Base `90c8e3ae15f9085c74b283c95bc557d60a7abc00`; head is the `test(cli): C3 Part A exit table and inventories` commit carrying this entry | **10 new focused tests passed**; all six checkpoint gates passed; **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535 passing** | Self-reviewed only; controller independently reviews actual Part A range `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` after return, then records the returned SHA and review outcome |
 | 4 P2 follow-up | Implemented; re-review pending | Base/initial Task 4 head `329a1436f3671586382ca4c1f41b2c9a8ab8a699`; follow-up head is the `test(cli): prove C3 index-unavailable exit through refresh` commit carrying this entry | Expected red C1-command attribution failure; **11 authoring-exits passed**; all six checkpoint gates passed, **182 + 239 + 71 + 44 = 536** | Part A SPEC P2 corrected with a new Task 4 binary test; independent acceptance remains with controller |
+| 4 final / Part A | Complete, APPROVED | `7368902a677a8228813f21da8f74d3cafff68ec3..452f031fd06d3a39e2c5de6cfe711b74256ab8a1` | Six gates and **536** tests retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 5 brief; supersedes historical pending statuses above |
+| 5 | Implemented; independent review pending | Base `452f031fd06d3a39e2c5de6cfe711b74256ab8a1`; head is the `feat(cli): ticket create, save and slug-assign` commit carrying this entry | **27 input + 8 fill + 31 ticket-authoring + 7 schemas + 11 authoring-exits + 9 help = 93 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
+
+## Part A approval and Task 5 preflight
+
+Recorded **2026-10-25T04:49:56Z**. The owner's fresh Task 5 brief explicitly
+conveys **Part A spec and quality APPROVED** at
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1`, including the P2 follow-up.
+The six checkpoint gates and **536 passing tests** are retained as recorded
+evidence, not rerun for this approval entry. This supersedes the pending
+review statuses in the historical Task 4 rows. All earlier owner approvals,
+decisions 1–7, R-1–R-18 and narrow rulings remain binding.
+
+Task 5 starts from that exact clean HEAD in the specified ticket worktree and
+branch, with no agents. Fetched origin/main, read its AGENTS.md, and merged
+origin/main into the ticket: already up to date. Main remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; ancestry passes and merge-tree
+succeeds with tree `8ef96859a1ac9d284f181c8dc514cbb3950c26f7`.
+Canonical Part A approval comment: `01M5RP9NH3G8KA9BA4JF3QR05R`, allocated
+by the built CLI; timestamp from the UTC clock. Task 5 only is authorized
+in this session, with focused tests, task commit and ticket-only push.
 
 ## Task 1: path observe and ticket check
 
@@ -1298,3 +1319,154 @@ the follow-up from `329a143` and the complete Part A range from `7368902` to
 the returned follow-up SHA. Ticket-only commit/push with the required co-author
 trailer; no Task 5, subagents, library/Cargo/schema/approved-document changes,
 completed Task 2 test edits, PR, main integration, closure, cleanup or dogfooding.
+
+## Task 5: list readers and ticket authoring
+
+Checkpoint recorded **2026-10-25T04:59:47Z**, exact task base
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1`. Part A spec/quality approval and
+its six-gate, 536-test evidence were recorded before Task 5 in the approval
+section above and canonical comment `01M5RP9NH3G8KA9BA4JF3QR05R`.
+All earlier owner decisions and approvals are retained. This task used no agents.
+
+### Implementation and contract evidence
+
+- Added `ListChange` and both list readers, with missing/null distinction,
+  order and repetitions preserved, and wrong-type errors naming only the
+  field. `tristate_list` calls `optional_string_list` for its non-null path;
+  both are used in production, without dead-code allowances or diagnostic
+  formatting/serialization on input-holding types.
+- Added `TicketFields`, `needs_read_ticket` and `ticket_draft`. Only omitted
+  draft fields come from the one read; nullable project/team retain absence
+  or clear on null. Wrong-kind/missing required DTO fields are unfillable.
+  Relationships remain library patches, never filled from the read.
+- Added the three adapters using existing `mutate::run` with
+  `identity_prompt: false`, `retry: true`. Flags and input precede selection
+  and optional fill; the computed draft is cloned across bounded retries.
+  The caller's observation is unchanged. Relationship strings go to the
+  library without CLI ID validation; create's typed item ID is parsed as
+  canonical input, while save/slug selectors retain invalid_id.
+- Literal C3 catalog entries and dispatch, three closed input schemas and
+  examples, seven JSON goldens and three human goldens. Create's example is
+  executed as supplied; save and slug examples run verbatim and deliberately
+  return external_change for their documented placeholder observations.
+- The 31 isolated binary tests use `relationship_repository`, and the
+  contract fixture's TICKET_A for project/metadata preservation. They cover
+  both relationship cycle kinds before create context creation and on save,
+  complete-proposal check agreement, self-reference and deduplication,
+  unresolved targets, all six draft fields, nullable relationships, status
+  versus lifecycle closure, short codes, stale tokens, fresh no-ops, replay,
+  omitted-field mismatch and cache-loss retry without a second commit.
+  The fixed comparison set contains all 15 design fields; body comparisons
+  preserve unusual bytes. Dynamic read fields are excluded as approved.
+- The quoted project-format fixture is created through the CLI, rewritten
+  and committed with git2 in its context, refreshed, then saved with only
+  observation and deps. It is absent from primary and retains every other
+  compared value, unknown wave/cycle keys and exact body bytes. This is an
+  isolated fixture, not a dogfooding save.
+- Both identity cases call `require_no_system_identity`. Homes contain only
+  autocrlf=false configuration. Identity-required save leaves a context and
+  frees its request; CLI identity-set prepare/confirm followed by a fresh
+  show observation and the same save request succeeds. Initials refusal also
+  frees the ID; explicit initials recover the same request.
+- Per the Task 5 brief, interrupted-refresh evidence remains the approved
+  document actor/CLI test `commit_success_refresh_failure_is_completed_by_the_same_request`
+  and the interrupted-saves table, already passing in Part A. No extra actor
+  seam or new ticket interruption feature was introduced; this is retained
+  Part A evidence, not a newly executed ticket-interruption claim.
+- Extended only the planned Task 4 tables/inventories. Six codes moved from
+  pending reasons to actual C3 ticket binary sources: initials_required,
+  invalid_slug_configuration, invalid_relationship, relationship_cycle,
+  slug_already_assigned and ticket_closed. Exact accounting remains **42**
+  (now **31 binary rows / 11 reasons**). Prepare and no-op inventories now
+  cover all nine delivered mutations, **7 capable / 2 incapable**, retaining
+  their equality/assertions. Repair obligations remain explicit for Task 6.
+
+### Red/green, debugging and goldens
+
+1. Added two list-reader and four ticket-fill unit tests before implementation.
+   Both prescribed no-feature commands (`input::` and `fill::`, separately)
+   failed to compile on the missing interfaces: 21 missing-symbol/method
+   errors, no tests executed. Implemented those interfaces; **27 input / 8
+   fill passed** (six new unit tests).
+2. Added the first 28 ticket binary cases before the adapters/catalog. The
+   exact ticket-authoring filter ran **0 passed / 28 failed / 239 filtered**,
+   all on command_unavailable. The temporary unused-interface warnings
+   disappeared once the wrappers called them; no allowance was added.
+3. Implemented the adapters, then enabled and regenerated E1 one verb at a
+   time: create, save, slug-assign. Each help run passed **9**. Read each
+   cumulative diff before the next verb: only the new verb's availability,
+   repository rule and options changed; summaries and C3 delivery stayed exact.
+4. First ticket golden-generation run: **20 passed / 8 failed**. Diagnosed
+   new-test assumptions against the existing API: show relationships are
+   `{id,state}` DTOs rather than bare IDs; an unconfigured prefix yields
+   `vh-…`, not `mh-vh-…`; editing the one-letter D title must match its title
+   line rather than every D in the source. A different held slug is refused
+   before stale-token validation, so human stale refusal uses the same code
+   and an edited, uncommitted file. The explicit different-code test retains
+   slug_already_assigned. Only the new tests were corrected.
+5. The new identity test also overasserted that the fresh token must differ.
+   Source precedent requires reading it again, not inequality; an unindexed
+   provisioned context can still leave show reading primary. Removed only
+   that unsupported extra assertion, retaining the fresh binary read. The
+   focused identity filter then passed **1 / 266 filtered**, and its actual
+   same-ID retry succeeded. No recovery workaround or contract change.
+6. Golden generation then passed **28 / 0 failed / 239 filtered**. Read all
+   **7 JSON + 3 text** outputs; only repository/request/operation/commit IDs
+   are substituted. Exact item IDs, short codes, relationships and effects
+   remain literal. Added three further characterization/coverage cases for
+   invalid slug configuration, complete-draft fields and optional/ID grammar.
+   The full ticket filter without the update environment passed **31**.
+
+### Final commands and counts
+
+All commands ran from this ticket worktree through Devenv. Each test command
+had exactly one positional filter. Final golden checks used no update variable.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --locked --bin manyhands-cli input::` | **27 passed**, 0 failed/ignored, 161 filtered. |
+| `devenv shell -- cargo test --locked --bin manyhands-cli fill::` | **8 passed**, 0 failed/ignored, 180 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli ticket_authoring` | **31 passed**, 0 failed/ignored, 239 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli input_schemas` | **7 passed**, 0 failed/ignored, 263 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli authoring_exits` | **11 passed**, 0 failed/ignored, 259 filtered. |
+| `devenv shell -- cargo test --all-features --locked --test cli help` | **9 passed**, 0 failed/ignored, 261 filtered. |
+| `devenv shell -- cargo check --all-features --locked` | Passed. |
+| `devenv shell -- cargo fmt --check` | Passed after `devenv shell -- cargo fmt`. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, no warnings. |
+
+Total **93 distinct passing tests** in the named filters: 35 unit + 58
+integration; **37 new tests** (6 unit + 31 integration). No broad suite or
+native CI. The historical Part A 536-test gate is not added to this total.
+
+### Files, self-review and return
+
+Changed **33 files**, confined to Task 5:
+
+- `src/bin/manyhands-cli/{input,input_tests,fill,fill_tests,authoring,catalog,dispatch}.rs`;
+- `tests/cli.rs`, new `tests/cli/ticket_authoring.rs`, the planned extensions
+  in `tests/cli/authoring_exits.rs`, and new registrations in `tests/support/cli.rs`;
+- `schemas/input/v1/{ticket_create,ticket_save,ticket_slug_assign}.schema.json`;
+- `tests/fixtures/cli_input_v1/{ticket_create,ticket_save,ticket_slug_assign}.json`;
+- seven new JSON and three text goldens under `tests/fixtures/cli_v1/`, plus
+  only E1's `help_root.json`, `help_root_text.txt`, `help_resource_ticket.json`;
+- this ledger and canonical comments `01M5RP9NH3G8KA9BA4JF3QR05R` (Part A
+  approval) and `01M5RPVPKTJ5B6F7HVRX3BVTFW` (Task 5 checkpoint), both IDs
+  allocated with the built CLI and timestamps from the UTC clock.
+
+Self-review checked every adapter's input/fill ordering, observation and
+request-ID preservation, closed schema types, library relationship ownership,
+refusal/no-op/replay snapshots, one-checkpoint/no-second-commit assertions,
+identity isolation, all output goldens and the complete task diff. Existing
+tests gain only additions, E1 regeneration and the specifically planned Task 4
+extensions. No library, Cargo, output-schema, shared-driver or new test target
+change. The unchanged interrupted-save evidence is explicitly carried above.
+
+Checkpoint fetch retained main at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`;
+the preflight merge was already current, and merge-tree at the committed base
+succeeded with tree `8ef96859a1ac9d284f181c8dc514cbb3950c26f7`. Status, full diff,
+last ten commits and whitespace checked before staging only owned paths.
+The actual task commit's SHA and final merge-tree result are returned to the
+controller. No unresolved blocker was found. Independent Task 5 spec/quality
+reviews are next; this is not whole-Cycle approval. Only the task commit and
+ticket-branch push are authorized. Task 6 remains unstarted; no agents, PR,
+main integration, closure, cleanup, native CI or dogfooding.
