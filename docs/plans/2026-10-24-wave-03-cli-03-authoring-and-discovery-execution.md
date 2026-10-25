@@ -35,9 +35,12 @@ remains historically non-green and was not rerun. The controller reports
 independent whole-branch **SPEC and QUALITY both APPROVED** over
 `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef`,
 including the authorized test-baseline exception, with no actionable findings
-or new gaps. Dogfooding build/read-only preflight are complete with no blocker;
-the separate owner go-ahead for real mutations/publication is pending.
-Dogfooding and the switch remain owed. Task 9 is not complete or review-ready.
+or new gaps. Dogfooding steps **4–7 are complete** under the owner's fresh
+go-ahead: six saves/checks and six new remote branches, with local/remote tips
+verified equal and all targets clean. The C4 checker error, stop, read-only
+preflight and authorized correction are preserved below; C4 was never resent.
+The **switch remains owed** and awaits controller resume; Task 9 is not complete
+or review-ready.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -483,6 +486,8 @@ review-ready or closure claim.
 | 9 narrow test correction | Implemented; independent review and full-gate disposition pending | Base `f9618f76ce9608c9ccc42018701647d7b98bb642`; fix/evidence commit carrying the follow-up below | Exact test **1 passed**, then checkpoint module **46 passed**; fmt/check/clippy passed. Full suite **not rerun** | Explicit owner exception for this test baseline only; original **4528/1/1**, exit **101** remains the sole full-suite result |
 | 9 whole-branch reviews | SPEC and QUALITY APPROVED; remaining gates outstanding | `ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a..806057d3223b9ac2e71fa3a28c3eba83de5c63ef` | Prior full-suite **4528/1/1**, exit **101**, and scoped **46 distinct passing** retained; no new test run | Both independent approvals conveyed by controller, including the authorized baseline correction; no actionable findings/new gaps. Owner full-suite disposition and dogfooding/switch remain owed; not review-ready |
 | 9 verification exception / dogfood preflight | Verification accepted by explicit owner exception; build/read-only preflight complete | Base `a79a3bd6d3ac0453726d00908c286f69f2c30a8d` | Historical full suite **4528/1/1**, exit **101**, plus scoped **46 distinct passing** and check/fmt/clippy accepted; no second full run. CLI build and repo inspect passed; six targets clean | SPEC/QUALITY approvals retained. Separate dogfood go-ahead pending; saves/pushes and switch OWED; Task 9 not complete/review-ready |
+| 9 dogfood steps 4–7 | Owner authorized; STOPPED during C4 value check | Base `5cba600b562062d6809d9ce916e26b65ea1e204e` | Refresh and C4 save ok; C4 one checkpoint, clean, body/other compared values preserved. Checker incorrectly compared dependency DTO objects with strings | Dependency IDs in returned data match proposal, but checker failed; no checker fix/retry, C5 or later save, target push or switch. Controller/owner disposition required |
+| 9 dogfood steps 4–7 resumed | Complete under fresh owner go-ahead | C3 evidence commit carrying the final summary below; six library checkpoint SHAs recorded | C4 settled/no resend, corrected check passed; five remaining saves ok; all six exact deps/value/body checks passed; six new remote branches, verified local=remote and clean | Prior stop preserved. Verification exception and whole-branch approvals retained; switch and its review still owed, Task 9 not complete/review-ready |
 
 ## Part A approval and Task 5 preflight
 
@@ -2279,3 +2284,293 @@ co-author trailer and is pushed only to C3's ticket branch after diff/status/
 whitespace/recent-log review. Postcommit clean state and merge-tree are checked
 in the return. No actual refresh, saves, target pushes/merges, switch,
 AGENTS/skill edits, closure, cleanup, PR or native CI. Owner go-ahead awaits.
+
+## Task 9 authorized dogfooding execution: steps 4–7
+
+Owner explicitly said **Proceed** to the presented preflight and go-ahead,
+authorizing the refresh, six saves and six target pushes creating the branches
+and publishing the ten listed existing commits plus checkpoints. Root:
+`/home/vhodges/work/src/manyhands`; default data:
+`/home/vhodges/.local/share/manyhands`. This is the explicit exception for these
+CLI effects and target pushes. Switch waits for the controller's next resume;
+Task 9 is not complete/review-ready. Prior verification exception and independent
+reviews remain accepted without rewriting the historical failed full-suite result.
+
+At **2026-10-25T20:08:44Z**, clean C3 HEAD is
+`5cba600b562062d6809d9ce916e26b65ea1e204e`; the already-built absolute CLI is
+executable. HOME and both data override variables still match preflight (HOME
+`/home/vhodges`, XDG_DATA_HOME/MANYHANDS_DATA_DIR unset). No rebuild or test rerun.
+Temporary ignored `target/c3-dogfood.cjs` reads CLI JSON in memory, omits source,
+replaces body with SHA-256/UTF-8 byte length and compares only the design's
+specified fields. It writes no files; canonical evidence is persisted with
+apply_patch before each request. Failed comparisons disclose field names only.
+
+### Refresh request, persisted before execution
+
+```json
+{"record":"dogfood_refresh_request","request_id":"01M5TAW1PY4TAXJ3W3MGK9GYV8","command":"index refresh","input":{"root":"/home/vhodges/work/src/manyhands"},"recorded_at":"2026-10-25T20:08:44Z"}
+```
+
+Refresh exit **0**, full returned mutation envelope:
+
+```json
+{"schema_version":1,"command":"index refresh","request_id":"01M5TAW1PY4TAXJ3W3MGK9GYV8","operation_id":"01M5TAY453A8MNV3FMCCMEV4TD","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":null,"branch":null,"worktree":null,"remote":null},"effects":{"write":"not_requested","checkpoint":"not_requested","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":null},"data":null,"recovery":[]}
+```
+
+### C4: pre-save record
+
+Read succeeded; actual target worktree porcelain status empty. Persisted before
+sending; the save driver repeats the clean/tip checks immediately before sending.
+
+```json
+{"record":"dogfood_pre_save","cycle":"C4","target_id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","input":{"observation":"v1:b5e7eb1268d71c39d7e03a904b349483f740301d914aef290066ee105431fe84","deps":["01M4CC0VMV81DFRGJ4Z76489XM","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","kind":"ticket","path":".manyhands/tickets/01M4CC0VMWEQQ9G4W0DAG7ADPY/ticket.md","title":"Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"C4","wave":"03"},"problems":[],"body":{"sha256":"e79f0a7156242d6e4e6d0ea249e5f9442c3ef4da07f906b862ee595a2ee7144b","byte_length":1704}},"local_tip_before":"aac4217cfa6a951d3fb83ad26fd31e1030804dcb","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T20:10:08.642Z"}
+```
+
+Save exit **0**, stderr empty, full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","operation_id":"01M5TAZAVWXW6TR739JVZXQH0N","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","branch":"manyhands/ticket/01M4CC0VMWEQQ9G4W0DAG7ADPY","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMWEQQ9G4W0DAG7ADPY","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7"},"data":{"id":"01M4CC0VMWEQQ9G4W0DAG7ADPY","path":".manyhands/tickets/01M4CC0VMWEQQ9G4W0DAG7ADPY/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+### STOP: C4 dependency value checker used the wrong DTO shape
+
+At **2026-10-25T20:10:54.294Z**, the post-save read succeeded, but the temporary
+verification helper reported a failed `deps` comparison. Its exact safe result:
+
+```json
+{"record":"dogfood_value_check","cycle":"C4","request_id":"01M5TAYKVT3P51QDSY8SM93PGV","passed":false,"mismatched_fields":["deps"],"deps":[{"id":"01M4CC0VMV81DFRGJ4Z76489XM","state":"open"},{"id":"01M57SKVF6TQ3QM6AXJ35JGGSY","state":"open"}],"body":{"sha256":"e79f0a7156242d6e4e6d0ea249e5f9442c3ef4da07f906b862ee595a2ee7144b","byte_length":1704},"local_tip":"9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7","primary_tip":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","new_commits":1,"status_porcelain":"","checked_at":"2026-10-25T20:10:54.294Z"}
+```
+
+This is an **implementer verification-tool error**: `ticket show` returns
+dependency DTO objects containing `id` and `state`; the temporary helper sorted
+and compared those objects directly with the proposed ID strings. It should
+compare the dependency **IDs**, as the design requires. The two returned IDs
+above exactly match the proposal. Every other compared field, including body
+SHA-256/length, matched; C4 has exactly one new commit and remains clean, and
+primary HEAD is unchanged. This is not evidence of a library mutation defect.
+Nevertheless, the checker failed, so the explicit stop rule was honored:
+
+- No helper correction, value-check rerun or resave was attempted.
+- C4's successful mutation envelope is settled and recorded; no replacement
+  request ID is allocated for it. Do not repeat its save merely to fix checking.
+- The combined `verify C4 && prepare C5` command stopped at its first command;
+  **C5 was never read/prepared and no C5 request ID was allocated**.
+- C5, D4, D5, D6 and G1 saves remain unstarted. **No target push occurred.**
+- No switch or other implementation was performed.
+
+At **2026-10-25T20:11:27Z**, recorded canonical stop comment
+**`01M5TB10S056PP9AADF50Q1VHG`**, ID from absolute CLI `--json id new` and timestamp
+from UTC. Fetch/merge-tree passed; C3 HEAD stays `5cba600b562062d6809d9ce916e26b65ea1e204e`,
+main stays `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge-tree is
+`bcfa0fe7b9652c49d6501c4bb171d628924db32b`. Fresh C4 ref/status probes confirm
+local `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`, no origin ref or upstream, and
+empty porcelain. The ledger and stop comment are left uncommitted to preserve
+the stop before any further push; ignored helper retained for diagnosis.
+
+**Controller/owner disposition needed:** authorize correcting only the temporary
+checker to compare dependency IDs, and the design's resumed preflight/go-ahead
+and remaining sequence. Do not infer resumed mutation/publication authorization
+from the original go-ahead after this stop. Full-suite exception and whole-branch
+review approvals remain unchanged; dogfooding/switch and Task 9 are incomplete.
+
+### Fresh preflight, owner go-ahead and checker correction
+
+The controller acknowledged the implementer checker bug, not a product failure.
+Before requesting fresh go-ahead, read-only preflight was repeated at
+**2026-10-25T20:14:21.954Z** after fetch. All six target worktrees were clean,
+all six origin refs/upstreams absent. Only C4 advanced to
+`9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`; the other five tips match the original
+preflight table. Commits to publish were C4 **3** (`9b26717`, `aac4217`, `6078dfa`),
+C5 **2**, D4 **1**, D5 **3**, D6 **1**, G1 **1**: **11 existing commits** total.
+Every subject remains `Checkpoint ticket <target ID>`. Repo inspect was ok/0,
+registered main, valid config, available identity, no problems/recovery/effects;
+root and default data environment were unchanged.
+
+Read-only `request show --request-id 01M5TAYKVT3P51QDSY8SM93PGV` confirmed C4
+**finished**, stored **success/ok**, accepted `2026-10-25T20:10:32Z`, finished
+`2026-10-25T20:10:38Z`, checkpoint `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`,
+publication not_requested. An initial request-show call with unsupported `--repo`
+returned usage_error/2 without effects; the correct read omitted that flag.
+C4 is **settled: NO RESEND**. No comparator correction or mutation happened
+during that read-only preflight; original stop evidence remains intact above.
+
+The owner then explicitly answered **YES** to fresh go-ahead: correct only the
+temporary comparator to extract dependency DTO IDs, recheck C4, save the other
+five in order and push all six target branches, publishing the **11 existing
+commits plus five new checkpoints**. Switch still waits for the controller's
+next resume. At **2026-10-25T21:33:05Z**, C3 HEAD is still `5cba600b`, with the
+prior ledger/comment preserved uncommitted. The absolute branch binary remains
+executable; HOME and default data overrides are unchanged.
+
+Applied only the temporary checker correction: extract each dependency object's
+`id` and compare sorted ID lists (retaining duplicate sensitivity), both for
+post-save deps and the existing no-op baseline predicate. Every other field
+comparison and body digest/length check is unchanged. No product code change,
+no refresh, no new C4 request and no test-gate rerun.
+
+C4 recheck **PASSED** at `2026-10-25T21:33:42.605Z`: exact proposed IDs,
+all other compared fields equal, body SHA-256/1704-byte length unchanged,
+one checkpoint `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7`, clean worktree,
+primary unchanged at e49f978. No save was resent; the failed checker result above
+is preserved as history, not erased.
+
+### C5: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"C5","target_id":"01M4CC0VMXTNXNH78C11DYXS8H","request_id":"01M5TFQMDVT12772Y9HD35MRMW","input":{"observation":"v1:ab8938152b3d243ccc7335becada6e064400fba3b4a0d75a4d99bab41c0473bd","deps":["01M4CC0VMWEQQ9G4W0DAG7ADPY","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VMXTNXNH78C11DYXS8H","kind":"ticket","path":".manyhands/tickets/01M4CC0VMXTNXNH78C11DYXS8H/ticket.md","title":"Wave 03 C5: CLI Completion And One-Shot Polling","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"C5","wave":"03"},"problems":[],"body":{"sha256":"ab7654e2a2cf5f9c483e8e0e07c7eceb0bad35f9199d5d8444c9e7d3f98e93a8","byte_length":1472}},"local_tip_before":"01d8a26e9d34a5821038ddb4cd4ea0653d571adc","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:33:42.723Z"}
+```
+
+C5 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFQMDVT12772Y9HD35MRMW","operation_id":"01M5TFR3M3GBPR32KG7FS2PYDQ","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VMXTNXNH78C11DYXS8H","branch":"manyhands/ticket/01M4CC0VMXTNXNH78C11DYXS8H","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMXTNXNH78C11DYXS8H","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"f3985a26cb4220d3076135b55e47e9556f3d56db"},"data":{"id":"01M4CC0VMXTNXNH78C11DYXS8H","path":".manyhands/tickets/01M4CC0VMXTNXNH78C11DYXS8H/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+C5 value check **PASSED** at `2026-10-25T21:34:19.492Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1472-byte length unchanged, one new
+checkpoint `f3985a26cb4220d3076135b55e47e9556f3d56db`, clean target, primary unchanged.
+
+### D4: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D4","target_id":"01M4CC0VN1KTQFSVR99378TDHV","request_id":"01M5TFRREYPJ8MSW62M5CDDVP1","input":{"observation":"v1:c455c1609a07820eac3ba14376131ecc4979e8072825708b14dde008b2e37897","deps":["01M4CC0VN0MFTGKQ4HGTTC5H63"]},"compared":{"id":"01M4CC0VN1KTQFSVR99378TDHV","kind":"ticket","path":".manyhands/tickets/01M4CC0VN1KTQFSVR99378TDHV/ticket.md","title":"Wave 03 D4: Desktop Discussion And Deliberate Synchronization","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D4","wave":"03"},"problems":[],"body":{"sha256":"0da75450dcfa29b91e7c9a89579042716a62e5dcd65d816fbb386f4e88fd4d07","byte_length":1061}},"local_tip_before":"f4513256a36aab6b0b0c50118ef76bed5f362ff6","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:34:19.622Z"}
+```
+
+D4 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFRREYPJ8MSW62M5CDDVP1","operation_id":"01M5TFS9H6SEPBXY3T6HXA46ZR","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN1KTQFSVR99378TDHV","branch":"manyhands/ticket/01M4CC0VN1KTQFSVR99378TDHV","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN1KTQFSVR99378TDHV","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"e4b48dd352d2603f9dc7e1e487e0339888f591d2"},"data":{"id":"01M4CC0VN1KTQFSVR99378TDHV","path":".manyhands/tickets/01M4CC0VN1KTQFSVR99378TDHV/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D4 value check **PASSED** at `2026-10-25T21:35:04.857Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1061-byte length unchanged, one new
+checkpoint `e4b48dd352d2603f9dc7e1e487e0339888f591d2`, clean target, primary unchanged.
+
+### D5: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D5","target_id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","request_id":"01M5TFT4RG7D87TQHCA3FTN4V3","input":{"observation":"v1:ca3b9ec6f1402ce90f7b94c1fc62fb03ad3e20fafa87ec4fbb512a8fc6037d00","deps":["01M4CC0VN1KTQFSVR99378TDHV","01M57SKVF6TQ3QM6AXJ35JGGSY"]},"compared":{"id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","kind":"ticket","path":".manyhands/tickets/01M4CC0VN2K8DBHNMZ46NTX5JJ/ticket.md","title":"Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D5","wave":"03"},"problems":[],"body":{"sha256":"16d5988d4fd94d1beeafdc7aeea806f8957b47b6342a79a86aae415fb3dfd020","byte_length":1929}},"local_tip_before":"03176b71e6072eb8380211cea2f677424350140c","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:35:04.985Z"}
+```
+
+D5 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFT4RG7D87TQHCA3FTN4V3","operation_id":"01M5TFTM1S2GEHGVJJFTN07FNJ","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","branch":"manyhands/ticket/01M4CC0VN2K8DBHNMZ46NTX5JJ","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN2K8DBHNMZ46NTX5JJ","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"7b2822c4a6fed76d64497de7e7524829b239a987"},"data":{"id":"01M4CC0VN2K8DBHNMZ46NTX5JJ","path":".manyhands/tickets/01M4CC0VN2K8DBHNMZ46NTX5JJ/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D5 value check **PASSED** at `2026-10-25T21:35:43.565Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1929-byte length unchanged, one new
+checkpoint `7b2822c4a6fed76d64497de7e7524829b239a987`, clean target, primary unchanged.
+
+### D6: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"D6","target_id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","request_id":"01M5TFVAJ2TSGKGVW0WANG1N04","input":{"observation":"v1:76ccf748b020adbd51557b974054c05f3aa20c3f5ea76836eceae50de4ae280a","deps":["01M4CC0VN2K8DBHNMZ46NTX5JJ"]},"compared":{"id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","kind":"ticket","path":".manyhands/tickets/01M4CC0VN3VPVVQ3RNWJKXWEVX/ticket.md","title":"Wave 03 D6: Desktop Background Polling And Shutdown","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"D6","wave":"03"},"problems":[],"body":{"sha256":"f6185af661eba2b8d7d84147f79157a250f5b541553ca0a51c0f6fedf0e0f856","byte_length":1366}},"local_tip_before":"e877e4b21747b77acddb6682b65287ffb480159a","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:35:43.691Z"}
+```
+
+D6 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFVAJ2TSGKGVW0WANG1N04","operation_id":"01M5TFVSEBBVK1T0VM5MB57JRP","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","branch":"manyhands/ticket/01M4CC0VN3VPVVQ3RNWJKXWEVX","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN3VPVVQ3RNWJKXWEVX","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"48e7a1df93f2c293c71e9eee62a7623823c01f8d"},"data":{"id":"01M4CC0VN3VPVVQ3RNWJKXWEVX","path":".manyhands/tickets/01M4CC0VN3VPVVQ3RNWJKXWEVX/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+D6 value check **PASSED** at `2026-10-25T21:36:20.517Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1366-byte length unchanged, one new
+checkpoint `48e7a1df93f2c293c71e9eee62a7623823c01f8d`, clean target, primary unchanged.
+
+### G1: pre-save record
+
+Read succeeded, target clean; persisted before sending. Clean/tip rechecked at send.
+
+```json
+{"record":"dogfood_pre_save","cycle":"G1","target_id":"01M4CC0VN4H9AC0Q3KA6E1QERC","request_id":"01M5TFWEMG2VCZ5TRJD84GHMWY","input":{"observation":"v1:492a9d7362c44fc79542a870b36ba203880a9a2cab8517f96ba755b22e47179d","deps":["01M4CC0VMXTNXNH78C11DYXS8H","01M4CC0VN3VPVVQ3RNWJKXWEVX"]},"compared":{"id":"01M4CC0VN4H9AC0Q3KA6E1QERC","kind":"ticket","path":".manyhands/tickets/01M4CC0VN4H9AC0Q3KA6E1QERC/ticket.md","title":"Wave 03 G1: Native Journeys And Dogfooding Gate","type":"cycle","status":"open","project":"manyhands","team":"core","closure":{"state":"open","closed_at":null,"closed_by":null},"slug":null,"parent":null,"deps":[],"unknown_metadata":{"cycle":"G1","wave":"03"},"problems":[],"body":{"sha256":"399fb8c229efacce96a9aa50222757299775efcd2f5635bebd2d58dceb250f12","byte_length":1041}},"local_tip_before":"7b306d1f9542737155a25988fd8b6b726387a4be","primary_tip_before":"e49f978b499ee34d6b77061caaa3a6fb9d37a88b","recorded_at":"2026-10-25T21:36:20.632Z"}
+```
+
+G1 save exit **0**, stderr empty; full mutation envelope:
+
+```json
+{"schema_version":1,"command":"ticket save","request_id":"01M5TFWEMG2VCZ5TRJD84GHMWY","operation_id":"01M5TFWYQDSJYXVH5VMT6YR2JG","outcome":"success","code":"ok","message":"The request completed.","scope":{"repository":"/home/vhodges/work/src/manyhands","item_id":"01M4CC0VN4H9AC0Q3KA6E1QERC","branch":"manyhands/ticket/01M4CC0VN4H9AC0Q3KA6E1QERC","worktree":"/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN4H9AC0Q3KA6E1QERC","remote":null},"effects":{"write":"written","checkpoint":"committed","discovery":"current","publication":"not_requested","integration":"not_requested","cleanup":"not_requested","commit_oid":"31a2b0f4ff3c71cfca4ff47dffca1de20f410c28"},"data":{"id":"01M4CC0VN4H9AC0Q3KA6E1QERC","path":".manyhands/tickets/01M4CC0VN4H9AC0Q3KA6E1QERC/ticket.md","slug":null,"unresolved":[],"rejected":[]},"recovery":[]}
+```
+
+G1 value check **PASSED** at `2026-10-25T21:36:58.911Z`: exact proposed deps IDs,
+all other compared fields equal, body digest/1041-byte length unchanged, one new
+checkpoint `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28`, clean target, primary unchanged.
+
+All six value checks have passed before **any** target push. Every save was
+success/ok, exactly one checkpoint, discovery current; no noop, unresolved or
+rejected dependency. C4 was not resent. Subsequent fetch leaves origin/main at
+e49f978; C3 merge-tree succeeds (`bcfa0fe7b9652c49d6501c4bb171d628924db32b`).
+Step 7 now pushes the six exact authorized ticket refs in order, rechecking
+clean worktrees and expected tips before each push; any rejection stops the loop.
+
+### Step 7 completed: six new remote branches verified
+
+All six `git push origin manyhands/ticket/<ID>` commands succeeded, sequentially
+C4, C5, D4, D5, D6, G1, at `2026-10-25T21:37:35.921Z` through
+`2026-10-25T21:37:44.424Z`. Each created its previously absent remote branch.
+No force push, target-branch merge or amendment of library checkpoint commits.
+Each push was preceded by an empty-porcelain check and expected-local-tip check.
+
+At **2026-10-25T21:37:58.235Z**, one `git ls-remote --heads origin` request for
+the six exact refs verified the actual remote tips (not just cached refs).
+All matched local tips, and every target worktree remained clean. Primary
+stays `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+
+| Target | Save request ID | Checkpoint = local tip = actual remote tip | Value check | Push | Target status |
+| --- | --- | --- | --- | --- | --- |
+| C4 | `01M5TAYKVT3P51QDSY8SM93PGV` | `9b26717a282c49dfd91a9483c7b5e8c5bd59eeb7` | Pass after authorized checker fix; no resend | New branch, success | Clean |
+| C5 | `01M5TFQMDVT12772Y9HD35MRMW` | `f3985a26cb4220d3076135b55e47e9556f3d56db` | Pass | New branch, success | Clean |
+| D4 | `01M5TFRREYPJ8MSW62M5CDDVP1` | `e4b48dd352d2603f9dc7e1e487e0339888f591d2` | Pass | New branch, success | Clean |
+| D5 | `01M5TFT4RG7D87TQHCA3FTN4V3` | `7b2822c4a6fed76d64497de7e7524829b239a987` | Pass | New branch, success | Clean |
+| D6 | `01M5TFVAJ2TSGKGVW0WANG1N04` | `48e7a1df93f2c293c71e9eee62a7623823c01f8d` | Pass | New branch, success | Clean |
+| G1 | `01M5TFWEMG2VCZ5TRJD84GHMWY` | `31a2b0f4ff3c71cfca4ff47dffca1de20f410c28` | Pass | New branch, success | Clean |
+
+All six save envelopes are success/ok, exit 0, stderr empty; each reports
+written/committed/current, null slug, empty unresolved/rejected/recovery and
+publication not_requested. Publication was then done by the separately authorized
+Git pushes above; the envelopes are not retrospectively changed. No request
+is unsettled. The one refresh also succeeded and was not repeated on resume.
+
+Exact post-save deps IDs are the proposal table and each pre-send input above:
+C4→C3+gate, C5→C4+gate, D4→D3, D5→D4+gate, D6→D5, G1→C5+D6. All other design
+comparison fields matched by value; body digest and UTF-8 byte length matched
+each recorded baseline. Source/body text was kept in memory only. Baseline
+inputs, complete mutation envelopes, per-target value-check evidence and the
+original failed checker result remain durable in this ledger.
+
+The published branch histories contain **16 commits beyond origin/main** in
+total: C4 **3**, C5 **3**, D4 **2**, D5 **4**, D6 **2**, G1 **2**. This is the
+fresh preflight's **11 existing commits plus five remaining save checkpoints**,
+equivalently the original ten existing commits plus six total saves. All
+checkpoint commits retain their library-written messages; none was amended.
+
+### C3 evidence checkpoint and remaining boundary
+
+Canonical completion comment **`01M5TFZE029WM8KQV9V7BX1BWA`**, ID allocated by
+the absolute branch CLI's `--json id new`, UTC timestamp
+**2026-10-25T21:37:58Z**. This commit includes only this C3 ledger, the preserved
+stop comment `01M5TB10S056PP9AADF50Q1VHG` and the new completion comment. The
+stop comment is preserved unchanged. The corrected helper stays ignored in
+`target/`; no product/library/Cargo/test/AGENTS/skill change and no Rust gate run.
+
+Fetch and C3 merge-tree passed; origin/main remains e49f978, precommit tree
+`bcfa0fe7b9652c49d6501c4bb171d628924db32b`. Status, diff, whitespace and recent
+ten commits are inspected before staging only the three evidence paths and
+committing with the required co-author trailer; only C3 bookkeeping is then
+pushed. Final C3 SHA, clean state and merge-tree are checked in the return.
+
+**Dogfooding refresh/saves/value checks/target pushes are complete.** No remaining
+blocker in steps 4–7. **Switch and separate switch review remain owed**; the
+controller resumes that work after this outcome. No review-ready, Task 9 complete,
+PR, main integration, closure, cleanup or native-CI claim. The explicit Task 9
+verification exception and approved whole-branch reviews remain unchanged;
+historical full suite remains **4528/1/1, exit 101**, with scoped **46 distinct
+passing** tests and check/fmt/clippy accepted, and no second full run.
