@@ -196,9 +196,11 @@ Authority, in order:
     whose read now fails gets the read's answer, while `request show` still
     gives the stored result.
 - **An interrupted save that is then edited cannot be finished in C3.**
-  While a save's row is pending, every other request on the repository
-  answers `recovery_required`. If the file is edited before the request is
-  retried, no retry completes it: with fields omitted it answers
+  While a save's row is pending, another request that reaches a new domain
+  operation on the repository answers `recovery_required`. Early binding
+  no-ops/refusals and finished-request replay keep their existing answers
+  (owner-approved Task 0 qualification). If the file is edited before the
+  request is retried, no retry completes it: with fields omitted it answers
   `request_mismatch`, and with every field `external_change`. The only way
   out in C3 is to restore the bytes the request committed. Otherwise it waits
   for C4's `operation abandon`. The design's interrupted-saves table is the
@@ -449,6 +451,12 @@ for approval with these documents.
 | Independent review, source lens (2026-10-24, `6c25c43`) | 22 findings: 2 blocking, 7 important, 13 minor. Blocking: every write re-emits the front matter, so the byte and no-op claims were false for hand-written files and for the dogfooding check; and the index stores titles, so a title sentinel cannot be absent from the data directory. Important: the R-2 test could not fail; slug assignment's repeat is a no-op; a move to its own path needs a context; `docs/notes` exists; deletion answers `repository_not_registered` and WAL files must go; and unfiltered tests extend to C3. | Ruling, settled | Outcomes are stated by value (design fact 9). Privacy is checked in the request stores (R-17). Tests and fixtures are corrected. One finding was not applied: No. 20(b), the full suite stays in Task 9, because AGENTS.md's 2026-10-24 exception covers `working-on-a-ticket` tickets, not Cycles. The suspected finding No. 9 was applied: the clause "a plain refresh also completes it" was dropped. |
 | Scoped re-review with an adversarial round (2026-10-24, `6c25c43..521b91b`) | 22 findings: 1 blocking, 6 important, 15 minor. Blocking: a read never offers `index.rebuild` for `repository_not_registered`, so six places were wrong, and decision 5 gives a save with an omitted field a different answer from a full-field save. Important: the six target branches are not on origin, so the pushes create remote branches and publish existing commits; dogfooding could commit an uncommitted edit; the resume rule lost pushes and could not settle a stopped save; R-17 contradicted mutation data that echoes input; a partial save plus a later edit never completes until C4; the identity retry needs a fresh observation. | Decision, ruling, settled | Decision 7. Design facts 10, 11, 17, 18 and 21 corrected; facts 36 and 37 added. Dogfooding has a build-then-preflight order, a clean check before each save, value checks on the `deps` IDs, a ledger written before sending, a resume that resends unsettled requests under their own IDs, and pushes for every unpublished tip. R-17 exempts the echoing data fields. The limits are qualified, golden names fixed, and the fixtures corrected. Fact 17 is left unconfirmed, as a Task 0 check. The third round reviewed this revision. |
 | Third scoped review with an adversarial round (2026-10-24, `521b91b..5dc1921`) | 16 findings: 1 blocking, 3 important, 12 minor. Blocking: the documented remedy for an interrupted save whose omitted field was then edited (resend every field) does not work, because a re-entered save answers `external_change` for any file content but its own bytes or its original observation. Important: a pending save blocks every other request on the repository, not only refreshes; the resume rule could loop or misreport a finished save; the value check could not run after a resume. | Ruling, settled | The third blocker in the same mechanism, so it was not rewritten again. The design states it as an interrupted-saves table of required outcomes, and Task 3 writes that test first and stops at a design checkpoint if the library answers otherwise. Fact 21 extended. Resume starts from `request show`. The ledger records the compared fields with a body digest, and step 5 reads before its clean check. Minors applied: citations, golden names, Task 0's grep, `CLI_ONLY` in Task 4, the "Equal" list, and the resolved repository in `fill::item_not_found`. These edits had no independent review. |
+
+**Task 0 owner qualification:** the third review round's blanket pending-save
+fence above applies to requests reaching a new domain operation. Early
+no-op/refusal and finished-replay answers remain unchanged. Task 3's blocked
+requests ask for actual new work; its interrupted-save retry expectations
+are unchanged.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing

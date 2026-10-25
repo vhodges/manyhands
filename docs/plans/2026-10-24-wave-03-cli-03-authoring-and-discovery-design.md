@@ -200,7 +200,8 @@ Task 0 re-checks all 37 facts before any code.
       first (`tests/mutation_replay/index.rs:344–352`).
 19. The repair fault point F2 uses is
     `AfterOwnedWriteBeforeLifecyclePersistence`. The stopped call answers
-    `internal_error`, partial, exit 1
+    `internal_error`, partial, exit 4 (owner-corrected during Task 0;
+    partial outcomes take precedence over the code's class)
     (`tests/mutation_bridges/repair.rs:650–678`).
     `support::repair::Shelf` (`tests/support/repair.rs:89`) builds the
     nonconforming fixtures and is already in the `cli` target. The
@@ -214,13 +215,17 @@ Task 0 re-checks all 37 facts before any code.
     (`tests/mutation_replay/execute.rs:551–583`), which is C4's verb, and
     not `request.retry`. So C2's driver does not retry it within the
     invocation.
-    - While its operation row is pending, **every other request on the
-      repository** is refused with `recovery_required`, exit 3, offering
+    - While its operation row is pending, **another request that reaches a
+      new domain operation on the repository** is refused with
+      `recovery_required`, exit 3, offering
       `operation.resume`, `repo.inspect` and `operation.abandon`. That
       includes other saves, creates and both index verbs
       (`tests/mutation_replay/index.rs:270–290`,
       `tests/mutation_replay/resume.rs:1323–1346`,
-      `src/repository/recovery.rs:779–780`, `:1366–1392`).
+      `src/repository/recovery.rs:779–780`, `:1366–1392`). Owner-approved
+      Task 0 qualification: early binding no-ops/refusals and finished-request
+      replay keep their existing answers (`src/repository/mutation/execute.rs:190–208,254–258`;
+      `tests/mutation_replay/documents.rs:573–614`).
     - The domain's index-pending refresh reaches the CLI as `busy`
       (`src/repository/mutation/outcome.rs:245–253`).
     - A re-entered save accepts the file only when it holds the bytes the
@@ -393,8 +398,15 @@ Values:
   after the service opens. For a mutation it is built with `mutate::refusal`,
   keeping a valid request ID.
 - `--repo` for a mutation is joined to the invocation directory
-  (`admin::mutation_root`). The library refuses a linked worktree's root
-  with `not_repository_root`.
+  (`admin::mutation_root`). Ordinary mutation root resolution refuses a
+  linked worktree's root with `not_repository_root`. **Owner-approved Task 0
+  exception:** `index rebuild` passes through its existing library root
+  handling. Its binding propagates only `repository_not_enabled` from
+  `resolve_root`, and its domain call checks the selected repository's own
+  workdir (`src/repository/mutation/bind/index.rs:213–233`,
+  `src/repository.rs:9570–9620`).
+  This is source-inspected behavior, not fixture proof of success for every
+  linked-root situation. C3 adds no root-validation workaround.
 - `--path` on `path observe` is repository-relative. `--context` is a
   worktree path, relative to the invocation directory, passed as
   `document show --path --context` passes it.
@@ -547,7 +559,7 @@ accepted and its row pending (fact 21).
 
 | Sequence after that | Required outcome |
 | --- | --- |
-| Nothing else happens | Every other request on the repository, including `index refresh` and a save of another item, answers `recovery_required`, exit 3, with nothing written. |
+| Nothing else happens | Another request that reaches a new domain operation on the repository, including `index refresh` and a save of another item that requests actual new work, answers `recovery_required`, exit 3, with nothing written. Early binding no-ops/refusals and finished-request replay retain their answers. |
 | The CLI retries the same request with a field omitted; the file is unchanged | Discovery completes. There is no second commit, and the other requests then succeed. |
 | Someone edits an omitted field in the worktree, uncommitted, then the CLI retries with that field omitted | The fill reads the edit, so the input differs: `request_mismatch`. Nothing is written, and the record stays accepted. |
 | As the row above, but the CLI retries with every field sent | `external_change` (fact 21: the file is neither the request's bytes nor its original observation). Nothing is written, and the record stays accepted. |
@@ -702,9 +714,9 @@ these tickets are partly unpublished.
    - that each save re-emits that ticket's whole front matter in the
      library's order and style (fact 9), with values unchanged;
    - the risk that a save which stops part-way, and whose ticket is then
-     edited, blocks every CLI mutation on this repository until its file is
-     restored or C4's `operation abandon` arrives (fact 21, the
-     interrupted-saves table).
+     edited, blocks CLI requests reaching new domain operations on this
+     repository until its file is restored or C4's `operation abandon`
+     arrives (fact 21, the interrupted-saves table).
 
    Without the go-ahead, the step is owed. The Cycle may become review-ready,
    but it is not closed or merged while the Wave's dogfooding evidence is
@@ -785,8 +797,10 @@ It then works in this order:
    follows:
    - **Finished:** record the stored result as the answer. The request is
      settled and nothing is resent.
-   - **Accepted:** the request has a pending row, which blocks every other
-     request on the repository (fact 21). Run step 5's clean check, then
+   - **Accepted:** the request has a pending row, which blocks other
+     requests reaching new domain operations on the repository (fact 21).
+     Early binding answers and finished-request replay remain available.
+     Run step 5's clean check, then
      resend with the **same** ID and input. Any answer but `ok` stops the
      sequence for the owner, as the interrupted-saves table describes.
    - **`request_not_found`:** the request was never accepted, or it was
@@ -1028,10 +1042,12 @@ Each ruling is listed with its cost if wrong.
 - Whether a no-op save of an item without an editing context creates that
   context is unconfirmed (fact 17).
 - A partial save offers `operation.resume`, which is C4's verb (fact 21).
-  While its row is pending, every other request on the repository answers
-  `recovery_required`. The same request's retry completes it while the file
-  holds what the request wrote. If the file was edited meanwhile, the only
-  way out in C3 is to restore those bytes; otherwise it waits for C4's
+  While its row is pending, another request reaching a new domain operation
+  on the repository answers `recovery_required`; early no-op/refusal and
+  finished-request replay answers are preserved. The same request's retry
+  completes it while the file holds what the request wrote. If the file was
+  edited meanwhile, the only way out in C3 is to restore those bytes;
+  otherwise it waits for C4's
   `operation abandon`. The interrupted-saves table is the contract.
 - A repaired document is listed twice until its context merges (F2).
 - An empty folder is not visible to Git. `folder list` lists it after the

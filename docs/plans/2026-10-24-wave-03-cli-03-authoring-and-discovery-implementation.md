@@ -425,6 +425,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 - [ ] **Step 0: Interrupted saves, test-first, with a design checkpoint.** Do this before any other step of this task, because it pins the library's behavior, not the CLI's.
   - Write `tests/cli/documents.rs::interrupted_saves_follow_the_required_outcomes`, one case per row of the design's interrupted-saves table.
   - Each case starts with a `FailOnce` actor at `BeforeIndexTransactionCommit` on a document that `document create` made, as in Step 7.
+  - Owner-approved Task 0 qualification: the blocked other-request fixtures request actual new work that reaches a new domain operation. Preserve F2's early binding no-op/refusal and finished-request replay answers. The interrupted-save retry expectations are unchanged.
   - While the CLI verb does not exist yet, drive each "CLI retry" with `support::mutation::execute_with` on a plain service over the same data directory, using the input the CLI would send with or without the omitted field. Step 12 switches the retries to the binary.
   - Run `devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes`.
   - **Checkpoint.** If every row holds, record the run in the ledger and continue. If any row gives a different answer, **stop**: record the actual answers and ask the controller for a ruling. Do not edit the table or the test to match.
