@@ -1,14 +1,17 @@
 ---
+wave: '03'
+cycle: C5
+deps:
+- 01M4CC0VMWEQQ9G4W0DAG7ADPY
+- 01M57SKVF6TQ3QM6AXJ35JGGSY
+id: 01M4CC0VMXTNXNH78C11DYXS8H
+title: 'Wave 03 C5: CLI Completion And One-Shot Polling'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VMXTNXNH78C11DYXS8H"
-title: "Wave 03 C5: CLI Completion And One-Shot Polling"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "C5"
 ---
 
 Complete the approved headless command contract.
