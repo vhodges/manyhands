@@ -113,7 +113,7 @@ These are inputs the spec implies but no table in it lists. Each has its test in
 | Task | Part | Creates | Modifies |
 | --- | --- | --- | --- |
 | 0 | — | `docs/plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md` | `docs/research/wave-03-api-audit.md` |
-| 1 | A | `human_authoring.rs`, `human_authoring_tests.rs`, `tests/cli/authoring_reads.rs` | `src/bin/manyhands-cli.rs`, `catalog.rs`, `parse.rs`, `parse_tests.rs` (additions only), `dispatch.rs`, `human.rs` (one helper made `pub(super)`), `tests/cli.rs`, `tests/support/cli.rs` (new golden names), help goldens (E1) |
+| 1 | A | `human_authoring.rs`, `human_authoring_tests.rs`, `tests/cli/authoring_reads.rs` | `src/bin/manyhands-cli.rs`, `catalog.rs`, `parse.rs`, `parse_tests.rs` (additions only), `dispatch.rs`, `human.rs` (two helpers made `pub(super)`), `tests/cli.rs`, `tests/support/cli.rs` (new golden names), help goldens (E1) |
 | 2 | A | `authoring.rs`, `authoring_tests.rs`, `tests/cli/index.rs`, `tests/cli/folders.rs`, schema and example `folder_create` | `src/bin/manyhands-cli.rs`, `admin.rs` (two helpers made `pub(crate)`), `catalog.rs`, `dispatch.rs`, `tests/cli.rs`, `tests/support/cli.rs`, help goldens (E1) |
 | 3 | A | `fill.rs`, `fill_tests.rs`, `tests/cli/documents.rs`, schemas and examples `document_create`, `document_save`, `document_move` | `src/bin/manyhands-cli.rs`, `authoring.rs`, `catalog.rs`, `dispatch.rs`, `tests/cli.rs`, `tests/support/cli.rs`, help goldens (E1) |
 | 4 | A | `tests/cli/authoring_exits.rs` | `tests/cli.rs` |
@@ -148,14 +148,17 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 
   ```sh
   grep -rln -E 'path observe|ticket check|index (refresh|rebuild)|folder create|document (create|save|move|repair)|ticket (create|save|repair|slug-assign)|"C3"' src/bin/manyhands-cli tests/cli tests/cli_remote tests/cli.rs tests/support/cli.rs tests/fixtures/cli_v1
-  grep -rn -E 'Availability::(Available|Planned)|available.*len\(\)|"available"\] == true' src/bin/manyhands-cli tests/cli
+  grep -rn -E '\bAvailability::(Available|Planned)|available.*len\(\)|"available"\] == true' src/bin/manyhands-cli tests/cli
   ```
 
   The first command is expected to hit `catalog.rs`, `catalog_tests.rs` and the three E1 goldens. Every hit of the second must be one of these:
   - production code in `catalog.rs`, `parse.rs` or `startup.rs`;
   - a test filtered to C1 or C2;
   - one of fact 32's unfiltered tests;
+  - the `DESIGN` comparison in `catalog_tests.rs` (around lines 120–121);
   - a test-local `CommandSpec` literal in `parse_tests.rs`, `startup_tests.rs`, `mutate_tests.rs` or `admin_tests.rs`.
+
+  The `\b` anchor keeps `IdentityAvailability::` (`human_tests.rs`) out.
 
   Any other hit stops for an owner ruling.
 - [ ] **Step 4: Baseline checks.**
@@ -244,12 +247,12 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - In `parse::validate` (`parse.rs:191`), after the `show` rule: `ticket check` requires at least one of `--deps` and `--parent`, with the message "ticket check needs --deps or --parent.". The `required` flags on `--path` and `--id` are enforced by the existing rule.
 - [ ] **Step 4: Run the test and see it pass.** Use the same command as Step 2.
 - [ ] **Step 5: Write the binary tests** in `tests/cli/authoring_reads.rs`, registered in `tests/cli.rs`. Copy `run`, `checked` and `golden` from `tests/cli/content.rs:20–60`. Documents come from `support::items::contract_repository()`, and tickets from `relationship_repository()`. Each case:
-  - `path_observe_gives_the_absent_token_for_an_empty_document_path`: `exists` is false; the data validates against `path_observation.schema.json`; golden `path_observe_absent`.
+  - `path_observe_gives_the_absent_token_for_an_empty_document_path`: `exists` is false; the data validates against `path_observation.schema.json`; golden `path_observe_ok`.
   - `path_observe_gives_the_same_token_as_document_show_for_a_file`.
   - `path_observe_reports_another_items_file_in_a_named_context`: make a context with `items::create_document_context` (`tests/support/items.rs:156`), then observe a different document's canonical path with `--context <that worktree>` (`items::context_worktree`, `:179`). The answer is `ok` with `exists` true (Cycle contract item 6).
   - `path_observe_refuses_an_inactive_context_and_escaping_paths`: a directory that is not an active context is `invalid_path`, exit 2. `../x.md`, an absolute path and `docs/../../x.md` each get the library's refusal. Stderr never contains the path text (Review Focus 2). Refusal golden `path_observe_invalid_path`.
   - `path_observe_escapes_a_path_holding_control_characters`: the path is `docs/a\u{1b}[2J\nb.md`. In human mode stdout shows it escaped, with no raw ESC byte and no extra line (Review Focus 5).
-  - `ticket_check_reports_resolved_unresolved_and_a_dependency_cycle`. D (`RELATED_D`) already depends on C, and both are open, so proposing that C depend on D gives `ok`, exit 0, with `data.rejection.code == "relationship_cycle"`. An unknown ULID is listed in `unresolved`. The data validates against `relationship_check.schema.json`. Golden `ticket_check_rejected`.
+  - `ticket_check_reports_resolved_unresolved_and_a_dependency_cycle`. D (`RELATED_D`) already depends on C, and both are open, so proposing that C depend on D gives `ok`, exit 0, with `data.rejection.code == "relationship_cycle"`. An unknown ULID is listed in `unresolved`. The data validates against `relationship_check.schema.json`. Golden `ticket_check_ok`, which holds the rejection.
   - `ticket_check_reports_a_parent_cycle`.
   - `ticket_check_proposes_exactly_what_it_is_given`. E and F (`RELATED_E`, `RELATED_F`) already form a dependency cycle and a parent cycle. For E, `--parent <RELATED_B>` alone reports no rejection, because the omitted `--deps` proposes none (fact 7). `--deps <RELATED_F>` reports the dependency cycle.
   - `ticket_check_refuses_malformed_or_empty_elements`: `--deps <RELATED_A>,,<RELATED_B>` (two valid IDs around an empty element) and `--deps not-a-ulid` are `invalid_id`, exit 2. Neither option given is `usage_error`. Golden `ticket_check_invalid_id`.
@@ -314,7 +317,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `index_verbs_need_a_request_id_without_a_terminal`: `--json` without `--request-id` is `usage_error`, exit 2.
   - `index_rebuild_restores_a_deleted_database` (R-12, fact 18). Remove `manyhands.sqlite3-wal` and `manyhands.sqlite3-shm`, then delete `manyhands.sqlite3`. `document list --json` answers `repository_not_registered` with `"recovery": []`, as the read gives it. `index rebuild` gives `ok`. `document list` and `ticket list` then list the fixture's items again. Worktree bytes and refs equal what they were before.
   - `index_rebuild_restores_a_database_replaced_by_other_bytes`: remove the WAL files, then write 4096 bytes of `0xA5` over `manyhands.sqlite3`. `document list` answers `index_unavailable` with `index.rebuild`, and the rest is as above.
-  - Goldens: `index_refresh_ok`, `index_rebuild_ok`, `index_refresh_usage_error`, `index_refresh_text` and `index_rebuild_text`.
+  - Goldens: `index_refresh_ok`, `index_rebuild_ok`, `index_refresh_usage_error`, `index_rebuild_usage_error`, `index_refresh_text` and `index_rebuild_text`.
   - `index_verbs_replay_a_finished_request`: the same request again is answered from the record.
   - `index_verbs_refuse_input_and_id`: `--input -` and `--id` are usage errors.
   - Human mode for both verbs, with text goldens.
@@ -406,17 +409,23 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   /// read's answer under `spec`'s command name, with `request_id` kept
   /// (decision 5).
   pub fn read_item(service: &RepositoryService, session: &Session, spec: &CommandSpec,
-      root: &Path, id: &ItemId, kind: ItemDtoKind, request_id: Option<RequestId>) -> Result<ItemDto, Output>;
+      root: &Path, id: &ItemId, kind: ItemDtoKind, request_id: Option<RequestId>) -> Result<(ResolvedRepository, ItemDto), Output>;
   /// `item_not_found` with the item scope and `request_id` kept: the answer
   /// for any `FillError`, and for a read of the other kind.
-  pub fn item_not_found(session: &Session, spec: &CommandSpec, root: &Path, id: &ItemId,
+  pub fn item_not_found(session: &Session, spec: &CommandSpec, repo: &ResolvedRepository, id: &ItemId,
       request_id: Option<RequestId>) -> Output;
   ```
 
   - `read_item` builds a failure as `ReadError::to_envelope(<command>)`, with `request_id` set. A wrong kind is `ReadError::new(ResultCode::ItemNotFound).with_scope(<item scope>)`, as `dispatch.rs:330` builds it. It renders through `render::failure_output`.
-  - A `FillError` from `document_draft` is turned into that same `item_not_found` by `fill::item_not_found(session, spec, root, id, request_id)`.
+  - A `FillError` from `document_draft` is turned into that same `item_not_found` by `fill::item_not_found(session, spec, &repo, id, request_id)`, with the item scope built from `repo.scope()`, as `dispatch.rs:321–331` builds it.
   - Task 5 adds `TicketFields` and `ticket_draft` beside these.
 
+- [ ] **Step 0: Interrupted saves, test-first, with a design checkpoint.** Do this before any other step of this task, because it pins the library's behavior, not the CLI's.
+  - Write `tests/cli/documents.rs::interrupted_saves_follow_the_required_outcomes`, one case per row of the design's interrupted-saves table.
+  - Each case starts with a `FailOnce` actor at `BeforeIndexTransactionCommit` on a document that `document create` made, as in Step 7.
+  - While the CLI verb does not exist yet, drive each "CLI retry" with `support::mutation::execute_with` on a plain service over the same data directory, using the input the CLI would send with or without the omitted field. Step 12 switches the retries to the binary.
+  - Run `devenv shell -- cargo test --all-features --locked --test cli interrupted_saves_follow_the_required_outcomes`.
+  - **Checkpoint.** If every row holds, record the run in the ledger and continue. If any row gives a different answer, **stop**: record the actual answers and ask the controller for a ruling. Do not edit the table or the test to match.
 - [ ] **Step 1: Write the failing unit tests** in `fill_tests.rs`. They are pure, with no repository, and compare fields one by one, because drafts derive only `Clone` (fact 3):
   - both fields given: no read is needed, and the draft is the input's;
   - `title` omitted: it comes from the read;
@@ -457,7 +466,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
   - `a_document_save_of_a_ticket_id_is_item_not_found_with_its_scope`: `scope.item_id` is set and the request ID is kept (decision 5). Golden `document_save_item_not_found`.
   - `a_never_enabled_root_answers_by_whether_a_field_is_omitted` (decision 7): a `born_repository` that was never enabled. With `title` omitted the answer is `repository_not_registered`, exit 3, with `"recovery": []`. With every field sent it is `repository_not_enabled`, exit 2. Golden `document_save_repository_not_registered`.
   - `a_lost_cache_answers_by_whether_a_field_is_omitted` (decision 7): delete the database as in Task 2. With `title` omitted the answer is `repository_not_registered` with `"recovery": []`. With every field sent it is `repository_not_registered` with `index.rebuild`.
-  - `a_partial_save_whose_omitted_field_was_then_edited_completes_when_every_field_is_resent`: set up as in Step 7, then edit the title in the context's worktree without committing. The CLI retry with `title` omitted answers `request_mismatch`. A retry with every field, valued from `git show <commit>:<path>`, completes with no second commit.
+  - The interrupted-saves table is Step 0's test. Step 12 switches its retries from `execute_with` to the binary, with no change to the outcomes it asserts.
   - `a_body_round_trips_byte_for_byte` (Review Focus 1): the body is `"line one\r\nline two\rthree 🦀\nno final newline"`. After create and after a title-only save, the bytes after the front matter equal it exactly.
   - `a_committed_save_retried_after_cache_loss_makes_no_second_commit`: delete the database as in Task 2, run `index rebuild`, then retry the same request. The answer is Task 0's recorded code, and there is no second commit.
   - `a_human_save_reports_its_progress_on_stderr`: stderr has at least one `progress:` line. In JSON mode stderr is empty.
@@ -518,7 +527,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
      "required": ["observation"], "additionalProperties": false}
     ```
 
-- [ ] **Step 12: Run the tests and see them pass.**
+- [ ] **Step 12: Switch Step 0's retries to the binary, then run the tests and see them pass.** Step 0's assertions do not change.
 
   ```sh
   devenv shell -- cargo test --all-features --locked --test cli documents
@@ -535,7 +544,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 - Modify: `tests/cli.rs`
 
 - [ ] **Step 1: Write the C3 exit table.** It has the shape of `tests/cli/exits.rs` (`ROWS`, `REASONS`, `How`), in its own module with its own constants.
-  - **`the_c3_table_and_reasons_account_for_every_code_of_the_audit`.** It reads the `#### C3 exit-coverage union` block from `docs/research/wave-03-api-audit.md` with `include_str!`. It asserts that the rows' codes and `REASONS`' codes are disjoint, and that their union equals the block by **set equality**.
+  - **`the_c3_table_and_reasons_account_for_every_code_of_the_audit`.** It reads the `#### C3 exit-coverage union` block from `docs/research/wave-03-api-audit.md` with `include_str!`. It asserts that the rows' codes and `REASONS`' codes are disjoint, and that their union equals the block plus a `CLI_ONLY` list of the CLI-built codes C3 verbs give (`usage_error`, `invalid_input`, `invalid_id`, `invalid_path`, `cancelled`, `internal_error`), by **set equality**.
   - **`busy_is_reached_with_the_lease_held`.** It runs a `document save` while `support::hold_lease_in_child_for_test` holds the lease, as `tests/cli/exits.rs:512` does. The answer is `busy`, exit 5, after the CLI's bounded retries.
   - **`every_c3_exit_class_is_covered`.**
     - Classes 0, 2, 3 and 5 each have a row run through the binary.
@@ -780,7 +789,7 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
     - the go-ahead (step 3), presenting the preflight's results and naming the six new remote branches with the commits they publish, and the front-matter re-emission.
   - **Without the go-ahead:** stop. Record the step as owed and continue to Step 5. The Cycle is not closed or merged while the step is owed.
   - **With it:**
-    - write each request ID and input to the ledger before sending it, and each mutation's envelope with the compared values after. Never record `body` or `source`;
+    - follow the design's step 5 order: read, clean check, ledger, save. The ledger takes the request ID (from `id new`), the input and the compared fields, with the body as its SHA-256 digest (`sha256sum`) and length; after each save it takes the mutation envelope. Never record `body` or `source` text;
     - add a ticket comment with the outcome.
 
     A stop rule stops the step. A resume follows the design's Resume rule.
@@ -819,7 +828,8 @@ Tasks run in order. Tasks 1–6 each flip verbs from `planned(…, "C3")` to `Av
 | Never fetch | 2 |
 | Progress | 3 |
 | Prompts never read stdin | 6 |
-| Fill refusals (decisions 5 and 7), fill before replay, partial-then-edited | 3, 5 |
+| Fill refusals (decisions 5 and 7), fill before replay | 3, 5 |
+| Interrupted saves (test-first, design checkpoint) | 3 (Step 0, Step 12) |
 | Mutating-Cycle evidence row | 3, 5, 6 (stale writes, retry); 6 (consent, cancellation); 3 (progress); 7 (redaction) |
 | Help, version and C4/C5 unavailable | 1–6 (E1); pre-existing `help.rs` tests unchanged |
 | No display dependency, thread or process | 4, 7, 9 (`check-cli-no-gpui.sh` and the no-feature `--bin` check) |

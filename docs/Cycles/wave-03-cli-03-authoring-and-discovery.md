@@ -181,16 +181,19 @@ Authority, in order:
     `request show` still returns the stored result, and no effect is
     repeated;
   - a retry of an interrupted save reads what the interrupted attempt
-    wrote, so its digest matches, as long as nobody has edited an omitted
-    field since. If someone has, it answers `request_mismatch`, and the
-    remedy is to resend every field with the values in the request's own
-    commit. Otherwise the request stays pending, and refreshes answer
-    index-pending, until C4;
+    wrote, so its digest matches, as long as the file still holds those
+    bytes;
   - the fill read comes before the replay. So a retry of a finished request
     whose read now fails gets the read's answer, while `request show` still
     gives the stored result.
-
-  A caller that wants a retry independent of the file sends every field.
+- **An interrupted save that is then edited cannot be finished in C3.**
+  While a save's row is pending, every other request on the repository
+  answers `recovery_required`. If the file is edited before the request is
+  retried, no retry completes it: with fields omitted it answers
+  `request_mismatch`, and with every field `external_change`. The only way
+  out in C3 is to restore the bytes the request committed. Otherwise it waits
+  for C4's `operation abandon`. The design's interrupted-saves table is the
+  contract, and its test is written first.
 - **The fill read's answer can differ from the library's (decision 7).** On
   a repository the index does not hold, a save that omits a field answers
   `repository_not_registered` with no recovery action. A save that sends
@@ -281,6 +284,9 @@ Also required:
   - The codes no fixture can reach are listed with their reasons. The rows
     plus that list equal, by set equality, the code set that Task 0's audit
     refresh records for C3's verbs.
+- **Interrupted saves.** Every row of the design's interrupted-saves table
+  holds. Its test is written first, before any `document save` code; a row
+  that answers otherwise stops for a ruling at a design checkpoint.
 - **Replay and cache loss.** Every C3 mutation has a lost-output replay case
   with no second effect. A committed save retried after the database is
   rebuilt makes no second commit. A confirmation presented after cache loss
@@ -432,7 +438,8 @@ for approval with these documents.
 | Planning, worktree | The G1 worktree held an uncommitted title edit. | Settled | The owner cleaned it on 2026-10-24. Dogfooding keeps a preflight. |
 | Independent review, contract lens (2026-10-24, `6c25c43`) | 38 findings: 2 blocking, 21 important, 15 minor. Blocking: the fill's refusals broke the CLI RFC's closed refusal rule, and `ticket create` refused `null`, which the relationships RFC accepts. Important findings changed the dogfooding procedure (preflight before asking, value checks, stop and resume rules, closure gating, the switch's scope and its own review). They also added replay cases for every mutation, cache-loss retries, both cycle kinds, a piped repair source, a never-fetch check, a progress check, and the note's wording. | Decision, ruling, settled | Decisions 5 and 6. `null` on create accepted (R-5). The other findings were applied to the three documents. Two were not applied, because the source showed otherwise. No. 33: a move to the document's own path is a no-op when it has a context (`document.rs:550`). No. 10: a malformed `project` makes the ticket nonconforming, so the fill never clears it (`canonical.rs:1106`). |
 | Independent review, source lens (2026-10-24, `6c25c43`) | 22 findings: 2 blocking, 7 important, 13 minor. Blocking: every write re-emits the front matter, so the byte and no-op claims were false for hand-written files and for the dogfooding check; and the index stores titles, so a title sentinel cannot be absent from the data directory. Important: the R-2 test could not fail; slug assignment's repeat is a no-op; a move to its own path needs a context; `docs/notes` exists; deletion answers `repository_not_registered` and WAL files must go; and unfiltered tests extend to C3. | Ruling, settled | Outcomes are stated by value (design fact 9). Privacy is checked in the request stores (R-17). Tests and fixtures are corrected. One finding was not applied: No. 20(b), the full suite stays in Task 9, because AGENTS.md's 2026-10-24 exception covers `working-on-a-ticket` tickets, not Cycles. The suspected finding No. 9 was applied: the clause "a plain refresh also completes it" was dropped. |
-| Scoped re-review with an adversarial round (2026-10-24, `6c25c43..521b91b`) | 22 findings: 1 blocking, 6 important, 15 minor. Blocking: a read never offers `index.rebuild` for `repository_not_registered`, so six places were wrong, and decision 5 gives a save with an omitted field a different answer from a full-field save. Important: the six target branches are not on origin, so the pushes create remote branches and publish existing commits; dogfooding could commit an uncommitted edit; the resume rule lost pushes and could not settle a stopped save; R-17 contradicted mutation data that echoes input; a partial save plus a later edit never completes until C4; the identity retry needs a fresh observation. | Decision, ruling, settled | Decision 7. Design facts 11, 17, 18 and 21 corrected; facts 36 and 37 added. Dogfooding has a build-then-preflight order, a clean check before each save, value checks on the `deps` IDs, a ledger written before sending, a resume that resends unsettled requests under their own IDs, and pushes for every unpublished tip. R-17 exempts the echoing data fields. The limits are qualified, golden names fixed, and the fixtures corrected. Fact 17 is left unconfirmed, as a Task 0 check. The revision after this round had no independent review. |
+| Scoped re-review with an adversarial round (2026-10-24, `6c25c43..521b91b`) | 22 findings: 1 blocking, 6 important, 15 minor. Blocking: a read never offers `index.rebuild` for `repository_not_registered`, so six places were wrong, and decision 5 gives a save with an omitted field a different answer from a full-field save. Important: the six target branches are not on origin, so the pushes create remote branches and publish existing commits; dogfooding could commit an uncommitted edit; the resume rule lost pushes and could not settle a stopped save; R-17 contradicted mutation data that echoes input; a partial save plus a later edit never completes until C4; the identity retry needs a fresh observation. | Decision, ruling, settled | Decision 7. Design facts 10, 11, 17, 18 and 21 corrected; facts 36 and 37 added. Dogfooding has a build-then-preflight order, a clean check before each save, value checks on the `deps` IDs, a ledger written before sending, a resume that resends unsettled requests under their own IDs, and pushes for every unpublished tip. R-17 exempts the echoing data fields. The limits are qualified, golden names fixed, and the fixtures corrected. Fact 17 is left unconfirmed, as a Task 0 check. The third round reviewed this revision. |
+| Third scoped review with an adversarial round (2026-10-24, `521b91b..5dc1921`) | 16 findings: 1 blocking, 3 important, 12 minor. Blocking: the documented remedy for an interrupted save whose omitted field was then edited (resend every field) does not work, because a re-entered save answers `external_change` for any file content but its own bytes or its original observation. Important: a pending save blocks every other request on the repository, not only refreshes; the resume rule could loop or misreport a finished save; the value check could not run after a resume. | Ruling, settled | The third blocker in the same mechanism, so it was not rewritten again. The design states it as an interrupted-saves table of required outcomes, and Task 3 writes that test first and stops at a design checkpoint if the library answers otherwise. Fact 21 extended. Resume starts from `request show`. The ledger records the compared fields with a body digest, and step 5 reads before its clean check. Minors applied: citations, golden names, Task 0's grep, `CLI_ONLY` in Task 4, the "Equal" list, and the resolved repository in `fill::item_not_found`. These edits had no independent review. |
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing

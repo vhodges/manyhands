@@ -189,7 +189,8 @@ Task 0 re-checks all 37 facts before any code.
       `"recovery": []`.
     - A mutation's own answer is different:
       - for a lost registration it offers `index.rebuild`
-        (`src/repository/mutation/outcome_tests.rs` around line 2315);
+        (`src/repository/mutation/outcome.rs:804–807`,
+        `tests/mutation_replay/cache_loss.rs:22–39`);
       - for a root that was never enabled it is `repository_not_enabled`
         (`not_registered`, `src/repository/mutation/bind/mod.rs:111–121`).
     - Bytes that are not a database leave the index unavailable
@@ -212,8 +213,20 @@ Task 0 re-checks all 37 facts before any code.
 21. A partial save offers `operation.resume`
     (`tests/mutation_replay/execute.rs:551–583`), which is C4's verb, and
     not `request.retry`. So C2's driver does not retry it within the
-    invocation. While its record is pending, a refresh answers index-pending
-    (`src/repository.rs:1366–1370`).
+    invocation.
+    - While its operation row is pending, **every other request on the
+      repository** is refused with `recovery_required`, exit 3, offering
+      `operation.resume`, `repo.inspect` and `operation.abandon`. That
+      includes other saves, creates and both index verbs
+      (`tests/mutation_replay/index.rs:270–290`,
+      `tests/mutation_replay/resume.rs:1323–1346`,
+      `src/repository/recovery.rs:779–780`, `:1366–1392`).
+    - The domain's index-pending refresh reaches the CLI as `busy`
+      (`src/repository/mutation/outcome.rs:245–253`).
+    - A re-entered save accepts the file only when it holds the bytes the
+      request intended or the original observation. Any other content is
+      `external_change` (`ensure_replayed_owned_destination`,
+      `src/repository.rs:8194–8222`, called at `:2217` and `:2636`).
 22. `hold_lease_in_child_for_test` (`tests/support/mod.rs:477`) holds the
     repository lease from a child process. C2 reaches `busy`, exit 5,
     through the binary with it (`tests/cli/exits.rs:512`).
@@ -305,8 +318,8 @@ Task 0 re-checks all 37 facts before any code.
 **Mutation data.**
 
 37. Mutation data echoes some input. `DocumentMutationDto.path` and
-    `RepairMutationDto.path` echo the path (`src/repository/read/dto.rs:906`,
-    `:556`). `TicketMutationDto.slug` contains the initials, and its
+    `RepairMutationDto.path` echo the path
+    (`src/repository/mutation/dto.rs:906`, `:556`). `TicketMutationDto.slug` contains the initials, and its
     `unresolved` and `rejected` contain `deps` IDs (`:930–944`). Human
     `mutation_success` prints them all.
 
@@ -483,8 +496,8 @@ library.
      in Known Limits and the CLI RFC amendment.
    - **The read comes before the replay.** A retry of a finished request
      whose fill read now fails gets that read's answer, not the stored
-     result. An example is `item_not_found` for an item whose context became
-     duplicated (`items.rs:1800–1802`). `request show` still gives the
+     result. An example is `item_not_found` once another item sits at the
+     item's path (`items.rs:1800–1802`). `request show` still gives the
      stored result.
 5. **The observation.** The caller's `observation` goes to the library
    unchanged. The CLI never compares it with the read's token: a retry after
@@ -497,10 +510,10 @@ fields:
 - `id`, `kind`, `path`, `title`, `type` and `status`;
 - `project`, `team` and `closure`;
 - `slug`, `parent` and `deps`;
-- `unknown_metadata` and `body`.
+- `unknown_metadata`, `problems` and `body`.
 
-`observation`, `source`, the timestamps, `context`, `readiness` and `index`
-change with every write and are not compared. Bytes are compared only for the
+`observation`, `source`, `changed_at`, `change_source`, `context`,
+`readiness` and `index` change with a write, and are not compared. Bytes are compared only for the
 body, and for files the library itself wrote (fact 9). Each row has a test in
 Task 3 (documents) and Task 5 (tickets), on an item the library created
 unless the row says otherwise.
@@ -514,13 +527,36 @@ unless the row says otherwise.
 | The output of a successful save is lost; same request, same input | The stored result is replayed; one commit. |
 | As the row above, but a third party then changed an omitted field | `request_mismatch`; one commit; `request show` returns the stored result (decision 2's replay limit). |
 | A library actor's save stops after its checkpoint; the CLI retries the same request with a field omitted | The fill reads what that attempt committed, the digest matches, and discovery completes with no second commit. |
-| As the row above, but someone then edits the omitted field in the worktree, uncommitted | The retry with the field omitted answers `request_mismatch`. The retry that resends every field, with the values from the request's own commit (`git show <commit>:<path>`), completes with no second commit. |
 | Never-enabled root, a field omitted versus every field sent | `repository_not_registered` with no recovery action, versus `repository_not_enabled` (decision 7). |
 | Lost cache, a field omitted versus every field sent | `repository_not_registered` with no recovery action, versus the same code with `index.rebuild` (decision 7). |
 | `ticket save --id <a document's ID>` with a field omitted | `item_not_found`, exit 2, item scope, no request record. |
 | `project: null` | `project` absent afterwards; every other value equal. |
 | `deps: []` and `deps: null` | `deps` absent afterwards. |
 | `deps` omitted | `deps` equal. |
+
+**Interrupted saves: required outcomes (test-first, with a design
+checkpoint).** Three review rounds each found the documents' account of
+this case wrong, so this table now states the contract. Task 3 writes these
+tests **first**, against the library as it is, before any `document save`
+code. If the library answers any row differently, the task stops for a
+controller ruling at a design checkpoint. The text is not rewritten to fit.
+
+Each row starts from the same state: a library actor's save of a document
+with a context stops after its checkpoint, so the request's record is
+accepted and its row pending (fact 21).
+
+| Sequence after that | Required outcome |
+| --- | --- |
+| Nothing else happens | Every other request on the repository, including `index refresh` and a save of another item, answers `recovery_required`, exit 3, with nothing written. |
+| The CLI retries the same request with a field omitted; the file is unchanged | Discovery completes. There is no second commit, and the other requests then succeed. |
+| Someone edits an omitted field in the worktree, uncommitted, then the CLI retries with that field omitted | The fill reads the edit, so the input differs: `request_mismatch`. Nothing is written, and the record stays accepted. |
+| As the row above, but the CLI retries with every field sent | `external_change` (fact 21: the file is neither the request's bytes nor its original observation). Nothing is written, and the record stays accepted. |
+| As either row above, after the file is restored to the bytes the request committed | The retry with a field omitted completes, with no second commit. |
+
+Recovery past these rows is C4's `operation abandon`. C3 offers no other way
+out of a stuck request. A caller following a CLI answer is told
+`recovery_required` with `operation.abandon`, which `command_unavailable`
+names as C4's.
 
 ## Reads
 
@@ -664,29 +700,36 @@ these tickets are partly unpublished.
    - six pushes that create six remote branches and publish the commits
      listed;
    - that each save re-emits that ticket's whole front matter in the
-     library's order and style (fact 9), with values unchanged.
+     library's order and style (fact 9), with values unchanged;
+   - the risk that a save which stops part-way, and whose ticket is then
+     edited, blocks every CLI mutation on this repository until its file is
+     restored or C4's `operation abandon` arrives (fact 21, the
+     interrupted-saves table).
 
    Without the go-ahead, the step is owed. The Cycle may become review-ready,
    but it is not closed or merged while the Wave's dogfooding evidence is
    owed, unless the owner amends that evidence.
 4. **Refresh.** `index refresh` with a request ID from `id new`.
-5. **Record.** For each target in turn:
-   - **Clean check.** Immediately before its save,
-     `git -C <worktree> status --porcelain` must be empty. Otherwise stop,
-     because `show_item` reads the worktree's file and the save would commit
-     any uncommitted edit (`items.rs:1790`).
-   - **Read.** `ticket show --id <id>` gives the observation and the values.
-   - **Save.** Write the request ID and the input `{observation, deps}` to
-     the ledger, then send
-     `ticket save --id <id> --request-id <that ID> --input -`. Every draft
-     field is omitted, so the save patch fills them.
+5. **Record.** For each target in turn, in this order:
+   1. **Read.** `ticket show --id <id>` gives the observation and the values.
+   2. **Clean check.** `git -C <worktree> status --porcelain` must be empty.
+      Otherwise stop, because `show_item` reads the worktree's file and the
+      save would commit an uncommitted edit (`items.rs:1790`). An edit made
+      after the read makes the observation stale, so the save refuses it.
+   3. **Ledger.** Take a request ID from `id new`. Write the ID, the input
+      `{observation, deps}`, and the read's compared fields to the ledger.
+      The body is recorded as its SHA-256 digest (`sha256sum`) and byte length, never its
+      text.
+   4. **Save.** `ticket save --id <id> --request-id <that ID> --input -`.
+      Every draft field is omitted, so the save patch fills them.
 
    Each save commits one checkpoint on that ticket's branch. A `noop` for a
    ticket that already holds exactly those deps counts as done.
-6. **Check by value.** For each target, `ticket show` gives these results:
-   - every compared field (Save Patch, Required outcomes) is equal to step
-     5's read, except `deps`;
-   - the `deps` IDs are exactly decision 3's list.
+6. **Check by value.** For each target, `ticket show` gives these results,
+   checked against the ledger's record of step 5:
+   - every compared field (Save Patch, Required outcomes) equal, except
+     `deps`, with the body checked by digest and length;
+   - the `deps` IDs exactly decision 3's list.
 
    This check reads `deps` directly. `ticket blocked` lists only open
    blockers, so it would fail falsely once a dependency closes.
@@ -737,14 +780,20 @@ When the sequence stops:
 **Resume.** A resume repeats the preflight and asks for a fresh go-ahead.
 It then works in this order:
 
-1. Resend every request the ledger shows as sent but not answered `ok` or
-   `noop`, with the **same** request ID and input. The fill reproduces the
-   same draft while the ticket is unchanged. A request whose answer is
-   `partial` or that was killed after acceptance is settled only this way:
-   its record blocks refreshes until then (fact 21). If the ticket was
-   changed meanwhile, the resend answers `request_mismatch`, and that stops
-   the sequence for the owner.
-2. Fresh request IDs go only to saves that were never sent.
+1. For every request the ledger holds without an `ok` or `noop` answer,
+   first run `request show --request-id <id>`. Its state decides what
+   follows:
+   - **Finished:** record the stored result as the answer. The request is
+     settled and nothing is resent.
+   - **Accepted:** the request has a pending row, which blocks every other
+     request on the repository (fact 21). Run step 5's clean check, then
+     resend with the **same** ID and input. Any answer but `ok` stops the
+     sequence for the owner, as the interrupted-saves table describes.
+   - **`request_not_found`:** the request was never accepted, or it was
+     refused and its record deleted. Redo step 5 in full, with a fresh read,
+     clean check, ledger entry and request ID, so that a stale observation is
+     never resent.
+2. Then run step 5 for every target that has no ledger entry.
 3. Step 7 then pushes every target whose tip is not on origin.
 
 The library writes the checkpoint commits with its own message, so they carry
@@ -761,7 +810,7 @@ repository fixture does (fact 33). Each verb task adds:
 | `tests/cli/authoring_reads.rs` | `path observe`: an absent path, a present path, a named context, another item's file in a context, an inactive context, escaping paths, and a path holding escape sequences shown escaped. `ticket check`: resolved, unresolved, a dependency cycle and a parent cycle, an omitted option proposing none, malformed and empty elements. Both reads write nothing. |
 | `tests/cli/index.rs` | Refresh and rebuild; never fetching; index loss and whole-file corruption (R-12); a replay of each. |
 | `tests/cli/folders.rs` | Create, no-op, occupied, outside `docs/`, replay. |
-| `tests/cli/documents.rs` | Create (with an escaping path and a used path); save (the save-patch table for documents, including decision 7's two pairs and the partial-then-edited row); move (collision, stale destination, a destination that gained a file after it was observed, a document with no context, its own path, an escaping destination); offline checkpoints; stale writes; replays; the interrupted save; cache loss; progress. |
+| `tests/cli/documents.rs` | Create (with an escaping path and a used path); save (the save-patch table for documents, including decision 7's two pairs, and the interrupted-saves table, test-first); move (collision, stale destination, a destination that gained a file after it was observed, a document with no context, its own path, an escaping destination); offline checkpoints; stale writes; replays; the interrupted save; cache loss; progress. |
 | `tests/cli/ticket_authoring.rs` | Create with deps, parent and initials, including `null`; save (the save-patch table for tickets, relationships); a ticket in this project's format (fact 34) saved with only `observation` and `deps`; slug-assign; dependency and parent cycles on create and on save; `ticket check` agreeing with a save; unresolved targets; a closed ticket; `slug_already_assigned`; closure and `slug` keys refused; replays; identity recovery with a fresh observation, and initials recovery (R-18). |
 | `tests/cli/repair.rs` | Prepare and confirm, previews for both repairs, adoption, adoption retry (R-11), invalid and malformed repair, `identity_ambiguous`, a closed ticket, cache loss, and pseudo-terminal consent with the source piped through `--input -` (Unix). |
 | `tests/cli/authoring_exits.rs` | The C3 exit table (R-10), `busy` with the lease holder, the confirmed-flag check for all eleven mutations, `invalid_input` for each input-taking verb, the no-op inventory (R-14), human mode for all thirteen verbs, privacy (R-17) and the examples (R-13). |
@@ -979,12 +1028,11 @@ Each ruling is listed with its cost if wrong.
 - Whether a no-op save of an item without an editing context creates that
   context is unconfirmed (fact 17).
 - A partial save offers `operation.resume`, which is C4's verb (fact 21).
-  - Until then, the same request's retry completes it, as long as the
-    omitted fields still read as they did.
-  - If one was edited meanwhile, the retry answers `request_mismatch`. The
-    way out is to resend every field with the values in the request's own
-    commit. Otherwise the record stays pending, and refreshes answer
-    index-pending, until C4.
+  While its row is pending, every other request on the repository answers
+  `recovery_required`. The same request's retry completes it while the file
+  holds what the request wrote. If the file was edited meanwhile, the only
+  way out in C3 is to restore those bytes; otherwise it waits for C4's
+  `operation abandon`. The interrupted-saves table is the contract.
 - A repaired document is listed twice until its context merges (F2).
 - An empty folder is not visible to Git. `folder list` lists it after the
   refresh that `folder create` makes (F2).

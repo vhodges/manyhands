@@ -90,7 +90,19 @@ Not applied, because the source showed otherwise: contract findings 10 and
 7. Accept the fill read's different answers and document them. Both cases
    are tested. A library ticket to align the read is optional and not filed.
 
-**Open questions.** None. A third, scoped review of the round-2 revisions
-follows, because round 2 found a blocker.
+**Review round 3, scoped and adversarial, at `5dc1921`.** 16 findings:
+1 blocking, 3 important and 12 minor.
+
+- The blocking finding: the remedy for an interrupted save whose omitted
+  field was then edited did not work. This is the third blocker in the same
+  mechanism, so it was not rewritten again. The design now gives a table of
+  required outcomes, and Task 3 writes that test first, with a design
+  checkpoint.
+- The important findings: a pending save blocks every request on the
+  repository; resume now starts from `request show`; the ledger now holds the
+  compared fields.
+- The round-3 edits (commit after `5dc1921`) had no independent review.
+
+**Open questions.** None. Ready to present for approval.
 
 **Proposed execution.** Subagent-driven, as C2 was.
