@@ -15,11 +15,12 @@ id: "01M5RD6N5PEYMVGZNZ2HGPSHKD"
 Task 0 baseline, in ticket worktree
 `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VMV81DFRGJ4Z76489XM`,
 on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
-Tasks 0–2 are approved (see task log). Task 3 is implemented and locally verified
-for independent controller reviews. Its two stops are resolved by explicit owner
+Tasks 0–3 are approved (see task log; Task 3 approvals conveyed in the Task 4
+controller brief). Task 4 is implemented and locally verified for independent
+controller Part A reviews. Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Tasks 4–9 remain unstarted.
+CLI retries with its approved assertions unchanged. Tasks 5–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -449,7 +450,8 @@ review-ready or closure claim.
 | 1 | Complete | `7368902a677a8228813f21da8f74d3cafff68ec3..8ae22ab9b34e52cf3404f74841cc5e1348ad393a` | 177 CLI unit + 10 authoring-read + 9 help = **196 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the owner's Task 2 brief |
 | 2 | Complete | `8ae22ab9b34e52cf3404f74841cc5e1348ad393a..66efd0629d73fa8d762921fd987d143604178175` | 13 index + 7 folders + 7 input-schema + 9 help = **36 passing**; check/fmt/clippy passed | Spec and quality both APPROVED, explicitly conveyed in the Task 3 Step 0 brief |
 | 3 Step 0 | Complete; binary conversion passed | Base `66efd0629d73fa8d762921fd987d143604178175`; included in Task 3 completion | Exact checkpoint filter initially **1 passed / 0 failed / 201 filtered**, 5.72s; all five rows, six independent fixtures; passes again inside final documents filter through real CLI children | Owner approved correcting only extra failure-class assertions to partial/Incomplete precedence; table expectations unchanged |
-| 3 | Implemented; independent review pending | Base `66efd0629d73fa8d762921fd987d143604178175`; completion is the commit carrying this entry | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Self-reviewed; owner-approved Fact 15 correction applied narrowly; spec and quality controller reviews are next |
+| 3 | Complete | `66efd0629d73fa8d762921fd987d143604178175..90c8e3ae15f9085c74b283c95bc557d60a7abc00` | **27 document + 7 input-schema + 4 fill + 9 help = 47 passing**; all-feature check, all-target/all-feature clippy, fmt check passed | Spec and quality both **APPROVED**, explicitly conveyed in the controller's Task 4 brief; prior owner rulings retained |
+| 4 | Implemented; Part A independent review pending | Base `90c8e3ae15f9085c74b283c95bc557d60a7abc00`; head is the `test(cli): C3 Part A exit table and inventories` commit carrying this entry | **10 new focused tests passed**; all six checkpoint gates passed; **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535 passing** | Self-reviewed only; controller independently reviews actual Part A range `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` after return, then records the returned SHA and review outcome |
 
 ## Task 1: path observe and ticket check
 
@@ -1107,3 +1109,119 @@ No unresolved Task 3 blocker. Commit message:
 required co-author trailer. Publication is restricted to this ticket branch.
 Independent controller spec/quality reviews are next; Task 4 remains unstarted.
 No subagents, PR, main merge, ticket closure, cleanup or dogfooding operation.
+
+## Task 4: Part A evidence and checkpoint
+
+Recorded **2026-10-25T04:35:48Z**. Fresh implementer, working only in the named
+ticket worktree/branch, without subagents. The controller's brief explicitly
+reports Task 3 spec and quality **APPROVED** at
+`90c8e3ae15f9085c74b283c95bc557d60a7abc00`; the task log now records those
+approvals. They are not approval of Task 4 or of the complete Part A range.
+
+### Preflight and brief clarification
+
+- Clean initial HEAD matched the supplied Task 4 base. Read current main
+  AGENTS with `git show origin/main:AGENTS.md`, handoff, ticket and comments,
+  Cycle/design/Task 4 plan, audit and the ledger's approved rulings.
+- Initial and resumed fetch/merge both answered already up to date. Main
+  remains `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`.
+- Before editing, stopped on the brief's phrase “expected all capable.” The
+  controller clarified that this was an erroneous summary subordinate to the
+  approved audit, not a requirement or contract change. Followed the existing
+  audit: all six Part A mutations, **four capable / two incapable**. This is
+  a **controller-brief clarification**, not a new owner ruling. Approved
+  Cycle/design/plan/audit documents are unchanged.
+
+### Test artifacts and evidence boundaries
+
+Added `tests/cli/authoring_exits.rs` and its registration in `tests/cli.rs`:
+
+- Separate C3 `ROWS`, `REASONS`, `How` and `CLI_ONLY`; C2's table is unchanged.
+  The audit's fenced union is read with `include_str!`. Exact set equality
+  proves **40 library / 42 CLI-inclusive codes**, **25 binary-backed rows +
+  17 reasons**, with unique and disjoint row/reason codes.
+- Every binary row names an existing `#[test]` function in `tests/cli/*.rs`.
+  New binary cases cover root selection, configuration, dirty configuration,
+  wrong branch, missing identity and unopenable application data; existing
+  Part A cases supply the remaining normal codes. These reachable cases are
+  not padded with unreachable-code reasons.
+- Binary classes **0, 1, 2, 3 and 5** are represented. Exit 4 remains the
+  explicit decision-6 actor/CLI-completion reason referencing
+  `commit_success_refresh_failure_is_completed_by_the_same_request`.
+  Registration failure is a source-backed library-seam reason. **15** Part B
+  obligations are labeled Task 5 or Task 6, including PTY cancellation/130.
+  Reason membership is accounting, not a claim those binary cases passed.
+- `busy_is_reached_with_the_lease_held` obtains a valid observation, sends a
+  complete document draft (avoiding an earlier fill-read refusal), holds the
+  repository lease in the existing child helper, and asserts busy/exit 5,
+  request ID, unchanged repository/worktree snapshot and elapsed retry time
+  of at least 700 ms and below the helper's ten-second deadline.
+- `c3_confirmed_flags_match_prepare` enumerates delivered available C3
+  mutations via JSON help's `--request-id` option, not a nonexistent kind
+  field. Each of the six gets a fresh isolated fixture and valid input;
+  save/move observations come from actual reads. All answer not_confirmable,
+  exit 2, without canonical/worktree changes.
+- `c3_noop_inventory_accounts_for_part_a` compares the same help inventory
+  against all six entries, checks each capability against its audit row,
+  verifies four existing no-op test references, and supplies binding-source
+  reasons for index refresh/rebuild. Fresh explicit index work is ok, not noop.
+
+The new tests characterize existing approved behavior; no production behavior
+was written. The focused first run passed **10 / 0 failed / 228 filtered**,
+2.65s. No intentional failing production regression is claimed for this
+test-only evidence task. Formatting touched only the new module via
+`devenv shell -- rustfmt --edition 2024 tests/cli/authoring_exits.rs`.
+
+### Checkpoint gate
+
+All six prescribed commands ran in this worktree:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.36s. |
+| `devenv shell -- cargo fmt --check` | Passed across the tree. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.09s; no old-test lint or other outside-C3 failure. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 18.52s; no features. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed; locked no-default-feature normal dependency tree contains no GPUI package. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | Completed retry passed **182 CLI unit + 238 CLI integration + 71 read-contract + 44 mutation-contract = 535**, zero failed/ignored/measured/filtered in every target. Target durations: 0.23s / 58.49s / 9.85s / 8.62s respectively. |
+
+The first combined gate tool call hit the shell's **120-second timeout** during
+mutation-contract tests, after the first five gates and both CLI targets had
+passed (182 and 238). No assertion failure was reported, and a process probe
+confirmed no remaining Cargo/test process. Only the incomplete exact test-gate
+command was retried, with a 600-second tool budget; that completed as above.
+The five completed gates were not repeated. The 535 total counts the completed
+run once, not the interrupted run or focused run again. No full Cargo suite or
+native CI ran. Task 2's previously unexecuted adjacent unit case passed in the
+182-test CLI-unit target.
+
+### Self-review and delivery for controller review
+
+- Reviewed the complete new module, all referenced test assertions, source
+  reasons, audit equality, catalog filtering, valid prepare fixtures, child
+  lease lifetime, retry bounds, isolation and effect assertions. Exit-4
+  actor evidence is distinguished from a binary exit; pending Part B cases
+  remain explicit. No unresolved implementation issue found in self-review.
+- Checkpoint `git fetch origin` and `git merge origin/main` again left main
+  unchanged and already current. `git merge-tree --write-tree HEAD origin/main`
+  succeeded at the task base with tree
+  `b78fb7a25e93aa1f768186dd09843e83323fcef8`. A final check on the actual
+  checkpoint commit is reported with its returned SHA.
+- Intended changed files are the new test module, module registration, this
+  ledger and canonical Part A comment `01M5RNFS864VQHTB7HHC81ES4P`. The comment's
+  ULID came from `devenv shell -- ./target/debug/manyhands-cli id new`; the
+  timestamp is from `date -u`. Status, diff, whitespace and last ten commits
+  inspected before staging only these paths.
+- Task base: `90c8e3ae15f9085c74b283c95bc557d60a7abc00`. Task head: the commit
+  carrying this section, `test(cli): C3 Part A exit table and inventories`,
+  whose full SHA is returned to the controller. **Independent Part A spec and
+  quality review is pending**, over the actual range
+  `7368902a677a8228813f21da8f74d3cafff68ec3..Task4HEAD` (Tasks 1–4).
+  The controller owns review and post-review bookkeeping after return.
+
+Commit/push authorization is restricted to the ticket branch. Only the new
+tests/registration and checkpoint records changed; no library, Cargo, output
+schema, existing-test semantics or approved-document changes. Task 5 was not
+started. No subagents, PR, main integration, closure, cleanup, dogfooding or
+native CI. This is a locally verified Part A checkpoint for independent review,
+not a review approval or whole-Cycle completion claim.
