@@ -183,9 +183,13 @@ review.
   - **Draft store.** If the draft store is unavailable, Edit says crash
     recovery is off before editing starts. A failed flush while editing
     stays visible.
+  - **Leaving with unsaved text.** Leaving a dirty editor always asks
+    first, whether or not a draft is stored.
   - **Releasing an unused context.** Leaving an Edit that created a context
-    and saved nothing in it, with Done or Discard, releases that context
-    through `context release` (decision 11).
+    and saved nothing in it releases that context through `context release`
+    (decision 11). That applies to Done, Discard and closing the tab, when:
+    - nothing is being saved;
+    - no other draft of the item is kept.
 - **Part C: metadata, relationships and creation.**
   - **Named controls:**
     - a document's title;
@@ -250,8 +254,10 @@ review.
 - **No item deletion**, ticket reopening, short-code edits or editing of
   unknown metadata. `ticket slug-assign` is not offered in D3.
 - **No library change outside Part 0** (track rule 5; decisions 2 and 11).
-  - `src/drafts/`, D2's module, gains one target state for a new item's
-    draft.
+  - **One exception:** `src/drafts/`, D2's GPUI-free module outside
+    `src/repository*`, gains one target state for a new item's draft
+    (design ruling R-20). It is flagged here for the owner's approval with
+    the documents.
 - **Known library defects** stay open and are not prerequisites
   (decision 7). The design says what the user sees under each:
   - `01M4PB7YZMBFAFFM94AZY08HWS`: an interrupted save closed as rejected;
@@ -264,6 +270,10 @@ review.
 - **Known limits:**
   - An Edit left open at quit keeps its context. Release happens on Done,
     Discard or closing the tab, not on quit.
+  - Releasing a clean, unused context removes its directory, even if
+    another process (for example an agent session) is using it as its
+    working directory. No file is lost: a release refuses any change,
+    untracked file or commit.
   - A link or image in the read view or the editor is opened by pointer
     only. The keyboard path to an address is the Source view.
   - Repair text is not crash-protected. D2's drafts are keyed by item ID,
@@ -276,8 +286,9 @@ review.
 1. **Viewing writes nothing.** Opening an item, the read view, the Source
    toggle, following a link, showing an image and switching editor modes
    never call a library mutation.
-   - Only these do, each through F2: Edit, Create, Save, Done or Discard of
-     an unused context, Move, New folder and Repair.
+   - Only these do, each through F2: Edit, Create, Save, Move, New folder
+     and Repair, plus leaving an unused context by Done, Discard or closing
+     its tab.
 2. **The recorded normalization only.** Loading a body into the editor
    changes it only by the recorded set: line endings to LF, then the pinned
    editor's load normalization.
@@ -303,10 +314,12 @@ review.
 
    A dirty editor, and unsaved repair text, are never replaced or dropped
    without the user's choice.
-7. **Stale edits are reviewed.** A save of a stale base is refused by the
-   library and leaves the draft unchanged. So is a save from an unverified
-   base. The review lets the user choose per field; nothing is overwritten
-   without that choice.
+7. **Stale edits are reviewed.**
+   - The library refuses a save of a stale base, and the draft stays
+     unchanged.
+   - D2's registry refuses a save from an unverified base.
+   - The review lets the user choose per field, the body included. Nothing
+     another actor changed is overwritten without that choice.
 8. **Truthful states.** The tab states each of these from the library's
    answer:
    - unsaved;
@@ -329,9 +342,11 @@ review.
     - Retrying a request after a lost answer never duplicates its effect;
       the design states each known defect's exception.
 12. **Contained resources.**
-    - Only image files inside the repository, never inside `.git`, reached
-      without `..` or a symbolic link leaving it, are read. They must be
-      PNG, JPEG, GIF, WebP or BMP and under the size cap.
+    - Only image files inside the repository are read: never inside `.git`
+      in any letter case, and never reached through `..`, a symbolic link
+      leaving it, a backslash, a drive letter or a network path.
+    - They must be PNG, JPEG, GIF, WebP or BMP, under the size cap, and are
+      decoded within fixed limits.
     - No remote resource, SVG, HTML or script is loaded or run.
     - Only `http`, `https` and `mailto` links leave the app, on a click.
 13. **Keyboard first.**
@@ -363,13 +378,13 @@ Planned evidence. Nothing in this table has been run.
 | Shared undo | Typing in rich mode, switching to source, typing, and undoing back past the switch returns to the baseline and makes the tab clean. | A | Planned |
 | Read view | A document and a ticket body render; Source shows the exact source; a large body renders without blocking. | A | Planned |
 | Links | Relative links resolve exactly, in the item's context first and then primary, and otherwise to the nearest same-named document; wiki links resolve by title; an unresolved link says so; unsafe schemes never open; safe ones open the browser. | A | Planned |
-| Images | A local PNG renders in both views; traversal, a symbolic link leaving the repository, `.git`, SVG, an oversized file and a remote URL are not read or loaded. | A | Planned |
+| Images | A local PNG renders in both views. None of these is read or loaded: traversal, a symbolic link leaving the repository, `.git` in any letter case, a backslash or drive-letter path, SVG, an oversized file and a remote URL. A many-frame GIF decodes one frame, and an image over the dimension limit is refused. | A | Planned |
 | Edit and save | Edit provisions with progress before the editor is enabled; a document save and a ticket save commit once and retire the draft; unknown metadata survives by value. | B | Planned |
 | States | Each envelope maps to its label, including `already_applied`, `discovery_pending` with Resume, and a pending checkpoint with Retry under the same request ID, which commits once. | B | Planned |
 | Stale edit | A second actor in a child process changes the item; the save answers `external_change`; the draft file is unchanged; the review chooses per field and Save writes exactly that. An unverified base opens the review before any save. | B | Planned |
 | Late results | A held read or save completing after newer typing or a reload changes nothing the user sees. | B | Planned |
 | Recovery | A restored draft continues and saves; the close dialog's Save saves and closes; a failed flush while editing stays visible and blocks no text; an unavailable store is said before editing. | B | Planned |
-| Release on leave | Done and Discard after an unused Edit, and Discard of a never-created item, release the context; a session that saved keeps its context. | B, C | Planned |
+| Release on leave | These release the context:<br>- Done, Discard or closing the tab after an unused Edit;<br>- closing the tab while Edit prepares;<br>- Discard of a never-created item.<br><br>These keep it:<br>- a session that saved;<br>- another kept draft of the item.<br><br>Leaving a dirty editor with no stored draft asks first. | B, C | Planned |
 | Metadata | Each named control edits its field; identity, short code, closure and unknown metadata are not editable; a status of `closed` saves as ordinary text. | C | Planned |
 | Relationships | Dependencies and parent come from lists and Find; a proposed cycle is explained with its tickets and Save is unavailable; an unresolved dependency is shown and allowed. | C | Planned |
 | Create | New document and New ticket open a draft already in the store, and create once on Save; an occupied path is refused; a failed read after create leaves an ordinary unverified draft, not a new one; a create retried after a lost answer makes one item; a never-created draft restores after relaunch. | C | Planned |

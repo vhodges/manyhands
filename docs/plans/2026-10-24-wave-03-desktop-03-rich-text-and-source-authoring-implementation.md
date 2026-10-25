@@ -35,7 +35,8 @@ contexts are released.
 - Rust 2024.
 - `gpui-kit` 0.6.6, through `gpui_kit::*` only.
 - `zorite-editor` `=0.10.0`, `zorite-markdown` `=0.9.0` with feature `view`,
-  and `markdown` `=1.0.0`. All three are already locked; no new package.
+  `markdown` `=1.0.0` and `image` `=0.25.10`. All four are already locked; no
+  new package.
 - Devenv.
 
 **Spec:** [Cycle](../Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md)
@@ -63,7 +64,9 @@ Edits.
   - `src/repository/cleanup.rs`, `recovery.rs` and `bridges/abandon.rs`;
   - `src/repository/read/{dto,status}.rs`;
   - the three operation schemas;
-  - `tests/read_contract.rs` (E-20).
+  - `tests/read_contract.rs` (E-20);
+  - `src/repository/read/status_tests.rs` (E-21);
+  - the test module inside `src/repository/recovery.rs` (E-22).
 - **No other task** changes `src/repository.rs`, `src/repository/`,
   `src/canonical.rs`, `src/results.rs`, `src/runtime.rs` or `src/lib.rs`.
 - **A gap found later** stops the task: file a shared-library ticket with
@@ -78,8 +81,8 @@ changes only there and gains no new `[[package]]`.
 
 **GPUI.**
 - Use it only through `gpui_kit::*`, and never as a `use gpui_kit::*` glob.
-- `zorite_editor`, `zorite_markdown` and `markdown` are used only under
-  `src/desktop/`.
+- `zorite_editor`, `zorite_markdown`, `markdown` and `image` are used only
+  under `src/desktop/`.
 
 **Privacy.**
 - No type holding body, draft or source text derives `Debug`.
@@ -112,18 +115,20 @@ changes only there and gains no new `[[package]]`.
   targets for Part 0, and the desktop binary's tests and `--test drafts`
   for Parts A to D.
 
-**Desktop verification.** Each desktop task verifies with
-`--features desktop-test-support` tests, and with `--features desktop`
-check and clippy on their own.
+**Desktop verification.** Each desktop task verifies with:
+- `--features desktop-test-support` tests;
+- `--features desktop` check and clippy on their own;
+- as its last Verify line,
+  `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`.
 
 **Dead code.** An item that only a later task calls carries
-`#[cfg_attr(not(test), allow(dead_code))] // Called from Task N.` The task
-that first calls it removes the allowance. This is the repository's
-convention (`services/requests.rs:337`).
+`#[cfg_attr(not(test), allow(dead_code))] // Called from Task N.` Task N is
+the task that first calls it in production code. That task removes the
+allowance. This is the repository's convention (`services/requests.rs:337`).
 
 **Test-first.** Write each behavior's test before its code.
 
-**Existing tests.** They change only as named edits E-1 to E-20. Any other
+**Existing tests.** They change only as named edits E-1 to E-22. Any other
 change to a pre-existing test, even a new lint, stops for the owner.
 
 **Commits.** Commit per task with a conventional message ending
@@ -185,12 +190,12 @@ test files are exempt.
 | --- | --- | --- |
 | `docs/plans/…-execution.md` | 0 | Execution ledger. |
 | `src/repository/mutation/{command,mod,dto}.rs`, `bind/{mod,context}.rs`, `schemas/v1/context_mutation.schema.json`, `tests/mutation_bridges{.rs,/context.rs}`, `tests/fixtures/mutation_v1/context_*.json`, `tests/support/{conformance,mutation_golden,mutation,repair}.rs`, `tests/mutation_contract.rs` | 1 | `context prepare`; E-15 to E-18. |
-| `src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`, `bridges/abandon.rs`, `read/{dto,status}.rs`, three operation schemas, `tests/read_contract.rs` | 2 | `context release`; E-20. |
+| `src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`, `bridges/abandon.rs`, `read/{dto,status,status_tests}.rs`, three operation schemas, `tests/read_contract.rs` | 2 | `context release`; E-20 to E-22. |
 | `Cargo.toml`, `Cargo.lock`, `src/desktop/model/editor_text.rs`, `src/desktop/view/editor.rs`, `tests/fixtures/editor/*` | 3 | Dependencies, feasibility, load normalization. |
 | `src/desktop/view/item/body.rs`, `view/item.rs`, `view/item/source.rs`, `view/item_tests.rs`, `view/tabs_tests.rs` | 4 | Read view; E-1 to E-5. |
 | `src/desktop/view/editor/{style,toolbar,keys}.rs`, `keys.rs`, `mod.rs`, `view/harness.rs` | 5 | Editor host. |
-| `src/desktop/model/links.rs`, `services/links.rs`, `view/link_rewrite.rs` | 6 | Links. |
-| `src/desktop/model/resources.rs`, `services/images.rs` | 7 | Images. |
+| `src/desktop/model/links.rs`, `services/links.rs`, `model/link_rewrite.rs`, `services/render_prep.rs`, `view/item/body.rs` | 6 | Links; background preparation. |
+| `src/desktop/model/resources.rs`, `services/images.rs`, `Cargo.toml` already holds `image` | 7 | Images. |
 | `src/desktop/services/{requests,mod}.rs`, `requests/build.rs`, `services/requests_tests.rs` | 8 | Eight intents; E-11 to E-14. |
 | `src/desktop/model/edit.rs`, `view/item/edit.rs`, `view/item/details.rs`, `model/item.rs`, `model/item_tests.rs` | 9 | Edit, provisioning, release on leave; E-6, first half. |
 | `view/item/edit.rs`, `services/drafts.rs`, `services/drafts/save.rs` | 10 | Save, states, Done. |
@@ -229,6 +234,9 @@ devenv shell -- cargo run --locked --bin manyhands-cli
   Run the test line detached, with a two-hour budget. A failure is resolved
   or accepted by the owner before Task 1.
 
+  Save the output of `devenv shell -- cargo run --locked --bin manyhands-cli -- help`
+  in the ledger. Task 1 compares its own run against this copy.
+
 - [ ] **Step 2: Re-check the Baseline Facts.**
   - Run `git diff --stat 98f49b7 HEAD -- src/repository.rs src/repository src/results.rs src/drafts src/desktop tests/support tests/read_contract.rs schemas Cargo.toml .github`.
   - Re-read each fact whose file changed, and update the design before
@@ -245,7 +253,7 @@ devenv shell -- cargo run --locked --bin manyhands-cli
   - `listed.len()`, `HOMES`, `DATA_ROOTS`, `CASES`, `LOCAL_ACTIONS`;
   - `CloseWithDraft::`.
 
-  Compare each hit with E-1 to E-20. A pre-existing test that will break
+  Compare each hit with E-1 to E-22. A pre-existing test that will break
   and is not listed stops for the owner. Record the sweep in the ledger.
 
 - [ ] **Step 4: Ledger.** Create the ledger with:
@@ -335,7 +343,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 devenv shell -- cargo run --locked --bin manyhands-cli -- help
 ```
 
-  Expected: all pass, and the CLI help is unchanged (R-5).
+  Expected: all pass, and the help output equals the copy Task 0 saved in the
+  ledger (R-5).
 
 - [ ] **Step 6: Commit, and write the ticket comment.**
 
@@ -364,14 +373,20 @@ devenv shell -- cargo run --locked --bin manyhands-cli -- help
     - each refusal leaves the worktree, branch and `contexts` row unchanged;
     - a Create context with no item is released;
     - a branch left without its worktree is released;
-    - after a release, a `context prepare` Edit answers `created: true`.
+    - after a release, a `context prepare` Edit answers `created: true`;
+    - each of these refuses: an unfinished closure, an unknown publication
+      history, and a non-primary branch checked out at the root.
   - **Binding tests,** in `tests/mutation_bridges/context.rs`, one per row
     of the design's `context release` table, prefixed `release_`.
 
 - [ ] **Step 2: Implement** the domain operation, its steps, failure point,
   action name, abandon `writes` arm, `OperationAction`, schemas and the
-  binding. Apply E-20, and the second `HOMES` row and golden
-  `context_release.json` (E-15, E-16).
+  binding.
+  - The lease-held removal uses the item-free precheck.
+  - The hand-off goes to any refresh (R-32).
+  - Apply E-20, E-21 and E-22.
+  - Add the second `HOMES` and `ROWS` rows (E-15) and the golden
+    `context_release.json` (E-16).
 
 - [ ] **Step 3: Verify.**
 
@@ -379,6 +394,7 @@ devenv shell -- cargo run --locked --bin manyhands-cli -- help
 devenv shell -- cargo test --locked --lib context_release
 devenv shell -- cargo test --locked --lib cleanup
 devenv shell -- cargo test --locked --lib recovery
+devenv shell -- cargo test --locked --lib read::status
 devenv shell -- cargo test --locked --test mutation_bridges release_
 devenv shell -- cargo test --locked --test mutation_bridges keeps_the_rules_of_the_boundary
 devenv shell -- cargo test --locked --test read_contract published_enumerations_list_exactly_the_registered_values
@@ -422,7 +438,8 @@ pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Enti
 ```
 
 - [ ] **Step 1: Dependencies.**
-  - `desktop = ["dep:gpui-kit", "dep:futures", "dep:zorite-editor", "dep:zorite-markdown", "dep:markdown"]`.
+  - `desktop = ["dep:gpui-kit", "dep:futures", "dep:zorite-editor", "dep:zorite-markdown", "dep:markdown", "dep:image"]`.
+  - `image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"], optional = true }`.
   - `editor-probe = ["desktop"]`.
   - `zorite-markdown = { version = "=0.9.0", default-features = false, features = ["view"], optional = true }`.
   - `markdown = { version = "=1.0.0", optional = true }`.
@@ -461,7 +478,10 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
     over every fixture.
 
 - [ ] **Step 4: Implement.** Items that only later tasks call carry the
-  dead-code allowance, naming Task 5 or Task 11.
+  dead-code allowance:
+  - `open_editor` names Task 5;
+  - `load` names Task 5;
+  - `normalized` names Task 11.
 
 - [ ] **Step 5: Verify.**
 
@@ -535,6 +555,7 @@ pub(crate) enum EditorHostEvent { DirtyChanged(bool), Edited }
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands editor
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keys
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 devenv shell -- sh scripts/check-cli-no-gpui.sh
 ```
@@ -552,27 +573,38 @@ pub(crate) fn parse_link(raw: &str) -> LinkTarget;
 pub(crate) fn nearest<'a>(from_dir: &str, candidates: &'a [CandidatePath]) -> Option<&'a CandidatePath>;
 // services/links.rs
 pub(crate) fn resolve(target: LinkTarget, from: &ItemDto, …) -> Task<LinkResolution>; // Item(ItemLocator) | NotManaged | NotFound
-// view/link_rewrite.rs
-pub(crate) fn rewrite(body: &str) -> String;   // relative links → [[mh-link:<target>|<text>]] (R-31)
+// model/link_rewrite.rs
+pub(crate) fn rewrite(body: &str) -> String;   // qualifying links → [[mh-link:<target>|<text>]] (R-31)
+// services/render_prep.rs
+pub(crate) struct Prepared { pub text: String, pub image_srcs: Vec<String> }
+pub(crate) fn prepare(body: String, cx: &App) -> Task<Prepared>; // rewrite, image sources, warm_parse (R-7)
 ```
 
 - [ ] **Step 1: Tests first.**
   - `model/links_tests.rs`:
     - `titles_brackets_fragments_and_percent_escapes_are_stripped`
+    - `the_fragment_and_scheme_are_split_before_decoding` (`a%23b.md`,
+      `a%3Ab.md`)
     - `schemes_other_than_http_https_mailto_are_unsafe`
-    - `dot_dot_past_the_root_is_not_found`
+    - `mailto_keeps_only_subject_and_body`
+    - `backslashes_drive_letters_and_double_slashes_are_refused`
+    - `dot_dot_past_the_root_is_not_found_with_no_fallback`
     - `nearest_counts_folder_steps_and_breaks_ties_by_path`
+    - `caret_and_refs_wiki_targets_are_ignored`
   - `services/links_tests.rs`, over real repositories:
     - `an_exact_path_in_the_items_context_wins_over_primary`
     - `an_exact_path_on_primary_opens_its_tab`
-    - `a_missing_path_falls_back_to_the_nearest_same_name`
+    - `a_missing_path_falls_back_to_the_nearest_same_name_and_says_so`
     - `a_title_link_resolves_closest_first`
-    - `a_non_document_file_is_not_managed`
+    - `a_link_to_a_non_item_path_is_not_found`
     - `an_unresolved_link_says_not_found`
-  - `view/link_rewrite_tests.rs`:
-    - `relative_links_become_mh_links_and_external_ones_stay`
-    - `links_with_pipes_or_brackets_and_reference_links_stay`
+  - `model/link_rewrite_tests.rs`:
+    - `relative_and_mailto_links_become_mh_links_and_http_links_stay`
+    - `links_with_formatted_text_pipes_brackets_or_references_stay`
+    - `a_users_own_mh_link_is_a_path_link`
     - `the_rewrite_never_reaches_a_save`
+  - `services/render_prep_tests.rs`:
+    `a_large_body_is_prepared_off_the_ui_thread_and_warmed_as_rewritten`
   - **Handler tests.** Feed `EditorEvent::OpenLink` and `OpenWikiLink`
     straight to the editor host, and call the read view's `on_wiki_link`
     handler directly. Try unsafe targets first, then safe ones, and check
@@ -583,6 +615,7 @@ pub(crate) fn rewrite(body: &str) -> String;   // relative links → [[mh-link:<
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands links
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands link_rewrite
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands render_prep
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 ```
@@ -606,9 +639,14 @@ pub(crate) struct ImageCache { /* src → Pending | Loaded(Arc<RenderImage>, f32
 - [ ] **Step 1: Tests first** (Review Focus 5).
   - `model/resources_tests.rs`, over temporary trees:
     - `dot_dot_symlink_escape_git_and_other_worktrees_are_refused`
+    - `a_case_variant_of_git_is_refused`
+    - `a_handle_that_is_not_the_checked_file_is_refused`
     - `svg_named_png_is_not_an_image`
     - `oversized_files_are_not_read`
     - `each_supported_kind_is_sniffed`
+    - `a_many_frame_gif_decodes_only_its_first_frame`
+    - `an_image_over_8192_pixels_is_refused`
+    - `the_per_tab_budget_stops_further_decodes`
   - `services/images_tests.rs`:
     - `a_local_png_loads_off_the_ui_thread_and_notifies`
     - `an_https_src_is_never_loaded`
@@ -623,6 +661,7 @@ pub(crate) struct ImageCache { /* src → Pending | Loaded(Arc<RenderImage>, f32
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands resources
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands images
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 ```
 
@@ -664,8 +703,8 @@ Their properties:
   "Repair ticket".
 - `TicketCreate` builds with `initials: None`.
 - Each variant carries the dead-code allowance, naming its task.
-- `ReadKind` gains `NewId`, `ObservePath`, `RelationshipCheck` and
-  `Documents`.
+- `ReadKind` gains `NewId`, `ObservePath` and `RelationshipCheck`.
+  `Documents` already exists.
 
 - [ ] **Step 1: Apply E-11 to E-14 first.** The count becomes 29. Run them:
   they fail to compile.
@@ -702,10 +741,21 @@ pub(crate) struct EditSession { provisioned: bool, saved: bool, /* … */ }
   - `a_failed_flush_while_editing_stays_visible`: make the drafts folder
     read-only during editing; the failure shows, and typing continues.
   - `done_after_an_unused_edit_releases_the_context`
+  - `discard_after_an_unused_edit_releases_the_context`
+  - `closing_a_clean_tab_after_an_unused_edit_releases_the_context`
+  - `a_session_that_saved_keeps_its_context`
   - `done_after_an_edit_on_an_existing_context_releases_nothing`
+  - `another_draft_of_the_item_prevents_release` (R-37)
+  - `closing_the_tab_while_preparing_releases_the_context_it_made`
+  - `leaving_a_dirty_editor_with_no_stored_draft_asks_first` (R-41: an
+    unavailable store, and a first write held)
+  - `discard_is_disabled_while_a_save_is_in_flight`
+  - `a_stranded_context_can_be_released_from_the_tab` (R-40)
+  - `undo_reaches_the_draft` (R-12)
   - `a_large_body_opens_in_the_editor` (Review Focus 4)
   - Apply E-6's first half: Edit leaves `LATER`.
-- [ ] **Step 2: Implement.**
+- [ ] **Step 2: Implement.** Remove D2's allowances on `begin` and `edit`,
+  which this task calls first.
 - [ ] **Step 3: Verify.**
 
 ```sh
@@ -745,8 +795,7 @@ pub(crate) fn save_state(code: ResultCode, effects: &Effects, has_publication_re
   - `done_with_a_draft_offers_the_close_choices`
   - `secondary_s_saves_and_secondary_shift_m_switches_mode`
   - `publication_pending_is_read_after_a_save_not_on_load`
-- [ ] **Step 2: Implement.** Remove D2's `begin`, `edit` and `save`
-  allowances.
+- [ ] **Step 2: Implement.** Remove D2's allowance on `save`.
 - [ ] **Step 3: Verify.**
 
 ```sh
@@ -762,6 +811,10 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
 
 - [ ] **Step 1: Apply E-8 and E-9, and write the new tests first.**
   - `continue_editing_loads_the_drafts_text_dirty_on_its_own_base_and_saves`
+  - `continue_editing_a_draft_based_on_primary_takes_the_contexts_token_when_the_source_matches`
+    (R-42)
+  - `continue_editing_opens_the_review_when_the_source_differs`
+  - `save_from_a_restored_draft_prepares_the_context_first`
   - `save_in_the_close_dialog_saves_then_closes`
   - `a_refused_save_from_the_close_dialog_keeps_the_tab`
   - `keep_draft_is_still_the_first_tab_stop_of_the_close_dialog` (R-16)
@@ -771,7 +824,8 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
   - `a_late_read_does_not_replace_a_dirty_editor`
   - `a_clean_editor_reloads_and_keeps_its_cursor` (R-19)
   - `normalization_alone_reads_current_on_the_drafts_page` (R-11)
-- [ ] **Step 2: Implement.** This includes:
+- [ ] **Step 2: Implement.** The new close-dialog tests live in
+  `view/tabs_tests.rs`, beside D2's. The implementation includes:
   - `workspace/content.rs`'s close-choice match;
   - `editor_text::normalized` at every desktop `classify` call;
   - R-38's placement.
@@ -780,7 +834,6 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tabs
-devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands close_draft
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
@@ -798,6 +851,8 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
   - `cancel_leaves_draft_and_base_unchanged`
   - `a_second_change_during_review_reopens_it_on_save` (two different
     `SaveDocumentAs` bodies)
+  - `a_body_changed_only_by_them_defaults_to_theirs`
+  - `a_body_changed_by_both_must_be_chosen_before_use`
   - `an_unverified_base_opens_the_review_before_any_save` (R-36)
   - `the_d2_privacy_sweep_still_holds_with_the_review_open` (R-38)
 - [ ] **Step 2: Implement.**
@@ -805,7 +860,7 @@ devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D w
 
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands review
-devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts_privacy
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts::privacy_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 ```
 
@@ -888,6 +943,11 @@ impl DraftRegistry {
   - In `services/drafts/create_tests.rs`:
     - `create_completion_clears_the_marker_when_the_read_matches`
     - `create_completion_clears_the_marker_when_the_read_fails` (R-20b)
+    - `a_retitle_between_create_and_read_reviews_with_theirs_as_default`
+      (R-20b)
+    - `the_new_item_draft_is_stored_before_context_prepare` (R-20)
+    - `an_occupied_path_for_this_drafts_own_item_becomes_a_review`
+    - `a_marked_draft_whose_item_exists_routes_to_edit_and_review` (R-42)
     - `a_create_retried_after_a_lost_answer_creates_one_item` (worker
       `retry`)
     - `discarding_a_new_item_draft_releases_its_context`
@@ -902,6 +962,7 @@ impl DraftRegistry {
 devenv shell -- cargo test --locked --lib drafts::
 devenv shell -- cargo test --locked --test drafts
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands draft_comparison
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
@@ -925,6 +986,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands create
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::documents
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tickets
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keys
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 ```
@@ -1059,18 +1121,19 @@ git merge-tree --write-tree HEAD origin/main
 | --- | --- |
 | Context prepare; R-1 to R-5 | 1 |
 | Context release; R-32 | 2 |
+| E-21, E-22 | 2 |
 | Load normalization; round trips | 3, 5 |
 | Read view; R-6, R-7 | 4 |
 | Shared undo; not dirty (editor); R-8, R-9, R-12 | 5 |
-| Links; R-31 | 6 |
-| Images; R-33, R-34 | 7 |
-| Edit; release on leave; R-13, R-35, R-37 | 9 |
+| Links; R-31; background preparation (R-7) | 6 |
+| Images; R-33, R-34, R-39 | 7 |
+| Edit; release on leave; R-12, R-13, R-35, R-37, R-40, R-41 | 9 |
 | Save; states; untouched bytes; not dirty (repository); R-11, R-14, R-15 | 10 |
-| Late results; recovery; R-16, R-17, R-19, R-38 | 11 |
+| Late results; recovery; R-16, R-17, R-19, R-38, R-42 (Continue editing) | 11 |
 | Stale edit; R-18, R-36 | 12 |
 | Metadata; R-27 | 13 |
 | Relationships; R-26 | 14 |
-| Create (drafts); R-20, R-20b | 15 |
+| Create (drafts); R-20, R-20b, R-42 (routing) | 15 |
 | Create (dialogs); R-21, R-22 | 16 |
 | Move; folders; R-23, R-24 | 17 |
 | Repair; R-25 | 18 |

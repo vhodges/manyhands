@@ -14,18 +14,19 @@ id: "01M5RE7RWMYCHA7CGMKED4QDDZ"
 
 This design implements the
 [D3 Cycle](../Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md).
-It says how each of these works and how each requirement is proved:
+It covers:
 
 - the two context commands;
-- how the read view and the editor are embedded;
-- what the editor's load normalization is;
-- how links and images resolve;
+- the read view and the editor;
+- the editor's load normalization;
+- how links and images resolve and load;
 - how edits flow into D2's draft sessions and out through F2;
-- how stale edits are reviewed;
-- how items are created, moved and repaired.
+- the stale-edit review;
+- creating, moving and repairing items.
 
-The Cycle owns scope, exclusions and the eleven product-owner decisions of
-2026-10-24. This document cites them by number.
+For each, it says how every requirement is proved. The Cycle owns scope,
+exclusions and the eleven product-owner decisions of 2026-10-24, which this
+document cites by number.
 
 Draft for product-owner review. Nothing in it has been built or run.
 
@@ -36,8 +37,8 @@ command was run. Line numbers are at that revision.
 
 **Library: reads.**
 
-1. **`show_item`.** `RepositoryService::show_item(&ResolvedRepository, &ItemId) -> Result<ItemDto, ReadError>`
-   (`src/repository/read/items.rs:1784`).
+1. `RepositoryService::show_item(&ResolvedRepository, &ItemId) ->
+   Result<ItemDto, ReadError>` (`src/repository/read/items.rs:1784`).
    - `ItemDto` (`read/dto.rs:426`) carries:
      - the parsed `body: Option<String>`;
      - the whole file as `source: Option<String>`, null when not UTF-8;
@@ -47,25 +48,28 @@ command was run. Line numbers are at that revision.
      - `context: ItemContextDto { kind, branch, worktree, head_oid }`
        (`dto.rs:537`).
    - List DTOs carry no body, source or observation.
-2. **The observation token.** It is `"v1:"` plus a BLAKE3 hash of the
-   context branch, the path and the file bytes (`items.rs:1200-1218`). It
-   changes when a context is created, because the branch is part of it.
-3. **Effective copy.** `show_item` prefers the item's own worktree copy once
-   the index holds that context's row (`items.rs:1546`, `1616`).
-4. **Path reads.**
-   - `show_path` (`items.rs:1853`) reads an exact path, nonconforming files
-     included.
-   - `observe_path` (`items.rs:1963`) returns a `PathObservationDto`
-     (`dto.rs:20`). Its token is the absence token when nothing is there.
-5. **Relationship check.** `check_ticket_relationships(repo, id, &ProposedRelationships)`
-   (`items.rs:2033`) checks a proposed whole set of `deps` and `parent`
+2. The observation token is `"v1:"` plus a BLAKE3 hash of the context
+   branch, the path and the file bytes (`items.rs:1200-1218`). It changes
+   when a context is created, because the branch is part of it.
+3. `show_item` prefers the item's own worktree copy once the index holds
+   that context's row (`items.rs:1546`, `1616`). It falls back to another
+   copy when the worktree has gone (`items.rs:1573-1597`).
+4. `show_path` (`items.rs:1853`) and `observe_path` (`items.rs:1963`)
+   accept only item paths:
+   - documents under `docs/`;
+   - tickets;
+   - comments.
+
+   They refuse any other path as `invalid_path`. Their context must be a
+   worktree the index knows.
+5. `check_ticket_relationships(repo, id, &ProposedRelationships)`
+   (`items.rs:2033`) checks a whole proposed set of `deps` and `parent`
    without writing.
-   - Its `RelationshipCheckDto` (`dto.rs:1037`) has
-     `rejection: Option<{ code, ids }>`.
-   - `ids` is a set in ID order, not a path. `code` is `relationship_cycle`
-     or `invalid_relationship`.
+   - It returns `RelationshipCheckDto` (`dto.rs:1037`), whose
+     `rejection: Option<{ code, ids }>` lists `ids` as a set, not a path.
+   - The code is `relationship_cycle` or `invalid_relationship`.
    - It reads the index only.
-6. **Other reads.** These exist:
+6. These reads exist:
    - `list_tickets` (`items.rs:1696`);
    - `list_documents`;
    - `find_tickets_by_slug` (`read/graph.rs:1109`);
@@ -74,65 +78,66 @@ command was run. Line numbers are at that revision.
 
 **Library: mutations.**
 
-7. **No context-only command.** `Mutation` (`mutation/mod.rs:398-429`) has
-   `DocumentCreate`, `DocumentSave`, `DocumentMove`, `TicketCreate`,
-   `TicketSave`, `FolderCreate`, `DocumentRepair` and `TicketRepair`, among
-   others. None provisions or releases a context alone.
-8. **Inputs.**
-
-   | Input | Fields | Defined at |
-   | --- | --- | --- |
-   | `DocumentCreateInput` | `root, id, path, draft` | `bind/document.rs:47` |
-   | `DocumentSaveInput` | `root, id, draft, observation: Option<String>` | `:59` |
-   | `DocumentMoveInput` | `root, id, observation, destination_path, destination_observation` | `:70` |
-   | `TicketCreateInput` | `root, id, draft, deps, parent, initials` | `bind/ticket.rs:44` |
-   | `TicketSaveInput` | `…, deps: RelationshipWrite<Vec<String>>, parent: RelationshipWrite<String>, observation: String` | `bind/ticket.rs` |
-   | `FolderCreateInput` | `root, path` | `bind/folder.rs:58` |
-   | `DocumentRepairInput`, `TicketRepairInput` | `root, path, observation, source` | `bind/repair.rs:100`, `:114` |
-9. **Confirmation.** Among D3's commands only the two repairs need
-   confirmation (`mutation/command.rs:436-476`). Their preview is
-   `RepairPreviewDto { root, path, id, adoption, primary_changed }`
-   (`mutation/dto.rs:226`). The desktop's confirmation dialog shows Root,
-   Path and ID for it (`view/confirm.rs:569-573`).
-10. **What a save writes.**
+7. `Mutation` (`mutation/mod.rs:398-429`) has `DocumentCreate`,
+   `DocumentSave`, `DocumentMove`, `TicketCreate`, `TicketSave`,
+   `FolderCreate`, `DocumentRepair`, `TicketRepair` and others. None of them
+   provisions or releases a context on its own.
+8. The inputs:
+   - `DocumentCreateInput { root, id, path, draft }` (`bind/document.rs:47`);
+   - `DocumentSaveInput { root, id, draft, observation: Option<String> }`
+     (`:59`);
+   - `DocumentMoveInput { root, id, observation, destination_path,
+     destination_observation }` (`:70`);
+   - `TicketCreateInput { root, id, draft, deps, parent, initials }`
+     (`bind/ticket.rs:44`);
+   - `TicketSaveInput { …, deps: RelationshipWrite<Vec<String>>, parent:
+     RelationshipWrite<String>, observation: String }`;
+   - `FolderCreateInput { root, path }` (`bind/folder.rs:58`);
+   - `DocumentRepairInput` and `TicketRepairInput`
+     `{ root, path, observation, source }` (`bind/repair.rs:100`, `:114`).
+9. Among D3's commands, only the two repairs need confirmation
+   (`mutation/command.rs:436-476`).
+   - Their preview is `RepairPreviewDto { root, path, id, adoption,
+     primary_changed }` (`mutation/dto.rs:226`).
+   - The desktop's confirmation dialog shows only Root, Path and ID for it
+     (`view/confirm.rs:569-573`).
+10. Document and ticket saves write differently:
     - A document save always provisions a context and rewrites the file,
       re-emitting its front matter. It commits only when the tree changed
       (`repository.rs:2036`, `2181-2183`, `2265-2297`, `3561-3571`).
     - A ticket save writes only when the parsed ticket differs
       (`repository.rs:2646-2661`).
-    - Both re-emit every front-matter key: unknown keys first, then the
+    - Both re-emit every front-matter key, unknown keys first and then the
       known keys in canonical order (`canonical.rs:911-981`). `deps` are
       written sorted by ID.
-11. **Relationship check on save.** A save checks relationships before the
-    observation (`bind/ticket.rs:394-475`, `601-634`). A cycle answers
-    `relationship_cycle`, with `TicketMutationDto.rejected` holding the
-    IDs.
-12. **A mismatched token.**
-    - It answers `already_applied` when the current file is already as
-      intended and committed, and `external_change` otherwise
-      (`bind/save.rs:124-139`).
-    - With no context, the primary file must be committed and clean
-      (`save.rs:145-158`, `worktree_not_clean`).
-13. **Pending rows.** Any pending journal row for the root, other than the
-    request's own, answers `recovery_required` for every new local
-    operation (`recovery.rs:1334-1394`).
-14. **Effects.** Saves report through `Effects { write, checkpoint,
-    discovery, publication, … }` (`results.rs:302`).
-    - `discovery_pending`, with discovery `pending`, is a commit whose index
-      refresh failed.
-    - A checkpoint `pending` is an interrupted save.
-15. **Mutation data.** `DocumentMutationDto { id, path }` and
+11. A save checks relationships before the observation
+    (`bind/ticket.rs:394-475`, `601-634`). A cycle answers
+    `relationship_cycle`, with the IDs in `rejected`.
+12. When the token does not match, the answer is `already_applied` if the
+    file is as intended and committed, and `external_change` otherwise
+    (`bind/save.rs:124-139`). With no context, the primary file must be
+    committed and clean (`save.rs:145-158`).
+13. Any pending journal row for the root, other than the request's own,
+    answers `recovery_required` for every new local operation
+    (`recovery.rs:1334-1394`).
+14. Saves report through `Effects { write, checkpoint, discovery,
+    publication, … }` (`results.rs:302`).
+    - `discovery_pending` means a commit whose index refresh failed.
+    - A checkpoint of `pending` means an interrupted save.
+15. `DocumentMutationDto { id, path: Option<String> }` and
     `TicketMutationDto { id, path, slug, unresolved, rejected }`
     (`mutation/dto.rs:906`, `:930`) return no new observation.
-16. **Folder creation.** It makes directories in the primary worktree with no
-    commit (`bridges/folder.rs:1-8`). Its hand-off is "any refresh's"
-    (`command.rs:388-400`, `hands_off_to_any_refresh`, true only for it).
-    Every other authoring command's hand-off is owed by its operation and
-    finished by `operation resume`.
+16. Folder creation makes directories in the primary worktree, with no
+    commit (`bridges/folder.rs:1-8`).
+    - Its hand-off is "any refresh's" (`command.rs:388-400`,
+      `hands_off_to_any_refresh`): it completes its row and marks the
+      registration stale if the refresh fails.
+    - Every other authoring command's hand-off is owed by its operation and
+      finished by `operation resume`.
 
 **Library: work contexts.**
 
-17. **The domain call.** `RepositoryService::prepare_context(&self, target: AuthoringTarget) ->
+17. `RepositoryService::prepare_context(&self, target: AuthoringTarget) ->
     Result<ContextProvisionOutcome, RepositoryError>` (`repository.rs:1710`).
     - `AuthoringTarget { root, kind: AuthoringKind, item_id, intent:
       ContextIntent, operation_id }` (`:555`).
@@ -141,323 +146,310 @@ command was run. Line numbers are at that revision.
     - `ContextIntent { Create, Edit, Repair }` (`:544`).
     - `ContextProvisionOutcome { Created(ItemContext), Reused(ItemContext),
       IndexPending { context } }` (`:572`).
-18. **What it does.**
-    - It takes the lease and writes an `operation_records` row.
-    - It cuts the branch `manyhands/<kind>/<id>` from primary HEAD
-      (`:1926`) and creates the worktree `.manyhands/worktrees/<id>`.
-    - It commits nothing and needs no Git identity.
-    - **Refusals:**
+18. `prepare_context` takes the lease and writes an `operation_records` row.
+    - It cuts `manyhands/<kind>/<id>` from primary HEAD (`:1926`) and
+      creates the worktree `.manyhands/worktrees/<id>`.
+    - It commits nothing and needs no identity.
+    - Refusals:
       - Create refuses an ID already present on primary
-        (`OccupiedItemPath`, `:1849-1858`);
-      - Edit refuses an absent item (`MissingAuthoringTarget`,
-        `:1886-1893`);
-      - a ticket Edit on a new row refuses a closed ticket (`TicketClosed`,
-        `:249-268`), but a same-ID retry does not check it again.
-19. **No file check.** It does not check that the item's primary file is
-    committed and clean. The save bindings do (`save.rs:145-158`), and stop
-    once a worktree exists (`save.rs:152`).
-20. **Its journal steps.**
-    - A `Created` outcome records `AuthoritativeObserved`, a checkpoint
-      step, and hands off to an index refresh (`repository.rs:3670-3725`).
-    - `IndexPending` leaves the row pending as a hand-off that
-      `operation resume` finishes (`resume.rs:358`).
-    - `Reused` completes the row with no step, so it reads
-      `checkpointed: false` (`:1780-1782`, `recovery.rs:1538`, `:1820`).
-    - Re-running a pending row answers `Created` (`:1757-1758`).
-21. **Create reuses.** After `prepare_context(Create)`, a create for the
-    same ID reuses the context (`tests/recovery_foundation_gate.rs:270-332`).
-22. **Context removal today.** It exists only as `pub(super)` primitives in
-    `src/repository/cleanup.rs`, which the promotion and closure runner
-    composes (`promotion/run.rs:1266-1430`):
-    - `precheck_context` (`:93`): worktree identity, `HEAD == ref == oid`,
-      `validate_context_tree`, and `require_cleanup_clean` (untracked,
-      ignored, hidden index bits, submodules), not locked;
-    - `remove_context_worktree` (`:165`): idempotent, `AlreadyAbsent`;
-    - `delete_context_branch` (`:216`): oid-checked, refused while checked
-      out anywhere.
+        (`OccupiedItemPath`);
+      - Edit refuses an absent item (`MissingAuthoringTarget`);
+      - a ticket Edit on a new row refuses a closed ticket (`:249-268`).
+        Retries skip that check.
+    - A branch without its worktree must sit at primary HEAD, otherwise
+      `MismatchedAuthoringContext`, which answers `recovery_required`
+      (`:1896-1912`).
+19. It does not check that the primary file is committed. The save
+    bindings do (`save.rs:145-158`), and they stop checking once a
+    worktree directory exists (`:152`).
+20. Each outcome leaves its journal row differently:
+    - `Created` records `AuthoritativeObserved` and hands off
+      (`:3670-3725`);
+    - `IndexPending` leaves the row pending as a hand-off for `operation
+      resume`;
+    - `Reused` completes the row with no step (`checkpointed: false`);
+    - re-running a pending row answers `Created` (`:1757-1758`).
+21. After `prepare_context(Create)`, a create of the same ID reuses the
+    context (`tests/recovery_foundation_gate.rs:270-332`).
+22. Context removal exists only as `pub(super)` primitives in
+    `src/repository/cleanup.rs`, composed by the promotion and closure
+    runner:
+    - `precheck_context` (`:93`): identity, `HEAD == ref == oid`,
+      `validate_context_tree` with the item required (`:137`), clean, not
+      locked;
+    - `remove_context_worktree` (`:165`): it re-runs the precheck (`:182`)
+      and is idempotent;
+    - `delete_context_branch` (`:216`): oid-checked, refused while the
+      branch is checked out anywhere.
 
-    `ContextCleanup::acquire` takes its own repository lease (`:80`). The
-    precheck's `validate_context_tree` requires the item to be present
-    (`repository.rs:9312`), so it refuses a context created for a new item.
-23. **No base is recorded.** No base commit is recorded for a context.
-    - A context gains commits from saves, comment checkpoints and
-      synchronization merges.
-    - Polls can fast-forward it.
-    - Publication evidence is `remote_context_states.publication_evidence`
-      (`remote/state.rs:95`), and a published branch has a
-      `refs/remotes/<remote>/manyhands/<kind>/<id>` tracking ref.
-24. **Index rows.** A removed worktree's `contexts` row is dropped by the
-    next refresh's `reconcile_disappeared_contexts` (`repository.rs:6160-6211`).
-25. **Steps and action names.**
+    `ContextCleanup::acquire` takes its own repository lease (`:80`).
+    `Precheck::Changed` covers both a dirty worktree and an identity or
+    HEAD mismatch.
+23. No base commit is recorded for a context.
+    - A context's tip moves by saves, comment checkpoints, synchronization
+      merges and poll fast-forwards.
+    - `publication_evidence_for` reads publication evidence, including a
+      verified push journal and `HistoryUnknown` after cache loss
+      (`remote/state.rs:2136-2160`, `5694-5760`).
+    - An unfinished closure (`ticket_closures` row before its terminal
+      step) or promotion owns the context (`closure/record.rs:741-752`).
+24. A removed worktree's `contexts` row is dropped by the next refresh
+    (`repository.rs:6160-6211`).
+25. Journal steps and actions are fixed lists:
     - `LocalStep` (`recovery.rs:880-931`) has no removal step.
     - Every `RepositoryOperation` has an action name (`recovery.rs:2078`,
       `:2115`) and an `OperationAction` (`read/dto.rs:763`,
       `read/status.rs:78`).
-    - Three schemas enumerate the actions: `operation`,
-      `operation_mutation` and `operation_abandon_preview`.
-    - `tests/read_contract.rs:686` lists the 13 local actions.
+    - Three schemas enumerate the actions.
     - Abandon touches no file, reference or index entry
       (`bridges/abandon.rs:419`).
 
-**Library: F2 plumbing a new command touches.**
+**Library: F2 plumbing and its tests.**
 
-26. **Exhaustive matches.**
-    - Command names and nine per-command tables are in
-      `mutation/command.rs:37-476`.
-    - `Mutation::kind`, `confirmed` and `into_binding` are exhaustive
-      (`mod.rs:437-547`).
-    - So are `recorded_effects` (`bind/mod.rs:899-992`) and
-      `MutationDataDto::from_stored(command, …)` (`mutation/dto.rs:994`).
-    - `MutationDataDto` is untagged (`dto.rs:540`).
-27. **Replay and re-entry.**
+26. These matches are exhaustive:
+    - the command names and nine tables (`mutation/command.rs:37-476`);
+    - `Mutation::kind`, `confirmed` and `into_binding` (`mod.rs:437-547`);
+    - `recorded_effects` (`bind/mod.rs:899-992`);
+    - `MutationDataDto::from_stored` (`dto.rs:994`).
+
+    `MutationDataDto` is untagged (`dto.rs:540`).
+27. Replay and settlement:
     - A request's replay identity is the digest of the command, scope,
-      target and the binding's fields (`reply.rs:45-53`). A reused request
-      ID with another digest answers `request_mismatch`
+      target and fields (`reply.rs:45-53`).
+    - A reused request ID with another digest answers `request_mismatch`
       (`replay.rs:133-154`).
     - Acceptance mints a fresh `OperationId` (`execute.rs:290-292`).
     - Each binding chooses `ended_without_checkpoint` and how each answer
-      settles. The saves settle `discovery_pending` as owed, so a same-ID
-      retry re-enters (`bind/save.rs:528-541`).
-28. **Registries.**
-    - `tests/support/conformance.rs:59` `HOMES: [(&str, Home); 30]`
-      requires one row per bound command.
-    - `tests/mutation_contract.rs:1494` requires a golden registered in
-      `tests/support/mutation_golden.rs:21` `CASES`.
-    - A new data shape needs a data root in `DATA_ROOTS: [&str; 46]`
-      (`mutation_contract.rs:1510`).
-    - `tests/support/mutation.rs` (`ticket_data` `:596` and five siblings)
-      and `tests/support/repair.rs:335-344` match `MutationDataDto`
-      exhaustively.
-    - Golden files use underscores (`document_create.json`).
+      settles. Saves settle `discovery_pending` as owed (`bind/save.rs:528-541`).
+28. Tests that enumerate commands, data or actions:
+    - `HOMES: [(&str, Home); 30]` (`tests/support/conformance.rs:59`) and
+      `ROWS: [Row; 4]` (`tests/mutation_bridges/conformance.rs:33`);
+    - `CASES` (`tests/support/mutation_golden.rs:21`) and
+      `DATA_ROOTS: [&str; 46]` (`tests/mutation_contract.rs:1510`);
+    - `tests/support/mutation.rs`'s six data helpers (`:596` onward) and
+      `tests/support/repair.rs:335-344`, which match `MutationDataDto`
+      exhaustively;
+    - `LOCAL_ACTIONS: [OperationAction; 13]` (`tests/read_contract.rs:687`);
+    - `src/repository/read/status_tests.rs`, whose `repository_operations()`
+      (`:224`) is an exhaustive match and whose two tests slice
+      `OperationAction::ALL[..13]` (`:80`, `:305`);
+    - `recovery.rs:2461` `every_step_is_stored_under_its_own_name_and_read_back`,
+      which lists every `LocalStep`.
 
-**Editor and viewer (pinned crates).**
+**Editor, viewer and images (pinned crates).**
 
-29. **The pin.** `zorite-editor` is pinned `=0.10.0` behind feature
-    `editor-probe` (`Cargo.toml:13`, `:30`).
-    - `Cargo.lock` holds one `gpui-pre` 0.3.6, shared by gpui-kit 0.6.6,
-      `zorite-editor` and `gpui-bidi`.
-    - `zorite-markdown` 0.9.0 is locked with its `view` feature off.
-    - `markdown` 1.0.0 is already locked.
-    - The release build compiles the editor
-      (`.github/workflows/build.yml:100`).
-30. **Loading.**
-    - `EditorState::new(window, cx)` (`zorite-editor` `lib.rs:1005`) builds
-      an empty raw-mode editor.
-    - `with_text` (`:1103`) and `set_text` (`:1151`) load through
-      `normalize_loaded` (`:324-332`), which calls
+29. `zorite-editor` is pinned `=0.10.0` behind feature `editor-probe`
+    (`Cargo.toml:13`, `:30`).
+    - Kit, the editor and `gpui-bidi` share one `gpui-pre` 0.3.6.
+    - `zorite-markdown` 0.9.0 is locked with `view` off.
+    - `markdown` 1.0.0 and `image` 0.25.10 are already locked.
+    - The release build compiles the editor (`build.yml:100`).
+30. Loading:
+    - `EditorState::new(window, cx)` (`lib.rs:1005`) creates the editor.
+    - `with_text` (`:1103`, cursor at 0) and `set_text` (`:1151`, which
+      clears undo and emits nothing) load through `normalize_loaded`
+      (`:324-332`).
+    - `normalize_loaded` calls
       `zorite_markdown::syntax::normalize_math_fences` when the text holds
-      `$$`. Nothing else changes on load. `with_text` puts the cursor at 0.
-    - `set_text` clears undo and emits no event.
-31. **Events and API.**
-    - Typing emits `EditorEvent::Changed` (`lib.rs:4866`). Undo and Redo
-      only notify (`:2674-2690`).
+      `$$`, and nothing else.
+31. Change events and editing calls:
+    - Typing emits `Changed` (`lib.rs:4866`).
+    - Undo and Redo only notify (`:2674-2690`).
     - These are public:
       - `cursor()` (`:1652`);
-      - `set_cursor(offset)` (`:1667`, emits `SelectionChanged`);
+      - `set_cursor(offset)` (`:1667`);
       - `replace_range` (`:1125`, undoable, no event);
-      - `EntityInputHandler::selected_text_range` (`:4816`, UTF-16).
-    - There is no public undo history.
-32. **Modes.**
-    - `set_markdown_style(SyntaxStyle)` (`:1199`) and `clear_markdown_style`
-      (`:1214`) change styling only.
-    - `SyntaxStyle` (`markdown_syntax.rs:27-86`, 25 fields) has no
-      `Default`.
+      - `EntityInputHandler::selected_text_range` (`:4816`).
+32. Mode and style:
+    - `set_markdown_style(SyntaxStyle)` (`:1199`) and
+      `clear_markdown_style` (`:1214`) change styling only.
+    - `SyntaxStyle` (25 fields) has no `Default`.
     - Some edits depend on the mode: marker-skipping deletes, image-line
-      backspace and `$$` paste normalization.
-33. **Keys.**
-    - `bind_keys` (`lib.rs:101-148`) binds every editing key in key
-      context `"Editor"`:
-      - arrows, backspace, delete and enter;
-      - select-all, copy, paste and cut;
-      - word moves;
-      - Tab (Indent) and Shift-Tab (Outdent);
-      - Escape (`Dismiss`, which closes menus and never propagates);
-      - undo and redo;
-      - bold, italic, code, strike and underline (which writes `<u>…</u>`);
-      - Ctrl-Cmd-Space (the character palette).
+      backspace and `$$` paste.
+33. Key bindings:
+    - `bind_keys` (`lib.rs:101-148`) binds every editing key in context
+      `"Editor"`. That includes Tab and Shift-Tab (indent and outdent),
+      Escape (`Dismiss`, which never propagates), underline (writing
+      `<u>`) and Ctrl-Cmd-Space.
     - Keys bound outside `"Editor"` still fire while it has focus.
-    - `NoAction` exists in gpui-pre (`action.rs:5`).
-34. **Carriage returns.** A carriage return is not handled on load. Only
-    paste converts it, and the source says one in the buffer garbles
-    rendering (`lib.rs:2552-2556`).
-35. **Editor links and images.**
-    - **Links.** `OpenLink(src)` and `OpenWikiLink(target)` are emitted on a
-      left click only.
-      - `src` is the raw text between `](` and the first `)`, title and
-        angle brackets included.
-      - A `#tag` arrives as `OpenWikiLink("tag")`.
-    - **Images.** `set_block_image_provider(impl Fn(&str) ->
-      Option<Arc<RenderImage>>)` (`lib.rs:1232`) is called synchronously
-      during layout, for every image line, with the raw `src`, and no `cx`.
-      `None` shows the source.
-    - There is no file, process or network call in the crate.
-36. **Tables.** Table operations are public methods (`tables.rs:437-931`),
-    not actions, and read state from the last paint.
-37. **Headless input.** The editor registers its input handler while
-    painting, and only when focused (`element.rs:1452-1457`).
-    - A test must focus it and draw a frame before typing.
-    - gpui-kit's scoped test helpers need `test_support` focus tracking,
-      which the editor lacks.
+    - A later `NoAction` binding in `"Editor"` suppresses an action
+      (`keymap.rs:195-214`).
+34. A carriage return in the buffer garbles rendering; only paste converts
+    it (`lib.rs:2552-2556`).
+35. Link events and the image provider:
+    - `OpenLink(src)` and `OpenWikiLink(target)` are emitted on a left click
+      only.
+    - `src` is the raw text up to the first `)`, title and angle brackets
+      included.
+    - Wiki targets include `#tag` (as `tag`), `#^id` and `refs:^id`.
+    - `set_block_image_provider(impl Fn(&str) -> Option<Arc<RenderImage>>)`
+      (`lib.rs:1232`) is called synchronously during layout, with no
+      `cx`.
+36. Table operations are public methods (`tables.rs:437-931`).
+37. The editor registers input only while focused and painted
+    (`element.rs:1452-1457`).
+    - gpui-kit's scoped test helpers need `test_support` focus tracking.
     - The test window's character palette is `unimplemented!`.
-38. **The viewer.** `zorite-markdown`'s `view` feature provides
-    `MarkdownView` (`view.rs:478`), a per-frame element:
-    `MarkdownView::new(id_base, source)` with a `MarkdownStyle`, which has
-    `Default`.
-    - **Hooks:** `on_wiki_link`, and `on_inline_image(Rc<dyn
+38. `MarkdownView` (`zorite-markdown` `view.rs:478`) is a per-frame
+    element.
+    - Its hooks include `on_wiki_link`, and `on_inline_image(Rc<dyn
       Fn(SharedString) -> Option<(Arc<RenderImage>, f32, f32)>>)`, which
-      also serves a paragraph's leading image when `on_image` is unset.
-    - **Images.** With no image, it renders a "🖼 alt" label that is a link
-      to the image's URL.
-    - **Raw HTML** renders as literal text.
-    - **Links.** A click on any `[text](url)` goes to `follow_link`, which
-      opens only `http`, `https` and `mailto` with `cx.open_url` and
-      ignores anything else (`view.rs:1903-1919`, `3005-3016`). There is no
-      host hook for these links. A `[[target|alias]]` link goes to
-      `on_wiki_link` with `target`.
-    - **No keyboard path.** Nothing is keyboard-activatable.
-    - **Large bodies.** Expensive sources not yet in its 64-entry parse cache
-      render as plain text until `warm_parse` has run (`view.rs:693-929`).
-    - **No I/O.** It does no file, process or network I/O.
-39. **Decoding.** `gpui_kit::{Image, ImageFormat}` decode bytes with
-    `Image::from_bytes(format, bytes).to_image_data(svg_renderer)`
-    (`gpui-pre` `platform.rs:2953`, `:3001`).
-    - The call is synchronous and safe on a background thread.
-    - SVG decoding can read other local files through `usvg`'s defaults.
-    - No HTTP client is installed on desktop.
-40. **Licenses.** All four crates (`zorite-editor`, `zorite-markdown`,
-    `gpui-bidi`, `markdown`) are MIT, with a `LICENSE` file and no NOTICE.
+      also serves a leading image.
+    - With no image it renders a link label to the image URL.
+    - `[text](url)` clicks go to `follow_link`, which opens only `http`,
+      `https` and `mailto`, including any `mailto` query
+      (`view.rs:1903-1919`, `3005-3016`; `syntax.rs:320-327`).
+    - There is no host hook for those links.
+    - `[[target|alias]]` reaches `on_wiki_link`, but only when the whole
+      `[[…]]` lies in one plain text run (`view.rs:2385-2428`).
+    - Nothing in it is keyboard-activatable.
+    - Its parse cache is keyed by the source passed in. Expensive sources
+      render plain until `warm_parse` has run (`view.rs:693-931`).
+    - `all_image_srcs` parses the body (`view.rs:1626`).
+    - It does no I/O.
+39. `Image::to_image_data` (`gpui-pre` `platform.rs:3001-3043`) decodes:
+    - with no limits for GIF, collecting every frame;
+    - with only the default 512 MiB allocation cap for other formats.
+
+    `RenderImage::new(frames)` (`assets.rs:61`) takes BGRA `image::Frame`s.
+    `ImageReader::with_format` does not sniff. SVG decoding can read local
+    files. No HTTP client is installed on desktop.
+40. All five crates are MIT, with a `LICENSE` file and no NOTICE:
+    - `zorite-editor`;
+    - `zorite-markdown`;
+    - `gpui-bidi`;
+    - `markdown`;
+    - `image`.
 
 **Desktop and drafts.**
 
-41. **The item tab** (`src/desktop/view/item.rs:124-163`) renders:
+41. The item tab renders the following, but not the parsed body
+    (`view/item.rs:124-163`):
     - identity and status;
     - the draft banner and section;
-    - details, relationships, problems and unknown metadata;
-    - a read-only `Textarea` of `item.source` (`view/item/source.rs`);
+    - details, relationships, problems and metadata;
+    - a read-only source `Textarea`;
     - the disabled `LATER` actions (`model/item.rs:33`).
 
-    The parsed body is not rendered. `tabs_tests.rs:526-558` pins the tab's
-    load reads in order.
-42. **Intents.** Desktop mutations are `Intent`s
-    (`services/requests.rs:42-151`), 21 variants, built into `Mutation`s by
-    `services/requests/build.rs` and run on the worker (`worker.rs:539`).
-    - `DocumentSave` and `TicketSave` exist.
-    - `for_drafts` (`services/mod.rs:298-314`) routes only those two
-      intents' answers to the draft registry.
-43. **D2's save path.**
-    - `DraftRegistry::begin`, `edit` and `save` are called only by tests
-      (`services/drafts.rs:289`, `:326`, `services/drafts/save.rs:62`).
-    - `save` refuses a session whose base has no observation
-      (`save.rs:75-79`).
-    - An unverified base keeps the earlier base's source and clears only
-      its observation (`model/drafts/save.rs:48-63`).
-44. **Classification.** `classify` (`src/drafts/compare.rs:232`) answers
-    `ItemNotFound` for a missing item, whatever the draft's base. It
-    answers `Unverified` for a base with no observation, and
-    `restore_policy` refuses `ItemNotFound`.
-45. **The close dialog.** The close-with-draft dialog offers Keep draft,
-    Discard and Cancel, with Save shown inert
-    (`view/close_draft.rs:31-38`, `:99-108`). `view/workspace/content.rs:272-279`
-    matches its choices exhaustively.
-46. **D2's privacy sweep** (`drafts_privacy_tests.rs:52-60`, `182-191`)
-    reads every label outside the `draft-section` element.
-47. **D2's second actor** (`test_support/drafts.rs:98-105`) can discard a
-    draft, retitle a document to one fixed title, or unregister a
-    repository.
-48. **Theme.** The theme is read as `cx.theme()`
-    (`gpui_kit::component::ActiveTheme`). The desktop uses
-    `muted_foreground`, `border`, `ring`, `danger`, `background` and
-    `mono_font_family`.
+    `tabs_tests.rs:526-558` pins the tab's load reads.
+42. Desktop mutations are `Intent`s (`services/requests.rs:42-151`), 21 of
+    them, built by `requests/build.rs` and run on the worker.
+    - `for_drafts` (`services/mod.rs:298-314`) routes `DocumentSave`,
+      `TicketSave` and `OperationAbandon` answers to the draft registry.
+    - `ReadKind::Documents` exists.
+43. D2's draft session API:
+    - `DraftRegistry::begin` is asynchronous: the session exists once the
+      store write lands, and an `edit` before then is ignored
+      (`services/drafts.rs:290-329`).
+    - `save` refuses a base with no observation (`save.rs:75-79`).
+    - `base_after_save` replaces the base's fields with the submitted ones
+      and clears the observation when the re-read differs or fails
+      (`model/drafts/save.rs:48-63`).
+44. `classify` (`src/drafts/compare.rs:232`) answers:
+    - `ItemNotFound` for a missing item;
+    - `Unverified` for a base with no observation;
+    - `Changed { context_changed }` when the token's branch differs
+      (`:259-266`).
+
+    `DraftFields::of` is `None` without a body (`:20-23`), so a non-UTF-8
+    item is never drafted.
+45. The close-with-draft dialog offers Keep draft, Discard and Cancel, and
+    shows Save inert (`view/close_draft.rs:31-38`, `:99-108`).
+    `view/workspace/content.rs:272-279` matches its choices exhaustively.
+46. D2's privacy sweep, `desktop::view::drafts::privacy_tests`
+    (`drafts_privacy_tests.rs:52-60`, `182-191`), reads labels outside
+    `draft-section`.
+47. D2's second actor (`test_support/drafts.rs:98-105`) discards a draft,
+    retitles a document to one fixed title, or unregisters a repository.
+48. The theme is `cx.theme()`: `muted_foreground`, `border`, `ring`,
+    `danger`, `background` and `mono_font_family`.
 
 ## API Audit Refresh (Entry-Gate Item 3)
 
 | Row | Need | Status at `98f49b7` | D3 resolution |
 | --- | --- | --- | --- |
-| D04 | Context provisioned before authoring | No F2 command (fact 7) | Part 0 `context prepare`; release by `context release` (decisions 2, 11). |
-| D07 | Rich/source shared draft | Editor present behind a probe feature (fact 29) | Part A editor host. |
-| D08 | Minimum vocabulary, focused edits | Source-first editor (facts 30–32) | Part A; untouched-bytes test. |
-| D09 | Shared undo across modes | One entity, styling-only mode (fact 32) | Part A. |
-| D10 | Named metadata, closure separation | Draft fields and saves exist (facts 8, 43) | Part C metadata controls. |
-| D11 | Full source repair | Repair bindings with preview (fact 9) | Part D repair view. |
-| D12 | Unsupported source fallback | Editor keeps every byte, unlabeled | Decision 8. |
-| D13 | Keyboard formatting and paste | Editor actions and paste (fact 33) | Part A toolbar and keys; paste tests. |
-| D14 | Image containment | Host providers only (facts 35, 38, 39) | Part A local raster images (decision 9). |
-| D15 | Link resolution, deliberate open | Editor events; viewer has no URL hook (fact 38) | Part A links (decision 10; ruling R-31). |
-| D19 | Save retires only the saved revision (editor half) | D2 rule exists (fact 43) | Part B Save. |
-| D20 | Close choices with Save | Save inert (fact 45) | Part B. |
-| D21 | Three-way review and clean reload | D2 comparison model (fact 44) | Part B review. |
-| D29 | Native IME, Unicode, high-DPI | Not evidenced | Linux checklist; Windows and macOS are G1's. |
-| D30 | Stale completions | D1 stamps | Part B late-results tests. |
+| D04 | Context before authoring | No F2 command | Part 0 `context prepare` and `context release` (decisions 2, 11). |
+| D07 | Rich and source share one draft | Editor behind a probe feature | Part A editor host. |
+| D08 | Minimum vocabulary, focused edits | Source-first editor | Part A; the untouched-bytes test. |
+| D09 | Shared undo | One entity; mode is styling only | Part A. |
+| D10 | Named metadata, closure separation | Draft fields and saves exist | Part C. |
+| D11 | Full-source repair | Repair bindings | Part D. |
+| D12 | Unsupported source | Kept, unlabeled | Decision 8. |
+| D13 | Keyboard formatting and paste | Editor actions | Part A. |
+| D14 | Image containment | Host providers only | Part A Images (decision 9). |
+| D15 | Links and deliberate open | Editor events; the viewer has no URL hook | Part A Links (decision 10, R-31). |
+| D19 | Only the saved revision retires | D2 rule | Part B. |
+| D20 | Close with Save | Save inert | Part B. |
+| D21 | Review and clean reload | D2 comparison | Part B. |
+| D29 | Native input evidence | Not evidenced | Linux checklist; Windows and macOS at G1. |
+| D30 | Stale completions | D1 stamps | Part B. |
 
 ## Recorded Load Normalization (Decision 1)
 
-The load path is fixed:
-1. The host applies N-1.
-2. It hands the text to `EditorState`.
-3. The editor's load applies N-2 to N-4 by
-   `zorite_markdown::syntax::normalize_math_fences`.
-
-The desktop computes the same result with one function,
-`editor_text::load(body)`, for baselines and comparisons. The pinned source
-is `zorite-markdown` 0.9.0 `syntax.rs:903-1013`. A body with no `$$` and no
+**The pipeline.** The host applies N-1. The editor's load then applies N-2
+to N-4 through `normalize_math_fences`. `editor_text::load(body)` computes
+the same result for baselines and comparisons. The pinned source is
+`zorite-markdown` 0.9.0, `syntax.rs:903-1013`. A body with no `$$` and no
 `\r` loads byte for byte.
 
 | ID | Rewrite | Example (before → after) |
 | --- | --- | --- |
 | N-1 | Host: every `\r\n`, then every remaining `\r`, becomes `\n`. | `a\r\nb\rc` → `a\nb\nc` |
-| N-2 | A line holding one complete `$$…$$` pair and other text is split into: the text before (trailing whitespace trimmed), the pair, and the text after (leading whitespace trimmed). An empty part is dropped. The pair's inner text is non-empty, with no `$$` and no whitespace next to a delimiter. | `What if words $$E=mc^2$$ more` → `What if words` / `$$E=mc^2$$` / `more` |
-| N-2b | A line holding only such a pair, with whitespace before or after it, loses that whitespace. This happens only when another rewrite in the same body fires. | (with another rewrite) `␠␠␠$$x$$␠␠` → `$$x$$` |
-| N-3 | A line ending in `$$` (with other text, no other `$$`) pairs with a closing line before the next blank line: a bare `$$`, or one starting with `$$` and holding no other `$$`. The pair becomes: its text before `$$` (trailing whitespace trimmed), `$$`, the inner lines unchanged, `$$`, then the closer's remaining text (leading whitespace trimmed), if any. The two `$$` lines lose any indentation. The search for a closer stops only at a blank line, not at a code fence. | `wer $$` / `x+y` / `$$ wer` → `wer` / `$$` / `x+y` / `$$` / `wer` |
-| N-4 | Only lines whose trimmed text starts with three backticks toggle "in code". N-2, N-2b and N-3 also apply inside `~~~` fences, indented code, HTML blocks and inline code spans. | `` use `$$x$$` here `` → `` use ` `` / `$$x$$` / `` ` here `` |
+| N-2 | A line holding one complete `$$…$$` pair and other text splits into three parts: the text before (trailing whitespace trimmed), the pair, and the text after (leading whitespace trimmed). An empty part is dropped. The inner text is non-empty, contains no `$$`, and has no whitespace next to a delimiter. | `What if words $$E=mc^2$$ more` → `What if words` / `$$E=mc^2$$` / `more` |
+| N-2b | A line holding only such a pair with whitespace around it loses that whitespace, but only when another rewrite in the same body fires. | `␠␠␠$$x$$␠␠` → `$$x$$` |
+| N-3 | A line ending in `$$` (with other text, and no other `$$`) pairs with a closing line before the next blank line. The closer is a bare `$$`, or a line starting `$$` with no other `$$`. The result is: the text before `$$`, `$$`, the inner lines, `$$`, then the closer's rest if any. The `$$` lines lose their indentation. The closer search stops only at a blank line. | `wer $$` / `x+y` / `$$ wer` → `wer` / `$$` / `x+y` / `$$` / `wer` |
+| N-4 | Only lines starting with three backticks toggle "in code". So N-2, N-2b and N-3 also apply inside `~~~` fences, indented code, HTML blocks and inline code. | `` use `$$x$$` here `` → `` use ` `` / `$$x$$` / `` ` here `` |
 
-**Exemptions, also golden-tested:**
+**Exemptions** (golden-tested): these load unchanged.
 - a pair inside a backtick fence;
-- a line whose first non-space character is `|`;
+- a line starting `|`;
 - delimiters next to whitespace (`$$5 and $$10`);
-- an opener with no closer before a blank line;
-- a pair alone on its line with nothing else rewritten.
+- an opener with no closer;
+- a lone pair with nothing else rewritten.
 
-A new pin must record its set again before adoption (desktop RFC).
+**A new pin** records its own set again before adoption.
 
 ## Module Layout
 
 | Path | Part | Role |
 | --- | --- | --- |
 | `src/repository/mutation/bind/context.rs` | 0 | Both context bindings. |
-| `src/repository/mutation/{command,mod,dto}.rs`, `bind/mod.rs` | 0 | Command names and table rows, `Mutation` variants, `ContextMutationDto`, `recorded_effects`. |
-| `src/repository/context_release.rs`, `context_release_tests.rs` | 0 | The domain release operation. |
-| `src/repository.rs` | 0 | `RepositoryOperation::ReleaseContext`, its request and outcome types, the module line, a failure point. |
-| `src/repository/cleanup.rs` | 0 | Lease-held variants of the precheck, removal and deletion, and a precheck that does not require the item. |
-| `src/repository/recovery.rs`, `bridges/abandon.rs`, `read/{dto,status}.rs` | 0 | Two `LocalStep`s, the action name, abandon's `writes`, `OperationAction::ReleaseContext`. |
-| `schemas/v1/{context_mutation,operation,operation_mutation,operation_abandon_preview}.schema.json` | 0 | The data schema; `release_context` in the action enums. |
+| `src/repository/mutation/{command,mod,dto}.rs`, `bind/mod.rs` | 0 | Names, tables, variants, `ContextMutationDto`. |
+| `src/repository/context_release.rs`, `context_release_tests.rs` | 0 | The release operation. |
+| `src/repository.rs` | 0 | `RepositoryOperation::ReleaseContext`, request and outcome types, failure points, the module line. |
+| `src/repository/cleanup.rs` | 0 | Lease-held variants; an item-free precheck that tells dirty from mismatched. |
+| `src/repository/{recovery,read/dto,read/status}.rs`, `bridges/abandon.rs` | 0 | Steps, action name, `OperationAction`, abandon's `writes`. |
+| `schemas/v1/{context_mutation,operation,operation_mutation,operation_abandon_preview}.schema.json` | 0 | Data schema; action enums. |
 | `tests/mutation_bridges/context.rs`, `tests/fixtures/mutation_v1/context_*.json` | 0 | Binding tests and goldens. |
-| `Cargo.toml` | A | `zorite-editor`, `zorite-markdown` (feature `view`) and `markdown` join `desktop`; `editor-probe` keeps working. |
-| `src/desktop/model/editor_text.rs` | A | `crlf_to_lf`, `load`, `normalized(&ItemDto)`; GPUI-free. |
-| `src/desktop/view/item/body.rs` | A | The read view and the Source toggle. |
+| `Cargo.toml` | A | `zorite-editor`, `zorite-markdown` (`view`), `markdown` and `image` in `desktop`. |
+| `src/desktop/model/editor_text.rs` | A | `crlf_to_lf`, `load`, `normalized`. |
+| `src/desktop/view/item/body.rs`, `services/render_prep.rs` | A | The read view; background preparation of a body. |
 | `src/desktop/view/editor.rs`, `view/editor/{style,toolbar,keys}.rs` | A | The editor host. |
-| `src/desktop/model/links.rs`, `services/links.rs`, `view/link_rewrite.rs` | A | Link parsing and resolution, and the read view's rewrite. |
-| `src/desktop/model/resources.rs`, `services/images.rs` | A | Image path containment, loading, decoding and the per-tab cache. |
-| `src/desktop/model/edit.rs`, `view/item/edit.rs` | B | Edit phases, Save, states, Done, release on leave. |
-| `src/desktop/view/item/review.rs` | B | The stale-edit review. |
-| `src/desktop/services/{requests,mod}.rs`, `requests/build.rs` | B–D | New intents, job and read kinds, answer routing. |
-| `src/desktop/view/item/metadata.rs`, `model/metadata.rs` | C | Named metadata controls. |
-| `src/desktop/view/item/relations_edit.rs`, `model/relations_edit.rs` | C | Pickers and the cycle check. |
+| `src/desktop/model/links.rs`, `services/links.rs`, `model/link_rewrite.rs` | A | Link parsing, resolution and the read-view rewrite. |
+| `src/desktop/model/resources.rs`, `services/images.rs` | A | Image path rules, containment, decoding, cache. |
+| `src/desktop/model/edit.rs`, `view/item/edit.rs` | B | Edit phases, Save, states, leaving and release. |
+| `src/desktop/view/item/review.rs` | B | The review. |
+| `src/desktop/services/{requests,mod}.rs`, `requests/build.rs` | B–D | Intents, read kinds, answer routing. |
+| `src/desktop/view/item/metadata.rs`, `model/metadata.rs` | C | Metadata controls. |
+| `src/desktop/view/item/relations_edit.rs`, `model/relations_edit.rs` | C | Pickers and check. |
 | `src/drafts/compare.rs` | C | `TargetState::NotCreated`, `is_new_item_base`. |
-| `src/desktop/services/drafts/create.rs`, `view/create.rs` | C | A new item's draft, its save and its dialogs. |
+| `src/desktop/services/drafts/create.rs`, `view/create.rs` | C | New-item drafts and dialogs. |
 | `src/desktop/view/move_document.rs`, `view/new_folder.rs` | D | Move and New folder. |
 | `src/desktop/view/item/repair.rs` | D | The repair editor. |
 
-Each new desktop source file stays below about 500 lines (test files
-exempt); one that would pass it is split by responsibility. Every
-`Workspace` field stays private.
+**Size limit.** Each new desktop source file stays below about 500 lines,
+not counting tests.
 
 ## Part 0: Work Contexts (Decisions 2 And 11)
 
-Both commands: no confirmation; `has_operation` true; `stage` `Writing`;
-every other `command.rs` flag false. `hands_off_to_any_refresh` is false
-because, as for the saves, their hand-off is owed by their operation and
-finished by `operation resume` (fact 16). Fields are `kind` and `id` (and
-`intent`); scope is `item_scope`. No CLI verb (ruling R-5).
+**Shared by both commands:**
+- no confirmation, no CLI verb (R-5) and no new `ResultCode`;
+- `has_operation` true and `stage` `Writing`;
+- fields `kind` and `id` (and `intent`), scope `item_scope`.
+
+**Prechecks run only on a request's first call** (R-2). A re-entered request
+always continues to the domain, so a check that changed since cannot
+strand its pending row.
 
 ### `context prepare`
 
@@ -467,172 +459,177 @@ pub enum ContextPrepareIntent { Create, Edit }
 pub struct ContextMutationDto { pub id: String, pub kind: String, pub branch: String, pub worktree: String, pub created: bool }
 ```
 
-- **Prepare.** Resolve the root, then check by intent (ruling R-2):
+- **Prechecks** (first call only):
   - **Edit:**
-    - `show_item`; an absent item is `item_not_found`;
-    - a closed ticket is `ticket_closed`, checked on every attempt
-      (fact 18);
-    - with no context yet, `primary_is_committed`, else
+    - `show_item`; absent is `item_not_found`, and any other read error
+      passes through;
+    - a closed ticket is `ticket_closed`;
+    - with no worktree, `primary_is_committed`, otherwise
       `worktree_not_clean`.
-  - **Create:** `show_item` must answer `item_not_found`; otherwise
-    `occupied_path`.
-- **Domain.** `prepare_context(AuthoringTarget { …, operation_id:
-  accepted.operation_id })`. Errors map through `repository_error_code`.
-- **Answer.**
+  - **Create:**
+    - `show_item` must answer `item_not_found`;
+    - an existing item is `occupied_path`;
+    - any other read error passes through.
+- **Domain call:** `prepare_context`. Errors map through
+  `repository_error_code`.
+- **Answer:**
   - `Created` and `Reused` answer `ok` with the DTO. Write and checkpoint
-    are `not_requested`, because nothing canonical is written; discovery
-    is `current`.
-  - `IndexPending` answers `discovery_pending` with `operation.resume`
-    (ruling R-3).
+    are `not_requested` and discovery is `current` (R-3).
+  - `IndexPending` answers `discovery_pending` with `operation.resume`.
+  - The hand-off is owed: `hands_off_to_any_refresh` is false.
 - **Settlement:**
   - `ended_without_checkpoint` is `DidNothing`;
   - `ok` settles final;
-  - `discovery_pending` settles owed, as the saves do.
+  - `discovery_pending` settles owed.
+- **`created`** is true when the domain answered `Created`. A retried
+  request can answer `Reused` for a context this request made (fact 20);
+  the desktop then keeps it (known limit).
 
-**Required outcomes**, written as tests before the binding (ruling R-4). If
-the library answers any row differently, the task stops for a ruling; the
-table is not edited to fit.
+**Required outcomes**, written test-first (R-4). The task stops for a ruling
+if any row answers differently.
 
 | Case | Required answer |
 | --- | --- |
 | Same request ID after `ok` | The stored answer; no domain call. |
-| Same request ID after `discovery_pending` | Re-enters under the recorded operation and finishes the hand-off: `ok`, `created: true`. |
-| Interrupted at `BeforeRequestDomainCall` | Same request ID: `ok`, `created: true`, one context. |
-| Interrupted at `BeforeWorktreeCreation` | Other requests on the root: `recovery_required`. Same request ID: `ok`, `created: true`; one branch, one worktree. |
-| Interrupted at `BeforeRequestSettlement` | Same request ID: `ok`, `created` true or false; one branch, one worktree. |
+| Same request ID after `discovery_pending` | Re-enters and finishes the hand-off: `ok`, `created: true`. |
+| Interrupted at `BeforeRequestDomainCall` | Same ID: `ok`, `created: true`. |
+| Interrupted at `BeforeWorktreeCreation` | Other requests: `recovery_required`. Same ID: `ok`, `created: true`; one branch, one worktree. |
+| The same, after the primary file is edited uncommitted or the ticket closed | Same ID still continues to the domain and answers `ok`. |
+| Interrupted at `BeforeRequestSettlement` | Same ID: `ok`, `created` true or false; one branch, one worktree. |
 | Another request ID after `ok` | `ok`, `created: false`. |
-| Same request ID, other intent or item | `request_mismatch`. |
-| A new Edit request on a ticket closed since | `ticket_closed`. |
-| Abandon of the row interrupted at `BeforeWorktreeCreation` | The row closes and nothing changes. A new Edit request answers `ok` while primary has not moved. Otherwise it answers `recovery_required`, and a `context release` request removes the stranded branch. |
+| Same ID, other intent or item | `request_mismatch`. |
+| Abandon of the row interrupted at `BeforeWorktreeCreation`, then primary moves | A new Edit answers `recovery_required`; `context release` then removes the stranded branch, and Edit answers `ok`. |
 
 ### `context release`
 
 ```rust
 pub struct ContextReleaseInput { pub root: PathBuf, pub kind: AuthoringKind, pub id: ItemId }
-// domain
 pub struct ReleaseContextRequest { pub root: PathBuf, pub kind: AuthoringKind, pub item_id: ItemId, pub operation_id: OperationId }
 pub enum ContextReleaseOutcome { Released, AlreadyAbsent, IndexPending }
 impl RepositoryService { pub fn release_context(&self, request: ReleaseContextRequest) -> Result<ContextReleaseOutcome, RepositoryError>; }
 ```
 
-**Domain** (`src/repository/context_release.rs`):
+**Domain**, in `src/repository/context_release.rs`. Ruling R-32 covers it.
 
-1. `begin_lifecycle` with `RepositoryOperation::ReleaseContext` (action
-   `release_context`). This takes the lease and refuses on another pending
-   row, an active remote operation or a yielding poll (fact 13).
-2. **Under that lease, every check passes or nothing is touched** (ruling
-   R-32):
-   - **(a)** The worktree is clean: no change, untracked or ignored file,
-     hidden index bit or submodule change, and not locked. This uses a
-     cleanup precheck that does not require the item, so a never-created
-     item's context qualifies. A failure answers `worktree_not_clean`; a
-     lock or mismatch answers `recovery_required`.
-   - **(b)** The branch tip is primary HEAD or an ancestor of it: the
-     branch has no commit of its own. Otherwise `external_change`.
-   - **(c)** It was never published:
-     - no `refs/remotes/*/manyhands/<kind>/<id>`;
-     - no `remote_context_states` row other than `never_published`.
+1. **Begin.** `begin_lifecycle` with `RepositoryOperation::ReleaseContext`
+   (action `release_context`). Under its lease, run every step below with
+   lease-held variants of the cleanup primitives.
+2. **A new row** in which neither the worktree nor the branch exists
+   answers `AlreadyAbsent` and touches nothing.
+3. **Ownership.** If a non-terminal `ticket_closures` or promotion row
+   names the item, answer `recovery_required`. If the ticket is
+   lifecycle-closed, answer `ticket_closed`. Closure or promotion owns
+   that context.
+4. **Checks before anything is touched.** These run only on a new row:
+   - **(a) Worktree.** When the worktree exists, it is checked with an
+     item-free precheck that tells two failures apart.
+     - Any change, untracked or ignored file, hidden index bit or
+       submodule change answers `worktree_not_clean`.
+     - An identity, HEAD or lock mismatch answers `recovery_required`.
+   - **(b) Branch.** `refs/heads/<primary branch>` must be checked out at
+     the root. The context branch tip must equal it, or be an ancestor of
+     it. Otherwise `external_change`.
+   - **(c) Publication.** `publication_evidence_for(kind, id)` must be
+     `NeverPublished`. No ref under `refs/remotes/**` may end in
+     `/manyhands/<kind>/<id>`. Otherwise `external_change`.
+   - **(d) Synchronization.** No synchronization of the item may be
+     pending (`reject_pending_synchronization_target`).
+5. **Remove the worktree**, when present, with the item-free lease-held
+   removal, then record `LocalStep::ContextWorktreeReleased`. Failure
+   point: `BeforeContextBranchRelease`.
+6. **Delete the branch**, when present. Re-check (b) and (c) against its
+   current tip, delete it oid-checked, then record
+   `LocalStep::ContextBranchReleased`. Failure point:
+   `AfterContextBranchRelease`.
+7. **Complete the row, then refresh.** A failed refresh marks the
+   registration stale and answers `IndexPending`, with nothing pending.
+   `hands_off_to_any_refresh` is true, as for folder creation (fact 16).
+   The stale `contexts` row is harmless meanwhile (fact 3) and is dropped
+   by the next refresh (fact 24).
 
-     Otherwise `external_change`.
-   - **(d)** No synchronization of the item is pending
-     (`reject_pending_synchronization_target`).
-   - **(e)** A ticket that is lifecycle-closed answers `ticket_closed`.
-     Closure owns its cleanup.
-3. Remove the worktree with the lease-held removal, then record
-   `LocalStep::ContextWorktreeReleased`.
-4. Delete the branch, oid-checked, then record
-   `LocalStep::ContextBranchReleased`. Failure point
-   `BeforeContextBranchRelease` sits between the two steps.
-5. Mark the registration refresh-required and hand off through
-   `handoff_post_authoritative`. The answer is `Released`, or
-   `IndexPending`.
-6. Neither the worktree nor the branch present: `AlreadyAbsent`, with no
-   step.
+**Re-entry.** A pending row skips steps 2–4 and re-enters at whichever of
+steps 5–7 is unfinished. Both removals are idempotent. A pending row whose
+worktree and branch are already gone continues to step 7.
 
-**Recovery.**
-- Both new steps re-run from Git state. In `continued` they are `None`, and
-  both removals are idempotent.
-- No remote state is touched: there is none, by (c), and
-  `retire_context` is not called.
-- Abandon's `writes` arm: it touches nothing.
+**Remote state** is never touched: (c) guarantees there is none, and
+`retire_context` is not called. Abandon's `writes` arm touches nothing.
 
-**Binding.**
-- Prepare resolves the root.
-- `Released` answers `ok`, and `AlreadyAbsent` answers `already_applied`.
-  Neither carries data, and write and checkpoint are `not_requested`.
-- `IndexPending` answers `discovery_pending`, which settles owed.
+**Binding:**
+- `Released` answers `ok`.
+- `AlreadyAbsent` answers `already_applied`.
+- `IndexPending` answers `discovery_pending`, with "any refresh" offered.
+- There is no data; write and checkpoint are `not_requested`.
 - `ended_without_checkpoint` is `DidNothing`.
 
-**Required outcomes**, test-first, with the same stop rule:
+**Required outcomes**, test-first, with the same stop rule.
 
 | Case | Required answer |
 | --- | --- |
-| A context with no saved work | `ok`; the worktree, branch and `contexts` row are gone; primary, other contexts and remote refs are unchanged. |
-| A never-created item's context (Create) | `ok`. |
+| No saved work | `ok`; worktree, branch and `contexts` row gone; primary, other contexts and remote refs unchanged. |
+| A never-created item's context | `ok`. |
 | Neither present | `already_applied`. |
-| A commit on the branch (a save) | `external_change`; nothing removed. |
-| A published branch (tracking ref) | `external_change`; nothing removed. |
-| An untracked file, a modified file, an ignored file | `worktree_not_clean`; nothing removed. |
+| A commit on the branch | `external_change`; nothing removed. |
+| A published branch, or publication history unknown | `external_change`. |
+| An untracked, modified or ignored file | `worktree_not_clean`. |
+| A non-primary branch checked out at the root, containing the context's commits | `external_change` (b), or `recovery_required` if primary is not checked out. |
+| An unfinished closure of the ticket | `recovery_required`. |
 | Another pending row on the root | `recovery_required`. |
-| Interrupted at `BeforeContextBranchRelease` | Other requests: `recovery_required`. Same request ID: `ok`; the branch is gone. |
-| Interrupted at `BeforeRequestSettlement` | Same request ID: `ok` or `already_applied`; nothing else changes. |
-| Same request ID after `ok` | The stored answer. |
-| A branch left without its worktree (an abandoned prepare) | `ok`; the branch is gone. |
-| Edit after release | `context prepare` answers `ok`, `created: true`. |
+| Interrupted at `BeforeContextBranchRelease` | Other requests: `recovery_required`. Same ID: `ok`, branch gone. |
+| Interrupted at `AfterContextBranchRelease` | Same ID: `ok`; refresh done. |
+| Interrupted at `BeforeRequestSettlement` | Same ID: `ok` or `already_applied`. |
+| A branch left without its worktree | `ok`. |
+| `context prepare` Edit after release | `ok`, `created: true`. |
 
 ## Part A: Read View, Editor, Links And Images
 
 ### The read view (decision 6)
 
-`view/item/body.rs` renders the body with `MarkdownView::new(id, body)`:
-- the `id` is unique per tab;
-- the `MarkdownStyle` comes from the theme: text, `muted_foreground` for
-  muted text and rules, `ring` for links, `mono_font_family` for code;
-- the hooks are `on_inline_image` (Images) and `on_wiki_link` (Links).
+- **Preparation.** `services/render_prep.rs` prepares a body on the
+  background executor, in one task per body version (R-7):
+  1. the link rewrite;
+  2. the image sources (`all_image_srcs`);
+  3. `warm_parse` of the rewritten text.
 
-The body passed is the link-rewritten one (Links).
-
-**Show source** swaps in D1's read-only source view.
-- The choice is kept per tab across reloads (ruling R-6).
-- An Inspect tab, for a nonconforming file, always shows source.
-- A non-UTF-8 item shows D1's message.
-- When `needs_warm(body)`, the view renders plain text and runs
-  `warm_parse` on the background executor (ruling R-7).
+  Until it lands, the view shows the body as plain text.
+- **Rendering.** `view/item/body.rs` renders the prepared text with
+  `MarkdownView::new(id, text)`.
+  - Style comes from the theme: `muted_foreground` for muted text and
+    rules, `ring` for links, `mono_font_family` for code.
+  - Its hooks are `on_wiki_link` (Links) and `on_inline_image` (Images).
+- **Show source** swaps in D1's read-only source view. The choice is kept
+  per tab across reloads (R-6).
+- **Inspect tabs** always show the source. **Non-UTF-8 items** show D1's
+  message.
 
 ### The editor host
 
-`view/editor.rs` holds one `Entity<EditorState>` per editing tab.
+`view/editor.rs` owns one `Entity<EditorState>` per editing tab.
 
-- **Load.** `with_text(editor_text::crlf_to_lf(body))`, then `text()` is the
-  baseline. A test pins that it equals `editor_text::load(body)`.
-- **Modes.** Rich is `set_markdown_style(style)`; source is
-  `clear_markdown_style()`, on the same entity.
-- **Dirty.** On every `Changed` event, and every notify, the host compares
-  `text()` with the baseline. The length is compared first, then the
-  bytes (ruling R-12). Undo back to the baseline makes the tab clean.
-- **Style.** `view/editor/style.rs` maps each `SyntaxStyle` color to a
-  theme color. `mono` comes from `mono_font_family`, and alert icons are
-  `None`.
-- **Keys** (ruling R-8):
-  - At startup, after `gpui_kit::init`, call `zorite_editor::bind_keys(cx)`,
-    then bind `cmd-u` and `ctrl-u` to `NoAction` in `"Editor"`, so
-    Underline is not offered.
-  - Tab and Shift-Tab indent and outdent, and Escape closes the editor's
-    menus. All three stay in the editor.
-  - F6, Shift-F6 and Ctrl-1 to Ctrl-4 (Cmd on macOS) leave it. A hint
+- **Load.** `with_text(crlf_to_lf(body))`. The baseline is `text()`, which
+  must equal `editor_text::load(body)`.
+- **Modes.** Rich and source are the same entity, switched with
+  `set_markdown_style` and `clear_markdown_style`.
+- **Change.** On every `Changed` and every notify, the host compares
+  `text()` with its last known text, length first (R-12). A difference
+  updates dirty (`text != baseline`) and feeds the draft's `edit`. Undo and
+  Redo therefore reach the draft too.
+- **Style.** `view/editor/style.rs` maps `SyntaxStyle` to the theme.
+- **Keys** (R-8):
+  - `zorite_editor::bind_keys(cx)` after `gpui_kit::init`, then `cmd-u`
+    and `ctrl-u` bound to `NoAction` in `"Editor"`.
+  - Tab, Shift-Tab and Escape stay in the editor.
+  - F6, Shift-F6 and Ctrl-1 to Ctrl-4 (Cmd on macOS) leave it, and a hint
     under the editor says so.
-- **Toolbar** (`view/editor/toolbar.rs`):
+- **Toolbar:**
   - Rich/Source, Undo, Redo, Bold, Italic, Code and Strikethrough;
-  - when `caret_table_align().is_some()`: Insert row below, Insert column
-    right, Delete row, Delete column, and Align left, center and right.
+  - inside a table, also Insert row below, Insert column right, Delete
+    row, Delete column, and Align left, center or right.
 
-  Each is a labeled focusable button. Formatting buttons focus the editor
-  and dispatch its action. Table buttons call the public methods.
-- **Paste.** The editor's own Ctrl/Cmd-V. A plain-text clipboard is always
-  accepted, and rich paste of supported structure is the editor's.
-- **Parse failures.** A source-first editor has no parse step that can
-  fail, so the RFC's "a failed parse keeps source mode" has nothing to act
-  on. It is noted in the amendments.
+  Every button is labeled and focusable.
+- **Paste** uses the editor's own Ctrl/Cmd-V. Plain text is always
+  accepted.
+- **No parse step.** A source-first editor has no parse step that can fail
+  (amended in the RFC).
 - **Unsupported syntax** is shown literally and edited in place
   (decision 8).
 
@@ -647,436 +644,452 @@ The body passed is the link-rewritten one (Links).
 
 ### Links (decision 10)
 
-`model/links.rs` parses a target. `services/links.rs` resolves it with
-library reads on the background executor, under the tab's stamp.
+**Parse** (`model/links.rs`):
+1. Trim, strip `<…>`, and drop a trailing title.
+2. Split off `#fragment` and detect a scheme on the raw text, before any
+   decoding.
+3. Then percent-decode the path only.
+4. Classify the result:
+   - **Scheme** (`[A-Za-z][A-Za-z0-9+.-]*:`):
+     - `http` and `https` open with `cx.open_url`;
+     - `mailto` opens with its query reduced to `subject` and `body`;
+     - anything else answers "This kind of link is not opened".
+   - **Refused as not found:**
+     - a backslash, a drive letter (`X:`), or a leading `//`;
+     - a `..` that leaves the repository root.
 
-- **Parse:**
-  1. Trim; strip `<…>`; drop a trailing title (`"…"`, `'…'` or `(…)`
-     after whitespace); percent-decode; drop a `#fragment`.
-  2. A target with a scheme is external. `is_safe_external_url` means
-     `cx.open_url`; anything else is refused with "This kind of link is not
-     opened".
-  3. A target starting `/` is from the repository root. Anything else is
-     relative to the linking item's folder.
-  4. `.` and `..` are resolved lexically. A target that leaves the root is
-     "not found".
-- **Exact.** `observe_path` is tried first in the linking item's own work
-  context, when it has one, and then on primary.
-  - A managed document or ticket at the path opens its tab: `show_path`,
-    then `ItemLocator`.
-  - Any other existing file answers "Not a Manyhands document".
-- **Nearest name.** Among `list_documents` entries with the same file name:
-  - the item's own context's copies come first, then primary's;
-  - within each, the fewest folder steps from the linking item's folder
-    (up to the common folder, then down);
-  - then path order.
-- **Titles.** `[[Title]]` (alias and `#heading` removed) matches documents
-  whose title equals it, ignoring case. It is nearest the same way. Targets
-  starting `^` or `refs:` are ignored.
-- **Not found.** The tab's status line says which link was not found. No
-  notification.
+     None of these reach the filesystem.
+   - **Path:** a target starting `/` is resolved from the repository root.
+     Anything else is relative to the linking item's folder.
 
-**Editor.** `OpenLink(src)` goes through Parse. `OpenWikiLink(target)` goes
-through Titles.
+**Exact.** `observe_path`, first in the linking item's own work context
+(when it has one), then on primary. A managed item there opens its tab.
+`invalid_path`, which is not an item path (fact 4), and absence go on to
+nearest name.
 
-**Read view** (ruling R-31). The viewer has no hook for ordinary links
-(fact 38), so `view/link_rewrite.rs` rewrites the body before rendering:
-- Each inline link whose target is not external and not a bare `#fragment`,
-  found with the `markdown` crate's syntax tree and its source positions,
-  becomes `[[mh-link:<target>|<text>]]`.
-- Links whose target or text holds `|`, `]]` or a newline are left as they
-  are, and stay inert.
-- Reference-style links are left too.
-- The rewritten text is used only for rendering, never saved, and cached
-  per body.
-- `on_wiki_link` sends `mh-link:` targets to Parse, and everything else to
-  Titles.
+**Nearest name.** Among `list_documents` entries with the same file name:
+1. the item's own context's copies first;
+2. then the fewest folder steps from the linking folder;
+3. then path order.
+
+When nearest name opens a document, the tab's status line says "Opened
+nearest match: `<path>`".
+
+**Titles.** For `[[Title]]`:
+- the alias is removed;
+- `#heading` is removed;
+- targets starting `#^`, `^` or `refs:` are ignored.
+
+It matches document titles, ignoring case, nearest first. A `[[mh-link:…]]`
+written by a user is treated as a path link, the same in the editor and the
+read view.
+
+**Not found** is said in the tab's status line, not as a notification.
+
+**Editor.** `OpenLink` goes to Parse, and `OpenWikiLink` to Titles.
+
+**Read view** (R-31). The viewer has no hook for ordinary links (fact 38),
+so `model/link_rewrite.rs` rewrites the body for rendering only:
+- An inline link qualifies when its target is a path or `mailto` and its
+  children are exactly one plain text node. It becomes
+  `[[mh-link:<target>|<text>]]`.
+- Links with formatted text, `|`, `]` or a newline, and reference links,
+  are left alone. Those stay inert, or for `http(s)` open as before.
+- The rewrite uses the `markdown` crate with the same parse options as the
+  viewer: GFM, math and wiki links, copied from `view.rs` in Task 6.
 
 ### Images (decision 9)
 
-`model/resources.rs` holds the pure rules. `services/images.rs` loads on
-the background executor and keeps a per-tab cache that is cleared on reload
-and refresh.
+**Source.** An `src` is parsed as a link target.
+- An external `src` is never loaded.
+  - The editor shows the source.
+  - The read view shows its label, which opens `http(s)` on a click.
+- Refused targets (the Parse rules) are never looked up.
 
-- **Source.** Parsed as a link target. An external `src` is never loaded:
-  - the editor shows its source;
-  - the read view shows its label, a link that opens `http(s)` in the
-    browser on a click.
-- **Resolution.**
-  - **Exact:** in the item's context first, then primary, as for links.
-  - **Nearest name:** a bounded walk (10,000 entries) of `docs/` in the
-    context worktree and then primary, cached per tab (ruling R-33).
-- **Containment** (ruling R-34). The resolved file is read only when its
-  canonical path is inside the canonical root of the tree it was found in,
-  and not inside `.git` or another item's `.manyhands/worktrees/<id>`. A
-  symbolic link that leaves the root is refused.
-- **Formats.**
-  - The format is recognized by magic bytes: PNG `\x89PNG`, JPEG
-    `\xFF\xD8\xFF`, GIF `GIF8`, WebP `RIFF…WEBP` and BMP `BM`.
-  - Anything else, SVG included, is not decoded.
-  - Files over 20 MiB are not read.
-- **Decode.** `Image::from_bytes(format, bytes).to_image_data(svg_renderer)`
-  on the background executor. Only the first frame of a GIF is painted.
-- **Editor.** `set_block_image_provider` gets a closure over the tab's
-  `Rc<RefCell<ImageCache>>`.
-  - On a miss the closure records the `src` and returns `None`.
-  - After each frame, the host starts loads for the recorded sources.
-  - The host also prefetches the sources found by
-    `zorite_markdown::all_image_srcs`, on load and 300 ms after the last
-    change.
-  - When a load lands, the host notifies the editor.
-- **Read view.** `on_inline_image` answers from the same cache with the
-  image and its logical size, capped at the view's width.
+**Resolution.**
+- **Exact:** a contained filesystem lookup, in the item's context worktree
+  first, then primary. `observe_path` does not cover non-item files.
+- **Nearest name:** a no-follow walk of `docs/` in the same order. It is
+  bounded at 10,000 entries, skips `.git` and `.manyhands`, and is cached
+  per tab (R-33).
+
+**Containment** (R-34). A file is read only when all of these hold:
+1. Its canonical path is inside the canonical root of the tree it was found
+   in.
+2. No component equals `.git` or `.manyhands`, ignoring ASCII case.
+3. Its symbolic links, if any, stay inside that root.
+4. After opening, the handle is a regular file whose identity (device and
+   inode, or the Windows file ID) equals the canonical path's.
+
+The read is `take(20 MiB + 1)`; more than 20 MiB is refused.
+
+**Decode** (R-39).
+- The format comes from magic bytes:
+  - PNG `\x89PNG`;
+  - JPEG `\xFF\xD8\xFF`;
+  - GIF `GIF8`;
+  - WebP `RIFF…WEBP`;
+  - BMP `BM`.
+
+  Anything else, SVG included, is refused.
+- Decoding uses the `image` crate directly, with `ImageReader::with_format`
+  and `Limits { max_image_width: 8192, max_image_height: 8192, max_alloc:
+  128 MiB }`.
+- For a GIF, only the first frame is decoded.
+- The frame is converted to BGRA and wrapped with `RenderImage::new`.
+- Decodes run one at a time per tab. A tab holds at most 256 MiB of
+  decoded images; beyond that, images show as source.
+- Misses and refusals are cached too, so the per-frame provider never
+  repeats them.
+
+**Editor.** `set_block_image_provider` reads the tab's
+`Rc<RefCell<ImageCache>>`.
+- On a miss it records the `src` and returns `None`.
+- After the frame, the host starts loads for what was recorded and for the
+  prepared image sources. A load that lands notifies the editor.
+- Image sources are re-prepared in the background 300 ms after the last
+  change.
+
+**Read view.** `on_inline_image` answers from the same cache, with the size
+capped to the view's width.
 
 ## Part B: Editing, Saving And Review
 
-### Phases of an item tab
+### Phases
 
 `model/edit.rs`:
 `Phase { Viewing, Preparing(DesktopRequestId), Loading, Editing, Saving, Review }`.
+An `EditSession` records `provisioned` (the `created` answer), `saved` and
+`dirty`.
 
-1. **Viewing.** The read view. Edit is offered unless the ticket is
-   lifecycle-closed, the item is nonconforming, or a stored draft exists
-   for it. In that last case D2's banner offers Restore, and Edit says "A
-   draft is kept for this item: restore it or discard it first"
-   (ruling R-35).
-2. **Preparing.** Edit submits `Intent::ContextPrepare { intent: Edit }`.
-   - The tab shows "Preparing the item's work context…" and the request's
-     progress.
-   - The session records `provisioned = created`.
-   - A tab closed meanwhile opens nothing later; the request still finishes
-     in the operation area.
-3. **Loading.**
-   - On `ok`, the tab re-reads the item (fact 3) and builds the base:
-     `DraftBase::of(item)` with its body replaced by
-     `editor_text::load(body)` (ruling R-11).
-   - On `discovery_pending`, editing waits for Resume (ruling R-13).
-   - A refusal is shown with its recovery, and the tab stays Viewing.
+1. **Viewing.** Edit is offered unless:
+   - the ticket is closed;
+   - the item is nonconforming;
+   - or a stored draft exists for it. Then D2's banner offers Restore, and
+     Edit says "A draft is kept for this item: restore it or discard it
+     first" (R-35).
+
+   If a previous Edit was refused with `recovery_required` while the read
+   shows no context, the tab also offers "Release stranded work context"
+   (R-40).
+2. **Preparing.** Edit submits `Intent::ContextPrepare { intent: Edit }`,
+   with the tab showing its progress.
+   - If the tab closes meanwhile, an answer with `created: true` is
+     released at once (R-37). Nothing opens.
+3. **Loading.** On `ok`:
+   1. Re-read the item.
+   2. Build the base: `DraftBase::of(item)` with
+     `editor_text::load(body)` as its body (R-11).
+
+   On `discovery_pending`, editing waits for Resume (R-13). Any refusal is
+   shown with its recovery.
 4. **Editing.**
-   - The first real change calls `DraftRegistry::begin(target, Some(base),
-     current)`, and every later change calls `edit`.
-   - An unavailable store is announced first, and the user chooses to
-     continue.
-   - A failed flush stays visible as D2 shows it.
-5. **Saving.** Save calls `DraftRegistry::save`, which flushes first and
-   keeps one save in flight. It is enabled only while Editing, dirty and
-   not saving.
+   - The first difference calls `DraftRegistry::begin`; edits made before
+     the session lands are kept and written with it. Every later
+     difference calls `edit`.
+   - An unavailable store is announced first, and the user chooses
+     whether to continue.
+   - A failed flush stays visible.
+5. **Saving.** Save calls `DraftRegistry::save`, which flushes first, with
+   one save in flight. It is enabled only while dirty and not saving.
    - With an unverified base, Save reads "Review before saving" and opens
-     the review instead (ruling R-36).
-   - A committed save sets the session's `saved` flag.
-6. **Review.** See Stale-edit review.
+     the review instead (R-36).
+   - A committed save sets `saved`.
+6. **Review.** See below.
 
-**Done** leaves Editing.
-- With no draft, it returns to Viewing.
-- With a draft, it offers Save (enabled only when dirty), Keep draft,
-  Discard and Cancel (ruling R-15).
+### Leaving (R-15, R-37, R-41)
 
-**Release on leave** (decision 11, ruling R-37). A session that has
-`provisioned` and no `saved` submits `Intent::ContextRelease` when it
-leaves without keeping a draft. Leaving means Done with no draft, Discard,
-or closing the tab with no draft.
-- A refusal, such as someone else having saved meanwhile, appears in the
-  operation area, and the context stays.
-- Quit releases nothing (known limit).
+**Done or closing the tab:**
+- **Not dirty:** Done returns to Viewing, and the tab closes.
+- **Dirty, or a session still being stored:** the user is asked first.
+  - **Save** is enabled when not already saving.
+  - **Keep draft** is offered only when a draft is stored. While one is
+    being stored, the dialog waits for it.
+  - **Discard** and **Cancel** are always there.
+- Nothing typed is dropped without that choice.
 
-### Save states (contract 8, ruling R-14)
+**Release on leave.** A session submits `Intent::ContextRelease` when all of
+these hold:
+1. It has `provisioned` and not `saved`.
+2. It leaves clean, or by Discard.
+3. No save of it is in flight. Discard is disabled while one is.
+4. The draft store lists no other draft of the item, from any process. Its
+   own discard has completed.
 
-| Envelope | Label | Offered |
+A refusal appears in the operation area, and the context stays. Quit
+releases nothing.
+
+### Save states (contract 8, R-14)
+
+| Envelope or state | Label | Offered |
 | --- | --- | --- |
-| No save yet, draft dirty | Unsaved, plus D2's recovery state | Save |
-| `ok` or `already_applied`, checkpoint committed or unchanged, discovery current | Saved locally | — |
+| Dirty, not yet saved | Unsaved, plus D2's recovery state | Save |
+| `ok` or `already_applied`, committed or unchanged, discovery current | Saved locally | — |
 | The same, with a selected publication remote | Saved locally · publication pending | — |
 | `discovery_pending` | Saved locally · discovery refresh pending | Resume |
 | Checkpoint `pending`, or an error after acceptance | Checkpoint failed | Retry (same request ID) |
 | `external_change` | The item changed | Review |
 | Unverified base | Review before saving | Review |
-| Any other refusal | The library's message and code | Its recovery actions |
+| Other refusal | The library's message and code | Its recovery actions |
 
-The repository's remotes are read once a save completes, never during the
-tab's load: `tabs_tests.rs` pins the load reads (fact 41).
-
-**Under known defects** (Cycle exclusions):
-- `01M4PB7YZM`: an interrupted save whose row was closed as rejected
+- **Remotes** are read after a save completes, never on the tab's load
+  (fact 41).
+- **Known defect `01M4PB7YZM`.** An interrupted save closed as rejected
   answers `external_change` with no effects. The review then finds theirs
-  equal to mine, classified `AlreadySaved`, and the draft retires.
-- `01M4R19PC0`: a held synchronization reservation refuses the save with
-  its code. Retry later.
+  equal to mine (`AlreadySaved`), and the draft retires.
+- **Known defect `01M4R19PC0`.** A held synchronization reservation answers
+  with its own code. The user retries later.
 
 ### Restored drafts and the close dialog
 
-- **Restored section.** D2's restored-draft section gains Continue editing
-  and Save, placed before Compare (ruling R-17).
-  - Continue editing provisions as Edit does. A new-item draft uses the
-    Create intent (Part C).
-  - It loads the draft's current text with the draft's base as the
-    baseline, so the tab is dirty at once and Save is enabled.
-- **Close dialog.** Its Save works and comes after Keep draft, which stays
-  the default and first Tab stop (ruling R-16).
-  - Save saves, then closes the tab once the draft retires.
-  - A refused save keeps the tab and shows why.
-  - `workspace/content.rs`'s match gains the Save choice.
+- **Continue editing.** D2's restored section gains Continue editing, placed
+  before Compare (R-17). It routes by classification (R-42):
+  - **`NotCreated`:** `context prepare` with Create, as in Part C.
+  - **Otherwise:** `context prepare` with Edit. After `ok`, re-read the
+    item.
+    - If its `source` equals the base's `source`, only the branch changed
+      the token. The base takes the read's observation and context.
+    - Otherwise the review opens.
+
+  The editor loads the draft's current text over the base's body. The tab
+  is dirty, and Save is enabled.
+- **Save from a restored draft** (from the section or the close dialog)
+  first runs Continue editing's steps, then saves. A context is therefore
+  always provisioned through `context prepare`.
+- **The close dialog's Save** works. It is placed after Keep draft, which
+  stays the default and the first Tab stop (R-16).
+  - It saves, then closes the tab once the draft retires. A refused save
+    keeps the tab open.
+  - `workspace/content.rs`'s match gains Save.
 - **D2's allowances.** D2's `dead_code` allowances on `begin`, `edit` and
   `save` are removed.
-- **Draft text placement** (ruling R-38). All D3 UI that shows draft text
-  sits inside the tab's `draft-section` element: the editor, the metadata
-  controls while editing, and the review. D2's privacy sweep (fact 46)
-  therefore holds unedited.
+- **Draft text** in D3's UI stays inside the tab's `draft-section`: the
+  editor, the metadata controls while editing, and the review (R-38).
 
 ### Late results (contract 6)
 
-- Every read applies only under its tab's current stamp.
-- **While Editing,** a refresh re-reads the item for the state line and D2's
-  classification. It never touches the editor's text.
-- **A clean editor** (no draft) whose item changed reloads with `set_text`.
-  It restores the cursor with `set_cursor`, clamped (ruling R-19).
-- **A save completion** follows D2's rule: only the saved revision
-  retires, and the baseline moves only when no newer text exists.
-- **Classification.** Every desktop call of `classify` passes the item
-  through `editor_text::normalized`, so normalization alone never reads as
-  a change, on the Drafts page as well (ruling R-11).
+- Every read applies under its tab's stamp.
+- While editing, a refresh updates the state line and D2's classification,
+  and never the editor's text.
+- A clean editor (not dirty, no draft) whose item changed reloads with
+  `set_text` and `set_cursor`, clamped (R-19).
+- A save completion follows D2's rule.
+- Every desktop `classify` passes the item through `editor_text::normalized`,
+  on the Drafts page too (R-11).
 
 ### Stale-edit review (decision 4)
 
-Review opens from an `external_change` answer, from a refresh that
-classifies the draft `Changed`, or from Save on an unverified base. It
-re-reads the item and shows D2's comparison over normalized bodies.
+The review opens on:
+- an `external_change` answer;
+- a refresh that classifies the draft `Changed`;
+- Save on an unverified base.
 
-- **Each named field** shows base, theirs and mine, with Take theirs and
-  Keep mine. A field changed by one side defaults to that side. A field
-  changed by both must be chosen.
-- **The body** shows theirs (rendered, with Show source) beside mine in the
-  editor, which stays editable.
+It re-reads the item and compares normalized bodies.
+
+- **Every field, the body included**, shows base, theirs and mine, with
+  Take theirs and Keep mine.
+- **Defaults.** A field changed only by theirs defaults to theirs. A field
+  changed only by mine defaults to mine. A field changed by both must be
+  chosen.
+- **Body.** The chosen body is set in the editor, which then stays editable
+  beside theirs, rendered.
 - **Use these choices** is enabled once every both-changed field has a
-  choice. It rebases the draft:
-  - the base becomes the read, normalized, with its observation;
-  - the current becomes the choices;
-  - the editor's text is set with `set_text`, which restarts undo (ruling
-    R-18), and its baseline becomes theirs.
-- **Cancel** changes nothing.
-- **Escape** stays in the editor while it has focus (fact 33). Cancel is a
-  button, and Escape cancels when focus is elsewhere.
-- **A second change** by the other actor answers `external_change` on Save
-  and reopens the review.
+  choice. It does three things:
+  1. the base becomes the read, normalized, with its observation;
+  2. current becomes the choices;
+  3. the editor is set with `set_text`, which restarts undo (R-18), and
+     its baseline becomes theirs.
+- **Cancel** changes nothing. Escape stays in the editor while the editor
+  has focus.
+- **A second change** by the other actor reopens the review on Save.
 
 ## Part C: Metadata, Relationships And Creation
 
 ### Metadata controls
 
-- **Documents:** Title.
-- **Tickets:** Title, Type, Status (free text), Project and Team. An emptied
-  Project or Team is saved as absent (ruling R-27).
-- **Shown only:** ID, short code, closure and unknown metadata.
+- Documents: Title.
+- Tickets: Title, Type, Status (free text), Project and Team. An emptied
+  Project or Team is saved as absent (R-27).
+- Identity, short code, closure and unknown metadata are shown only.
 
 ### Relationships (contract 10)
 
-- **Dependencies** are listed with short code, title and Remove.
-  **Add dependency…** opens a picker over `list_tickets` with a filter box,
-  which also matches a short code exactly through `find_tickets_by_slug`.
-- **Parent** is one ticket, with Change… and Clear.
-- **The check** runs on every change: `check_ticket_relationships` with the
-  whole proposed set, under the tab's stamp (ruling R-26).
-  - A rejection says "These tickets would form a cycle:" and names them;
-    Save stays disabled.
-  - Unresolved dependencies are listed as "not found, kept".
-  - An incomplete index adds "The check may be incomplete; Save checks
-    again."
-- **The draft** keeps `deps` sorted by ID, as the canonical writer does
-  (fact 10).
-- **Save** sends:
-  - `Unchanged` for a relationship equal to the base;
-  - `Clear` for an emptied one;
+- **Dependencies** are listed with short code, title and Remove. **Add
+  dependency…** opens a picker over `list_tickets` with a filter box, which
+  also matches short codes exactly through `find_tickets_by_slug`.
+- **Parent:** Change… and Clear.
+- **The check.** Every change runs `check_ticket_relationships` over the
+  whole proposed set, under the tab's stamp (R-26).
+  - A cycle is explained by naming its tickets, and Save stays disabled.
+  - An unresolved dependency is "not found, kept".
+  - An incomplete index adds "Save checks again".
+- **The draft** keeps `deps` sorted by ID.
+- **Save sends:**
+  - `Unchanged` when a relationship equals the base;
+  - `Clear` when it was emptied;
   - `Set` otherwise.
-
-  A `relationship_cycle` answer is explained the same way.
 
 ### Create (decision 3)
 
-1. **Dialog.** New document… (Documents list) and New ticket… (Tickets
-   list) open a dialog.
-   - Both take a Title. A ticket also takes a Type, default `task`.
-   - A document takes a Folder, from `list_document_folders`, default
-     `docs`, and a File name suggested from the title.
-   - The path is checked locally: under `docs/`, ends `.md`, no `..`. It is
-     also checked with `observe_path`: nothing may be there (ruling R-22).
-2. **Create.** It takes `new_item_id()` and submits
-   `Intent::ContextPrepare { intent: Create }`.
-3. **The new-item draft** (ruling R-20). On `ok`, `DraftRegistry::begin` at
-   once writes it to the store:
-   - its base has no observation and no source, and holds the chosen path,
-     the provisioned context and the dialog's fields;
-   - its current is those fields with an empty body.
+1. **Dialog.** New document… or New ticket… opens a dialog.
+   - Both take a Title. A ticket also takes a Type (default `task`).
+   - A document also takes a Folder (default `docs`) and a File name. Its
+     path is checked locally, then with `observe_path`, which must find
+     nothing (R-22).
+2. **Create**, in this order (R-20):
+   1. Take `new_item_id()`.
+   2. Write the new-item draft with `DraftRegistry::begin_new`. Its base
+      has no observation and no source, and holds the path and fields.
+   3. Submit `Intent::ContextPrepare { intent: Create }`.
 
-   The tab opens in Editing, and Save is enabled once the title is
-   non-empty.
-4. **Classification.** `is_new_item_base(base)` is true for such a base.
-   D2 never writes one (fact 43). For a missing item, `classify` answers
-   `TargetState::NotCreated` ("Not created yet"), which `restore_policy`
-   allows.
-   - Restoring it opens a tab for the item ID with no item read: the editor
-     and "Not created yet".
-   - Continue editing provisions with the Create intent.
-5. **Save** of a new-item draft goes through
-   `services/drafts/create.rs::create`. `for_drafts` routes the create
-   intents' answers there.
-   - It submits `Intent::DocumentCreate { root, id, path, title, body }`,
-     or `Intent::TicketCreate` with the draft's current title, type,
-     status (default `open`), project, team, body, deps and parent, and no
-     initials.
-   - **Completion** (ruling R-20b), on `ok` or `already_applied`:
-     - re-read the item;
-     - if the read's fields equal the submitted ones, the base becomes the
-       read;
-     - if the read differs, the base is the read without its observation
-       (unverified);
-     - if the read fails, the base keeps its path and fields, with no
-       observation and with source `""` (unverified).
-
-     Each of these clears the new-item marker. Retirement then follows D2's
-     rule, and the tab is an ordinary edit session.
-6. **Refusals.**
-   - `occupied_path` keeps the draft and says another file now holds the
-     path.
-   - `initials_required` points to Settings, then Retry (ruling R-21).
-   - A create retried with the same request ID after a lost answer makes
-     one item.
-7. **Discard.** Discarding a new-item draft, from the tab or the Drafts
-   page, also submits `Intent::ContextRelease` for its item (decision 11).
+   A crash at any point leaves a restorable draft.
+3. **Classification.** `is_new_item_base` marks such a base. D2 never
+   writes one (fact 43), and a non-UTF-8 item is never drafted (fact 44).
+   - A missing item classifies as `NotCreated`, which is restorable.
+   - An existing item classifies as `Unverified`, which goes to the Edit
+     route and the review (R-42).
+4. **Save of a `NotCreated` draft** goes through
+   `services/drafts/create.rs::create`. `for_drafts` routes create answers
+   there.
+   - It submits `DocumentCreate`, or `TicketCreate` with the draft's
+     fields (status default `open`) and no initials (R-21).
+   - **Completion** (R-20b), on `ok` or `already_applied`: re-read the
+     item.
+     - If its fields equal the submitted ones, the base becomes the read.
+     - Otherwise, or if the read fails, the base becomes the submitted
+       fields, with no observation and with source `""`. That is D2's
+       unverified rule, and it clears the marker.
+   - **`occupied_path`.** The desktop checks the ID with `show_path` in the
+     item's own context.
+     - If it is this draft's item (a lost answer), the draft becomes an
+       ordinary unverified draft and goes to review.
+     - Otherwise it says another file holds the path.
+   - **`initials_required`** points to Settings.
+5. **Discard** of a new-item draft, from the tab or the Drafts page,
+   submits `Intent::ContextRelease`. A context that was never made answers
+   `already_applied`.
 
 ## Part D: Moves, Folders And Repair
 
-**Move** (ruling R-23).
-- Move… on a document tab is enabled when there is no unsaved draft. Its
-  dialog defaults to the current folder and file name.
+**Move** (R-23).
+- Available when the item is not dirty and no save is in flight.
 - On confirm:
-  1. read the item, for its `observation`;
-  2. observe the destination in the item's context worktree, or primary
-     when there is none;
-  3. submit `Intent::DocumentMove`.
-- `occupied_path` and `external_change` are explained, and the dialog
-  stays.
-- On `ok`, the tab reloads by ID.
-- **A retry after a lost answer,** under known defect `01M4PB80T7`, answers
-  `external_change`. The tab reloads by ID and shows the moved document,
-  and the state line says the move is done.
+  1. read the observation;
+  2. observe the destination in the item's context, or on primary;
+  3. submit `DocumentMove`.
+- Refusals are explained, and the dialog stays open.
+- A retry after a lost answer hits known defect `01M4PB80T7`, which answers
+  `external_change`. The tab reloads by ID and shows the moved document.
 
-**New folder** (ruling R-24).
-- It replaces D1's disabled control. The dialog takes a parent folder and a
-  name, and says: "A folder exists only on this computer until a document is
-  saved in it."
-- It submits `Intent::FolderCreate`, and lists reload through
-  `changes_items`.
-- A retry answers `already_applied`, read as "Folder exists".
+**New folder** (R-24).
+- It replaces D1's disabled control.
+- The dialog explains that a folder is local until a document is saved in
+  it.
+- It submits `FolderCreate`.
+- A retry answers `already_applied`, shown as "Folder exists".
 
-**Repair** (ruling R-25).
-- An Inspect tab of a nonconforming file under `docs/` or
-  `.manyhands/tickets/` offers Repair….
-- The repair view is a plain editable `Textarea` over the whole file
-  source.
-- **Preview repair** prepares `Intent::DocumentRepair` or `TicketRepair`
-  with the file's `observation` and the edited source.
-  `view/confirm.rs`'s preview fields add "A new ID will be assigned" when
-  `adoption` is true.
-- **Confirm** runs it.
-  - `identity_ambiguous`, `not_repairable`, `external_change` and an
-    expired preview are explained, with Prepare again where the library
-    offers it.
-  - A retry with the same request ID answers the stored result.
-- On `ok`, the tab opens the repaired item.
-- Closing the tab or quitting with edited repair text asks Discard or
-  Cancel first.
-- A non-UTF-8 file says it cannot be repaired here.
+**Repair** (R-25).
+- **Inspect tabs** under `docs/` or `.manyhands/tickets/` offer Repair….
+- **Editing.** A plain `Textarea` holds the whole file.
+- **Preview.** Preview prepares the repair, and `view/confirm.rs` adds "A new
+  ID will be assigned" when adopting.
+- **Refusals.** Each is explained, with Prepare again where the library
+  offers it.
+- **Retries.** A retry answers the stored result.
+- **Closing or quitting** with edited text asks Discard or Cancel.
+- **Non-UTF-8 files** say they cannot be repaired here.
 
 ## Privacy
 
-- No type holding body, draft or source text derives `Debug`.
-- No body text enters an operation entry, notification, dialog message, log
+- No type holding body, draft, source, link target or image path derives
+  `Debug`.
+- None of them enters an operation entry, notification, dialog message, log
   or error.
-- Intent labels name the action and the item's read title.
-- Link and image targets are not logged.
 - The privacy sweep extends D2's across save, stale save, create, move,
   repair and release.
 
 ## Testing
 
-**Library (Part 0).**
-- `tests/mutation_bridges/context.rs` runs every row of both
-  required-outcome tables over real repositories, injecting failure
-  points with `FailOnce`.
-- `src/repository/context_release_tests.rs` tests the domain checks (a) to
-  (e) directly.
-
-**Desktop.**
-- **Harness.** `--features desktop-test-support --bin manyhands`,
-  `#[gpui_kit::test]` and D1's harness. Every Verify step checks that its
-  filter ran more than zero tests.
-- **Editor tests** build a real `EditorState`:
-  - set the cursor, focus it and draw a frame, then type with the
-    window-level helpers;
-  - call `zorite_editor::bind_keys` in the test shell;
-  - never send Ctrl-Cmd-Space.
-
-  Part A's first task proves this works, and stops for a ruling if it
-  cannot.
+- **Library.**
+  - `tests/mutation_bridges/context.rs` runs every row of both
+    required-outcome tables over real repositories, using `FailOnce`.
+  - `context_release_tests.rs` covers checks (a) to (d) and the ownership
+    rule.
+- **Desktop.**
+  - Tests run under `--features desktop-test-support --bin manyhands`.
+    Every Verify step checks that more than zero tests ran.
+  - Editor tests set the cursor, focus and paint, then type through the
+    window-level helpers. They call `bind_keys` and never send
+    Ctrl-Cmd-Space. Part A's first task proves this works, and stops for a
+    ruling if it does not.
 - **Golden fixtures** (`tests/fixtures/editor/`):
-  - `n1_crlf`, `n1_lone_cr`;
-  - `n2_mixed_pair`, `n2b_padded_pair`;
-  - `n3_attached_fences`;
-  - `n4_inline_code`, `n4_tilde_fence`, `n4_indented`, `n4_html`;
-  - the exemptions `x_backtick_fence`, `x_table_row`, `x_prices`,
-    `x_unclosed_opener` and `x_lone_pair`;
-  - the round-trip bodies `unicode`, `tables`, `html`, `extensions`,
-    `mixed` and `unknown_yaml_ticket`.
+  - the rewrites: `n1_crlf`, `n1_lone_cr`, `n2_mixed_pair`,
+    `n2b_padded_pair`, `n3_attached_fences`, `n4_inline_code`,
+    `n4_tilde_fence`, `n4_indented`, `n4_html`;
+  - the exemptions: `x_backtick_fence`, `x_table_row`, `x_prices`,
+    `x_unclosed_opener`, `x_lone_pair`;
+  - the round trips: `unicode`, `tables`, `html`, `extensions`, `mixed`,
+    `unknown_yaml_ticket`.
 
-  Each N and exemption fixture has its `.expected` file.
-- **Untouched bytes.** A real repository; type in rich mode and apply Bold
-  from the toolbar; Save. Then compare the saved file's body with the
-  original, outside the edit and the N set, and its front matter by value.
-- **Links and images** are tested at the host's handlers:
-  - parse, resolve and containment, as pure functions over temporary
-    trees;
-  - the editor's handler, fed `EditorEvent::OpenLink` and `OpenWikiLink`
-    directly;
-  - the read view's `on_wiki_link` handler over a rewritten body;
-  - `opened_url()`, with unsafe targets tried first.
+  Each N and exemption fixture has an `.expected` file.
+- **Untouched bytes.** A typed edit and a toolbar Bold, saved through a real
+  repository. The body is compared byte for byte outside the edit and the
+  N set. The front matter is compared by value.
+- **Links and images** are tested at the host's handlers and pure
+  functions:
+  - parsing, resolution and containment over temporary trees, including
+    symbolic links, case variants of `.git`, backslashes, drive letters and
+    `//`;
+  - the editor's handler, fed events directly;
+  - the read view's `on_wiki_link` over a rewritten body;
+  - `opened_url()` checked with unsafe targets first;
+  - decoding refusals: a many-frame GIF, an image over 8192 pixels and an
+    SVG named `.png`.
 
-  Real pointer clicks are on the native checklist.
-- **Second actor.** D2's child-process actor gains a document save with a
-  given title and body, and a ticket save (E-19).
-- **Late results.** `DelayingBackend` holds a read or save. The refresh in
-  these tests is a tab read (`ReadKind::Item`), because a refresh job would
-  queue behind a held save on the one worker.
+  Real clicks are on the native checklist.
+- **Second actor.** D2's child-process actor gains `SaveDocumentAs` and
+  `SaveTicket` (E-19).
+- **Late results.** These use `DelayingBackend`. The refresh in those tests
+  is a tab read.
 
 ### Native checklist (Linux Wayland, product owner)
 
-Against this project's repository, on a throwaway branch:
+On a throwaway branch of this project's repository:
 
-1. Commit a fixture document holding a words-mixed `$$` pair and an image
-   under `docs/`. Open it: it renders with its image; Show source shows the
-   file; `git status` is unchanged.
-2. Click a relative link to another document: its tab opens. Click a
-   `file:` link, a `javascript:` link, a missing link, an `https` link and
-   the label of an `https` image. Expected: nothing, nothing, "not found",
-   the browser, and the browser.
-3. Edit (`secondary-shift-e`): progress, then the editor.
-   - Type in rich mode, switch to source (`secondary-shift-m`), type, then
-     undo past the switch to the start: the tab is clean.
-   - Done: `git branch` shows the item's context gone (released).
-4. Edit again and compose a non-ASCII character with an input method, and
-   CJK through IBus or Fcitx if available: the text and the cursor are
-   right.
-5. Bold, Italic and a table row insert from the toolbar by keyboard: Tab
-   indents; F6 leaves the editor.
-6. Save (`secondary-s`) with no network: "Saved locally"; `git log` in the
-   item's worktree shows one commit.
-7. While editing, commit a change to the item's file with `git` in its
-   worktree, then Save: the review opens. Take theirs for the title, keep
-   mine for the body, and Save.
-8. New ticket by keyboard, with a dependency chosen in the picker; Save.
-   Then make the dependency's parent this ticket: the cycle is explained
-   and Save is unavailable.
-9. Measure typing in a 100 KiB document: record whether input lags.
-10. For each step, record the build, the display server, the scale factor
-    and the result.
+1. **Read view.** Commit a fixture document with a words-mixed `$$` pair and
+   an image under `docs/`, then open it.
+   - It renders with its image.
+   - Show source shows the file.
+   - `git status` is unchanged.
+2. **Links.** Click each of these and check the result:
+   - a relative link opens its tab;
+   - a `file:` link does nothing;
+   - a `javascript:` link does nothing;
+   - a missing link says not found;
+   - an `https` link opens the browser;
+   - an `https` image label opens the browser.
+3. **Edit and undo.** Edit (`secondary-shift-e`).
+   - Type in rich mode, switch mode (`secondary-shift-m`), type, then undo
+     past the switch: the tab is clean.
+   - Type again, Done, Discard: `git branch` shows the context gone.
+4. **Input method.** Edit again and compose a non-ASCII character, and CJK
+   through IBus or Fcitx if available: the text and cursor are right.
+5. **Toolbar and focus.** Use the toolbar by keyboard. Tab indents, and F6
+   leaves the editor.
+6. **Save.** Save offline (`secondary-s`).
+   - The tab shows "Saved locally".
+   - `git log` in the worktree shows one commit.
+7. **Review.** While editing, commit a change to the item's file with `git`
+   in its worktree, then Save.
+   - The review opens.
+   - Take theirs for the title and keep mine for the body, then Save.
+8. **New ticket.** Create a new ticket by keyboard, with a dependency chosen
+   in the picker, and Save.
+   - Then make the dependency's parent this ticket.
+   - The cycle is explained, and Save is unavailable.
+9. **Large document.** Type in a 100 KiB document and record any lag.
+10. **Record** the build, display server, scale factor and result for each
+    step.
 
 ## Named Edits To Pre-Existing Tests
 
@@ -1085,238 +1098,223 @@ plus D3's".
 
 | ID | Test | Edit |
 | --- | --- | --- |
-| E-1 | `src/desktop/view/item_tests.rs::the_source_is_shown_verbatim_and_a_non_utf8_file_says_so` | Press Show source before asserting the source. |
+| E-1 | `src/desktop/view/item_tests.rs::the_source_is_shown_verbatim_and_a_non_utf8_file_says_so` | Press Show source first. |
 | E-2 | `view/item_tests.rs::the_source_rejects_every_edit` | Press Show source first. |
-| E-3 | `view/tabs_tests.rs::a_refresh_reloads_every_open_tab_of_the_repository_in_place` | Press Show source in each tab before focusing its source. |
+| E-3 | `view/tabs_tests.rs::a_refresh_reloads_every_open_tab_of_the_repository_in_place` | Press Show source in each tab before focusing it. |
 | E-4 | `view/tabs_tests.rs::a_busy_reload_keeps_the_view_and_retry_loads_in_place` | The same. |
 | E-5 | `view/tabs_tests.rs::the_tab_keys_work_from_inside_the_source` | The same, in each tab it focuses. |
 | E-6 | `src/desktop/model/item_tests.rs::the_unavailable_actions_are_the_designs_six` | Renamed `…_designs`. Edit leaves `LATER` in Task 9; Repair leaves in Task 18. |
-| E-7 | `view/item_tests.rs::a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable` | Renamed `…_and_repair_offered`; Repair is offered; source and problem assertions stay. |
-| E-8 | `view/item/draft_tests.rs::restore_attaches_the_draft_and_writes_nothing_to_the_repository` | The `draft-later` rows give way to Continue editing and Save; still writes nothing. |
-| E-9 | `view/tabs_tests.rs::closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once` | Save is a working button; the inert-Save click is replaced by Save being present and disabled for an undirtied draft. |
+| E-7 | `view/item_tests.rs::a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable` | Renamed `…_and_repair_offered`; Repair is offered; its source and problem assertions stay. |
+| E-8 | `view/item/draft_tests.rs::restore_attaches_the_draft_and_writes_nothing_to_the_repository` | The `draft-later` rows give way to Continue editing and Save; it still writes nothing. |
+| E-9 | `view/tabs_tests.rs::closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once` | Save is present and enabled (the stored draft differs from the item); the test no longer clicks it. |
 | E-10 | `view/documents_tests.rs::folder_creation_is_visibly_unavailable` | Replaced by `new_folder_opens_its_dialog`. |
-| E-11 | `services/requests_tests.rs::every_intent` and its `variant` helper | Eight new intents. |
+| E-11 | `services/requests_tests.rs::every_intent` and `variant` | Eight new intents. |
 | E-12 | `services/requests_tests.rs::confirmed_agrees_with_prepare_for_every_intent` | The new intents. |
-| E-13 | `services/requests_tests.rs::every_intent_builds_its_own_command` | The new intents and their commands. |
+| E-13 | `services/requests_tests.rs::every_intent_builds_its_own_command` | The new intents and commands. |
 | E-14 | `services/requests_tests.rs::changes_items_names_the_intents_that_can_change_items` | The new intents. |
-| E-15 | `tests/support/conformance.rs` `HOMES` | `context prepare` and `context release`, homed in `mutation_bridges`, with their rows. |
+| E-15 | `tests/support/conformance.rs` `HOMES`; `tests/mutation_bridges/conformance.rs` `ROWS` | Both context commands, homed in `mutation_bridges`, with their rows. |
 | E-16 | `tests/support/mutation_golden.rs` `CASES` | `context_prepare`, `context_prepare_discovery_pending`, `context_release`. |
 | E-17 | `tests/mutation_contract.rs` `DATA_ROOTS` | `context_mutation.schema.json`. |
-| E-18 | `tests/support/mutation.rs` (`ticket_data`, `document_data`, `remote_data`, `operation_data`, `key_data`, `identity_data`) and `tests/support/repair.rs::repair_data` | A `MutationDataDto::Context(_)` arm each. |
-| E-19 | `src/desktop/test_support/drafts.rs` `Actor` and its child dispatch | New variants `SaveDocumentAs { root, id, title, body }` and `SaveTicket { root, id, title, status }`; existing variants unchanged. |
-| E-20 | `tests/read_contract.rs` `LOCAL_ACTIONS` | `OperationAction::ReleaseContext` (14). |
+| E-18 | `tests/support/mutation.rs` (six data helpers) and `tests/support/repair.rs::repair_data` | A `MutationDataDto::Context(_)` arm each. |
+| E-19 | `src/desktop/test_support/drafts.rs` `Actor` and its child dispatch | New variants `SaveDocumentAs { root, id, title, body }` and `SaveTicket { root, id, title, status }`. |
+| E-20 | `tests/read_contract.rs` `LOCAL_ACTIONS` | `OperationAction::ReleaseContext`. |
+| E-21 | `src/repository/read/status_tests.rs`: `repository_operations()`, `a_local_action_is_one_the_recovery_store_writes`, `every_action_the_recovery_store_writes_is_one_the_read_knows` | `ReleaseContext` listed; the local slice grows by one. |
+| E-22 | `src/repository/recovery.rs::every_step_is_stored_under_its_own_name_and_read_back` | The two new steps and their stored names. |
 
-**Task 0's sweep.** Task 0 greps every Rust file under `src/` and `tests/`
-(not only `*_tests.rs`) for the following, and stops for the owner on
-anything unlisted:
-
-- the strings and helpers behind E-1 to E-10;
-- `MutationDataDto::`;
-- `OperationAction::`;
-- `LocalStep::ALL`;
-- `RepositoryOperation::`;
-- `TargetState::`;
-- every fixed list of intents, commands or actions.
-
-Lists of target states that are not exhaustive (`compare_tests.rs:619-631`,
-`model/drafts/rows_tests.rs:70-102`, `view/draft_comparison_tests.rs:33-77`)
-stay valid without `NotCreated`. D3 adds its own tests for it.
+**Task 0 sweep.** Task 0 greps every Rust file for the strings and helpers
+behind E-1 to E-22, and for every fixed list of intents, commands, actions,
+steps or target states. Anything unlisted stops for the owner.
 
 ## Document Amendments
 
-Applied in the approval commit, before Task 0, so no test encodes behavior
-the RFCs forbid. Each is recorded on the ticket.
+These are applied in the approval commit, before Task 0. Each is recorded
+on the ticket.
 
-- **Desktop RFC, "Editor load normalization"** (decision 1):
-  - name N-1 to N-4, with N-2b, in place of the single math-fence rule;
-  - replace the "layout-only rewrites that keep the Markdown's meaning"
-    bullet with the owner's acceptance of 2026-10-24, inside code included;
-  - say that the host converts line endings before loading.
+- **Desktop RFC, load normalization** (decision 1):
+  - N-1 to N-4 and N-2b;
+  - the owner's acceptance, including inside code;
+  - the host's line-ending conversion.
 - **Canonical RFC, lines 49–51:** "recorded, meaning-preserving load
   normalization" becomes "recorded load normalization (desktop RFC)".
-- **Desktop RFC, unsupported constructs** (decision 8): for the pinned
-  source-first editor, unsupported syntax is shown literally and edited in
-  place. "Labeled source blocks" no longer applies, and a parse failure
-  cannot occur.
+- **Desktop RFC, unsupported constructs** (decision 8): shown literally and
+  edited in place, with no labeled blocks and no parse failure.
 - **Desktop RFC, resources** (decisions 9 and 10):
   - local raster images under the stated containment;
   - no remote images and no SVG;
-  - link resolution as decision 10 says;
+  - link resolution;
   - `http`, `https` and `mailto` open on a click.
-- **Desktop RFC, reload** (ruling R-19): a clean reload keeps the cursor.
-- **Wave, D3 section,** "Amended 2026-10-24 by D3". It records:
-  - the five Parts and the risk-row departure (decision 5);
+- **Desktop RFC, reload** (R-19): a clean reload keeps the cursor.
+- **Wave, D3 section,** "Amended 2026-10-24 by D3":
+  - five Parts, departing from the risk row (decision 5);
   - Part 0 inside D3, departing from track rule 5 (decisions 2 and 11);
   - front matter kept by value in the untouched-bytes evidence;
-  - local images as "safe local resource rendering".
+  - local images as the safe local resource rendering.
 - **Ticket body:** "rebased onto main" becomes "merged into this branch".
 
 ## Rulings
 
-Each ruling is listed as: decision — why — cost if wrong.
+Each ruling reads: decision — why — cost if wrong.
 
-- **R-1** `context prepare` offers Create and Edit, not Repair — repair
-  provisions itself — one variant to add.
-- **R-2** The prepare binding checks a closed ticket on every attempt, and a
-  dirty or uncommitted primary file before provisioning — the domain skips
-  the first on retries and never checks the second (facts 18 and 19) — a
-  check moved later.
-- **R-3** Context commands report no write and no checkpoint, because the
-  effects vocabulary describes canonical content. Hand-offs answer
-  `discovery_pending` with resume — the Part 0 review confirms it — a new
-  effect would be a schema change.
-- **R-4** Re-entry is stated as outcome tables, written test-first. Replay
-  over a lifecycle that can end with no checkpoint step (fact 20) is where
-  earlier Cycles found surprises — stop and ask.
-- **R-5** Neither context command has a CLI verb — the CLI has no "start
-  editing", and C3 is in flight on its catalog — a verb later is
-  additive.
-- **R-6** The Source toggle persists per tab across reloads, and Inspect
-  tabs always show source — reload tests rely on it (E-3, E-4) — one
-  line.
-- **R-7** Warm the viewer's parse cache in the background — otherwise it
-  shows plain text (fact 38) — a frame of plain text.
+- **R-1** `context prepare` has Create and Edit, not Repair — repair
+  provisions itself — one variant.
+- **R-2** Binding prechecks run on the first call only; re-entry continues to
+  the domain — a precheck that changed since would strand a pending row
+  that blocks the root — a refused retry.
+- **R-3** Context commands report no write or checkpoint — the effects
+  vocabulary describes canonical content — a schema change for a new
+  effect.
+- **R-4** Re-entry is stated as outcome tables, written test-first — replay
+  over lifecycles is where surprises were found — stop and ask.
+- **R-5** No CLI verbs — C3 is in flight on the catalog — additive later.
+- **R-6** The Source toggle persists per tab; Inspect tabs always show
+  source — E-3 and E-4 rely on it — one line.
+- **R-7** One background task per body prepares the rewrite, the image
+  sources and `warm_parse` — all three parse the whole body (fact 38) — a
+  frame of plain text.
 - **R-8** `bind_keys`, then `NoAction` for underline — every editing key is
   needed, and underline writes HTML — one binding.
-- **R-9** The keys in Keyboard map additions — none collide (fact 33) — a
-  binding changes.
-- **R-11** The base stores the normalized body, and every desktop
-  classification normalizes theirs — D2's obligation that normalization is
-  never a change — a display fix.
-- **R-12** Dirty compares `text()` on each notify, length first — undo
-  emits no event (fact 31). The cost is a whole-text compare per notify on
-  a 100 KiB body, which checklist step 9 measures. If it lags, use a
-  generation counter kept on `Changed` and notify.
-- **R-13** Editing waits for a pending hand-off — the read could return the
-  primary copy, whose token makes the save stale (fact 2) — a Resume
-  press.
-- **R-14** The Save states table, with remotes read after a save, not on
-  load — it maps every answer, and fact 41 pins the load reads — a label
-  changes.
-- **R-15** Done with a draft offers the close choices — one rule for
-  leaving unsaved work — none.
-- **R-16** In the close dialog, Save comes after Keep draft — the safe
+- **R-9** The added keys — they do not collide (fact 33) — a binding.
+- **R-11** The base stores the normalized body; every desktop
+  classification normalizes theirs — normalization is never a change — a
+  display fix.
+- **R-12** A change is a text difference seen on notify or `Changed`,
+  length first, and it feeds both dirty and the draft — undo emits no
+  event. The cost is a whole-text compare per notify, which checklist
+  step 9 measures; if it lags, a generation counter replaces it.
+- **R-13** Editing waits for a pending hand-off — the read may still show
+  the primary copy — a Resume press.
+- **R-14** The Save states table; remotes are read after a save — fact 41 —
+  a label.
+- **R-15** Leaving while dirty always asks — no text is dropped — none.
+- **R-16** Save comes after Keep draft in the close dialog — the safe
   default stays first — a keyboard test edit.
-- **R-17** Continue editing and Save come before Compare — Compare,
-  Export… and Discard… keep their order — a keyboard test edit.
-- **R-18** Resolving a review restarts undo — `set_text` clears history —
-  a whole-text `replace_range` instead.
-- **R-19** A clean reload restores the cursor, clamped. Only the cursor is
-  settable (fact 31) — the selection is lost.
-- **R-20** A new-item draft's base has neither observation nor source, and
-  holds the chosen path. `NotCreated` is restorable. D2 never writes such a
-  base, and the format needs no change — draft format version 2.
-- **R-20b** A create's completion always clears the new-item marker — an
-  existing item must never read as not created (index lag) — a create
-  routed again, refused as `occupied_path`.
-- **R-21** Ticket create sends no initials, and `initials_required` points
-  to Settings — initials are repository settings (C2) — a dialog field.
-- **R-22** A new document's path is checked in the dialog, and a collision
-  at Save keeps the draft — the library checks again — a rare refused
-  Save.
-- **R-23** A move needs a clean tab and observes the destination in the
-  item's context — the binding checks it there — a refusal.
-- **R-24** No extra refresh after New folder — it hands off to one
-  (fact 16) — a refresh press.
-- **R-25** Repair edits the whole file in a plain text area — front matter
-  must not pass through the editor — none.
-- **R-26** The relationship check is advisory; the save checks again — the
-  read is index-only — a late cycle answer, shown the same way.
+- **R-17** Continue editing comes before Compare — D2's Tab order is kept —
+  a keyboard test edit.
+- **R-18** Using the review's choices restarts undo — `set_text` clears
+  history — a whole-text `replace_range`.
+- **R-19** A clean reload restores the cursor, clamped — only the cursor is
+  settable — the selection is lost.
+- **R-20** The new-item draft is written before `context prepare`, with a
+  base that has neither observation nor source — no crash leaves a context
+  without a draft, and the format is unchanged — a format version 2.
+- **R-20b** Create's completion follows D2's unverified rule and always
+  clears the marker — another actor's change between create and read stays
+  visible in the review — a review that defaults to theirs.
+- **R-21** No initials on ticket create — initials are repository settings
+  — a dialog field.
+- **R-22** The path is checked in the dialog; a collision at Save keeps the
+  draft — the library checks again — a rare refused Save.
+- **R-23** Move needs a clean, idle tab — a move would race a save — a
+  disabled Move.
+- **R-24** No extra refresh after New folder — fact 16 — a refresh press.
+- **R-25** Repair uses a plain text area — front matter must not pass
+  through the editor — none.
+- **R-26** The relationship check is advisory — it is index-only and the
+  save checks again — a late cycle answer.
 - **R-27** An emptied Project or Team is saved as absent — the library
-  removes the key — an explicit empty value instead.
-- **R-31** The read view rewrites relative links to the viewer's wiki form
-  for rendering only — the viewer has no hook for ordinary links
-  (fact 38) — links with `|`, `]]` or reference style stay inert.
-- **R-32** Release checks everything before touching anything, under one
-  lease, using lease-held variants of the cleanup primitives — they take
-  their own lease (fact 22) — a busy answer.
-- **R-33** Nearest-name for images walks `docs/`, bounded and cached — no
-  index of image files exists — a missed image beyond 10,000 entries.
-- **R-34** Image files are read by the desktop under containment checks.
-  The RFC puts image loading in the host — cost: move it to a library
-  read.
+  removes the key — an explicit empty value.
+- **R-31** The read view rewrites qualifying links to the viewer's wiki form
+  for rendering only — the viewer has no link hook — formatted-text and
+  reference links stay as the viewer treats them.
+- **R-32** Release has ownership, (a)–(d), two removal steps and a hand-off
+  to any refresh, under one lease with lease-held cleanup variants — the
+  primitives take their own lease, and an owed hand-off would block the
+  root with nothing to resume it — a busy answer.
+- **R-33** Nearest-name for images walks `docs/` without following links,
+  bounded and cached — no index of images exists — a missed image.
+- **R-34** The desktop reads image files under containment checks; the RFC
+  puts image loading in the host — a library read.
 - **R-35** Edit is unavailable while a stored draft exists for the item —
-  `begin` would make a second draft for the same item — none.
+  two drafts for one item — none.
 - **R-36** An unverified base opens the review instead of saving — D2's
-  obligation (fact 43) — none.
-- **R-37** Only a session that created its context and saved nothing
-  releases it, and only on Done, Discard or close — a context made by
-  someone else, or holding work, is never released (the library refuses
-  that too) — a context kept.
-- **R-38** All draft-text UI sits inside `draft-section` — D2's privacy
-  sweep (fact 46) stays valid — a sweep edit.
+  obligation — none.
+- **R-37** Release on leave follows the four conditions; a context created
+  for a tab that closed while preparing is released at once — a context
+  holding work, or used by another session, is never released, and the
+  library refuses one with work — a context kept.
+- **R-38** Draft-text UI stays inside `draft-section` — D2's privacy sweep
+  holds — a sweep edit.
+- **R-39** Images are decoded with explicit limits, first frame only, one at
+  a time, within a per-tab budget — gpui's decoder has no GIF limits
+  (fact 39) — an image shown as source.
+- **R-40** A tab offers to release a stranded context when Edit is refused
+  with `recovery_required` and the read shows no context — an abandoned
+  prepare can leave a branch that blocks Edit (fact 18) — a release refused
+  with its reason.
+- **R-41** Leaving decides on dirty, or a session still being stored, not on
+  whether a draft exists — the store may be unavailable, or the first
+  write still pending — none.
+- **R-42** A restored or new-item draft is routed by its classification:
+  `NotCreated` takes the Create intent; everything else takes the Edit
+  intent, with the review when unverified or changed — one rule for both
+  entry points — a misrouted draft refused and reviewed.
 
 ## Known Limits
 
 - An Edit left open at quit keeps its context.
-- Links and images open by pointer only (fact 38).
+- A retried `context prepare` that answers `Reused` for a context it made is
+  kept.
+- Releasing a clean, unused context removes its directory even if another
+  process uses it as its working directory. No file is lost: release
+  refuses any change.
+- Links and images open by pointer only.
 - Repair text is not crash-protected.
-- A path taken between the Create dialog's check and Save is refused at
-  Save.
-- The editor keeps 256 undo steps, each a whole-text snapshot.
-- Dragging a table column's width writes a `<!-- table: … -->` marker.
-  Resizing an image writes `{width=N}`. Both are user edits: dirty and
-  undoable.
-- Paste in rich mode applies the `$$` normalization to pasted text, as a
-  user edit.
-- An abandoned `context prepare` interrupted after its branch leaves a
-  branch that `context release` removes.
+- A path taken between the dialog and Save is refused at Save.
+- The editor keeps 256 whole-text undo steps.
+- A table column drag or image resize writes Zorite syntax as a user edit.
+- Paste in rich mode normalizes `$$` as a user edit.
 
 ## Alternatives Rejected
 
-- **A byte-exact fallback editor.** Rejected by decision 1.
-- **Provisioning at the first save.** Rejected by decision 2.
-- **The desktop calling `prepare_context` directly.** It would be outside
-  F2: no replay and no shared results.
-- **Creating the item at once from the dialog.** Rejected by decision 3.
-- **A draft format version 2.** Ruling R-20's marker needs no format change.
-- **gpui-component's Markdown `TextView`.** The owner chose
-  `zorite-markdown` (decision 6).
-- **Re-pinning to `zorite-editor` 0.11.x.** Its source has not been
-  reviewed.
-- **Loading images with gpui's `img(path)`.** Its cache is keyed by path,
-  it resolves strings as URLs, and it decodes SVG (fact 39).
-- **Releasing through the promotion runner's cleanup.** That cleanup
-  retires remote state, and it refuses a context without its item
-  (fact 22).
+- **A fallback editor:** decision 1.
+- **Provisioning at the first save:** decision 2.
+- **Calling `prepare_context` directly:** outside F2.
+- **Creating at once:** decision 3.
+- **A draft format v2:** R-20 needs none.
+- **gpui-component's `TextView`:** decision 6.
+- **Re-pinning to 0.11.x:** not reviewed.
+- **gpui's `img(path)` or `to_image_data`:** path-keyed cache, URL strings,
+  SVG, no limits (fact 39).
+- **Releasing through the promotion runner's cleanup:** it retires remote
+  state and needs the item (fact 22).
+- **A reflog check of the release's own creation:** release refuses any
+  change and any commit, so a clean, unpublished context holds nothing to
+  lose.
 
 ## Risks
 
 | Risk | Control |
 | --- | --- |
-| The editor does not work under GPUI's headless tests | Part A's first task proves it; stop for a ruling. |
-| `NoopTextSystem` geometry hides layout behavior (tables, IME, images) | Tests assert text and cache state; geometry is on the native checklist. |
-| A binding's re-entry differs from its outcome table | Test-first, with a stop (R-4). |
-| A pending row from a context command blocks the root (fact 13) | It is `discovery_pending` with Resume, or retryable under its request ID. |
-| Release removes work | Five checks under one lease; tests for each refusal; the desktop asks only for contexts it created and left unsaved (R-37). |
-| A malicious image or path reads outside the repository | Containment and magic-byte checks; no SVG; tests for traversal, symbolic links, `.git` and other worktrees. |
-| `01M5CS4MH2` and `01M5F3GV` edit the item view and lists | Merge main at work boundaries. |
+| The editor fails under headless GPUI | Part A's first task proves it, or stops. |
+| Synthetic geometry hides layout behavior | Tests assert text and state; geometry is on the checklist. |
+| A binding's re-entry differs from its table | Test-first, with a stop (R-4). |
+| Release removes work | Ownership, (a)–(d) and an oid-checked delete under one lease; a test per refusal; the desktop conditions (R-37). |
+| A crafted path or image reaches outside the repository or exhausts memory | Parse refusals before any filesystem call, containment, a handle identity check, magic bytes, decode limits and a budget. |
+| Parallel desktop follow-ups edit the item view | Merge main at work boundaries. |
 | D3 is large | Five Parts with checkpoint reviews (decision 5). |
-| Windows and macOS build the editor only after merge | It already builds there through `editor-probe` (fact 29). |
 
 ## Review Record
 
-Reviewed against these sources, by reading only, on 2026-10-24:
-- the Wave, the governing RFCs and the review register;
-- the provisional API audit;
+Reviewed by reading only, on 2026-10-24, against:
+- the Wave, the RFCs, the review register and the provisional API audit;
 - the D1 and D2 Cycles and designs;
 - the library, desktop and draft source;
-- the pinned `zorite-editor` 0.10.0, `zorite-markdown` 0.9.0, gpui-kit
-  0.6.6 and gpui-pre 0.3.6 sources.
+- the pinned crate sources.
 
 | Source | Concern | Classification | Resolution | Evidence or follow-up |
 | --- | --- | --- | --- | --- |
-| `zorite-markdown` `syntax.rs:903-1013`; desktop RFC 2026-10-07 | The load normalization is wider than recorded and splits code. | Decision | Cycle decision 1; N-1 to N-4 and N-2b. | Goldens; RFC amendments. |
-| Desktop RFC lines 69–71; no context command | Provisioning before authoring. | Decision | Cycle decision 2. | Part 0 tests. |
-| D2 design "a new item is D3's" | Create before Save. | Decision | Cycle decision 3; R-20, R-20b. | Create tests. |
-| Desktop RFC "three-way review" | What the review can do. | Decision | Cycle decision 4. | Stale-edit tests. |
-| Wave risk "too much in one Cycle" | Shape. | Decision | Cycle decision 5. | Part checkpoints. |
-| Owner, 2026-10-24 | The read view. | Decision | Cycle decision 6. | Read-view tests. |
-| Open library defects | Prerequisites? | Decision | Cycle decision 7; user-visible outcomes stated. | Save states; Move. |
-| Desktop RFC "labeled source blocks"; audit D12 | Unsupported syntax. | Decision | Cycle decision 8. | RFC amendment. |
-| Desktop RFC resources; audit D14, D15 | Images and links. | Decision | Cycle decisions 9 and 10; R-31, R-33, R-34. | Link and image tests; checklist. |
-| Abandoned Edit and Create leave contexts | Cleanup. | Decision | Cycle decision 11; release command. | Release tests. |
-| Fact 10, document save always writes | No-change save. | Settled | Save only when dirty, everywhere (contract 4). | Not-dirty tests. |
-| Round 1, source and feasibility review of `b32c737` | 2 blocking, 13 important, 11 minor. | Settled | Every finding checked against source: dead-code allowances (plan), E-18, re-entry choices, R-20b, R-36, the NotCreated Create intent, routing and file lists, R-38, N-2b, the feasibility test, `bind_keys`, image labels, handler-level link tests, E-19, filters, and the minors. | This revision. |
-| Round 1, contract and consistency review of `b32c737` | 5 blocking, 21 important, 14 minor; 8 owner questions. | Decision / settled | Decisions 8–11 asked and answered. Questions 6–8 settled under the standing test rule, decision 5 and decision 7. Every other finding applied: amendments at approval, contract 2 scope, flush-failure and track-rule-7 tests, Save gating, the snapshot definition, the Unverified review, the audit table, cadence, task splits, the repair guard, the checklist without the CLI, paste. | This revision. |
-| Rulings R-1 to R-38 | Engineering choices inside the contract. | Ruling | As stated. R-10, R-28, R-29 and R-30 are retired. | As stated. |
+| `zorite-markdown` `syntax.rs`; RFC 2026-10-07 | Normalization wider than recorded. | Decision | Decision 1; N table. | Goldens; amendments. |
+| RFC lines 69–71 | Provisioning before authoring. | Decision | Decision 2. | Part 0. |
+| D2 design | Create before Save. | Decision | Decision 3; R-20, R-20b. | Create tests. |
+| RFC "three-way review" | Review actions. | Decision | Decision 4. | Review tests. |
+| Wave risk row | Shape. | Decision | Decision 5. | Checkpoints. |
+| Owner | Read view. | Decision | Decision 6. | Read-view tests. |
+| Library defects | Prerequisites? | Decision | Decision 7. | Save states; Move. |
+| RFC "labeled source blocks" | Unsupported syntax. | Decision | Decision 8. | Amendment. |
+| RFC resources; audit D14, D15 | Images and links. | Decision | Decisions 9, 10. | Tests; checklist. |
+| Abandoned contexts | Cleanup. | Decision | Decision 11. | Release tests. |
+| Round 1 source review, `b32c737` | 2 blocking, 13 important, 11 minor. | Settled | All checked against source and applied in `82b69be`. | — |
+| Round 1 contract review, `b32c737` | 5 blocking, 21 important, 14 minor; 8 questions. | Decision / settled | Decisions 8–11 asked and answered; the rest applied in `82b69be`. | — |
+| Round 2 scoped re-review, `82b69be` | 0 blocking, 8 important, 15 minor. | Settled | Applied here: E-21 and E-22; Continue editing re-read (R-42); routing by classification; single-text-node rewrite; background preparation (R-7); E-9; release-on-leave tests; filters; facts 4, 15, 42, 43; the minors. | This revision. |
+| Round 2 adversarial review, `82b69be` | 4 blocking, 11 important, 11 minor. | Settled | Applied here: R-20b to D2's rule; the body as a reviewed field; leaving on dirty (R-41); decode limits (R-39); ownership and the item-free precheck; release-on-leave conditions; prechecks on the first call only (R-2); the stranded-branch remedy (R-40); hand-off to any refresh; release re-entry; draft before prepare; Windows path refusals; primary-branch ancestry; publication evidence; link parse order; `mailto` queries; handle identity; case-insensitive `.git`; the nearest-match notice; Discard while saving. Release refusals that are retryable are retried by D1's busy rule. | This revision. |
+| Rulings R-1 to R-42 | Engineering choices. | Ruling | As stated. R-10 and R-28 to R-30 are retired. | — |
