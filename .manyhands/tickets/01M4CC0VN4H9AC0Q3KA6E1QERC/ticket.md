@@ -1,14 +1,17 @@
 ---
+wave: '03'
+cycle: G1
+deps:
+- 01M4CC0VMXTNXNH78C11DYXS8H
+- 01M4CC0VN3VPVVQ3RNWJKXWEVX
+id: 01M4CC0VN4H9AC0Q3KA6E1QERC
+title: 'Wave 03 G1: Native Journeys And Dogfooding Gate'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VN4H9AC0Q3KA6E1QERC"
-title: "Wave 03 G1: Native Journeys And Dogfooding Gate"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "G1"
 ---
 
 Close the evidence matrix and demonstrate the complete product with
