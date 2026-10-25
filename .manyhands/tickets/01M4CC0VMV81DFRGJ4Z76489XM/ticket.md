@@ -4,11 +4,13 @@ manyhands_kind: ticket
 id: "01M4CC0VMV81DFRGJ4Z76489XM"
 title: "Wave 03 C3: CLI Authoring And Discovery Maintenance"
 type: "cycle"
-status: "open"
+status: "closed"
 project: "manyhands"
 team: "core"
 wave: "03"
 cycle: "C3"
+closed_at: "2026-10-25T22:29:39Z"
+closed_by: "Vince Hodges <vince@imbas.ca>"
 ---
 
 Make local document/ticket lifecycle and explicit discovery repair
