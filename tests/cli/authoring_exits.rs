@@ -1,4 +1,4 @@
-//! C3 per-task exit evidence. Task 7 owns the complete Part B inventories.
+//! C3 exit, input, human-mode, privacy and documented-example evidence.
 use std::{
     collections::BTreeSet,
     fs,
@@ -615,7 +615,7 @@ const NOOPS: &[(&str, How)] = &[
 ];
 
 #[test]
-fn c3_noop_inventory_accounts_for_part_a() {
+fn c3_noop_inventory_accounts_for_all_eleven_mutations() {
     let commands = available_c3_mutations();
     let available = set(commands.iter().map(String::as_str));
     assert_eq!(
@@ -778,4 +778,581 @@ fn an_unopenable_data_directory_is_internal_error() {
     assert_eq!(value["code"], "internal_error");
     support::schema::check_published("envelope.schema.json", &value).unwrap();
     assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
+}
+
+// R-13 authoritative example outcome table. Task 8 copies/links this table.
+// Every row gets a fresh contract_repository, no remote, and executes (repairs
+// first prepare and then confirm). Only observation fields are substituted.
+//
+// command            | fixture preparation                         | code | exit
+// folder create      | absent docs/new-folder                      | ok   | 0
+// document create    | example ID and docs/new.md absent            | ok   | 0
+// document save      | DOCUMENT_A on primary                       | ok   | 0
+// document move      | DOCUMENT_A; absent docs/moved.md on primary  | ok   | 0
+// document repair    | marker-only file at example path            | ok   | 0
+// ticket create      | example ID absent; relationship IDs unknown | ok   | 0
+// ticket save        | TICKET_A on primary                         | ok   | 0
+// ticket repair      | marker-only file at example ticket path     | ok   | 0
+// ticket slug-assign | open TICKET_C on primary, no slug            | ok   | 0
+struct Example {
+    command: &'static str,
+    stem: &'static str,
+    selector: Option<&'static str>,
+    typed_field: &'static str,
+    code: &'static str,
+    exit: i32,
+}
+
+const EXAMPLES: &[Example] = &[
+    Example {
+        command: "folder create",
+        stem: "folder_create",
+        selector: None,
+        typed_field: "path",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "document create",
+        stem: "document_create",
+        selector: None,
+        typed_field: "title",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "document save",
+        stem: "document_save",
+        selector: Some(items::DOCUMENT_A),
+        typed_field: "body",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "document move",
+        stem: "document_move",
+        selector: Some(items::DOCUMENT_A),
+        typed_field: "destination_path",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "document repair",
+        stem: "document_repair",
+        selector: None,
+        typed_field: "source",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "ticket create",
+        stem: "ticket_create",
+        selector: None,
+        typed_field: "title",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "ticket save",
+        stem: "ticket_save",
+        selector: Some(items::TICKET_A),
+        typed_field: "body",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "ticket repair",
+        stem: "ticket_repair",
+        selector: None,
+        typed_field: "source",
+        code: "ok",
+        exit: 0,
+    },
+    Example {
+        command: "ticket slug-assign",
+        stem: "ticket_slug_assign",
+        selector: Some(items::TICKET_C),
+        typed_field: "initials",
+        code: "ok",
+        exit: 0,
+    },
+];
+
+fn example_input(case: &Example) -> Value {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_input_v1")
+        .join(format!("{}.json", case.stem));
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn input_commands() -> BTreeSet<String> {
+    let f = Fixture::new();
+    let help = checked(&["--help", "--json"], &f.env, &[], 0, "ok", None);
+    help["data"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["delivered_by"] == "C3" && c["available"] == true)
+        .filter(|c| {
+            c["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["name"] == "--input")
+        })
+        .map(|c| c["command"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+fn input_inventory() -> BTreeSet<String> {
+    let expected = input_commands();
+    assert_eq!(expected.len(), 9);
+    assert_eq!(
+        expected,
+        EXAMPLES.iter().map(|c| c.command.to_owned()).collect()
+    );
+    expected
+}
+
+fn input_call(
+    f: &Fixture,
+    case: &Example,
+    input: &Value,
+    json: bool,
+    extra: &[&str],
+) -> cli::CliRun {
+    let (resource, verb) = case.command.split_once(' ').unwrap();
+    let mut args = vec![
+        resource,
+        verb,
+        "--repo",
+        f.repo.root.to_str().unwrap(),
+        "--input",
+        "-",
+    ];
+    if let Some(id) = case.selector {
+        args.extend(["--id", id]);
+    }
+    args.extend_from_slice(extra);
+    if json {
+        args.push("--json");
+    }
+    run(&args, &f.env, &serde_json::to_vec(input).unwrap())
+}
+
+fn assert_json_result(out: &cli::CliRun, command: &str, exit: i32, code: &str) -> Value {
+    let value = cli::json(out);
+    assert_eq!(out.status, exit, "{command}: {value}");
+    assert_eq!(value["command"], command);
+    assert_eq!(value["code"], code);
+    support::schema::check_published("envelope.schema.json", &value).unwrap();
+    value
+}
+
+fn assert_no_request(f: &Fixture) {
+    checked(
+        &["request", "show", "--request-id", REQUEST, "--json"],
+        &f.env,
+        &[],
+        2,
+        "request_not_found",
+        None,
+    );
+}
+
+#[test]
+fn every_input_taking_c3_verb_refuses_malformed_input() {
+    input_inventory();
+    const VALUE: &str = "MALFORMED-VALUE-9c12";
+    for case in EXAMPLES {
+        for field in ["unexpected", case.typed_field] {
+            for json in [false, true] {
+                let f = Fixture::new();
+                let mut input = example_input(case);
+                input[field] = if field == "unexpected" {
+                    json!(VALUE)
+                } else {
+                    json!([VALUE])
+                };
+                let before = support::repository_and_worktree_snapshot(&f.repo);
+                let refs = f.refs("refs/");
+                let out = input_call(&f, case, &input, json, &["--request-id", REQUEST]);
+                assert_eq!(out.status, 2, "{} {field}", case.command);
+                assert!(!String::from_utf8_lossy(&out.stdout).contains(VALUE));
+                assert!(!String::from_utf8_lossy(&out.stderr).contains(VALUE));
+                if json {
+                    let value = assert_json_result(&out, case.command, 2, "invalid_input");
+                    assert_eq!(
+                        value["message"],
+                        manyhands::results::ResultCode::InvalidInput.message()
+                    );
+                    assert_eq!(value["request_id"], REQUEST);
+                } else {
+                    assert!(out.stdout.is_empty());
+                    let error = String::from_utf8_lossy(&out.stderr);
+                    assert!(error.contains("invalid_input"), "{error}");
+                    assert!(error.contains(field), "{error}");
+                }
+                assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
+                assert_eq!(f.refs("refs/"), refs);
+                assert_no_request(&f);
+            }
+        }
+    }
+}
+
+#[test]
+fn every_c3_verb_runs_in_human_mode_with_split_streams() {
+    let cases = [
+        ("folder create", "folder_create_has_human_output"),
+        (
+            "document create",
+            "document_verbs_have_human_success_refusal_and_noop_output",
+        ),
+        (
+            "document save",
+            "document_verbs_have_human_success_refusal_and_noop_output",
+        ),
+        (
+            "document move",
+            "document_verbs_have_human_success_refusal_and_noop_output",
+        ),
+        ("document repair", "both_repairs_have_human_output"),
+        (
+            "ticket create",
+            "ticket_verbs_have_human_success_refusal_and_fresh_noop_output",
+        ),
+        (
+            "ticket save",
+            "ticket_verbs_have_human_success_refusal_and_fresh_noop_output",
+        ),
+        ("ticket repair", "both_repairs_have_human_output"),
+        (
+            "ticket slug-assign",
+            "ticket_verbs_have_human_success_refusal_and_fresh_noop_output",
+        ),
+        ("index refresh", "index_verbs_have_human_output"),
+        ("index rebuild", "index_verbs_have_human_output"),
+        (
+            "path observe",
+            "path_observe_gives_the_absent_token_for_an_empty_document_path",
+        ),
+        (
+            "ticket check",
+            "ticket_check_reports_resolved_unresolved_and_a_dependency_cycle",
+        ),
+    ];
+    let f = Fixture::new();
+    let help = checked(&["--help", "--json"], &f.env, &[], 0, "ok", None);
+    let delivered: Vec<_> = help["data"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["delivered_by"] == "C3")
+        .collect();
+    assert!(delivered.iter().all(|c| c["available"] == true));
+    assert_eq!(delivered.len(), 13);
+    assert_eq!(
+        set(delivered.iter().map(|c| c["command"].as_str().unwrap())),
+        set(cases.iter().map(|(verb, _)| *verb))
+    );
+    for (_, case) in cases {
+        assert_case_exists(case);
+    }
+    assert_case_exists("a_human_save_reports_its_progress_on_stderr");
+}
+
+const CONTENT_SENTINEL: &str = "MANYHANDS-SENTINEL-7f3a";
+const TITLE_SENTINEL: &str = "PRIVATE-TITLE-1d8c";
+const PATH_SENTINEL: &str = "private-path-6e21";
+// Ticket repair paths must contain a canonical ULID; keep it distinct from deps.
+const TICKET_PATH_SENTINEL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ8";
+const INITIALS_SENTINEL: &str = "qx";
+const DEPS_SENTINEL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ9";
+
+// Prepare the repository to fit the input, rather than rewriting example IDs,
+// paths or source. Privacy runs may plant extra content in the existing item.
+fn prepare_input(f: &Fixture, case: &Example, input: &mut Value, private: bool) {
+    let mut files = Vec::new();
+    if REPAIRS.contains(&case.command) {
+        files.push((
+            input["path"].as_str().unwrap().to_owned(),
+            format!("---\nmanyhands_managed: true\n---\n{CONTENT_SENTINEL}\n"),
+        ));
+    }
+    if case.command == "ticket slug-assign" {
+        files.push((
+            items::ticket_path(items::TICKET_C),
+            items::ticket_source(items::TICKET_C, "Uncoded", ""),
+        ));
+    }
+    if private
+        && matches!(
+            case.command,
+            "document move" | "document save" | "ticket save"
+        )
+    {
+        let path = if case.command.starts_with("document") {
+            "docs/guide.md".to_owned()
+        } else {
+            items::ticket_path(items::TICKET_A)
+        };
+        let mut source = fs::read_to_string(f.repo.root.join(&path)).unwrap();
+        source.push_str(CONTENT_SENTINEL);
+        files.push((path, source));
+    }
+    if private && case.command == "ticket slug-assign" {
+        files[0].1.push_str(CONTENT_SENTINEL);
+    }
+    if !files.is_empty() {
+        for (path, source) in &files {
+            items::write(&f.repo.root, path, source);
+        }
+        items::commit(
+            &f.repo,
+            &files.iter().map(|(p, _)| p.as_str()).collect::<Vec<_>>(),
+            items::COMMITTED_AT + 300,
+        );
+        let service = manyhands::repository::RepositoryService::open_at(f.data.path()).unwrap();
+        items::refresh_completely(&service, &f.repo.root);
+    }
+    let (resource, _) = case.command.split_once(' ').unwrap();
+    if input.get("observation").is_some() {
+        let read = if let Some(id) = case.selector {
+            f.checked(resource, "show", &["--id", id], &[], 0, "ok")
+        } else {
+            f.checked(
+                "path",
+                "observe",
+                &["--path", input["path"].as_str().unwrap()],
+                &[],
+                0,
+                "ok",
+            )
+        };
+        input["observation"] = read["data"]["observation"].clone();
+    }
+    if input.get("destination_observation").is_some() {
+        let read = f.checked(
+            "path",
+            "observe",
+            &["--path", input["destination_path"].as_str().unwrap()],
+            &[],
+            0,
+            "ok",
+        );
+        input["destination_observation"] = read["data"]["observation"].clone();
+    }
+}
+
+fn assert_private(out: &cli::CliRun, json: bool, refusal: bool) {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains(CONTENT_SENTINEL));
+    assert!(!stderr.contains(CONTENT_SENTINEL));
+    let diagnostic = if json {
+        cli::json(out)["message"].as_str().unwrap().to_owned()
+    } else {
+        stderr.to_string()
+    };
+    for sentinel in [
+        TITLE_SENTINEL,
+        PATH_SENTINEL,
+        TICKET_PATH_SENTINEL,
+        INITIALS_SENTINEL,
+        DEPS_SENTINEL,
+    ] {
+        assert!(
+            !diagnostic.contains(sentinel),
+            "diagnostic leaked {sentinel}"
+        );
+        if refusal {
+            assert!(!stdout.contains(sentinel));
+        }
+    }
+}
+
+fn execute_input(f: &Fixture, case: &Example, input: &Value, json: bool) -> cli::CliRun {
+    let confirmation = if REPAIRS.contains(&case.command) {
+        let out = input_call(f, case, input, true, &["--prepare"]);
+        assert_private(&out, true, false);
+        let preview = assert_json_result(&out, case.command, 0, "ok");
+        Some(
+            preview["data"]["confirmation_id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        )
+    } else {
+        None
+    };
+    let mut flags = vec!["--request-id", REQUEST];
+    if let Some(id) = &confirmation {
+        flags.extend(["--confirm", id]);
+    }
+    input_call(f, case, input, json, &flags)
+}
+
+#[test]
+fn no_c3_verb_echoes_a_sentinel() {
+    let expected = input_inventory();
+    for json in [false, true] {
+        let mut executed = BTreeSet::new();
+        for case in EXAMPLES {
+            let f = Fixture::new();
+            let mut input = example_input(case);
+            match case.command {
+                "folder create" => input["path"] = format!("docs/{PATH_SENTINEL}").into(),
+                "document create" => {
+                    input["path"] = format!("docs/{PATH_SENTINEL}.md").into();
+                    input["title"] = TITLE_SENTINEL.into();
+                    input["body"] = CONTENT_SENTINEL.into();
+                }
+                "document save" => {
+                    input["title"] = TITLE_SENTINEL.into();
+                    input["body"] = CONTENT_SENTINEL.into();
+                }
+                "document move" => {
+                    input["destination_path"] = format!("docs/{PATH_SENTINEL}.md").into()
+                }
+                "document repair" | "ticket repair" => {
+                    let source = input["source"]
+                        .as_str()
+                        .unwrap()
+                        .replace("title: Repaired", &format!("title: {TITLE_SENTINEL}"));
+                    input["source"] = format!("{source}{CONTENT_SENTINEL}\n").into();
+                    if case.command == "document repair" {
+                        input["path"] = format!("docs/{PATH_SENTINEL}.md").into();
+                    } else {
+                        input["path"] = items::ticket_path(TICKET_PATH_SENTINEL).into();
+                        input["source"] = input["source"]
+                            .as_str()
+                            .unwrap()
+                            .replace(support::repair::TICKET_MARKER, TICKET_PATH_SENTINEL)
+                            .into();
+                    }
+                }
+                "ticket create" | "ticket save" => {
+                    input["title"] = TITLE_SENTINEL.into();
+                    input["body"] = CONTENT_SENTINEL.into();
+                    input["deps"] = json!([DEPS_SENTINEL]);
+                    if case.command == "ticket create" {
+                        input["initials"] = INITIALS_SENTINEL.into();
+                    }
+                }
+                "ticket slug-assign" => input["initials"] = INITIALS_SENTINEL.into(),
+                _ => panic!("uncovered privacy verb"),
+            }
+            prepare_input(&f, case, &mut input, true);
+
+            // All planted values also pass through a CLI-built refusal, before
+            // execution. The field name is public; its value remains private.
+            let mut refused = input.clone();
+            refused["unexpected"] = CONTENT_SENTINEL.into();
+            let before = support::repository_and_worktree_snapshot(&f.repo);
+            let out = input_call(&f, case, &refused, json, &["--request-id", REQUEST]);
+            assert_eq!(out.status, 2);
+            assert_private(&out, json, true);
+            assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
+            assert_no_request(&f);
+
+            let out = execute_input(&f, case, &input, json);
+            assert_eq!(
+                out.status,
+                0,
+                "{}: {}",
+                case.command,
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_private(&out, json, false);
+            if json {
+                assert_json_result(&out, case.command, 0, "ok");
+            } else {
+                assert!(!out.stdout.is_empty());
+                assert!(String::from_utf8_lossy(&out.stderr).contains("progress:"));
+            }
+            // A preview/no-op/refusal cannot satisfy this execution inventory.
+            let record = f.request(REQUEST);
+            assert_eq!(record["data"]["state"], "finished");
+            assert_eq!(record["data"]["result"]["code"], "ok");
+            if case.command == "folder create" {
+                assert!(f.repo.root.join(input["path"].as_str().unwrap()).is_dir());
+            } else {
+                assert_eq!(
+                    record["data"]["result"]["effects"]["checkpoint"],
+                    "committed"
+                );
+                let data = &record["data"]["result"]["data"];
+                let context = items::context_worktree(&f.repo.root, data["id"].as_str().unwrap());
+                let written =
+                    fs::read_to_string(context.join(data["path"].as_str().unwrap())).unwrap();
+                assert!(
+                    written.contains(CONTENT_SENTINEL),
+                    "sentinel must actually reach the owned file"
+                );
+            }
+            support::mutation::assert_request_stores_exclude(f.data.path(), &[CONTENT_SENTINEL]);
+            assert!(executed.insert(case.command.to_owned()));
+        }
+        assert_eq!(executed, expected, "only successful executions count");
+
+        // R-17 specifically includes a refusal after the save patch's fill read.
+        let f = Fixture::new();
+        let case = Example {
+            command: "ticket save",
+            selector: Some(items::DOCUMENT_A),
+            ..EXAMPLES[6]
+        };
+        let input = json!({"observation": show(&f)["observation"], "body": CONTENT_SENTINEL, "deps": [DEPS_SENTINEL]});
+        assert!(input.get("title").is_none());
+        let before = support::repository_and_worktree_snapshot(&f.repo);
+        let out = input_call(&f, &case, &input, json, &["--request-id", REQUEST]);
+        assert_eq!(out.status, 2);
+        assert_private(&out, json, true);
+        if json {
+            let value = assert_json_result(&out, "ticket save", 2, "item_not_found");
+            assert_eq!(value["scope"]["item_id"], items::DOCUMENT_A);
+            assert_eq!(value["request_id"], REQUEST);
+        } else {
+            assert!(out.stdout.is_empty());
+            assert!(String::from_utf8_lossy(&out.stderr).contains("item_not_found"));
+        }
+        assert_no_request(&f);
+        assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
+        support::mutation::assert_request_stores_exclude(f.data.path(), &[CONTENT_SENTINEL]);
+    }
+}
+
+#[test]
+fn every_c3_example_input_runs() {
+    input_inventory();
+    for case in EXAMPLES {
+        let f = Fixture::new();
+        let original = example_input(case);
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/input/v1");
+        support::schema::check(&directory, &format!("{}.schema.json", case.stem), &original)
+            .unwrap();
+        let mut input = original.clone();
+        prepare_input(&f, case, &mut input, false);
+        let mut restored = input.clone();
+        for field in ["observation", "destination_observation"] {
+            if let Some(value) = original.get(field) {
+                assert_ne!(
+                    input[field], *value,
+                    "{} {field} must be observed",
+                    case.command
+                );
+                restored[field] = value.clone();
+            }
+        }
+        assert_eq!(
+            restored, original,
+            "non-observation example fields must remain unchanged"
+        );
+        support::schema::check(&directory, &format!("{}.schema.json", case.stem), &input).unwrap();
+        let out = execute_input(&f, case, &input, true);
+        let value = assert_json_result(&out, case.command, case.exit, case.code);
+        assert_eq!(value["request_id"], REQUEST);
+        assert_eq!(f.request(REQUEST)["data"]["state"], "finished");
+    }
 }

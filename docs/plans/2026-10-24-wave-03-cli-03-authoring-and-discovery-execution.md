@@ -18,11 +18,13 @@ on `manyhands/ticket/01M4CC0VMV81DFRGJ4Z76489XM`. No subagents dispatched.
 Tasks 0–4 and Part A are approved (see task log; Part A spec and quality
 approvals conveyed in the fresh Task 5 implementer brief at base `452f031`).
 Task 5 spec and quality are APPROVED, as conveyed in the fresh Task 6 brief at
-`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. Task 6 is implemented and locally
-verified for independent review. Task 3's two stops are resolved by explicit owner
+`6d0ec5191bf4282e099b0d28dac4b37bb26112f3`. Task 6 spec and quality are APPROVED,
+as conveyed in the fresh Task 7 brief at `aab0e795d5245d0e0932d8ceff2501d06846d963`.
+Task 7 is implemented and checkpoint-verified; independent Part B review is pending.
+Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Tasks 7–9 remain unstarted.
+CLI retries with its approved assertions unchanged. Tasks 8–9 remain unstarted.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -459,6 +461,8 @@ review-ready or closure claim.
 | 5 | Implemented; independent review pending | Base `452f031fd06d3a39e2c5de6cfe711b74256ab8a1`; head is the `feat(cli): ticket create, save and slug-assign` commit carrying this entry | **27 input + 8 fill + 31 ticket-authoring + 7 schemas + 11 authoring-exits + 9 help = 93 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
 | 5 final | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..6d0ec5191bf4282e099b0d28dac4b37bb26112f3` | The recorded 93 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 6 brief; supersedes the historical pending row |
 | 6 | Implemented; independent review pending | Base `6d0ec5191bf4282e099b0d28dac4b37bb26112f3`; head is the `feat(cli): document and ticket repair` commit carrying this entry | **16 repair + 11 authoring-exits + 7 input-schema + 9 help = 43 passing**; check/fmt/clippy passed | Self-reviewed; controller spec/quality reviews next |
+| 6 final | Complete, APPROVED | `6d0ec5191bf4282e099b0d28dac4b37bb26112f3..aab0e795d5245d0e0932d8ceff2501d06846d963` | Recorded 43 passing tests and check/fmt/clippy retained | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 7 brief; supersedes historical pending row |
+| 7 | Implemented; Part B independent review pending | Base `aab0e795d5245d0e0932d8ceff2501d06846d963`; head is the `test(cli): C3 exit table, input, human, privacy and example evidence` commit carrying this entry | **15 authoring-exits passed**; six checkpoint gates passed; **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passing** | Self-reviewed; controller reviews actual Part B range `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD` after return; no approval claimed |
 
 ## Part A approval and Task 5 preflight
 
@@ -1632,3 +1636,102 @@ diff and last ten commits were inspected before staging owned paths. The task
 commit carries the required co-author trailer and is pushed only to this ticket
 branch. Independent controller reviews are next. Task 7 remains unstarted;
 no agents, PR, main integration, closure, cleanup, native CI or dogfooding.
+
+## Task 7: Part B evidence and checkpoint
+
+Recorded **2026-10-25T05:28:07Z**. The owner's fresh Task 7 brief explicitly
+conveys **Task 6 spec and quality APPROVED** at
+`aab0e795d5245d0e0932d8ceff2501d06846d963`. The baseline and task table now
+record that approval, superseding the historical pending row. All previous
+decisions, approvals and narrow owner rulings remain in force.
+
+### Preflight and evidence
+
+- Began at the exact clean supplied base, in the specified ticket worktree and
+  branch. Read the handoff, current main's AGENTS.md, Cycle/design/Task 7 plan,
+  ledger rulings and preceding checkpoint evidence. Initial fetch succeeded;
+  merging origin/main into the ticket answered already up to date.
+- Preserved Task 6's complete exit accounting: **39 binary rows + 3 reasons**
+  on Unix, **38 + 4** otherwise. The exact union remains **40 library codes
+  plus the six CLI_ONLY entries = 42 unique codes**. Only discovery_pending,
+  registration_pending and confirmation_expired remain reasons on Unix.
+  Exit 4 retains decision-6 actor/CLI-completion evidence; the repair actor's
+  partial internal_error is not misrepresented as a binary exit. The C3
+  index_unavailable row retains the approved refresh provenance correction.
+- Renamed the no-op inventory to
+  `c3_noop_inventory_accounts_for_all_eleven_mutations`; preserved all eleven
+  rows, **9 capable / 2 index-incapable**, audit equality and test references.
+- Added the malformed-input matrix: **nine verbs × two malformed shapes ×
+  two modes = 36 binary calls**. Unknown fields and wrong types are
+  invalid_input/2. Human stderr names the field without its value; JSON retains
+  the fixed ResultCode message and request ID, with empty stderr. Canonical/
+  linked-worktree snapshots, Git refs and absent request records prove refusal
+  has no authoring effect.
+- Added the human inventory: help filtered by delivered_by C3 equals exactly
+  the design's thirteen verbs, all available, each naming its actual existing
+  human binary test. Inspected the referenced loops: every named verb executes,
+  including both reads. The checkpoint runs those tests and their goldens.
+- Added R-17 privacy: **18 successful executions**, nine verbs independently
+  in each mode, plus **18 CLI-built refusals** and **two fill-read refusals**.
+  Repairs prepare then execute with consent; previews do not count. Finished
+  request records must be ok, and all eight content mutations must checkpoint;
+  folder creation must produce its directory. Each content mutation's actual
+  owned file contains MANYHANDS-SENTINEL-7f3a, proving non-vacuous planting.
+  That content is absent from stdout/stderr and all eight request stores via
+  assert_request_stores_exclude. Title/path/initials/deps use distinct valid
+  sentinels and diagnostic-only checks, retaining the approved public data/read
+  exemptions. Ticket repair's path uses a separate canonical-ULID sentinel.
+  The fill-refusal case is ticket save of DOCUMENT_A with title omitted:
+  item_not_found/2, item scope/request ID retained, no record or file change.
+- Added R-13's authoritative nine-row outcome table beside EXAMPLES in
+  tests/cli/authoring_exits.rs. Every example validates before and after runtime
+  observation replacement, executes in a fresh fixture and returns **ok/0**.
+  Both repairs are confirmed executions. Fixture files fit the example IDs,
+  paths and corrected sources; a restored-object equality assertion proves
+  every non-observation field remains unchanged. Destination observation is
+  obtained from path observe too. Task 8 copies/links this table.
+
+All helpers stay in the owned file and reuse Fixture/CliEnv isolation, including
+autocrlf=false and an identity-free home. Services used to seed/refresh fixtures
+are dropped before CLI children execute. No shared mutation driver was changed.
+
+### Verification
+
+This is test-only evidence for already approved behavior. The first focused run
+passed **15 / 0 failed / 275 filtered** (15.19s); no intentional production-red
+claim. Self-review then added a valid distinct ticket-path sentinel and positive
+owned-file content checks. The final focused run passed **15 / 0 failed / 275
+filtered** (15.25s). Four tests are new; all eleven earlier C3 tests remain.
+
+The six checkpoint commands ran once on that final Rust tree, through Devenv,
+with a 600-second tool budget. All passed:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Passed, 0.38s. |
+| `devenv shell -- cargo fmt --check` | Passed across the whole tree. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Passed, 1.35s; no warnings or outside-file failure. |
+| `devenv shell -- cargo check --locked --bin manyhands-cli` | Passed, 0.67s. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Passed. |
+| `devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract` | **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passed**; zero failed/ignored/measured/filtered. Durations 0.28s / 125.83s / 10.80s / 9.92s. |
+
+Counts above count the completed gate once; focused runs are not added again.
+No full suite ran. After the gate, fetch/merge-tree and merge again found main
+unchanged at `e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; merge already current.
+Merge-tree at the task base returned `cc0f419dd8db68a9e623b26d6d2920e7519720c0`.
+
+### Self-review and return
+
+Reviewed the task diff against all seven steps, output-mode distinctions,
+example immutability, actual successful execution counts, request-store privacy,
+refusal state and fixture isolation. Status/diff/last ten commits and whitespace
+were inspected. Only tests/cli/authoring_exits.rs, this ledger and canonical
+Part B comment `01M5RRFKFH7190Z50S4WNDB4RZ` change. Comment ID came from the built
+CLI's id new through Devenv; timestamp from the UTC clock.
+
+No unresolved implementation blocker was found. The controller owns independent
+Part B spec/quality review **after return**, over
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD`; review is **pending**.
+Task-only commit and ticket-only push are authorized, with the prescribed message
+and co-author trailer. Task 8 has not started. No agents, PR, main integration,
+closure, cleanup, native CI or other-branch dogfooding operation occurred.
