@@ -22,13 +22,18 @@ Task 5 spec and quality are APPROVED, as conveyed in the fresh Task 6 brief at
 as conveyed in the fresh Task 7 brief at `aab0e795d5245d0e0932d8ceff2501d06846d963`.
 Task 7 / Part B spec and quality are **APPROVED**, explicitly conveyed in the
 fresh Task 8 brief at `9a2a5170c4704ef03420ef2276911c6b1bfa3959`, retaining
-the six checkpoint gates and 593 tests. Task 8's documentation amendments are
-implemented and source/document-validated; independent Task 8 review is pending.
+the six checkpoint gates and 593 tests. Task 8 spec and quality are **APPROVED**,
+explicitly conveyed in the fresh Task 9 brief at
+`f9618f76ce9608c9ccc42018701647d7b98bb642`.
 Task 3's two stops are resolved by explicit owner
 rulings: Partial/Incomplete assertion precedence, and primary-only committed
 move-to-self no-op. The interrupted-save checkpoint also passes through real
-CLI retries with its approved assertions unchanged. Task 9 remains unstarted;
-its dogfooding authorization and evidence are still owed.
+CLI retries with its approved assertions unchanged. Task 9's full verification
+is **not green** after an outside-C3 library-unit failure. The owner-authorized
+test-baseline correction now passes scoped verification; independent review and
+full-gate disposition remain pending. Original and post-fix evidence are below.
+Whole-branch reviews remain controller-owned and pending; dogfooding preflight,
+authorization and evidence are still owed.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -469,6 +474,9 @@ review-ready or closure claim.
 | 7 | Implemented; Part B independent review pending | Base `aab0e795d5245d0e0932d8ceff2501d06846d963`; head is the `test(cli): C3 exit table, input, human, privacy and example evidence` commit carrying this entry | **15 authoring-exits passed**; six checkpoint gates passed; **188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract = 593 passing** | Self-reviewed; controller reviews actual Part B range `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..Task7HEAD` after return; no approval claimed |
 | 7 final / Part B | Complete, APPROVED | `452f031fd06d3a39e2c5de6cfe711b74256ab8a1..9a2a5170c4704ef03420ef2276911c6b1bfa3959` | Recorded six gates and **593** tests retained, not rerun | Spec and quality **APPROVED**, explicitly conveyed in the owner's fresh Task 8 brief; supersedes the historical pending row |
 | 8 | Implemented; independent review pending | Base `9a2a5170c4704ef03420ef2276911c6b1bfa3959`; head is the `docs: amend the RFCs, Wave and audit for C3` commit carrying this entry | Documentation/source checks: 38 changed links/anchors, 11 scoped amendment markers, 9 schema/example inventories and exact example outcomes, 13 available audit/catalog rows, unchanged **40/42** union, whitespace/scope/merge-tree | Self-reviewed; controller review after return. No Rust gate rerun for docs-only changes |
+| 8 final | Complete, APPROVED | `9a2a5170c4704ef03420ef2276911c6b1bfa3959..f9618f76ce9608c9ccc42018701647d7b98bb642` | Recorded documentation/source validation retained | Spec and quality **APPROVED**, explicitly conveyed in the fresh Task 9 brief; supersedes historical pending row |
+| 9 verification | BLOCKED; gate evidence complete | Tested HEAD `f9618f76ce9608c9ccc42018701647d7b98bb642` | Check/fmt/clippy/CLI smoke/no-GPUI passed; sole full-suite invocation exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets, 6239s | Outside-C3 library assertion requires owner/controller disposition; whole-branch reviews pending; no review-ready claim |
+| 9 narrow test correction | Implemented; independent review and full-gate disposition pending | Base `f9618f76ce9608c9ccc42018701647d7b98bb642`; fix/evidence commit carrying the follow-up below | Exact test **1 passed**, then checkpoint module **46 passed**; fmt/check/clippy passed. Full suite **not rerun** | Explicit owner exception for this test baseline only; original **4528/1/1**, exit **101** remains the sole full-suite result |
 
 ## Part A approval and Task 5 preflight
 
@@ -1822,3 +1830,268 @@ no unresolved Task 8 blocker; independent review belongs to the controller.
 Task 9 is not started. Full verification, whole-branch review and dogfooding
 remain owed; there is no Cycle-complete, native CI, PR, main integration,
 closure or cleanup claim.
+
+## Task 8 approval and Task 9: full-gate checkpoint
+
+Blocker recorded **2026-10-25T13:27:02Z**. The fresh Task 9 brief explicitly
+conveys Task 8 **spec and quality APPROVED** at
+`f9618f76ce9608c9ccc42018701647d7b98bb642`. This supersedes Task 8's historical
+pending status; all earlier approvals and owner rulings remain binding.
+
+Scope is the full gate and checkpoint evidence only, in the named ticket
+worktree/branch, without subagents. The controller owns whole-branch reviews.
+Dogfooding preflight has not started. No implementation fix is authorized.
+
+### Tested tree and commands
+
+- Initial and tested HEAD: `f9618f76ce9608c9ccc42018701647d7b98bb642`.
+- Commit tree: `036c882cfbf7b765025b1b48c06d2c4eda49339c`.
+- `HEAD:src`: `1cc7a955979ede82b1a779cfad8557925db5d531`.
+- `HEAD:tests`: `6126b2040a21cf4350c6eac68569426ca7ba7c18`.
+- Worktree was clean before the gate. Only this ledger and the canonical
+  checkpoint comment are tracked changes for this substep. Temporary harness
+  artifacts live in ignored `target/`.
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0; Cargo 0.35s. |
+| `devenv shell -- cargo fmt --check` | Exit 0. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; Cargo 1.05s. |
+| `devenv shell -- cargo test --all-features --locked --no-fail-fast` | One invocation, detached; exit **101**, **4528 passed / 1 failed / 1 ignored**, 43 targets; 6239s wall time. |
+| `devenv shell -- cargo run --locked --bin manyhands-cli` | Exit 0; printed usage/catalog, opened no window. Cargo 4m 34s including an observed build-directory lock wait. |
+| `devenv shell -- sh scripts/check-cli-no-gpui.sh` | Exit 0. |
+
+The approved `/tmp/claude-1000` parent was verified with `ls`. Log path is
+**`/tmp/claude-1000/c3-full-suite.log`**, without substitution. An initial
+launcher attempted `nohup setsid python3 target/c3-task9-gate.py` and failed
+before Devenv/Cargo started: Python is absent (log line 1). It is not a test
+invocation or test retry. Replaced only that agent-owned temporary wrapper
+with Bash, using `apply_patch`.
+
+Actual launch:
+`nohup setsid bash target/c3-task9-gate.sh >> /tmp/claude-1000/c3-full-suite.log 2>&1 &`.
+The wrapper runs the exact test command above under GNU
+`timeout --verbose --kill-after=10s 7200s`, preserves its actual return code
+without a pipeline, and records start/end/status/duration in
+`target/c3-task9-{start,actual-exit,result}.txt`. Its exclusive start marker
+prevents a second invocation. Only its own timeout-managed process group may
+be terminated if the budget expires.
+
+Start: **2026-10-25T12:53:46Z**, wrapper PID/PGID/SID **3498233**, verified
+detached with PPID 1. The two-hour deadline is **2026-10-25T14:53:46Z**.
+The independent smoke command visibly waited for the build lock; no assumption
+of compilation independence is made.
+
+### Outside-C3 blocker: stop for the owner
+
+`repository::closure::checkpoint::tests::mismatched_confirmed_identity_persists_nothing`
+failed at **`src/repository/closure/checkpoint_tests.rs:1183:5`**:
+`assert_eq!(f.reload(&r), r)`. Log evidence: first failure at line 117,
+assertion and printed records at **1305–1311**, failure summary at
+**1313–1319**. The two redacted Debug renderings look identical; this does
+not establish which equality field differs, and no root cause is claimed.
+The earlier ExternalChange/config/file-image assertions at source lines
+1175–1182 had passed before that assertion.
+
+Library target: **1269 passed / 1 failed / 0 ignored / 0 measured / 0 filtered**,
+718.34s. This is outside C3's authorized files. No test was retried, changed,
+ignored or weakened; no library or Cargo fix was attempted. The already-running
+`--no-fail-fast` invocation is allowed to finish solely to preserve its final
+status and all target counts. Subsequent Task 9 work is blocked for the owner.
+
+### Checkpoint and evidence boundary
+
+At **2026-10-25T13:26:25Z**, `git fetch origin` succeeded; `origin/main` remains
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. `git merge-tree --write-tree HEAD origin/main`
+succeeded with tree `036c882cfbf7b765025b1b48c06d2c4eda49339c`; main is already
+an ancestor of HEAD. No new main merge or gate reassessment is needed.
+Current main's AGENTS.md was read. `git diff --exit-code origin/main --
+src/repository.rs src/repository src/lib.rs src/results.rs src/runtime.rs
+Cargo.toml Cargo.lock` passed, confirming the failing library and Cargo tree
+match main exactly.
+
+Canonical checkpoint comment **`01M5SKWGAZBNRQ73CPQ8J4EWZ1`**, allocated with
+`devenv shell -- ./target/debug/manyhands-cli id new`; `created_at` is the actual
+UTC clock above. Final suite status/counts and self-review follow. Ledger/comment
+remain uncommitted for the controller's eventual Task 9 commit. No review-ready,
+Task 9 completion, dogfooding, switch, closure, main integration or native-CI claim.
+
+### Final result of the sole full-suite invocation
+
+Ended **2026-10-25T14:37:45Z**, **6239 seconds (1h 43m 59s)** after launch,
+within the two-hour budget. No timeout or process termination was required.
+`target/c3-task9-actual-exit.txt` records **actual_exit_status=101**;
+`target/c3-task9-result.txt` independently records wrapper status **101**, end
+time and duration. Log **4956–4958** reports the sole failed target `--lib`
+and the wrapper's final status. A post-run session probe
+`ps -s 3498233 -o pid,ppid,pgid,sid,etime,args` found no remaining process.
+
+Log SHA-256:
+`d194d2c5ce3fcc336595de6503c4599991ea87c3d5e9bc3e20121a3991f6b454`.
+The complete 4958-line log, ignored wrapper, exclusive start marker, actual
+exit file and final status file are retained. No full-suite or failed-test
+rerun occurred.
+
+**43 targets: 4528 passed / 1 failed / 1 ignored = 4530 reported cases.**
+Standard-harness targets report zero measured/filtered. SSH entries are the
+custom harness's completed case totals (Cargo.toml declares `harness = false`),
+not invented libtest summaries; they reported no failed or skipped cases.
+The following rows count this invocation only. References are result-line
+numbers in `/tmp/claude-1000/c3-full-suite.log`.
+
+| Target | Passed | Failed | Ignored | Result log line |
+| --- | ---: | ---: | ---: | ---: |
+| Library (`src/lib.rs`) | 1269 | 1 | 0 | 1317 |
+| Desktop unit (`src/main.rs`) | 520 | 0 | 0 | 1846 |
+| CLI unit (`src/bin/manyhands-cli.rs`) | 188 | 0 | 0 | 2041 |
+| canonical_foundation | 65 | 0 | 0 | 2112 |
+| cli | 290 | 0 | 0 | 2412 |
+| cli_remote (SSH) | 31 | 0 | 0 | 2446 |
+| comment_publication (SSH) | 41 | 0 | 0 | 2491 |
+| discovery_rebuild | 79 | 0 | 0 | 2575 |
+| document_promotion (SSH) | 74 | 0 | 0 | 2711 |
+| drafts | 48 | 0 | 0 | 2764 |
+| editor_feasibility | 9 | 0 | 0 | 2779 |
+| journal_rejection | 26 | 0 | 0 | 2811 |
+| key_material | 39 | 0 | 0 | 2856 |
+| key_storage | 2 | 0 | 0 | 2864 |
+| local_authoring | 140 | 0 | 0 | 3010 |
+| mutation_bridges | 129 | 0 | 0 | 3145 |
+| mutation_confirmation | 183 | 0 | 0 | 3334 |
+| mutation_contract | 44 | 0 | 0 | 3384 |
+| mutation_relationships | 27 | 0 | 0 | 3417 |
+| mutation_remote (SSH) | 88 | 0 | 0 | 3509 |
+| mutation_replay | 308 | 0 | 0 | 3827 |
+| read_boundary | 20 | 0 | 0 | 3853 |
+| read_characterization | 0 | 0 | 1 | 3860 |
+| read_comments | 23 | 0 | 0 | 3889 |
+| read_contract | 71 | 0 | 0 | 3966 |
+| read_credentials | 25 | 0 | 0 | 3997 |
+| read_items | 76 | 0 | 0 | 4079 |
+| read_relationships | 17 | 0 | 0 | 4102 |
+| read_repository | 33 | 0 | 0 | 4141 |
+| read_status | 24 | 0 | 0 | 4171 |
+| recovery_foundation_gate | 52 | 0 | 0 | 4229 |
+| remote_merge_recovery (SSH) | 25 | 0 | 0 | 4257 |
+| remote_observation (SSH) | 15 | 0 | 0 | 4274 |
+| remote_polling (SSH) | 84 | 0 | 0 | 4362 |
+| remote_reservation | 13 | 0 | 0 | 4380 |
+| remote_synchronization (SSH) | 63 | 0 | 0 | 4447 |
+| repository_enablement | 95 | 0 | 0 | 4547 |
+| session_credentials | 11 | 0 | 0 | 4564 |
+| shared_key_registry | 39 | 0 | 0 | 4609 |
+| ssh_fixture (SSH) | 35 | 0 | 0 | 4663 |
+| ssh_transport (SSH) | 123 | 0 | 0 | 4789 |
+| ticket_closure (SSH) | 73 | 0 | 0 | 4938 |
+| manyhands doc-tests | 11 | 0 | 0 | 4954 |
+| **Total** | **4528** | **1** | **1** | |
+
+The sole ignored case is the existing
+`reads_of_a_thousand_item_repository_are_characterized`, explicitly described
+as an on-request characterization (`--ignored --nocapture`), log **3858**.
+It was not enabled or rerun. Desktop unit tests ran as part of the mandated
+all-features suite; no desktop application launch was performed.
+
+### Final self-review and blocked return
+
+At **2026-10-25T14:42:22Z**, post-suite `git fetch origin` again succeeded.
+HEAD/main/merge-tree remain the exact SHAs above, and main ancestry passed.
+Main did not move; no merge or gate reassessment is required. The Rust/test/
+schema/Cargo/AGENTS/skill tree is unchanged from the tested HEAD. Whitespace,
+full ledger diff, canonical comment and final status were self-reviewed.
+
+Only the ledger and comment are left as uncommitted evidence. No commit or
+push was made. **Task 9 is blocked, not complete or review-ready.** The owner/
+controller must disposition the outside-C3 failure before further Task 9 work;
+whole-branch spec/quality reviews remain pending with the controller.
+Dogfooding preflight has not run. All later Task 9 steps remain owed.
+
+## Task 9 follow-up: owner-authorized persisted test baseline
+
+Recorded **2026-10-25T15:23:28Z**. The owner explicitly authorized a narrow
+exception to the frozen-library/pre-existing-test restriction: correct only
+`src/repository/closure/checkpoint_tests.rs::mismatched_confirmed_identity_persists_nothing`
+by reloading its persisted record immediately after `confirmed_record`, before
+the observations and hook, retaining every no-effect assertion. The owner also
+authorized the exact failing test followed by the checkpoint test module,
+fmt/check/clippy, a separate fix/evidence commit and ticket-only push. No other
+test or library correction and **no second full-suite run** is authorized.
+
+This supersedes the earlier stop only for that correction and scoped verification.
+The original full run remains **4528 passed / 1 failed / 1 ignored**, exit **101**,
+6239s, on `f9618f76ce9608c9ccc42018701647d7b98bb642`; it has not been rerun or
+relabeled passing. Task 8 spec/quality approval remains recorded above. The
+controller independently reviews this fix and the whole branch, then asks the
+owner for full-gate disposition. Task 9 is not complete or review-ready.
+
+### Source verification and uncertainty
+
+Verified the supplied read-only diagnosis against unchanged production source:
+
+- `confirmed_record` (`checkpoint_tests.rs:1040–1058`) inserts/reads the record,
+  changes `context_oid` and `step`, saves it, then returns that in-memory value
+  without reloading the save's persisted timestamp.
+- `record.rs:514–515` inserts with `parent::now()` and reads it back.
+  `save_record` takes `&ClosureRecord` (`:520–524`) and updates the database's
+  `updated_at=max(updated_at, now)` (`:557–560`), without updating that input.
+  `promotion/lifecycle_record.rs:90–92` supplies whole Unix seconds. Crossing a
+  second boundary during fixture setup can therefore leave its returned record
+  older than the persisted baseline, even when the operation writes nothing.
+- `ClosureRecord` derives `PartialEq` including `updated_at`
+  (`record.rs:165–185`), but its custom Debug omits it (`:207–223`). Identical
+  displayed records do not imply full equality.
+- The identity-mismatch path returns `ExternalChange` before identity persistence
+  or `begin_closing` (`checkpoint.rs:624–656`).
+- Existing precedent `309c9e071994f55eb0b1fa9f44546cc2722d0398` added the same
+  persisted-baseline reload to `existing_closure_writes_no_checkpoint`.
+
+This is a high-confidence source-supported mechanism, **not proof of the original
+failure's hidden timestamp values**. Those values were not captured. No diagnostic
+reproduction or historical-cause confirmation is claimed. Scoped passes below
+verify the corrected test, not the old run's exact cause.
+
+### Minimal correction and scoped verification
+
+Only two Rust lines were added, at `checkpoint_tests.rs:1164–1165`: a comment
+explaining the setup timestamp and `let r = f.reload(&r);`, before the observation.
+All existing assertions are byte-for-byte retained: ExternalChange, identical
+configuration bytes, absent config lock, unchanged repository image, and full
+persisted-record equality. Production code, helper, equality and Debug behavior,
+other tests and Cargo are unchanged. No broad refactor or assertion weakening.
+
+Commands ran once each, in order, through Devenv on this two-line correction:
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests::mismatched_confirmed_identity_persists_nothing -- --exact` | Exit 0; **1 passed / 0 failed / 0 ignored / 1269 filtered**, 0.39s test time; build 6.91s. |
+| `devenv shell -- cargo test --all-features --locked --lib repository::closure::checkpoint::tests` | Exit 0; **46 passed / 0 failed / 0 ignored / 1224 filtered**, 10.15s test time. Includes the exact test above; these are not 47 distinct tests. |
+| `devenv shell -- cargo fmt --check` | Exit 0. |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0; 0.46s. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; 6.41s. |
+
+Both test runs report zero measured tests. No other test command ran; the sole
+full-suite result and its preserved log/status files are unchanged.
+
+### Checkpoint, evidence preservation and delivery
+
+Resumed in the same C3 ticket worktree/branch at `f9618f7`. Inspected and preserved
+the uncommitted Task 9 ledger and comment `01M5SKWGAZBNRQ73CPQ8J4EWZ1`; both are
+included as original gate evidence in this fix/evidence checkpoint. The old
+comment is unchanged. The ledger retains the failed run and marks the narrow
+follow-up separately. New canonical comment **`01M5STHPHER7K005JYRSD3PC52`** uses
+the built CLI's `id new` and actual UTC clock above.
+
+Initial fetch/merge found main already current; current main's AGENTS.md was
+read. After scoped verification, fetch again retained `origin/main` at
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. Precommit merge-tree at the unchanged
+HEAD succeeded, tree `036c882cfbf7b765025b1b48c06d2c4eda49339c`. The resulting
+commit's merge-tree/status/push are checked in the delivery return. No main
+movement requires a merge or gate reassessment.
+
+Commit scope: the two-line test correction, this ledger, original gate comment,
+and new owner-exception/scoped-verification comment. Status, complete diff,
+whitespace and recent ten commits are inspected before staging only those four
+paths, with the required co-author trailer. Ticket-only publication is authorized.
+Independent fix/whole-branch reviews and owner full-gate disposition remain
+pending. No subagents, dogfood preflight, switch, PR, main integration, closure,
+cleanup or native CI.
