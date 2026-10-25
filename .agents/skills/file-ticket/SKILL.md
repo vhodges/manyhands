@@ -1,163 +1,158 @@
 ---
 name: file-ticket
-description: Use when creating a new Manyhands ticket by hand because the Manyhands CLI does not yet support the operation, including defects, gaps, explorations, or future cycle placeholders.
+description: Use when filing, creating, or updating a Manyhands ticket, including defects, gaps, explorations, tasks, and future Cycle placeholders.
 ---
 
-# File a Manyhands Ticket
+# File or Update a Manyhands Ticket
 
-Create a Manyhands-style ticket with its own branch and worktree. This is a
-manual filesystem workflow to use until `manyhands-cli` supports ticket filing.
+Use the CLI for ticket creation and updates. The library creates the item's
+branch/worktree and commits its checkpoint; do not pre-create them or hand-write
+the ticket as the normal filing path.
 
-## 1. Confirm scope and current repository state
+## 1. Scope and prerequisites
 
-Read `AGENTS.md` and the user's request. Determine the ticket `type`, `title`,
-`status`, and optional metadata (`project`, `team`, `wave`, `cycle`). Default to:
+Read `AGENTS.md` and the request. Choose a specific type (`defect`, `gap`,
+`exploration`, `task`, or `cycle`); default status/project/team to
+`open` / `manyhands` / `core`. Search existing tickets first to avoid duplicates.
+Preserve unrelated edits in main and every worktree; inspect `git status --short`
+and `git worktree list --porcelain` before writing.
 
-- `status: "open"`
-- `project: "manyhands"`
-- `team: "core"`
+**Availability:** use this workflow from an up-to-date main **after C3 is merged**.
+The implementation on a ticket branch does not mean main already supports it.
+For this project the normal target is the trusted, registered main checkout
+`/home/vhodges/work/src/manyhands`, not a linked ticket worktree. If main lacks
+the command or registration, stop for the owner rather than enable a repository,
+switch binaries, or hand-create a ticket without authorization.
 
-Do not create a duplicate ticket for an existing issue. Search existing tickets
-first:
-
-```sh
-scripts/list-tickets
-find .manyhands/tickets .manyhands/worktrees -path '*/.manyhands/tickets/*/ticket.md' -print
-```
-
-Check for unrelated local changes before creating anything:
-
-```sh
-git status --short
-git worktree list --porcelain
-```
-
-Preserve unrelated edits in the primary checkout and all existing worktrees.
-
-## 2. Generate a canonical ticket ID
-
-Generate a new uppercase ULID. One portable option is Node.js:
+Run commands from that main checkout with this shorthand:
 
 ```sh
-node -e 'const crypto=require("crypto"); const a="0123456789ABCDEFGHJKMNPQRSTVWXYZ"; let n=(BigInt(Date.now())<<80n)|BigInt("0x"+crypto.randomBytes(10).toString("hex")); let s=""; for(let i=0;i<26;i++){s=a[Number(n&31n)]+s; n>>=5n;} console.log(s)'
+repo=/home/vhodges/work/src/manyhands
+mh() { devenv shell -- cargo run --locked --bin manyhands-cli -- --json --non-interactive "$@"; }
+mh ticket create --help
+mh repo inspect --repo "$repo"
+mh ticket list --repo "$repo"
 ```
 
-Store it in a shell variable for the remaining commands:
+Inspect must report registered, valid configuration. Help must report the verb
+available. A filing request authorizes the CLI's local checkpoint, not publication,
+merging, closing, cleanup or native CI; obtain those permissions separately.
+
+## 2. Create a ticket
+
+Run `mh id new` twice. Take each returned `data.id`: one is the **ticket ID**,
+the other the **request ID**. Keep them distinct; neither command takes `--repo`.
+Use canonical uppercase ULIDs, not short-code aliases. Record the request ID
+and intended input before sending so lost output can be reconciled.
+
+Prepare one JSON object, using a JSON encoder for arbitrary text. Replace the
+example's `<ticket-ULID>` with the new ticket ID:
+
+```json
+{
+  "item_id": "<ticket-ULID>",
+  "title": "Describe the problem",
+  "type": "defect",
+  "status": "open",
+  "project": "manyhands",
+  "team": "core",
+  "body": "Problem and evidence.\n\nExpected behavior and acceptance criteria.\n"
+}
+```
+
+Feed that object through stdin (for example, from an owned `create.json` file):
 
 ```sh
-id=<ULID>
-branch="manyhands/ticket/$id"
-worktree=".manyhands/worktrees/$id"
+mh ticket create --repo "$repo" --request-id "$request_id" --input - < create.json
 ```
 
-## 3. Create the ticket branch and worktree
+Set `$request_id` to the separately allocated request ULID. Required input fields
+are `item_id`, `title`, `type`, `status`; body defaults to empty if omitted.
+Bodies are JSON strings, never argv, `body_path`, or an editor prompt. An encoder
+such as `jq --rawfile body` can embed a body file into the JSON object safely.
 
-Create the ticket branch and worktree from the current primary branch tip unless
-the user explicitly names another base:
+Include purpose, relevant docs/code, evidence or reproduction, expected behavior,
+and acceptance/closure criteria in the body. For a Cycle use `type: "cycle"`,
+identify its Wave/Cycle and entry gate in the body, and file before its plan.
+A placeholder does not satisfy its prerequisites or authorize implementation.
+The closed create schema has no `wave`/`cycle` or arbitrary metadata input;
+do not invent these keys. Existing unknown metadata is preserved by saves.
+
+## 3. Update a ticket
+
+Before saving your own Cycle ticket, **commit your owned edits to its `ticket.md`**:
+the save checkpoints into its active worktree. Preserve others' edits and stop
+on an uncommitted ticket change you do not own. Then:
+
+1. Run `mh ticket show --repo "$repo" --id "$ticket_id"`; retain the current
+   `data.observation` and the values to preserve. Keep raw body/source out of
+   diagnostics and evidence; use a body digest/byte length when recording checks.
+2. Check the target worktree is clean after the read and immediately before save.
+3. Allocate a fresh request ID with `mh id new` for this **new** operation and
+   record it with the intended input. Do not replace an accepted/pending request.
+4. Supply the observation and only intended changes, for example in `save.json`:
+
+```json
+{"observation":"<current-observation>","title":"Clarified problem title"}
+```
 
 ```sh
-git worktree add -b "$branch" "$worktree" HEAD
+mh ticket save --repo "$repo" --id "$ticket_id" --request-id "$request_id" --input - < save.json
 ```
 
-Do **not** file the ticket only in the primary checkout. The ticket's canonical
-working copy belongs in its own worktree:
+The caller's observation is passed unchanged; omission preserves draft fields.
+`project`/`team` may be cleared with null. Relationship values are **canonical
+ULIDs**, not aliases:
 
-```text
-.manyhands/worktrees/<ticket-id>/.manyhands/tickets/<ticket-id>/ticket.md
-```
+| Input | Create | Save |
+| --- | --- | --- |
+| `deps` omitted / null / `[]` | No dependencies | Omitted preserves; null or `[]` clears |
+| `parent` omitted / null | No parent | Omitted preserves; null clears |
+| Nonempty `deps` / `parent` | Proposed relationships | Replace that relationship set/value |
 
-## 4. Write the ticket file
+Create accepts optional `initials`; save does not. Neither accepts `slug`,
+closure fields or `--context`. Create/save are unconfirmed: execute with the
+request ID, not `--prepare`/`--confirm`. Input schemas are
+`schemas/input/v1/ticket_{create,save}.schema.json`.
 
-Create the ticket directory and `ticket.md` in the ticket worktree:
+## 4. Verify, recover and hand off
 
-```sh
-mkdir -p "$worktree/.manyhands/tickets/$id"
-$EDITOR "$worktree/.manyhands/tickets/$id/ticket.md"
-```
+Require success or an explained already-applied/noop; then `ticket show` the ID
+and check intended values, preserved values and the checkpoint/worktree state.
+For relationship checks compare `data.deps[*].id`, not DTO objects with strings.
+Report ID, branch, worktree, canonical ticket path, request ID, checkpoint,
+verification and any remaining changes. Expected branch is `manyhands/ticket/<ID>`
+and worktree `.manyhands/worktrees/<ID>`. Normal ticket path:
+`.manyhands/worktrees/<ID>/.manyhands/tickets/<ID>/ticket.md`.
 
-Use this schema:
+On failure or lost output, inspect `mh request show --request-id "$request_id"`
+(**no `--repo`**). Finished: use its stored result. Accepted/pending: retain its
+ID/input and stop for the reported recovery; never allocate a new ID to bypass it.
+C3 has no `operation abandon` (C4). Refused identity-required saves leave a
+context but free their request ID: after authorized `repo identity-set`, read a
+fresh observation before retrying that ID. No identity prompt is added by save.
+An omitted-field retry can mismatch after another edit; do not blindly resend.
 
-```markdown
----
-manyhands_managed: true
-manyhands_kind: ticket
-id: "<ULID>"
-title: "<short title>"
-type: "defect"
-status: "open"
-project: "manyhands"
-team: "core"
----
+## Comments, closure and workflow exceptions
 
-<Problem statement, context, evidence, expected behavior, and acceptance criteria.>
-```
+Until C4's `comment add`, write comments canonically in the ticket worktree at
+`.manyhands/comments/<ticket-id>/<comment-id>.md`. Allocate a separate comment
+ULID with `id new`, take actual UTC RFC3339 time, and use:
 
-For Cycle tickets, include `type: "cycle"`, `wave: "WW"`, and `cycle: "CC"`.
-For non-cycle tickets, choose a specific type such as `defect`, `gap`,
-`exploration`, or `task` when the user provides it.
-
-The body should include enough information for a future implementer:
-
-- why the ticket exists;
-- where the relevant docs/code live;
-- observed evidence or reproduction notes;
-- expected behavior;
-- acceptance criteria or closure conditions.
-
-## 5. Add comments only when needed
-
-If the ticket needs an initial comment, create it in the same ticket worktree:
-
-```text
-.manyhands/worktrees/<ticket-id>/.manyhands/comments/<ticket-id>/<comment-id>.md
-```
-
-Generate a separate ULID for the comment and use UTC RFC3339 `created_at`:
-
-```markdown
----
+```yaml
 manyhands_managed: true
 manyhands_kind: comment
-id: "<comment-ulid>"
-item_id: "<ticket-ulid>"
+id: "<comment-ULID>"
+item_id: "<ticket-ULID>"
 created_at: "YYYY-MM-DDTHH:MM:SSZ"
----
-
-<Comment body.>
 ```
 
-Prefer putting the initial problem statement in `ticket.md`; use comments for
-progress notes, decisions, blockers, verification, or review-ready status.
+Wrap those fields in Markdown front matter and put the comment body after it.
+Use comments for progress, decisions, blockers, verification and review-ready
+status; put the initial problem in the ticket body. Commit canonical comment
+edits only when authorized, staging only owned files in the ticket worktree.
 
-## 6. Verify discovery
-
-From the primary checkout, verify that the ticket is discovered through the
-worktree scan:
-
-```sh
-scripts/list-tickets | grep "$id"
-scripts/show-ticket "$id"
-git -C "$worktree" status --short --branch
-```
-
-Expected results:
-
-- `scripts/list-tickets` shows the new ticket.
-- `scripts/show-ticket <id>` displays the ticket body.
-- The ticket worktree is on `manyhands/ticket/<id>` and has the new ticket file
-  as an uncommitted change unless the user asked you to commit it.
-
-## 7. Commit policy
-
-Do not commit unless the user explicitly requests it. If committing is requested,
-commit from inside the ticket worktree and stage only the ticket's files:
-
-```sh
-git -C "$worktree" add ".manyhands/tickets/$id" ".manyhands/comments/$id"
-git -C "$worktree" commit -m "file ticket $id"
-```
-
-## Handoff
-
-Report the ticket ID, branch, worktree path, and ticket file path. Mention any
-uncommitted changes and any verification commands run.
+Until C5's `ticket close`, closure remains a canonical-file operation after
+review approval and under lifecycle authorization. Status text `closed` is not
+closure. **`working-on-a-ticket` keeps its own status-edit/closure procedure**
+until revised: its sandbox clones lack the main checkout's registration.

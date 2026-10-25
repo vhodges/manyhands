@@ -19,8 +19,8 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-cli-03-authoring-and-discovery.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-cli-03-authoring-and-discovery.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
 
 ## Entry Gate
@@ -37,13 +37,15 @@ Wave 03 dependencies: F1, F2 and C1–C2.
 
 Ticket relationships and short codes, per the
 [RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
-`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
-rebased onto main.
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC is present through main merged into
+this ticket branch; ticket branches are merged, not rebased.
 
-Ticket create and save take `deps` and `parent`. Add `ticket slug-assign`,
-initials on `repo identity-set` and the prefix on `repo create`/`enable`.
-Record the Wave 03 Cycle dependencies in the project's own tickets when these
-operations meet this Cycle's gate.
+Ticket create and save take `deps` and `parent`; C3 adds `ticket slug-assign`
+and optional initials on ticket creation/slug assignment. Initials on
+`repo identity-set` and the prefix on `repo create`/`enable` shipped in C2.
+The six Wave 03 dependency saves, value checks and target pushes completed with
+owner authorization; evidence is recorded in C3 commit `8da3890`. The dogfooding
+workflow switch is a separate Task 9 documentation step with its own review.
 
 ## Exit Evidence
 

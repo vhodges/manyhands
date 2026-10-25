@@ -39,8 +39,8 @@ or new gaps. Dogfooding steps **4–7 are complete** under the owner's fresh
 go-ahead: six saves/checks and six new remote branches, with local/remote tips
 verified equal and all targets clean. The C4 checker error, stop, read-only
 preflight and authorized correction are preserved below; C4 was never resent.
-The **switch remains owed** and awaits controller resume; Task 9 is not complete
-or review-ready.
+The **switch is implemented and awaiting its separate independent SPEC/QUALITY
+review**. Task 9 is not complete or review-ready; ticket status remains open.
 Actual verification date: 2026-10-25 UTC;
 the filename retains the approved plan's date.
 
@@ -488,6 +488,7 @@ review-ready or closure claim.
 | 9 verification exception / dogfood preflight | Verification accepted by explicit owner exception; build/read-only preflight complete | Base `a79a3bd6d3ac0453726d00908c286f69f2c30a8d` | Historical full suite **4528/1/1**, exit **101**, plus scoped **46 distinct passing** and check/fmt/clippy accepted; no second full run. CLI build and repo inspect passed; six targets clean | SPEC/QUALITY approvals retained. Separate dogfood go-ahead pending; saves/pushes and switch OWED; Task 9 not complete/review-ready |
 | 9 dogfood steps 4–7 | Owner authorized; STOPPED during C4 value check | Base `5cba600b562062d6809d9ce916e26b65ea1e204e` | Refresh and C4 save ok; C4 one checkpoint, clean, body/other compared values preserved. Checker incorrectly compared dependency DTO objects with strings | Dependency IDs in returned data match proposal, but checker failed; no checker fix/retry, C5 or later save, target push or switch. Controller/owner disposition required |
 | 9 dogfood steps 4–7 resumed | Complete under fresh owner go-ahead | C3 evidence commit carrying the final summary below; six library checkpoint SHAs recorded | C4 settled/no resend, corrected check passed; five remaining saves ok; all six exact deps/value/body checks passed; six new remote branches, verified local=remote and clean | Prior stop preserved. Verification exception and whole-branch approvals retained; switch and its review still owed, Task 9 not complete/review-ready |
+| 9 Step 4 switch | Implemented; separate switch review pending | Base `8da3890f2c4f2ac6199324163346f72eb13818f8`; `docs: switch ticket dogfooding to the CLI` commit carrying this entry | Documentation-only: 8 built CLI help contracts, 2 JSON input examples, nullable input variants, frontmatter/scope/whitespace checks passed; no mutations or Rust gates | Controller owns independent switch SPEC/QUALITY review after return; Task 9 not complete/review-ready, ticket open |
 
 ## Part A approval and Task 5 preflight
 
@@ -2574,3 +2575,107 @@ PR, main integration, closure, cleanup or native-CI claim. The explicit Task 9
 verification exception and approved whole-branch reviews remain unchanged;
 historical full suite remains **4528/1/1, exit 101**, with scoped **46 distinct
 passing** tests and check/fmt/clippy accepted, and no second full run.
+
+## Task 9 Step 4: switch ticket dogfooding to the CLI
+
+Recorded **2026-10-25T21:45:05Z**, clean starting HEAD
+`8da3890f2c4f2ac6199324163346f72eb13818f8`. The controller authorized the approved
+switch after the six saves/value checks/pushes succeeded and were recorded in
+that commit. The prior stop, corrected checker, fresh go-ahead and all six
+request/checkpoint/publication records remain intact. Only C3 worktree files
+are changed here; there are no new real ticket mutations or target pushes.
+
+### Switch implementation
+
+- **AGENTS.md, Dogfooding Workflow only:** ticket create/save against the
+  registered main checkout `/home/vhodges/work/src/manyhands`, run from an
+  up-to-date main via `devenv shell -- cargo run --locked --bin manyhands-cli -- …`.
+  Explicitly effective **after C3 is merged**; main is not claimed to have C3
+  already. Before saving one's own Cycle ticket, commit owned ticket.md edits
+  because the CLI checkpoints into that active worktree. Comments remain
+  canonical until C4, closure until C5; `closed` status text is not closure.
+  The `working-on-a-ticket` sandbox-clone status/closure exception is named;
+  its procedure is unchanged.
+- **`.agents/skills/file-ticket/SKILL.md`:** rewritten around CLI id new,
+  create, show and save, with a create/update trigger. Retains classification,
+  open/manyhands/core defaults, duplicate search, unrelated-edit preservation,
+  Cycle-before-plan/entry-gate context, canonical comment schema and separate
+  publication/lifecycle authorization. Distinguishes ticket/request/comment
+  IDs, input versus selector fields, JSON-string bodies through stdin, nullable
+  relationship/save metadata semantics, no mutation context or confirmation,
+  commit-first/clean checks, request-state recovery and the sandbox exception.
+  The closed create schema has no wave/cycle metadata inputs: new Cycle identity
+  and entry-gate context go in the body; existing unknown metadata survives saves.
+  No unsupported input key or hand-edit workaround is introduced.
+- **C3 ticket:** both planning boxes checked; Added Scope now says main was
+  merged into the ticket, identifies initials/prefix on repository verbs as C2,
+  retains C3 relationships/slug assignment, and cites successful dependency
+  dogfooding at `8da3890`. Its entire front matter is unchanged, status **open**,
+  no closure fields. This local ticket-body edit is the specifically authorized
+  Task 9 documentation correction, not an uncommitted cross-repository CLI save.
+
+### Validation and skill-workflow evidence
+
+Loaded writing-skills and skill-creator guidance; applied trigger/frontmatter,
+clear examples, preservation of scope and scenario review inline. The approved
+design already settles policy. No subagents, agent-pressure evaluations, global
+skill edits or OpenCode configuration changes were performed; the controller
+provides the separate independent review after this return.
+
+Baseline inspection identified the obsolete instructions before editing:
+manual Node ULID generation, git worktree creation, hand-written ticket files
+and uncommitted-new-ticket expectations. It also exposed the old wave/cycle
+metadata instruction's incompatibility with C3's closed create schema. This is
+source/document baseline evidence, **not** an independently executed failing
+agent evaluation.
+
+Read-only checks on the final docs:
+
+- Five initial direct help reads checked create/save/show/id-new/request-show
+  selectors. The final ignored Node documentation validator checked **8 verbs**
+  using the absolute built CLI with `--json --non-interactive … --help`:
+  ticket create/save/show/list, repo inspect/identity-set, id new and request
+  show. All return available/ok and support the documented flags. It confirmed
+  id new/request show refuse --repo and mutation verbs expose no --context.
+- **Two JSON examples** parse and validate against the actual closed create/save
+  schemas after replacing their labeled ID/token placeholders with representative
+  strings; also checked **four nullable/nonempty relationship variants** and
+  nullable project/team on save. These are schema/help checks, **not runtime
+  ticket-create/save executions**; no additional real mutation was run.
+- Frontmatter checks: skill name preserved, only name/description, trigger
+  starts Use when, header under 1024 chars; C3 ticket front matter byte-identical,
+  open, no closure fields, exactly two planning boxes checked.
+- Scope checks: AGENTS prefix/suffix outside Dogfooding Workflow byte-identical;
+  src/tests/schemas/Cargo and working-on-a-ticket/implementing-a-cycle/
+  planning-a-cycle skills unchanged from `8da3890`; no Rust gates rerun.
+- Inline scenario walkthrough: new defect uses distinct ticket/request IDs and
+  create checkpoint; Cycle placeholder preserves classification/entry-gate
+  context without unsupported metadata keys; owned Cycle edit is committed before
+  show/clean/save; accepted request is inspected without --repo and not bypassed
+  with a new ID; sandbox status/closure follows its existing skill. These are
+  self-review outcomes, not independent review approvals.
+- `git diff --check` passed. Temporary ignored validator:
+  `target/c3-switch-validate.cjs`; it performs only local document/schema reads,
+  Git comparisons and CLI help. No viewer, eval agent or broad test run.
+
+### Checkpoint and independent-review boundary
+
+Initial fetch/merge found main already current; current main AGENTS.md was read.
+Post-validation fetch retained `origin/main` at
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`; precommit merge-tree passed with tree
+`633cb67698f351da3f396b56ad9108f4df41e7a4`. Canonical switch comment
+**`01M5TGCERSDK7Q8RF5X62VKGFQ`** uses an ID from the absolute built CLI's
+`--json id new` and actual UTC timestamp above.
+
+Separate commit **`docs: switch ticket dogfooding to the CLI`**, with the required
+co-author trailer, stages only AGENTS.md, file-ticket/SKILL.md, the C3 ticket,
+this ledger and that comment after status/diff/whitespace/recent-ten-log review.
+Push is only to the C3 ticket branch; postcommit merge-tree and clean/local-remote
+HEAD checks are returned to the controller.
+
+**Independent switch SPEC and QUALITY review is pending** over
+`8da3890f2c4f2ac6199324163346f72eb13818f8..SwitchHEAD`. Task 9 is not yet complete
+or review-ready. The owner-accepted verification exception remains the original
+**4528/1/1, exit 101** plus scoped **46 distinct passing** and check/fmt/clippy;
+no claim of a green full-suite run and no second full run. No PR, main merge,
+closure, cleanup or native CI.
