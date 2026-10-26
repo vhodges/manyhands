@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D3 Rich-Text And Source Authoring Design"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -30,9 +30,11 @@ For each, it says how every requirement is proved. The Cycle owns scope,
 exclusions and the product-owner decisions of 2026-10-24 (1–11) and
 2026-10-26 (12–18), which this document cites by number.
 
-Draft for product-owner review. Nothing in it has been built or run. The
-2026-10-26 revision (decisions 12–17) was reviewed in round 4. The round-4
-edits, decision 18 included, were re-reviewed in round 5; the round-5 edits have had no independent review.
+Approved by the product owner on 2026-10-26, at `c3904c7`. Nothing in it
+has been built or run. The 2026-10-26 revision (decisions 12–17) was
+reviewed in round 4. The round-4 edits, decision 18 included, were
+re-reviewed in round 5. The round-5 edits had no independent review; the
+owner approved them as they stand.
 
 ## Baseline Facts At `98f49b7`, Refreshed At `6f1463c`
 
@@ -2146,9 +2148,10 @@ on the ticket.
 - **Desktop RFC, keyboard** (R-59): after a pointer press in the editor,
   Escape first closes the editor's menu; otherwise it leaves the editor.
 - **Ticket body:** "rebased onto main" becomes "merged into this branch".
-  The edit is committed to `ticket.md` on the ticket branch, then saved with
-  `manyhands-cli ticket save` against the main checkout, as `AGENTS.md`
-  requires after C3.
+  Any other owned edit to `ticket.md` is committed first; the body change
+  itself is made by `manyhands-cli ticket save` from main's code against
+  the main checkout, which checkpoints into this ticket's worktree, as
+  `AGENTS.md` requires after C3.
 - **Follow-up ticket** for editing other front-matter keys (decision 14):
   created with `manyhands-cli ticket create` against the main checkout, with
   the owner's go-ahead.

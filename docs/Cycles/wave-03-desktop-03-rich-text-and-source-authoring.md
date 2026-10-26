@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D3: Rich-Text And Source Authoring"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,10 +10,12 @@ id: "01M5RE7RVRGQ8V8F06HEY50XQV"
 
 # Wave 03 D3: Rich-Text And Source Authoring
 
-**Draft for product-owner review.** Nothing here is approved. Approval of
-this document, the design and the implementation plan, and authorization to
-implement, are separate steps. None of them authorizes publication beyond
-the ticket branch, a merge, ticket closure or worktree cleanup.
+**Approved by the product owner on 2026-10-26**, with the design and the
+implementation plan, at `c3904c7`, including named edits E-1 to E-29 and the
+round-5 edits as they stand. The execution method is subagent-driven.
+Authorization to implement is a separate step. None of these authorizes
+publication beyond the ticket branch, a merge, ticket closure or worktree
+cleanup.
 
 ## Purpose And Authority
 

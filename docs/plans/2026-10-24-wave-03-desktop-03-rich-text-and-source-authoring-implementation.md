@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D3 Rich-Text And Source Authoring Implementation Plan"
 date: 2026-10-24
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,12 +10,14 @@ id: "01M5RE7RXNQ4PNZR6NZWEP9Q75"
 
 # Rich-Text And Source Authoring Implementation Plan
 
-> **For agentic workers:** Draft for product-owner review. Implementation is
-> not authorized until the owner approves the Cycle, design and this plan.
-> Once authorized, use `implementing-a-cycle` and the selected execution
-> method task by task, re-read the design, repeat the ticket preflight, and
-> record every checkpoint on ticket `01M4CC0VN0MFTGKQ4HGTTC5H63`. Steps use
-> checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Approved by the product owner on 2026-10-26, with
+> the Cycle and design, at `c3904c7`. The execution method is
+> subagent-driven (`superpowers:subagent-driven-development`). Implementation
+> starts only once the owner has authorized it. Then use
+> `implementing-a-cycle` task by task, re-read the design, repeat the ticket
+> preflight, and record every checkpoint on ticket
+> `01M4CC0VN0MFTGKQ4HGTTC5H63`. Steps use checkbox (`- [ ]`) syntax for
+> tracking.
 
 **Goal:** Read, edit, create, move and repair documents and tickets in the
 desktop, in the owner's item-view design, with `zorite-editor`. Links and
@@ -157,9 +159,10 @@ change to a pre-existing test, even a new lint, stops for the owner.
   `created_at` from the UTC clock.
 - Each comment records the commit, the tests run with their counts and
   results, and any ruling.
-- An edit to the ticket's own `ticket.md` is committed on the ticket branch
-  first, then saved with `manyhands-cli ticket save` from an up-to-date main
-  checkout. A new ticket (a `file-ticket` gap, or decision 14's follow-up)
+- A change to the ticket's own fields or body is made with
+  `manyhands-cli ticket save`, run from an up-to-date main checkout's code
+  against the main checkout; it checkpoints into this worktree. Commit any
+  other owned edit to `ticket.md` first. A new ticket (a `file-ticket` gap)
   is made with `manyhands-cli ticket create`, with the owner's go-ahead.
 - Closure stays a canonical ticket-file edit until C5, after review
   approval, in the final push before merge.

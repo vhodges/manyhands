@@ -95,7 +95,8 @@ but untouched blocks, unsupported syntax and unknown metadata values are preserv
 
 Examples of syntax outside that vocabulary include embedded HTML, custom
 directives and extensions the renderer does not understand. They appear as
-labeled source blocks with a source-edit action. If a construct cannot be
+labeled source blocks with a source-edit action (amended for the pinned
+editor by D3, below). If a construct cannot be
 isolated safely, the affected region remains source-editable and read-only in
 rich text. No operation silently drops or simplifies it. Switching modes,
 opening a document and a no-change save write nothing and create no commit.
@@ -120,12 +121,56 @@ above for the desktop editor only:
   applied. Undo returns to the normalized baseline, not the original bytes.
 - The acceptance covers layout-only rewrites that keep the Markdown's meaning.
   A normalization that drops, truncates or simplifies content is still
-  prohibited, and unsupported syntax still appears as labeled source.
+  prohibited, and unsupported syntax still appears as labeled source (both
+  points amended by D3, below).
 - Metadata does not pass through the editor. Unknown front-matter values keep
   the protection of the canonical RFC.
 - The set of normalizations is recorded for the pinned release. Changing the
   pin requires recording its normalizations again and reviewing any new one
   before adoption.
+
+### D3 amendments (approved 2026-10-26)
+
+The product owner approved these with the Wave 03 D3 Cycle on 2026-10-26.
+The [D3 design](../plans/2026-10-24-wave-03-desktop-03-rich-text-and-source-authoring-design.md)
+records the detail and the evidence, and its decision numbers are the
+[Cycle's](../Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md#product-owner-decisions-2026-10-24).
+
+- **The recorded load normalization** (decision 1). For `zorite-editor`
+  0.10.0 the recorded set is wider than the 2026-10-07 amendment named:
+  - the host first converts every CRLF, then every lone CR, to LF (N-1);
+  - the editor then splits `$$…$$` pairs mixed into a line of words onto
+    their own lines, pairs fences attached to words, and trims the
+    whitespace around them (N-2, N-2b, N-3);
+  - these rewrites apply inside inline code, `~~~` fences, indented code
+    and HTML blocks too. Only backtick fences are exempt (N-4).
+
+  The owner accepted the whole set ("I am okay if the document is mutated
+  by the editor"), so its acceptance no longer depends on a rewrite being
+  layout-only. Everything else in the 2026-10-07 amendment stands: it is
+  not an edit, it is written only with a real edit, and a new pin records
+  its set again.
+- **Unsupported syntax** (decision 8). In the pinned editor, syntax outside
+  the minimum vocabulary is shown literally and edited in place. There is no
+  labeled source block and no source-edit action. A source-first editor has
+  no parse step that can fail, so the failed-parse rule below does not
+  arise. Nothing is dropped or simplified.
+- **Local resources and links** (decisions 9 and 10).
+  - Images: PNG, JPEG, GIF (first frame), WebP and BMP files inside the
+    repository, never inside `.git` or `.manyhands`, never reached through
+    `..`, a symbolic link leaving the repository, a backslash, a drive letter
+    or a network path; size-capped and decoded within fixed limits. Remote
+    images and SVG are never loaded; they show as their source.
+  - Links: a relative link resolves in the linking item's own work context,
+    then on the primary branch, then to the nearest managed document with
+    the same file name; `[[Title]]` matches a document title, nearest first.
+    Only `http`, `https` and `mailto` links leave the app, on a click.
+- **Reload** (D3 ruling R-19). A clean editor that reloads keeps its cursor,
+  clamped. The editor exposes no selection to restore.
+- **Keyboard** (D3 ruling R-59). In the editor, Escape first closes the
+  editor's own menu after a pointer press, and otherwise moves focus out of
+  the editor to the item header. In the read-only view, Tab and Shift-Tab
+  move focus on.
 
 The CLI and the headless library do not load bodies through the editor; the
 canonical RFC's preservation contract applies to them unchanged.
@@ -136,7 +181,8 @@ remain protected by the canonical RFC.
 
 Both modes share one draft, selection mapping where possible, validation state
 and undo history. Switching modes is not a save. A failed parse keeps the draft
-in source mode with precise diagnostics. Toolbar actions and paste must remain
+in source mode with precise diagnostics (this does not arise in the pinned
+editor; see the D3 amendments above). Toolbar actions and paste must remain
 usable by keyboard. Rich paste converts only supported structure; plain-text
 paste is always available. Spellchecking, collaborative cursors, embedded
 webviews and arbitrary HTML execution are outside this RFC's scope.
@@ -146,6 +192,8 @@ Relative document links resolve within the repository's permitted document
 tree; external links require deliberate opening. Traversal, symlink escape,
 executable URL schemes and private-key locations are not preview resources.
 Images outside supported local resources remain visible source placeholders.
+The D3 amendments above define the supported local resources and link
+resolution.
 
 ## Drafts, saves and external changes
 
@@ -178,7 +226,8 @@ existing expected-observation boundary. An external edit or poll can change a
 clean worktree while a draft is unsaved in memory. Therefore disabling only the
 desktop's poller is insufficient. Keep the draft and its base, show the new
 canonical version, and offer a three-way review. A clean open editor may reload
-after preserving selection; a dirty editor MUST NOT be replaced automatically.
+after preserving selection (the cursor, as amended by D3 above); a dirty
+editor MUST NOT be replaced automatically.
 Switching repository/tab or refreshing discovery does not bypass this rule.
 
 Folder creation is an explicit local filesystem operation. Empty Git folders
@@ -269,7 +318,8 @@ newer draft or the currently selected item's state.
 
 Every core action has a labeled focusable control. Tab order, visible focus,
 focus return after dialogs, Escape cancellation and keyboard activation are
-required. Editor mode switching, formatting, conflict resolution, polling and
+required; Escape inside the editor follows the D3 amendments above. Editor
+mode switching, formatting, conflict resolution, polling and
 key management must all work without a pointer. Color alone cannot signal
 unsaved work or failure. Native accessibility semantics and IME behavior require
 evidence on supported platforms; keyboard support is the PRD minimum, not proof
