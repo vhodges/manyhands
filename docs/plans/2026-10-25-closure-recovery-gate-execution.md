@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Execution Ledger"
 date: 2026-10-25
-status: "implementing"
+status: "waiting"
 author: "GPT-6 Astra"
 manyhands_managed: true
 manyhands_kind: document
@@ -26,10 +26,13 @@ The historical planning comment `01M5TM3G781C6TXKA5BY50QPBC` is unchanged.
 PR, closure, merge, cleanup and native CI require separate authorization.
 
 Task 0 completed with no production/test/schema edits. Controller owns independent
-review. Status is **implementing**: the owner answered both named-edit questions
-with “yes”, explicitly approving E4's companion local-action partition and E9's
-repair DTO refusal arm. Comment `01M5V0RYTAKJE3F155FH4QTP53` records the ruling.
-Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
+review. The owner answered both earlier named-edit questions with “yes”, explicitly
+approving E4's companion local-action partition and E9's repair DTO refusal arm;
+comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–3 are implemented
+and independently approved. Current status is **waiting**: Task 4 SPEC requested
+changes on five source-verified findings, and the newly identified key-file scope
+requires an owner answer to question `01M5V7SPS9W51SSF5XYTJR5J08`. No fresh
+implementation proceeds while waiting. Tasks 4/7 retain ownership of E4/E9 code.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -38,7 +41,7 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
-| Task 4 | Implemented from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7` in the commit containing the Task 4 checkpoint below, titled `feat: persist and observe local context synchronization`. Comment `01M5V6K8THJGFZ8FFSC4M87PD7`. Awaiting controller SPEC then QUALITY review. |
+| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`; checkpoint comment `01M5V6K8THJGFZ8FFSC4M87PD7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five unresolved findings (1 P1, 4 P2). **Not approved; waiting for scoped owner permission**, question `01M5V7SPS9W51SSF5XYTJR5J08`. |
 | Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -955,3 +958,55 @@ has not started. No unresolved policy ruling was discovered.
   owner/semantic freshness separately; it does not claim historical side reads.
 - Tasks 7/8 retain the public authority-only race, permissions, no-Drop/cross-process
   lease and complete closure-resolution acceptance cases listed earlier.
+
+## Task 4 SPEC review: waiting for scoped owner decision
+
+Recorded `2026-10-26T04:34:16Z`. Canonical question:
+`01M5V7SPS9W51SSF5XYTJR5J08`. Ticket and ledger are set to **waiting** through the
+`working-on-a-ticket` status-edit exception. This checkpoint changes only status,
+ledger and comment; no implementation, test or schema changes were made.
+
+- Reviewer session: **`ses_e898c0189ffebSYYicNzmsZaXQ`**.
+- Review result: **REQUEST CHANGES — five findings (1 P1, 4 P2), all unresolved**.
+- Reviewed range: **`37bd2c36ace84e56920d4cf15f55539d63c7d1c7..00a75e7742b6a9cc9284c91d2e18c9d5aec37599`**.
+- Tasks **1, 2 and 3 retain their recorded SPEC and QUALITY approvals**.
+- Task 4's initial **136 selected tests and fmt/check/clippy gates passed**, as
+  recorded above, but **Task 4 SPEC is not approved**. Those results do not prove
+  the newly identified missing controls. No unchanged tests were rerun here.
+
+### Source-verified findings, not yet fixed
+
+| # | Priority | Finding and verified source | Required correction/evidence |
+| --- | --- | --- | --- |
+| 1 | P1 | `local_sync/record.rs:714–725`: `refresh_allowed` returns `Ok(true)` for an absent companion without auditing the surviving local-sync envelope. `bridges/folder.rs:465–609` reaches that check before marking discovery stale and creating directories, then can reach `close_refresh` after refresh fails. | Audit before granting refresh permission; distinguish ordinary operations from missing local-sync authority. Add a public `create_folder` regression asserting no directories, registration change or envelope settlement. |
+| 2 | P2 | `operation_collision` tests foreign-first admission only. `keys/generation.rs:65–91,279–302` reserves a generation without a local-ID exclusion. `keys/deletion.rs:59–95` and `keys/registry.rs:270–305` also insert key journal identities directly. The mutation/local/remote admission guards alone cannot protect these public key entry points. | Transactional reverse exclusion of IDs already owned by local sync, plus audit rejection of existing cross-journal duplicates; local-first tests. Preserve legitimate old cross-journal handoffs. The prior fifteen-family test is one-direction evidence, not proof of a reciprocal global namespace. Key-file edits require the scoped permission below. |
+| 3 | P2 | `local_sync/record.rs` publicly exposes begin/takeover/read methods and its record is re-exported. The approved design at lines 115–118 keeps low-level execution library-owned and publishes service reads plus Mutation variants. | Internalize store mutators/record, retain real internal store tests, and use bounded appropriate test-only cfg while the executor caller is pending. Do not use public exposure or broad unused-code allowances to bypass the boundary. |
+| 4 | P2 | Closing admission checks ancestry/closure fields but omits `closure::checkpoint::checkpoint_authority` (`checkpoint.rs:514–546`), which checks subject, exactly one open parent, and author/closed_by agreement. The local fixture's `fixture` commit subject does not establish that authority. | Reuse checkpoint authority validation, build a genuine closure checkpoint fixture, and test a valid descendant plus changed-closure/invalid-checkpoint refusals. |
+| 5 | P2 | `local_context_sync_steps.expected_old_oid` and `expected_new_oid` are unconstrained TEXT and are not decoded by the companion audit. Malformed reference evidence can therefore survive read/takeover. | Validate persisted step OIDs and applicable required-field relationships, with corruption tests through the real internal read/takeover APIs. No Task 5 execution is needed to reject malformed authority. |
+
+Verification here was source inspection under receiving-code-review discipline,
+not a claim that new regression tests were run or any finding was resolved.
+
+### Exact owner question and authorization boundary
+
+**Approve minimal edits to `src/repository/keys/{generation,deletion,registry}.rs`
+solely for transactional refusal of IDs already owned by local sync before
+journal insertion/effects; shared guard/audit in `local_sync/record.rs`, new tests
+in `local_sync`, with no old assertion changes or other key behavior changes?**
+
+The owner initially approved the whole plan, detailed rulings, implementation and
+ticket-branch commits/pushes. These key files are newly identified scope, rather
+than an implicit extension of that approval. The current request authorizes this
+documentation/status/comment checkpoint only; it does not approve the proposed
+key-file edits, other files, native CI, or PR/closure/merge/cleanup actions.
+
+An explicit scoped approval permits resuming Task 4: meaningful tests first for
+**all five** findings, preserve approved policies and old assertions, fix and run
+required Devenv gates plus relevant tests, then controller **SPEC re-review,
+followed by QUALITY**. Without that answer, remain waiting with no fresh
+implementation. Task 5 remains unstarted. Answer in chat or a canonical reply
+whose `parent_id` is `01M5V7SPS9W51SSF5XYTJR5J08`.
+
+Checkpoint preflight: clean worktree at `00a75e7`; fetched origin and merged
+`origin/main` (already up to date). No PR exists. No Rust tests, native CI or
+lifecycle completion action was run for these documentation-only edits.
