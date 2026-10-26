@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Execution Ledger"
 date: 2026-10-25
-status: "waiting"
+status: "implementing"
 author: "GPT-6 Astra"
 manyhands_managed: true
 manyhands_kind: document
@@ -25,16 +25,18 @@ implementation and ticket-branch commits/pushes. Start comment
 The historical planning comment `01M5TM3G781C6TXKA5BY50QPBC` is unchanged.
 PR, closure, merge, cleanup and native CI require separate authorization.
 
-This bounded implementer performed Task 0 only, with no production/test/schema
-edits and no subagents. Controller owns independent review. Status is **waiting**:
-baseline is green, but the named-test inventory has two concrete gaps requiring
-clarification before Task 1. The approved substantive design is unchanged.
+Task 0 completed with no production/test/schema edits. Controller owns independent
+review. Status is **implementing**: the owner answered both named-edit questions
+with “yes”, explicitly approving E4's companion local-action partition and E9's
+repair DTO refusal arm. Comment `01M5V0RYTAKJE3F155FH4QTP53` records the ruling.
+Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 
 | Work | Evidence/state |
 | --- | --- |
 | Approval recording | `51a0e96da11f8bc1f2f0689e72c88ed99470c96a`, `docs: approve closure recovery gate implementation`; pushed to ticket branch. |
-| Task 0 | Source/selector inventory and required baseline completed; checkpoint is the commit titled `docs: record closure recovery baseline` containing this ledger and comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Owner questions below block progression. |
-| Tasks 1–9 | Not started. All new-behavior outcomes below remain unproven. |
+| Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
+| Task 1 | Starting after the separate E4/E9 approval checkpoint; bounded implementer, no subagents. |
+| Tasks 2–9 | Not started. New local-operation outcomes below remain unproven. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -422,10 +424,22 @@ main `0464c42dae19a6dde000c7e7660e82762a41fada`, already up to date. HEAD before
 and after was `9039e65f882c169a70ae0f5b90da33b18760ea43`; ancestry check passed.
 This follow-up records reviews only; no implementation or baseline rerun.
 
-## Handoff
+## Owner inventory ruling and Task 1 start
 
-Baseline evidence is complete for the prescribed commands. The new recovery
-protocol remains unimplemented and unproven. Independent SPEC and QUALITY reviews
-approved Task 0 with zero findings. The two exact owner inventory clarifications
-remain outstanding; do not begin Task 1 while this checkpoint is waiting.
-No tests were weakened or baseline code altered.
+At `2026-10-26T02:31:31Z`, recorded the controller-supplied latest owner answer
+**“yes”**, explicitly approving both questions in `01M5TZXJZ2348Z8GRMAQ7BSHPR`:
+E4 `src/repository/read/status_tests.rs::a_local_action_is_one_the_recovery_store_writes`
+local-action partition and E9 `tests/support/repair.rs::repair_data` new DTO
+rejection arm. Updated the design's named-edit table; no E4/E9 code edit belongs
+to Task 1. Canonical approval comment: `01M5V0RYTAKJE3F155FH4QTP53`.
+
+Restored ticket implementing using the working-on-a-ticket status-edit exception.
+Clean entry HEAD `5e6e7ad5a90f80752b08432cd2b573087b7bea01`; fetched and merged
+`origin/main` `0464c42dae19a6dde000c7e7660e82762a41fada`, already current, HEAD
+unchanged. Merge-tree succeeded with tree `77010a32ecd6416d9aa38a2dd6cb94c101f68116`.
+Task 0's approved baseline is retained without rerunning unchanged tests.
+
+Task 1 follows the approved red/green classification matrix, E1/E2 fresh-result
+changes, retained-attempt and mixed-set controls, then whole-tree fmt/check/clippy
+and targeted tests. Controller reviews its actual commit range before Task 2.
+PR, merge, closure, cleanup and native CI remain separately gated.
