@@ -731,6 +731,17 @@ owner review; Task 0 proves the inventory before implementation.
 | E8 | Library module visibility/declarations and test module registrations | Mechanical moves/import rewiring for shared integration extraction, preserving function bodies/assertions except E1/E2. |
 | E9 | `tests/support/{golden.rs,mutation_golden.rs,mutation.rs}`, `tests/support/repair.rs::repair_data` and `tests/mutation_replay/conformance.rs` | Add new golden registrations and conformance rows; add explicit new-variant refusal arms to the seven existing DTO helper matches (`ticket_data`, `document_data`, `remote_data`, `operation_data`, `key_data`, `identity_data`, `repair_data`), without weakening their old assertions. New local helpers handle the new DTO. Owner explicitly approved the omitted repair helper in comment `01M5V0RYTAKJE3F155FH4QTP53`; Task 7 owns implementation. |
 
+### Scoped owner addendum: Task 7 migration fixture
+
+On 2026-10-26 the owner answered **“yes”** to question
+`01M5X2Y6RPMMT9BMS75Y0EXTYQ`, recorded in approval comment
+`01M5X3KKAFXVGD84SYBH3TBGFB`. The additional named edit permits changes only to
+`tests/mutation_replay.rs::the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`
+and its private `REQUEST_TABLES` fixture/removal/migration-marker inventory for
+the new local request-control table. Preserve ALL existing old-column,
+unrelated-data and privacy assertions. This resolves the Task 7 scope stop;
+it grants no wider old-test rewrite or Task 7 review approval.
+
 E1's exact SSH harness selector is
 `true_race_distinct_identities_needs_external_recovery`; `true_race` is its Rust
 function. Task 0 rechecks this exact inventory for drift; it does not grant an

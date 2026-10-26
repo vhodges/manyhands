@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | Started from `41bce3e`; initial F2 control acceptance/handover implementation checkpointed as **WIP `ee9e485`**. **Waiting for scoped migration-fixture approval**, question `01M5X2Y6RPMMT9BMS75Y0EXTYQ`. Nine new request-store tests pass; full mutation_replay has 316 passes and one existing migration-fixture failure. Public bindings/reads, production executor activation and complete request protocol remain undelivered. No independent Task 7 review has occurred. |
+| Task 7 | Started from `41bce3e`; initial F2 control acceptance/handover implementation checkpointed as **WIP `ee9e485`**. Owner answered **“yes”** to the scoped migration-fixture question; approval `01M5X3KKAFXVGD84SYBH3TBGFB`. Implementation resumed from `0b75184`. Nine new request-store tests pass; prior full mutation_replay had 316 passes and one existing migration-fixture failure. Public bindings/reads, production executor activation and complete request protocol remain in progress. No independent Task 7 review has occurred. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -2980,3 +2980,18 @@ Task 7 is not complete or independently reviewed. Public bindings, production
 executor activation, DTO/schema publication and all required full-protocol cases
 are still owed. Task 8 remains unstarted. No PR, closure, merge into main, native
 CI or cleanup is authorized by this checkpoint.
+
+## Task 7 scoped approval and implementation resumed
+
+At **2026-10-26T21:59:30Z**, recorded the owner answer **“yes”** to question
+`01M5X2Y6RPMMT9BMS75Y0EXTYQ`, approving exactly the additional legacy migration
+fixture and private inventory edit stated there. Approval comment:
+`01M5X3KKAFXVGD84SYBH3TBGFB`; design named-edit addendum records the same scope.
+All old-column, unrelated-data and privacy assertions must remain. This is scope
+approval, not independent review of Task 7.
+
+Entry clean at `0b751846ff4fdb78a3e6b0f0c3d046d152bc05d2`; fetch/merge found main
+`0464c42` already current. Restored ticket implementing via the skill's status
+procedure. The WIP and nine-test evidence are retained; the already reproduced
+fixture RED will be followed by its approved correction and GREEN. The remainder
+of full Task 7, including mandatory production activation, is still required.
