@@ -40,6 +40,18 @@ pub(super) struct Execution {
     pub ref_observed: bool,
 }
 impl Execution {
+    pub fn validate_graph(
+        &self,
+        git: &git2::Repository,
+        row: &LocalContextSyncRecord,
+    ) -> Result<(), Fault> {
+        let actual = super::run::classify(git, row.context_parent, row.primary_parent)
+            .map_err(|_| Fault::authority())?;
+        if self.disposition != actual {
+            return Err(Fault::authority());
+        }
+        Ok(())
+    }
     pub fn prepare(
         repo: &ResolvedRepository,
         git: &git2::Repository,
@@ -192,6 +204,16 @@ pub(super) struct Owner<'a> {
     pub git: git2::Repository,
     pub lease: coordination::RepositoryLease,
     pub row: LocalContextSyncRecord,
+    // Reporting evidence only; neither cache grants write/takeover authority.
+    pub known_execution: Option<Execution>,
+    pub performed: Performed,
+}
+#[derive(Default)]
+pub(super) struct Performed {
+    pub wrote: bool,
+    pub committed: bool,
+    pub integrated: bool,
+    pub oid: Option<git2::Oid>,
 }
 impl Owner<'_> {
     pub fn transaction<T>(
@@ -219,6 +241,9 @@ impl Owner<'_> {
         if current != self.row {
             return Err(Fault::foreign());
         }
+        let prior = Execution::read(&tx, current.operation_id)?;
+        prior.validate_graph(&self.git, &current)?;
+        self.known_execution = Some(prior);
         let result = change(&tx, &current)?;
         let row = tx
             .query_row(
@@ -228,8 +253,11 @@ impl Owner<'_> {
             )
             .map_err(|_| Fault::authority())?;
         record::audit(&tx).map_err(|_| Fault::authority())?;
+        let evidence = Execution::read(&tx, current.operation_id)?;
+        evidence.validate_graph(&self.git, &row)?;
         tx.commit().map_err(ReadError::from)?;
         self.row = row;
+        self.known_execution = Some(evidence);
         Ok(result)
     }
     pub fn evidence(&mut self) -> Result<Execution, Fault> {

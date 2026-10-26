@@ -101,7 +101,7 @@ fn identity(git: &git2::Repository) -> Result<git2::Signature<'static>, Fault> {
         reason: Reason::IdentityRequired,
     })
 }
-fn classify(
+pub(super) fn classify(
     git: &git2::Repository,
     local: git2::Oid,
     incoming: git2::Oid,
@@ -251,6 +251,8 @@ pub(super) fn execute(
             git,
             lease,
             row: row.clone(),
+            known_execution: None,
+            performed: recover::Performed::default(),
         })
     })() {
         Ok(owner) => owner,
@@ -271,14 +273,37 @@ pub(super) fn execute(
     // Loss of execution authority does not erase previously proven effects.
     // This read grants no takeover/write/settlement permission.
     let evidence = read_evidence(service, repo, id);
-    match (result, evidence) {
+    let reply = match (result, evidence) {
         (Ok(code), Ok((row, e))) => report(code, Reason::None, Some((&row, &e))),
         (Err(fault), Ok((row, e))) => report(fault.code, fault.reason, Some((&row, &e))),
-        (_, Err(error)) => {
-            let fault = Fault::from(error);
-            report(fault.code, fault.reason, None)
+        (result, Err(error)) => {
+            // A secondary evidence-read failure must not replace the error that
+            // actually stopped execution or erase already known durable work.
+            let fault = result.err().unwrap_or_else(|| Fault::from(error));
+            report(
+                fault.code,
+                fault.reason,
+                owner.known_execution.as_ref().map(|e| (&owner.row, e)),
+            )
         }
+    };
+    with_performed(reply, &owner)
+}
+
+fn with_performed(mut reply: Report, owner: &Owner<'_>) -> Report {
+    if owner.performed.wrote {
+        reply.effects.write = WriteEffect::Written;
     }
+    if owner.performed.committed {
+        reply.effects.checkpoint = CheckpointEffect::Committed;
+    }
+    if owner.performed.integrated {
+        reply.effects.integration = IntegrationEffect::Complete;
+    }
+    if let Some(oid) = owner.performed.oid {
+        reply.effects.commit_oid = Some(oid.to_string());
+    }
+    reply
 }
 
 fn read_evidence(
@@ -286,11 +311,18 @@ fn read_evidence(
     repo: &ResolvedRepository,
     id: OperationId,
 ) -> Result<(LocalContextSyncRecord, Execution), ReadError> {
-    service.read_session(RepositoryOperation::Read,|db| {
+    super::record::store_access(true)?;
+    let (row,evidence)=service.read_session(RepositoryOperation::Read,|db| {
         super::record::audit(db).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))?;
         let row=db.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.id=?2 AND r.root_path=?3",params![id.to_string(),repo.registration_id(),repo.root().to_str()],super::record::decode)?;
         Ok((row,Execution::read(db,id)?))
-    })
+    })?;
+    let git = git2::Repository::open(repo.root())
+        .map_err(|_| ReadError::new(ResultCode::RepositoryInaccessible))?;
+    evidence
+        .validate_graph(&git, &row)
+        .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
+    Ok((row, evidence))
 }
 
 fn report(
@@ -322,7 +354,18 @@ fn report(
         } else {
             DiscoveryEffect::Pending
         };
-        effects.commit_oid = row.result.or(row.candidate).map(|o| o.to_string());
+        // A planned merge OID may not have been imported yet. Its intent is
+        // recovery authority, not evidence that a commit was actually made.
+        effects.commit_oid = row
+            .result
+            .or_else(|| {
+                if e.disposition == Disposition::Merge && !e.commit_observed {
+                    None
+                } else {
+                    row.candidate
+                }
+            })
+            .map(|o| o.to_string());
     }
     Report {
         code,
@@ -484,8 +527,13 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
         owner.authorize()?;
         checkout(owner, candidate)?;
     }
-    owner.flag("checkout_observed")?;
-    owner.step(1, "checkout", true, Some(candidate))?;
+    // Equal trees still need the ref transition, but no checkout or file-write
+    // effect. A previously started checkout may instead be reconciling its
+    // already-complete image and retains that historical write evidence.
+    if !result || e.checkout_started {
+        owner.flag("checkout_observed")?;
+        owner.step(1, "checkout", true, Some(candidate))?;
+    }
     boundary(owner, FailurePoint::LocalSyncAfterCheckout)?;
     owner.step(2, "reference", false, Some(candidate))?;
     owner.flag("ref_started")?;
@@ -564,6 +612,8 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
     {
         return Err(Fault::authority());
     }
+    owner.performed.committed = true;
+    owner.performed.oid = Some(oid);
     boundary(owner, FailurePoint::LocalSyncAfterObjectImport)?;
     owner.step(0, "objects", true, Some(oid))?;
     Ok(oid)
@@ -603,7 +653,7 @@ fn validate_candidate(owner: &Owner<'_>, e: &Execution) -> Result<(), Fault> {
 fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
     let git = git2::Repository::open(owner.git.path())?;
     let (service, root) = (owner.service, owner.repo.root());
-    integration::artifacts::local_checkout(
+    let result = integration::artifacts::local_checkout(
         &git,
         candidate,
         || owner.authorize(),
@@ -616,7 +666,12 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
                 )
                 .map_err(|_| Fault::ambiguous())
         },
-    )
+    );
+    if result.is_ok() || recover::checkout_progress(owner).unwrap_or(false) {
+        owner.performed.wrote = true;
+        owner.performed.oid = Some(candidate);
+    }
+    result
 }
 fn transition(owner: &mut Owner<'_>, candidate: git2::Oid, e: &Execution) -> Result<(), Fault> {
     if !recover::exact_image(&owner.git, candidate)? {
@@ -647,7 +702,10 @@ fn transition(owner: &mut Owner<'_>, candidate: git2::Oid, e: &Execution) -> Res
                 )
                 .map_err(|_| Fault::ambiguous())
         },
-    )
+    )?;
+    owner.performed.integrated = true;
+    owner.performed.oid = Some(candidate);
+    Ok(())
 }
 fn integrated(owner: &mut Owner<'_>, result: Option<git2::Oid>) -> Result<(), Fault> {
     owner.authorize()?;

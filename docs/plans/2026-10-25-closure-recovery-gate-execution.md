@@ -34,7 +34,9 @@ question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded in approval comment
 `01M5VWDPG57KWRAJ55Y2EMXRQR`. The latest controller handoff reports SPEC and QUALITY
 approval with zero findings at `4377944`, covering the full Task 4 range
 `37bd2c3..4377944`. Earlier pending-review entries below remain historical.
-Task 5 is implemented and locally verified, awaiting controller SPEC then QUALITY.
+Task 5 SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` requested four changes at `5fde757`.
+All four have source-verified implementer fixes and fresh verification, recorded in
+`01M5W6R1Q4F2SY8E86XKB838N9`; **SPEC re-review then QUALITY remain pending**.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -49,7 +51,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Implemented from `7856c619f157febf3c327f5d643cba1a4557cb8a` (original supplied Rust base `4377944`); checkpoint `01M5W3AMDN1J5BTZNCW0X798QF`. **81 local tests, 7 shared-integration controls and 4 compile-fail tests pass**; whole-tree fmt/check/clippy pass. Internal executor remains narrowly test-gated until Task 7. Controller SPEC then QUALITY pending. |
+| Task 5 | Initial implementation `7856c61..5fde757`; SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` requested 3 P1 and 1 P2 fixes. Corrections start at `5fde75757182c5714a6069ceec7998a4f1f6ed33`, checkpoint `01M5W6R1Q4F2SY8E86XKB838N9`. **88 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. Internal executor remains narrowly test-gated until Task 7. Awaiting SPEC re-review then QUALITY; not reviewer-approved. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1586,3 +1588,140 @@ already merged. Final merge-tree succeeded with committed base tree
 **independent SPEC, then QUALITY**, covering the full Task 5 range and the mandatory
 Task 7 activation obligation. No Task 6 implementation, PR, lifecycle action or
 native dispatch is included.
+
+## Task 5 SPEC corrections: awaiting re-review
+
+Recorded `2026-10-26T13:35:08Z`, comment `01M5W6R1Q4F2SY8E86XKB838N9`.
+Review: **`ses_e87b8a702ffe6HryC0itCXg4H5`, REQUEST CHANGES: 3 P1, 1 P2**.
+Fix base: **`5fde75757182c5714a6069ceec7998a4f1f6ed33`**. The full Task 5 code
+range continues to start at `7856c619f157febf3c327f5d643cba1a4557cb8a`; the original
+task-supplied Rust base was `4377944`. Each finding was verified against source
+before a regression and correction. These dispositions are implementer evidence,
+not SPEC approval. No owner question or policy/scope change was needed.
+
+### Findings, fixes and proof
+
+1. **P1: same-tree integrations dead-end — addressed.** The old code skipped
+   checkout when the candidate image already matched, then unconditionally set
+   checkout_observed and observed a nonexistent step. It now records checkout
+   completion only when checkout ran or an earlier recorded checkout is being
+   reconciled. Equal-tree fast-forwards and divergent clean merges still perform
+   exactly one ref transition, but report write unchanged and create no checkout
+   intent. New proof covers **12 cases**: document/ticket × empty-commit FF,
+   change/revert FF and same-tree clean divergence × immediate execution or retry
+   after the ref fault. It asserts unchanged file/index bytes, one ref-log append,
+   exact ordered merge parents, correct made/adopted checkpoint effects and replay.
+
+2. **P1: lost execution row grants a generic handoff — addressed.** The execution
+   table's own rows cannot prove that no row was lost. Added parent-owned
+   `execution_required`, atomically set with real execution identity creation.
+   `local_context_sync_execution_authority_v4` additively migrates the exact audited
+   parent layout. Audit requires the parent marker and execution-row presence to
+   agree; known integration/candidate phases cannot pretend to be store-only.
+   `refresh_allowed` now uses that retained parent fact after audit, never child
+   absence as permission. Deleting the execution row before effects or at
+   index_pending refuses public same-ID refresh, internal read and reopen, with
+   **all snapshotted authority/discovery rows, owner fields and Git unchanged**.
+
+   Legitimate Task 4 store-only fixtures retain execution_required=false, because
+   they claim no executor integration. Existing executable v3 records upgrade to
+   true. Known legacy progress with lost execution authority causes refusal and
+   transaction rollback rather than manufactured evidence. Two new migration tests
+   cover store-only/executor preservation, injected marker-insertion rollback and
+   lost-legacy-progress refusal. No old fixture assertion was weakened or relabeled.
+
+3. **P1: later journal failure erases known effects — addressed.** The old final
+   evidence-read error path returned an empty report and replaced the drive error.
+   `Owner` now retains its last graph-validated execution evidence/phase plus
+   positive in-call Git completions (object import, checkout and ref transition).
+   These caches are **reporting evidence only**, never write/takeover authority.
+   Failed final reads fall back to that knowledge and preserve the original drive
+   error. A planned, not-yet-imported merge OID no longer masquerades as an actual
+   commit receipt. Completed effects remain Partial/Incomplete where work failed.
+
+   A persistent typed PermissionDenied injection at the actual owned journal
+   access seams denies writes **and the final evidence read**. Counters prove the
+   final read failed; this is not merely the old before-index failure hook with
+   a readable store. **Ten cases** cover FF/merge checkout, ref and index failures,
+   pre-effect controls, and merge before/after object import. They assert known
+   phase/OID/effects, original discovery_pending/index_pending after index failure,
+   no fabricated writes/commits before effects, privacy-safe diagnostics and exact
+   retry after access is restored. This is portable typed I/O injection, not a
+   claim of real OS ACL denial on native platforms.
+
+4. **P2: stored disposition trusted without graph proof — addressed.** Readable,
+   valid-shaped `noop` could previously replace accepted fast_forward, falsely
+   finishing already_applied. Execution evidence is now checked against the frozen
+   parent graph inside the fenced store transaction before any effect/settlement,
+   and again before evidence is cached or used for final/replay reporting. This
+   adds no fresh-primary observation and cannot change the frozen pair. **Sixteen
+   pending corruption cases** cover both kinds and equal/contained/FF/merge graphs
+   against every wrong valid disposition, asserting unchanged rows, epochs, files
+   and logs. Two completed-noop controls also refuse corrupt replay without
+   fabricating complete integration effects.
+
+### Actual RED/GREEN record
+
+All rows used the prefix
+`devenv shell -- cargo test --all-features --locked --lib` with the single filter
+shown below. New tests are confined to `local_sync/run_tests.rs`.
+
+| Filter | Before fix | After fix |
+| --- | --- | --- |
+| `spec_same_tree_integrations_transition_once_without_claiming_file_writes` | 1 failed: empty-tree FF returned InternalError at CommitPrepared. | 1 passed, all 12 matrix cases. |
+| `spec_missing_execution_authority_refuses_public_refresh_without_settlement` | 1 failed: public generic refresh accepted the lost-execution handoff. | 1 passed, four kind/phase compositions. |
+| `spec_execution_authority_upgrade` | 2 failed at the missing new authority-column seam; these are schema-seam REDs, not a claim that the migration rollback assertion ran before the schema existed. | 2 passed: preservation, rollback and lost-progress refusal cases. |
+| `spec_journal_access_loss_preserves_known_effects_and_original_drive_error` | 1 failed first at pre-effect phase loss; reordered the matrix and reran before implementation: 1 failed after actual FF checkout, with owned file bytes positively verified and final read failure counted. | 1 passed, all 10 access-loss/control cases. |
+| `spec_corrupt_` | 2 failed: pending FF→noop returned AlreadyApplied; completed noop→FF replay returned Ok. | 2 passed, 18 corrupt-disposition cases. |
+
+The v4 migration's first implementation run failed fixture creation because SQLite
+inserts an ALTER-added column before table-level CHECK constraints. Inspected the
+actual fixed schema definition, corrected the expected exact layout, removed the
+temporary schema-only diagnostic, and reran both migration and missing-authority
+tests green. No parser, constraint or assertion was relaxed. No unrelated test
+failure was encountered.
+
+### Final verification
+
+Whole-tree commands on the final Rust tree, all exit 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+Check finished in 3.10s; clippy in 13.91s with no warnings. Test commands use
+`devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib local_sync::` | **88**, 0 failed/ignored/measured, 1284 filtered; 184.42s. Includes 81 prior plus all 7 new SPEC tests and the existing eight actual no-Drop child exits. |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--lib repository::registration_removal::tests` | 20 |
+| `--test repository_enablement remove_registration` | 8 |
+| `--doc local_sync` | 4 compile-fail API-boundary controls |
+
+Unique selected total: **115 library + 8 integration + 4 compile-fail = 127**.
+Red/green repeats and child-process assertions are not added to that total. Fixture
+matrix long-running notices completed successfully. No full suite or native run.
+
+Changed Rust files are only `local_sync/{record,recover,run,run_tests}.rs`. The v4
+marker/audit is production-active; executor and exclusively executor-only helpers
+retain the controller-approved narrow test gating. **Task 7 must still activate
+real production mutation/resume callers, remove exclusive executor gates, retain
+fixture-only access hooks as test-only, enforce F2 request attempts and rerun
+production-boundary tests plus whole-tree gates.** No public bypass or new lint
+allowance was introduced. Task 6 and all previously listed conflict/resolution,
+request-control and broader closure/native outcomes remain outstanding.
+
+Start and checkpoint fetch/merge found main `0464c42dae19a6dde000c7e7660e82762a41fada`
+already incorporated. Entry was clean at the fix base; merge-tree succeeded with
+base tree `9b39ee2d8a1568c1f27f485e97921cc2ebce45f5`. Status/diff/log were inspected;
+`git diff --check` passed. Ticket remains implementing; no owner question, subagent,
+Task 6 work, PR, lifecycle action or native dispatch. Next gate: controller SPEC
+re-review of all four fixes, then QUALITY on the full Task 5 range.

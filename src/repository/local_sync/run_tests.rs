@@ -1125,3 +1125,457 @@ fn local_sync_no_drop_candidate_and_ref_logs_reconcile_exactly_once() {
         }
     }
 }
+
+#[test]
+fn spec_same_tree_integrations_transition_once_without_claiming_file_writes() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["empty_fast_forward", "reverted_fast_forward", "merge"] {
+            for stop in [None, Some(FailurePoint::LocalSyncAfterRef)] {
+                let f = Fixture::new(kind);
+                graph(&f, "equal");
+                let p = primary(&f);
+                if shape == "merge" {
+                    commit(&f.context());
+                }
+                if shape == "reverted_fast_forward" {
+                    fs::write(f.root.path().join("ordinary"), "temporary primary change").unwrap();
+                    commit(&p);
+                    fs::write(f.root.path().join("ordinary"), "base\n").unwrap();
+                }
+                // A distinct subject ensures genuinely divergent equal-tree
+                // commits rather than accidentally identical fixture objects.
+                let parent = p.find_commit(tip(&p)).unwrap();
+                let mut index = p.index().unwrap();
+                index
+                    .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                    .unwrap();
+                index.write().unwrap();
+                let tree = p.find_tree(index.write_tree().unwrap()).unwrap();
+                let sig = p.signature().unwrap();
+                let incoming = p
+                    .commit(
+                        Some("HEAD"),
+                        &sig,
+                        &sig,
+                        "same tree primary",
+                        &tree,
+                        &[&parent],
+                    )
+                    .unwrap();
+                p.reference("refs/remotes/origin/main", incoming, true, "fixture")
+                    .unwrap();
+                let context = tip(&f.context());
+                let image = f.image();
+                let logs = reflog_len(&f);
+                assert_eq!(
+                    f.context().find_commit(context).unwrap().tree_id(),
+                    tree.id()
+                );
+                let observation = f.observe();
+                let id = OperationId::new();
+                if let Some(point) = stop {
+                    assert_ne!(
+                        faults(&f, id, &observation.observation, point).code,
+                        ResultCode::Ok
+                    );
+                }
+                let result = execute(&f, id, &observation.observation);
+                assert_eq!(
+                    result.code,
+                    ResultCode::Ok,
+                    "{kind:?} {shape} {stop:?}: {result:?}"
+                );
+                assert_eq!(result.effects.write, WriteEffect::Unchanged);
+                assert_eq!(
+                    result.effects.checkpoint,
+                    if shape == "merge" {
+                        CheckpointEffect::Committed
+                    } else {
+                        CheckpointEffect::Unchanged
+                    }
+                );
+                assert_eq!(result.effects.integration, IntegrationEffect::Complete);
+                assert_eq!(f.image().1, image.1);
+                assert_eq!(f.image().2, image.2);
+                assert_eq!(reflog_len(&f), logs + 1);
+                refs_unchanged(&f, incoming);
+                if shape == "merge" {
+                    assert_eq!(
+                        f.context()
+                            .find_commit(tip(&f.context()))
+                            .unwrap()
+                            .parent_ids()
+                            .collect::<Vec<_>>(),
+                        [context, incoming]
+                    );
+                } else {
+                    assert_eq!(tip(&f.context()), incoming);
+                }
+                let e = super::recover::Execution::read(&f.db(), id).unwrap();
+                assert!(!e.checkout_started && !e.checkout_observed);
+                assert_eq!(f.db().query_row("SELECT count(*) FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='checkout'",[id.to_string()],|r|r.get::<_,i64>(0)).unwrap(),0);
+                assert_eq!(execute(&f, id, &observation.observation), result);
+                assert_eq!(reflog_len(&f), logs + 1);
+            }
+        }
+    }
+}
+
+fn local_authority_rows(f: &Fixture) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+    let db = f.db();
+    [
+        "operation_records",
+        "local_context_sync_records",
+        "local_context_sync_execution",
+        "local_context_sync_steps",
+        "repositories",
+        "contexts",
+    ]
+    .into_iter()
+    .map(|table| {
+        let mut statement = db
+            .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+            .unwrap();
+        let columns = statement.column_count();
+        statement
+            .query_map([], |row| {
+                (0..columns)
+                    .map(|i| row.get(i))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    })
+    .collect()
+}
+
+#[test]
+fn spec_missing_execution_authority_refuses_public_refresh_without_settlement() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for stop in [
+            FailurePoint::LocalSyncBeforeIndex,
+            FailurePoint::LocalSyncAfterIntent,
+        ] {
+            let f = Fixture::new(kind);
+            graph(&f, "merge");
+            let observation = f.observe();
+            let id = OperationId::new();
+            faults(&f, id, &observation.observation, stop);
+            f.db()
+                .execute(
+                    "DELETE FROM local_context_sync_execution WHERE operation_ulid=?1",
+                    [id.to_string()],
+                )
+                .unwrap();
+            let rows = local_authority_rows(&f);
+            let image = f.image();
+            let logs = reflog_len(&f);
+            assert!(
+                f.service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: f.root.path().into(),
+                        operation_id: id
+                    })
+                    .is_err(),
+                "missing execution must never grant a generic handoff"
+            );
+            assert_eq!(rows, local_authority_rows(&f));
+            assert_eq!(image, f.image());
+            assert_eq!(logs, reflog_len(&f));
+            assert_eq!(
+                f.service
+                    .read_local_context_sync_record(&f.repo, id)
+                    .unwrap_err()
+                    .code(),
+                ResultCode::RecoveryRequired
+            );
+            assert!(RepositoryService::open_at(f.data.path()).is_err());
+            assert_eq!(rows, local_authority_rows(&f));
+        }
+    }
+}
+
+#[test]
+fn spec_execution_authority_upgrade_preserves_store_only_and_executor_records() {
+    for executor in [false, true] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        let id = OperationId::new();
+        if executor {
+            graph(&f, "merge");
+            faults(
+                &f,
+                id,
+                &f.observe().observation,
+                FailurePoint::LocalSyncBeforeIndex,
+            );
+        } else {
+            f.begin(id).unwrap();
+        }
+        let before = f
+            .service
+            .read_local_context_sync_record(&f.repo, id)
+            .unwrap();
+        f.db().execute_batch("ALTER TABLE local_context_sync_records DROP COLUMN execution_required; DELETE FROM registry_migrations WHERE name='local_context_sync_execution_authority_v4'").unwrap();
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(
+            before,
+            reopened
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap()
+        );
+        assert_eq!(f.db().query_row("SELECT execution_required FROM local_context_sync_records WHERE operation_ulid=?1",[id.to_string()],|r|r.get::<_,bool>(0)).unwrap(),executor);
+    }
+}
+
+#[test]
+fn spec_execution_authority_upgrade_rolls_back_and_refuses_lost_legacy_progress() {
+    for lose in [false, true] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "merge");
+        let id = OperationId::new();
+        faults(
+            &f,
+            id,
+            &f.observe().observation,
+            FailurePoint::LocalSyncBeforeIndex,
+        );
+        f.db().execute_batch("ALTER TABLE local_context_sync_records DROP COLUMN execution_required; DELETE FROM registry_migrations WHERE name='local_context_sync_execution_authority_v4'").unwrap();
+        if lose {
+            f.db()
+                .execute(
+                    "DELETE FROM local_context_sync_execution WHERE operation_ulid=?1",
+                    [id.to_string()],
+                )
+                .unwrap();
+        } else {
+            f.db().execute_batch("CREATE TRIGGER stop_authority_upgrade BEFORE INSERT ON registry_migrations WHEN NEW.name='local_context_sync_execution_authority_v4' BEGIN SELECT RAISE(ABORT,'fixture'); END").unwrap();
+        }
+        let rows = local_authority_rows(&f);
+        let image = f.image();
+        assert!(RepositoryService::open_at(f.data.path()).is_err());
+        assert_eq!(rows, local_authority_rows(&f));
+        assert_eq!(image, f.image());
+        assert_eq!(f.db().query_row("SELECT count(*) FROM registry_migrations WHERE name='local_context_sync_execution_authority_v4'",[],|r|r.get::<_,i64>(0)).unwrap(),0);
+        if !lose {
+            f.db()
+                .execute_batch("DROP TRIGGER stop_authority_upgrade")
+                .unwrap();
+            assert!(RepositoryService::open_at(f.data.path()).is_ok());
+        }
+    }
+}
+
+#[test]
+fn spec_journal_access_loss_preserves_known_effects_and_original_drive_error() {
+    for shape in ["fast_forward", "merge"] {
+        for point in [
+            FailurePoint::LocalSyncAfterCheckout,
+            FailurePoint::LocalSyncAfterRef,
+            FailurePoint::LocalSyncBeforeIndex,
+            FailurePoint::LocalSyncAfterIntent,
+            FailurePoint::LocalSyncBeforeObjectImport,
+            FailurePoint::LocalSyncAfterObjectImport,
+        ] {
+            if shape == "fast_forward"
+                && matches!(
+                    point,
+                    FailurePoint::LocalSyncBeforeObjectImport
+                        | FailurePoint::LocalSyncAfterObjectImport
+                )
+            {
+                continue;
+            }
+            let f = Fixture::new(AuthoringKind::Ticket);
+            let (context, incoming) = graph(&f, shape);
+            let observation = f.observe();
+            let id = OperationId::new();
+            super::record::ACCESS_FAILURES.with(|counts| counts.set((0, 0)));
+            run::BOUNDARY_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |p| {
+                    if p == point {
+                        super::record::ACCESS_FAULT
+                            .with(|fault| fault.set(Some(std::io::ErrorKind::PermissionDenied)));
+                    }
+                }))
+            });
+            let result = execute(&f, id, &observation.observation);
+            let failures = super::record::ACCESS_FAILURES.with(|counts| counts.get());
+            super::record::ACCESS_FAULT.with(|fault| fault.set(None));
+            run::BOUNDARY_HOOK.with(|slot| slot.borrow_mut().take());
+            assert_eq!(
+                failures.0, 1,
+                "the final evidence READ must actually fail at the store boundary"
+            );
+            assert!(failures.1 > 0, "journal WRITES must also be unavailable");
+            let row = f
+                .service
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap();
+            if matches!(
+                point,
+                FailurePoint::LocalSyncAfterCheckout
+                    | FailurePoint::LocalSyncAfterRef
+                    | FailurePoint::LocalSyncBeforeIndex
+            ) {
+                assert_eq!(
+                    fs::read(f.context().workdir().unwrap().join("incoming")).unwrap(),
+                    b"committed primary\n"
+                );
+            }
+            assert_eq!(
+                result.state,
+                Some(row.state),
+                "{shape} {point:?}: retain known phase"
+            );
+            let index = point == FailurePoint::LocalSyncBeforeIndex;
+            assert_eq!(
+                result.code,
+                if index {
+                    ResultCode::DiscoveryPending
+                } else {
+                    ResultCode::IndexUnavailable
+                },
+                "{shape} {point:?}: preserve drive error"
+            );
+            if index {
+                assert_eq!(result.reason, Reason::IndexPending);
+            }
+            let wrote = matches!(
+                point,
+                FailurePoint::LocalSyncAfterCheckout
+                    | FailurePoint::LocalSyncAfterRef
+                    | FailurePoint::LocalSyncBeforeIndex
+            );
+            let made_commit = shape == "merge"
+                && !matches!(
+                    point,
+                    FailurePoint::LocalSyncAfterIntent | FailurePoint::LocalSyncBeforeObjectImport
+                );
+            let integrated = matches!(
+                point,
+                FailurePoint::LocalSyncAfterRef | FailurePoint::LocalSyncBeforeIndex
+            );
+            assert_eq!(
+                result.effects.write,
+                if wrote {
+                    WriteEffect::Written
+                } else {
+                    WriteEffect::Unchanged
+                },
+                "{shape} {point:?}"
+            );
+            assert_eq!(
+                result.effects.checkpoint,
+                if made_commit {
+                    CheckpointEffect::Committed
+                } else {
+                    CheckpointEffect::Unchanged
+                },
+                "{shape} {point:?}"
+            );
+            assert_eq!(
+                result.effects.integration,
+                if integrated {
+                    IntegrationEffect::Complete
+                } else {
+                    IntegrationEffect::Pending
+                },
+                "{shape} {point:?}"
+            );
+            if made_commit || wrote {
+                assert_eq!(
+                    result.effects.commit_oid,
+                    row.candidate.map(|o| o.to_string())
+                );
+                assert_eq!(result.outcome(), Outcome::Partial);
+            } else {
+                assert_eq!(result.effects.commit_oid, None);
+                assert!(!result.effects.is_durable());
+                assert_ne!(result.outcome(), Outcome::Partial);
+            }
+            assert_eq!(
+                tip(&f.context()),
+                if integrated {
+                    row.candidate.unwrap()
+                } else {
+                    context
+                }
+            );
+            refs_unchanged(&f, incoming);
+            assert!(!format!("{result:?}").contains("PermissionDenied"));
+            assert_eq!(
+                execute(&f, id, &observation.observation).code,
+                ResultCode::Ok
+            );
+        }
+    }
+}
+
+#[test]
+fn spec_corrupt_dispositions_refuse_before_any_git_effect_or_settlement() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge", "equal", "contained"] {
+            for corrupt in ["noop", "fast_forward", "merge"] {
+                let actual = match shape {
+                    "equal" | "contained" => "noop",
+                    other => other,
+                };
+                if actual == corrupt {
+                    continue;
+                }
+                let f = Fixture::new(kind);
+                graph(&f, shape);
+                let observation = f.observe();
+                let id = OperationId::new();
+                faults(
+                    &f,
+                    id,
+                    &observation.observation,
+                    FailurePoint::LocalSyncAfterIntent,
+                );
+                f.db().execute("UPDATE local_context_sync_execution SET disposition=?2 WHERE operation_ulid=?1",rusqlite::params![id.to_string(),corrupt]).unwrap();
+                let rows = local_authority_rows(&f);
+                let image = f.image();
+                let logs = reflog_len(&f);
+                let result = execute(&f, id, &observation.observation);
+                assert_eq!(
+                    result.code,
+                    ResultCode::RecoveryRequired,
+                    "{kind:?} {shape}->{corrupt}: {result:?}"
+                );
+                assert_eq!(rows, local_authority_rows(&f));
+                assert_eq!(image, f.image());
+                assert_eq!(logs, reflog_len(&f));
+                assert!(!result.effects.is_durable());
+            }
+        }
+    }
+}
+
+#[test]
+fn spec_corrupt_completed_noop_cannot_replay_fabricated_integration_effects() {
+    for corrupt in ["fast_forward", "merge"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "equal");
+        let observation = f.observe();
+        let id = OperationId::new();
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::AlreadyApplied
+        );
+        f.db()
+            .execute(
+                "UPDATE local_context_sync_execution SET disposition=?2 WHERE operation_ulid=?1",
+                rusqlite::params![id.to_string(), corrupt],
+            )
+            .unwrap();
+        let rows = local_authority_rows(&f);
+        let image = f.image();
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(result.code, ResultCode::RecoveryRequired);
+        assert!(!result.effects.is_durable());
+        assert_eq!(rows, local_authority_rows(&f));
+        assert_eq!(image, f.image());
+    }
+}

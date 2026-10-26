@@ -11,6 +11,7 @@ use std::path::PathBuf;
 const MARKER: &str = "local_context_sync_v1";
 const CASCADE_MARKER: &str = "local_context_sync_child_cascade_v2";
 const EXECUTION_MARKER: &str = "local_context_sync_execution_v3";
+const EXECUTION_AUTHORITY_MARKER: &str = "local_context_sync_execution_authority_v4";
 const EXECUTION: &str = "CREATE TABLE local_context_sync_execution (
  operation_ulid TEXT PRIMARY KEY NOT NULL REFERENCES local_context_sync_records(operation_ulid) ON DELETE CASCADE,
  format_version INTEGER NOT NULL CHECK(format_version=1),
@@ -57,6 +58,7 @@ const RECORD: &str = "CREATE TABLE local_context_sync_records (
  integration_proven INTEGER NOT NULL DEFAULT 0 CHECK(integration_proven IN (0,1)),
  artifacts_released INTEGER NOT NULL DEFAULT 0 CHECK(artifacts_released IN (0,1)),
  index_complete INTEGER NOT NULL DEFAULT 0 CHECK(index_complete IN (0,1)),
+ execution_required INTEGER NOT NULL DEFAULT 0 CHECK(execution_required IN (0,1)),
  CHECK((closure_operation IS NULL)=(closure_checkpoint IS NULL)),
  CHECK(index_complete=0 OR (integration_proven=1 AND artifacts_released=1))
 )";
@@ -109,7 +111,7 @@ fn sql_error(error: rusqlite::Error) -> ReadError {
     })
 }
 
-fn schemas(cascade: bool) -> [(&'static str, String); 3] {
+fn schemas(cascade: bool, execution_required: bool) -> [(&'static str, String); 3] {
     let child = |sql: &str| {
         if cascade {
             sql.to_owned()
@@ -118,7 +120,14 @@ fn schemas(cascade: bool) -> [(&'static str, String); 3] {
         }
     };
     [
-        ("local_context_sync_records", RECORD.to_owned()),
+        (
+            "local_context_sync_records",
+            if execution_required {
+                RECORD.to_owned()
+            } else {
+                RECORD.replace(" execution_required INTEGER NOT NULL DEFAULT 0 CHECK(execution_required IN (0,1)),\n","")
+            },
+        ),
         ("local_context_sync_steps", child(STEPS)),
         ("local_context_sync_resolutions", child(RESOLUTIONS)),
     ]
@@ -128,6 +137,7 @@ fn schemas(cascade: bool) -> [(&'static str, String); 3] {
 // the two child FKs and recording the marker either commit together or roll
 // back together; existing v1 authority is audited before any table is rebuilt.
 pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> {
+    let authority_marked = execution_authority_marked(db)?;
     let migrated: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -151,7 +161,7 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
             return Err(failure());
         }
     }
-    for (name, sql) in schemas(cascaded || !migrated) {
+    for (name, sql) in schemas(cascaded || !migrated, authority_marked) {
         let actual: Option<String> = db
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
@@ -175,7 +185,7 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
     if !cascaded {
         if migrated {
             audit_with_schema(db, false)?;
-            for (name, sql) in schemas(true).into_iter().skip(1) {
+            for (name, sql) in schemas(true, authority_marked).into_iter().skip(1) {
                 // Both audited layouts have identical columns/order; only the
                 // parent FK delete action changes. No authority is synthesized.
                 db.execute_batch(&format!("ALTER TABLE {name} RENAME TO {name}_before_cascade; {sql}; INSERT INTO {name} SELECT * FROM {name}_before_cascade; DROP TABLE {name}_before_cascade;")).map_err(|_|failure())?;
@@ -205,7 +215,29 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         )
         .map_err(|_| failure())?;
     }
+    if !authority_marked {
+        audit_with_schema(db, true)?;
+        audit_execution(db, false)?;
+        db.execute_batch("ALTER TABLE local_context_sync_records ADD COLUMN execution_required INTEGER NOT NULL DEFAULT 0 CHECK(execution_required IN (0,1))").map_err(|_|failure())?;
+        // Existing executor rows remain executable. Proven legacy progress with
+        // missing execution evidence is tagged too, then REFUSED by the audit;
+        // it is never downgraded into a store-only record to grant a handoff.
+        db.execute("UPDATE local_context_sync_records SET execution_required=1 WHERE EXISTS(SELECT 1 FROM local_context_sync_execution e WHERE e.operation_ulid=local_context_sync_records.operation_ulid) OR candidate_oid IS NOT NULL OR result_oid IS NOT NULL OR integration_proven=1 OR state IN ('applying','commit_prepared','integrated','index_pending','complete')",[]).map_err(|_|failure())?;
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [EXECUTION_AUTHORITY_MARKER],
+        )
+        .map_err(|_| failure())?;
+    }
     audit(db)
+}
+fn execution_authority_marked(db: &Connection) -> Result<bool, RepositoryError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+        [EXECUTION_AUTHORITY_MARKER],
+        |r| r.get(0),
+    )
+    .map_err(|_| failure())
 }
 fn compact(sql: &str) -> String {
     sql.split_whitespace().collect()
@@ -250,6 +282,7 @@ impl LocalSyncState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) struct LocalContextSyncRecord {
+    pub(crate) execution_required: bool,
     pub(crate) operation_id: OperationId,
     pub(crate) local_record_id: i64,
     pub(crate) repository_id: i64,
@@ -311,6 +344,12 @@ pub(super) fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSync
         }
     };
     let result = LocalContextSyncRecord {
+        // Only exact audited pre-v4 schemas may omit this column during upgrade.
+        execution_required: if r.as_ref().column_index("execution_required").is_ok() {
+            flag("execution_required")?
+        } else {
+            false
+        },
         candidate: oid("candidate_oid")?,
         result: oid("result_oid")?,
         active_resolution: r
@@ -412,6 +451,13 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         return Err(failure());
     }
     audit_with_schema(db, true)?;
+    if !execution_authority_marked(db)? {
+        return Err(failure());
+    }
+    audit_execution(db, true)
+}
+
+fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryError> {
     let marked: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -448,6 +494,12 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if broken {
         return Err(failure());
     }
+    if required {
+        let missing:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records p WHERE p.execution_required != EXISTS(SELECT 1 FROM local_context_sync_execution e WHERE e.operation_ulid=p.operation_ulid) OR (p.execution_required=0 AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR p.integration_proven=1 OR p.state IN ('applying','commit_prepared','integrated','index_pending','complete'))))",[],|r|r.get(0)).map_err(|_|failure())?;
+        if missing {
+            return Err(failure());
+        }
+    }
     Ok(())
 }
 
@@ -462,7 +514,7 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
     if !marked {
         return Err(failure());
     }
-    for (name, sql) in schemas(cascade) {
+    for (name, sql) in schemas(cascade, execution_authority_marked(db)?) {
         let actual: String = db
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
@@ -556,7 +608,26 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
 thread_local! { pub(super) static WRITE_FAULT: std::cell::Cell<Option<std::io::ErrorKind>>=const {std::cell::Cell::new(None)}; }
 
 #[cfg(test)]
+thread_local! {
+    // Persistent typed access loss at the owned journal read/write boundaries.
+    pub(super) static ACCESS_FAULT: std::cell::Cell<Option<std::io::ErrorKind>>=const {std::cell::Cell::new(None)};
+    pub(super) static ACCESS_FAILURES: std::cell::Cell<(usize,usize)>=const {std::cell::Cell::new((0,0))};
+}
+#[cfg(test)]
+pub(super) fn store_access(read: bool) -> Result<(), ReadError> {
+    if let Some(kind) = ACCESS_FAULT.with(|f| f.get()) {
+        ACCESS_FAILURES.with(|counts| {
+            let (reads, writes) = counts.get();
+            counts.set((reads + usize::from(read), writes + usize::from(!read)));
+        });
+        return Err(journal_io(std::io::Error::from(kind)));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> {
+    store_access(false)?;
     // Typed failures are injected at the actual registry-opening boundary,
     // before either identity row can be inserted (and before any Git effect).
     let access: std::io::Result<()> = {
@@ -735,6 +806,10 @@ impl RepositoryService {
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,item_id,context_path,state,completed_step,observed_at) VALUES(?1,?2,?3,'context_sync_local',?4,?5,?6,'created','local_sync_prepared',?7)",params![facts.repository_id,repo.root().to_str(),id,observation,item.to_string(),current.context_worktree,time::OffsetDateTime::now_utc().unix_timestamp()]).map_err(sql_error)?;
         let envelope = tx.last_insert_rowid();
         tx.execute("INSERT INTO local_context_sync_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,context_worktree,context_ref,primary_ref,observation,context_parent,primary_parent,state,owner_epoch,semantic_revision,generation,closure_operation,closure_checkpoint) VALUES(?1,?2,?3,1,?4,?5,?6,?7,?8,?9,?10,?11,'prepared',1,1,1,?12,?13)",params![id,envelope,facts.repository_id,authoring_kind_segment(&kind),item.to_string(),current.context_worktree,current.context_ref,current.primary_ref,observation,current.context_head,current.primary_head,admitted.as_ref().map(|(op,_)|op.to_string()),admitted.as_ref().map(|(_,oid)|oid.to_string())]).map_err(sql_error)?;
+        if let Some(execution) = execution {
+            execution.insert(&tx, operation)?;
+            if tx.execute("UPDATE local_context_sync_records SET execution_required=1 WHERE operation_ulid=?1",[operation.to_string()]).map_err(sql_error)?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        }
         let row = tx
             .query_row(
                 "SELECT * FROM local_context_sync_records WHERE operation_ulid=?1",
@@ -742,9 +817,6 @@ impl RepositoryService {
                 decode,
             )
             .map_err(recovery_error)?;
-        if let Some(execution) = execution {
-            execution.insert(&tx, operation)?;
-        }
         tx.commit().map_err(sql_error)?;
         Ok(row)
     }
@@ -965,15 +1037,14 @@ pub(in super::super) fn refresh_allowed(
     // Absence grants ordinary refresh permission only after proving there is
     // no local-sync envelope whose companion authority was lost.
     audit(db)?;
-    let row:Option<(bool,bool,String)>=db.query_row("SELECT integration_proven,artifacts_released,state FROM local_context_sync_records WHERE operation_ulid=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|failure())?;
+    let row:Option<(bool,bool,String,bool)>=db.query_row("SELECT integration_proven,artifacts_released,state,execution_required FROM local_context_sync_records WHERE operation_ulid=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|failure())?;
     match row {
         None => Ok(!owned_identity(db, operation)?),
-        Some((integrated, released, state)) => {
+        Some((integrated, released, state, execution_required)) => {
             // The real executor settles discovery and BOTH local identities in
             // one transaction. Generic refresh only knows the envelope and may
             // not split this handoff, even though Git artifacts are released.
-            let executor:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_execution WHERE operation_ulid=?1)",[operation],|r|r.get(0)).map_err(|_|failure())?;
-            if executor && state != "complete" {
+            if execution_required && state != "complete" {
                 return Ok(false);
             }
             let matches_root:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.root_path=?2)",params![operation,root.to_str()],|r|r.get(0)).map_err(|_|failure())?;
