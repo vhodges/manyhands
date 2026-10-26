@@ -1,0 +1,414 @@
+---
+title: "Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery"
+date: 2026-10-26
+status: "draft"
+author: "Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5X4YWPK69CG37HVK5DYKGKE"
+---
+
+# Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery
+
+## Status
+
+**Draft, 2026-10-26.** Written for product-owner review. Nothing is built,
+and no build or test was run for planning.
+
+The other planning documents:
+
+- [Design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md)
+- [Implementation plan](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-implementation.md)
+
+Ticket: `01M4CC0VMWEQQ9G4W0DAG7ADPY`. On 2026-10-26 the ticket branch merged
+`origin/main` at `0464c42` as merge commit `219ec57`. It was merged, not
+rebased.
+
+Implementation does not start until the gate ticket
+`01M57SKVF6TQ3QM6AXJ35JGGSY` is merged to main (decision 2). Task 0 then
+merges that main and re-checks every fact the design cites.
+
+## Purpose And Authority
+
+Let CLI users and agents discuss work, synchronize it deliberately and
+recover what a synchronization left incomplete
+([Wave 03](../Waves/wave-03-dogfooding.md#c4-cli-discussion-synchronization-and-conflict-recovery)).
+Through `manyhands-cli`, with JSON or at a terminal, a caller can:
+
+- add a comment or a reply, and have it published;
+- synchronize an item's context or the primary branch, merging divergent
+  history;
+- inspect a synchronization conflict and resolve owned canonical Markdown;
+- continue, after an outside repair, the synchronization the repair
+  finished;
+- republish an item branch that was deleted on the remote, with exact
+  consent;
+- resume or abandon an operation that stopped.
+
+Then the project's own comment dogfooding moves to the CLI.
+
+Unlike C3, C4 changes the headless library. The owner approved that as an
+exception to track rule 5 (decision 1). The library part is limited to what
+the C4 verbs need, and is listed under Scope.
+
+Authority, in order:
+
+1. The Wave 03 document: C4's scope, exclusions and exit evidence, and track
+   rules 1–7, with the exception of decision 1.
+2. The [CLI contract RFC](../RFC/cli-contract.md), as amended by C1, C2 and
+   C3, and by this Cycle's Document Amendments.
+3. The [Git workflow and conflict recovery RFC](../RFC/git-workflow-and-conflict-recovery.md)
+   for item and primary synchronization, merges, deletion, resolution,
+   outside repair and resume.
+4. The [canonical content and comment schema RFC](../RFC/canonical-content-and-comment-schema.md)
+   for comments, replies, ordering and `created_by`.
+5. The [authentication RFC](../RFC/authentication-and-credential-handling.md),
+   the [runtime RFC](../RFC/application-runtime-and-polling.md) and the
+   [test strategy RFC](../RFC/test-and-compatibility-strategy.md), for
+   unlock, cancellation, redaction and two-clone evidence.
+6. The F2 Cycle and design: the mutation boundary, replay, confirmation,
+   progress and cancellation, which C4 extends.
+7. The C1, C2 and C3 Cycles and designs: parsing, envelopes, exit statuses,
+   isolation, goldens and the mutation driver.
+8. The gate ticket's design
+   (`docs/plans/2026-10-25-closure-recovery-gate-design.md` on its branch),
+   for the local-synchronization shapes that C4's conflict DTOs follow.
+
+## Entry Evidence And Dependency Boundary
+
+- **Wave 02.** Cycles 06 (merge and conflict recovery) and 07 (comment
+  publication) are closed on main, with `closed_at` set (entry-gate item 2).
+- **Wave 03.** F1, F2, C1, C2 and C3 are closed and merged to main.
+- **Gate ticket (decision 2).** `01M57SKVF6TQ3QM6AXJ35JGGSY` is
+  implementing on its own branch. C4's implementation starts only after it is
+  merged to main. It adds local context synchronization, classifies a true
+  closure race as `ExternalResolutionRequired`, and words closure child
+  errors. It edits the mutation files C4 extends, so C4's library tasks
+  follow it.
+- **Track rule 5 (decision 1).** C4's branch carries the library additions
+  its verbs need. Nothing else under `src/repository*` changes.
+- **Track rule 2 (decision 5).** D4 waits until all of C4 is merged. D4's
+  desktop Post and Sync consume C4's comment, synchronization and conflict
+  bindings. The Wave records this ordering.
+- **Desktop (decision 10).** C4 adds one arm to the desktop's exhaustive
+  preview match, `src/desktop/view/confirm.rs`, for `item republish`'s
+  preview. D3's Task 25 edits the same file; whichever merges second
+  resolves the merge.
+- **Known library limits.** Open defects that touch C4's verbs. None is a
+  prerequisite and C4 adds no workaround:
+  - `01M4H33R34Z7C7EEKTY1ZCT950`: a pending remote conflict cannot be
+    abandoned (decision 6);
+  - `01M4R19PC0T6ZPKM39X9DF26HX`: a blocked synchronization holds its
+    reservation until its request is cancelled;
+  - `01M5MK57JKCSQFXBNZ8DBE548K`: an unusable Git identity is refused late,
+    after a merge has begun;
+  - `01M5E6DYJ6GN7DMW4424TH3V78`: a wrong passphrase is reported as
+    `transport_unavailable`;
+  - `01M4W5SCBV6WFJP11Y7PJF5VS8`: operation reads name no item for local
+    authoring rows, comment submission included;
+  - `01M4PB7YZMBFAFFM94AZY08HWS`: an interrupted save whose row recorded no
+    step is closed as `rejected`.
+- **Entry-gate item 3.** Task 0 refreshes the API audit's C4 rows, which
+  still describe a pre-Wave-02 baseline.
+- **Entry-gate item 7.** Task 0 runs the baseline checks on the merged main.
+
+## Scope
+
+- **Eight verbs.**
+  - discussion: `comment add`;
+  - synchronization: `item sync`, `repo sync`, `item republish`;
+  - conflicts: `conflict show`, `conflict resolve`;
+  - operations: `operation resume`, `operation abandon`.
+
+  Seven are cataloged today as planned for C4. `item republish` is new
+  (decision 7).
+- **Library part (decision 1).**
+  - **`comment add`:** a mutation binding over comment submission. A retry
+    of the same request publishes without writing the comment again. It
+    stops at safe points, and takes an optional `created_by` (decision 9).
+  - **Merging synchronization (decision 3):** the `item sync` and
+    `repo sync` bindings merge divergent history. A conflict leaves the
+    operation recoverable.
+  - **`conflict show`:** a read over the recorded conflict. Its path tokens
+    and observation are strings that a later process can present.
+  - **`conflict resolve`:** a mutation binding that resolves every
+    conflicted owned canonical path, checkpoints the result and continues the
+    operation's publication.
+  - **`operation resume`:** it also takes up a comment's publication, and a
+    synchronization a resolution or an outside repair finished.
+  - **`item republish` (decision 7):** a confirmed binding that republishes
+    exactly the branch its preview showed.
+  - **The next step (decision 8):** a result that stops on a conflict
+    carries typed data naming the operation and its next step. No result code
+    or recovery-action kind is added.
+- **Confirmation.** `item republish` and `operation abandon` are confirmed.
+  The other six answer `not_confirmable` to `--prepare`.
+- **Cancellation.** A Ctrl-C while a synchronizing command runs stops it at
+  its next safe point, and the result names what completed. The CLI installs
+  that handler only while such a command executes.
+- **Mutation input.** As C2 decision 2: selectors are flags, and everything
+  else is one JSON object from `--input`. `comment add` and
+  `conflict resolve` take input. Each publishes a closed input schema and an
+  example.
+- **Output.** Library envelopes pass through unchanged. Every verb has human
+  output, with progress on stderr as in C2. `comment add`'s human output
+  says that publishing the comment also publishes the context's other
+  checkpointed work, but not unsaved drafts.
+- **Dogfooding.** In the final task, with the owner's go-ahead at that step,
+  the branch-built CLI adds the C4 ticket's review-ready comment with
+  `comment add`. AGENTS.md and the skills then direct comments to the CLI.
+
+## Explicit Exclusions And Downstream Obligations
+
+- **Out of scope:**
+  - promotion, closure and cleanup adapters (C5);
+  - the gate's local-synchronization verbs `context sync-local` and
+    `context resolve-local`, which C5 exposes with ticket closure;
+  - automatic retries of manual lifecycle intent;
+  - arbitrary code, binary or structural conflict writes, and blanket "keep
+    mine" or "keep theirs" policies;
+  - a resident poller or background work;
+  - abandoning a pending remote conflict (decision 6).
+- **No comment editing or deletion.** Outside the Wave.
+- **No identity prompt.** A merge or checkpoint without a usable identity
+  answers `identity_required` with `repo.identity_set`, as C3's saves do.
+- **No host approval inside a sync.** A host that needs approval answers
+  `host_approval_required` with `host.approve`, as F2 binds it.
+- **`--context` stays absent.** As C3: every request names its item by ID.
+- **A pending remote conflict blocks the repository.** Until it is resolved
+  or repaired outside, other synchronizations answer `busy` and authoring in
+  that item's context answers `recovery_required` (decision 6).
+- **`request cancel` does not reach a resume.** As F2 binds it. Ctrl-C does
+  reach it (design fact 41, which Task 0 confirms).
+- **Native evidence.** C4 is proven on Linux. Its tests join existing test
+  targets, which are already in the native workflow's list. Windows Ctrl-C is
+  a native manual check. Native CI runs on main after merge, with its own
+  approval.
+
+## Required Contract
+
+1. **Grammar.** C2's grammar, with the selectors in the design:
+   - `--repo` on every C4 verb;
+   - `--id` on `comment add`, `item sync` and `item republish`;
+   - `--operation-id` on `conflict show`, `conflict resolve`,
+     `operation resume` and `operation abandon`.
+2. **Input.** C2's rules: one UTF-8 JSON object, read once.
+   - `comment add`: `comment_id` and `body`, optional `parent_id` and
+     `created_by`.
+   - `conflict resolve`: `observation` and `resolutions`, an array of
+     `{token, source}` covering every conflicted path.
+   - Unknown, duplicate, mistyped and missing fields are `invalid_input`. No
+     diagnostic contains a body, a source or a token.
+3. **Comments.**
+   - One request writes one comment file and one checkpoint, then publishes
+     the context when a publication remote is configured.
+   - With no publication remote, it succeeds with publication pending,
+     exit 0.
+   - When publication fails after the checkpoint, the result is partial,
+     exit 4. A retry of the same request publishes without a second file or
+     checkpoint.
+   - `created_by` is the input's value when given, validated as
+     `Name <email>`, else the effective Git identity (decision 9). It is
+     written once.
+   - Comments on a lifecycle-closed ticket are refused with `ticket_closed`.
+4. **Synchronization (decision 3).**
+   - `item sync` integrates the item's remote context and then primary, and
+     pushes the context branch. `repo sync` integrates and pushes primary.
+   - Divergent history is merged with ordered parents, never rebased or
+     force-pushed.
+   - A conflict stops the operation with the conflict recorded. The result
+     is `recovery_required`, exit 3, with `integration: pending` and the
+     next step in its data (decision 8).
+   - With no publication remote, both are `publication_remote_required`,
+     exit 3.
+5. **Republish (decision 7).**
+   - Ordinary synchronization never recreates a remotely deleted branch. It
+     answers `remote_branch_deleted`, exit 3.
+   - `item republish` is confirmed. Its preview names the branch, its last
+     published commit and the local commit to publish. Confirming publishes
+     exactly that, and any change in between is `external_change`.
+6. **Conflicts.**
+   - `conflict show` reports the operation, the conflict's state, its
+     observation and each path's token, kind and sides, and the next step.
+   - `conflict resolve` validates every resolution before any write. It
+     writes only owned canonical Markdown, checkpoints the merge, and
+     continues the operation's publication.
+   - A changed observation is `external_change`. A path that cannot be
+     resolved here is reported with outside-repair guidance and is never
+     written.
+   - After an outside repair, `conflict show` reports it and
+     `operation resume` continues.
+7. **Operations.**
+   - `operation resume` never infers permission for another target or
+     action. It continues only the work the operation recorded.
+   - `operation abandon` is confirmed. It closes a pending local operation's
+     journal record without changing files.
+8. **Request identity, consent, prompts, retry and refusals.** As C2's
+   Required Contract items 3, 4, 6, 8 and 10, and C3's. C2's bounded retry
+   applies unchanged, and never follows a cancellation.
+9. **Cancellation and lost output.**
+   - A Ctrl-C during `item sync`, `repo sync`, `item republish`,
+     `comment add`, `conflict resolve` or `operation resume` stops it at the
+     next safe point. It exits 130, and its effects name any completed work.
+   - A second Ctrl-C ends the process at once. That is interruption, not
+     rollback.
+   - A lost stdout exits 1. The work's effects stay, and the request's
+     result can be read and replayed under its request ID.
+10. **Never printed.** No body, source, secret, private key, passphrase,
+    backend or server text, SQL or `Debug` rendering appears in either mode,
+    except a requested comment body or conflict side in `conflict show`'s
+    data.
+
+## Acceptance And Exit Evidence
+
+| Wave exit evidence | Required proof |
+| --- | --- |
+| Comment publish success and failure | Real two-clone SSH: `comment add` on clone A publishes. Clone B's `item sync` then shows it in `comment list`. With the server refusing the push, `comment add` is partial, exit 4, with the checkpoint committed and publication pending. With no publication remote, it succeeds with publication pending, exit 0. |
+| Ordered replies | Two clones each add replies to one root. After both synchronize, `comment list` on each lists the root, then its replies by `created_at` and ID, with parent IDs and depth, the same on both. |
+| One saved comment after retry | After a failed publication, a retry of the same request publishes. The context branch holds exactly one comment file, one comment checkpoint and the original `created_at`, and the retry's input digest matches. |
+| Clean and divergent sync | Two clones: an already-current sync is `already_applied`; a fast-forward publishes; a clean divergence publishes one merge commit with ordered parents; for both `item sync` and `repo sync`. No rebase and no forced push: the remote's history keeps every earlier tip. |
+| Stale resolutions | `conflict resolve` with an observation taken before a change is `external_change`, and nothing is written. An incomplete set and an unknown token are refused before any write. A second, different resolution after a completed one is refused. |
+| Outside repair of a noncanonical conflict | A conflict in a code file is reported with outside-repair guidance, and `conflict resolve` writes nothing. After the user commits a two-parent merge in the worktree, `conflict show` reports the repair and `operation resume` publishes it. Removing markers alone, staging without a commit, or wrong parents is not accepted. |
+| No secret or raw-server output | Every C4 journey's stdout and stderr pass the output scan: no private key, passphrase, sentinel, server text or remote URL credential. Bodies and sources never reach a diagnostic or the request stores. |
+| Ctrl-C | Through the pseudo-terminal: a Ctrl-C while `item sync` is held at a safe point exits 130. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed and its publication resumable. |
+| Lost stdout | With stdout closed, `item sync` and `comment add` exit 1. `request show` returns the stored result, and a replay under the same request ID makes no second push, file or checkpoint. |
+| Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds the C4 ticket's review-ready comment with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI. |
+
+Also required:
+
+- **Republish.** Two-clone SSH: after the remote deletes a published item
+  branch, `item sync` answers `remote_branch_deleted` and does not recreate
+  it. `item republish --prepare` shows the branch and both commits.
+  `--confirm` republishes it once. A prepare whose local branch then moves is
+  refused at confirm with `external_change`.
+- **Resume and abandon.**
+  - `operation resume` publishes a comment whose publication stopped, and a
+    synchronization that a resolution or an outside repair finished.
+  - `operation abandon` closes C3's interrupted save, its known limit, after
+    prepare and confirm, and its file stays.
+  - Abandoning a remote operation is refused.
+- **Identity.** A divergent sync with no usable identity answers
+  `identity_required` with `repo.identity_set`. After `repo identity-set`,
+  the same request completes the merge. This needs a test machine whose
+  system Git configuration sets no identity, as C2's ruling R-17 has it.
+- **Outcome tables.** Every row of the design's required-outcome tables
+  holds:
+  - divergent synchronization;
+  - comment submission;
+  - conflict states;
+  - interrupted resolution;
+  - republish.
+
+  Each table's test is written first. A row that answers otherwise stops for
+  a ruling.
+- **Exit classes.** Exits 0, 2, 3, 4, 5 and 130 are each reached by a C4 verb
+  through the binary. The codes no fixture can reach are listed with their
+  reasons. The rows plus that list equal, by set equality, the code set
+  Task 0's audit refresh records for C4's verbs.
+- **Schemas, goldens and examples.** Every input-taking C4 verb has a closed
+  input schema and an example under `tests/fixtures/cli_input_v1/`. Every C4
+  verb has JSON goldens checked against the published output schemas. Every
+  new output DTO has a closed schema.
+- **Mutating-Cycle evidence (track rule 7).** For each mutating verb:
+  - progress lines in human mode, and empty JSON stderr;
+  - prepare, confirm and interactive cases for the two confirmed verbs;
+  - safe-point cancellation by Ctrl-C and by `request cancel`;
+  - redaction;
+  - stale writes;
+  - replay of a finished request, `request_mismatch`, and completion of a
+    stopped request under its own ID.
+- **Unchanged behavior.**
+  - Help and version start no transport and open no data directory.
+  - C5 verbs still answer `command_unavailable`.
+  - Test children never inherit the developer's terminal, keys, Git
+    configuration or application data.
+  - The CLI starts no thread of its own and leaves no process behind. On
+    Windows the console-control routine runs on a thread the system creates.
+- **Documents.** The RFCs, the Wave, the API audit, AGENTS.md and the skills
+  carry the amendments the design lists.
+
+## Product-Owner Decisions (2026-10-26)
+
+Answered before drafting:
+
+1. **The library part is in C4.** The `comment add`, `conflict show` and
+   `conflict resolve` bindings land in C4's branch, as an approved exception
+   to track rule 5. Decisions 3, 4, 7 and 9 extend it to the
+   synchronization, republish and authorship changes those verbs need.
+2. **The gate lands first.** C4's implementation starts after
+   `01M57SKVF6TQ3QM6AXJ35JGGSY` merges, and Task 0 re-grounds on that main.
+3. **Divergent synchronization merges.** `item sync` and `repo sync` merge
+   as the Git RFC describes. A canonical conflict is resolved with
+   `conflict show` and `conflict resolve`. Any other conflict gets
+   outside-repair guidance and then `operation resume`.
+4. **Republish consent is added in C4,** through prepare and confirm.
+5. **D4 waits for all of C4.** Part A is not merged to main early. The Wave
+   records the cross-track ordering under rule 2.
+6. **Abandoning a pending remote conflict stays on its ticket,**
+   `01M4H33R34Z7C7EEKTY1ZCT950`. C4 records the block as a known limit.
+7. **Republish is its own confirmed verb, `item republish`.** Confirmation
+   is fixed per command (design facts 3 and 12), so `item sync` cannot ask for
+   it only when a branch was deleted.
+8. **The next step is typed data.** A result that stops on a conflict keeps
+   the code `recovery_required` and carries `conflict: {operation_id,
+   next_action}` in its data, as the gate's local-synchronization DTO does.
+   The recovery-action enum is unchanged, so no desktop match changes for it.
+   This replaces the `conflict.show` recovery action of the outline.
+9. **`comment add` takes an optional `created_by`.** It is validated as
+   `Name <email>` and written once. Agents pass their noreply identity;
+   people omit it and get their Git identity. The canonical schema RFC and the
+   F2 author rule are amended.
+10. **One desktop arm for the republish preview.** C4 adds it to
+    `src/desktop/view/confirm.rs`, and whichever of C4 or D3 merges second
+    resolves the merge.
+
+The following were stated to the owner on 2026-10-26 with the outline, and
+the owner approved the outline:
+
+- the conflict-resolution input `{observation, resolutions: [{token,
+  source}]}`, replacing the RFC's per-entry `{path, observation, source}`;
+- `operation resume` taking up a comment's publication, as the CLI RFC's
+  example shows;
+- the gate's local-synchronization verbs staying with C5;
+- the known defects being known limits;
+- Ctrl-C through `libc` and `windows-sys`, with no new crate.
+
+The design proposes engineering rulings R-1 to R-30. These narrow or
+condition the contract or its evidence:
+
+- R-5: the operation ID `conflict show` accepts;
+- R-9: the string token's derivation and lifetime;
+- R-12: `conflict show` taking the repository lease;
+- R-14: the deterministic resolution attempt;
+- R-17: identity during a merge;
+- R-21: the Ctrl-C handler's window;
+- R-26: the dogfooding procedure.
+
+Named edits E-1 to E-11 change pre-existing tests and goldens. All of these
+are submitted for approval with these documents.
+
+## Review Record
+
+| Source | Concern | Classification | Resolution |
+| --- | --- | --- | --- |
+| Planning, source | Three C4 verbs have no mutation binding: comment submission and conflict inspection and resolution exist only as domain functions. | Decision | Decision 1. |
+| Planning, gate | The gate ticket is in flight and edits the mutation files C4 extends. | Decision | Decision 2. |
+| Planning, source | The `item sync` and `repo sync` bindings refuse divergence, so no in-product way exists to merge, and the Wave asks for divergent sync and conflict recovery. | Decision | Decision 3. |
+| Planning, source | Nothing in the library accepts consent to republish a deleted branch, and the Wave asks for it. | Decision | Decisions 4 and 7. |
+| Planning, Wave | D4 needs the same bindings. Track rule 2 forbids a hidden cross-track dependency. | Decision | Decision 5. |
+| Planning, tickets | A pending remote conflict cannot be abandoned (`01M4H33R`). | Decision | Decision 6. |
+| Planning, gate and source | A new recovery-action kind would edit the desktop's exhaustive match while D3 is in flight. | Decision | Decision 8. |
+| Planning, source | `comment add` stamps the repository's Git identity, which is the owner's in every worktree, and `scripts/ticket-loop` tells agents from people by a noreply address. | Decision | Decision 9. |
+| Planning, source | A new preview-details variant meets the desktop's exhaustive match, which D3 edits. | Decision | Decision 10. |
+| Planning, source | The library's conflict tokens cannot leave a process: their fields are private and they have no serialization. | Ruling | String tokens re-derived from the live conflict (design R-9). |
+| Planning, source | An interrupted resolution resumes only from an identical in-memory request. A separate CLI process cannot rebuild it after the index is installed. | Ruling | The interrupted-resolution table, written first, with a stop (design R-14). |
+| Planning, source | A merge without an identity leaves its reservation held, and `repo identity-set` refuses while one is held. | Ruling | The divergent-synchronization table's identity rows, written first, with a stop (design R-17). |
+| Planning, source | `comment add`'s publication takes no observer, so it cannot stop at a safe point. | Ruling | An observed submission inside the library (design R-3). |
+| Planning, source | The CLI never cancels its token and installs no Ctrl-C handler. | Ruling | Design R-21. |
+| Planning, source | The RFC's `comment add` example uses the code `publication_pending`, which does not exist. | Settled | The real codes are used, and the example is amended (design Document Amendments). |
+| Planning, source | The API audit's C4 rows describe a pre-Wave-02 baseline. | Settled | Task 0's refresh. |
+
+Record planning, per-task progress, decisions, baseline and final
+verification, review and review-ready status as ticket comments. Publishing
+beyond the ticket branch, merging, closing and worktree cleanup each need
+their own authorization.
