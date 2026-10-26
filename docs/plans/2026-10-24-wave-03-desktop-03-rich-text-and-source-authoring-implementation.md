@@ -107,8 +107,8 @@ the design's Design Deviations table says otherwise. No task edits
 - Set the cursor, focus the editor and draw a frame before typing.
 - Type with the window-level `simulate_input` / `simulate_keystrokes`,
   never gpui-kit's scoped helpers.
-- Call `zorite_editor::bind_keys` and D3's own editor bindings in the test
-  shell.
+- The test shell (`view/harness.rs`) calls `zorite_editor::bind_keys` and
+  D3's editor bindings from Task 3 on, as startup does.
 - Never send Ctrl-Cmd-Space.
 - A view test that waits on the worker calls
   `cx.executor().allow_parking()`.
@@ -137,7 +137,7 @@ allowance. This is the repository's convention (`services/requests.rs:337`).
 
 **Test-first.** Write each behavior's test before its code.
 
-**Existing tests.** They change only as named edits E-1 to E-27. Any other
+**Existing tests.** They change only as named edits E-1 to E-29. Any other
 change to a pre-existing test, even a new lint, stops for the owner.
 
 **Commits.** Commit per task with a conventional message ending
@@ -149,16 +149,24 @@ change to a pre-existing test, even a new lint, stops for the owner.
   `git merge-tree --write-tree HEAD origin/main`.
 - E-15 to E-17 count "main's at the merge, plus D3's".
 
-**Ticket records.**
+**Ticket records** (`AGENTS.md`, after C3).
 - After each task, add a ticket comment as a canonical file under
   `.manyhands/comments/01M4CC0VN0MFTGKQ4HGTTC5H63/`, until C4's
-  `comment add` exists (`AGENTS.md`). Take the ULID from
-  `manyhands-cli id new` and `created_at` from the UTC clock.
+  `comment add` exists. Take the ULID from
+  `devenv shell -- cargo run --locked --bin manyhands-cli -- id new` and
+  `created_at` from the UTC clock.
 - Each comment records the commit, the tests run with their counts and
   results, and any ruling.
-- Part checkpoints add the review and its fixes.
-- They notify the owner but do not wait, unless the owner asks for a stop.
-  Part 0's review must pass before Task 3.
+- An edit to the ticket's own `ticket.md` is committed on the ticket branch
+  first, then saved with `manyhands-cli ticket save` from an up-to-date main
+  checkout. A new ticket (a `file-ticket` gap, or decision 14's follow-up)
+  is made with `manyhands-cli ticket create`, with the owner's go-ahead.
+- Closure stays a canonical ticket-file edit until C5, after review
+  approval, in the final push before merge.
+- Part checkpoints add the review and its fixes. The owner may split the
+  Cycle at any checkpoint (decision 5): each checkpoint notifies the owner
+  and continues unless the owner has asked to stop there. Part 0's review
+  must pass before Task 3.
 
 **Execution ledger.**
 `docs/plans/2026-10-24-wave-03-desktop-03-rich-text-and-source-authoring-execution.md`
@@ -184,15 +192,15 @@ test files are exempt.
    Task 16.
 3. **Edit on a hand-edited, uncommitted primary file.** Refused with
    `worktree_not_clean`; no branch or worktree is made; the editor never
-   opens. Pinned in Tasks 1 and 14.
-4. **A very large body**, over 128 KiB. It opens in the read view without a
-   long block, Edit opens it, and typing stays responsive (checklist step
-   10). Pinned in Tasks 7 and 14.
+   opens. Pinned in Tasks 1 and 14a.
+4. **A very large body**, 200 KiB. It opens in the read view, Edit opens
+   it, and typing stays responsive. The tests are smoke tests; lag is
+   checklist step 10. Pinned in Tasks 7 and 14a.
 5. **Every way the read view could be edited**: typing, Enter, Backspace,
-   Delete, paste, cut, the formatting keys, undo, a checkbox click, a
-   right-click, an input-method commit and a table drag. The text shown
-   never changes, no draft begins, and no mutation runs. Pinned in Tasks 3
-   and 7.
+   Delete, paste, middle-click paste, cut, the formatting keys, undo, a
+   checkbox click, a right-click, an input-method commit or composition,
+   and a table drag. The text shown never changes, no draft begins, and no
+   mutation runs. Pinned in Tasks 3 and 7.
 
 Crafted link and image paths (`..`, a symbolic link out of the repository,
 `.git`, another item's worktree, SVG named `.png`, `file:` and
@@ -205,19 +213,23 @@ Crafted link and image paths (`..`, a symbolic link out of the repository,
 | `docs/plans/…-execution.md` | 0 | Execution ledger. |
 | `src/repository/mutation/{command,mod,dto}.rs`, `bind/{mod,context}.rs`, `schemas/v1/context_mutation.schema.json`, `tests/mutation_bridges{.rs,/context.rs}`, `tests/fixtures/mutation_v1/context_*.json`, `tests/support/{conformance,mutation_golden,mutation,repair}.rs`, `tests/mutation_contract.rs` | 1 | `context prepare`; E-15 to E-18. |
 | `src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`, `bridges/abandon.rs`, `read/{dto,status,status_tests}.rs`, three operation schemas, `tests/read_contract.rs` | 2 | `context release`; E-20 to E-22. |
-| `Cargo.toml`, `Cargo.lock`, `src/desktop/model/editor_text.rs`, `src/desktop/view/editor.rs`, `view/editor/read_only.rs`, `tests/fixtures/editor/*` | 3 | Dependencies, feasibility, the read-only guard, load normalization. |
-| `src/desktop/assets.rs`, `desktop/mod.rs`, `view/item/tokens.rs`, `view/tabs.rs`, `view/tabs_tests.rs` | 4 | Icons, item colours, the tab strip; E-27. |
-| `view/item.rs`, `view/item/{header,chips,pill,banners,page}.rs`, `view/scroll.rs`, `view/scroll_tests.rs`, `view/workspace/{render,content}.rs`, `model/item.rs`, `model/item_tests.rs`, `view/item_tests.rs` | 5 | The frame and the item scroll region; E-6, E-25. |
+| `Cargo.toml`, `Cargo.lock`, `src/desktop/model/editor_text.rs`, `src/desktop/view/editor.rs`, `view/editor/{read_only,keys}.rs`, `desktop/mod.rs`, `view/harness.rs`, `scripts/check-cli-no-gpui.sh`, `tests/fixtures/editor/*` | 3 | Dependencies, editor bindings, feasibility, the read-only guard, load normalization. |
+| `src/desktop/assets.rs`, `desktop/mod.rs`, `view/item/tokens.rs`, `view/tabs.rs`, `view/tabs_tests.rs`, `view/settings/mod_tests.rs` | 4 | Icons, item colours, the tab strip; E-27, E-28, E-29. |
+| `view/item.rs`, `view/item/page.rs`, `view/scroll.rs`, `view/scroll_tests.rs`, `view/workspace/{render,content}.rs` | 5a | The layout, the item's scroll region and Back to top; E-25. |
+| `view/item/{header,chips,pill,banners}.rs`, `model/item.rs`, `model/item_tests.rs`, `view/item_tests.rs` | 5b | The header, chips, pill and banners; E-6 (labels), E-7 (first half). |
 | `view/item/sheet.rs`, `view/item/sheet/{ticket,document,facts}.rs`, `view/relationships.rs`, `view/workspace/render.rs`, `view/item_tests.rs`, `view/relationships_tests.rs`, `view/keyboard_tests.rs`, `view/keyboard_tests/actions.rs` | 6 | The details sheet while viewing; E-23, E-26. |
 | `view/item/page.rs`, `view/editor/style.rs`, `view/item/source.rs`, `view/item_tests.rs`, `view/tabs_tests.rs` | 7 | The read view; E-1 to E-5. |
-| `view/item/discussion.rs`, `model/discussion.rs`, `view/item_tests.rs` | 8 | The discussion; E-24. |
-| `src/desktop/view/editor/{host,keys}.rs`, `keys.rs`, `mod.rs`, `view/harness.rs` | 9 | The editor host. |
-| `view/editor/toolbar.rs`, `model/markdown_edit.rs` | 10 | The toolbar. |
+| `view/item/discussion.rs`, `model/discussion.rs`, `keys.rs`, `view/item_tests.rs` | 8 | The discussion; E-24. |
+| `src/desktop/view/editor/host.rs`, `keys.rs` | 9 | The editor host. |
+| `model/markdown_edit.rs` | 10a | The toolbar's host edits. |
+| `view/editor/toolbar.rs` | 10b | The toolbar. |
 | `src/desktop/model/links.rs`, `services/links.rs`, `view/item/banners.rs` | 11 | Links. |
 | `src/desktop/model/resources.rs`, `services/images.rs` | 12 | Images. |
 | `src/desktop/services/{requests,mod}.rs`, `requests/build.rs`, `services/requests_tests.rs` | 13 | Eight intents; E-11 to E-14. |
-| `src/desktop/model/edit.rs`, `view/item/edit.rs`, `view/item/pill.rs`, `model/item.rs`, `model/item_tests.rs`, `view/editor/toolbar.rs` | 14 | Edit, provisioning, Done, release on leave, the draft indicator; E-6, first half. |
-| `view/item/edit.rs`, `view/item/banners.rs`, `services/drafts.rs`, `services/drafts/save.rs` | 15 | Save and states. |
+| `src/desktop/model/edit.rs`, `view/item/edit.rs`, `view/item/pill.rs`, `model/item.rs`, `model/item_tests.rs`, `view/editor/toolbar.rs` | 14a | Edit, provisioning and drafts, the draft indicator; E-6, first half. |
+| `model/edit.rs`, `view/item/edit.rs`, `view/item/banners.rs` | 14b | Done and the kept session. |
+| `model/edit.rs`, `view/item/edit.rs`, `services/drafts/stored.rs` call sites | 14c | Release on leave. |
+| `view/item/edit.rs`, `view/item/banners.rs`, `view/editor/host.rs`, `services/drafts.rs`, `services/drafts/save.rs` | 15 | Save, the session after a save, and states. |
 | `view/item/draft.rs`, `view/close_draft.rs`, `view/workspace/content.rs`, `view/item/reads.rs`, `services/drafts/restore.rs`, `view/drafts.rs`, `view/item/draft_tests.rs`, `view/tabs_tests.rs` | 16 | Restored drafts, close-dialog Save, late results, normalized classification; E-8, E-9. |
 | `view/item/review.rs`, `test_support/drafts.rs` | 17 | Stale-edit review; E-19. |
 | `view/item/sheet/fields.rs`, `model/metadata.rs` | 18 | Named controls in the sheet. |
@@ -274,9 +286,10 @@ devenv shell -- cargo run --locked --bin manyhands-cli
   - `MutationDataDto::`, `OperationAction::`, `RepositoryOperation::`,
     `LocalStep::`, `TargetState::`;
   - `listed.len()`, `HOMES`, `DATA_ROOTS`, `CASES`, `LOCAL_ACTIONS`;
-  - `CloseWithDraft::`, `content_scroll`, `ContentScroll`.
+  - `CloseWithDraft::`, `content_scroll`, `ContentScroll`;
+  - `strip(`, `comment_author`, `created_at`, `local_time`.
 
-  Compare each hit with E-1 to E-27. A pre-existing test that will break
+  Compare each hit with E-1 to E-29. A pre-existing test that will break
   and is not listed stops for the owner. Record the sweep in the ledger.
 
 - [ ] **Step 4: Ledger.** Create the ledger with:
@@ -457,7 +470,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 # Part A: The Item Frame
 
-## Task 3: Dependencies, Editor Feasibility, The Read-Only Guard And Load Normalization
+## Task 3: Dependencies, Editor Bindings, Feasibility, The Read-Only Guard And Load Normalization
 
 **Interfaces:**
 
@@ -468,6 +481,10 @@ pub(crate) fn load(body: &str) -> String;                 // N-1, then normalize
 pub(crate) fn normalized(item: &ItemDto) -> ItemDto;      // body through load (R-11)
 // src/desktop/view/editor.rs
 pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState>;
+pub(crate) fn step_over_blocks(editor: &Entity<EditorState>, event: &EditorEvent, cx: &mut App) -> bool; // R-66
+// src/desktop/view/editor/keys.rs (R-8, R-59)
+pub(crate) fn bind(cx: &mut App); // zorite_editor::bind_keys; cmd-u/ctrl-u → NoAction and
+                                  // Unbind("zorite_editor::Dismiss") for escape, in "Editor"
 // src/desktop/view/editor/read_only.rs (R-61)
 pub(crate) struct ReadOnly { /* editor, shown: String, cursor */ }
 impl ReadOnly {
@@ -476,20 +493,22 @@ impl ReadOnly {
     pub(crate) fn reload(&mut self, body: &str, cx: &mut Context<Self>); // R-19
     pub(crate) fn cursor(&self, cx: &App) -> usize;                     // R-65
 }
-impl Render for ReadOnly { /* capture_action, capture_key_down, right-click capture, revert backstop */ }
+impl Render for ReadOnly { /* capture_action, capture_key_down, right and middle press capture, revert backstop */ }
 ```
 
-- [ ] **Step 1: Dependencies.**
+- [ ] **Step 1: Dependencies and bindings.**
   - `desktop = ["dep:gpui-kit", "dep:futures", "dep:zorite-editor", "dep:zorite-markdown", "dep:image"]`.
   - `image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"], optional = true }`.
   - `editor-probe = ["desktop"]`.
   - `zorite-markdown = { version = "=0.9.0", default-features = false, optional = true }`.
-  - If Task 4's icon source needs a `gpui-kit-assets` feature (fact 69),
-    add it here.
   - Run `devenv shell -- cargo check --features desktop` once, without
     `--locked`.
   - Then check `git diff Cargo.lock`: only dependency lists may change. No
     new `[[package]]` and no second `gpui-pre`.
+  - Call `view::editor::keys::bind` after `gpui_kit::init` in
+    `desktop/mod.rs`, and in `view/harness.rs`'s `Shell::start`.
+  - Widen `scripts/check-cli-no-gpui.sh` to also refuse `zorite`, `image`
+    and `markdown` crates in the CLI's dependency tree (fact 80).
 
 ```sh
 devenv shell -- cargo check --locked --features desktop
@@ -499,32 +518,35 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 - [ ] **Step 2: Feasibility test (stop point).**
   `view/editor_tests.rs::a_real_editor_takes_typing_and_undo_in_a_headless_window`:
-  1. open a test window;
-  2. call `zorite_editor::bind_keys`;
-  3. create an `EditorState` with `"abc"`, then `set_cursor(3)`;
-  4. focus it and draw a frame;
-  5. `simulate_input("d")`: `text()` is `"abcd"`, and one `Changed` was
+  1. open a test window through the shell, which binds the keys;
+  2. create an `EditorState` with `"abc"`, then `set_cursor(3)`;
+  3. focus it and draw a frame;
+  4. `simulate_input("d")`: `text()` is `"abcd"`, and one `Changed` was
      seen;
-  6. `simulate_keystrokes("ctrl-z")`: `text()` is `"abc"`.
+  5. `simulate_keystrokes("ctrl-z")`: `text()` is `"abc"`.
 
   If it cannot pass with the window-level helpers, stop and ask the owner
   before Step 3.
 
 - [ ] **Step 3: The read-only guard's tests first (stop point; Review Focus
   5).** In `view/editor/read_only_tests.rs`, over a real, focused, painted
-  editor in a `ReadOnly` holding a body with a paragraph, a checkbox, a link
-  and a table:
+  editor in a `ReadOnly` holding a body with a paragraph, a checkbox, a
+  link, a table and a `$$` block. Each asserts that the text is unchanged
+  and that the `ReadOnly` emitted nothing:
   - `typing_enter_backspace_and_delete_change_nothing`
   - `paste_and_cut_change_nothing_and_copy_still_copies`
   - `the_formatting_keys_and_undo_change_nothing`
-  - `a_checkbox_click_is_reverted_and_reaches_no_draft`
-  - `a_right_click_opens_no_menu`
-  - `an_input_method_commit_is_reverted` (through the window's input
-    handler)
+  - `an_input_method_commit_is_reverted` (`replace_text_in_range` on the
+    entity, fact 76)
+  - `an_input_method_composition_is_reverted_and_leaves_no_marked_text`
+    (`replace_and_mark_text_in_range`)
+  - `a_checkbox_click_is_reverted` (the box found from `bounds_for_offset`
+    and the gutter; fragile, and checklist step 2 also covers it)
+  - `a_right_or_middle_press_is_stopped` (focus did not move)
   - `select_all_copy_and_the_arrows_work`
+  - `the_caret_steps_over_math_and_property_blocks` (R-66)
   - `tab_and_shift_tab_move_focus_out`
   - `a_link_click_still_emits_open_link`
-  - `no_change_event_reaches_a_subscriber`
 
   If any cannot pass with the guard of design R-61, stop and ask the owner.
   The viewer comes back only by the owner's ruling.
@@ -547,12 +569,14 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands editor
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands read_only
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
+devenv shell -- sh scripts/check-cli-no-gpui.sh
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
 ```
 
-- [ ] **Step 7: Commit** `Cargo.toml`, `Cargo.lock`, the fixtures and the
-  code, and write the ticket comment.
+- [ ] **Step 7: Commit** `Cargo.toml`, `Cargo.lock`, the script, the
+  fixtures and the code, and write the ticket comment.
 
 ## Task 4: Icons, Item Colours And The Tab Strip
 
@@ -560,31 +584,31 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 ```rust
 // src/desktop/assets.rs (R-52)
-pub(crate) struct DesktopAssets;           // Kit Assets + the item view's icons
+pub(crate) struct DesktopAssets;           // the item view's icons first, then the Kit's Assets
 // src/desktop/view/item/tokens.rs (R-51)
 pub(crate) struct ItemColors { /* header_block, header_border, header_title, page, page_text, … */ }
 pub(crate) fn item_colors(cx: &App) -> ItemColors;   // by cx.theme().is_dark()
 ```
 
-- [ ] **Step 1: Apply E-27, and write the tests first.**
+- [ ] **Step 1: Apply E-27, E-28 and E-29, and write the tests first.**
   - `view/item/tokens_tests.rs`:
     `header_colours_follow_dark_and_light_and_the_page_stays_white`
-  - `assets_tests.rs`: `every_item_view_icon_loads` (each of the design's
-    34 names).
+  - `assets_tests.rs`: `every_item_view_icon_loads`, calling
+    `DesktopAssets::load` directly for each name in the design's list.
   - `view/tabs_tests.rs`:
     - `each_tab_shows_its_type_short_code_and_title`
     - `a_document_tab_has_no_short_code`
-    - `a_tab_with_a_stored_draft_shows_its_dot_and_says_unsaved`
+    - `a_tab_with_a_stored_draft_shows_its_dot_and_is_named_unsaved`
     - `the_tooltip_names_the_repository_and_the_context_when_there_is_one`
     - `the_strip_does_not_wrap`
-    - `the_shown_tab_is_aria_selected` (E-27)
+    - `only_the_shown_tab_carries_the_active_line` (E-27)
     - `the_focused_strip_marks_the_active_tab`
-- [ ] **Step 2: Implement.** Register `DesktopAssets` in `desktop/mod.rs` and
-  in the test shell.
+- [ ] **Step 2: Implement.** Register `DesktopAssets` in `desktop/mod.rs`.
 - [ ] **Step 3: Verify.**
 
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tabs
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::settings
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands tokens
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands assets
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
@@ -594,13 +618,48 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 4: Commit, and write the ticket comment.**
 
-## Task 5: The Item Frame
+## Task 5a: The Layout And The Item's Scroll Region
+
+**Interfaces:**
+
+```rust
+// view/item/page.rs
+pub(crate) struct Page { /* D1's content for now; the read editor from Task 7 */ }
+// view/scroll.rs: ContentScroll tracks the shown item's region; the region gets the Kit's vertical scrollbar
+```
+
+- [ ] **Step 1: Apply E-25, and write the tests first**
+  (`view/item/frame_tests.rs`).
+  - `the_tab_strip_and_header_stay_in_place_while_the_page_scrolls`
+  - `page_keys_scroll_the_items_region_and_settings_keep_theirs`
+  - `the_page_fills_the_region_and_the_discussion_starts_below_it`
+  - `the_region_shows_a_scrollbar`
+  - `back_to_top_returns_and_focuses_the_page`
+  - `opening_an_item_writes_nothing` stays as it is.
+- [ ] **Step 2: Implement.** The tab strip, a header placeholder holding
+  D1's identity line, then the region with D1's content and the discussion,
+  whose header row gains Back to top now (E-25).
+- [ ] **Step 3: Verify.**
+
+```sh
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::scroll
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tabs
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::settings
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
+devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+- [ ] **Step 4: Commit, and write the ticket comment.**
+
+## Task 5b: The Header, Chips, Pill And Banners
 
 **Interfaces:**
 
 ```rust
 // view/item/pill.rs
-pub(crate) enum PillState { ViewingShared, ViewingPrivate, ViewingDraftKept, Preparing,
+pub(crate) enum PillState { ViewingShared, ViewingPrivate, ViewingDraftKept, Preparing, Saving, Review,
                             EditingUnsaved, EditingSaved { not_shared: bool }, Closed, NeedsAttention }
 pub(crate) fn pill_words(state: PillState) -> &'static str;
 // view/item/banners.rs
@@ -610,10 +669,8 @@ pub(crate) enum ChipField { Type, Status, Project, Team, Parent, WaitingOn, Auth
 pub(crate) struct OpenDetails(pub ChipField);   // emitted; Task 6 opens the sheet
 ```
 
-- [ ] **Step 1: Apply E-6's label change and E-25, and write the tests
-  first** (`view/item_tests.rs`, `view/item/frame_tests.rs`).
-  - `the_header_stays_in_place_while_the_page_scrolls`
-  - `page_keys_scroll_the_items_region_and_settings_keep_theirs`
+- [ ] **Step 1: Apply E-6's label change and E-7's first half, and write
+  the tests first** (`view/item/header_tests.rs`).
   - `the_breadcrumb_names_the_repository_section_and_file`
   - `ticket_chips_show_type_status_project_team_and_parent`
   - `waiting_on_shows_only_when_blocked`
@@ -624,21 +681,16 @@ pub(crate) struct OpenDetails(pub ChipField);   // emitted; Task 6 opens the she
   - `share_and_the_primary_action_are_disabled_with_their_note`
   - `the_status_lines_are_banners_with_their_actions` (Refresh, recovery,
     item not found; D1's IDs are kept)
-  - `the_page_fills_the_region_and_the_discussion_starts_below_it`
+  - `a_nonconforming_item_shows_needs_fixing_with_repair_disabled`
   - `tab_order_runs_strip_header_chips_page`
-  - `opening_an_item_writes_nothing` stays as it is.
-- [ ] **Step 2: Implement.**
-  - Move `ContentScroll` to the item's region while an item tab is shown.
-  - Rehome D1's lines as the design's table says. Details, relationships
-    and source stay in the page until Tasks 6 and 7.
+- [ ] **Step 2: Implement.** Rehome D1's lines as the design's table says.
+  Details, relationships and source stay in the page until Tasks 6 and 7.
+  `OpenDetails` carries the dead-code allowance naming Task 6.
 - [ ] **Step 3: Verify.**
 
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands model::item
-devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::scroll
-devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tabs
-devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::settings
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -658,16 +710,17 @@ pub(crate) fn open_details(pane: &Entity<ItemPane>, field: ChipField, window: &m
 
 - [ ] **Step 1: Apply E-23 and E-26, and write the tests first**
   (`view/item/sheet_tests.rs`).
-  - `each_chip_and_all_details_open_the_sheet_at_its_field`
+  - `each_chip_and_all_details_open_the_sheet_and_focus_its_field`
   - `the_sheet_is_read_only_while_viewing`
   - `ticket_details_show_every_row_of_the_design`
-  - `document_details_show_status_date_and_author_as_written`
-  - `other_fields_are_listed_in_file_order_and_are_not_editable`
+  - `document_details_show_status_date_and_author_as_the_library_gives_them`
+  - `other_fields_are_listed_in_the_librarys_key_order_and_are_not_editable`
   - `the_four_relationship_groups_are_in_the_ticket_sheet` (R-54)
   - `escape_done_and_close_return_focus_to_the_chip`
   - `no_workspace_key_acts_behind_the_sheet` (R-60)
   - `the_inspect_link_opens_the_items_inspect_tab`
-  - `switching_or_closing_the_tab_closes_the_sheet`
+  - `closing_the_tab_by_its_action_closes_the_sheet` (a programmatic
+    close; the backdrop takes clicks)
   - `a_refresh_updates_the_open_sheet_in_place`
   - `the_sheet_writes_nothing`
 - [ ] **Step 2: Implement.** Move D1's details, provenance, metadata,
@@ -678,6 +731,7 @@ pub(crate) fn open_details(pane: &Entity<ItemPane>, field: ChipField, window: &m
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands sheet
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::relationships
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::scroll
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -690,10 +744,11 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 **Interfaces:**
 
 ```rust
-// view/item/page.rs
-pub(crate) struct Page { /* read: Entity<ReadOnly>, … */ }
+// view/item/page.rs: Page holds read: Entity<ReadOnly>
 // view/editor/style.rs
-pub(crate) fn page_style(cx: &App) -> SyntaxStyle;   // page tokens (Part B "Style")
+pub(crate) fn page_style(cx: &App) -> SyntaxStyle;   // all 25 fields from the page tokens
+// view/editor.rs
+pub(crate) fn reveal_caret(editor: &Entity<EditorState>, scroll: &ContentScroll, cx: &mut App); // R-67
 ```
 
 - [ ] **Step 1: Apply E-1 to E-5, and write the tests first**
@@ -701,14 +756,15 @@ pub(crate) fn page_style(cx: &App) -> SyntaxStyle;   // page tokens (Part B "Sty
   - `a_document_body_renders_in_a_read_editor`
   - `a_ticket_body_renders`
   - `select_all_and_copy_put_the_markdown_on_the_clipboard`
-  - `typing_paste_and_a_checkbox_click_in_the_tab_change_nothing_and_begin_no_draft`
+  - `typing_and_paste_in_the_tab_change_nothing_and_begin_no_draft`
   - `tab_moves_focus_out_of_the_read_editor`
   - `a_click_below_the_text_puts_the_caret_at_the_end`
+  - `arrowing_past_the_fold_keeps_the_caret_in_view` (R-67)
+  - `a_click_deep_in_a_long_body_does_not_jump_to_its_top` (R-67)
   - `a_clean_reload_keeps_the_cursor` (R-19)
   - `a_non_utf8_item_says_so`
   - `the_inspect_tab_still_shows_the_exact_file`
-  - `a_large_body_opens_and_the_first_frame_completes` (200 KiB; Review
-    Focus 4)
+  - `a_large_body_opens` (200 KiB; a smoke test, Review Focus 4)
   - `viewing_changes_nothing_in_the_repository` (`RepositorySnapshot`
     before and after)
 - [ ] **Step 2: Implement.** Remove the item tab's source textarea and its
@@ -737,7 +793,7 @@ pub(crate) struct Reply { pub ix: usize, pub replying_to: Option<String> } // se
 pub(crate) fn threads(list: &CommentListDto) -> Vec<Thread>;
 pub(crate) fn display_name(author: Option<&str>) -> String;              // drops "<email>"
 pub(crate) fn avatar_color(name: &str) -> Hsla;                          // stable; white text ≥ 4.5:1
-pub(crate) fn comment_time(at: &str, now: OffsetDateTime) -> String;     // "Oct 22, 10:14" | "Today, 15:36"
+pub(crate) fn comment_time(at: &str, now: OffsetDateTime, offset: UtcOffset) -> String; // "Oct 22, 10:14" | "Today, 15:36"
 ```
 
 - [ ] **Step 1: Apply E-24, and write the tests first.**
@@ -746,13 +802,12 @@ pub(crate) fn comment_time(at: &str, now: OffsetDateTime) -> String;     // "Oct
     - `a_deeper_reply_names_who_it_replies_to`
     - `display_names_drop_the_email`
     - `avatar_colours_are_stable_and_keep_contrast`
-    - `times_read_today_or_the_date_in_local_time`
+    - `times_read_today_or_the_date_at_the_given_offset`
   - `view/item/discussion_tests.rs`:
     - `a_malformed_entry_shows_its_path_and_reason`
     - `comment_bodies_are_read_editors_and_can_be_copied`
     - `the_comments_button_and_its_key_jump_and_focus_the_heading`
     - `the_floating_button_hides_once_the_discussion_shows`
-    - `back_to_top_returns_and_focuses_the_page`
     - `no_comments_says_so_and_hides_the_floating_button`
     - `comment_is_disabled_with_its_note`
 - [ ] **Step 2: Implement.** One `ReadOnly` per comment body, created when
@@ -763,6 +818,7 @@ pub(crate) fn comment_time(at: &str, now: OffsetDateTime) -> String;     // "Oct
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands discussion
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::scroll
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -776,12 +832,13 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   moved.
 - [ ] **Step 2: Run the desktop binary's tests in full.**
   - `--features desktop-test-support --bin manyhands`;
+  - `--test drafts`;
   - the desktop-only check and clippy;
   - the CLI isolation script.
-- [ ] **Step 3: Review.** A fresh reviewer reviews Part A against the item-view
-  handoff, the Design Deviations and Not Built tables, decisions 12, 16 and
-  17, R-47 to R-54, R-56, R-60 to R-65, and contracts 1, 13 and 16. Use
-  the adversarial brief on the read-only guard.
+- [ ] **Step 3: Review.** A fresh reviewer reviews Part A against the
+  item-view handoff, the Design Deviations and Not Built tables, decisions
+  12, 16 and 17, R-47 to R-54, R-56, R-60 to R-67, and contracts 1, 13 and
+  16. Use the adversarial brief on the read-only guard.
 - [ ] **Step 4: Ticket comment.**
 
 ---
@@ -793,37 +850,41 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 **Interfaces:**
 
 ```rust
-pub(crate) struct EditorHost { /* edit editor, baseline: String, rich: bool, dirty: bool */ }
+pub(crate) struct EditorHost { /* edit editor, baseline: String, rich: bool, dirty: bool, pressed: bool */ }
 impl EditorHost {
     pub(crate) fn new(body: &str, cursor: Option<usize>, window: &mut Window, cx: &mut Context<Self>) -> Self; // R-65
     pub(crate) fn text(&self, cx: &App) -> String;
     pub(crate) fn is_dirty(&self) -> bool;
     pub(crate) fn set_rich(&mut self, rich: bool, cx: &mut Context<Self>);
+    pub(crate) fn mark_saved(&mut self, saved: &str, cx: &mut Context<Self>);              // R-69, no set_text
     pub(crate) fn rebase(&mut self, baseline: String, text: &str, cx: &mut Context<Self>); // R-18
     pub(crate) fn reload_clean(&mut self, body: &str, cx: &mut Context<Self>);             // R-19
 }
 pub(crate) enum EditorHostEvent { DirtyChanged(bool), Edited, SelectionChanged }
-// view/editor/keys.rs: bind(cx): zorite_editor::bind_keys, then cmd-u/ctrl-u → NoAction and
-//   Unbind(zorite_editor::Dismiss) for escape, both in "Editor" (R-8, R-59)
-// keys.rs: actions Edit, Save, ToggleRich, FocusHeader, InsertLink, NewItem
+// keys.rs: actions Edit, Save, ToggleRich, EditorEscape, InsertLink, NewItem;
+//   escape and secondary-k bound in "EditHost > Editor" (R-59)
 ```
 
-- [ ] **Step 1: Tests first.**
+- [ ] **Step 1: Tests first.** They build an `EditorHost` directly in the
+  test shell.
   - `a_mode_switch_keeps_the_text_and_the_undo_history`
   - `typing_in_rich_mode_then_switching_round_trips_each_fixture`
   - `undo_back_to_the_baseline_makes_the_editor_clean`
+  - `mark_saved_makes_the_editor_clean_and_keeps_undo` (R-69)
   - `a_normalized_body_is_not_dirty_after_load_and_mode_switches`
   - `bold_italic_code_and_strike_work_from_their_keys`
   - `ctrl_u_does_not_underline`
   - `tab_indents_inside_the_editor_and_f6_leaves_it`
-  - `escape_moves_focus_to_the_headers_first_action` (R-59)
+  - `escape_focuses_the_headers_done` (R-59)
+  - `escape_after_a_right_click_closes_the_menu_first` (R-59)
+  - `the_caret_steps_over_math_and_property_blocks` (R-66)
   - `markdown_mode_uses_the_monospace_font`
   - `plain_text_paste_works_in_both_modes`
   - `enter_backspace_and_arrows_edit_as_expected`
-  - `the_caret_is_kept_visible_in_the_scroll_region`
+  - `the_caret_is_kept_visible_in_the_scroll_region` (R-67)
   - `the_cursor_given_is_where_editing_starts` (R-65)
-- [ ] **Step 2: Implement.** The startup binding goes in `desktop/mod.rs`,
-  after `gpui_kit::init`, and the same binding in `view/harness.rs`.
+- [ ] **Step 2: Implement.** `EditorHost` carries the dead-code allowance
+  naming Task 14a.
 - [ ] **Step 3: Verify.**
 
 ```sh
@@ -837,7 +898,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 4: Commit, and write the ticket comment.**
 
-## Task 10: The Toolbar
+## Task 10a: The Toolbar's Host Edits
 
 **Interfaces:**
 
@@ -854,35 +915,54 @@ pub(crate) fn code_block(text: &str, sel: Selection) -> HostEdit;
 pub(crate) fn insert_table(text: &str, sel: Selection) -> HostEdit;
 pub(crate) fn insert_link(text: &str, sel: Selection, address: &str) -> HostEdit;
 pub(crate) fn block_style_at(text: &str, cursor: usize) -> BlockStyle;
+pub(crate) fn table_at(text: &str, cursor: usize) -> bool;                // a pipe table around the caret
 pub(crate) enum Mark { Bold, Italic, Strike, Code }
 pub(crate) fn active_marks(text: &str, sel: Selection) -> Vec<Mark>;     // the editor's unwrap rule
 ```
 
-- [ ] **Step 1: Tests first.**
-  - `model/markdown_edit_tests.rs`, over Markdown strings and selections:
-    - `headings_are_set_replaced_and_cleared_on_the_caret_line`
-    - `each_prefix_toggles_on_every_selected_line`
-    - `a_numbered_list_counts_from_one`
-    - `a_code_block_wraps_the_selected_lines_or_inserts_an_empty_fence`
-    - `a_table_template_is_inserted_on_its_own_lines`
-    - `a_link_wraps_the_selection_or_uses_the_address_as_its_text`
-    - `utf16_selections_convert_at_non_bmp_and_combining_text`
-    - `the_block_style_follows_the_caret_line`
-    - `active_marks_follow_the_editors_unwrap_rule`
-  - `view/editor/toolbar_tests.rs`, through a real editor:
-    - `every_control_edits_by_pointer_and_by_keyboard_in_both_modes`
-    - `a_host_edit_is_one_undo_step`
-    - `left_right_home_and_end_move_along_the_toolbar`
-    - `the_style_label_and_active_marks_follow_the_caret`
-    - `table_controls_show_only_inside_a_table_and_insert_a_row`
-    - `secondary_k_opens_the_link_popover`
-    - `markdown_mode_dims_the_formatting_controls_and_keeps_them_working`
-- [ ] **Step 2: Implement.** The status item is a placeholder slot until
-  Task 14 wires it.
+- [ ] **Step 1: Tests first** (`model/markdown_edit_tests.rs`), over
+  Markdown strings and selections:
+  - `headings_are_set_replaced_and_cleared_on_the_caret_line`
+  - `each_prefix_toggles_on_every_selected_line`
+  - `a_numbered_list_counts_from_one`
+  - `a_code_block_wraps_the_selected_lines_or_inserts_an_empty_fence`
+  - `a_table_template_is_inserted_on_its_own_lines`
+  - `a_link_wraps_the_selection_or_uses_the_address_as_its_text`
+  - `utf16_selections_convert_at_non_bmp_and_combining_text`
+  - `the_block_style_follows_the_caret_line`
+  - `table_at_finds_the_caret_in_a_pipe_table_and_not_in_a_paragraph`
+  - `active_marks_follow_the_editors_unwrap_rule`
+- [ ] **Step 2: Implement.** The module carries the dead-code allowance
+  naming Task 10b.
 - [ ] **Step 3: Verify.**
 
 ```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands markdown_edit
+devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+- [ ] **Step 4: Commit, and write the ticket comment.**
+
+## Task 10b: The Toolbar
+
+- [ ] **Step 1: Tests first** (`view/editor/toolbar_tests.rs`), through a
+  real `EditorHost` in the test shell. Each inline-mark test selects text
+  first, since those actions do nothing on an empty selection.
+  - `every_control_edits_by_pointer_and_by_keyboard_in_both_modes`
+  - `editor_actions_reach_the_editor_while_a_button_has_focus`
+  - `a_host_edit_is_one_undo_step`
+  - `left_right_home_and_end_move_along_the_toolbar`
+  - `the_style_label_and_active_marks_follow_the_caret`
+  - `table_controls_show_only_inside_a_table_and_insert_a_row`
+  - `secondary_k_opens_the_link_popover_only_in_the_edit_host`
+  - `markdown_mode_dims_the_formatting_controls_and_keeps_them_working`
+- [ ] **Step 2: Implement.** The status item is a placeholder slot until
+  Task 14a wires it. The toolbar carries the dead-code allowance naming
+  Task 14a.
+- [ ] **Step 3: Verify.**
+
+```sh
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands toolbar
 devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
@@ -924,9 +1004,9 @@ pub(crate) fn resolve(target: LinkTarget, from: &ItemDto, …) -> Task<LinkResol
     - `an_unresolved_link_says_not_found_in_a_banner`
     - `a_comments_link_resolves_from_its_items_folder`
   - **Handler tests.** Feed `EditorEvent::OpenLink` and `OpenWikiLink`
-    straight to the read editor, the edit editor and a comment editor. Try
-    unsafe targets first, then safe ones, and check `opened_url()` after
-    each.
+    straight to the read editor, an `EditorHost` built in the test and a
+    comment editor. Try unsafe targets first, then safe ones, and check
+    `opened_url()` after each.
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Verify.**
 
@@ -974,7 +1054,8 @@ pub(crate) struct ImageCache { /* src → Pending | Loaded(Arc<RenderImage>, f32
     - `the_cache_clears_on_reload`
   - View tests:
     - `the_read_editor_shows_the_image_once_loaded`
-    - `the_edit_editor_and_a_comment_share_the_tabs_cache`
+    - `an_edit_host_and_a_comment_share_the_tabs_cache` (an `EditorHost`
+      built in the test, since Edit is wired in Task 14a)
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Verify.**
 
@@ -992,11 +1073,12 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 1: Merge.** Run the merge-tree check, and merge main if it
   moved.
-- [ ] **Step 2: Run the desktop binary's tests in full,** with the
-  desktop-only check and clippy and the CLI isolation script.
+- [ ] **Step 2: Run the desktop binary's tests in full,** with
+  `--test drafts`, the desktop-only check and clippy and the CLI isolation
+  script.
 - [ ] **Step 3: Review.** A fresh reviewer reviews Part B against the N
-  table, decisions 1, 8, 9 and 10, R-8, R-12, R-55, R-59, and contracts 2,
-  3, 5, 12 and 13.
+  table, decisions 1, 8, 9 and 10, R-8, R-12, R-55, R-59, R-66, R-67, R-69,
+  and contracts 2, 3, 5, 12 and 13.
 - [ ] **Step 4: Ticket comment.**
 
 ---
@@ -1039,64 +1121,41 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 4: Commit, and write the ticket comment.**
 
-## Task 14: Edit, Provisioning, Done And Release On Leave
+## Task 14a: Edit, Provisioning And Drafts
 
 **Interfaces:**
 
 ```rust
 pub(crate) enum Phase { Viewing, Preparing(DesktopRequestId), Loading, Editing, Saving, Review }
 pub(crate) fn base_for_edit(item: &ItemDto) -> Option<DraftBase>; // body through editor_text::load (R-11)
-pub(crate) struct EditSession { provisioned: bool, saved: bool, kept: bool, /* host: Entity<EditorHost>, … */ }
+pub(crate) struct EditSession { created_here: bool, saved: bool, kept: bool, /* host: Entity<EditorHost>, … */ }
 pub(crate) enum DraftIndicator { Kept { age_secs: u64 }, NotKept, RecoveryOff }   // from D2's state only
 ```
 
 - [ ] **Step 1: Tests first.**
-  - **Edit:**
-    - `edit_prepares_the_context_with_progress_in_the_pill_before_the_editor_opens`
-    - `e_and_secondary_shift_e_start_edit_only_while_viewing`
-    - `edit_of_a_closed_ticket_is_not_offered`
-    - `edit_is_unavailable_while_a_stored_draft_exists_with_no_session`
-      (R-35)
-    - `edit_of_an_uncommitted_primary_file_is_refused_and_nothing_is_made`
-      (Review Focus 3, with a snapshot)
-    - `a_discovery_pending_context_waits_for_resume`
-    - `closing_the_tab_while_preparing_opens_no_editor`
-    - `edit_carries_the_read_cursor_into_the_editor` (R-65)
-    - `the_toolbar_appears_and_focus_moves_into_the_editor`
-  - **Drafts:**
-    - `the_first_real_edit_begins_a_draft_and_later_edits_update_it`
-    - `an_unavailable_store_is_said_before_editing`
-    - `a_failed_flush_while_editing_stays_visible`: make the drafts folder
-      read-only during editing; the failure shows, and typing continues.
-    - `the_draft_indicator_reads_only_d2s_flush_state`
-  - **Done (decision 15):**
-    - `done_with_unsaved_text_keeps_the_draft_and_returns_to_viewing`
-    - `continue_editing_after_done_restores_text_cursor_and_undo`
-    - `done_waits_for_a_pending_first_write`
-    - `done_asks_when_the_draft_cannot_be_kept`
-  - **Release:**
-    - `done_after_an_unused_edit_releases_the_context`
-    - `discard_after_an_unused_edit_releases_the_context`
-    - `discard_from_the_kept_draft_banner_releases_an_unused_context`
-    - `closing_a_clean_tab_after_an_unused_edit_releases_the_context`
-    - `a_session_that_saved_keeps_its_context`
-    - `done_after_an_edit_on_an_existing_context_releases_nothing`
-    - `a_kept_draft_prevents_release` (R-37)
-    - `an_unavailable_draft_listing_prevents_release`
-    - `discarding_a_restored_edit_draft_releases_its_context` (R-45)
-    - `closing_the_tab_while_preparing_releases_the_context_it_made`
-    - `discard_is_disabled_while_a_save_is_in_flight`
-    - `a_stranded_context_can_be_released_from_the_tab` (R-40)
-  - **Leaving:**
-    - `a_metadata_change_alone_makes_closing_ask`
-    - `closing_a_dirty_tab_with_no_stored_draft_asks_first` (R-41: an
-      unavailable store, and a first write held)
-  - **Other:**
-    - `undo_reaches_the_draft` (R-12)
-    - `a_large_body_opens_in_the_editor` (Review Focus 4)
+  - `edit_prepares_the_context_with_progress_in_the_pill_before_the_editor_opens`
+  - `e_and_secondary_shift_e_start_edit_only_while_viewing`
+  - `edit_of_a_closed_ticket_is_not_offered`
+  - `edit_reads_continue_editing_while_a_draft_is_stored` (R-35)
+  - `edit_of_an_uncommitted_primary_file_is_refused_and_nothing_is_made`
+    (Review Focus 3, with a snapshot)
+  - `a_discovery_pending_context_waits_for_resume`
+  - `closing_the_tab_while_preparing_opens_no_editor`
+  - `edit_carries_the_read_cursor_into_the_editor` (R-65)
+  - `loading_reloads_the_read_editor_when_the_texts_differ` (R-70)
+  - `the_toolbar_appears_and_focus_moves_into_the_editor`
+  - `the_sheet_is_read_only_while_preparing_and_loading` (R-74)
+  - `the_first_real_edit_begins_a_draft_and_later_edits_update_it`
+  - `an_unavailable_store_is_said_before_editing`
+  - `a_failed_flush_while_editing_stays_visible`: make the drafts folder
+    read-only during editing; the failure shows, and typing continues.
+  - `the_draft_indicator_reads_only_d2s_flush_state`
+  - `undo_reaches_the_draft` (R-12)
+  - `a_large_body_opens_in_the_editor` (a smoke test; Review Focus 4)
   - Apply E-6's first half: Edit leaves `LATER`.
 - [ ] **Step 2: Implement.** Remove D2's allowances on `begin` and `edit`,
-  which this task calls first. Wire the toolbar's status item.
+  and Tasks 9 and 10b's allowances, which this task calls first. Wire the
+  toolbar's status item.
 - [ ] **Step 3: Verify.**
 
 ```sh
@@ -1111,7 +1170,69 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 4: Commit, and write the ticket comment.**
 
-## Task 15: Save And States
+## Task 14b: Done And The Kept Session
+
+- [ ] **Step 1: Tests first** (decision 15; R-58, R-71, R-73).
+  - `done_with_unsaved_text_writes_the_draft_and_returns_to_viewing`
+  - `done_writes_a_revision_still_waiting_on_the_timer_first`
+  - `done_waits_for_a_save_in_flight_then_applies_its_rules`
+  - `done_asks_when_the_draft_cannot_be_written`
+  - `done_on_a_never_created_item_asks`
+  - `done_after_typing_and_undoing_discards_the_stored_draft`
+  - `the_kept_session_shows_the_saved_copy_in_page_header_sheet_and_title`
+  - `continue_editing_edit_and_e_restore_text_cursor_and_undo`
+  - `a_refresh_while_kept_shows_the_change_banner_and_opens_nothing` (R-68)
+  - `a_drafts_page_discard_ends_the_kept_session_and_says_so` (R-71)
+  - `a_drafts_page_discard_ends_a_live_session_and_says_so` (R-71)
+  - `closing_a_tab_with_a_kept_session_asks_first`
+  - `a_metadata_change_alone_makes_closing_ask`
+  - `closing_a_dirty_tab_with_no_stored_draft_asks_first` (R-41: an
+    unavailable store, and a first write held)
+- [ ] **Step 2: Implement.**
+- [ ] **Step 3: Verify.**
+
+```sh
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands edit
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::item
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands view::tabs
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts
+devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+- [ ] **Step 4: Commit, and write the ticket comment.**
+
+## Task 14c: Release On Leave
+
+- [ ] **Step 1: Tests first** (R-37, R-40; decision 18).
+  - `done_after_an_unused_edit_releases_the_context`
+  - `discard_after_an_unused_edit_releases_the_context`
+  - `discard_from_the_draft_banner_releases_an_unused_context_this_session_made`
+  - `closing_a_clean_tab_after_an_unused_edit_releases_the_context`
+  - `a_session_that_saved_keeps_its_context`
+  - `done_after_an_edit_on_an_existing_context_releases_nothing`
+  - `a_kept_draft_prevents_release`
+  - `an_unavailable_draft_listing_prevents_release`
+  - `discarding_a_restored_draft_releases_nothing_when_this_session_did_not_make_its_context`
+    (decision 18)
+  - `discarding_a_restored_draft_releases_the_context_continue_editing_made`
+  - `closing_the_tab_while_preparing_releases_the_context_it_made`
+  - `discard_is_disabled_while_a_save_is_in_flight`
+  - `a_stranded_context_can_be_released_from_the_tab` (R-40)
+- [ ] **Step 2: Implement.**
+- [ ] **Step 3: Verify.**
+
+```sh
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands edit
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands drafts
+devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands keyboard_tests
+devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+- [ ] **Step 4: Commit, and write the ticket comment.**
+
+## Task 15: Save, The Session After A Save, And States
 
 ```rust
 pub(crate) enum SaveState { Unsaved, SavedLocally { publication_pending: bool }, DiscoveryPending,
@@ -1123,6 +1244,10 @@ pub(crate) fn save_state(code: ResultCode, effects: &Effects, has_publication_re
   - `save_state_maps_every_row_of_the_design_table_to_its_words`
   - `save_is_offered_only_when_dirty_and_not_while_saving`
   - `a_document_save_commits_once_and_the_pill_reads_saved_on_this_computer`
+  - `edit_save_edit_save_commits_twice_and_keeps_undo` (R-69)
+  - `a_committed_save_reads_the_tab_again_and_reloads_the_read_editor`
+    (R-70)
+  - `a_read_sent_before_a_save_never_lands_after_it` (R-70)
   - `the_saved_file_keeps_every_untouched_body_byte`: a typed edit and a
     toolbar Bold over a real repository; the body is compared byte for
     byte outside the edit and the N set; front matter by value.
@@ -1167,7 +1292,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
     `ReadKind::Item`)
   - `a_late_read_does_not_replace_a_dirty_editor`
   - `a_refresh_with_a_kept_session_reloads_only_the_read_editor`
-  - `a_clean_editor_reloads_and_keeps_its_cursor` (R-19)
+  - `a_clean_editor_reloads_only_on_a_newer_observation_and_keeps_its_cursor`
+    (R-19, R-70)
   - `normalization_alone_reads_current_on_the_drafts_page` (R-11)
 - [ ] **Step 2: Implement.** The new close-dialog tests live in
   `view/tabs_tests.rs`, beside D2's. The implementation includes:
@@ -1198,6 +1324,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `switching_the_body_choice_after_an_edit_asks_first`
   - `an_edited_body_result_is_what_save_writes`
   - `a_stale_save_opens_the_review_and_leaves_the_draft_file_unchanged`
+  - `a_refresh_shows_the_change_banner_and_compare_opens_the_review` (R-68)
   - `one_sided_changes_default_and_both_changed_fields_must_be_chosen`
   - `taking_theirs_for_the_title_and_mine_for_the_body_saves_exactly_that`
   - `a_ticket_change_by_the_second_actor_is_reviewed`
@@ -1207,6 +1334,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `a_body_changed_only_by_them_defaults_to_theirs`
   - `a_body_changed_by_both_must_be_chosen_before_use`
   - `an_unverified_base_opens_the_review_before_any_save` (R-36)
+  - `the_sheet_is_read_only_during_the_review` (R-74)
   - `the_d2_privacy_sweep_still_holds_with_the_review_open` (R-38)
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Verify.**
@@ -1225,8 +1353,9 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 - [ ] **Step 1: Merge, and run the desktop binary's tests in full,** with
   `--test drafts`, the desktop-only check and clippy.
 - [ ] **Step 2: Review.** A fresh reviewer, with the adversarial brief on
-  saves, Done, late results, release on leave and the review. Contracts 4,
-  6, 7 and 8; decision 15; R-15, R-41, R-58.
+  saves, Done and the kept session, late results, release on leave and the
+  review. Contracts 4, 6, 7 and 8; decisions 15 and 18; R-15, R-37, R-41,
+  R-58, R-68 to R-71, R-73.
 - [ ] **Step 3: Ticket comment.**
 
 ---
@@ -1244,6 +1373,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `a_documents_status_date_and_author_are_not_editable` (decision 14)
   - `a_status_of_closed_saves_as_ordinary_text_and_the_ticket_stays_open`
   - `an_emptied_project_is_saved_as_absent` (R-27)
+  - `secondary_s_inside_the_sheet_saves_the_tab` (R-74)
   - `the_sheets_body_is_a_draft_section_while_editing` (R-38)
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Verify.**
@@ -1268,7 +1398,9 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `an_unresolved_dependency_is_shown_and_saves`
   - `an_incomplete_index_adds_its_note`
   - `a_late_check_does_not_replace_a_newer_one`
-  - `deps_are_kept_in_id_order_and_an_unchanged_relationship_is_sent_as_unchanged`
+  - `deps_keep_the_files_order_and_a_new_one_goes_in_sorted_position`
+    (R-72)
+  - `adding_then_removing_a_dependency_returns_the_tab_to_clean_and_sends_unchanged`
   - `a_library_relationship_cycle_answer_is_explained_the_same_way`
   - `dependents_and_children_stay_read_only`
 - [ ] **Step 2: Implement.**
@@ -1310,6 +1442,7 @@ impl DraftRegistry {
     - `a_retitle_between_create_and_read_reviews_with_theirs_as_default`
       (R-20b)
     - `the_new_item_draft_is_stored_before_context_prepare` (R-20)
+    - `a_titled_new_item_with_an_empty_body_can_be_saved` (R-73)
     - `an_occupied_path_for_this_drafts_own_item_becomes_a_review`
     - `a_marked_draft_whose_item_exists_routes_to_edit_and_review` (R-42)
     - `continue_editing_a_not_created_draft_whose_item_appeared_routes_to_review`
@@ -1317,7 +1450,8 @@ impl DraftRegistry {
       (R-46)
     - `a_create_retried_after_a_lost_answer_creates_one_item` (worker
       `retry`)
-    - `discarding_a_new_item_draft_releases_its_context`
+    - `discarding_a_new_item_draft_releases_the_context_this_session_made`
+    - `discarding_a_restored_new_item_draft_keeps_its_context` (decision 18)
     - `a_not_created_draft_restores_into_a_tab_with_no_item_read`
     - `continue_editing_a_not_created_draft_prepares_with_create`
 - [ ] **Step 2: Implement.**
@@ -1366,8 +1500,9 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 1: Merge, and run the desktop binary's tests in full,** with
   `--test drafts` and `--lib drafts::`.
-- [ ] **Step 2: Review.** Contracts 9, 10 and 11 for create; decision 14;
-  R-20, R-20b, R-27, R-38, R-57; release on discard.
+- [ ] **Step 2: Review.** Contracts 9, 10 and 11 for create; decisions 14
+  and 18; R-20, R-20b, R-27, R-38, R-57, R-72, R-73, R-74; release on
+  discard.
 - [ ] **Step 3: Ticket comment.**
 
 ---
@@ -1380,7 +1515,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `move_from_the_sheet_commits_both_paths_and_the_tab_follows`
   - `a_collision_is_refused_and_explained_and_the_dialog_stays`
   - `a_stale_source_is_refused`
-  - `move_is_unavailable_with_an_unsaved_or_kept_draft`
+  - `move_is_offered_only_while_viewing_with_no_draft` (R-23)
   - `a_move_retried_after_a_lost_answer_shows_the_moved_document` (known
     defect `01M4PB80T7`)
   - `new_folder_opens_its_dialog` (E-10)
@@ -1403,9 +1538,10 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 ## Task 23: Repair
 
-- [ ] **Step 1: Apply E-6's second half and E-7, and write the tests
-  first.**
+- [ ] **Step 1: Apply E-6's second half and E-7's second half, and write
+  the tests first.**
   - `the_needs_fixing_banner_offers_repair`
+  - `an_unmanaged_document_offers_adopt`
   - `a_nonconforming_document_is_repaired_after_a_preview_naming_the_new_id`
   - `a_nonconforming_ticket_is_repaired`
   - `a_stale_preview_is_refused_and_prepare_again_is_offered`
@@ -1439,11 +1575,12 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
     - the read view: select, copy, and Tab out.
   - In `view/keyboard_tests/editing.rs`:
     - Edit, mode switch, every toolbar control, Save and Done;
+    - Continue editing after Done;
     - the review, the sheet's controls and both pickers;
     - Create, Move, New folder and Repair.
 
   Escape and focus return are checked wherever a dialog or the sheet
-  closes, and Escape's move to the header while editing.
+  closes, and Escape's move to the header's Done while editing.
 - [ ] **Step 2: Privacy sweep.** In `view/editing_privacy_tests.rs`, a
   sentinel body, link target and image path must appear in no operation
   entry, notification, dialog message, error or `Debug` output. Cover:
@@ -1471,7 +1608,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   `devenv shell -- cargo run --locked --features desktop --bin manyhands`.
   Record the results in the Cycle's table.
 - [ ] **Step 3: Full gate, last.** Run it detached, with a two-hour budget,
-  and record the counts in the ledger.
+  and record the counts in the ledger. If the merge of main brings desktop
+  changes, ask the owner to re-run the checklist steps they touch.
 
 ```sh
 git fetch origin && git merge origin/main
@@ -1492,7 +1630,8 @@ git merge-tree --write-tree HEAD origin/main
   - Write the review-ready ticket comment, and push the ticket branch.
   - A PR, a merge, closing the ticket and native CI each need the owner's
     own go-ahead. The ticket is closed only after review approval, in the
-    final push before merge.
+    final push before merge, as a canonical ticket-file edit until C5
+    (`AGENTS.md`).
 
 ## Plan Self-Review
 
@@ -1501,32 +1640,34 @@ git merge-tree --write-tree HEAD origin/main
 | Context prepare; R-1 to R-5 | 1 |
 | Context release; R-32, R-43 | 2 |
 | E-21, E-22 | 2 |
-| Read-only guard; R-61 | 3, 7 |
+| Read-only guard; R-8, R-59 (bindings), R-61, R-66 | 3, 7 |
 | Load normalization | 3 |
 | Tab strip; R-50, R-51, R-52 | 4 |
-| Item frame; R-47 | 5 |
+| Item frame; R-47 | 5a, 5b |
 | Details sheet; R-48, R-54, R-60, R-64 | 6 |
-| Read view; R-19 (read editor), R-62, R-63 (body), R-64 | 7 |
+| Read view; R-19 (read editor), R-49, R-62, R-63 (body), R-64, R-67 | 7 |
 | Discussion; R-53, R-56, R-63 (comments) | 8 |
-| Round trips; shared undo; not dirty (editor); R-8, R-9, R-12, R-59, R-65 | 9 |
-| Toolbar; R-55 | 10 |
+| Round trips; shared undo; not dirty (editor); R-9, R-12, R-59 (Escape), R-65, R-66, R-67, R-69 (`mark_saved`) | 9 |
+| Toolbar; R-55 | 10a, 10b, 14a |
 | Links | 11 |
 | Images; R-33, R-34, R-39 | 12 |
-| Edit; Done; release on leave; R-12, R-13, R-35, R-37, R-40, R-41, R-45, R-58 | 14 |
-| Save; states; untouched bytes; not dirty (repository); R-11, R-14, R-15 | 15 |
-| Late results; recovery; R-16, R-17, R-19, R-38, R-42 (Continue editing) | 16 |
-| Stale edit; R-18, R-36, R-44 | 17 |
-| Metadata; R-27, R-38 (sheet), R-57; decision 14 | 18 |
-| Relationships; R-26 | 19 |
-| Create (drafts); R-20, R-20b, R-42 (routing), R-46 | 20 |
+| Edit; R-12, R-13, R-35, R-70 (Loading), R-74 (Preparing, Loading) | 14a |
+| Done; R-15, R-41, R-58, R-68 (kept), R-71, R-73 | 14b |
+| Release on leave; R-37, R-40; decision 18 | 14c |
+| Save; states; untouched bytes; not dirty (repository); R-11, R-14, R-69, R-70 | 15 |
+| Late results; recovery; R-16, R-17, R-19, R-38, R-42 (Continue editing), R-70 | 16 |
+| Stale edit; R-18, R-36, R-44, R-68, R-74 (Review) | 17 |
+| Metadata; R-27, R-38 (sheet), R-57, R-74 (Save key); decision 14 | 18 |
+| Relationships; R-26, R-72 | 19 |
+| Create (drafts); R-20, R-20b, R-42 (routing), R-46, R-73 (new item); decision 18 | 20 |
 | Create (dialogs); R-21, R-22 | 21 |
 | Move; folders; R-23, R-24 | 22 |
 | Repair; R-25 | 23 |
 | Keyboard; privacy | 24 |
 | Native checklist; native run; CLI isolation; regression | 25 |
 | E-1 to E-5 | 7 |
-| E-6 | 5 (labels), 14, 23 |
-| E-7 | 23 |
+| E-6 | 5b (labels), 14a, 23 |
+| E-7 | 5b, 23 |
 | E-8, E-9 | 16 |
 | E-10 | 22 |
 | E-11 to E-14 | 13 |
@@ -1535,25 +1676,26 @@ git merge-tree --write-tree HEAD origin/main
 | E-20 | 2 |
 | E-23, E-26 | 6 |
 | E-24 | 8 |
-| E-25 | 5 |
-| E-27 | 4 |
+| E-25 | 5a |
+| E-27, E-28, E-29 | 4 |
 
 **Interfaces** are defined where they are produced:
 
 | Interface | Task |
 | --- | --- |
 | The context DTOs and inputs | 1, 2 |
-| `editor_text`, `open_editor`, `ReadOnly` | 3 |
+| `editor_text`, `open_editor`, `step_over_blocks`, editor `keys::bind`, `ReadOnly` | 3 |
 | `DesktopAssets`, `ItemColors` | 4 |
-| `PillState`, `Banner`, `ChipField`, `OpenDetails` | 5 |
+| `Page` (frame) | 5a |
+| `PillState`, `Banner`, `ChipField`, `OpenDetails` | 5b |
 | `open_details` | 6 |
-| `Page`, `page_style` | 7 |
+| `page_style`, `reveal_caret` | 7 |
 | `Thread`, `Reply` and the discussion helpers | 8 |
 | `EditorHost` | 9 |
-| `markdown_edit` | 10 |
+| `markdown_edit` | 10a |
 | Link and image models | 11, 12 |
 | Intents | 13 |
-| `Phase`, `EditSession`, `DraftIndicator` | 14 |
+| `Phase`, `EditSession`, `DraftIndicator` | 14a |
 | `SaveState` | 15 |
 | `NotCreated`, `begin_new`, `create` | 20 |
 

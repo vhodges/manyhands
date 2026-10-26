@@ -31,7 +31,8 @@ exclusions and the product-owner decisions of 2026-10-24 (1–11) and
 2026-10-26 (12–17), which this document cites by number.
 
 Draft for product-owner review. Nothing in it has been built or run. The
-2026-10-26 revision (decisions 12–17) has had no independent review.
+2026-10-26 revision (decisions 12–17) was reviewed in round 4. The round-4
+edits, decision 18 included, have had no independent review.
 
 ## Baseline Facts At `98f49b7`, Refreshed At `6f1463c`
 
@@ -378,9 +379,10 @@ command was run. Line numbers are at that revision.
 **Refreshed at `6f1463c` (2026-10-26).** The merge of `origin/main` at
 `0464c42` changed no library source file except
 `src/repository/closure/checkpoint_tests.rs`, so facts 1–48 stand. Facts 49
-onward were read at `6f1463c`. Facts 61–76 come from two read-only source
-audits of the pinned crates on 2026-10-26. Parts of facts 61, 70 and 71
-were spot-checked by hand; the review round re-checks the rest. Crate paths are relative to each crate's `src/`.
+onward were read at `6f1463c`. Facts 61–75 come from two read-only source
+audits of the pinned crates on 2026-10-26. Review round 4's source reviewer
+confirmed facts 49–75 as cited, corrected facts 58 and 69, and supplied
+facts 76–80. Crate paths are relative to each crate's `src/`.
 `gpui-kit` re-exports `gpui-component` and `gpui-base` 0.6.6.
 
 **Desktop item view today.**
@@ -426,7 +428,8 @@ were spot-checked by hand; the review round re-checks the rest. Crate paths are 
     - `DocumentDraft { title, body }` and `TicketDraft { title, ticket_type,
       status, project, team, body }` (`repository.rs:579-592`) carry no
       other key.
-    - Nor does D2's `DraftFields` (`drafts/schema.rs:69-87`).
+    - D2's `DraftFields` (`drafts/schema.rs:69-87`) carries those fields,
+      plus a ticket's `deps` and `parent`, and no other key.
 
     So no save writes any other key (decision 14).
 59. `CommentDto` (`read/dto.rs:583-609`) has:
@@ -483,12 +486,16 @@ were spot-checked by hand; the review round re-checks the rest. Crate paths are 
 68. **Animation.** `with_animation` exists, keyed by element ID. Under
     reduced motion it jumps to its end (`gpui-pre`
     `elements/animation.rs:33-414`).
-69. **Icons.** `Assets` embeds 101 Lucide icons.
-    - Of the item view's 34 icons, only circle-check, eye, undo-2, redo-2,
-      calendar, copy, arrow-up and arrow-down are among them
-      (`gpui-kit-assets` `build.rs:19-118`).
+69. **Icons.** `Assets` embeds 101 Lucide icons (`gpui-kit-assets`
+    `build.rs:19-118`).
+    - Of the item view's icons, these are among them: circle-check, eye,
+      undo-2, redo-2, calendar, copy, arrow-up, arrow-down, check,
+      chevron-down, chevron-right, chevrons-up-down, folder and file-text.
+      The Kit's `x` is `close`.
     - `AllAssets` and `icon_assets!` add more (`native_assets.rs:11`,
-      `lib.rs:65`).
+      `lib.rs:65`); `icon_assets!` needs no Cargo feature.
+    - `Assets::load` errors on an unknown path (`native_assets.rs:27-29`),
+      so a combined source asks the added icons first.
 
 **zorite-editor 0.10.0, for viewing and the toolbar.**
 
@@ -525,6 +532,9 @@ were spot-checked by hand; the review round re-checks the rest. Crate paths are 
     - Operations on the caret's table are public (`tables.rs:437-915`).
 74. **Escape.**
     - `Dismiss` only closes the editor's own menus (`lib.rs:3655-3664`).
+      They open from pointer presses: the right-click menu, and clicks on
+      table grips, images, property rows and code-language chips. No public
+      call reports whether one is open.
     - In `gpui-pre`, a `NoAction` binding also mutes a parent's binding of
       equal precedence. `Unbind` removes one binding only (`keymap.rs:40-47`,
       `195-222`).
@@ -544,14 +554,73 @@ were spot-checked by hand; the review round re-checks the rest. Crate paths are 
     monospace, but no line can be tinted. No hook decorates or labels a
     block. HTML lines show literally, in the muted `quote` colour
     (`markdown_syntax.rs:1338-1344`).
-76. **Capture phase.**
+76. **Capture phase and text input** (confirmed in review round 4).
     - A parent's `capture_action` and `capture_key_down` run before the
-      editor's own handlers (`gpui-pre` `elements/div.rs:435`, `512`).
+      editor's own handlers, and must call `stop_propagation`
+      (`gpui-pre` `elements/div.rs:435-449`, `512-523`). A capture listener
+      stops the whole keystroke (`window.rs:6309-6330`).
     - A keystroke's bound action is dispatched first, then key-down
-      listeners (`window.rs:5810-6020`).
-    - Whether a text keystroke stopped in the capture phase also stays out
-      of the platform's text input is proved by Task 3's stop test, not
-      assumed.
+      listeners (`window.rs:5880-5961`, `6042-6070`).
+    - A key-down stopped in the capture phase never reaches text input:
+      Wayland's `handle_input` returns before `replace_text_in_range`
+      (`gpui-pre-linux` `linux/wayland/window.rs:1534-1556`), and so do X11
+      (`x11/window.rs:1192-1211`) and the test platform (`gpui-pre`
+      `window.rs:5383-5393`).
+    - Input methods and dead keys bypass key listeners. They call
+      `replace_text_in_range` or `replace_and_mark_text_in_range` directly
+      (`wayland/window.rs:1433-1457`; `x11/client.rs:1111-1121`,
+      `1493-1507`). zorite emits `Changed` on both paths, with no focus
+      check (`zorite-editor` `lib.rs:4836-4898`).
+    - Emitted events and subscriptions flush before any draw (`gpui-pre`
+      `app.rs:1781-1840`), so a revert made in a subscription is never
+      painted.
+    - The editor's left and right presses are bubble-phase handlers
+      (`zorite-editor` `lib.rs:5002-5007`), so a parent's capture-phase stop
+      reaches them first.
+77. **Math and property blocks.** In rich mode, moving into inline math, a
+    `$$` block or a `key:: value` property block emits `EditMath` or
+    `EditProperties` and returns without moving the caret. A click on
+    inline math, a property row or an inline image emits `EditMath`,
+    `EditProperties` or `PreviewImage` (`zorite-editor` `lib.rs:447-498`,
+    `1928-2086`, `3008-3075`). With no host handler, the caret cannot pass
+    them.
+78. **Other front-matter keys.** `unknown_metadata` holds every key in key
+    order, sorted on purpose, with JSON values (`src/repository/discovery.rs:125-130`,
+    `272-278`).
+79. **D2 ends a session after a save.** When a committed save leaves no
+    newer text, the draft retires and the session ends
+    (`services/drafts/save.rs:8-11`, `retire.rs:160-180`). `edit` and `save`
+    on an ended session do nothing (`services/drafts.rs:329-333`,
+    `save.rs:66-71`), and `discard` ends it too (`save.rs:244-256`).
+    `flush_now` writes a session at once (`services/drafts/flush.rs:34`).
+80. **Smaller API facts** (review round 4).
+    - `bounds_for_item` gives layout bounds before the scroll offset, so add
+      `offset()`. `scroll_to_top_of_item` exists (`gpui-pre`
+      `elements/div.rs:1986-2026`, `4325`).
+    - `open_sheet` focuses a handle Root owns, so the app focuses the
+      chip's field afterwards. `on_close` does not fire on `close_sheet`;
+      focus is restored on every path (`gpui-component` `root.rs:394-423`).
+    - The editor's action handlers are private: the toolbar dispatches
+      through the editor's `FocusHandle::dispatch_action` (`gpui-pre`
+      `window.rs:628`).
+    - `caret_in_table` is `pub(crate)` and `caret_table_align` answers only
+      on a header row (`zorite-editor` `tables.rs:279`, `437-443`), so the
+      host finds tables itself.
+    - `SyntaxStyle` has 25 fields and no `Default`
+      (`markdown_syntax.rs:26-86`).
+    - The test platform lays text out with fixed advances
+      (`NoopTextSystem`, `gpui-pre` `platform/test/platform.rs:128`), and
+      `TestAppContext` fixes the asset source to `()`
+      (`test_context.rs:171`).
+    - `local_offset` in `view/confirm.rs:456` is private, and `local_time`
+      formats `YYYY-MM-DD HH:MM:SS`.
+    - D1's focus-reveal marker scrolls to an element's top when the
+      element is taller than the region (`view/scroll.rs:147-148`).
+    - `scripts/check-cli-no-gpui.sh` matches only crates named `gpui…`.
+    - A plain `overflow_y_scroll` div draws no scrollbar. The Kit's
+      `.vertical_scrollbar(&handle)` adds one, and its thumb can be
+      styled (`gpui-component` `scroll/scrollable.rs:33`; `gpui-base`
+      `scrollbar.rs:738-924`).
 
 ## API Audit Refresh (Entry-Gate Item 3)
 
@@ -819,11 +888,18 @@ Anything not listed there follows the handoff.
 
   Chrome colours (chips, buttons, tab strip) come from the current Kit
   theme. The full custom theme is the workspace handoff's Cycle 1.
-- **Icons.** `src/desktop/assets.rs` combines the Kit's default `Assets`
-  with an `icon_assets!` source of the icons the item view uses (fact 69).
-  `desktop/mod.rs` registers it in place of `Assets`. If that needs a
-  `gpui-kit-assets` feature, the feature is added in Task 3, and no new
-  package is added.
+- **Icons.** `src/desktop/assets.rs` combines an `icon_assets!` source of the
+  item view's icons with the Kit's default `Assets`, asking the added icons
+  first (fact 69). `desktop/mod.rs` registers it in place of `Assets`. The
+  item view uses these Lucide names: `folder-git-2`, `ticket`, `file-text`,
+  `sliders-horizontal`, `circle-check`, `pencil`, `eye`, `save`,
+  `cloud-upload`, `message-square`, `undo-2`, `redo-2`, `pilcrow`, `bold`,
+  `italic`, `strikethrough`, `code`, `link`, `list`, `list-ordered`,
+  `list-todo`, `text-quote`, `square-code`, `table`, `shield-check`,
+  `circle-alert`, `file-code`, `calendar`, `folder-kanban`, `users`,
+  `close`, `copy`, `cloud-off`, `arrow-up`, `arrow-down` and `archive`.
+  A ticket tab uses `ticket` and a document tab `file-text`. Tests call `DesktopAssets::load` directly, since the test
+  context has no asset source (fact 80).
 - **Fonts.** The Kit's default UI font, and its monospace font for codes
   and Markdown mode. IBM Plex is not bundled.
 
@@ -839,13 +915,17 @@ Anything not listed there follows the handoff.
   - an unsaved dot, 7 px amber, with the tooltip "Unsaved changes";
     "unsaved" is also in the tab's accessible name;
   - a close button, 20 × 20.
-- **Active tab.** It takes the page-adjacent background, with a 2 px amber
-  top line while the content region has focus and `faint` otherwise.
+- **Active tab.** It takes the page-adjacent background, with a 2 px top
+  line (`tab-active-line`): amber while the content region has focus,
+  `faint` otherwise. The line is a shape, so the shown tab is never marked
+  by colour alone.
+- **Accessible name.** The title, plus ", unsaved" while the tab has
+  unsaved work or a kept or stored draft (E-29).
 - **Tooltip.** "Title · repository". When the item has a work context, it
   also names the branch and worktree.
-- **Kept from D1:** roles, labels, the tab keys and the focus handles. The
-  "Shown" text marker is dropped; `aria_selected` already carries it
-  (E-27). There is no Split right.
+- **Kept from D1:** roles, the tab keys and the focus handles. The "Shown"
+  text marker is replaced by `tab-active-line` (E-27, E-28). There is no
+  Split right.
 
 ### Layout (R-47)
 
@@ -861,8 +941,12 @@ An item tab is a column:
   region instead of the whole content region.
 - Page Up, Page Down, Home and End act on it, except while an editor has
   focus: there, the editor's own Home and End apply.
-- Focus-reveal markers work as before inside the region. The header's
-  controls sit outside it and are always visible.
+- Focus-reveal markers work as before inside the region, but no editor
+  carries one: a marker would jump a tall editor to its top on every click
+  (fact 80). Read and edit editors use the caret reveal instead (R-67).
+  The header's controls sit outside the region and are always visible.
+- The region shows the Kit's vertical scrollbar on its handle, with its
+  thumb in `page-border-strong` (fact 80).
 - **Other pages.** Settings, Drafts and the empty pane keep D1's single
   scrolling column.
 
@@ -885,14 +969,18 @@ Values are from `item_view/01-item-frame.md`.
 - **Actions.** On the right; they wrap below the title on a narrow pane.
   - **The state pill** (below).
   - **Comments {n}** jumps to the discussion.
-  - **Viewing:** Edit.
-  - **Editing:** Save and Done.
+  - **Viewing:** Edit. With a kept or stored draft it reads Continue
+    editing (R-35).
+  - **Editing:** Save (tooltip "Save a checkpoint on this computer
+    (Ctrl S)") and Done.
   - **Share**, disabled (decision 16).
   - **Primary:** Close ticket… or Approve and merge…, disabled
     (decision 16).
 
   A disabled action's tooltip says "Available in a later release". Until
-  Task 14 enables Edit, Edit is one of them.
+  Task 14a enables Edit, Edit is one of them.
+- **What the header shows while a draft is kept or stored:** the saved
+  copy's title and chips, and the tab's title, with the unsaved mark.
 - **Banner slot.** Below the actions, as many banners as apply, most
   severe first (see Banners).
 
@@ -905,9 +993,11 @@ always go together, never colour alone.
 | --- | --- | --- |
 | Viewing the primary copy | `circle-check`, green | Viewing the shared copy |
 | Viewing an item's own context copy | `circle-check`, green | Viewing your private copy |
-| Viewing, with a kept draft (decision 15) | `pencil`, amber | Viewing · unsaved changes kept |
-| Preparing | spinner, teal | Getting a private copy ready… |
+| Viewing, with a kept or stored draft (decision 15) | `pencil`, amber | Viewing · unsaved changes kept |
+| Preparing or Loading | spinner, teal | Getting a private copy ready… |
 | Editing, dirty | `pencil`, amber | Editing · unsaved changes |
+| Saving | spinner, teal | Saving… |
+| Review | `pencil`, amber | Reviewing changes |
 | Editing, saved and clean | `pencil`, amber | Editing · saved on this computer |
 | The same, with a selected publication remote | `pencil`, amber | Editing · saved on this computer · not shared yet |
 | A closed ticket | `archive`, secondary | Closed |
@@ -916,24 +1006,27 @@ always go together, never colour alone.
 ### Banners
 
 A banner has padding 10 12, radius 6, a tinted fill and border, a 15 px
-icon, text at 12.5 px and one action. Each one names the step and says the
-work is safe, as `06-language-and-states.md` asks. D3's exact strings are
-fixed by Task 5's and Task 15's tests.
+icon, text at 12.5 px and one action; the draft banners have two (a design
+deviation). Each one names the step and says the work is safe, as
+`06-language-and-states.md` asks. Where the handoff gives a banner's words,
+D3 uses them. D3's other strings are fixed by Task 5b's and Task 15's
+tests.
 
-| Condition | Tone | Action | Was |
-| --- | --- | --- | --- |
-| Loading, refreshing, or not refreshed | info or amber | Refresh | D1's status lines |
-| Context recovery, item not found | red | D1's recovery | D1's status lines |
-| A stored draft for this item | amber | Continue editing (Part C) | D2's draft banner |
-| Unsaved changes kept after Done | amber | Continue editing; Discard… | new (decision 15) |
-| Crash recovery off | amber | — | D3 |
-| Checkpoint failed | red | Retry | D3 save states |
-| Discovery refresh pending | amber | Resume | D3 save states |
-| The item changed | amber | Review changes… | D3 save states |
-| Review before saving | amber | Review… | D3 save states |
-| Another refusal | red | the library's recovery | D3 save states |
-| Nonconforming ("Needs fixing") or unmanaged document | amber | Repair… (Part E) | D1's problem and repair line |
-| Link not found, or opened as the nearest match | info | — | D3's link messages |
+| Condition | Tone | Words (from the handoff where it has them) | Action | Was |
+| --- | --- | --- | --- | --- |
+| Loading, refreshing, or not refreshed | info or amber | D1's | Refresh | D1's status lines |
+| Context recovery, item not found | red | D1's | D1's recovery | D1's status lines |
+| A stored draft for this item, or changes kept after Done | amber | "Your unsaved changes are kept as a draft on this computer." | Continue editing; Discard… | D2's draft banner; decision 15 |
+| A draft discarded elsewhere ended this tab's session | info | "The draft was discarded." | — | new (R-71) |
+| Crash recovery off | amber | D3's | — | D3 |
+| Checkpoint failed | red | D3's | Retry | D3 save states |
+| Discovery refresh pending | amber | D3's | Resume | D3 save states |
+| The item changed under a dirty or kept draft | amber | "Someone changed this file outside Manyhands. Your edits are kept." | Compare… (opens the review) | D3 save states (R-68) |
+| Review before saving | amber | D3's | Review… | D3 save states |
+| Another refusal | red | the library's message | its recovery | D3 save states |
+| A ticket with no type, or another nonconforming file | amber | "This ticket has no type, so Manyhands can't save it yet.", or D1's reason | Repair… (Part E) | D1's problem and repair line |
+| Unmanaged document | amber | the handoff's | Adopt… (repair with adoption, Part E) | D1 |
+| Link not found, or opened as the nearest match | info | D3's | — | D3's link messages |
 
 A link banner clears at the next navigation.
 
@@ -961,18 +1054,24 @@ editable, styled as rich text.
   normalization for display, and nothing is written.
 - **The guard** (`view/editor/read_only.rs`, R-61). It wraps every read
   editor.
-  - **Actions.** `capture_action` stops each editing action of fact 72,
-    and the table operations' entry points. Indent and Outdent become
-    focus-next and focus-previous, so Tab moves focus on.
+  - **Actions.** `capture_action` stops each editing action of fact 72.
+    Indent and Outdent become focus-next and focus-previous, so Tab moves
+    focus on.
   - **Keystrokes.** `capture_key_down` stops any keystroke that would
     insert text: one with a key character and no Control, Command or
-    Function modifier.
-  - **Right-click.** A capture-phase right mouse down is stopped, so the
-    editor's menus never open.
-  - **Backstop.** Any text change that still lands (a checkbox click, an
-    input-method commit, a table drag or an image resize) is reverted in
-    the same update with `set_text` and the previous cursor. Nothing is
-    fed to a draft.
+    Function modifier. That keeps typed text out (fact 76).
+  - **Mouse.** Capture-phase right and middle presses are stopped, so the
+    editor's menus never open and a middle-click paste never lands.
+  - **Backstop.** Any text change that still lands is reverted in the same
+    update with `set_text` and the previous cursor: a checkbox click, an
+    input-method commit or composition (fact 76), a table drag or an image
+    resize. The revert is never painted (fact 76). Nothing is fed to a
+    draft, and the `ReadOnly` wrapper emits nothing; the inner editor's own
+    `Changed` is not used by anything that writes.
+  - **Math and properties** (R-66). `EditMath` and `EditProperties` move the
+    caret across their range, after it when moving forward or clicking and
+    before it when moving back. `PreviewImage` does nothing.
+  - **Caret reveal** (R-67), as for the edit editor (Part B).
   - **Allowed:** moving, selecting, Select All, Copy, link clicks and
     images.
 - **What the reader sees** (fact 71):
@@ -1005,8 +1104,9 @@ Values are from `item_view/04-comments.md`.
     author's name. White text keeps 4.5:1 contrast (R-56).
   - **Name:** the `created_by` value without an `<email>` part, or D1's
     "unknown author".
-  - **Time:** in local time, "Oct 22, 10:14" or "Today, 15:36", by
-    `local_time`'s conversion (fact 55).
+  - **Time:** in local time, "Oct 22, 10:14" or "Today, 15:36". The local
+    offset is found the way `confirm.rs` finds it, and passed into the
+    formatter, so its tests do not depend on the machine's zone (fact 80).
   - **Body:** a read editor at 14 px (R-63).
 - **Malformed entries** stay visible, with their path and reason.
 - **Empty.** With no comments, it reads "No comments yet".
@@ -1015,13 +1115,13 @@ Values are from `item_view/04-comments.md`.
   later release".
 
 **Navigation.**
-- **Comments {n} and `secondary-shift-c`** set the region's offset so the
-  discussion's header sits at the top (fact 62), and focus the
+- **Comments {n} and `secondary-shift-c`** scroll the discussion to the
+  region's top with `scroll_to_top_of_item` (fact 80), and focus the
   "Discussion" heading.
 - **The floating button** "{n} comments ↓" sits at the bottom right, 16 px
-  in. It is hidden when there are no comments, and once the discussion's
-  header is inside the region's bounds. That position is read from
-  `bounds_for_item` each frame.
+  in, and occludes clicks. It is hidden when there are no comments, and once
+  the discussion's header is inside the region's bounds. That position is
+  `bounds_for_item` plus the region's `offset()`, each frame (fact 80).
 - **Back to top** sets offset 0 and focuses the page.
 - **Not built here.** There is no scroll-to-comment highlight, because no
   comment notification exists yet (D4).
@@ -1030,19 +1130,24 @@ Values are from `item_view/04-comments.md`.
 
 `view/item/sheet.rs` opens a Kit `Sheet` on the right, 440 px wide
 (fact 61, R-48).
-- **Opening.** From any chip or All details. It opens focused on that
-  chip's field.
+- **Opening.** From any chip or All details. Right after `open_sheet`, the
+  app focuses that chip's field (fact 80).
 - **Title.** "Ticket details" or "Document details".
 - **Description.** It has no slot, so it is the body's first line: "Viewing
   the shared copy. Choose Edit to change these." While editing it reads
   "Changes here become part of your draft and are saved with the ticket"
   (or "document").
 - **Footer.** "Read only while viewing" or "Saved with the ticket
-  (Ctrl S)", and Done.
+  (Ctrl S)", and Done. While editing, the sheet handles `secondary-s` in its
+  own context and forwards Save to its tab, because the sheet renders in
+  Root's layer, outside the tab (R-74).
 - **Closing.** Escape, Done and the close button all close it, and Root
-  returns focus to the opener. Switching or closing the tab closes it too.
+  returns focus to the opener. The backdrop takes every click outside it,
+  so the tab cannot change under it; when the tab closes or goes away by
+  any other path, the app calls `close_sheet` (fact 80).
 - **The frame.** Labels are 12 px, and required fields have a red `*`.
-  While viewing, inputs are disabled at 75% opacity.
+  While viewing, and while the tab is Preparing, Loading or in Review,
+  inputs are disabled at 75% opacity (R-74).
 - **Workspace keys.** No workspace key acts behind the sheet (R-60).
 
 **Ticket.**
@@ -1055,10 +1160,10 @@ Values are from `item_view/04-comments.md`.
 | Waiting on | A chip per dependency, with lifecycle and short code; the readiness note from `readiness`, for example "MH-VH-4KD is closed, so this ticket is ready to work on." |
 | Dependents, Children | D1's rows, read-only, each opening its ticket (R-54). |
 | Relationship problems | D1's list. |
-| Other fields | Each other key with its value, mono key, in file order, "Kept exactly as written". Never editable (decision 14). |
+| Other fields | Each other key with its value, mono key, in the library's key order and as the library's JSON (fact 78), headed "Kept exactly as written". Never editable (decision 14). |
 | Facts | Short code with Copy; ID with Copy; the context kind, branch and worktree (D1's provenance); closure: "Not closed. Use Close ticket… to close it.", or "Closed by … on …". |
 | Problems | D1's item problems. |
-| Link | "Inspect the raw file…" opens the item's Inspect tab (R-64). |
+| Link | "Inspect the raw front matter (YAML)…" opens the item's Inspect tab, which shows the whole file (R-64). |
 
 **Document.**
 
@@ -1066,7 +1171,7 @@ Values are from `item_view/04-comments.md`.
 | --- | --- |
 | Title * | Its value. |
 | Status, Date, Author | From the other keys, as written; never editable (decision 14). |
-| Folder | The folder path, with Move… (Part E). |
+| Folder | The folder path, with Move… while viewing (Part E). |
 | Other fields | The remaining keys, or "None". |
 | Facts | ID with Copy; file name; the context kind, branch and worktree. |
 | Problems, link | As for a ticket. |
@@ -1100,7 +1205,12 @@ reports it.
 | A date picker for a document's Date | The date as written, read-only. | It is not a named key (fact 58; decision 14). |
 | Editable Status, Date and Author; Other fields with "+ Add field" | Shown read-only. | Decision 14. |
 | A labeled source block with Edit source | Shown literally, muted, unlabeled. | Decision 8; no block hook (fact 75). |
-| Line height 1.65, H2 19 px, mono inline code with padding, a code-block border, a 3 px quote bar, table cells 7/12, `#fbefd6` selection, a 2 px caret, teal headings in Markdown mode, a lead paragraph | The editor's own geometry. D3 matches the colours, sizes, column and padding. | Fixed in the pinned editor (fact 75); R-49. |
+| Line height 1.65, 14 px between blocks, H2 19 px, mono inline code with padding, a code-block border and horizontal scroll, a 3 px quote bar, the checklist box, table borders, radius, header fill and cells 7/12, a link hover colour, `#fbefd6` selection, a 2 px caret, Markdown mode in `#2b3038` at 1.75 with teal headings, a lead paragraph | The editor's own geometry and drawing. D3 matches the colours it can set, the sizes, the column and the padding. The scroll region's thumb does take `page-border-strong`. | Fixed in the pinned editor (fact 75); R-49. |
+| Other fields in file order, as written | In the library's key order, as its JSON. | Fact 78. |
+| A ticket with no type fixed in the sheet, with "Choose type" | "Repair…", opening the repair editor. | It does not parse as a ticket. |
+| Share's tooltip "Bring in others' changes…" | "Available in a later release". | Decision 16. |
+| One action per banner | The draft banners have Continue editing and Discard…. | Decision 15. |
+| Rich-text editing of math and property blocks | The caret steps over them; they are edited in Markdown mode. | Fact 77; R-66. |
 | Ticket details with Parent and Waiting on only | Also Dependents and Children. | The RFC (fact 54); R-54. |
 | One level of replies | Deeper replies at the reply indent, with "Reply to {name}". | Fact 59; R-53. |
 | Avatar colours per person | A colour derived from the name. | Fact 66; R-56. |
@@ -1153,29 +1263,44 @@ reports it.
 
   Undo and Redo therefore reach the draft too. In the Review phase the feed
   is suspended, and the review's own model holds the text (R-44).
+- **After a save** (R-69). `EditorHost::mark_saved(text)` moves the
+  baseline to the saved text without `set_text`, so undo is kept. When D2
+  ends the session because the save retired the draft (fact 79), the next
+  difference calls `begin` anew, on the base from the post-save read.
+- **Math and properties** (R-66). As in the read editor, `EditMath` and
+  `EditProperties` move the caret across their range; they are edited in
+  Markdown mode. `PreviewImage` does nothing.
 - **Style.** `view/editor/style.rs` builds one `SyntaxStyle` from the page
-  tokens, for read and edit editors alike:
+  tokens, for read and edit editors alike. It sets all 25 fields
+  (fact 80), among them:
   - `link`: `page-teal`;
   - `code` / `code_bg`: `page-text` and `code-inline`;
   - `quote`: `page-text-secondary`;
   - `marker` and `rule`: `page-border`;
   - `mono`: the monospace font;
-  - popovers: the chrome surface.
+  - `mark_bg`: `selection`;
+  - popovers: the chrome surface;
+  - tags, alerts, block labels and the property icon: the nearest page
+    tokens.
 
   The page wrapper sets the font size (15 px) and `page-text`.
-- **Keys** (R-8, R-59):
+- **Keys** (R-8, R-59). Bound at startup and in the test shell from Task 3
+  on, because read editors need them too:
   - `zorite_editor::bind_keys(cx)` after `gpui_kit::init`, then:
     - `cmd-u` and `ctrl-u` bound to `NoAction` in `"Editor"`;
-    - `Unbind` of `zorite_editor::Dismiss` for `escape` in `"Editor"`.
+    - `Unbind("zorite_editor::Dismiss")` for `escape` in `"Editor"`.
   - While editing:
     - Tab and Shift-Tab stay in the editor (indent and outdent);
-    - Escape moves focus to the header's first action;
+    - Escape closes an editor menu the user just opened, or else moves
+      focus to the header's Done (R-59);
     - F6, Shift-F6 and Ctrl-1 to Ctrl-4 (Cmd on macOS) leave it;
     - a hint under the toolbar says so.
   - The editor's menus still close on a click outside.
-- **Caret visibility.** The editor never scrolls. After each change of
-  cursor or text, the host compares `caret_screen_bounds()` with the scroll
-  region and moves the region the least that shows the caret (fact 70).
+- **Caret visibility** (R-67). The editor never scrolls. After each change
+  of cursor or text, the host compares `caret_screen_bounds()` with the
+  scroll region and moves the region the least that shows the caret
+  (fact 70). Read editors do the same, so reading with the arrow keys keeps
+  the caret in view.
 - **Paste** uses the editor's own Ctrl/Cmd-V. Plain text is always
   accepted.
 - **No parse step.** A source-first editor has no parse step that can fail
@@ -1199,9 +1324,13 @@ icons at 15 px and separators between groups.
 | Lists | Bulleted, Numbered, Checklist, Quote | Host edit: toggle the prefix on each selected line (`- `, `1. `, `- [ ] `, `> `) |
 | Blocks | Code block | Host edit: wrap the selected lines in a backtick fence, or insert an empty one |
 | Blocks | Table | Host edit: insert a 2 × 2 table template |
-| Table | Insert row below, Insert column right, Delete row, Delete column, Align left, centre, right | Editor table methods; shown only when the caret is in a table |
+| Table | Insert row below, Insert column right, Delete row, Delete column, Align left, centre, right | Editor table methods; shown only when `markdown_edit::table_at` finds the caret in a pipe table, since the editor's own check is not public (fact 80) |
 | Status | "Draft kept · {n}s ago", or "Draft not kept. Save to protect your changes", or "Crash recovery is off" | D2's flush state and `flushed_at` |
 
+- **Editor actions** are dispatched through the editor's
+  `FocusHandle::dispatch_action`, because focus is on the button and the
+  handlers are private (fact 80). Bold, Italic, Strikethrough and Inline
+  code do nothing on an empty selection, as their keys do.
 - **Host edits** (`model/markdown_edit.rs`, R-55) are pure functions from
   `(text, selection)` to `(range, replacement, new cursor)`, applied with
   `replace_range`. They are undoable as one step and feed the draft like
@@ -1232,8 +1361,8 @@ icons at 15 px and separators between groups.
 | `secondary-s` | Save | item tab, while editing |
 | `secondary-shift-m` | Switch Rich text / Markdown | item tab, while editing |
 | `secondary-shift-c` | Jump to the discussion | item tab |
-| `secondary-k` | Link | `"Editor"`, while editing |
-| `escape` | Focus the header's first action | item tab, while editing (R-59) |
+| `secondary-k` | Link | `"EditHost > Editor"`, so read and comment editors never see it |
+| `escape` | Close an editor menu just opened, or else focus the header's Done | `"EditHost > Editor"` (R-59) |
 | `secondary-n` | New document or New ticket (the shown list's) | navigation |
 
 `secondary-e` is the editor's own Code. `e` reaches the item context only
@@ -1351,33 +1480,34 @@ The read is `take(20 MiB + 1)`; more than 20 MiB is refused.
 
 `model/edit.rs`:
 `Phase { Viewing, Preparing(DesktopRequestId), Loading, Editing, Saving, Review }`.
-An `EditSession` records `provisioned` (the `created` answer), `saved` and
-`dirty`. A session can outlive Editing: Done keeps it while its draft is
-kept (decision 15, R-58).
+An `EditSession` records `created_here` (a `created: true` answer to a
+`context prepare` this desktop process sent), `saved`, `dirty` and `kept`.
+A session can outlive Editing: Done keeps it while its draft is kept
+(decision 15, R-58). A new item is dirty until its create succeeds (R-73).
 
 1. **Viewing.** The read editor shows the item. Edit is offered unless:
    - the ticket is closed;
    - the item is nonconforming;
-   - a stored draft exists for it with no live session in this tab. Then
-     the banner offers Continue editing, which takes the restored-draft
-     route below, and Edit says "A draft is kept for this item: continue it
-     or discard it first" (R-35).
+   - a draft of it is kept in this tab or stored. Then Edit reads Continue
+     editing (R-35). For a kept session it shows the kept editor; for a
+     stored draft it takes the restored-draft route below.
 
    If a previous Edit was refused with `recovery_required` while the read
    shows no context, the tab also offers "Release stranded work context"
    (R-40).
 2. **Preparing.** Edit submits `Intent::ContextPrepare { intent: Edit }`.
    The state pill reads "Getting a private copy ready…", Edit is disabled,
-   and the page stays readable.
+   the sheet is read-only, and the page stays readable.
    - If the tab closes meanwhile, an answer with `created: true` is
      released at once (R-37). Nothing opens.
 3. **Loading.** On `ok`:
-   1. Re-read the item.
+   1. Re-read the item, under a new stamp (R-70).
    2. Build the base: `DraftBase::of(item)` with
       `editor_text::load(body)` as its body (R-11).
    3. Create the edit editor with that body. When it equals the read
       editor's text, the read editor's cursor carries across, clamped
-      (R-65). The toolbar appears, and focus moves into the editor.
+      (R-65). Otherwise the read editor reloads from this read. The toolbar
+      appears, and focus moves into the editor.
 
    On `discovery_pending`, editing waits for Resume (R-13). Any refusal is
    shown in a banner with its recovery, and the tab stays in Viewing.
@@ -1385,6 +1515,9 @@ kept (decision 15, R-58).
    - The first difference calls `DraftRegistry::begin`; edits made before
      the session lands are kept and written with it. Every later
      difference calls `edit`.
+   - When D2 has ended the session because a save retired its draft
+     (fact 79), the next difference calls `begin` anew, on the post-save
+     base (R-69).
    - An unavailable store is announced first, and the user chooses
      whether to continue.
    - A failed flush stays visible in the toolbar's status item.
@@ -1392,37 +1525,61 @@ kept (decision 15, R-58).
    one save in flight. It is enabled only while dirty and not saving.
    - With an unverified base, Save reads "Review before saving" and opens
      the review instead (R-36).
-   - A committed save sets `saved`.
+   - A committed save sets `saved`, calls `EditorHost::mark_saved` with
+     the saved text, and issues a fresh tab read under a new stamp. The
+     read editor reloads from it (R-69, R-70).
    - `secondary-s` on a clean editor saves nothing and says "No changes to
      save" in the toolbar's status item.
 6. **Review.** See below.
 
-### Done and leaving (decision 15; R-15, R-37, R-41, R-58)
+### Done and leaving (decision 15; R-15, R-37, R-41, R-58, R-73)
 
-Dirty means the text or any metadata field differs from the baseline.
+Dirty means the text or any metadata field differs from the baseline, or
+the item is not yet created.
 
-**Done.**
-- **Not dirty, and no stored draft.** The session ends and the tab returns
-  to Viewing. Release on leave applies.
-- **Dirty, with the draft kept.** The session has been written, its last
-  flush succeeded, and no write is pending. If a write is pending, Done
-  waits for it.
-  - The tab returns to Viewing at once, without asking.
-  - The session, the edit editor and its undo history are kept (R-58).
-  - The page shows the saved copy in the read editor.
-  - The pill reads "Viewing · unsaved changes kept", and the tab keeps its
-    unsaved dot.
-  - A banner says the changes are kept as a draft on this computer, with
-    Continue editing and Discard….
-  - **Continue editing** shows the kept edit editor again, with its text,
-    cursor and undo. Nothing is prepared again.
-  - Nothing is released.
-- **Dirty, with the draft not kept.** The store is unavailable, or the last
-  flush failed. Done asks Save, Discard or Cancel; Keep draft is not
-  offered.
+**Done**, in this order:
+1. **A save in flight.** Done waits for its answer, then goes on.
+2. **A never-created item.** Done asks Save, Keep draft, Discard or Cancel.
+   Keep draft closes the tab and leaves the draft for the Drafts page; there
+   is no saved copy to view.
+3. **Write now.** Done calls `flush_now` when the session holds text not yet
+   written, a revision waiting on the one-second timer included (RFC lines
+   162–163). A write still in flight is waited for.
+4. **Then:**
+   - **Not dirty, and nothing stored.** The session ends and the tab
+     returns to Viewing. Release on leave applies.
+   - **Not dirty, with a stored draft** (typed, written, then undone). The
+     draft is discarded, the session ends, and the tab returns to Viewing.
+     Release on leave applies.
+   - **Dirty, and the draft is written.** The tab returns to Viewing at
+     once, without asking.
+     - The session, the edit editor and its undo history are kept (R-58).
+     - The page shows the saved copy in the read editor. The header,
+       chips, sheet and tab title show the saved copy too.
+     - The pill reads "Viewing · unsaved changes kept", and the tab keeps
+       its unsaved mark.
+     - The draft banner offers Continue editing and Discard….
+     - Nothing is released.
+   - **Dirty, and the draft is not written** (the store is unavailable, or
+     the write failed). Done asks Save, Discard or Cancel; Keep draft is not
+     offered.
 
-**Closing the tab.** Dirty, a stored draft, or a session still being stored
-asks first:
+**A kept session.**
+- **Continue editing**, Edit and `e` show the kept edit editor again, with
+  its text, cursor and undo. Nothing is prepared again.
+- **A refresh** that classifies the draft `Changed` shows the change
+  banner, with Compare… (R-68). Nothing opens by itself.
+- **The Drafts page** lists the kept draft as held by this tab.
+
+**A session ended elsewhere** (R-71). When D2 ends the tab's session for a
+reason the tab did not cause, such as a discard from the Drafts page:
+- a kept session is dropped, and a live one ends; the tab returns to
+  Viewing on the saved copy, with "The draft was discarded.";
+- if a draft of the item is still stored, the draft banner offers Continue
+  editing through the restored-draft route.
+
+**Closing the tab.** Dirty, a kept or stored draft, or a session still being
+stored asks first:
 - **Save** is enabled only when dirty and not saving (contract 4).
 - **Keep draft** is offered only when a draft is stored. While one is being
   stored, the dialog waits for it.
@@ -1431,11 +1588,12 @@ asks first:
 A clean tab with no draft closes at once. Nothing typed is dropped without
 a choice.
 
-**Release on leave** (R-37). A session submits `Intent::ContextRelease`
-when all of these hold:
-1. **Either** the session has `provisioned` and not `saved`, **or** the
-   user discards an Edit draft, from the tab, its banner or the Drafts page
-   (R-45).
+**Release on leave** (R-37, decision 18). A session submits
+`Intent::ContextRelease` when all of these hold:
+1. The session has `created_here` and not `saved`. Discarding a draft, from
+   the tab, its banner or the Drafts page, releases a context only under
+   this condition; a context this desktop process did not create is never
+   released by leaving or Discard.
 2. It leaves clean (Done or closing), or by Discard.
 3. No save of it is in flight. Discard is disabled while one is.
 4. The draft store answers, and lists no draft of the item from any
@@ -1458,7 +1616,7 @@ strings.
 | The same, with a selected publication remote | Pill "Editing · saved on this computer · not shared yet" | — |
 | `discovery_pending` | Banner: saved on this computer; the search index is not updated yet | Resume |
 | Checkpoint `pending`, or an error after acceptance | Banner: the checkpoint failed; the text is kept | Retry (same request ID) |
-| `external_change` | Banner: the item changed since editing began | Review changes… |
+| `external_change` | The review opens; the change banner stays until it is resolved | — |
 | Unverified base | Banner: check the current version before saving | Review… |
 | Other refusal | Banner: the library's message and code | Its recovery actions |
 
@@ -1508,23 +1666,27 @@ strings.
 
 ### Late results (contract 6)
 
-- Every read applies under its tab's stamp.
+- Every read applies under its tab's stamp. Loading's re-read and the read
+  after a committed save each take a new stamp, so a read sent before them
+  never lands (R-70).
 - While editing, or while a session is kept after Done, a refresh updates
   the banners, the read editor and D2's classification. It never touches
   the edit editor's text.
-- A clean read editor whose item changed reloads with `set_text` and
-  `set_cursor`, clamped (R-19). So does a clean edit editor (not dirty, no
-  draft).
+- A clean read editor reloads with `set_text` and `set_cursor`, clamped
+  (R-19), only when the read's observation differs from the one it shows.
+  So does a clean edit editor (not dirty, no draft).
 - A save completion follows D2's rule.
 - Every desktop `classify` passes the item through `editor_text::normalized`,
   on the Drafts page too (R-11).
 
 ### Stale-edit review (decision 4)
 
-The review opens on:
-- an `external_change` answer;
-- a refresh that classifies the draft `Changed`;
-- Save on an unverified base.
+The review opens on (R-68):
+- an `external_change` answer to Save;
+- Save on an unverified base;
+- Compare… on the change banner, which a refresh that classifies the draft
+  `Changed` shows. A refresh never opens the review by itself, as the RFC
+  and the handoff both say "offer" (RFC line 180).
 
 It re-reads the item and compares normalized bodies. It takes the page's
 place in the scroll region, and the toolbar is hidden while it is open.
@@ -1555,8 +1717,8 @@ the draft or the store until **Use these choices**.
      undo (R-18), and its baseline becomes theirs.
 - **Cancel** restores mine in the edit editor, resumes the feed, and leaves
   the draft and its file unchanged.
-- **Escape** moves focus to the header's first action, as while editing
-  (R-59). It cancels nothing.
+- **Escape** moves focus to the header's Done, as while editing (R-59). It
+  cancels nothing.
 - **A second change** by the other actor reopens the review on Save.
 
 **Required outcomes.** This is the contract for the review, after three
@@ -1579,8 +1741,10 @@ stops the task for a ruling.
 
 ### Named controls in the details sheet
 
-While editing, the details sheet's named rows become controls that write
-into the draft. They mark the tab dirty exactly as typing does.
+While editing or saving, the details sheet's named rows become controls
+that write into the draft. They mark the tab dirty exactly as typing does.
+While the tab is Preparing, Loading or in Review, they are read-only
+(R-74).
 - **Documents:** Title.
 - **Tickets:** Title, Type, Status (free text), Project and Team.
   - An emptied Project or Team is saved as absent (R-27).
@@ -1595,6 +1759,8 @@ into the draft. They mark the tab dirty exactly as typing does.
 - **Status.** Typing `closed` does not close the ticket. Closure is shown
   separately in the facts.
 - **Opening.** A chip opens the sheet focused on its control.
+- **Saving from the sheet.** `secondary-s` inside the sheet saves the tab
+  (R-74).
 
 ### Relationships (contract 10)
 
@@ -1611,7 +1777,9 @@ These sit in the ticket's sheet.
   - An unresolved dependency is "not found, kept".
   - An incomplete index adds "Save checks again".
 - **Dependents and Children** stay read-only (R-54).
-- **The draft** keeps `deps` sorted by ID.
+- **The draft** keeps `deps` in the file's order. A new dependency is
+  inserted at its sorted position among them, and removing one leaves the
+  rest in place, so undoing a change returns to the base exactly (R-72).
 - **Save sends:**
   - `Unchanged` when a relationship equals the base;
   - `Clear` when it was emptied;
@@ -1661,15 +1829,19 @@ These sit in the ticket's sheet.
      - Otherwise it says another file holds the path.
    - **`initials_required`** points to Settings.
 5. **Discard** of a new-item draft, from the tab or the Drafts page,
-   submits `Intent::ContextRelease`. A context that was never made answers
-   `already_applied`.
+   submits `Intent::ContextRelease` when this desktop process created the
+   context (decision 18). A context that was never made answers
+   `already_applied`. A never-created item's draft restored after a
+   relaunch keeps its context (Known Limits).
+6. **The baseline.** A new item is dirty until its create succeeds, so Save
+   is offered for a titled item with an empty body (R-73).
 
 ## Part E: Moves, Folders And Repair
 
 **Move** (R-23).
-- It is offered as Move… on the document sheet's Folder row. It is
-  available when the tab is not dirty, keeps no draft, and has no save in
-  flight.
+- It is offered as Move… on the document sheet's Folder row, only while
+  viewing, with no session, no kept or stored draft and no save in flight.
+  So a move never adds a commit to a context an unsaved Edit created.
 - On confirm:
   1. read the observation;
   2. observe the destination in the item's context, or on primary;
@@ -1726,6 +1898,18 @@ These sit in the ticket's sheet.
 - **Frame tests** assert structure, labels, roles, focus order and the
   scroll region's offset, through test-support IDs. Pixel geometry and
   colours are on the checklist.
+- **The guard's tests** drive the inputs the test platform can reach:
+  keystrokes through the window-level helpers; input-method commits and
+  composition through `EntityInputHandler::replace_text_in_range` and
+  `replace_and_mark_text_in_range` on the editor entity, which is the path a
+  real input method takes (fact 76); a right-click, asserting that focus did
+  not move. A checkbox click needs the box's position from
+  `bounds_for_offset` and the gutter's geometry, so it is fragile;
+  checklist step 2 also covers it. They assert that the `ReadOnly` wrapper
+  emits nothing.
+- **A large body.** The test platform lays text out with fixed advances
+  (fact 80), so the 200 KiB tests are smoke tests: they fail only on a
+  panic. Lag is measured on checklist step 10.
 - **Golden fixtures** (`tests/fixtures/editor/`):
   - the rewrites: `n1_crlf`, `n1_lone_cr`, `n2_mixed_pair`,
     `n2b_padded_pair`, `n3_attached_fences`, `n4_inline_code`,
@@ -1773,7 +1957,9 @@ On a throwaway branch of this project's repository:
    and an image under `docs/`, then open it.
    - It renders with its image.
    - Select a paragraph and copy it: the paste is its Markdown.
-   - Typing, pasting, a checkbox click and a right-click change nothing.
+   - Typing, pasting, a middle-click paste, a checkbox click, a table
+     column drag and a right-click change nothing.
+   - Arrow through the `$$` block: the caret passes it.
    - The sheet's Inspect link shows the file.
    - `git status` is unchanged.
 3. **Links.** Click each of these and check the result:
@@ -1782,10 +1968,12 @@ On a throwaway branch of this project's repository:
    - a `javascript:` link does nothing;
    - a missing link says not found;
    - an `https` link opens the browser.
-4. **Edit and undo.** Edit (`e`).
+4. **Edit and undo.** Edit (`e`) the fixture document of step 2.
    - The caret is where you last clicked in the read view.
-   - Type in rich mode, switch mode (`secondary-shift-m`), type, then undo
-     past the switch: the tab is clean.
+   - Done at once: nothing is written, `git status` is unchanged, and
+     `git branch` shows the context gone.
+   - Edit again. Type in rich mode, switch mode (`secondary-shift-m`),
+     type, then undo past the switch: the tab is clean.
    - Type again, Done: the saved copy shows, with the kept-draft banner.
    - Continue editing: the text and undo are back. Discard: `git branch`
      shows the context gone.
@@ -1794,20 +1982,23 @@ On a throwaway branch of this project's repository:
    read view, composing changes nothing.
 6. **Toolbar and focus.** Use every toolbar control by keyboard, in both
    modes, with the arrows along the toolbar. Tab indents, Escape moves to
-   the header, and F6 leaves the editor.
+   the header's Done, and F6 leaves the editor. Right-click in the editor,
+   then Escape: the menu closes.
 7. **Save.** Save offline (`secondary-s`).
    - The pill reads "Editing · saved on this computer".
    - `git log` in the worktree shows one commit.
+   - Type again and save again: two commits.
 8. **Review.** While editing, commit a change to the item's file with `git`
-   in its worktree, then Save.
+   in its worktree, then Refresh: the change banner shows. Save.
    - The review opens.
    - Take theirs for the title and keep mine for the body, then Save.
 9. **New ticket.** Create a new ticket by keyboard, with a dependency chosen
    in the sheet's picker, and Save.
    - Then make the dependency's parent this ticket.
    - The cycle is explained, and Save is unavailable.
-10. **Large document.** Open a 100 KiB document, then edit it. Record any
-    lag on opening and while typing.
+10. **Large document.** Open a 200 KiB document, then edit it, and open a
+    ticket with 60 comments. Record any lag on opening, while scrolling and
+    while typing.
 11. **Record** the build, display server, scale factor and result for each
     step.
 
@@ -1823,8 +2014,8 @@ plus D3's".
 | E-3 | `view/tabs_tests.rs::a_refresh_reloads_every_open_tab_of_the_repository_in_place` | Focus each tab's read editor where it focused the source; a kept-selection assertion becomes a kept-cursor one (R-19). |
 | E-4 | `view/tabs_tests.rs::a_busy_reload_keeps_the_view_and_retry_loads_in_place` | The same. |
 | E-5 | `view/tabs_tests.rs::the_tab_keys_work_from_inside_the_source` | The same, in each tab it focuses; renamed `…_from_inside_the_read_view`. |
-| E-6 | `src/desktop/model/item_tests.rs::the_unavailable_actions_are_the_designs_six` | Renamed `…_designs`. The labels become the design's: Sync is Share, with ellipses on Approve and merge… and Close ticket…. Edit leaves `LATER` in Task 14, and Repair in Task 23. |
-| E-7 | `view/item_tests.rs::a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable` | Renamed `…_and_repair_offered`. Repair is offered from the banner; its source and problem assertions stay. |
+| E-6 | `src/desktop/model/item_tests.rs::the_unavailable_actions_are_the_designs_six` | Renamed `…_designs`. The labels become the design's: Sync is Share, with ellipses on Approve and merge… and Close ticket…. Edit leaves `LATER` in Task 14a, and Repair in Task 23. |
+| E-7 | `view/item_tests.rs::a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable` (lines 387–399) | Two halves. Task 5b: the `later-action` rows are read where the frame puts them, in the header and the discussion's Comment, and Repair's disabled control in the "Needs fixing" banner. Task 23: renamed `…_and_repair_offered`; Repair is offered from the banner; its source and problem assertions stay. |
 | E-8 | `view/item/draft_tests.rs::restore_attaches_the_draft_and_writes_nothing_to_the_repository` | The `draft-later` rows give way to Continue editing and Save; it still writes nothing. |
 | E-9 | `view/tabs_tests.rs::closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once` | Save is present and enabled (the stored draft differs from the item); the test no longer clicks it. |
 | E-10 | `view/documents_tests.rs::folder_creation_is_visibly_unavailable` | Replaced by `new_folder_opens_its_dialog`. |
@@ -1840,14 +2031,16 @@ plus D3's".
 | E-20 | `tests/read_contract.rs` `LOCAL_ACTIONS` | `OperationAction::ReleaseContext`. |
 | E-21 | `src/repository/read/status_tests.rs`: `repository_operations()`, `a_local_action_is_one_the_recovery_store_writes`, `every_action_the_recovery_store_writes_is_one_the_read_knows` | `ReleaseContext` listed; the local slice grows by one. |
 | E-22 | `src/repository/recovery.rs::every_step_is_stored_under_its_own_name_and_read_back` | The two new steps and their stored names. |
-| E-23 | In `view/item_tests.rs`: `the_provenance_says_primary_or_active_with_its_branch_and_worktree`, `lifecycle_closure_and_project_status_are_separate_fields`, `unknown_metadata_is_listed_and_a_null_value_is_not_representable`, `copy_writes_the_id_to_the_clipboard`, `each_copy_leaves_exactly_the_short_code_or_the_ulid`, `a_ticket_without_a_short_code_offers_none_to_copy`; all eight in `view/relationships_tests.rs`; `view/keyboard_tests/actions.rs::copy_by_keyboard` and `each_relationship_group_is_followed_by_keyboard` | Open the details sheet first, with All details by click or keyboard. IDs, labels and assertions are unchanged; a Tab walk starts inside the sheet. `a_document_tab_shows_no_relationships_panel` asserts the document sheet has no relationship groups. |
-| E-24 | `view/item_tests.rs::comments_are_indented_by_depth_in_list_order` | The order assertion stays. The indent assertion becomes: roots at none, every reply at the one reply indent, and a reply deeper than one says "Reply to {name}" (R-53). Renamed `comments_keep_list_order_and_replies_share_one_indent`. |
-| E-25 | `view/scroll_tests.rs`: both tests | Scroll the item's scroll region. The control below the fold becomes the discussion's Back to top under a long body, because relationship rows moved to the sheet. |
+| E-23 | In `view/item_tests.rs`: `the_provenance_says_primary_or_active_with_its_branch_and_worktree`, `lifecycle_closure_and_project_status_are_separate_fields`, `unknown_metadata_is_listed_and_a_null_value_is_not_representable`, `copy_writes_the_id_to_the_clipboard`, `each_copy_leaves_exactly_the_short_code_or_the_ulid`, `a_ticket_without_a_short_code_offers_none_to_copy`, `an_item_whose_context_is_rejected_shows_the_librarys_answer_and_no_context_choice` (its `provenance-kind` read, lines 420–423); all eight in `view/relationships_tests.rs`; `view/keyboard_tests/actions.rs::copy_by_keyboard` and `each_relationship_group_is_followed_by_keyboard` | Open the details sheet first, with All details by click or keyboard. IDs, labels and assertions are unchanged; a Tab walk starts inside the sheet. `a_document_tab_shows_no_relationships_panel` asserts the document sheet has no relationship groups. `a_refresh_reads_the_relationships_again_in_place` closes the sheet before `secondary-r`, which R-60 blocks behind it, and reopens it after. |
+| E-24 | `view/item_tests.rs::comments_are_indented_by_depth_in_list_order` | The order assertion stays. The indent assertion becomes: roots at none, every reply at the one reply indent, and a reply deeper than one says "Reply to {name}" (R-53). The author is read without its `<email>` (line 329) and the time in the new format (line 335). Renamed `comments_keep_list_order_and_replies_share_one_indent`. |
+| E-25 | `view/scroll_tests.rs`: both tests | Applied in Task 5a. Scroll the item's scroll region. The below-fold control becomes the discussion's Back to top, which Task 5a adds, under a long body, because relationship rows move to the sheet in Task 6. |
 | E-26 | `view/keyboard_tests.rs` walk helper (`tab_to("tab", ("rel-dependency", 0))`, line 381) | The walk opens the details sheet before tabbing to the row. |
-| E-27 | `view/tabs_tests.rs` shown-tab helper (line 95) | Read the tab's `aria_selected` instead of the `tab-shown` label, which leaves the strip. `SHOWN` stays for Settings. |
+| E-27 | `view/tabs_tests.rs` shown-tab helper (line 95) | The text check reads the `tab-active-line` element instead of the `tab-shown` label: exactly the selected tab carries it. |
+| E-28 | `view/settings/mod_tests.rs`, lines 76–79 and 117–120 | The same change as E-27. `SHOWN` stays for Settings' own navigation. |
+| E-29 | `view/tabs_tests.rs::closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once` (its `strip()` assertion) | A tab with a stored draft is named "One, unsaved". Applied in Task 4; E-9's change to the same test is applied in Task 16. |
 
 **Task 0 sweep.** Task 0 greps every Rust file for the strings and helpers
-behind E-1 to E-27, and for every fixed list of intents, commands, actions,
+behind E-1 to E-29, and for every fixed list of intents, commands, actions,
 steps or target states. Anything unlisted stops for the owner.
 
 ## Document Amendments
@@ -1874,9 +2067,21 @@ on the ticket.
   - Part 0 inside D3, departing from track rule 5 (decisions 2 and 11);
   - the item-view design in D3 (decision 12), with the read view as a
     read-only editor (decision 17);
+  - release of only the contexts the desktop created (decision 18);
   - front matter kept by value in the untouched-bytes evidence;
   - local images as the safe local resource rendering.
+- **Wave, D4 section:** "D3 builds the read-only, ordered thread display
+  (decision 12). D4 keeps the composers, posting, synchronization and its
+  exit evidence."
+- **Desktop RFC, keyboard** (R-59): after a pointer press in the editor,
+  Escape first closes the editor's menu; otherwise it leaves the editor.
 - **Ticket body:** "rebased onto main" becomes "merged into this branch".
+  The edit is committed to `ticket.md` on the ticket branch, then saved with
+  `manyhands-cli ticket save` against the main checkout, as `AGENTS.md`
+  requires after C3.
+- **Follow-up ticket** for editing other front-matter keys (decision 14):
+  created with `manyhands-cli ticket create` against the main checkout, with
+  the owner's go-ahead.
 
 The design handoffs under `docs/design/` are not edited. The Design
 Deviations and Not Built In D3 tables here are D3's record of where it
@@ -1914,7 +2119,8 @@ Each ruling reads: decision — why — cost if wrong.
 - **R-14** The Save states table, in the design's plain language; remotes
   are read after a save — fact 41 — a label.
 - **R-15** Closing a tab while dirty always asks; Done asks only when the
-  draft cannot be kept (decision 15) — no text is dropped — none.
+  draft cannot be written or the item was never created (decision 15,
+  R-73) — no text is dropped — none.
 - **R-16** Save comes after Keep draft in the close dialog — the safe
   default stays first — a keyboard test edit.
 - **R-17** Continue editing comes before Compare — D2's Tab order is kept —
@@ -1933,8 +2139,10 @@ Each ruling reads: decision — why — cost if wrong.
   — a dialog field.
 - **R-22** The path is checked in the dialog; a collision at Save keeps the
   draft — the library checks again — a rare refused Save.
-- **R-23** Move needs a clean, idle tab with no kept draft — a move would
-  race a save — a disabled Move.
+- **R-23** Move is offered only while viewing, with no session, no kept or
+  stored draft and no save in flight — a move would race a save, and would
+  commit into a context an unsaved Edit created, which release then
+  refuses — a disabled Move.
 - **R-24** No extra refresh after New folder — fact 16 — a refresh press.
 - **R-25** Repair uses a plain text area — front matter must not pass
   through the editor — none.
@@ -1952,15 +2160,16 @@ Each ruling reads: decision — why — cost if wrong.
   bounded and cached — no index of images exists — a missed image.
 - **R-34** The desktop reads image files under containment checks; the RFC
   puts image loading in the host — a library read.
-- **R-35** While a stored draft exists with no live session, Edit is
-  unavailable and Continue editing is offered — two drafts for one item —
+- **R-35** While a draft is kept or stored, Edit reads Continue editing:
+  the kept editor, or the restored-draft route — two drafts for one item —
   none.
 - **R-36** An unverified base opens the review instead of saving — D2's
   obligation — none.
-- **R-37** Release on leave follows the four conditions; a context created
-  for a tab that closed while preparing is released at once — a context
-  holding work, or used by another session, is never released, and the
-  library refuses one with work — a context kept.
+- **R-37** Release on leave follows the four conditions, and only for a
+  context this desktop process created (decision 18); a context created for
+  a tab that closed while preparing is released at once — a context holding
+  work, or made by another session, the CLI or an agent, is never released,
+  and the library refuses one with work — a context kept.
 - **R-38** Draft-text UI stays inside a `draft-section`: the edit editor,
   the sheet's body while editing, the review and D2's restored section —
   D2's privacy sweep holds, and the sheet renders in Root's layer outside
@@ -1972,9 +2181,9 @@ Each ruling reads: decision — why — cost if wrong.
   with `recovery_required` and the read shows no context — an abandoned
   prepare can leave a branch that blocks Edit (fact 18) — a release refused
   with its reason.
-- **R-41** Leaving decides on dirty, a stored draft, or a session still
-  being stored, not on whether a draft exists alone — the store may be
-  unavailable, or the first write still pending — none.
+- **R-41** Leaving decides on dirty, a kept or stored draft, or a session
+  still being stored, not on whether a draft exists alone — the store may
+  be unavailable, or the first write still pending — none.
 - **R-42** A restored or new-item draft is routed by its classification:
   `NotCreated` takes the Create intent; everything else takes the Edit
   intent, with the review when unverified or changed — one rule for both
@@ -1987,10 +2196,8 @@ Each ruling reads: decision — why — cost if wrong.
 - **R-44** The review holds mine, theirs, base and the body's result in its
   own model; the draft feed is suspended until Use these choices — choosing
   or toggling must never write to the draft (round 3) — none.
-- **R-45** Discarding an Edit draft, from the tab, its banner or the Drafts
-  page, requests a release under conditions 2–4 — restored drafts are the
-  commonest abandoned edits, and the library still refuses a context with
-  work — a release refused with its reason.
+- **R-45** *Replaced by decision 18.* Discarding a draft requests a release
+  only when this desktop process created its context, under conditions 2–4.
 - **R-46** Create needs a working draft store — the new item's draft must
   exist before its context — a Create that waits for the store.
 - **R-47** The header and toolbar sit above the item's scroll region — GPUI
@@ -2031,18 +2238,23 @@ Each ruling reads: decision — why — cost if wrong.
   stay, and the page shows the saved copy in the read editor (decision 15)
   — returning to the same text and undo without preparing again — one
   more editor per tab while a draft is kept.
-- **R-59** Escape: `Unbind` the editor's Dismiss in `"Editor"`, then Escape
-  moves focus to the header's first action — `NoAction` would also mute the
-  parent's binding (fact 74), and the editor's menus still close on a click
-  outside — the menus lose their keyboard close.
+- **R-59** Escape: `Unbind("zorite_editor::Dismiss")` for `escape` in
+  `"Editor"`, and bind `escape` in `"EditHost > Editor"` to the host's
+  `EditorEscape`. The editor's menus open only from a pointer press
+  (fact 74), so after a press inside the editor and before the next
+  keystroke, `EditorEscape` dispatches `Dismiss` through the editor's
+  `FocusHandle::dispatch_action`. Otherwise it focuses the header's Done.
+  — `NoAction` would also mute the parent's binding (fact 74), and the RFC
+  requires Escape cancellation (RFC line 271) — after a click, the first
+  Escape may close nothing visible.
 - **R-60** Workspace actions are also blocked while a sheet is open —
   `unless_dialog` checks dialogs only (fact 56) — a key acting behind the
   sheet.
 - **R-61** The read-only guard: capture the editing actions, stop text
-  keystrokes and right-clicks in the capture phase, and revert any change
-  that still lands — the editor has no read-only switch (fact 71) — Task 3
-  stops for a ruling if it leaks, and the viewer comes back only by the
-  owner's ruling.
+  keystrokes and right and middle presses in the capture phase, and revert
+  any change that still lands, input-method text included (fact 76) — the
+  editor has no read-only switch (fact 71) — Task 3 stops for a ruling if it
+  leaks, and the viewer comes back only by the owner's ruling.
 - **R-62** A tab has a read editor and, while a session lives, a separate
   edit editor — the guard is never switched off on a live editor, and Done
   can show the saved copy while the draft's editor is kept (R-58) — Edit
@@ -2056,8 +2268,44 @@ Each ruling reads: decision — why — cost if wrong.
   clamped, when the loaded texts are equal — the design's "caret where the
   user clicked" — the caret at the start when the texts differ.
 
-R-6, R-7, R-10, R-28 to R-31 are retired: R-6 by R-64; R-7 and R-31 by
-decision 17, since no viewer parse, rewrite or warm-up remains.
+- **R-66** In rich text, `EditMath` and `EditProperties` move the caret
+  across their range in both editors, and `PreviewImage` does nothing —
+  with no handler the caret cannot pass math or property blocks (fact 77)
+  — those blocks are edited in Markdown mode only.
+- **R-67** No focus-reveal marker sits on an editor; read and edit editors
+  keep their caret in view themselves — a marker jumps a tall editor to its
+  top on every click (fact 80) — a caret reveal per editor.
+- **R-68** A refresh that finds the item changed shows the change banner;
+  only Save, an unverified base or Compare… open the review — the RFC and
+  the handoff say "offer", and an automatic review would take the page
+  away mid-typing — one more press.
+- **R-69** After a save that retires the draft, `mark_saved` moves the
+  baseline without `set_text`, and the next difference begins a new D2
+  session — D2 ends the session then (fact 79), and `set_text` would clear
+  undo — a second session per save.
+- **R-70** Loading's re-read and the read after each committed save take a
+  new stamp, and a clean editor reloads only on a newer observation — a
+  read sent before a save would otherwise reload pre-save text — none.
+- **R-71** When D2 ends a tab's session for a reason the tab did not cause,
+  the tab drops a kept session or ends a live one and shows the saved copy
+  — otherwise the tab claims a draft that is gone, and typing goes nowhere
+  (fact 79) — a discarded draft is not recoverable, which is what discard
+  means.
+- **R-72** The draft keeps `deps` in file order, adding new ones at their
+  sorted position — the base keeps file order, and a sorted draft would
+  never compare equal to it — none; the library sorts on write.
+- **R-73** Done waits for a save in flight, writes the draft now, discards a
+  stored draft that equals the base, and asks for a never-created item; a
+  new item is dirty until created — the RFC forbids calling unflushed text
+  safe (lines 162–163), and a never-created item has no saved copy to view
+  — a prompt in two rare cases.
+- **R-74** The sheet's controls are read-only while Preparing, Loading or in
+  Review, and the sheet handles `secondary-s` itself — the review suspends
+  the draft feed (R-44), and the sheet renders outside the tab — none.
+
+R-6, R-7, R-10, R-28 to R-31 and R-45 are retired: R-6 by R-64; R-7 and
+R-31 by decision 17, since no viewer parse, rewrite or warm-up remains;
+R-45 by decision 18.
 
 ## Known Limits
 
@@ -2078,6 +2326,18 @@ decision 17, since no viewer parse, rewrite or warm-up remains.
   its address.
 - Selecting in the read view shows the raw Markdown of the lines it
   touches, with a caret; Copy copies Markdown.
+- In rich text the caret steps over math and property blocks; they are
+  edited in Markdown mode (R-66).
+- After a pointer press in the editor, the first Escape may close nothing
+  visible (R-59).
+- A context made by an earlier run of the desktop, the CLI or an agent is
+  kept when its draft is discarded (decision 18), a never-created item's
+  context restored after a relaunch included. So is a context whose
+  release a crash interrupted between the discard and the release.
+- Other front-matter keys show in the library's key order, as JSON
+  (fact 78).
+- A kept session holds a second editor, each with up to 256 whole-text undo
+  steps; every comment body is its own editor (R-63).
 - A remote image shows as its source text.
 - The details sheet's backdrop dims the whole window.
 - A very large body is laid out in full when it opens; checklist step 10
@@ -2124,7 +2384,9 @@ decision 17, since no viewer parse, rewrite or warm-up remains.
 | Release removes work | Ownership, (a)–(d) and an oid-checked delete under one lease; a test per refusal; the desktop conditions (R-37). |
 | A crafted path or image reaches outside the repository or exhausts memory | Parse refusals before any filesystem call, containment, a handle identity check, magic bytes, decode limits and a budget. |
 | Parallel desktop follow-ups edit the item view | Merge main at work boundaries. |
-| D3 is large | Six Parts with checkpoint reviews (decisions 5 and 13). |
+| D3 is large | Six Parts with checkpoint reviews (decisions 5 and 13); the largest tasks split (5a/5b, 10a/10b, 14a–14c). |
+| Many comments slow the page | One editor per comment, shaped lazily off the band (fact 70); checklist step 10 includes a long discussion. |
+| The checklist runs before the final merge of main | Task 25 re-runs the affected checklist steps when that merge brings desktop changes. |
 
 ## Review Record
 
@@ -2157,5 +2419,8 @@ Reviewed by reading only, on 2026-10-24 and 2026-10-26, against:
 | Item-view design: editable document fields and Other fields | No save carries other keys (fact 58). | Decision | Decision 14. | A follow-up ticket, filed at approval. |
 | Item-view design: Done | It conflicted with "leaving always asks". | Decision | Decision 15; R-15, R-58. | Done tests. |
 | Owner: the viewer cannot copy | Read view. | Decision | Decision 17; R-61 to R-63. | Task 3's stop test. |
-| **The 2026-10-26 revision** | Decisions 12–17 and Part A. | Open | **No independent review yet.** | A review round before approval. |
-| Rulings R-1 to R-65 | Engineering choices. | Ruling | As stated. R-6, R-7, R-10 and R-28 to R-31 are retired. | — |
+| Round 4, Q1: releasing a context others made | Trust policy. | Decision | Decision 18; R-37; R-45 retired. | Release tests. |
+| Round 4 source and feasibility review, `4a2628e` | 2 blocking (E-25's task order; editor key bindings arriving after the read view), 6 important, 9 minor. | Settled | Checked against source and applied: facts 76–80 and corrections to 58 and 69; R-66 (math and properties), R-67 (no marker on editors), E-23 to E-29 completed, bindings in Task 3, the guard's test methods, smoke-test wording, table detection, toolbar dispatch, icon list, comment time offset, dead-code names, the CLI isolation pattern. | This revision. |
+| Round 4 contract and adversarial review, `4a2628e` | 3 blocking (a D2 session ended under a live edit; Done during a save; the sheet during the review), 14 important, 5 minor; 6 questions. | Decision / settled | Q1 became decision 18. The other five were settled as rulings inside decisions 4, 15 and 17: R-59 (Escape), R-68 (review offered), R-69 to R-71, R-72 (deps order), R-73 (Done), R-74 (sheet). Also: Move only while viewing (R-23), the D4 scope line, CLI dogfooding in the amendments and the plan, the split tasks, the copy and deviations rows, the pill states, the minors. | This revision. |
+| **The round-4 edits** | Decision 18 and the fixes above. | Open | **No independent review yet.** | A scoped re-review before approval. |
+| Rulings R-1 to R-74 | Engineering choices. | Ruling | As stated. R-6, R-7, R-10, R-28 to R-31 and R-45 are retired. | — |
