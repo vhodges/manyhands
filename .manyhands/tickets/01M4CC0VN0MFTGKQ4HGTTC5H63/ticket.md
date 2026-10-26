@@ -1,14 +1,14 @@
 ---
+wave: '03'
+cycle: D3
+id: 01M4CC0VN0MFTGKQ4HGTTC5H63
+title: 'Wave 03 D3: Rich-Text And Source Authoring'
+type: cycle
+status: open
+project: manyhands
+team: core
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CC0VN0MFTGKQ4HGTTC5H63"
-title: "Wave 03 D3: Rich-Text And Source Authoring"
-type: "cycle"
-status: "open"
-project: "manyhands"
-team: "core"
-wave: "03"
-cycle: "D3"
 ---
 
 Deliver the selected editor experience with trustworthy local saves.
@@ -36,8 +36,8 @@ Wave 03 dependencies: F1, F2 and D1–D2. `zorite-editor` is selected; record th
 
 Ticket relationships and short codes, per the
 [RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
-`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
-rebased onto main.
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when main is merged
+into it.
 
 Metadata controls edit `deps` and `parent` by choosing tickets and explain a
 rejected cycle before any save.
