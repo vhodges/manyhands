@@ -47,3 +47,8 @@ Fetch/merge main `0464c42` was a no-op; checkpoint ancestry/merge-tree passed.
 Awaiting controller extraction review before local execution. Ticket remains
 implementing, Task 4 unstarted. No unresolved policy question; Windows/macOS runtime
 validation remains unexecuted. No full suite, native, PR or lifecycle actions.
+
+Implementation head resolved after commit: `87431fcffe18dd7125bf99962795129c9d5d578b`,
+pushed to the ticket branch. Review **`1f25f56..87431fc`** for all Task 3 code.
+The following documentation-only checkpoint records this exact range; no Rust
+changed after verification. Post-push status was clean and merge-tree passed.

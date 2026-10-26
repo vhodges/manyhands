@@ -37,7 +37,7 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
-| Task 3 | Extracted and locally verified from `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`; checkpoint `refactor: share owned integration mechanics without transport`, comment `01M5V38TV55N7WRG6SM1HAPDQT`. Awaiting controller review of actual moved code and ownership sequencing. |
+| Task 3 | Implemented and pushed at `87431fcffe18dd7125bf99962795129c9d5d578b`, from `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`; comment `01M5V38TV55N7WRG6SM1HAPDQT`. Awaiting controller review of actual moved code and ownership sequencing. |
 | Tasks 4–9 | Not started. New local-operation outcomes below remain unproven. |
 
 All new commits use the requested trailer
@@ -732,3 +732,20 @@ Controller must independently review the **full Task 3 range**, actual moved cod
 and ownership sequencing before local execution is built. Task 4 is not started.
 No full suite, native run, PR or lifecycle action; native Windows/macOS behavior
 has not been executed by this Linux-only checkpoint.
+
+### Exact review handoff
+
+- **Task base:** `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`.
+- **Implementation head:** `87431fcffe18dd7125bf99962795129c9d5d578b`.
+- **Code review range:** `1f25f56..87431fc`; inspect the new integration files as
+  well as removed bodies and adapters, not only the remaining remote diff.
+- Implementation commit is pushed to
+  `origin/manyhands/ticket/01M57SKVF6TQ3QM6AXJ35JGGSY`; post-push status was clean.
+  Postcommit merge-tree passed, tree `199338911f5a3db620f97dd510ab29b06e2e5666`.
+- This subsequent documentation-only checkpoint records the resolved SHA and
+  publication evidence. It changes no Rust/test code or verification result.
+- Controller review focus: priority-1000 memory lifetime versus persistent import;
+  explicit callback preconditions and existing adapter gates; unchanged complete
+  preflight/retained-candidate order; content proof versus exact-parent/clean-state
+  proof; private index/ref orchestration versus extracted descriptor/metadata
+  mechanics; preserved conservative coarse-backend stops.
