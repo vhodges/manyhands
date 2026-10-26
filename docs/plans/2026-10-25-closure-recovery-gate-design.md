@@ -139,6 +139,20 @@ coordination, integration primitives, relevant closure/promotion fences, reads,
 mutation binding/command/progress/results/schema plumbing, and their tests.
 No front-end implementation, dependency changes, or incidental refactoring.
 
+### Scoped owner addendum: Task 4 namespace review
+
+On 2026-10-26 the owner answered **“yes”** to canonical question
+`01M5V7SPS9W51SSF5XYTJR5J08`; approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`
+records the answer and context. The additional allowed files are
+`src/repository/keys/{generation,deletion,registry}.rs`, solely for transactional
+refusal of operation IDs already owned by local synchronization before journal
+insertion/effects. The shared guard/audit belongs in `local_sync/record.rs` and
+new tests in `local_sync`. No old assertion changes or other key behavior changes
+are authorized by this addendum. Existing valid cross-journal handoffs remain
+valid. This closes the scope question, not the five Task 4 SPEC findings; fixes
+still require SPEC then QUALITY re-review before Task 5. No additional files,
+front-end work, PR/merge/closure or native CI permission is granted here.
+
 ## New Shared Interfaces (Proposed)
 
 New input structs, exported through `manyhands::repository`, contain no Debug,

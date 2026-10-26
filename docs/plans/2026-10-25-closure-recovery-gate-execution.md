@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Execution Ledger"
 date: 2026-10-25
-status: "waiting"
+status: "implementing"
 author: "GPT-6 Astra"
 manyhands_managed: true
 manyhands_kind: document
@@ -29,10 +29,10 @@ Task 0 completed with no production/test/schema edits. Controller owns independe
 review. The owner answered both earlier named-edit questions with “yes”, explicitly
 approving E4's companion local-action partition and E9's repair DTO refusal arm;
 comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–3 are implemented
-and independently approved. Current status is **waiting**: Task 4 SPEC requested
-changes on five source-verified findings, and the newly identified key-file scope
-requires an owner answer to question `01M5V7SPS9W51SSF5XYTJR5J08`. No fresh
-implementation proceeds while waiting. Tasks 4/7 retain ownership of E4/E9 code.
+and independently approved. Current status is **implementing**: the owner answered
+“yes” to the narrow key-file scope question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded
+in approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`. All five Task 4 SPEC findings
+remain to be fixed and re-reviewed. Tasks 4/7 retain ownership of E4/E9 code.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -41,7 +41,7 @@ implementation proceeds while waiting. Tasks 4/7 retain ownership of E4/E9 code.
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
-| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`; checkpoint comment `01M5V6K8THJGFZ8FFSC4M87PD7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five unresolved findings (1 P1, 4 P2). **Not approved; waiting for scoped owner permission**, question `01M5V7SPS9W51SSF5XYTJR5J08`. |
+| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`; checkpoint comment `01M5V6K8THJGFZ8FFSC4M87PD7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five findings (1 P1, 4 P2). **Implementing review fixes, not approved**; narrow key scope approved in `01M5VWDPG57KWRAJ55Y2EMXRQR`. |
 | Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1010,3 +1010,22 @@ whose `parent_id` is `01M5V7SPS9W51SSF5XYTJR5J08`.
 Checkpoint preflight: clean worktree at `00a75e7`; fetched origin and merged
 `origin/main` (already up to date). No PR exists. No Rust tests, native CI or
 lifecycle completion action was run for these documentation-only edits.
+
+## Scoped approval and Task 4 review fixes resumed
+
+At `2026-10-26T10:34:43Z`, the controller supplied the owner's answer **“yes”**
+to question `01M5V7SPS9W51SSF5XYTJR5J08`. This authorizes minimal edits to
+`src/repository/keys/{generation,deletion,registry}.rs` solely for transactional
+refusal of operation IDs already owned by local sync before journal/effects;
+shared guard/audit stays in `local_sync/record.rs`, new tests in `local_sync`,
+with no old assertion changes or other key behavior changes. The design scope
+addendum and canonical comment `01M5VWDPG57KWRAJ55Y2EMXRQR` record that exact limit.
+
+Restored ticket/ledger to implementing using the status-edit exception. Entry
+HEAD `fc50316277db8228f3ed41513bf5fe96beab289a` was clean; fetched and merged
+`origin/main` `0464c42dae19a6dde000c7e7660e82762a41fada`, already up to date.
+This approval checkpoint changes no code and reruns no unchanged tests.
+Next: fix all five verified findings with meaningful tests first, required
+Devenv gates and relevant regression tests, then controller SPEC followed by
+QUALITY. Task 4 is not approved; Task 5 remains unstarted. Existing branch
+commit/push approval remains, without PR/merge/closure/native authorization.
