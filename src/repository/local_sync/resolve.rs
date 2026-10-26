@@ -580,13 +580,9 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
     // The process may have died after the commit object reached the ODB but
     // before observing its objects intent. Signature/parents/all-side invariants,
     // full result files and accepted path digests have now been checked above;
-    // require the same resolution's candidate binding before attributing it.
+    // the shared authority audit requires the same active-R candidate binding
+    // unconditionally, including when the objects step was already observed.
     if !evidence.commit_observed {
-        owner.transaction(|db,row| {
-            let bound:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1 AND operation_ulid=?2 AND generation=?3 AND candidate_oid=?4)",params![row.active_resolution.map(|id|id.to_string()),row.operation_id.to_string(),row.generation,oid.to_string()],|r|r.get(0))?;
-            if !bound {return Err(ReadError::new(ResultCode::RecoveryRequired));}
-            Ok(())
-        })?;
         owner.step(0, "objects", true, Some(oid))?;
     }
     if current.index != conflict::entries(&expected) {
@@ -804,12 +800,15 @@ fn finish_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
 }
 pub(super) fn verify_external_integrated(owner: &mut Owner<'_>) -> Result<(), Fault> {
     let result = owner.row.result.ok_or_else(Fault::authority)?;
-    owner.transaction(|db,row| {
-        let recorded:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13 AND kind='reference' AND phase='observed' AND generation=?2 AND expected_old_oid=?3 AND expected_new_oid=?4)",params![row.operation_id.to_string(),row.generation,row.context_parent.to_string(),result.to_string()],|r|r.get(0))?;
-        if !recorded {return Err(ReadError::new(ResultCode::RecoveryRequired));}
-        Ok(())
-    })?;
+    if !external_integration_recorded(owner)? {
+        return Err(Fault::authority());
+    }
     external_proof(owner, result)
+}
+pub(super) fn external_integration_recorded(owner: &mut Owner<'_>) -> Result<bool, Fault> {
+    owner.transaction(|db,row| {
+        Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13 AND kind='reference' AND phase='observed' AND generation=?2 AND expected_old_oid=?3 AND expected_new_oid=?4)",params![row.operation_id.to_string(),row.generation,row.context_parent.to_string(),row.result.map(|id|id.to_string())],|r|r.get(0))?)
+    })
 }
 fn finish_index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     run::index(owner).map_err(|fault| {

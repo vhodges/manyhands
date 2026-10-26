@@ -477,11 +477,10 @@ pub(super) fn verify_released_integration(owner: &mut Owner<'_>) -> Result<(), F
         super::run::validate_candidate(owner, &evidence)?;
         return super::resolve::verify_integrated(owner);
     }
-    if evidence.conflict_started {
-        if evidence.disposition != Disposition::Merge
-            || !evidence.conflict_observed
-            || owner.row.candidate.is_some()
-        {
+    // External integration is authorized by its observed reference record, not
+    // whether this process previously installed/observed a conflict image.
+    if super::resolve::external_integration_recorded(owner)? {
+        if evidence.disposition != Disposition::Merge || owner.row.candidate.is_some() {
             return Err(Fault::authority());
         }
         return super::resolve::verify_external_integrated(owner);

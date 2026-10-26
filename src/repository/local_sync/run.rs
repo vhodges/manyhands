@@ -451,6 +451,8 @@ fn observe_checkout_progress(owner: &mut Owner<'_>) -> Result<(), Fault> {
     Ok(())
 }
 fn observe_object_progress(owner: &mut Owner<'_>) -> Result<(), Fault> {
+    // The shared authority audit also checks active-R candidate ownership here;
+    // error reporting must not promote an intent that resolution just refused.
     owner.authorize()?;
     let e = owner.evidence()?;
     if e.disposition == Disposition::Merge

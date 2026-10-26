@@ -532,6 +532,108 @@ fn spec_existing_external_object_cannot_be_observed_as_the_owned_candidate() {
     }
 }
 
+#[test]
+fn spec_candidate_binding_is_required_on_repeated_start_retry_and_observed_recovery() {
+    for observed in [false, true] {
+        for missing in [false, true] {
+            let (f, _) = fixture(AuthoringKind::Ticket);
+            let id = start(&f);
+            let (observation, sources) = input(&f, id);
+            let request = OperationId::new();
+            let point = if observed {
+                resolve::Point::Candidate
+            } else {
+                resolve::Point::CandidateImported
+            };
+            resolve::HOOK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |p| {
+                    if p == point {
+                        Err(std::io::Error::other("fixture"))
+                    } else {
+                        Ok(())
+                    }
+                }))
+            });
+            resolve::execute(&f.service, &f.repo, id, request, &observation, &sources);
+            resolve::HOOK.with(|h| h.borrow_mut().take());
+            let row = f
+                .service
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap();
+            assert!(f.context().find_commit(row.candidate.unwrap()).is_ok());
+            let phase = if observed { "observed" } else { "prepared" };
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT phase FROM local_context_sync_steps WHERE ordinal=0",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                phase
+            );
+            f.db()
+                .execute(
+                    "UPDATE local_context_sync_resolutions SET candidate_oid=?1",
+                    [if missing {
+                        None
+                    } else {
+                        Some(row.context_parent.to_string())
+                    }],
+                )
+                .unwrap();
+            let before = image(&f);
+            // Exercise both S retries even if the first would incorrectly promote
+            // the step: the second must never turn that promotion into authority.
+            let first =
+                super::run::execute(&f.service, &f.repo, f.kind, &f.item, id, &row.observation);
+            let after_first = image(&f);
+            let first_phase: String = f
+                .db()
+                .query_row(
+                    "SELECT phase FROM local_context_sync_steps WHERE ordinal=0",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let second =
+                super::run::execute(&f.service, &f.repo, f.kind, &f.item, id, &row.observation);
+            assert_ne!(
+                first.code,
+                ResultCode::Ok,
+                "observed={observed} missing={missing}"
+            );
+            assert_ne!(
+                second.code,
+                ResultCode::Ok,
+                "observed={observed} missing={missing}"
+            );
+            assert_eq!(first_phase, phase);
+            assert_eq!(after_first, before);
+            assert_eq!(image(&f), before);
+            assert_ne!(
+                resolve::resume(&f.service, &f.repo, id).code,
+                ResultCode::Ok
+            );
+            assert_ne!(
+                resolve::execute(&f.service, &f.repo, id, request, &observation, &sources).code,
+                ResultCode::Ok
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT phase FROM local_context_sync_steps WHERE ordinal=0",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                phase
+            );
+            assert_eq!(image(&f), before);
+        }
+    }
+}
+
 fn index_pending(kind: AuthoringKind, shape: &str) -> (Fixture, OperationId) {
     if shape == "external" {
         let (f, paths) = fixture(kind);
@@ -691,6 +793,209 @@ fn spec_disposition_abandon_preserves_foreign_files_and_backend_artifacts() {
                 super::control::abandon(&f.service, &f.repo, id).is_ok(),
                 "{shape} {foreign} restored"
             );
+        }
+    }
+}
+
+fn external_before_observed_install(
+    kind: AuthoringKind,
+    installed: bool,
+) -> (Fixture, OperationId) {
+    let (f, paths) = fixture(kind);
+    let id = OperationId::new();
+    let observation = f.observe();
+    let stopped = if installed {
+        resolve::HOOK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(|p| {
+                if p == resolve::Point::InstallReturned {
+                    Err(std::io::Error::other("fixture"))
+                } else {
+                    Ok(())
+                }
+            }))
+        });
+        let result = super::run::execute(
+            &f.service,
+            &f.repo,
+            kind,
+            &f.item,
+            id,
+            &observation.observation,
+        );
+        resolve::HOOK.with(|h| h.borrow_mut().take());
+        result
+    } else {
+        let failed = RepositoryService::open_at_with_failure_point_for_testing(
+            f.data.path(),
+            FailurePoint::LocalSyncAfterIntent,
+        )
+        .unwrap();
+        super::run::execute(
+            &failed,
+            &f.repo,
+            kind,
+            &f.item,
+            id,
+            &observation.observation,
+        )
+    };
+    assert_ne!(stopped.code, ResultCode::Ok);
+    let row = f
+        .service
+        .read_local_context_sync_record(&f.repo, id)
+        .unwrap();
+    assert_eq!(
+        row.state,
+        if installed {
+            super::record::LocalSyncState::Applying
+        } else {
+            super::record::LocalSyncState::Prepared
+        }
+    );
+    assert!(!f.db().query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_conflicts WHERE manifest IS NOT NULL)",[],|r|r.get::<_,bool>(0)).unwrap());
+    let git = f.context();
+    assert_eq!(git.index().unwrap().has_conflicts(), installed);
+    let local = git.find_commit(row.context_parent).unwrap();
+    let incoming = git.find_commit(row.primary_parent).unwrap();
+    let tree = local.tree().unwrap();
+    // Deliberate external repair, not an automatic library rollback.
+    for path in paths {
+        fs::write(
+            git.workdir().unwrap().join(&path),
+            git.find_blob(tree.get_path(&path).unwrap().id())
+                .unwrap()
+                .content(),
+        )
+        .unwrap();
+    }
+    let mut index = git.index().unwrap();
+    index.read_tree(&tree).unwrap();
+    index.write().unwrap();
+    let sig = git.signature().unwrap();
+    let oid = git
+        .commit(
+            None,
+            &sig,
+            &sig,
+            "external repair before observed installation",
+            &tree,
+            &[&local, &incoming],
+        )
+        .unwrap();
+    git.reference(&row.context_ref, oid, true, "external repair")
+        .unwrap();
+    git.cleanup_state().unwrap();
+    let failed = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::LocalSyncBeforeIndex,
+    )
+    .unwrap();
+    let result = resolve::resume(&failed, &f.repo, id);
+    assert_eq!(result.code, ResultCode::DiscoveryPending, "{result:?}");
+    assert_eq!(result.effects.checkpoint, CheckpointEffect::Unchanged);
+    let integrated = f
+        .service
+        .read_local_context_sync_record(&f.repo, id)
+        .unwrap();
+    assert_eq!(integrated.result, Some(oid));
+    assert!(
+        integrated.candidate.is_none()
+            && integrated.integration_proven
+            && integrated.artifacts_released
+    );
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT phase FROM local_context_sync_steps WHERE ordinal=13",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "observed"
+    );
+    (f, id)
+}
+
+#[test]
+fn spec_external_repair_without_observed_installation_can_abandon() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for installed in [false, true] {
+            let (f, id) = external_before_observed_install(kind, installed);
+            let row = f
+                .service
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap();
+            let before = image(&f);
+            let result = super::control::abandon(&f.service, &f.repo, id);
+            assert!(result.is_ok(), "{kind:?} installed={installed}: {result:?}");
+            let after = f
+                .service
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap();
+            assert_eq!(after.state, super::record::LocalSyncState::Abandoned);
+            assert!(after.owner_epoch > row.owner_epoch);
+            assert_eq!(after.result, row.result);
+            assert_eq!(image(&f), before);
+            assert_eq!(
+                resolve::resume(&f.service, &f.repo, id).code,
+                ResultCode::Cancelled
+            );
+            assert_eq!(image(&f), before);
+        }
+    }
+}
+
+#[test]
+fn spec_external_abandon_requires_observed_reference_authority_and_no_foreign_artifacts() {
+    for installed in [false, true] {
+        for corrupt in ["missing", "unobserved", "wrong_result", "foreign_lock"] {
+            let (f, id) = external_before_observed_install(AuthoringKind::Document, installed);
+            let row = f
+                .service
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap();
+            match corrupt {
+                "missing" => {
+                    f.db()
+                        .execute("DELETE FROM local_context_sync_steps WHERE ordinal=13", [])
+                        .unwrap();
+                }
+                "unobserved" => {
+                    f.db()
+                        .execute(
+                            "UPDATE local_context_sync_steps SET phase='prepared' WHERE ordinal=13",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "wrong_result" => {
+                    f.db().execute("UPDATE local_context_sync_steps SET expected_new_oid=?1 WHERE ordinal=13",[row.context_parent.to_string()]).unwrap();
+                }
+                "foreign_lock" => {
+                    fs::write(f.context().path().join("index.lock"), "FOREIGN").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let before = image(&f);
+            assert!(
+                super::control::abandon(&f.service, &f.repo, id).is_err(),
+                "installed={installed} {corrupt}"
+            );
+            assert_eq!(
+                f.service
+                    .read_local_context_sync_record(&f.repo, id)
+                    .unwrap(),
+                row
+            );
+            assert_eq!(image(&f), before);
+            if corrupt == "foreign_lock" {
+                assert_eq!(
+                    fs::read(f.context().path().join("index.lock")).unwrap(),
+                    b"FOREIGN"
+                );
+                fs::remove_file(f.context().path().join("index.lock")).unwrap();
+                assert!(super::control::abandon(&f.service, &f.repo, id).is_ok());
+            }
         }
     }
 }

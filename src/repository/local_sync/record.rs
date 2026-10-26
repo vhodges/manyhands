@@ -587,6 +587,14 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
         .prepare("SELECT * FROM local_context_sync_records")
         .and_then(|mut s| s.query_map([], decode)?.collect::<Result<Vec<_>, _>>())
         .map_err(|_| failure())?;
+    // Parent and active-R candidate intent are written atomically. Their binding
+    // is authority even after the objects step was observed, not a one-time
+    // recovery check. Every reader/owner transaction (including S's error-path
+    // object observer) must reject loss or substitution of either side.
+    let candidate_mismatch:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records p JOIN local_context_sync_resolutions a ON a.attempt_ulid=p.active_resolution WHERE a.candidate_oid IS NOT p.candidate_oid)",[],|r|r.get(0)).map_err(|_|failure())?;
+    if candidate_mismatch {
+        return Err(failure());
+    }
     for row in rows {
         if foreign_id_collision(db,&row.operation_id.to_string(),Some(row.local_record_id))?
             || db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1)",[row.operation_id.to_string()],|r|r.get::<_,bool>(0)).map_err(|_|failure())? {

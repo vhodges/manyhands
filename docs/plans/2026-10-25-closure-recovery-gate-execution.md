@@ -69,7 +69,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
-| Task 6 | Implemented at `3dc7d15616819fcdef49164182614b2195ce1877`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. SPEC `ses_e864b2dfbffemfrKBcgnvISO55`: **REQUEST CHANGES, four Important findings**. Checkpoint `01M5WX1PHGK4REHFEHJGBQ5PAW` records source-verified fixes and **150 local + 4 shared = 154 passing tests**, with whole-tree gates green. Independent SPEC re-review is pending, then QUALITY; the blanket domain-completion claim remains qualified until reviewed. |
+| Task 6 | Implemented at `3dc7d15616819fcdef49164182614b2195ce1877`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. SPEC `ses_e864b2dfbffemfrKBcgnvISO55` re-reviewed `4104895b4ccb90c4410eb64cc035146cace7cbc9`: whole-result preflight and early backend checks closed; **two Important findings remain** in candidate-observation composition and external-abandon provenance. Checkpoint `01M5WYJ5NR8CQ09A8JMGPDX847` records verified corrections and **153 local + 4 shared = 157 passing tests**, with whole-tree gates green. SPEC re-review is pending; QUALITY has not started. The blanket domain-completion claim remains qualified until reviewed. |
 | Tasks 7–9 | Not started. Public F2 requests/DTOs/activation and end-to-end closure acceptance remain unproven; precise obligations below. |
 
 All new commits use the requested trailer
@@ -2628,3 +2628,121 @@ were inspected; diff checks passed. No subagents, owner-policy changes, PR or
 lifecycle actions. **Next: SPEC re-review of all four findings on the full Task 6
 range, then QUALITY.** The blanket completion claim remains qualified until those
 independent gates approve the corrections.
+
+## Task 6 SPEC re-review: candidate ownership and external provenance composition
+
+Recorded **2026-10-26T20:31:21Z**, comment `01M5WYJ5NR8CQ09A8JMGPDX847`.
+Fix base **`4104895b4ccb90c4410eb64cc035146cace7cbc9`**. The controller reports
+SPEC `ses_e864b2dfbffemfrKBcgnvISO55` closed the original whole-result preflight
+and early lock/log findings, but retained **two Important findings** below.
+Both were verified in source and reproduced before correction. These are verified
+implementer fixes awaiting SPEC re-review, not approval. **No QUALITY review yet.**
+
+### 1. Shared candidate ownership, including S's error observer
+
+Verified composition: `complete_candidate` checked the active R's candidate only
+when `commit_observed` was false. A failed S execution then called
+`observe_object_progress`, whose parent candidate validation did not require the
+R binding. That observer could mark the objects step, allowing the next S retry to
+skip the conditional binding check and integrate an inconsistent attempt.
+
+The binding is now an unconditional invariant in the shared **production-active
+authority audit**: the parent candidate and active-resolution candidate must agree,
+including NULL versus non-NULL. The existing shared audit already verifies the
+operation/generation association and now refuses missing/substituted candidate
+ownership before any reader/owner transaction can treat it as authority. This
+covers S's error observer, fresh and repeated R/resume execution, direct objects
+step observation and already-observed steps. Candidate and active-R intent are
+created atomically, so ordinary pre-candidate NULL/NULL records remain valid.
+
+Removed the weaker conditional binding query from the resolver. Full candidate
+signature/parents/tree/path/invariant checks remain before continuation; the
+observed objects flag is never a substitute for association authority. No schema
+shape, source storage, F2 control or public API changed.
+
+New `spec_candidate_binding_is_required_on_repeated_start_retry_and_observed_recovery`
+executes **four compositions**: prepared/observed objects step × missing/substituted
+R candidate. Each makes **two real `run::execute` S retries**, then source-free
+resume and exact R retry. Both S calls must refuse, the objects phase must stay as
+it was, and files/index/ref/logs/metadata/persistent objects must not change.
+The prior foreign-signature and missing-attempt resolver controls remain green.
+
+### 2. External authority is not installation history
+
+Verified cause: the abandonment dispatcher used `conflict_started` and required
+`conflict_observed` to recognize external integration. A legitimate exact-parent
+external repair after S's intent but before conflict installation took the ordinary
+merge branch and failed for lack of an owned candidate. A repair after actual
+installation but before manifest observation failed the observed-manifest test.
+
+External provenance is now selected by the **observed external reference evidence**:
+operation, ordinal/kind, observed phase, generation, frozen old OID and recorded
+result OID must match. `external_integration_recorded` supplies that shared lookup;
+`verify_external_integrated` still verifies the complete exact ordered-parent,
+all-side canonical, clean-result and artifact-free proof. The dispatcher no longer
+requires a prior conflict-install intent or observed manifest to recognize this
+proven external result. It still refuses to borrow external provenance for an
+owned merge candidate, and retains the ordinary no-op/FF/clean/R proof branches.
+
+`spec_external_repair_without_observed_installation_can_abandon` covers **four
+positive cases**: both context kinds × pre-install intent / actual backend install
+interrupted before manifest observation. Each explicitly creates the valid external
+commit, resumes through observed external-reference adoption, injects discovery
+failure, and proves released IndexPending abandonment with retained result OID,
+revoked epoch and no Git effect. Terminal domain resume remains cancelled.
+
+`spec_external_abandon_requires_observed_reference_authority_and_no_foreign_artifacts`
+covers **eight controls**: both installation histories × missing external step,
+unobserved external step, wrong recorded result, or a foreign index lock. Refusal
+preserves parent/epoch and the complete Git image. Restoring the foreign-lock
+fixture permits abandonment, proving the guard is not a blanket refusal.
+The interrupted-install seam is an injected return after real backend effects;
+it is **not** claimed as an additional no-Drop exit.
+
+### Exact RED/GREEN and final gates
+
+Test command prefix: `devenv shell -- cargo test --all-features --locked --lib`,
+one positional filter per invocation.
+
+| Filter | RED before fix | GREEN |
+| --- | --- | --- |
+| `spec_candidate_binding_is_required_on_repeated_start_retry_and_observed_recovery` | 1 failed: the second S retry returned Ok in the prepared/substituted-R-candidate composition. | 1 passed, four compositions, both S retries and R/resume controls preserved. |
+| `spec_external_` | 2 failed: pre-install external result refused abandonment; the foreign-lock control still refused after restoration. | 2 passed: four positive cases and eight negative/restoration controls. |
+| `spec_existing_external_object_cannot_be_observed_as_the_owned_candidate` | Retained regression control, not a new RED claim. | 1 passed, foreign-signature and missing-attempt cases. |
+
+Final whole-tree commands, all exit 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: **2.63s**; clippy: **11.93s**, no warnings. Local selection: **153 passed**,
+zero failed/ignored/measured, 1284 filtered, **507.63s**. This includes all 150 prior
+tests and three new regression tests. All existing 21 actual no-Drop exit assertions
+remain green; this correction adds no new process-exit case.
+
+Each shared anchor ran separately with the same Devenv prefix and selected/passed
+exactly **one** test:
+
+```text
+public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally
+external_repair_exact_ordered_parent_clean_only
+clean_merge_integration_fault_matrix_resumes_each_durable_transition_once
+cancellation_with_a_pending_conflict_is_a_recoverable_stop
+```
+
+Unique selected total: **157 passing library tests**. No full suite, unrelated
+target, native run, frontend/dependency/global-enum edit, subagent, PR or lifecycle
+action. No Task 7/F2 implementation or all-associated S/R/U settlement claim.
+Narrow executor staging and production authority/admission guards remain in force.
+
+Rust files: `local_sync/{record,recover,resolve,run,spec_tests}.rs`. The run change
+documents its shared audit gate; existing test assertions are unchanged. Entry was
+clean at the supplied base. Start/checkpoint fetch/merge found main `0464c42` already
+incorporated; merge-tree passed with base tree
+`23c13023a64a35900ba5e82d90415924c53891ae`. Status/diff/log and owned scope were
+inspected, and diff checks passed. **Next gate: SPEC re-review must be green before
+QUALITY begins.** Overall Task 6 completion remains qualified pending that review.
