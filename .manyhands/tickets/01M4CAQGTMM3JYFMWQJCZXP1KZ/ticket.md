@@ -1,13 +1,15 @@
 ---
+wave: '03'
+id: 01M4CAQGTMM3JYFMWQJCZXP1KZ
+title: Replan Wave 03 into a foundation and parallel CLI and desktop tracks
+type: task
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-07T23:39:59Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01M4CAQGTMM3JYFMWQJCZXP1KZ"
-title: "Replan Wave 03 into a foundation and parallel CLI and desktop tracks"
-type: "task"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "03"
 ---
 
 Wave 03 was approved on 2026-10-05 as thirteen Cycles in one sequence, CLI

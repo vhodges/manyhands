@@ -1,0 +1,886 @@
+#!/usr/bin/env bash
+# Run a coding-agent harness over a list of Manyhands tickets, one ticket at a
+# time, using the working-on-a-ticket skill in loop mode.
+#
+# Agents work only in a dedicated clone, inside a bubblewrap sandbox that hides
+# credentials and makes the home directory read-only. Each harness runs under
+# the loop's own login (see --login), never yours. Agents hold no GitHub
+# credential: this driver, outside the sandbox, fetches, pushes the ticket
+# branch, opens the PR and fast-forwards your own clean ticket worktree.
+#
+# The ticket list is one ticket ID per line, in priority order; `#` starts a
+# comment. Touch .manyhands/loop/STOP in the clone to stop after the current
+# run. Each run's log in .manyhands/loop/logs grows as the agent works;
+# --follow shows it live. See .agents/skills/working-on-a-ticket/SKILL.md,
+# "Loop mode".
+
+set -euo pipefail
+export LC_ALL=C
+
+# ---- Configuration ----------------------------------------------------------
+
+# The loop's own clone. Agents work only here.
+LOOP_CLONE="$HOME/work/src/manyhands-loop"
+# Your checkout. Agents never see it; the driver fast-forwards your clean
+# ticket worktrees in it so the desktop shows the loop's progress.
+OWNER_REPO="$HOME/work/src/manyhands"
+# The sandbox's own Nix and Cargo caches, kept apart from the caches your
+# builds use so that a run cannot poison them, and outside the clone so that
+# agents' searches do not wade through crate sources.
+LOOP_CACHE="$HOME/work/src/manyhands-loop-cache"
+# The harnesses' own logins and settings for the loop, one folder each, apart
+# from yours. Sign each harness in once with --login.
+LOOP_HARNESS_HOME="$HOME/work/src/manyhands-loop-harness"
+DEFAULT_HARNESS=claude
+RUN_TIMEOUT=3h
+POLL_SECONDS=900
+MAX_RUNS=15
+RATE_LIMIT_SLEEP=1800
+# Writable inside the sandbox, besides the clone, LOOP_CACHE and the harness's
+# own state.
+WRITABLE_PATHS=()
+# Hidden inside the sandbox: credentials, keys, agent sockets and browsers.
+HIDDEN_PATHS=(
+    "$HOME/.ssh" "$HOME/.gnupg" "$HOME/.config/gh" "$HOME/.config/herdr"
+    "$HOME/.git-credentials" "$HOME/.netrc" "$HOME/.aws" "$HOME/.config/gcloud"
+    "$HOME/.kube" "$HOME/.docker" "$HOME/.password-store"
+    "$HOME/.local/share/keyrings" "$HOME/.mozilla" "$HOME/.config/chromium"
+    "$HOME/.config/google-chrome"
+)
+HARNESSES=(claude codex opencode)
+
+PROMPT_TEMPLATE='Work on ticket %s. Follow the working-on-a-ticket skill at .agents/skills/working-on-a-ticket/SKILL.md, including its "Loop mode" section: MANYHANDS_LOOP=1 is set. The owner is not watching this session, so ask any question in a ticket comment, as the skill describes. End your reply with the skill'\''s last line.'
+
+# ---- Helpers ----------------------------------------------------------------
+
+LOOP_DIR="$LOOP_CLONE/.manyhands/loop"
+ULID_PATTERN='^[0-9A-HJKMNP-TV-Z]{26}$'
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/ticket-loop [options]
+
+  --harness NAME     claude, codex or opencode (default: claude)
+  --model MODEL      model passed to the harness
+  --list FILE        ticket list (default: .manyhands/loop/tickets.txt in the clone)
+  --once             do at most one run, then exit
+  --exit-when-idle   exit instead of sleeping when no ticket can move
+  --strict           work only on the first unfinished ticket; never skip past it
+  --status           show each ticket's state and exit
+  --follow           follow the newest run's log, moving to each new run's log
+  --dry-run          show what the next run would do, and exit
+  --login            sign the harness in once, under the loop's own login
+  --check            check the setup and the sandbox, and run a trivial prompt
+  --reset ID         clear the driver's record for a ticket (e.g. after "stuck")
+  --notify CMD       run CMD ID STATE DETAIL on each state change
+  --poll SECONDS     idle sleep between passes (default: 900)
+  --max-runs N       runs per ticket before it is parked as stuck (default: 15)
+  --timeout DURATION limit for one run, as for timeout(1) (default: 3h)
+EOF
+}
+
+say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
+warn() { printf '%s warning: %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
+die() { printf 'ticket-loop: %s\n' "$*" >&2; exit 1; }
+
+# Prints a scalar from a Markdown file's front matter, without its quotes.
+front_matter() {
+    awk -v key="$2" -v q="'" -v dq='"' '
+        NR == 1 { if ($0 != "---") exit; next }
+        $0 == "---" { exit }
+        index($0, key ":") == 1 {
+            value = substr($0, length(key) + 2)
+            sub(/^[ \t]+/, "", value); sub(/[ \t]+$/, "", value)
+            first = substr(value, 1, 1); last = substr(value, length(value), 1)
+            if (length(value) > 1 && first == last && (first == q || first == dq))
+                value = substr(value, 2, length(value) - 2)
+            print value; exit
+        }' "$1"
+}
+
+# Prints the ticket IDs in a ticket's `deps`, block or flow style.
+ticket_deps() {
+    awk '
+        NR == 1 { next }
+        $0 == "---" { exit }
+        /^deps:/ { on = 1; print substr($0, 6); next }
+        on && /^[ \t]*-/ { print; next }
+        { on = 0 }' "$1" | grep -oE '[0-9A-HJKMNP-TV-Z]{26}' || true
+}
+
+dep_closed() {
+    git -C "$LOOP_CLONE" show "origin/main:.manyhands/tickets/$1/ticket.md" 2>/dev/null |
+        grep -q '^closed_at:'
+}
+
+# Prints the newest created_at of the ticket's comments by agents ("agent") or
+# by people ("person"). An agent signs with a noreply@ address.
+newest_comment() {
+    local directory=$1 who=$2 file by at newest=""
+    [[ -d $directory ]] || return 0
+    for file in "$directory"/*.md; do
+        [[ -e $file ]] || continue
+        at=$(front_matter "$file" created_at)
+        by=$(front_matter "$file" created_by)
+        if [[ $by == *"<noreply@"* ]]; then
+            [[ $who == agent ]] || continue
+        else
+            [[ $who == person ]] || continue
+        fi
+        [[ $at > $newest ]] && newest=$at
+    done
+    printf '%s' "$newest"
+}
+
+state_file() { printf '%s/state/%s' "$LOOP_DIR" "$1"; }
+
+state_get() {
+    local file
+    file=$(state_file "$1")
+    [[ -f $file ]] || return 0
+    sed -n "s/^$2=//p" "$file" | tail -n 1
+}
+
+state_number() {
+    local value
+    value=$(state_get "$1" "$2")
+    printf '%s' "${value:-0}"
+}
+
+state_set() {
+    local file temporary
+    file=$(state_file "$1")
+    mkdir -p "${file%/*}"
+    temporary=$(mktemp "$file.XXXXXX")
+    { grep -v "^$2=" "$file" 2>/dev/null || true; printf '%s=%s\n' "$2" "$3"; } >"$temporary"
+    mv "$temporary" "$file"
+}
+
+# Records a ticket's state and notifies on a change.
+report() {
+    local id=$1 state=$2 detail=${3:-}
+    say "ticket $id: $state${detail:+ ($detail)}"
+    [[ $(state_get "$id" reported) == "$state" ]] && return 0
+    state_set "$id" reported "$state"
+    if [[ -n $notify_command ]]; then
+        $notify_command "$id" "$state" "$detail" || warn "notify command failed"
+    elif command -v notify-send >/dev/null; then
+        notify-send "Manyhands loop" "ticket $id: $state${detail:+ ($detail)}" || true
+    else
+        printf '\a'
+    fi
+}
+
+# ---- Git and GitHub, outside the sandbox ------------------------------------
+
+worktree_of() { printf '%s/.manyhands/worktrees/%s' "$LOOP_CLONE" "$1"; }
+branch_of() { printf 'manyhands/ticket/%s' "$1"; }
+
+is_clean() { [[ -z $(git -C "$1" status --porcelain) ]]; }
+
+fast_forward() {
+    local directory=$1 target=$2
+    git -C "$directory" rev-parse -q --verify "$target" >/dev/null || return 0
+    is_clean "$directory" || return 0
+    git -C "$directory" merge-base --is-ancestor HEAD "$target" || return 0
+    git -C "$directory" merge -q --ff-only "$target"
+}
+
+setup_clone() {
+    if [[ ! -d $LOOP_CLONE/.git ]]; then
+        local url
+        url=$(git -C "$OWNER_REPO" remote get-url origin) ||
+            die "cannot read origin from $OWNER_REPO; clone $LOOP_CLONE by hand"
+        say "cloning $url into $LOOP_CLONE"
+        git clone -q "$url" "$LOOP_CLONE"
+    fi
+    local exclude="$LOOP_CLONE/.git/info/exclude" pattern
+    for pattern in .manyhands/worktrees/ .manyhands/loop/; do
+        grep -qxF "$pattern" "$exclude" 2>/dev/null || printf '%s\n' "$pattern" >>"$exclude"
+    done
+    mkdir -p "$LOOP_DIR/logs" "$LOOP_DIR/pr" "$LOOP_DIR/state" "$LOOP_CACHE/xdg" "$LOOP_CACHE/cargo" \
+        "$LOOP_CACHE/manyhands-data"
+    if [[ ! -f $LOOP_DIR/tickets.txt ]]; then
+        printf '# One ticket ID per line, in priority order.\n' >"$LOOP_DIR/tickets.txt"
+    fi
+}
+
+fetch_origin() {
+    git -C "$LOOP_CLONE" fetch -q --prune origin || { warn "fetch failed"; return 1; }
+    if [[ $(git -C "$LOOP_CLONE" symbolic-ref --short HEAD) == main ]] && is_clean "$LOOP_CLONE"; then
+        fast_forward "$LOOP_CLONE" origin/main ||
+            warn "the clone's main cannot fast-forward to origin/main"
+    else
+        warn "the clone's checkout is not a clean main; runs may read an old skill"
+    fi
+}
+
+# Makes sure the ticket's worktree exists in the clone, and brings it up to
+# its origin branch when it is clean. Fails if origin has no ticket branch.
+prepare_worktree() {
+    local id=$1 branch worktree
+    branch=$(branch_of "$id")
+    worktree=$(worktree_of "$id")
+    if [[ ! -d $worktree ]]; then
+        if git -C "$LOOP_CLONE" rev-parse -q --verify "refs/heads/$branch" >/dev/null; then
+            git -C "$LOOP_CLONE" worktree add -q "$worktree" "$branch"
+        elif git -C "$LOOP_CLONE" rev-parse -q --verify "refs/remotes/origin/$branch" >/dev/null; then
+            git -C "$LOOP_CLONE" worktree add -q --track -b "$branch" "$worktree" "origin/$branch"
+        else
+            return 1
+        fi
+    fi
+    fast_forward "$worktree" "origin/$branch" || warn "could not fast-forward $id"
+}
+
+# Sets pr_number, pr_state, pr_last_commit and pr_last_feedback.
+read_pr_summary() {
+    local summary
+    pr_number="" pr_state="" pr_last_commit="" pr_last_feedback=""
+    summary=$(gh pr list --repo "$github_repo" --head "$(branch_of "$1")" --state all --limit 1 \
+        --json number,state,commits,comments,reviews \
+        --jq '.[0] // empty | [(.number | tostring), .state,
+              ((.commits | last | .committedDate) // ""),
+              ([.comments[].createdAt, .reviews[].submittedAt] | max // "")] | @tsv') || return 1
+    [[ -n $summary ]] || return 0
+    IFS=$'\t' read -r pr_number pr_state pr_last_commit pr_last_feedback <<<"$summary"
+}
+
+write_pr_state() {
+    gh pr list --repo "$github_repo" --head "$(branch_of "$1")" --state all --limit 1 \
+        --json number,state,url,headRefOid,commits,comments,reviews >"$LOOP_DIR/pr/$1.json"
+}
+
+push_ticket() {
+    local id=$1 branch worktree
+    branch=$(branch_of "$id")
+    worktree=$(worktree_of "$id")
+    if [[ $(git -C "$worktree" symbolic-ref --short HEAD 2>/dev/null) != "$branch" ]]; then
+        warn "$id: the worktree is not on $branch; not pushing"
+        return 1
+    fi
+    is_clean "$worktree" || warn "$id: the run left uncommitted changes"
+    if [[ $(git -C "$worktree" rev-parse HEAD) == $(git -C "$worktree" rev-parse -q --verify "origin/$branch" || true) ]]; then
+        return 0
+    fi
+    git -C "$worktree" push -q origin "HEAD:refs/heads/$branch" ||
+        { warn "$id: push refused; the next run merges origin's branch"; return 1; }
+}
+
+open_pr() {
+    local id=$1 body title url
+    body="$LOOP_DIR/pr/$id.body"
+    [[ -s $body ]] || return 1
+    title=$(front_matter "$(worktree_of "$id")/.manyhands/tickets/$id/ticket.md" title)
+    url=$(gh pr create --repo "$github_repo" --base main --head "$(branch_of "$id")" \
+        --title "$title" --body-file "$body") || { warn "$id: gh pr create failed"; return 1; }
+    say "opened $url"
+}
+
+update_owner_worktree() {
+    local id=$1 worktree branch before
+    worktree="$OWNER_REPO/.manyhands/worktrees/$id"
+    branch=$(branch_of "$id")
+    [[ -d $worktree ]] || return 0
+    # Fast-forward to the remote-tracking branch, not FETCH_HEAD: each
+    # worktree has its own FETCH_HEAD, so it never sees the repository's.
+    git -C "$OWNER_REPO" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null ||
+        return 0
+    [[ $(git -C "$worktree" symbolic-ref --short HEAD 2>/dev/null) == "$branch" ]] || return 0
+    if is_clean "$worktree"; then
+        before=$(git -C "$worktree" rev-parse HEAD)
+        fast_forward "$worktree" "refs/remotes/origin/$branch" || true
+        if [[ $(git -C "$worktree" rev-parse HEAD) != "$before" ]]; then
+            say "updated your worktree for $id"
+        elif ! git -C "$worktree" merge-base --is-ancestor "refs/remotes/origin/$branch" HEAD; then
+            say "your worktree for $id cannot fast-forward to origin; not updating it"
+        fi
+    else
+        say "your worktree for $id has local changes; not updating it"
+    fi
+}
+
+# ---- Deciding what to do -----------------------------------------------------
+
+# Sets verdict (run, pr, skip or done), reason and ticket_status for a ticket.
+assess() {
+    local id=$1 worktree ticket closed_at agent person feedback recorded dep
+    worktree=$(worktree_of "$id")
+    ticket="$worktree/.manyhands/tickets/$id/ticket.md"
+    verdict=skip reason="" ticket_status=""
+    recorded=$(state_get "$id" last)
+    if [[ ! -f $ticket ]]; then
+        reason="no ticket file on its branch"; return
+    fi
+    ticket_status=$(front_matter "$ticket" status)
+    closed_at=$(front_matter "$ticket" closed_at)
+    read_pr_summary "$id" || { reason="cannot read its PR"; return; }
+    if [[ -n $closed_at ]]; then
+        verdict="done" reason="closed${pr_number:+, PR #$pr_number ${pr_state,,}}"; return
+    fi
+    if [[ $pr_state == MERGED ]]; then
+        reason="PR #$pr_number merged but the ticket is open"; return
+    fi
+    if [[ $recorded == stuck ]]; then
+        reason="stuck; clear with --reset $id"; return
+    fi
+    if (( $(state_number "$id" runs) >= MAX_RUNS )); then
+        reason="reached $MAX_RUNS runs; clear with --reset $id"; return
+    fi
+    agent=$(newest_comment "$worktree/.manyhands/comments/$id" agent)
+    person=$(newest_comment "$worktree/.manyhands/comments/$id" person)
+    feedback=$pr_last_feedback
+    case $ticket_status in
+        waiting)
+            if [[ $person > $agent || $feedback > $agent ]]; then
+                verdict=run reason="answered"
+            else
+                reason="waiting for your answer"
+            fi ;;
+        review_ready)
+            if [[ -z $pr_number ]]; then
+                if [[ -s $LOOP_DIR/pr/$id.body ]]; then verdict=pr reason="PR to open"
+                else verdict=run reason="no PR body yet"; fi
+            elif [[ $feedback > $pr_last_commit || $person > $agent ]]; then
+                verdict=run reason="new feedback on PR #$pr_number"
+            else
+                reason="in review, PR #$pr_number"
+            fi ;;
+        *)
+            if [[ $recorded == blocked ]]; then
+                for dep in $(ticket_deps "$ticket"); do
+                    dep_closed "$dep" || { reason="blocked by $dep"; return; }
+                done
+            fi
+            verdict=run reason="${ticket_status:-open}" ;;
+    esac
+}
+
+# ---- Running the agent ---------------------------------------------------------
+
+# Your own harness logins and settings. The sandbox hides all of them.
+owner_harness_paths() {
+    printf '%s\n' "$HOME/.claude" "$HOME/.claude.json" "$HOME/.codex" \
+        "$HOME/.local/share/opencode" "$HOME/.config/opencode" \
+        "$HOME/.cache/opencode" "$HOME/.local/state/opencode"
+}
+
+# Prints NAME=VALUE lines that point a harness at the loop's own login and
+# settings in LOOP_HARNESS_HOME, so a run cannot read your logins or plant
+# hooks, plugins or settings that your own sessions would later load.
+harness_environment() {
+    local home="$LOOP_HARNESS_HOME/$1"
+    case $1 in
+        claude) printf '%s\n' "CLAUDE_CONFIG_DIR=$home" ;;
+        codex) printf '%s\n' "CODEX_HOME=$home" ;;
+        opencode) printf '%s\n' "XDG_DATA_HOME=$home/data" "XDG_STATE_HOME=$home/state" \
+            "XDG_CONFIG_HOME=$home/config" "OPENCODE_CONFIG_DIR=$home/config/opencode" ;;
+    esac
+}
+
+# Copies your installed skills, plugins and their settings into the loop's own
+# harness folder, one way. Credentials, history and sessions are never copied.
+# It runs before every agent run, so anything a run changed there is reverted.
+sync_harness() {
+    local home="$LOOP_HARNESS_HOME/$harness" item
+    local -a copy=(rsync -a --copy-links --delete --exclude '*~')
+    case $harness in
+        claude)
+            mkdir -p "$home/plugins"
+            for item in plugins/cache plugins/marketplaces skills; do
+                if [[ -d $HOME/.claude/$item ]]; then
+                    "${copy[@]}" "$HOME/.claude/$item/" "$home/$item/"
+                fi
+            done
+            # These name their plugins by absolute path, so point them at the copies.
+            for item in plugins/installed_plugins.json plugins/known_marketplaces.json settings.json; do
+                if [[ -f $HOME/.claude/$item ]]; then
+                    sed "s#$HOME/.claude/#$home/#g" "$HOME/.claude/$item" >"$home/$item"
+                fi
+            done ;;
+        codex)
+            for item in skills plugins rules; do
+                if [[ -d $HOME/.codex/$item ]]; then
+                    "${copy[@]}" "$HOME/.codex/$item/" "$home/$item/"
+                fi
+            done
+            if [[ -f $HOME/.codex/config.toml ]]; then
+                sed "s#$HOME/.codex/#$home/#g" "$HOME/.codex/config.toml" >"$home/config.toml"
+            fi ;;
+        opencode)
+            mkdir -p "$home/config"
+            if [[ -d $HOME/.config/opencode ]]; then
+                "${copy[@]}" "$HOME/.config/opencode/" "$home/config/opencode/"
+            fi ;;
+    esac
+}
+
+# Signs a harness in once, outside the sandbox, under the loop's own login.
+login() {
+    local -a environment
+    mapfile -t environment < <(harness_environment "$harness")
+    mkdir -p "$LOOP_HARNESS_HOME/$harness"
+    sync_harness
+    say "signing $harness in for the loop, in $LOOP_HARNESS_HOME/$harness"
+    case $harness in
+        claude)
+            say "in Claude Code, run /login, then /exit"
+            env "${environment[@]}" claude ;;
+        codex) env "${environment[@]}" codex login ;;
+        opencode) env "${environment[@]}" opencode auth login ;;
+    esac
+}
+
+# Sets the array `box`: bwrap and its arguments, ending in `--`.
+build_sandbox() {
+    local id=$1 path runtime setting
+    local -a hidden environment
+    mapfile -t hidden < <(owner_harness_paths)
+    hidden+=("${HIDDEN_PATHS[@]}" "$OWNER_REPO")
+    mapfile -t environment < <(harness_environment "$harness")
+    box=("$bwrap" --die-with-parent --unshare-pid --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp)
+    runtime="/run/user/$(id -u)"
+    [[ -d $runtime ]] && box+=(--tmpfs "$runtime")
+    for path in "${hidden[@]}"; do
+        if [[ -d $path ]]; then box+=(--tmpfs "$path")
+        elif [[ -e $path ]]; then box+=(--ro-bind /dev/null "$path"); fi
+    done
+    box+=(--bind "$LOOP_CLONE" "$LOOP_CLONE" --bind "$LOOP_CACHE" "$LOOP_CACHE")
+    # Only this harness's loop login is visible, and the others are hidden.
+    box+=(--tmpfs "$LOOP_HARNESS_HOME"
+        --bind "$LOOP_HARNESS_HOME/$harness" "$LOOP_HARNESS_HOME/$harness")
+    for path in "${WRITABLE_PATHS[@]}"; do
+        [[ -e $path ]] && box+=(--bind "$path" "$path")
+    done
+    for setting in "${environment[@]}"; do
+        box+=(--setenv "${setting%%=*}" "${setting#*=}")
+    done
+    # The terminal multiplexer's variables name a socket the sandbox hides.
+    while IFS= read -r setting; do
+        box+=(--unsetenv "$setting")
+    done < <(compgen -e | grep '^HERDR_' || true)
+    box+=(--unsetenv SSH_AUTH_SOCK --unsetenv DBUS_SESSION_BUS_ADDRESS
+        --unsetenv GH_TOKEN --unsetenv GITHUB_TOKEN
+        --setenv MANYHANDS_LOOP 1
+        --setenv MANYHANDS_LOOP_PR_STATE "$LOOP_DIR/pr/$id.json"
+        --setenv MANYHANDS_LOOP_PR_BODY "$LOOP_DIR/pr/$id.body"
+        --setenv XDG_CACHE_HOME "$LOOP_CACHE/xdg"
+        --setenv CARGO_HOME "$LOOP_CACHE/cargo"
+        # manyhands-cli's default data folder is under the read-only home.
+        --setenv MANYHANDS_DATA_DIR "$LOOP_CACHE/manyhands-data"
+        --setenv NO_COLOR 1
+        --chdir "$LOOP_CLONE" --)
+}
+
+# Sets the array `command` for the harness.
+build_command() {
+    local prompt=$1 last_message=$2
+    case $harness in
+        claude)
+            # stream-json, unlike text, writes each step as it happens.
+            command=(claude -p "$prompt" --permission-mode bypassPermissions
+                --output-format stream-json --verbose)
+            if [[ -n $model ]]; then command+=(--model "$model"); fi ;;
+        codex)
+            command=(codex exec -C "$LOOP_CLONE" --dangerously-bypass-approvals-and-sandbox
+                -o "$last_message")
+            if [[ -n $model ]]; then command+=(-m "$model"); fi
+            command+=("$prompt") ;;
+        opencode)
+            command=(opencode run --dir "$LOOP_CLONE" --auto)
+            if [[ -n $model ]]; then command+=(-m "$model"); fi
+            command+=("$prompt") ;;
+    esac
+}
+
+LOG_FORMATTER=$(cat <<'JS'
+const [harness, lastFile] = process.argv.slice(1);
+const fs = require('fs');
+const clean = s => String(s)
+    .replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+const out = s => process.stdout.write(clean(s) + '\n');
+const clock = () => new Date().toTimeString().slice(0, 8);
+const oneLine = (s, n) => {
+    s = String(s).replace(/\s*\n\s*/g, '; ');
+    return s.length > n ? s.slice(0, n) + '...' : s;
+};
+const text = c => typeof c === 'string' ? c
+    : Array.isArray(c) ? c.map(x => x.type === 'text' ? x.text : `[${x.type}]`).join('\n') : '';
+const excerpt = (s, mark) => {
+    const lines = s.replace(/\n+$/, '').split('\n');
+    const shown = lines.slice(0, 12).map(l => `    ${mark}${oneLine(l, 200)}`);
+    if (lines.length > 12) shown.push(`    ... ${lines.length - 12} more lines`);
+    return shown.join('\n');
+};
+const describe = (i = {}) => oneLine(i.command ?? i.file_path ?? i.path ?? i.pattern
+    ?? i.skill ?? i.url ?? i.description ?? JSON.stringify(i), 300);
+
+const claude = e => {
+    const who = e.parent_tool_use_id ? '[subagent] ' : '';
+    switch (e.type) {
+    case 'system':
+        if (e.subtype === 'init') out(`[${clock()}] session ${e.session_id}, model ${e.model}`);
+        break;
+    case 'assistant':
+        for (const c of e.message?.content ?? []) {
+            if (c.type === 'text' && c.text.trim()) out(`\n${who}${c.text.trim()}\n`);
+            if (c.type === 'tool_use') out(`[${clock()}] ${who}${c.name}: ${describe(c.input)}`);
+        }
+        break;
+    case 'user':
+        for (const c of Array.isArray(e.message?.content) ? e.message.content : [])
+            if (c.type === 'tool_result') out(excerpt(text(c.content), c.is_error ? 'error: ' : ''));
+        break;
+    case 'rate_limit_event': {
+        const r = e.rate_limit_info ?? {};
+        if (!String(r.status).startsWith('allowed'))
+            out(`[${clock()}] rate limit ${r.status} (${r.rateLimitType}), resets ${new Date(r.resetsAt * 1000).toLocaleString()}`);
+        break;
+    }
+    case 'result':
+        if (lastFile && typeof e.result === 'string') fs.writeFileSync(lastFile, clean(e.result) + '\n');
+        out(`[${clock()}] ${e.subtype}${e.is_error ? ', error' : ''}: ${e.num_turns} turns in ${Math.round((e.duration_ms ?? 0) / 1000)} s`);
+        if (e.is_error && e.result) out(e.result);
+        break;
+    }
+};
+
+require('readline').createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line', line => {
+    if (harness !== 'claude') return out(line);
+    let event;
+    try { event = JSON.parse(line); } catch { return out(line); }
+    if (!event || typeof event !== 'object') return out(line);
+    try { claude(event); } catch (err) { out(`(log formatter: ${err.message}) ${oneLine(line, 300)}`); }
+});
+JS
+)
+
+# Passes a harness's output through as it arrives, for a log that can be
+# followed. Claude's stream-json becomes readable text, and its final message
+# goes to the file named by $1. Terminal escape codes are dropped throughout.
+format_output() {
+    node -e "$LOG_FORMATTER" "$harness" "${1:-}"
+}
+
+looks_rate_limited() {
+    tail -n 40 "$1" | grep -qiE 'rate.?limit|usage limit|too many requests|\b429\b|overloaded|quota|hit your limit'
+}
+
+run_agent() {
+    local id=$1 stamp log last_message prompt status final state before after runs
+    local -a box command
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    log="$LOOP_DIR/logs/$stamp-$id-$harness.log"
+    last_message="$LOOP_DIR/logs/$stamp-$id-$harness.last"
+    write_pr_state "$id" || { warn "$id: cannot read its PR"; return 1; }
+    # shellcheck disable=SC2059
+    printf -v prompt "$PROMPT_TEMPLATE" "$id"
+    if (( ! dry_run )); then sync_harness; fi
+    build_sandbox "$id"
+    build_command "$prompt" "$last_message"
+    if (( dry_run )); then
+        printf 'would run, logging to %s:\n' "$log"
+        printf '  %q' timeout -k 60 "$RUN_TIMEOUT" "${box[@]}" "${command[@]}"
+        printf ' 2>&1 | format_output > %q\n' "$log"
+        return 0
+    fi
+    runs=$(( $(state_number "$id" runs) + 1 ))
+    state_set "$id" runs "$runs"
+    # Whatever state the run ends in is news, even if it was reported before.
+    state_set "$id" reported running
+    before=$(git -C "$(worktree_of "$id")" rev-parse HEAD)
+    say "run $runs on $id with $harness; log: $log"
+    status=0
+    timeout -k 60 "$RUN_TIMEOUT" "${box[@]}" "${command[@]}" </dev/null 2>&1 |
+        format_output "$last_message" >"$log" || status=$?
+    after=$(git -C "$(worktree_of "$id")" rev-parse HEAD)
+    # The skill's last line, allowing for Markdown emphasis or code marks.
+    final=$(cat "$last_message" "$log" 2>/dev/null |
+        sed -E 's/^[*`>[:space:]]+//; s/[*`[:space:]]+$//' |
+        grep -E "^ticket $id: " | tail -n 1 || true)
+    state=${final#"ticket $id: "}
+    push_ticket "$id" || true
+    if [[ -z $final && $after != "$before" ]]; then
+        warn "$id: run ended without a state line (exit $status) but committed; counting it as progress"
+        final="ticket $id: implementing" state=implementing
+    fi
+    if [[ -z $final ]]; then
+        if looks_rate_limited "$log"; then
+            state_set "$id" runs "$((runs - 1))"
+            report "$id" "rate limited" "sleeping $RATE_LIMIT_SLEEP s"
+            sleep "$RATE_LIMIT_SLEEP"
+            return 0
+        fi
+        local failures
+        failures=$(( $(state_number "$id" failures) + 1 ))
+        state_set "$id" failures "$failures"
+        if (( failures >= 2 )); then
+            state_set "$id" last stuck
+            report "$id" stuck "two runs ended without a state line; see $log"
+        else
+            warn "$id: run ended without a state line (exit $status); retrying after a pause"
+            sleep 60
+        fi
+        return 0
+    fi
+    state_set "$id" failures 0
+    case $state in
+        implementing*)
+            say "ticket $id: $state"
+            if [[ $after == "$before" ]]; then
+                local stalls
+                stalls=$(( $(state_number "$id" stalls) + 1 ))
+                state_set "$id" stalls "$stalls"
+                if (( stalls >= 2 )); then
+                    state_set "$id" last stuck
+                    report "$id" stuck "two runs made no commit; see $log"
+                    return 0
+                fi
+            else
+                state_set "$id" stalls 0
+            fi
+            state_set "$id" last implementing ;;
+        review_ready*) state_set "$id" last review_ready ;;
+        blocked*) state_set "$id" last blocked; report "$id" "$state" ;;
+        *) state_set "$id" last "${state%%[ ,]*}"; report "$id" "$state" ;;
+    esac
+    after_run "$id"
+}
+
+# Opens the PR once the ticket is review-ready, and updates your worktree.
+after_run() {
+    local id=$1 ticket
+    ticket="$(worktree_of "$id")/.manyhands/tickets/$id/ticket.md"
+    if [[ $(front_matter "$ticket" status) == review_ready ]]; then
+        read_pr_summary "$id" || true
+        [[ -z $pr_number ]] && open_pr "$id" && { read_pr_summary "$id" || true; }
+        if [[ -n $pr_number ]]; then
+            report "$id" review_ready "PR #$pr_number"
+        else
+            report "$id" review_ready "PR not opened; see the log"
+        fi
+    fi
+    update_owner_worktree "$id"
+}
+
+# ---- Commands ------------------------------------------------------------------
+
+read_list() {
+    local line
+    tickets=()
+    [[ -f $list_file ]] || die "no ticket list at $list_file"
+    while IFS= read -r line || [[ -n $line ]]; do
+        line=${line%%#*}
+        line=${line//[[:space:]]/}
+        [[ -z $line ]] && continue
+        [[ $line =~ $ULID_PATTERN ]] || die "not a ticket ID in $list_file: $line"
+        tickets+=("$line")
+    done <"$list_file"
+}
+
+# Sets bwrap to bubblewrap: from PATH, or else fetched from nixpkgs.
+find_bubblewrap() {
+    local store_path
+    if bwrap=$(command -v bwrap); then
+        return 0
+    fi
+    command -v nix >/dev/null ||
+        die "bwrap is not on PATH; install bubblewrap (on NixOS, add pkgs.bubblewrap to environment.systemPackages)"
+    say "bwrap is not on PATH; fetching bubblewrap from nixpkgs"
+    store_path=$(nix build --no-link --print-out-paths nixpkgs#bubblewrap 2>/dev/null | tail -n 1) ||
+        die "bwrap is not on PATH, and nix could not build nixpkgs#bubblewrap"
+    [[ -x $store_path/bin/bwrap ]] || die "nixpkgs#bubblewrap has no bin/bwrap"
+    bwrap=$store_path/bin/bwrap
+}
+
+preflight() {
+    local tool
+    for tool in git gh timeout flock awk rsync node; do
+        command -v "$tool" >/dev/null || die "$tool is not on PATH"
+    done
+    find_bubblewrap
+    command -v "$harness" >/dev/null || die "harness $harness is not on PATH"
+    case $LOOP_CLONE/ in "$OWNER_REPO"/*) die "LOOP_CLONE must not be inside OWNER_REPO" ;; esac
+    case $OWNER_REPO/ in "$LOOP_CLONE"/*) die "OWNER_REPO must not be inside LOOP_CLONE" ;; esac
+    case $LOOP_CACHE/ in "$OWNER_REPO"/*|"$LOOP_CLONE"/*) die "LOOP_CACHE must be outside both repositories" ;; esac
+    case $LOOP_HARNESS_HOME/ in "$OWNER_REPO"/*|"$LOOP_CLONE"/*|"$LOOP_CACHE"/*)
+        die "LOOP_HARNESS_HOME must be outside the repositories and LOOP_CACHE" ;; esac
+    mkdir -p "$LOOP_HARNESS_HOME/$harness"
+    gh auth status >/dev/null 2>&1 || die "gh is not logged in"
+    git config user.name >/dev/null && git config user.email >/dev/null ||
+        die "set a Git identity (user.name and user.email)"
+    setup_clone
+    github_repo=$(cd "$LOOP_CLONE" && gh repo view --json nameWithOwner --jq .nameWithOwner) ||
+        die "cannot find the clone's GitHub repository"
+    : "${list_file:=$LOOP_DIR/tickets.txt}"
+}
+
+check_setup() {
+    local -a box command
+    sync_harness
+    build_sandbox check
+    say "sandbox probe:"
+    "${box[@]}" sh -c '
+        touch "$HOME/.ticket-loop-probe" 2>/dev/null && echo "  FAIL: home is writable" || echo "  ok: home is read-only"
+        [ -z "$(ls -A "$HOME/.ssh" 2>/dev/null)" ] && echo "  ok: ~/.ssh is hidden" || echo "  FAIL: ~/.ssh is visible"
+        [ -z "${SSH_AUTH_SOCK:-}" ] && echo "  ok: no SSH agent" || echo "  FAIL: SSH agent visible"
+        [ -z "$(ls -A "$HOME/.claude" "$HOME/.codex" "$HOME/.local/share/opencode" 2>/dev/null | grep -v :)" ] &&
+            [ ! -s "$HOME/.claude.json" ] && echo "  ok: your harness logins are hidden" ||
+            echo "  FAIL: your harness logins are visible"
+        touch .manyhands/loop/.probe && rm .manyhands/loop/.probe && echo "  ok: the clone is writable"
+        devenv shell -- cargo --version >/dev/null 2>&1 && echo "  ok: devenv and cargo work" || echo "  FAIL: devenv shell -- cargo"
+    '
+    rm -f "$HOME/.ticket-loop-probe"
+    say "harness probe ($harness, using the loop's own login):"
+    build_command 'Reply with exactly: ticket-loop check ok' "$LOOP_DIR/logs/check.last"
+    local answer
+    answer=$(timeout 300 "${box[@]}" "${command[@]}" </dev/null 2>&1 |
+        format_output "$LOOP_DIR/logs/check.last" | tail -n 3 || true)
+    printf '%s\n' "$answer"
+    if [[ $answer == *"ticket-loop check ok"* ]]; then
+        say "ok: $harness answered from inside the sandbox"
+    else
+        say "FAIL: no answer; if $harness is not signed in, run: scripts/ticket-loop --login --harness $harness"
+    fi
+    rm -f "$LOOP_DIR/logs/check.last"
+}
+
+# Follows the newest run log, and moves to each new run's log as it starts.
+# It only reads, so it can run beside a running loop.
+follow_logs() {
+    local current="" newest waited=0 lines=40
+    local -a logs
+    tail_pid=""
+    trap '[[ -z $tail_pid ]] || kill "$tail_pid" 2>/dev/null' EXIT
+    trap 'exit 0' INT TERM
+    while :; do
+        # Logs are named from a UTC stamp, so the last in order is the newest.
+        logs=("$LOOP_DIR"/logs/*.log)
+        newest=${logs[-1]}
+        if [[ -e $newest && $newest != "$current" ]]; then
+            if [[ -n $tail_pid ]]; then
+                kill "$tail_pid" 2>/dev/null || true
+                wait "$tail_pid" 2>/dev/null || true
+            fi
+            current=$newest
+            say "following $current"
+            tail -n "$lines" -f "$current" &
+            tail_pid=$!
+            # A run that starts while we watch is shown from its beginning.
+            lines=+1
+        elif [[ ! -e $newest ]] && (( ! waited )); then
+            say "no run logs yet in $LOOP_DIR/logs; waiting for one"
+            waited=1
+        fi
+        sleep 2
+    done
+}
+
+pass() {
+    local id chosen="" chosen_verdict="" in_progress="" first_unfinished=1
+    local -a rows=()
+    # --status only reads, so it can run beside a running loop.
+    if (( ! status_only )); then fetch_origin || return 1; fi
+    read_list
+    for id in "${tickets[@]}"; do
+        if (( status_only )) && [[ ! -d $(worktree_of "$id") ]]; then
+            verdict=skip reason="not started" ticket_status=""
+        elif (( ! status_only )) && ! prepare_worktree "$id"; then
+            verdict=skip reason="no branch manyhands/ticket/$id on origin" ticket_status=""
+        else
+            assess "$id"
+        fi
+        rows+=("$(printf '%s  %-13s %-5s %s' "$id" "${ticket_status:--}" "$verdict" "$reason")")
+        [[ $verdict == "done" ]] && continue
+        if (( strict )); then
+            if (( first_unfinished )) && [[ $verdict != skip ]]; then
+                chosen=$id chosen_verdict=$verdict
+            fi
+            first_unfinished=0
+            continue
+        fi
+        [[ $verdict == skip ]] && continue
+        [[ -z $chosen ]] && chosen=$id chosen_verdict=$verdict
+        if [[ -z $in_progress && $verdict == run && $(state_get "$id" last) == implementing ]]; then
+            in_progress=$id
+        fi
+    done
+    # A ticket already in progress comes before starting or resuming another.
+    [[ -n $in_progress ]] && chosen=$in_progress chosen_verdict=run
+    if (( status_only )); then
+        printf '%s\n' "${rows[@]}"
+        return 0
+    fi
+    if [[ -z $chosen ]]; then
+        say "no ticket can move"
+        idle=1
+        return 0
+    fi
+    idle=0
+    if [[ $chosen_verdict == pr ]]; then
+        (( dry_run )) && { say "would open the PR for $chosen"; return 0; }
+        after_run "$chosen"
+        return 0
+    fi
+    run_agent "$chosen"
+}
+
+main() {
+    harness=$DEFAULT_HARNESS model="" list_file="" once=0 exit_when_idle=0 strict=0
+    status_only=0 dry_run=0 check=0 sign_in=0 follow=0 reset_id="" notify_command=""
+    while (( $# )); do
+        case $1 in
+            --harness) harness=${2:?}; shift ;;
+            --model) model=${2:?}; shift ;;
+            --list) list_file=${2:?}; shift ;;
+            --once) once=1 ;;
+            --exit-when-idle) exit_when_idle=1 ;;
+            --strict) strict=1 ;;
+            --status) status_only=1 ;;
+            --follow) follow=1 ;;
+            --dry-run) dry_run=1 ;;
+            --check) check=1 ;;
+            --login) sign_in=1 ;;
+            --reset) reset_id=${2:?}; shift ;;
+            --notify) notify_command=${2:?}; shift ;;
+            --poll) POLL_SECONDS=${2:?}; shift ;;
+            --max-runs) MAX_RUNS=${2:?}; shift ;;
+            --timeout) RUN_TIMEOUT=${2:?}; shift ;;
+            -h|--help) usage; exit 0 ;;
+            *) usage >&2; exit 2 ;;
+        esac
+        shift
+    done
+    case " ${HARNESSES[*]} " in *" $harness "*) ;; *) die "unknown harness: $harness" ;; esac
+    if (( follow )); then follow_logs; fi
+    preflight
+    if [[ -n $reset_id ]]; then
+        rm -f "$(state_file "$reset_id")"
+        say "cleared the driver's record for $reset_id"
+        exit 0
+    fi
+    if (( sign_in )); then login; exit 0; fi
+    if (( check )); then check_setup; exit 0; fi
+    if (( status_only )); then pass; exit 0; fi
+    exec 9>"$LOOP_DIR/lock"
+    flock -n 9 || die "another ticket-loop is running on $LOOP_CLONE"
+    trap 'say "interrupted"; exit 130' INT TERM
+    if (( dry_run )); then pass; exit 0; fi
+    while :; do
+        if [[ -e $LOOP_DIR/STOP ]]; then
+            rm -f "$LOOP_DIR/STOP"
+            say "stopping: found STOP"
+            exit 0
+        fi
+        idle=0
+        pass || { sleep 60; continue; }
+        (( once )) && exit 0
+        if (( idle )); then
+            (( exit_when_idle )) && exit 0
+            sleep "$POLL_SECONDS"
+        fi
+    done
+}
+
+main "$@"

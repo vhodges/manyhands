@@ -1,14 +1,16 @@
 ---
+cycle: '03'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+title: 'Wave 02 Cycle 03: Authenticated SSH Transport'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-06T00:22:11Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-title: "Wave 02 Cycle 03: Authenticated SSH Transport"
-type: "cycle"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "03"
 ---
 
 Bind the selected shared key and approved host-verification policy to `git2`

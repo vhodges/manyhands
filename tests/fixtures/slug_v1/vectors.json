@@ -1,0 +1,131 @@
+{
+  "method": "Hash: b3sum 1.8.7 (nixpkgs#b3sum, run via nix shell), an independent BLAKE3 implementation; not this crate's blake3 dependency. For each ULID text U: printf %s \"$U\" | b3sum --no-names. Base-32 step: node v24, below. Bit order: the first 5 bytes of the digest as 40 bits, most significant bit first, five bits per character, alphabet 0123456789abcdefghjkmnpqrstvwxyz. Initials were derived by hand from the RFC rule.\n--- shell ---\nfor u in 01K6YQ2A4D8F1H3J5K7M9N0P2Q 01M4CC0VMR8HSPZXQ1WX41GWVK 00000000000000000000000000 7ZZZZZZZZZZZZZZZZZZZZZZZZZ 01K7F6H9J2N4Q6S8V0X2Z4B6DE 01ARZ3NDEKTSV4RRFFQ69G5FAV 01HZZ0000000000000000ABCDE 3VZ9Y8X7W6T5S4R3Q2P1N0M9KJ; do\n  printf '%s %s\\n' \"$u\" \"$(printf %s \"$u\" | b3sum --no-names)\"\ndone\n--- node ---\nconst A = \"0123456789abcdefghjkmnpqrstvwxyz\";\nfor (const l of require(\"fs\").readFileSync(process.argv[2], \"utf8\").trim().split(\"\\n\")) {\n  const [u, h] = l.split(\" \");\n  const bits = [...Buffer.from(h, \"hex\").subarray(0, 5)].map(b => b.toString(2).padStart(8, \"0\")).join(\"\");\n  const code = n => Array.from({ length: n }, (_, i) => A[parseInt(bits.slice(i * 5, i * 5 + 5), 2)]).join(\"\");\n  console.log(JSON.stringify({ ulid: u, codes: { 5: code(5), 6: code(6), 7: code(7), 8: code(8) } }));\n}\n",
+  "codes": [
+    {
+      "ulid": "01K6YQ2A4D8F1H3J5K7M9N0P2Q",
+      "codes": {
+        "5": "n4rkb",
+        "6": "n4rkba",
+        "7": "n4rkbay",
+        "8": "n4rkbay3"
+      }
+    },
+    {
+      "ulid": "01M4CC0VMR8HSPZXQ1WX41GWVK",
+      "codes": {
+        "5": "q0ybh",
+        "6": "q0ybh8",
+        "7": "q0ybh8t",
+        "8": "q0ybh8th"
+      }
+    },
+    {
+      "ulid": "00000000000000000000000000",
+      "codes": {
+        "5": "2h6aq",
+        "6": "2h6aqx",
+        "7": "2h6aqx7",
+        "8": "2h6aqx7m"
+      }
+    },
+    {
+      "ulid": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "codes": {
+        "5": "s3mjx",
+        "6": "s3mjxd",
+        "7": "s3mjxdz",
+        "8": "s3mjxdzn"
+      }
+    },
+    {
+      "ulid": "01K7F6H9J2N4Q6S8V0X2Z4B6DE",
+      "codes": {
+        "5": "25wxm",
+        "6": "25wxma",
+        "7": "25wxmaz",
+        "8": "25wxmaz2"
+      }
+    },
+    {
+      "ulid": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "codes": {
+        "5": "fczpc",
+        "6": "fczpc7",
+        "7": "fczpc7d",
+        "8": "fczpc7d2"
+      }
+    },
+    {
+      "ulid": "01HZZ0000000000000000ABCDE",
+      "codes": {
+        "5": "v60bk",
+        "6": "v60bkv",
+        "7": "v60bkvm",
+        "8": "v60bkvmt"
+      }
+    },
+    {
+      "ulid": "3VZ9Y8X7W6T5S4R3Q2P1N0M9KJ",
+      "codes": {
+        "5": "b0qar",
+        "6": "b0qar7",
+        "7": "b0qar7a",
+        "8": "b0qar7a2"
+      }
+    }
+  ],
+  "initials": [
+    {
+      "name": "Vince Hodges",
+      "initials": "vh"
+    },
+    {
+      "name": "Ada Augusta King",
+      "initials": "ak"
+    },
+    {
+      "name": "Cher",
+      "initials": "ch"
+    },
+    {
+      "name": "X",
+      "initials": null
+    },
+    {
+      "name": "Émile Zola",
+      "initials": null
+    },
+    {
+      "name": "Grace BROWN",
+      "initials": "gb"
+    },
+    {
+      "name": "  Linus \t  Torvalds  ",
+      "initials": "lt"
+    },
+    {
+      "name": "7 of 9",
+      "initials": "79"
+    },
+    {
+      "name": "",
+      "initials": null
+    },
+    {
+      "name": "Zoë",
+      "initials": "zo"
+    },
+    {
+      "name": "Jean-Luc Picard",
+      "initials": "jp"
+    },
+    {
+      "name": "Wei 李",
+      "initials": null
+    },
+    {
+      "name": "李 Wei",
+      "initials": null
+    }
+  ]
+}

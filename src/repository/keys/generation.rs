@@ -471,7 +471,7 @@ fn phase_value(phase: KeyMaterialPhase) -> &'static str {
         KeyMaterialPhase::RetainedForInspection => "retained-for-inspection",
     }
 }
-fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
+pub(super) fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
     match value {
         "reserved" => Ok(KeyMaterialPhase::Reserved),
         "private-written" => Ok(KeyMaterialPhase::PrivateWritten),
@@ -484,7 +484,7 @@ fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
         _ => Err(error(KeyMaterialErrorKind::RegistryUnavailable)),
     }
 }
-pub(super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
+pub(in super::super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
     match kind {
         KeyMaterialErrorKind::RegistryUnavailable => "registry-unavailable",
         KeyMaterialErrorKind::SourceMissing => "source-missing",

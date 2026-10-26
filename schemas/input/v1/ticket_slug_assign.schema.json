@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Ticket slug assignment input",
+  "type": "object",
+  "properties": {
+    "observation": { "type": "string" },
+    "initials": { "type": "string" }
+  },
+  "required": ["observation"],
+  "additionalProperties": false
+}

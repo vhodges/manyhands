@@ -32,12 +32,17 @@ pub(crate) enum Checkpoint {
     Prepared,
     ProviderReturned,
     Authenticated,
+    /// The host's trust was finalized for the connection: a pin an
+    /// approval asked for is stored, and the call has not returned.
+    HostTrustFinalized,
     Reconnected,
     TrackingDownloaded,
     BeforeTrackingWrite,
     TrackingWritten,
     /// Client attempt boundary, not receive-side transaction evidence.
     ExactPushStarted,
+    /// Guarded delete returned (possibly ambiguously); no advertisement proof yet.
+    DeleteAttemptReturned,
     /// Fault seam between the caller's snapshot check and scoped preparation.
     ActionSnapshotChecked,
     /// Successful fresh receive-pack list on the independently resolved Push endpoint.
@@ -106,6 +111,45 @@ pub(crate) fn install_pin(service: &RepositoryService, approval: &HostApproval) 
             Some(approval),
         )
         .unwrap();
+}
+
+/// Source-inclusion fixture driver: freezes public registry/configuration state,
+/// then exercises the real combined scope. No injected transport or checkpoint.
+pub(crate) fn poll_policy<P: SessionCredentialProvider>(
+    service: &RepositoryService,
+    request: VerifySshTransportRequest,
+    session: &mut SessionCredentials<P>,
+    automatic: bool,
+    before: impl FnOnce(),
+) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+    let repository = git2::Repository::open(&request.root).unwrap();
+    let endpoint =
+        endpoint::configured_remote_endpoint(&repository, "origin", request.direction).unwrap();
+    let selected = service
+        .list_shared_keys()
+        .unwrap()
+        .into_iter()
+        .find(|key| key.selected)
+        .unwrap();
+    let source = KeySourceToken::observe(&selected.private_key_path).unwrap();
+    let expected = SshScopeExpectation::new(
+        endpoint,
+        Some((selected.id, selected.private_key_path, Some(source))),
+    );
+    before();
+    service.with_authenticated_remote_policy_expected(
+        request,
+        session,
+        automatic,
+        Some(&expected),
+        |remote| {
+            remote.fetch_poll_set(
+                &crate::repository::remote::RemoteRefPlan::from_configuration("origin", "main")
+                    .unwrap(),
+                |_| true,
+            )
+        },
+    )
 }
 
 #[test]
