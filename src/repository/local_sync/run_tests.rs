@@ -2400,3 +2400,121 @@ fn spec_missing_after_only_image_refuses_before_checkout() {
     assert_eq!(logs, reflog_len(&f));
     assert!(!f.context().workdir().unwrap().join("incoming").exists());
 }
+
+#[test]
+fn spec_both_manifest_sides_bind_before_reconciliation_or_owner_change() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for corrupt in ["before_oid", "before_mode", "before_path", "after_path"] {
+            let f = Fixture::new(kind);
+            graph(&f, "equal");
+            let c = f.context();
+            let context = tip(&c);
+            let old_bytes = fs::read(c.workdir().unwrap().join("ordinary")).unwrap();
+            fs::write(f.root.path().join("ordinary"), "new primary bytes\n").unwrap();
+            let incoming = commit(&primary(&f));
+            primary(&f)
+                .reference("refs/remotes/origin/main", incoming, true, "fixture")
+                .unwrap();
+            let observation = f.observe();
+            let id = OperationId::new();
+            let stop = if corrupt == "after_path" {
+                FailurePoint::LocalSyncAfterIntent
+            } else {
+                FailurePoint::LocalSyncAfterCheckout
+            };
+            faults(&f, id, &observation.observation, stop);
+            if corrupt != "after_path" {
+                // Real owned checkout: candidate index, still the recorded parent
+                // ref. The composition below changes ONLY before.oid in evidence.
+                assert_eq!(
+                    c.index()
+                        .unwrap()
+                        .get_path(Path::new("ordinary"), 0)
+                        .unwrap()
+                        .id,
+                    primary(&f)
+                        .head()
+                        .unwrap()
+                        .peel_to_tree()
+                        .unwrap()
+                        .get_path(Path::new("ordinary"))
+                        .unwrap()
+                        .id()
+                );
+            }
+            edit_image_manifest(&f, id, |value| {
+                let path = value["paths"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|p| p["path"] == "ordinary")
+                    .unwrap();
+                match corrupt {
+                    "before_oid" => path["before"]["oid"] = path["after"]["oid"].clone(),
+                    "before_mode" => path["before"]["mode"] = 0o100755.into(),
+                    "before_path" => path["before"] = serde_json::Value::Null,
+                    "after_path" => path["after"] = serde_json::Value::Null,
+                    _ => unreachable!(),
+                }
+            });
+            if corrupt == "before_oid" {
+                fs::write(c.workdir().unwrap().join("ordinary"), &old_bytes).unwrap();
+            }
+            let rows = local_authority_rows(&f);
+            let image = f.image();
+            let logs = reflog_len(&f);
+            let manifest: Vec<u8> = f
+                .db()
+                .query_row(
+                    "SELECT manifest FROM local_context_sync_images WHERE operation_ulid=?1",
+                    [id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let result = execute(&f, id, &observation.observation);
+            assert_eq!(
+                result.code,
+                ResultCode::RecoveryRequired,
+                "{kind:?} {corrupt}: {result:?}"
+            );
+            assert_eq!(
+                rows,
+                local_authority_rows(&f),
+                "no takeover, new intent or settlement on invalid bindings"
+            );
+            assert_eq!(
+                manifest,
+                f.db()
+                    .query_row(
+                        "SELECT manifest FROM local_context_sync_images WHERE operation_ulid=?1",
+                        [id.to_string()],
+                        |r| r.get::<_, Vec<u8>>(0)
+                    )
+                    .unwrap()
+            );
+            assert_eq!(image, f.image());
+            assert_eq!(tip(&c), context);
+            assert_eq!(reflog_len(&f), logs);
+            refs_unchanged(&f, incoming);
+        }
+    }
+}
+
+#[test]
+fn spec_complete_bindings_match_git_directory_and_file_ordering() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.context();
+    let root = c.workdir().unwrap();
+    fs::create_dir_all(root.join("a/sub")).unwrap();
+    for path in ["a.c", "a0", "a/sub.c", "a/sub/file", "a/sub0", "a/é"] {
+        fs::write(root.join(path), format!("{path}\n")).unwrap();
+    }
+    commit(&c);
+    let (_, incoming) = graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    let result = execute(&f, id, &observation.observation);
+    assert_eq!(result.code, ResultCode::Ok, "{result:?}");
+    assert_eq!(tip(&c), incoming);
+    assert_eq!(execute(&f, id, &observation.observation), result);
+}

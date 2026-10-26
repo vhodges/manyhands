@@ -16,6 +16,8 @@ const SCHEMA:&str="CREATE TABLE local_context_sync_images (
 #[serde(deny_unknown_fields)]
 pub(super) struct Proof {
     #[serde(skip)]
+    bindings: std::cell::Cell<Option<(git2::Oid, git2::Oid)>>,
+    #[serde(skip)]
     pub baseline_v2: Option<[u8; 32]>,
     version: u32,
     pub coarse_version: u32,
@@ -41,6 +43,104 @@ struct EntryProof {
 
 fn valid_oid(text: &str) -> bool {
     git2::Oid::from_str(text).is_ok_and(|id| !id.is_zero() && id.to_string() == text)
+}
+
+enum BindingEntry {
+    File(git2::Oid, u32),
+    Directory(String),
+}
+type Directory = std::collections::BTreeMap<String, BindingEntry>;
+
+// Hash the complete path/OID/mode projection as canonical Git trees. This is
+// metadata-only: no blob/filter reads, ODB writes, or merge reconstruction.
+// Iterative directory processing also avoids recursion on stored path depth.
+fn binding_tree(paths: &[PathProof], before: bool) -> Result<git2::Oid, ()> {
+    use std::collections::{BTreeMap, btree_map::Entry};
+    let mut directories = BTreeMap::<String, Directory>::new();
+    directories.insert(String::new(), Directory::new());
+    for path in paths {
+        let Some(entry) = (if before {
+            path.before.as_ref()
+        } else {
+            path.after.as_ref()
+        }) else {
+            continue;
+        };
+        let parts = path.path.split('/').collect::<Vec<_>>();
+        let mut prefix = String::new();
+        for (i, name) in parts.iter().enumerate() {
+            if name.is_empty() || matches!(*name, "." | "..") {
+                return Err(());
+            }
+            let directory = directories.entry(prefix.clone()).or_default();
+            if i + 1 == parts.len() {
+                if directory
+                    .insert(
+                        (*name).to_owned(),
+                        BindingEntry::File(
+                            git2::Oid::from_str(&entry.oid).map_err(|_| ())?,
+                            entry.mode,
+                        ),
+                    )
+                    .is_some()
+                {
+                    return Err(());
+                }
+            } else {
+                let child = format!("{prefix}{name}/");
+                match directory.entry((*name).to_owned()) {
+                    Entry::Vacant(v) => {
+                        v.insert(BindingEntry::Directory(child.clone()));
+                    }
+                    Entry::Occupied(o) => {
+                        if !matches!(o.get(),BindingEntry::Directory(existing) if existing==&child)
+                        {
+                            return Err(());
+                        }
+                    }
+                }
+                prefix = child;
+            }
+        }
+    }
+    let mut hashes = BTreeMap::<String, git2::Oid>::new();
+    for (path, directory) in directories.iter().rev() {
+        let mut entries = Vec::new();
+        for (name, entry) in directory {
+            let (mode, oid, is_directory) = match entry {
+                BindingEntry::File(oid, mode) => (*mode, *oid, false),
+                BindingEntry::Directory(child) => (0o40000, *hashes.get(child).ok_or(())?, true),
+            };
+            let mut key = name.as_bytes().to_vec();
+            key.push(if is_directory { b'/' } else { 0 });
+            let mut bytes = format!("{mode:o} {name}\0").into_bytes();
+            bytes.extend_from_slice(oid.as_bytes());
+            entries.push((key, bytes));
+        }
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        let bytes = entries
+            .into_iter()
+            .flat_map(|(_, bytes)| bytes)
+            .collect::<Vec<_>>();
+        hashes.insert(
+            path.clone(),
+            git2::Oid::hash_object(git2::ObjectType::Tree, &bytes).map_err(|_| ())?,
+        );
+    }
+    hashes.get("").copied().ok_or(())
+}
+impl Proof {
+    fn binding_hashes(&self) -> Result<(git2::Oid, git2::Oid), ()> {
+        if let Some(bound) = self.bindings.get() {
+            return Ok(bound);
+        }
+        let bound = (
+            binding_tree(&self.paths, true)?,
+            binding_tree(&self.paths, false)?,
+        );
+        self.bindings.set(Some(bound));
+        Ok(bound)
+    }
 }
 fn decode(bytes: &[u8], context: &str, primary: &str) -> Result<Proof, ()> {
     let proof: Proof = serde_json::from_slice(bytes).map_err(|_| ())?;
@@ -79,6 +179,9 @@ fn decode(bytes: &[u8], context: &str, primary: &str) -> Result<Proof, ()> {
         if path.before.as_ref().is_some_and(|e| e.digests.len() != 1) {
             return Err(());
         }
+    }
+    if proof.binding_hashes()?.1.to_string() != proof.tree {
+        return Err(());
     }
     Ok(proof)
 }
@@ -237,6 +340,25 @@ mod execute {
             .collect()
     }
     impl Proof {
+        // The ONE complete binding gate: both projections are validated before
+        // any live-index mismatch, retained-image shortcut, or filter comparison.
+        // Projections are cached only on this immutable decoded proof, never
+        // trusted from serialized data. The context tree is immutable Git truth.
+        pub(in super::super) fn validate_bindings(
+            &self,
+            git: &git2::Repository,
+        ) -> Result<(), Fault> {
+            let (before, after) = self.binding_hashes().map_err(|_| Fault::authority())?;
+            if before
+                != git
+                    .find_commit(git2::Oid::from_str(&self.context)?)?
+                    .tree_id()
+                || after.to_string() != self.tree
+            {
+                return Err(Fault::authority());
+            }
+            Ok(())
+        }
         pub(in super::super) fn build(
             git: &git2::Repository,
             local: git2::Oid,
@@ -325,6 +447,7 @@ mod execute {
                 });
             }
             Ok(Self {
+                bindings: std::cell::Cell::new(None),
                 baseline_v2: None,
                 version: 1,
                 coarse_version: 2,
@@ -367,6 +490,7 @@ mod execute {
             git: &git2::Repository,
             oid: git2::Oid,
         ) -> Result<bool, Fault> {
+            self.validate_bindings(git)?;
             let baseline = oid.to_string() == self.context;
             if !baseline && git.find_commit(oid)?.tree_id().to_string() != self.tree {
                 return Err(Fault::authority());
@@ -376,28 +500,6 @@ mod execute {
             actual.read(true)?;
             if entries(&expected) != entries(&actual) {
                 return Ok(false);
-            }
-            let bound = self
-                .paths
-                .iter()
-                .filter_map(|p| {
-                    if baseline {
-                        p.before.as_ref()
-                    } else {
-                        p.after.as_ref()
-                    }
-                    .map(|e| {
-                        (
-                            p.path.as_bytes().to_vec(),
-                            e.mode,
-                            git2::Oid::from_str(&e.oid).expect("audited OID"),
-                            0,
-                        )
-                    })
-                })
-                .collect::<Vec<_>>();
-            if bound != entries(&expected) {
-                return Err(Fault::authority());
             }
             let root = git.workdir().ok_or_else(Fault::foreign)?;
             for path in &self.paths {
@@ -444,6 +546,7 @@ mod execute {
             git: &git2::Repository,
             candidate: git2::Oid,
         ) -> Result<bool, Fault> {
+            self.validate_bindings(git)?;
             if git.find_commit(candidate)?.tree_id().to_string() != self.tree {
                 return Err(Fault::authority());
             }
@@ -461,15 +564,6 @@ mod execute {
                 .iter()
                 .filter_map(|p| p.after.as_ref().map(|e| (&p.path, e)))
                 .collect::<Vec<_>>();
-            if bound.len() != current.len()
-                || bound.iter().any(|(path, e)| {
-                    current
-                        .get(*path)
-                        .is_none_or(|actual| actual.oid != e.oid || actual.mode != e.mode)
-                })
-            {
-                return Err(Fault::authority());
-            }
             Ok(bound.into_iter().all(|(path, e)| {
                 current
                     .get(path)

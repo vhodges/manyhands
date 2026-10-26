@@ -52,6 +52,9 @@ impl Execution {
         if self.disposition != actual {
             return Err(Fault::authority());
         }
+        if let Some(proof) = &self.images {
+            proof.validate_bindings(git)?;
+        }
         Ok(())
     }
     pub fn prepare(

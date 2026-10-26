@@ -40,8 +40,11 @@ at `f282335`**, as reported by the controller. QUALITY
 source-verified implementer fixes and fresh verification in
 `01M5WAQG5RHQ4ZG571AB2DDCZA`. Subsequent SPEC verification at `2b9ba0c` found two
 additional P1 image gaps; their source-verified fixes and new evidence are recorded
-in `01M5WFEQNTFFPE9ZHKK82ABC1C`. **SPEC verification and QUALITY re-review remain
-pending**; prior approvals are not automatically extended.
+in `01M5WFEQNTFFPE9ZHKK82ABC1C`. SPEC at `ef746ba` reports those two findings resolved
+and identifies one further P1: a retained image could borrow an unbound before-side
+OID. Its verified correction is recorded in `01M5WHV3951QADA81HKTX5B7XY`.
+**SPEC verification and QUALITY re-review remain pending**; prior approvals are not
+automatically extended.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -56,7 +59,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Initial implementation `7856c61..5fde757`; SPEC corrections `5fde757..f282335` approved with zero remaining findings. QUALITY corrections `f282335..2b9ba0c` followed. SPEC verification `ses_e87b8a702ffe6HryC0itCXg4H5` then found two P1 image gaps. Current fix base `2b9ba0cb72850e478094c310f92b2406c8221acc`, checkpoint `01M5WFEQNTFFPE9ZHKK82ABC1C`: **105 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. SPEC verification then QUALITY re-review pending; executor remains narrowly test-gated until Task 7. |
+| Task 5 | Initial implementation `7856c61..5fde757`; SPEC fixes `5fde757..f282335` approved. QUALITY fixes `f282335..2b9ba0c`, then image fixes `2b9ba0c..ef746ba`. SPEC reports the latter two findings resolved and one new P1 mapping-composition gap. Current fix base `ef746ba7d060e8b0d087213998f4c656c1f2dd13`, checkpoint `01M5WHV3951QADA81HKTX5B7XY`: **107 local tests + 39 affected controls pass**, whole-tree gates pass. Independent verification pending; Task 7 production activation obligation retained. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -2055,3 +2058,107 @@ already merged. Entry was clean; merge-tree passed with base tree
 passed. Ticket remains implementing. No owner question, subagent, PR/lifecycle action
 or native dispatch. Await SPEC verification of these two corrections, then QUALITY
 re-review of the complete Task 5 range; no independent approval is claimed here.
+
+## Task 5 SPEC: complete two-sided image bindings
+
+Recorded `2026-10-26T16:49:02Z`, comment `01M5WHV3951QADA81HKTX5B7XY`.
+Fix base **`ef746ba7d060e8b0d087213998f4c656c1f2dd13`**. Controller reports SPEC
+`ses_e87b8a702ffe6HryC0itCXg4H5` resolved the prior two P1s but found one new P1
+in their composition. This is an implementer correction pending independent review.
+
+### Source finding and centralized correction
+
+Verified: `matches` returned false on a live-index mismatch before checking the
+selected mapping, then candidate proof could use a `before` digest whose OID had
+not been bound to the frozen context tree. `filters_match` checked only the after
+mapping. After FF checkout, changing only before.oid to after.oid and restoring
+old file bytes could therefore move the ref and settle despite a dirty old file.
+
+The complete mapping gate is now `Proof::validate_bindings`. Both full path/OID/mode
+projections are encoded as canonical Git trees and hashed with Git's tree object
+hashing. The before projection must equal the immutable frozen context commit's
+tree; the after projection must equal the accepted result tree, which candidate
+proof also binds to the actual candidate. The complete after projection is checked
+at decode/audit too. Duplicate/prefix-conflicting paths cannot form a valid tree.
+
+This is metadata-only validation: it reads no blobs or filters, creates no objects,
+and reconstructs no merge. Directory processing is iterative and uses Git's
+directory-versus-file ordering. Projection hashes are computed once per immutable
+decoded proof and cached in a nonserialized Cell; stored input cannot provide the
+cache. Removed the old partial selected-side and after-only mapping checks.
+
+`Execution::validate_graph` invokes the complete gate before an owner transaction
+can take over, write intents, cache authority or settle. The same gate precedes
+both `matches` and `filters_match`, so early live-index mismatches and retained-image
+shortcuts cannot skip either side. Baseline digest trust remains limited to its
+verified immutable tree identity under the cooperative-writer contract.
+
+### TDD and exact composition evidence
+
+Command:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib spec_both_manifest_sides_bind_before_reconciliation_or_owner_change
+```
+
+- **RED:** one test failed. The real FF had changed `ordinary`, stopped after
+  checkout with candidate index and parent ref, then the fixture changed only
+  before.oid to after.oid, retained the original baseline digest and restored old
+  bytes. Retry incorrectly returned Ok/Complete/integration complete.
+- **GREEN:** one test passed, exercising **eight cases** across documents/tickets
+  and before OID, before mode, missing before path and missing after path.
+  The before variants retain the candidate index; the after-path variant retains
+  baseline index to exercise the opposite early-return path. Every refusal preserves
+  authority/discovery rows, owner epoch, intents, manifest bytes, files, index,
+  context/primary/tracking refs and reflog counts. No takeover or settlement occurs.
+- Supplementary `spec_complete_bindings_match_git_directory_and_file_ordering`
+  passes a genuine FF/replay with nested paths, Unicode, and ordering-sensitive
+  siblings such as `a.c`, `a/…`, `a0`, `a/sub.c`, `a/sub/…`, `a/sub0`. It checks the
+  projection against actual Git-created trees, not a second copy of the algorithm.
+
+No pre-existing assertion was weakened. No new schema or stored-format migration
+was needed: validation is stronger; the in-memory cache is excluded from storage.
+The previous attribute, ident, same-tree, partial-byte, mode-only, legacy and
+no-Drop tests all remain green.
+
+### Final verification and handoff
+
+All required Devenv gates exited 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: 3.78s; clippy: 14.10s, no warnings. Local tests: **107 passed**, zero
+failed/ignored/measured, 1284 filtered, 287.28s. This includes 105 previous tests
+plus the two new tests. Long-running matrices completed normally; their 14 actual
+no-Drop exits remain parent-test assertions, not extra test counts.
+
+Additional commands use `devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--lib repository::registration_removal::tests` | 20 |
+| `--test repository_enablement remove_registration` | 8 |
+| `--doc local_sync` | 4 |
+
+Unique selected total: **134 library + 8 integration + 4 compile-fail = 146**.
+No full suite or native run. Rust edits are confined to
+`local_sync/{image_proof,recover,run_tests}.rs`. Unsafe filter code, executable
+staging gates, dependencies, frontends and global result/recovery enums are unchanged.
+Task 7 still owns production activation, real F2 callers/attempt authority and
+production-boundary verification. No Task 6 implementation or owner question.
+
+Entry was clean at the fix base. Start/checkpoint fetches found main `0464c42` already
+merged; merge-tree passed with base tree `6fdeb937f58d9f9314f757248295bfe2b8edb689`.
+Status/diff/log inspected and diff checks passed. Ticket remains implementing;
+no subagent, PR/lifecycle action or native dispatch. Await SPEC verification of
+this correction, then QUALITY re-review of the full Task 5 range.
