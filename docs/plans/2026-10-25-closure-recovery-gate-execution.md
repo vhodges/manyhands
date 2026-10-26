@@ -69,8 +69,9 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
-| Task 6 | Controller reports **SPEC APPROVED, zero outstanding at `fd1b356eb67403bc1dbcf6a7fad7ac8425dcecdc`**, session `ses_e864b2dfbffemfrKBcgnvISO55`. QUALITY `ses_e8613a466ffe3Dlw50236N05X9` requests three P2 corrections. Checkpoint `01M5X0P7E9XE73WJYHYSSQN09A` records verified fixes and **159 local + 4 shared = 163 passing tests**, with whole-tree gates green. Next: SPEC delta verification and QUALITY re-review. The approved base's SPEC result is not automatically extended to these changes. |
-| Tasks 7–9 | Not started. Public F2 requests/DTOs/activation and end-to-end closure acceptance remain unproven; precise obligations below. |
+| Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
+| Task 7 | Started from `41bce3e`; initial F2 control acceptance/handover implementation checkpointed as **WIP `ee9e485`**. **Waiting for scoped migration-fixture approval**, question `01M5X2Y6RPMMT9BMS75Y0EXTYQ`. Nine new request-store tests pass; full mutation_replay has 316 passes and one existing migration-fixture failure. Public bindings/reads, production executor activation and complete request protocol remain undelivered. No independent Task 7 review has occurred. |
+| Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -2848,3 +2849,134 @@ incorporated; merge-tree passed with base tree
 inspected; diff checks passed. **Next: SPEC delta verification, then QUALITY
 re-review of these three corrections.** Prior SPEC approval applies to the base;
 no approval of the changed tree or Task 7 advance is claimed.
+
+## Task 7 start: request-control foundation and named-edit stop
+
+Recorded **2026-10-26T21:47:49Z**, canonical question
+`01M5X2Y6RPMMT9BMS75Y0EXTYQ`. Implementation base:
+**`41bce3eb23ae4e95316f287cd832d38be00164aa`**. Initial implementation is committed
+as **`ee9e485`**, `wip: stage local request acceptance and attempt controls`.
+This is an incomplete checkpoint, not Task 7 delivery.
+
+### Authority and preflight
+
+The controller supplied final Task 6 SPEC and QUALITY approval at this base,
+zero findings over the full `7283ad2..41bce3e` range, with sessions and counts
+recorded in the task table above. These are controller reports, not fresh reviews
+performed here. Read the entire authoritative approved design and contract, Task 7
+plan, Task 0 source/selector inventory and implemented Task 4–6 seam/handoff records.
+
+Worked inline without subagents, only in the specified ticket checkout. Entry
+status was clean, branch and HEAD matched the handoff. Fetched origin, read
+`origin/main:AGENTS.md`, merged main `0464c42` (already up to date), and verified
+ancestry. HEAD did not move. No dependency, frontend, global enum or target edit.
+
+### Implemented so far, and explicit limits
+
+- Added internal production `mutation/local_control.rs`. The additive v1 table
+  holds request FK, immutable intended parent/scope/role, nullable domain links,
+  execution-attempt fence, cancellation generations and content-free effect fields.
+  Migration checks marker/table consistency, exact shape and association integrity.
+- `records::insert_request` creates S/R controls in the acceptance transaction;
+  local-target U detection uses the existing scoped parent. Ignored insertion
+  rolls back request and operation rows. No source text is added to persistence.
+- `records::enter_request` advances the control fence in the same transaction as
+  F2's attempt. Missing or stale S/R controls and ignored control updates refuse
+  without committing the F2 advance. Stable intended identity, counters and effects
+  survive unlinked handover and reopening.
+- Registered nine tests in the requested existing `mutation_replay/local_sync.rs`
+  module. They exercise the existing public hidden request-store API; **they are
+  not public mutation-binding recovery tests** and do not satisfy the mandatory
+  named full-protocol cases. Their deliberate corruption/trigger writes are
+  isolated fixture injections, not production authority creation.
+
+The production executor/conflict/control/filtered-image `cfg(test)` gates are
+still present. No new public input, Mutation variant, read method, schema/golden,
+domain linkage/fencing, authoritative cancellation integration, local resume or
+atomic abandonment disposition has been delivered. Task 6 domain counters remain
+distinct from this new F2 table. This checkpoint does not claim API activation.
+
+### TDD and verification evidence
+
+An initial two-test public-binding probe failed compilation because the approved
+input and Mutation variant are absent. That temporary probe was replaced with
+the focused acceptance/handover tests while building their prerequisite; it is
+not retained or counted as passed public API coverage.
+
+Five initial request-control tests ran RED: four encountered the missing table,
+and one showed that F2 incorrectly advanced an attempt without control authority.
+After implementation all five passed. Four supplementary rollback/reopen/legacy
+controls were added and passed; no separate RED is claimed for those controls.
+
+All Rust commands used Devenv from this checkout:
+
+| Command | Observed result |
+| --- | --- |
+| `cargo test --all-features --locked --test mutation_replay local_sync` | **9 passed**, 0 failed, 308 filtered. |
+| `cargo fmt --check` | Exit 0 after the final Rust edits. `git diff --check` also passed. |
+| `cargo check --all-features --locked` | Exit 0, 4.44s. |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, 45.65s, no warnings. |
+| `cargo test --all-features --locked --test mutation_replay` | **316 passed, 1 failed**, 473.33s. All nine new tests and the existing conformance test passed. |
+| `cargo test --all-features --locked --test mutation_replay the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else -- --exact` | **1 selected, 1 failed**, reproducing the same old assertion at line 430. |
+
+The full target was selected because migration and request acceptance/handover are
+shared by every binding. It was not the package-wide test suite. No golden updates,
+native run, Task 8 work or completion feature commit occurred. The controller
+subsequently directed committing/pushing the partial work and recording `waiting`;
+the checkpoint publication procedure is recorded below.
+
+### Actual old-test scope issue: owner approval required
+
+`tests/mutation_replay.rs::the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`
+constructs a pre-F2 fixture by dropping only `request_operations`, `request_records`
+and `confirmation_records` (lines 415–423). It then asserts that no remaining
+schema object's name contains `request` (line 430). The newly required
+`local_context_sync_request_control` table remains, so that assertion fails before
+reopening. Its later exact additive inventory is also explicitly the original
+three tables (`REQUEST_TABLES`, line 347), with all other objects/rows unchanged.
+
+This is an actual newly failing old assertion, not a compiler-staging issue or a
+baseline failure. E5/E6/E7/E9 do not name this migration fixture or its private
+inventory. The design explicitly requires owner review for an additional old-test
+semantic edit, so the fixture remains unchanged and implementation pauses here.
+
+**Requested narrow approval:** change only
+`tests/mutation_replay.rs::the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`
+and its private `REQUEST_TABLES` fixture/removal/migration-marker inventory for the
+new local request-control table. Preserve **all** existing old-column,
+unrelated-schema/data and privacy assertions; verify the control table/marker as
+the exact additional migration effects. No general migration-test exemption or
+unrelated fixture/golden rewrite is requested. The controller verified that this
+is a genuine additional named edit, but expressly did not grant owner approval.
+
+After the owner answers, complete the remaining Task 7 production binding/read/
+control work and all required named tests/gates, then use the specified feature
+commit and trailer and push. Independent controller SPEC then QUALITY reviews
+still precede Task 8. The existing SSH conformance selector remains exactly
+`every_command_of_this_target_keeps_the_rules_of_the_boundary`; four separate
+target invocations and nonzero counts are still owed by Task 7 completion.
+
+### Controller-directed WIP publication and hold
+
+The controller instructed committing all owned partial work before pausing,
+separating code from waiting documentation where practical, then pushing the ticket
+branch. Status/diff/recent log and both new Rust files were inspected. Fetch/merge
+again found main already incorporated. No PR exists. No Rust edits or repeated
+gates were made on the unchanged verified tree.
+
+- **Code checkpoint `ee9e485`:** only `src/repository/mutation/{local_control,mod,records}.rs`,
+  `tests/mutation_replay.rs` (new module registration only), and
+  `tests/mutation_replay/local_sync.rs`. The existing migration fixture and private
+  inventory remain unchanged. The commit explicitly records the known test failure
+  and incomplete scope and includes the required Co-Authored-By trailer.
+- **Separate waiting checkpoint:** this ledger, question comment
+  `01M5X2Y6RPMMT9BMS75Y0EXTYQ`, and the ticket's status-only change from implementing
+  to waiting, using the `working-on-a-ticket` exception. The existing question ID
+  and UTC creation time are retained. Both checkpoints are to be pushed to the
+  existing ticket branch; remote parity is verified after push.
+
+**Hold:** owner input is required for the exact fixture/inventory edit above.
+Task 7 is not complete or independently reviewed. Public bindings, production
+executor activation, DTO/schema publication and all required full-protocol cases
+are still owed. Task 8 remains unstarted. No PR, closure, merge into main, native
+CI or cleanup is authorized by this checkpoint.
