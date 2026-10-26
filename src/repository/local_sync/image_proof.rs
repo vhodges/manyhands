@@ -424,7 +424,12 @@ mod execute {
                         primary,
                     )?;
                     let integration::prepare::MergePreparation::Clean(merge) = merge else {
-                        return Err(Fault::authority());
+                        // Conflict installation has its own complete image evidence.
+                        // Keep this proof as the frozen baseline, never pretend the
+                        // unresolved merge is a clean candidate image.
+                        let baseline = Self::build(git, local, primary, Disposition::Noop)?;
+                        baseline.require_worktree_attributes(git)?;
+                        return Ok(baseline);
                     };
                     let tree = integration::prepare::import_prepared_tree(&worker, &merge)?;
                     let sig = git2::Signature::new(

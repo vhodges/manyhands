@@ -20,6 +20,9 @@ pub(super) enum Reason {
     AmbiguousBackend,
     AuthorityMissing,
     UnsupportedConflict,
+    CanonicalConflict,
+    OriginalResolutionRequired,
+    Cancelled,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Report {
@@ -27,6 +30,8 @@ pub(super) struct Report {
     pub reason: Reason,
     pub state: Option<LocalSyncState>,
     pub effects: Effects,
+    pub required_request: Option<OperationId>,
+    pub cancel_acknowledged: bool,
 }
 impl Report {
     pub fn outcome(&self) -> Outcome {
@@ -72,6 +77,16 @@ impl From<ReadError> for Fault {
 }
 impl From<RepositoryError> for Fault {
     fn from(e: RepositoryError) -> Self {
+        if e.source
+            .as_deref()
+            .and_then(|e| e.downcast_ref::<std::io::Error>())
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied)
+        {
+            return Self {
+                code: ResultCode::RepositoryInaccessible,
+                reason: Reason::AuthorityMissing,
+            };
+        }
         ReadError::from(e).into()
     }
 }
@@ -86,7 +101,7 @@ impl From<integration::Error> for Fault {
     }
 }
 
-fn identity(git: &git2::Repository) -> Result<git2::Signature<'static>, Fault> {
+pub(super) fn identity(git: &git2::Repository) -> Result<git2::Signature<'static>, Fault> {
     let config = git.config()?;
     let identity = CommitIdentity {
         name: config.get_string("user.name").unwrap_or_default(),
@@ -156,15 +171,19 @@ fn prepare(
                         == integration::validate::ConflictStructure::IncompatibleClosures
                 })
             });
-            // Task 6 owns installation/inspection/resolution of admissible conflicts.
-            return Err(Fault {
-                code: ResultCode::RecoveryRequired,
-                reason: if incompatible {
-                    Reason::ImmutableClosureDisagreement
-                } else {
-                    Reason::UnsupportedConflict
-                },
-            });
+            if incompatible {
+                return Err(Fault {
+                    code: ResultCode::RecoveryRequired,
+                    reason: Reason::ImmutableClosureDisagreement,
+                });
+            }
+            return Execution::prepare(
+                repo,
+                &git,
+                &observation.context_ref,
+                disposition,
+                (local, incoming),
+            );
         }
         identity(&git)?;
     }
@@ -300,10 +319,14 @@ pub(super) fn execute(
             )
         }
     };
-    with_performed(reply, &owner)
+    let mut reply = with_performed(reply, &owner);
+    if reply.code == ResultCode::OriginalRequestRequired {
+        reply.required_request = super::resolve::required_request(service, id);
+    }
+    reply
 }
 
-fn with_performed(mut reply: Report, owner: &Owner<'_>) -> Report {
+pub(super) fn with_performed(mut reply: Report, owner: &Owner<'_>) -> Report {
     if owner.performed.wrote {
         reply.effects.write = WriteEffect::Written;
     }
@@ -319,13 +342,13 @@ fn with_performed(mut reply: Report, owner: &Owner<'_>) -> Report {
     reply
 }
 
-fn read_evidence(
+pub(super) fn read_evidence(
     service: &RepositoryService,
     repo: &ResolvedRepository,
     id: OperationId,
 ) -> Result<(LocalContextSyncRecord, Execution), ReadError> {
     super::record::store_access(true)?;
-    let (row,evidence)=service.read_session(RepositoryOperation::Read,|db| {
+    let (row,mut evidence)=service.read_session(RepositoryOperation::Read,|db| {
         super::record::audit(db).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))?;
         let row=db.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.id=?2 AND r.root_path=?3",params![id.to_string(),repo.registration_id(),repo.root().to_str()],super::record::decode)?;
         Ok((row,Execution::read(db,id)?))
@@ -335,23 +358,37 @@ fn read_evidence(
     evidence
         .validate_graph(&git, &row)
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
+    // Reporting only, never partial-install reconciliation authority. A changed
+    // index/file image after recorded backend intent is retained as durable work.
+    if evidence.conflict_started
+        && !evidence.conflict_observed
+        && let Ok(context) = git2::Repository::open(&row.worktree)
+        && evidence.images.as_ref().is_some_and(|p| {
+            p.matches(&context, row.context_parent)
+                .is_ok_and(|same| !same)
+        })
+    {
+        evidence.conflict_observed = true;
+    }
     Ok((row, evidence))
 }
 
-fn report(
+pub(super) fn report(
     code: ResultCode,
     reason: Reason,
     evidence: Option<(&LocalContextSyncRecord, &Execution)>,
 ) -> Report {
     let mut effects = Effects::not_requested();
     if let Some((row, e)) = evidence {
-        effects.write = if e.checkout_observed {
+        effects.write = if e.checkout_observed || e.conflict_observed {
             WriteEffect::Written
         } else {
             WriteEffect::Unchanged
         };
         effects.checkpoint = if e.commit_observed {
             CheckpointEffect::Committed
+        } else if e.conflict_observed && !row.integration_proven {
+            CheckpointEffect::Pending
         } else {
             CheckpointEffect::Unchanged
         };
@@ -385,9 +422,11 @@ fn report(
         reason,
         state: evidence.map(|(r, _)| r.state),
         effects,
+        required_request: None,
+        cancel_acknowledged: code == ResultCode::Cancelled,
     }
 }
-fn boundary(owner: &Owner<'_>, point: FailurePoint) -> Result<(), Fault> {
+pub(super) fn boundary(owner: &Owner<'_>, point: FailurePoint) -> Result<(), Fault> {
     BOUNDARY_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(point);
@@ -427,12 +466,33 @@ fn observe_object_progress(owner: &mut Owner<'_>) -> Result<(), Fault> {
 
 fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     let e = owner.evidence()?;
+    if matches!(
+        owner.row.state,
+        LocalSyncState::Cancelled | LocalSyncState::Abandoned
+    ) {
+        return Err(Fault {
+            code: ResultCode::Cancelled,
+            reason: Reason::Cancelled,
+        });
+    }
     if owner.row.state == LocalSyncState::Complete {
         return Ok(if e.disposition == Disposition::Noop {
             ResultCode::AlreadyApplied
         } else {
             ResultCode::Ok
         });
+    }
+    owner.authorize()?;
+    boundary(owner, FailurePoint::LocalSyncAfterIntent)?;
+    super::control::safe_point(owner)?;
+    if e.disposition == Disposition::Merge && super::conflict::has_conflicts(owner)? {
+        if owner.row.active_resolution.is_some()
+            || owner.row.integration_proven
+            || owner.git.refname_to_id(&owner.row.context_ref)? != owner.row.context_parent
+        {
+            return super::resolve::continue_without_source(owner);
+        }
+        return super::conflict::install(owner);
     }
     if owner.row.active_resolution.is_some()
         || !matches!(
@@ -457,6 +517,7 @@ fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     if !owner.row.integration_proven {
         integrate(owner)?;
     }
+    super::control::safe_point(owner)?;
     owner.authorize()?;
     let expected = owner.row.result.unwrap_or(owner.row.context_parent);
     recover::clean_metadata(&owner.git, &owner.row.context_ref)?;
@@ -466,13 +527,20 @@ fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
         return Err(Fault::foreign());
     }
     owner.phase("index_pending")?;
+    super::control::safe_point(owner)?;
     boundary(owner, FailurePoint::LocalSyncBeforeIndex).map_err(|_| Fault {
         code: ResultCode::DiscoveryPending,
         reason: Reason::IndexPending,
     })?;
-    index(owner).map_err(|_| Fault {
-        code: ResultCode::DiscoveryPending,
-        reason: Reason::IndexPending,
+    index(owner).map_err(|fault| {
+        if fault.code == ResultCode::Cancelled {
+            fault
+        } else {
+            Fault {
+                code: ResultCode::DiscoveryPending,
+                reason: Reason::IndexPending,
+            }
+        }
     })?;
     boundary(owner, FailurePoint::LocalSyncAfterIndex)?;
     Ok(if e.disposition == Disposition::Noop {
@@ -564,6 +632,7 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
         owner.step(1, "checkout", true, Some(candidate))?;
     }
     boundary(owner, FailurePoint::LocalSyncAfterCheckout)?;
+    super::control::safe_point(owner)?;
     owner.step(2, "reference", false, Some(candidate))?;
     owner.flag("ref_started")?;
     owner.authorize()?;
@@ -662,7 +731,7 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
     owner.step(0, "objects", true, Some(oid))?;
     Ok(oid)
 }
-fn validate_candidate(owner: &Owner<'_>, e: &Execution) -> Result<(), Fault> {
+pub(super) fn validate_candidate(owner: &Owner<'_>, e: &Execution) -> Result<(), Fault> {
     let oid = owner.row.candidate.ok_or_else(Fault::authority)?;
     let commit = owner.git.find_commit(oid)?;
     match e.disposition {
@@ -771,22 +840,34 @@ fn integrated(owner: &mut Owner<'_>, result: Option<git2::Oid>) -> Result<(), Fa
     }
     owner.transaction(|tx,row| {tx.execute("UPDATE local_context_sync_records SET state='integrated',result_oid=?2,integration_proven=1,artifacts_released=1,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",params![row.operation_id.to_string(),result.map(|o|o.to_string())])?;Ok(())})
 }
-fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
+pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     owner.authorize()?;
     let git = git2::Repository::open(owner.repo.root())?;
     let observed_from = time::OffsetDateTime::now_utc().unix_timestamp();
     let before = observe_root(&git, owner.repo.root());
     boundary(owner, FailurePoint::BeforeIndexTransactionCommit)?;
+    super::control::safe_point(owner)?;
     let after = observe_root(&git, owner.repo.root());
     if !changed_contexts(&before, &after, owner.repo.root()).is_empty() {
         return Err(Fault::foreign());
     }
     let root = owner.repo.root();
-    owner.transaction(|tx,row| {
+    let cancelled=owner.transaction(|tx,row| {
+        if super::control::acknowledge_pending(tx,row)? {return Ok(true);}
         persist_observation(tx,row.repository_id,&before,root)?;
         tx.execute("UPDATE repositories SET accessibility='accessible',refresh_required=0,refreshed_at=?2 WHERE id=?1",params![row.repository_id,observed_from])?;
         tx.execute("UPDATE local_context_sync_records SET state='complete',index_complete=1,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",[row.operation_id.to_string()])?;
+        if let Some(attempt)=row.active_resolution
+            && tx.execute("UPDATE local_context_sync_resolutions SET state='complete' WHERE attempt_ulid=?1 AND operation_ulid=?2",params![attempt.to_string(),row.operation_id.to_string()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
         tx.execute("UPDATE operation_records SET state='completed',completed_step='completed' WHERE id=?1",[row.local_record_id])?;
+        Ok(false)
+    })?;
+    if cancelled {
+        Err(Fault {
+            code: ResultCode::Cancelled,
+            reason: Reason::Cancelled,
+        })
+    } else {
         Ok(())
-    })
+    }
 }

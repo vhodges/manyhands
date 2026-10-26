@@ -40,6 +40,8 @@ pub(super) struct Execution {
     pub ref_started: bool,
     pub ref_observed: bool,
     pub checkout_baseline: Option<[u8; 32]>,
+    pub conflict_observed: bool,
+    pub conflict_started: bool,
 }
 impl Execution {
     pub fn validate_graph(
@@ -84,6 +86,8 @@ impl Execution {
             ref_started: false,
             ref_observed: false,
             checkout_baseline: None,
+            conflict_observed: false,
+            conflict_started: false,
         })
     }
     pub fn insert(&self, tx: &Connection, id: OperationId) -> Result<(), ReadError> {
@@ -100,9 +104,11 @@ impl Execution {
             let disposition=match r.get::<_,String>("disposition")?.as_str() {"noop"=>Disposition::Noop,"fast_forward"=>Disposition::FastForward,"merge"=>Disposition::Merge,_=>return Err(rusqlite::Error::InvalidQuery)};
             let commit_identity=r.get::<_,Option<String>>("commit_name")?.map(|name| -> rusqlite::Result<_> {Ok((name,r.get("commit_email")?,r.get("commit_time")?,r.get("commit_offset")?))}).transpose()?;
             let checkout_baseline=r.get::<_,Option<Vec<u8>>>("baseline_worktree")?.map(|bytes|bytes.try_into().map_err(|_|rusqlite::Error::InvalidQuery)).transpose()?;
-            Ok(Self {images:None,disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?,checkout_baseline})
+            Ok(Self {images:None,disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?,checkout_baseline,conflict_observed:false,conflict_started:false})
         }).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))?;
         execution.images = super::image_proof::Proof::read(db, id)?;
+        execution.conflict_observed = db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_conflicts WHERE operation_ulid=?1 AND manifest IS NOT NULL)",[id.to_string()],|r|r.get(0))?;
+        execution.conflict_started=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='conflict_install')",[id.to_string()],|r|r.get(0))?;
         Ok(execution)
     }
 }
@@ -306,7 +312,13 @@ impl Owner<'_> {
             .map_err(ReadError::from)?;
         record::audit(&tx).map_err(|_| Fault::authority())?;
         let current=tx.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.id=?2 AND r.root_path=?3",params![self.row.operation_id.to_string(),self.repo.registration_id(),self.repo.root().to_str()],record::decode).map_err(|_|Fault::authority())?;
-        if current != self.row {
+        let mut expected = self.row.clone();
+        // Issuance is concurrent read/control work, not executor takeover.
+        // The closure below receives CURRENT counters and only acknowledges the
+        // explicitly observed generation; no newer cancellation is overwritten.
+        expected.cancel_issued = current.cancel_issued;
+        expected.cancel_acknowledged = current.cancel_acknowledged;
+        if current != expected {
             return Err(Fault::foreign());
         }
         let prior = Execution::read(&tx, current.operation_id)?;

@@ -47,7 +47,13 @@ The controller subsequently reports **full Task 5 SPEC approval at `3177dba`**.
 QUALITY `ses_e878dbd29ffednm05pK3O5zlGc` resolved its original four findings but found
 one new P2 worktree-attribute-source gap. Its tested correction is recorded in
 `01M5WNVFNPVN42302WYENZCYEB`; independent re-review remains pending, and the SPEC
-approval is not automatically extended to the correction.
+approval is not automatically extended to the correction. **Superseding controller
+handoff for Task 6:** SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` and QUALITY
+`ses_e878dbd29ffednm05pK3O5zlGc` both **APPROVED, zero outstanding findings at
+`7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, over the full Task 5 base `4377944`
+(implementation-code base `7856c619`). Its final recorded evidence is 113 local,
+7 shared and 4 compile-fail tests, and 14 actual no-Drop exits. These are controller
+review reports, not reviews performed by this implementer.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -62,8 +68,9 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Full SPEC approved at `3177dba4a44f8f13abeb8aa8ac936942eca4151d` per controller. QUALITY original four findings resolved; one new P2 on ignored/untracked worktree attributes corrected from that base. Checkpoint `01M5WNVFNPVN42302WYENZCYEB`: **113 local tests + 7 shared controls + 4 compile-fail controls pass**, whole-tree gates pass. Independent re-review pending; Task 7 production activation obligation retained. |
-| Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
+| Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
+| Task 6 | Domain implementation and local verification complete in the feature commit containing checkpoint `01M5WTE43WQ76N6VDJXB70519K`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. **142 local + 7 shared + 4 compile-fail = 153 selected passing tests**. Controller independent SPEC then QUALITY pending. |
+| Tasks 7–9 | Not started. Public F2 requests/DTOs/activation and end-to-end closure acceptance remain unproven; precise obligations below. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -2267,3 +2274,226 @@ Merge-tree passed with base tree `76000e7c2f650004b7972bb1db42d5db7bc58f2f`; sta
 diff and log inspected, diff checks passed. Ticket remains implementing. No owner
 question, subagent, PR/lifecycle action or native dispatch. Await independent
 verification of this guard before Task 6.
+
+## Task 6: canonical conflict resolution and safe domain recovery
+
+Checkpoint `01M5WTE43WQ76N6VDJXB70519K`, ID/time issued at
+**2026-10-26T19:19:14Z**; the final malformed-token correction and verification
+continued after issuance. Base **`7283ad210abbb0e9f6fd108362c48d488ee7fad4`**.
+Review from that base through the feature commit containing this checkpoint,
+`feat: resolve and recover owned local context conflicts`.
+
+### Authority and staging
+
+The Task 6 handoff explicitly preserves the owner-approved plan, E4/E9 and narrow
+key-ID guard scope, ticket-branch commits/pushes, and the controller's narrow
+internal `cfg(test)` staging. No new staging approval was requested. Work remained
+in this ticket worktree/branch, without subagents. Entry was clean. Start and final
+fetch/merge found `origin/main` at `0464c42dae19a6dde000c7e7660e82762a41fada`
+already incorporated; HEAD stayed at the supplied base. Final merge-tree exited 0,
+base tree `41328daafed68b35880d236101608f9ca917c021`. Current main AGENTS was checked.
+
+New files: `local_sync/{conflict,conflict_record,resolve,control,conflict_tests,
+control_tests}.rs`. Modified: `local_sync/{mod,record,recover,run,image_proof}.rs`
+and `bridges/abandon.rs`. All paths are under `src/repository/`.
+The neutral integration helpers are reused directly; no remote orchestration or
+old semantic test was changed. No Cargo/dependency/target, frontend, global
+ResultCode/RecoveryActionKind or public execution bypass was introduced.
+
+The real domain code performs Git/SQL/file effects under the common lease and
+existing `Owner` authority checks. `conflict`, `resolve` and `control` join the
+approved test-gated executor; production schema/audit/admission and the generic
+abandon guard remain active. All-target clippy compiles these real domain paths.
+This is not a claim that the public mutation commands or F2 protocol are delivered.
+
+### Implemented sequencing and evidence
+
+- Admissible canonical or mixed-code conflicts are installed through the neutral
+  backend after durable intent. The content-free installed image binds complete
+  index stages, raw paths, file digests/modes and owned merge-member digests to the
+  frozen pair. Before acceptance, incompatible closures still refuse without an
+  owner. Existing clean integration, two-sided image bindings, filtered-image and
+  ref/reflog proofs remain in force. Conflict preparation/retry also retains the
+  worktree-attribute-source guard.
+- Additive marker `local_context_sync_conflicts_v7` versions the exact audited
+  conflict and resolution-cancellation tables. Missing marker/table/required row,
+  invalid generations/counters or broken associations refuse. The cancellation
+  table cascades from the parent and audits its attempt association, preserving
+  the existing legacy child-table upgrade/rollback contract.
+- Conflict capabilities use versioned, length-delimited BLAKE3 over repository
+  scope, operation, immutable generation, raw paths, modes and stage OIDs. Tokens
+  select re-enumerated frozen entries, never caller-decoded paths. Malformed tokens
+  are invalid_input; valid foreign tokens are external_change. Side strings come
+  only from immutable ODB blobs; accepted partial attempts retain historical reads.
+  Completed/abandoned operations invalidate those reads. Separate read sessions
+  recheck registration/semantic facts and parent/active-R cancellation counters;
+  Git image/HEAD and routing are rechecked afterward. No read-token table exists.
+- Full canonical-set, all-side immutable-field and prospective-context dependency
+  validation precedes acceptance/writes. Every path is preflighted before the
+  first replacement. Attempts persist the top-level observation and canonical
+  ordered token/source digest, per-path preimage/output digests and progress, never
+  source text. Exact accepted input is matched before fresh-token validation;
+  incomplete attempts require their original resolution request ID and bytes.
+- Per-path replacements reuse no-follow/digest-guarded owned writes. Candidate
+  intent freezes one ordered-parent OID and identity before import. Referenced
+  objects are imported before the commit object; retry reconstructs the same
+  candidate after an intent interruption, even after configured identity changes.
+  Index pre/post images, original nonconflict entries, canonical invariants,
+  candidate identity, context CAS and both expected reflog appends are checked.
+- Metadata release preflights all members, records intent, treats an absent member
+  as already retired, and removes only matching owned members. A foreign member
+  refuses before retiring the remainder. Unknown backend locks are preserved for
+  operator repair. No automatic reset, rollback, marker deletion or unsafe abandon
+  exists. External repair requires a clean exact ordered-parent commit and the
+  shared all-side invariant validation, and does not claim a made checkpoint.
+- Domain S/active-R cancellation counters are monotonic. Safe points acknowledge
+  the captured vector, retaining a concurrently newer issuance. Pre-effect stop
+  is terminal; conflict/path/integration/index stops retain their phase and accepted
+  intent. Final domain indexing serializes the cancellation check with parent,
+  attempt and envelope completion. Exact continuation consumes acknowledged values
+  without a cancellation loop. **These are domain counters, not F2 controls.**
+- Internal abandonment proves either artifact-free Prepared or integrated/released
+  IndexPending state, revokes epochs, and abandons parent/attempt without changing
+  Git. It refuses an associated public operation owner. The production generic
+  bridge has an explicit local-sync guard so its old request-deletion path cannot
+  bypass the future all-associated disposition. Terminal domain resume cannot
+  resurrect an abandoned operation.
+- Positive in-call and last-proven evidence survive later journal access loss.
+  The original failure is retained; durable effects remain Partial. Actual owned
+  filesystem PermissionDenied maps to repository_inaccessible. Index failure maps
+  to discovery_pending with integrated OID, and retry performs only discovery.
+
+### Test-first and debugging record
+
+Every command used Devenv and one positional test filter. Missing new read/resolve,
+resume and control symbols first established API-seam compilation failures; these
+are not counted as runtime recovery REDs. Runtime REDs before their corrections:
+
+| Test/filter | Observed failure before correction | Final result |
+| --- | --- | --- |
+| `conflict_installation_is_owned_partial_for_both_context_kinds` | Unsupported preaccept refusal instead of owned ConflictPending. | Both kinds pass. |
+| `mixed_conflict_requires_exact_ordered_clean_external_repair` | Valid external repair initially refused; then reversed parents exposed the adapter's missing ordered-parent check. | Exact clean parents pass; wrong order preserves/refuses. |
+| `candidate_intent_rebuilds_same_identity_and_foreign_release_precedes_no_write` | Missing imported candidate could not resume with exact R. | Frozen candidate/identity retry and foreign-metadata no-write control pass. |
+| `resolution_authority_loss_and_missing_companion_never_authorize_writes` | A write followed an injected owner-epoch loss. | Reauthorization at the actual write seam, plus missing marker/manifest/control controls pass. |
+| `no_drop_conflict_backend_window_preserves_until_exact_operator_baseline` | Actual child exit left changed index/files but reply claimed Unchanged. | Written/Partial ambiguity, preserved owner and explicit operator-baseline retry pass. |
+| `accepted_resolution_refuses_changed_mode_and_unrelated_untracked_before_more_effects` | Unrelated untracked content was accepted after candidate preparation. | Complete dirtiness/nonconflict proof refuses it before additional effects. |
+| `conflict_preparation_keeps_frozen_attribute_source_guards` | Ignored unbound attributes admitted and installed conflict. | Owner-free/no-write refusal passes. |
+| `cancellation_after_integration_and_at_index_handoff_keeps_proven_effects` | Cancellation arriving at index handoff finished Ok instead of stopping. | Both integrated and index-pending cancellation/continuation pass. |
+| `only_artifact_free_domain_abandonment_can_revoke_authority` | Terminal prepared abandon resumed as RecoveryRequired instead of terminal cancellation. | Artifact-free cases and terminal replay pass. |
+| `resolution_index_transaction_failure_preserves_integration_and_retries_only_discovery` | Actual index-transaction boundary failure returned RecoveryRequired. | DiscoveryPending/complete integration and discovery-only retry pass. |
+| `conflict_read_rechecks_resolution_counters_in_a_fresh_session` | Active-R counter changed between sessions but read succeeded. | ExternalChange on the raced read; historical token remains usable afterward. |
+| `unix_directory_permission_loss_keeps_partial_resolution_resendable` | Actual directory PermissionDenied became InternalError. | Typed local I/O mapping and exact resend pass, executed as UID 1000. |
+| `resolution_journal_access_loss_retains_last_proven_effects` | Failed final evidence read erased actual earlier writes. | Path/candidate cases retain effects and resume after access restoration. |
+| `ignored_resolution_takeover_does_not_authorize_a_path_write` | Ignored SQL epoch update still allowed resolution. | Required one-row fenced takeover refuses before writes. |
+| `complete_preflight_refuses_every_invalid_set_before_any_path_write` | Final code-specific assertion exposed malformed token returning ExternalChange. | Malformed InvalidInput, foreign ExternalChange and no-write controls pass. |
+
+Supplementary real proofs cover complete multi-path CRLF byte preservation in files
+and blobs; serialized/reopened tokens; historical reads despite mutable-path edits;
+same-ID source and top-level observation mismatch; all-side and ancestor-only
+irreversible closures; affected comment dependencies; accepted-source privacy;
+mode/path/metadata/lock refusal; rebuild/lost-registry preservation; and fault matrices.
+
+Fixture/debug corrections were not policy changes: the first dependency probe used
+an unknown `depends_on` key, which canonical parsing intentionally preserves; the
+final test exercises actual comment-parent dependencies. The ancestor-only fixture
+initially passed a commit handle from another repository handle into Git commit
+creation; reopening the parent through each committing handle and asserting both
+parent IDs fixed the fixture. New cancellation evidence initially referenced a
+child table that legacy upgrade fixtures rename; changing its FK to the stable
+parent plus audited attempt association preserved all old assertions. Clippy's
+tuple-complexity finding was resolved with a private type alias, not an allowance.
+An early 120-second local selection timed out and is not counted as passing;
+subsequent complete selections used a 600-second tool limit.
+
+### Design checkpoint: actual outcomes and retained owners
+
+All **Task 6 domain-owned** required-outcome rows pass. This table supplements,
+and does not rewrite, the original 25 required outcomes or earlier evidence.
+W/C/I/D below mean write/checkpoint/integration/discovery effects.
+
+| Original row / boundary | Executed domain outcome and authority | Public/later obligation |
+| --- | --- | --- |
+| 1–3: intent, backend interruption, frozen pair | Task 5 controls remain green. New conflict backend child exit retains Applying and ambiguous Git evidence; explicit exact-baseline repair permits retry. | S acceptance/replay: Task 7; closure follow-on: Task 8. |
+| 4–5: foreign state and bad complete set | Refuse before any new resolution path write, preserving files/index/refs and parent. Whole-set mixed conflict is external-only; malformed/foreign/duplicate/missing/stale and invalid immutable/dependency input refuse. | Public DTO/schema/error presentation: Task 7. |
+| 6: after one path / missing bytes | ResolutionPrepared + same active attempt; W Written, C/I/D Pending. Resume names R with original_request_required; exact R completes once. Changed source or only observation gives request_mismatch with historical effects. | F2 R/U ownership and IDs: Task 7. |
+| 7: candidate intent/import/index/ref | Before import, exact R reconstructs the frozen candidate. After import/index, C Committed, I Pending. After ref, Integrated with I Complete and release pending. Retry uses the same OID/one ref append. | Independent S/R settlement: Task 7. |
+| 8, 14–15: cancellation | Prepared/no-effect stop is terminal Cancelled with no durable effects; conflict/path stops retain underlying phase/attempt. Integrated/index stops retain complete I/OID. Issued 2 versus acknowledged 1 survives the coordinated race; next retry acknowledges 2, then continuation completes. Unsafe abandon refuses. | Accepted S/R/U, reply-loss crashes, authoritative F2 counters and U takeover remain Task 7. |
+| 9: output loss after completion | Domain R replay returns the completed parent evidence without new Git effects. | Both independent finished request receipts and lost settlement: Task 7, not claimed here. |
+| 10–11: closure | Existing Closing admission/reciprocal-fence controls and all-side immutable validation remain green. | End-to-end closure refusal → local resolution → explicit adoption retaining closure_oid/fields is Task 8, still unproven here. |
+| 12–13: rebuild/authority loss | Rebuild refuses pending real conflict/partial R without changing evidence. Replaced registry cannot resume or read historical sides; files/index/merge artifacts remain unchanged. | Full public three-way lost-journal distinction and registration behavior: Task 8. |
+| 16: integrated/released abandon | IndexPending, W Written/C Committed/I Complete/D Pending. Artifact-free domain abandonment atomically marks parent/attempt Abandoned and revokes epoch; exact domain resume stays terminal. | Finish ALL Accepted S/R/U, including unlinked intended-parent contenders, atomically: Task 7. |
+| 17–18, 23–25: acceptance/link/handover | Domain digest/attempt identity and owner loss are tested, with no new attempt on exact partial retry. | Public acceptance-before-link, stable-ID evidence, F2 handover, unlinked terminal dispositions and immutable request results are wholly Task 7. |
+| 19–20: admission/closure disagreement | Task 4 reciprocal ownership and Task 5 preaccept immutable-disagreement controls remain green, without changed old assertions. | F2 acceptance disposition and broader public compositions: Tasks 7/8. |
+| 21: backend ambiguity | Actual child exit after conflict backend effect, before observed image, preserves metadata/index/files and refuses automatic repair. Existing Task 5 actual checkout/ref/log/lock controls stay green. | Broader platform/adversarial coverage: Task 8/native later. |
+| 22: owned-member retirement | Actual child exits **after MERGE_HEAD unlink**, leaving MERGE_MSG/MERGE_MODE. Resume observes absence, verifies and retires remainder, completes without another commit/ref effect. FOREIGN replacement refuses and survives. | Public request composition: Task 7; native runtime still unproven. |
+| Permission loss | Mandatory portable typed PermissionDenied occurs at the actual second owned-write seam: two attempted writes, exactly one observed path. Partial repository_inaccessible retains R. Actual Unix directory denial corroborates it; restoration + exact R finishes once. | Windows ACL evidence is not claimed. |
+
+There are **three new actual no-Drop child exits** (two owned-retirement cases,
+including FOREIGN control, and one initial-install backend case), each asserted
+exit status 76 without Drop. Together with Task 5's fourteen, the final local group
+contains **17 actual no-Drop exits**. The ordinary child-entry test is not another
+crash proof. Candidate/ref/path returned-fault tests are not mislabeled no-Drop.
+
+### Final verification and Task 7 handoff
+
+Final whole-tree Devenv gates all exit 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Final local run: **142 passed**, zero failures/ignored/measured, 1284 filtered,
+393.79s. This is the 113 existing local tests plus **29 new tests** (25 conflict/
+resolution tests including one child entry, and four control tests). Check and
+clippy finished in 0.30s and 6.57s respectively; no warnings. The earlier complete
+run also passed 142 tests; the last change only corrected malformed-token result
+classification and was followed by this fresh full local selection and all gates.
+
+Additional targeted commands (each separate invocation, one positional filter),
+prefix `devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--lib repository::integration::tests` | 3 |
+| `--doc local_sync` | 4 |
+
+These shared/private-boundary controls were unchanged by the final local token
+parser correction. Unique selected total: **149 library + 4 compile-fail = 153**.
+No full suite, native CI, PR or lifecycle action. Linux/UID-1000 permission evidence
+does not establish native Windows/macOS behavior.
+
+**Mandatory Task 7 obligations, not delivered by this checkpoint:**
+
+1. Activate the existing executor and new conflict/resolve/control internals with
+   real production mutation/read/resume callers; remove exclusive-dependency gates
+   while leaving all fixture hooks and tests test-only. No direct public journal
+   bypass may replace the approved boundary.
+2. Create authoritative F2 S/R/U control associations atomically with acceptance,
+   including immutable intended scoped parent before linkage; check current request
+   attempt plus domain epoch at linking, takeover, every effect and settlement.
+3. Atomically advance the control attempt fence with `enter_request`, preserving
+   stable-ID evidence, original digest, effects and cancellation generations. Do
+   not use the domain-only cancellation table as proof that F2 is implemented;
+   bridge/migrate its observed counters without losing an outstanding issuance.
+4. Route partial resume to original R and preserve Accepted/Owed on recoverable
+   cancellation; handle linked and unlinked terminal dispositions exactly. Complete
+   the bridge's guarded route with atomic cancellation of ALL associated Accepted
+   S/R/U, including unlinked intended-parent records, preserving Finished results.
+5. Publish the exact designed DTOs, closed enums/schemas/goldens, content-read
+   privacy, command inventories, progress, request retry/cancel/abandon presentation
+   and stable two-session reads. Current conflict-domain inspection is an internal
+   building block, not the complete public operation-inspection DTO.
+6. Run the named F2/read/contract cases and production gates. Task 8 still owns the
+   complete closure acceptance fixture and broader lost-journal/platform evidence.
+
+Next gate is controller **independent SPEC, then QUALITY**, over the full Task 6
+range from the supplied base, including these activation and required-outcome
+boundaries. This implementer claims no independent review approval and starts no
+Task 7 implementation. Ticket remains implementing.

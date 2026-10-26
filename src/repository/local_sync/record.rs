@@ -247,6 +247,7 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         )
         .map_err(|_| failure())?;
     }
+    super::conflict_record::migrate(db)?;
     super::image_proof::migrate(db)?;
     if !checkout_image_marked(db)? {
         audit(db)?;
@@ -485,7 +486,9 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         return Err(failure());
     }
     audit_execution(db, true)?;
-    super::image_proof::audit(db)
+    super::image_proof::audit(db)?;
+    super::conflict_record::audit(db)?;
+    Ok(())
 }
 
 fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryError> {

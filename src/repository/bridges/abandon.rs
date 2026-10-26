@@ -503,6 +503,24 @@ impl RepositoryService {
         {
             return Ok(AbandonOperationOutcome::Changed);
         }
+        // Local synchronization owns companion Git/recovery authority. The old
+        // generic release deletes request identity and cannot implement its atomic
+        // S/R/U disposition. Task 7 supplies that route; never fall through here.
+        if transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_context_sync_records WHERE operation_ulid=?1)",
+                [operation_id.to_string()],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(sqlite)?
+        {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::RecoveryRequired,
+                "local synchronization requires guarded abandonment",
+            ));
+        }
         let owner = mutation::release_operation_owner(&transaction, root_key, operation_id)
             .map_err(sqlite)?;
         let left = remains(&root, &row, owner);
