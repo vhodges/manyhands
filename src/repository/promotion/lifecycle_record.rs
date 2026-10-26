@@ -534,10 +534,9 @@ pub(in super::super) fn child_execution<R: ParentRecord>(
         child: child.ok_or_else(|| mismatch(R::KIND))?,
     })
 }
-/// The fence's refusal reads as promotion's for either parent kind, as it
-/// did before the closure parent shared it.
-fn fence_mismatch() -> RepositoryError {
-    mismatch(LifecycleKind::DocumentPromotion)
+/// The fence's refusal names the lifecycle that issued the child attempt.
+fn fence_mismatch(kind: LifecycleKind) -> RepositoryError {
+    mismatch(kind)
 }
 impl ChildExecution {
     pub(in super::super) fn validate_request(
@@ -555,7 +554,7 @@ impl ChildExecution {
             _ => false,
         };
         if request.operation_id != self.child || !matches {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         Ok(())
     }
@@ -566,10 +565,10 @@ impl ChildExecution {
         op: OperationId,
     ) -> Result<(), RepositoryError> {
         if id != self.repository_id || op != self.child {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
-        let parent =
-            ParentFacts::read(db, self.kind, id, self.parent)?.ok_or_else(fence_mismatch)?;
+        let parent = ParentFacts::read(db, self.kind, id, self.parent)?
+            .ok_or_else(|| fence_mismatch(self.kind))?;
         let (attempt, child) = match self.role {
             ChildRole::Context => parent.context,
             ChildRole::Primary => parent.primary,
@@ -579,7 +578,7 @@ impl ChildExecution {
             || attempt != self.attempt
             || child != Some(self.child)
         {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         let record = state::read_operation(db, id, op)?;
         // Exact, current authoritative handoff remains valid after parent
@@ -588,7 +587,7 @@ impl ChildExecution {
             return Ok(());
         }
         if !child_allowed(parent.step, self.role) || (parent.cancel_requested && record.is_none()) {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         Ok(())
     }

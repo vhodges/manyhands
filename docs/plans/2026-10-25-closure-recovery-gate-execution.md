@@ -35,8 +35,9 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | --- | --- |
 | Approval recording | `51a0e96da11f8bc1f2f0689e72c88ed99470c96a`, `docs: approve closure recovery gate implementation`; pushed to ticket branch. |
 | Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
-| Task 1 | Implemented and locally verified after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; code checkpoint is `fix: classify incompatible closures as external recovery`, containing comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Awaiting controller SPEC/QUALITY review. |
-| Tasks 2–9 | Not started. New local-operation outcomes below remain unproven. |
+| Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
+| Task 2 | Implemented and locally verified from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; code checkpoint `fix: use lifecycle parent wording for child mismatches`, containing comment `01M5V1QEB9WYETHHG1H765DVH7`. Awaiting controller SPEC then QUALITY review. |
+| Tasks 3–9 | Not started. New local-operation outcomes below remain unproven. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -522,3 +523,79 @@ change or existing assertion adjustment was needed.
   Immutable closure races remain unsupported; this task makes classification
   honest, not a winner-selection policy. Controller SPEC then QUALITY review is
   next. Ticket remains implementing; Task 2 has not started.
+
+## Independent Task 1 review
+
+Recorded at the Task 2 checkpoint, `2026-10-26T02:48:10Z`, from the controller's
+explicit handoff. Both reviews **APPROVED with zero findings** for
+`9b7879e..76a1ff5` (full endpoints
+`9b7879e3b03a888c8f6ab62608b0edede65a6982` and
+`76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`).
+
+| Review | Session | Result |
+| --- | --- | --- |
+| SPEC | `ses_e89ead5dbffeOxjtFK9DMXgdOi` | APPROVED; zero findings. |
+| QUALITY | `ses_e89e93bd6ffeltNxvyfeRCKLIZ` | APPROVED; zero findings. |
+
+Task 0 and E4/E9 approvals above remain authoritative. This checkpoint records
+Task 1 review completion and Task 2 implementation; it grants no new lifecycle
+permission.
+
+## Task 2: child mismatch wording by parent kind
+
+Recorded `2026-10-26T02:48:10Z`; task base
+`76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`. Bounded implementer used no subagents.
+Only the assigned ticket worktree/branch was changed. Entry status was clean at
+the controller's supplied HEAD. Read current AGENTS, approved contract/design/
+plan, ticket, checkpoint and ledger, plus the parent/fence/test source.
+
+Preflight fetched origin and merged main
+`0464c42dae19a6dde000c7e7660e82762a41fada`: already up to date, task HEAD unchanged,
+ancestry check passed, no conflicts. Checkpoint fetch found the same main;
+`git merge-tree --write-tree HEAD origin/main` exited 0 with tree
+`331438ddce7565143862638c2919e7ff4cf34620` (committed task-base HEAD).
+
+### Implementation and coverage
+
+- Root cause: private `fence_mismatch` hard-coded DocumentPromotion despite
+  ChildExecution retaining LifecycleKind. It now accepts that kind, and all five
+  refusal sites pass `self.kind`, including the absent-parent `ok_or_else`.
+- Production changes are confined to `src/repository/promotion/lifecycle_record.rs`:
+  helper signature/body, comment and five callers. Validation predicates, their
+  ordering, completed authoritative handoff exception, error kinds, and privacy
+  wrappers are unchanged.
+- Added four tests and two fixture/assertion helpers to the existing
+  `src/repository/remote/reservation_tests.rs`. No existing assertions changed.
+  Both closure and promotion parents cover both context and primary roles:
+  **48 mismatch scenarios** (13 per context kind, 11 per primary kind).
+- Cases independently alter request operation/target role, repository/operation
+  identity, parent disappearance, item/expectation binding, attempt counter,
+  child ID, disallowed stage and unreserved cancellation; context cases also
+  alter target kind and item. Each starts with successful request/durable fence
+  validation of a parent issued through real record APIs. Durable mutations
+  retain valid row shape so the asserted error is OperationMismatch, not decode
+  recovery failure.
+- Tests obtain the inner RepositoryError directly, retaining it inside the
+  transaction result where needed. Every case asserts OperationMismatch and
+  exact fixed parent-specific message. Collecting messages before comparison
+  ensures the red run exercises all scenarios, rather than stopping at its first
+  wrong string. Promotion controls pin the original text.
+
+### TDD and gates
+
+| Command | Result |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib child_fence` (RED, before production edits) | **6 passed, 2 failed**, 0 ignored/measured, 1273 filtered; 2.45s. Both new closure tests failed only on promotion-versus-closure text, across all 24 closure scenarios. Two new promotion controls and four old tests passed. |
+| Same `child_fence` command (GREEN) | **8 passed, 0 failed/ignored/measured**, 1273 filtered; 2.67s. All 48 new mismatch scenarios exercised. |
+| `devenv shell -- cargo test --all-features --locked --lib quality1_current_authority_handoff_and_ordinary_synchronization_remain_valid` | **1 passed, 0 failed/ignored/measured**, 1280 filtered; 1.01s. |
+| `devenv shell -- cargo fmt --check` | Final exit 0. Initial check identified only the new helper's tuple-return line wrapping; applied that layout and reran. |
+| `devenv shell -- cargo check --all-features --locked` | Exit 0; 2.62s. |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; 10.99s, no warnings. |
+| `git diff --check` | Exit 0. |
+
+Final targeted total: **9 library tests passed**. No full suite or native CI was
+run under this task's targeted-test scope. No dependency, frontend, global enum,
+new target, schema, or existing-test semantic changes were needed. No unresolved
+issue or owner question. Controller independently reviews SPEC then QUALITY for
+the commit from the recorded task base; Task 3 is not started. Ticket remains
+implementing. Commit/push are authorized; PR/lifecycle/native actions are not.
