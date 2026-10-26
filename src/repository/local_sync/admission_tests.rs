@@ -1,8 +1,12 @@
-use super::record_tests::{Fixture, commit};
+use super::record_tests::Fixture;
 use crate::repository::{closure::record as closure, remote::state};
 use crate::{canonical, repository::*, results::ResultCode};
 
 fn closure_owner(f: &Fixture, written: bool) -> OperationId {
+    closure_owner_with(f, written, "valid")
+}
+
+pub(super) fn closure_owner_with(f: &Fixture, written: bool, variant: &str) -> OperationId {
     let operation = OperationId::new();
     let context = f.context();
     let tip = context.head().unwrap().target().unwrap();
@@ -20,7 +24,56 @@ fn closure_owner(f: &Fixture, written: bool) -> OperationId {
             ticket.closed_by = Some("Fixture <fixture@example.invalid>".into());
         }
         std::fs::write(file, canonical::serialize_item(&item).unwrap()).unwrap();
-        commit(&context)
+        let mut index = context.index().unwrap();
+        index.add_path(std::path::Path::new(&path)).unwrap();
+        index.write().unwrap();
+        let tree = context.find_tree(index.write_tree().unwrap()).unwrap();
+        let author = git2::Signature::now(
+            if variant == "wrong_author" {
+                "Other"
+            } else {
+                "Fixture"
+            },
+            "fixture@example.invalid",
+        )
+        .unwrap();
+        let subject = if variant == "wrong_subject" {
+            "fixture".into()
+        } else {
+            format!("Close ticket {}", f.item)
+        };
+        let mut parents = vec![context.find_commit(tip).unwrap()];
+        if variant == "two_parents" {
+            parents.push(
+                context
+                    .find_commit(context.refname_to_id("refs/heads/main").unwrap())
+                    .unwrap(),
+            );
+        }
+        let first = context
+            .commit(
+                Some("HEAD"),
+                &author,
+                &author,
+                &subject,
+                &tree,
+                &parents.iter().collect::<Vec<_>>(),
+            )
+            .unwrap();
+        if variant == "closed_parent" {
+            context
+                .commit(
+                    Some("HEAD"),
+                    &author,
+                    &author,
+                    &subject,
+                    &tree,
+                    &[&context.find_commit(first).unwrap()],
+                )
+                .unwrap()
+        } else {
+            first
+        }
     } else {
         tip
     };

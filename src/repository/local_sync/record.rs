@@ -1,7 +1,11 @@
 //! Same-database companion authority. Creation is indivisible with the local
 //! envelope and is serialized under the common-Git lease. No fallback journal.
-use crate::{canonical::ItemId, repository::*, results::ResultCode};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+#[cfg(test)]
+use crate::results::ResultCode;
+use crate::{canonical::ItemId, repository::*};
+#[cfg(test)]
+use rusqlite::TransactionBehavior;
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::PathBuf;
 
 const MARKER: &str = "local_context_sync_v1";
@@ -70,9 +74,11 @@ fn failure() -> RepositoryError {
         "local synchronization authority is unavailable",
     )
 }
+#[cfg(test)]
 fn recovery_error(_: impl std::fmt::Debug) -> ReadError {
     ReadError::new(ResultCode::RecoveryRequired)
 }
+#[cfg(test)]
 fn sql_error(error: rusqlite::Error) -> ReadError {
     ReadError::new(match error.sqlite_error_code() {
         Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
@@ -158,13 +164,14 @@ impl LocalSyncState {
             _ => return None,
         })
     }
+    #[cfg(test)]
     fn ended(self) -> bool {
         matches!(self, Self::Complete | Self::Cancelled | Self::Abandoned)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LocalContextSyncRecord {
+pub(in super::super) struct LocalContextSyncRecord {
     pub(crate) operation_id: OperationId,
     pub(crate) local_record_id: i64,
     pub(crate) repository_id: i64,
@@ -190,11 +197,6 @@ pub struct LocalContextSyncRecord {
     pub(crate) integration_proven: bool,
     pub(crate) artifacts_released: bool,
     pub(crate) index_complete: bool,
-}
-impl LocalContextSyncRecord {
-    pub fn operation_id(&self) -> OperationId {
-        self.operation_id
-    }
 }
 
 fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
@@ -375,8 +377,38 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         .and_then(|mut s| s.query_map([], decode)?.collect::<Result<Vec<_>, _>>())
         .map_err(|_| failure())?;
     for row in rows {
+        if foreign_id_collision(db,&row.operation_id.to_string(),Some(row.local_record_id))?
+            || db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1)",[row.operation_id.to_string()],|r|r.get::<_,bool>(0)).map_err(|_|failure())? {
+            return Err(failure());
+        }
         let invalid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND (generation!=?2 OR owner_epoch>?3)) OR EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE operation_ulid=?1 AND (generation!=?2 OR owner_epoch>?3))",params![row.operation_id.to_string(),row.generation,row.owner_epoch],|r|r.get(0)).map_err(|_|failure())?;
         if invalid {
+            return Err(failure());
+        }
+    }
+    let mut steps = db
+        .prepare("SELECT kind,expected_old_oid,expected_new_oid FROM local_context_sync_steps")
+        .map_err(|_| failure())?;
+    let mut rows = steps.query([]).map_err(|_| failure())?;
+    while let Some(row) = rows.next().map_err(|_| failure())? {
+        let kind: String = row.get(0).map_err(|_| failure())?;
+        let parse = |column| -> Result<Option<git2::Oid>, RepositoryError> {
+            row.get::<_, Option<String>>(column)
+                .map_err(|_| failure())?
+                .map(|text| {
+                    let oid = git2::Oid::from_str(&text).map_err(|_| failure())?;
+                    if oid.is_zero() || oid.to_string() != text {
+                        return Err(failure());
+                    }
+                    Ok(oid)
+                })
+                .transpose()
+        };
+        let (old, new) = (parse(1)?, parse(2)?);
+        // A ref CAS intent needs both exact endpoints, even before its effect.
+        // Other effect kinds may have no ref transition; any stored OID must
+        // still decode canonically. This audit grants no execution authority.
+        if kind == "reference" && (old.is_none() || new.is_none()) {
             return Err(failure());
         }
     }
@@ -386,6 +418,9 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         for column in 0..3 {
             OperationId::parse(&row.get::<_, String>(column).map_err(|_| failure())?)
                 .map_err(|_| failure())?;
+        }
+        if foreign_id_collision(db, &row.get::<_, String>(0).map_err(|_| failure())?, None)? {
+            return Err(failure());
         }
         if !valid_observation(&row.get::<_, String>(3).map_err(|_| failure())?) {
             return Err(failure());
@@ -403,6 +438,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
 #[cfg(test)]
 thread_local! { pub(super) static WRITE_FAULT: std::cell::Cell<Option<std::io::ErrorKind>>=const {std::cell::Cell::new(None)}; }
 
+#[cfg(test)]
 fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> {
     // Typed failures are injected at the actual registry-opening boundary,
     // before either identity row can be inserted (and before any Git effect).
@@ -424,14 +460,19 @@ fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> 
         _ => ReadError::new(ResultCode::IndexUnavailable),
     })
 }
+#[cfg(test)]
 fn journal_io(_: std::io::Error) -> ReadError {
     ReadError::new(ResultCode::IndexUnavailable)
 }
 
+// Task 4 exercises the real store internally. The approved Task 5 executor
+// will make these seams production callers; no public claim/takeover API is
+// published ahead of preparation and Task 7 request-attempt authority.
+#[cfg(test)]
 impl RepositoryService {
     /// Claim a retained journal without substituting its frozen observation or
     /// parents. This only transfers domain ownership; it performs no Git work.
-    pub fn take_over_local_context_sync(
+    pub(in super::super) fn take_over_local_context_sync(
         &self,
         repo: &ResolvedRepository,
         expected: &LocalContextSyncRecord,
@@ -474,7 +515,7 @@ impl RepositoryService {
     /// The domain journal boundary: bind a frozen, observed pair without Git
     /// effects. Request acceptance/linkage is a separate mutation-boundary duty.
     /// This is not a synchronization executor.
-    pub fn begin_local_context_sync(
+    pub(in super::super) fn begin_local_context_sync(
         &self,
         repo: &ResolvedRepository,
         operation: OperationId,
@@ -567,7 +608,7 @@ impl RepositoryService {
         tx.commit().map_err(sql_error)?;
         Ok(row)
     }
-    pub fn read_local_context_sync_record(
+    pub(in super::super) fn read_local_context_sync_record(
         &self,
         repo: &ResolvedRepository,
         id: OperationId,
@@ -580,30 +621,48 @@ impl RepositoryService {
     }
 }
 
+#[cfg(test)]
 fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
-    for (table, column) in [
-        ("operation_records", "operation_ulid"),
-        ("remote_operation_records", "operation_ulid"),
-        ("key_material_operations", "operation_id"),
-        ("key_registry_changes", "operation_id"),
-        ("document_promotions", "operation_id"),
-        ("document_promotions", "context_sync_id"),
-        ("document_promotions", "primary_sync_id"),
-        ("ticket_closures", "operation_id"),
-        ("ticket_closures", "context_sync_id"),
-        ("ticket_closures", "primary_sync_id"),
-        ("comment_publication_bindings", "operation_ulid"),
-        ("comment_publication_bindings", "synchronization_ulid"),
-        ("remote_resolution_attempts", "attempt_ulid"),
-        ("remote_identity_confirmations", "confirmation_ulid"),
-        ("local_context_sync_resolutions", "attempt_ulid"),
-    ] {
-        if recovery::has_table(db, table)?
-            && db.query_row(
-                &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column}=?1)"),
-                [id],
-                |r| r.get::<_, bool>(0),
-            )?
+    Ok(foreign_id_collision(db, id, None).map_err(recovery_error)?
+        || owned_identity(db, id).map_err(recovery_error)?)
+}
+
+// Only local-sync identities are excluded here. Old remote/local index handoffs
+// and lifecycle child bindings retain their existing cross-journal rules.
+const FOREIGN_IDENTITIES: &[(&str, &str)] = &[
+    ("remote_operation_records", "operation_ulid"),
+    ("key_material_operations", "operation_id"),
+    ("key_registry_changes", "operation_id"),
+    ("document_promotions", "operation_id"),
+    ("document_promotions", "context_sync_id"),
+    ("document_promotions", "primary_sync_id"),
+    ("ticket_closures", "operation_id"),
+    ("ticket_closures", "context_sync_id"),
+    ("ticket_closures", "primary_sync_id"),
+    ("comment_publication_bindings", "operation_ulid"),
+    ("comment_publication_bindings", "synchronization_ulid"),
+    ("remote_resolution_attempts", "attempt_ulid"),
+    ("remote_identity_confirmations", "confirmation_ulid"),
+];
+
+fn foreign_id_collision(
+    db: &Connection,
+    id: &str,
+    own_envelope: Option<i64>,
+) -> Result<bool, RepositoryError> {
+    let local:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1 AND (?2 IS NULL OR id!=?2))",params![id,own_envelope],|r|r.get(0)).map_err(|_|failure())?;
+    if local {
+        return Ok(true);
+    }
+    for (table, column) in FOREIGN_IDENTITIES {
+        if recovery::has_table(db, table).map_err(|_| failure())?
+            && db
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column}=?1)"),
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|_| failure())?
         {
             return Ok(true);
         }
@@ -611,6 +670,51 @@ fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
     Ok(false)
 }
 
+pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool, RepositoryError> {
+    // The envelope alone still reserves its ID after companion loss.
+    for (table, column, predicate) in [
+        (
+            "operation_records",
+            "operation_ulid",
+            " AND action='context_sync_local'",
+        ),
+        ("local_context_sync_records", "operation_ulid", ""),
+        ("local_context_sync_resolutions", "attempt_ulid", ""),
+    ] {
+        if recovery::has_table(db, table).map_err(|_| failure())?
+            && db
+                .query_row(
+                    &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE {column}=?1{predicate})"),
+                    [id],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(|_| failure())?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Call inside the foreign journal's insertion transaction, before effects.
+/// Preflight/replay reads may also call this, but cannot replace that check.
+pub(in super::super) fn require_foreign_id_available(
+    db: &Connection,
+    id: OperationId,
+) -> Result<(), RepositoryError> {
+    if owned_identity(db, &id.to_string())? {
+        Err(RepositoryError::new(
+            RepositoryOperation::Read,
+            None,
+            RepositoryErrorKind::OperationMismatch,
+            "the operation ID belongs to local synchronization",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 fn admit(
     db: &Connection,
     repository_id: i64,
@@ -643,6 +747,7 @@ fn admit(
         let checkpoint = r
             .closure_oid
             .ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))?;
+        closure::checkpoint::checkpoint_authority(git, item, checkpoint).map_err(recovery_error)?;
         let head = git2::Oid::from_str(&observation.context_head).map_err(recovery_error)?;
         if head != checkpoint && !git.graph_descendant_of(head, checkpoint).unwrap_or(false) {
             return Err(ReadError::new(ResultCode::RecoveryRequired));
@@ -684,6 +789,7 @@ fn admit(
     Ok(admitted)
 }
 
+#[cfg(test)]
 fn require_remote_released(db: &Connection, id: i64) -> Result<(), ReadError> {
     let retained:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records r WHERE r.repository_id=?1 AND (r.phase NOT IN ('completed','interrupted','cancelled','failed') OR r.index_pending!=0 OR r.reconciliation_required!=0 OR EXISTS(SELECT 1 FROM remote_integration_steps s WHERE s.operation_record_id=r.id AND s.phase!='applied') OR EXISTS(SELECT 1 FROM remote_resolution_attempts t WHERE t.operation_record_id=r.id AND (t.phase!='applied' OR NOT EXISTS(SELECT 1 FROM remote_resolution_index_artifacts a WHERE a.attempt_id=t.id AND a.phase='released'))) OR EXISTS(SELECT 1 FROM remote_integration_merge_metadata m JOIN remote_integration_steps s ON s.id=m.integration_step_id WHERE s.operation_record_id=r.id AND m.phase!='retired')))",[id],|r|r.get(0))?;
     if retained {
@@ -714,14 +820,19 @@ pub(in super::super) fn require_no_pending(
 pub(in super::super) fn refresh_allowed(
     db: &Connection,
     operation: &str,
+    root: &std::path::Path,
 ) -> Result<bool, RepositoryError> {
+    // Absence grants ordinary refresh permission only after proving there is
+    // no local-sync envelope whose companion authority was lost.
+    audit(db)?;
     let row:Option<(bool,bool,String)>=db.query_row("SELECT integration_proven,artifacts_released,state FROM local_context_sync_records WHERE operation_ulid=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|failure())?;
     match row {
-        None => Ok(true),
+        None => Ok(!owned_identity(db, operation)?),
         Some((integrated, released, state)) => {
-            audit(db)?;
+            let matches_root:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.root_path=?2)",params![operation,root.to_str()],|r|r.get(0)).map_err(|_|failure())?;
             Ok(integrated
                 && released
+                && matches_root
                 && matches!(state.as_str(), "integrated" | "index_pending" | "complete"))
         }
     }

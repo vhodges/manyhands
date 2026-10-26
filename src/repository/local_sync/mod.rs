@@ -5,7 +5,6 @@
 mod observe;
 pub(super) mod record;
 pub use observe::LocalContextSyncObservationDto;
-pub use record::LocalContextSyncRecord;
 
 #[cfg(test)]
 mod admission_tests;
@@ -13,3 +12,5 @@ mod admission_tests;
 mod observe_tests;
 #[cfg(test)]
 mod record_tests;
+#[cfg(test)]
+mod review_tests;

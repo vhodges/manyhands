@@ -4443,10 +4443,11 @@ pub(in super::super) fn has_pending_context_conflict(
     ).map_err(|_| recovery_required())
 }
 
-fn validate_child_id(
+pub(in super::super) fn validate_child_id(
     tx: &Transaction<'_>,
     operation_id: crate::repository::OperationId,
 ) -> Result<(), RepositoryError> {
+    crate::repository::local_sync::record::require_foreign_id_available(tx, operation_id)?;
     let id = operation_id.to_string();
     let collision: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_identity_confirmations WHERE confirmation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_resolution_attempts WHERE attempt_ulid=?1)",

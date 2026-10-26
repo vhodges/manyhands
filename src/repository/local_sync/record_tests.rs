@@ -1,4 +1,5 @@
 use super::record;
+use super::record::LocalContextSyncRecord;
 use crate::canonical::ItemId;
 use crate::repository::*;
 use std::{fs, path::Path};

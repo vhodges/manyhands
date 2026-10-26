@@ -265,6 +265,7 @@ pub(super) fn observe_with(
     })
 }
 
+#[cfg(test)]
 pub(super) fn from_facts(
     repo: &ResolvedRepository,
     facts: &Facts,
@@ -329,6 +330,34 @@ fn seal(
 }
 
 impl RepositoryService {
+    /// Observe an existing context without accepting journal ownership.
+    /// The journal record and mutating store seams are not public APIs.
+    ///
+    /// ```compile_fail
+    /// use manyhands::repository::LocalContextSyncRecord;
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use manyhands::{canonical::ItemId, repository::*};
+    /// fn local_sync_begin_is_internal(s: &RepositoryService, r: &ResolvedRepository, id: &ItemId) {
+    ///     let _ = s.begin_local_context_sync(r, OperationId::new(), AuthoringKind::Ticket, id, "token");
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use manyhands::repository::*;
+    /// fn local_sync_read_is_internal(s: &RepositoryService, r: &ResolvedRepository) {
+    ///     let _ = s.read_local_context_sync_record(r, OperationId::new());
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// use manyhands::{canonical::ItemId, repository::*};
+    /// fn local_sync_takeover_is_internal(s: &RepositoryService, r: &ResolvedRepository, id: &ItemId) {
+    ///     let row = s.begin_local_context_sync(r, OperationId::new(), AuthoringKind::Ticket, id, "token").unwrap();
+    ///     let _ = s.take_over_local_context_sync(r, &row);
+    /// }
+    /// ```
     pub fn observe_local_context_sync(
         &self,
         repo: &ResolvedRepository,

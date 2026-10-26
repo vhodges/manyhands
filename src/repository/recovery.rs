@@ -296,6 +296,7 @@ impl super::RepositoryService {
             return Err(mismatch(RepositoryOperation::SubmitComment, root));
         }
         let child = OperationId::new();
+        super::local_sync::record::require_foreign_id_available(&tx, child)?;
         let collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)
             OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1)
             OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",
@@ -682,9 +683,13 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
-    if action == "refresh" && !super::local_sync::record::refresh_allowed(&transaction, &requested)?
+    if action == "refresh"
+        && !super::local_sync::record::refresh_allowed(&transaction, &requested, root)?
     {
         return Err(recovery_required(operation, root));
+    }
+    if action != "refresh" {
+        super::local_sync::record::require_foreign_id_available(&transaction, operation_id)?;
     }
     // Both parent journals: promotion and closure IDs are never local ones.
     super::promotion::record::validate_local_identity(
@@ -1420,7 +1425,7 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
-    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string())? {
+    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string(), root)? {
         return Err(recovery_required(operation, root));
     }
     super::promotion::record::validate_local_identity(

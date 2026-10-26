@@ -82,7 +82,7 @@ pub use keys::{
     SharedKeyOwnership, SharedKeyRegistration, SharedKeySelectionOutcome,
     UnregisterSharedKeyOutcome,
 };
-pub use local_sync::{LocalContextSyncObservationDto, LocalContextSyncRecord};
+pub use local_sync::LocalContextSyncObservationDto;
 pub use mutation::*;
 pub use promotion::*;
 pub use read::*;

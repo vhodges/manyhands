@@ -342,6 +342,7 @@ pub(in super::super) fn existing_record<R: ParentRecord>(
 where
     R::Expectation: PartialEq,
 {
+    crate::repository::local_sync::record::require_foreign_id_available(tx, op)?;
     let existing = read_record::<R>(tx, id, op)?;
     let (own, other) = (R::KIND.table(), R::KIND.other().table());
     let (action, kind) = R::KIND.stored_action();
@@ -673,6 +674,7 @@ fn mint_attempt<R: ParentRecord>(
         .checked_add(1)
         .ok_or_else(state::recovery_required)?;
     let child = OperationId::new();
+    crate::repository::local_sync::record::require_foreign_id_available(tx, child)?;
     let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",[child.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if used {
         return Err(state::recovery_required());
@@ -712,6 +714,7 @@ pub(in super::super) fn validate_remote_identity(
     target: &RemoteOperationTarget,
     priority: RemoteOperationPriority,
 ) -> Result<(), RepositoryError> {
+    crate::repository::local_sync::record::require_foreign_id_available(db, op)?;
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
 }

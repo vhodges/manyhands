@@ -32,7 +32,9 @@ comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–3 are implem
 and independently approved. Current status is **implementing**: the owner answered
 “yes” to the narrow key-file scope question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded
 in approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`. All five Task 4 SPEC findings
-remain to be fixed and re-reviewed. Tasks 4/7 retain ownership of E4/E9 code.
+have implementation fixes and targeted evidence recorded in checkpoint
+`01M5VXXM7XSZCBTGB0HTVKV246`; **controller SPEC then QUALITY re-review is pending**.
+Task 4 is not approved or complete. Tasks 4/7 retain ownership of E4/E9 code.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -41,7 +43,7 @@ remain to be fixed and re-reviewed. Tasks 4/7 retain ownership of E4/E9 code.
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
-| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`; checkpoint comment `01M5V6K8THJGFZ8FFSC4M87PD7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five findings (1 P1, 4 P2). **Implementing review fixes, not approved**; narrow key scope approved in `01M5VWDPG57KWRAJ55Y2EMXRQR`. |
+| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five findings. Scope approval/code-fix base `9b40deda19d7fee34a7956a54743e1483359d230`; all five addressed in the commit containing review-fix checkpoint `01M5VXXM7XSZCBTGB0HTVKV246`. **Awaiting controller SPEC then QUALITY re-review; not approved or complete.** |
 | Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1029,3 +1031,161 @@ Next: fix all five verified findings with meaningful tests first, required
 Devenv gates and relevant regression tests, then controller SPEC followed by
 QUALITY. Task 4 is not approved; Task 5 remains unstarted. Existing branch
 commit/push approval remains, without PR/merge/closure/native authorization.
+
+## Task 4 SPEC fixes: awaiting re-review
+
+Recorded `2026-10-26T11:00:53Z`, comment `01M5VXXM7XSZCBTGB0HTVKV246`.
+Session entry `fc50316277db8228f3ed41513bf5fe96beab289a`; separate scope-approval
+commit **`9b40deda19d7fee34a7956a54743e1483359d230`** is the code-fix base.
+Both start and checkpoint fetch/merge found main `0464c42` already incorporated.
+Precommit merge-tree passed with committed base tree
+`4b1472af85ee8b09c25c8b168103a5f2db4167a2`. No subagents were used.
+
+Review addressed: **SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`**, initial range
+`37bd2c36ace84e56920d4cf15f55539d63c7d1c7..00a75e7742b6a9cc9284c91d2e18c9d5aec37599`.
+The table below records implementer dispositions and evidence, not reviewer
+approval. Tasks 1–3 retain their earlier approvals; Task 5 remains unstarted.
+
+### Item-by-item verified corrections
+
+1. **P1, missing companion refresh bypass — addressed.** `refresh_allowed`
+   audits before every permission result, including absent-companion handling.
+   An ordinary ID can still refresh; an ID reserved by a local resolution cannot.
+   A parent handoff additionally matches its registered root. The public
+   `create_folder` regression deletes the companion of a real admitted local
+   operation, then compares directory absence, registration freshness/timestamps,
+   envelope state/step/epoch/timestamp and Git images. All remain unchanged.
+2. **P2, reverse ID exclusion and duplicate audit — addressed.** Shared
+   `owned_identity`/`require_foreign_id_available` recognize local-sync envelopes,
+   companions and resolution IDs, including an envelope whose companion was lost.
+   Guards run inside key generation reservation, the new immediate deletion-intent
+   transaction, and marked key-registry change transactions; key preflight/replay
+   reads also reject before opening the key store. These are the sole behavioral
+   edits in the three newly approved key files. The existing local begin/refresh,
+   remote/lifecycle identity, remote child-ID, lifecycle child minting and comment
+   child minting seams call the same narrow guard where needed. It is not a new
+   general namespace policy for old journals. Companion audit detects foreign
+   journal duplicates for parent and resolution identities, excluding the parent's
+   own legitimate envelope. Existing remote/local handoff and parent-child controls
+   pass unchanged. New tests cover public key generation/deletion, marked registry
+   mutation rollback, duplicate corruption in three foreign journals, resolution
+   IDs across a second registered root (folder/remote/key/promotion/closure), and
+   remote child-ID admission. The old fifteen-family test remains **foreign-first
+   evidence**; it is not relabeled as fifteen public reverse-order executions.
+3. **P2, public unfinished store API — addressed.** Removed both record
+   re-exports and its unused public getter. Record and store methods are
+   repository-internal. The real begin/read/takeover impl and its exclusive helpers
+   have bounded `cfg(test)` while the approved executor caller is absent; migration,
+   decoding, audit, namespace guards and observation remain active production
+   paths. No broad dead-code allowance was introduced. Task 5 must enable the
+   internal seams with its prepared executor and retain their internal visibility;
+   Task 7 still owns request-attempt authority. Four compile-fail doctests reject
+   the old public record/begin/read/takeover surfaces. The approved observation
+   DTO/service API and its golden continue to pass.
+4. **P2, incomplete Closing checkpoint proof — addressed.** Admission now
+   invokes the existing `closure::checkpoint::checkpoint_authority` before
+   descendant/field proof. The local fixture now builds a real `Close ticket ID`
+   checkpoint with one open parent and matching author/closed_by. No existing
+   assertions were weakened. New negatives cover wrong subject, wrong author,
+   two parents and already-closed parent; positives validate checkpoint authority
+   directly and admit a clean descendant retaining the original checkpoint. A
+   changed-closure descendant refuses with Git unchanged. The existing authority,
+   adoption and publication guards pass unchanged.
+5. **P2, unvalidated step OIDs — addressed.** Audit decodes both optional step
+   OIDs as canonical lowercase nonzero full Git OIDs. A `reference` intent requires
+   both old/new endpoints even when prepared; other effect kinds may omit a ref
+   transition but any stored OID must validate. Eight malformed/missing-field
+   scenarios refuse both real internal read and takeover without changing epoch;
+   valid reference and absent non-reference controls pass. This runtime audit
+   strengthens existing v1 evidence validation without rewriting the table shape
+   or inventing Task 5 effect execution.
+
+### TDD evidence
+
+New tests live in `src/repository/local_sync/review_tests.rs`; old assertions in
+other test modules are unchanged. The only edits to existing local test helpers
+are the genuine checkpoint construction and explicit import of the now-internal
+record. Source verification preceded the fixes, as recorded in the blocker.
+
+| Command/filter, all through Devenv | Red evidence | Green evidence |
+| --- | --- | --- |
+| `cargo test --all-features --locked --lib local_sync::review_tests` (first 3 cases) | 1 passed, 2 failed: public folder created directories after companion loss; malformed OID read succeeded. | 3 passed after audit fixes; all eight malformed cases exercised. |
+| Same filter (5 cases) | 4 passed, 1 failed: wrong-subject checkpoint admitted. | All four invalid authority forms and both descendant cases pass in final selection. |
+| `cargo test --all-features --locked --doc local_sync` | 0 passed, 4 failed: all forbidden public API examples compiled successfully despite `compile_fail`. | 4 passed after internalization; no unused warnings. |
+| `cargo test --all-features --locked --lib local_sync::review_tests` (9 cases) | 5 passed, 4 failed: public key generation, public deletion, marked registry mutation, and duplicate-journal audit. | 9 passed after shared guard/audit and scoped key edits. |
+| `cargo test --all-features --locked --lib local_resolution_id_is_reserved_across_repository_boundaries` | 1 failed on folder creation on a second registered root; after that guard, 1 failed on remote reservation. | Final test covers all five foreign admission paths. |
+| `cargo test --all-features --locked --lib remote_child_id_guard_refuses_local_resolution_identity` | 1 failed: existing child-ID guard admitted a local resolution ID. | Passes for local parent/child refusals and a fresh-ID positive control. |
+
+The initial removal of the fixture's old commit call left an unused import, and
+internalization left a production-unused ResultCode import. Removed/scoped those
+imports; no warning suppression or unrelated code changes. No unexpected old-test
+failure or additional policy question arose.
+
+### Final verification and counts
+
+- `devenv shell -- cargo fmt --check`: exit 0.
+- `devenv shell -- cargo check --all-features --locked`: exit 0 (8.24s).
+- `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`:
+  exit 0 (37.40s), no warnings.
+- `devenv shell -- cargo test --all-features --locked --lib local_sync::`:
+  **49 passed**, 0 failed/ignored, 1284 filtered. This includes **11 new review
+  regressions** and the 38 earlier local tests.
+- `devenv shell -- cargo test --all-features --locked --doc local_sync`:
+  **4 passed**, 11 filtered.
+- `devenv shell -- cargo test --all-features --locked --lib child_fence`:
+  **8 passed**, 1325 filtered.
+
+Each selector below ran individually as
+`devenv shell -- cargo test --all-features --locked --lib <selector> -- --exact`;
+each selected/passed **one** test, zero failed/ignored:
+
+```text
+repository::read::status::tests::a_local_action_is_one_the_recovery_store_writes
+repository::read::status::tests::every_action_the_recovery_store_writes_is_one_the_read_knows
+repository::recovery::abandoned_row_tests::every_step_is_stored_under_its_own_name_and_read_back
+repository::closure::observe::tests::local_operation_pending
+repository::closure::observe::tests::pending_local_operation_blocks
+repository::closure::observe::tests::comment_publication_pending
+repository::closure::observe::tests::pending_comment_publication_blocks
+repository::closure::run_tests::a_written_checkpoint_refuses_a_manual_context_synchronization
+repository::closure::run_tests::an_active_manual_context_synchronization_holds_off_the_checkpoint
+repository::closure::run_tests::an_interrupted_manual_context_synchronization_cannot_restart_after_the_checkpoint
+repository::closure::run_tests::a_manual_context_synchronization_is_refused_while_publication_is_pending
+repository::closure::checkpoint::tests::adopt_written_closure_only_while_closing
+repository::closure::checkpoint::tests::reconcile_adoptable_descendant_is_checkpoint_written
+repository::closure::checkpoint::tests::checkpoint_authority_reads_commit_not_config
+repository::remote::reservation::tests::sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity
+repository::remote::reservation::tests::sync_incomplete_action_cannot_coexist_with_a_same_id_local_refresh
+repository::remote::reservation::tests::conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition
+repository::promotion::run_tests::quality1_current_authority_handoff_and_ordinary_synchronization_remain_valid
+repository::remote::sync::tests::public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally
+```
+
+Additional commands use `devenv shell -- cargo test --all-features --locked`:
+
+| Target/filter | Passed |
+| --- | ---: |
+| `--test key_material` | 39 |
+| `--test shared_key_registry` | 39 |
+| `--test mutation_replay key_generation` | 21 |
+| `--test mutation_replay keys::` | 31 |
+| `--test mutation_bridges folder::` | 32 |
+| `--test read_contract local_context_sync_observation_matches_its_schema_and_golden -- --exact` | 1 |
+
+Unique selected total: **76 library + 4 compile-fail doctests + 163 integration
+tests = 243 passing tests**. Repeated red/green selections are not counted twice;
+no zero-selection result was used. The full package suite and native workflows
+were not run. No front-end/dependency/global-enum changes, new test target, PR,
+closure, merge or cleanup. Key-file changes are limited to the owner-approved
+local-sync identity refusal and transaction boundaries.
+
+### Re-review handoff
+
+The code review range starts at **`9b40deda19d7fee34a7956a54743e1483359d230`**
+and ends at the commit containing this checkpoint. The preceding approval-only
+range starts at `fc50316`. Reviewer should check all five corrections, narrow key
+scope, unchanged old handoffs, and bounded internal test-only seams. There are no
+known unresolved implementation findings or policy questions, but **Task 4 awaits
+controller SPEC then QUALITY re-review and is not done**. Future executor/request
+control/historical content/abandonment evidence remains with Tasks 5–7; this commit
+does not claim it. Linux evidence is not native Windows/macOS runtime evidence.
