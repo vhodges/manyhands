@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M57SKVF6TQ3QM6AXJ35JGGSY"
 title: "2.10 follow up: closure recovery gaps before C4, C5 and D5"
 type: "task"
-status: "open"
+status: "implementing"
 project: "manyhands"
 team: "core"
 wave: "02"
