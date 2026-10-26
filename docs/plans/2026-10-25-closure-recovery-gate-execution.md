@@ -37,8 +37,9 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
-| Task 3 | Implemented and pushed at `87431fcffe18dd7125bf99962795129c9d5d578b`, from `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`; comment `01M5V38TV55N7WRG6SM1HAPDQT`. Awaiting controller review of actual moved code and ownership sequencing. |
-| Tasks 4–9 | Not started. New local-operation outcomes below remain unproven. |
+| Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
+| Task 4 | Implemented from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7` in the commit containing the Task 4 checkpoint below, titled `feat: persist and observe local context synchronization`. Comment `01M5V6K8THJGFZ8FFSC4M87PD7`. Awaiting controller SPEC then QUALITY review. |
+| Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -287,7 +288,7 @@ Actual unit module names (file names are not always module names):
 | Task 2 control | `repository::promotion::run_tests::quality1_current_authority_handoff_and_ordinary_synchronization_remain_valid` |
 | Task 3 anchors | `repository::remote::sync::tests::public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally`; `external_repair_exact_ordered_parent_clean_only`; `clean_merge_integration_fault_matrix_resumes_each_durable_transition_once`; `cancellation_with_a_pending_conflict_is_a_recoverable_stop`. All source-read, not executed in Task 0. |
 | E3 | `repository::closure::run_tests::conflicting_advance_after_the_checkpoint_needs_a_deliberate_synchronization`; `adopted_context_is_merged_reconciled_after_f4_and_retired`. Only first executed here. |
-| E4 | `repository::read::status::tests::every_action_the_recovery_store_writes_is_one_the_read_knows`; `repository::recovery::tests::every_step_is_stored_under_its_own_name_and_read_back`; additional inventory question above. |
+| E4 | `repository::read::status::tests::every_action_the_recovery_store_writes_is_one_the_read_knows`; `repository::recovery::abandoned_row_tests::every_step_is_stored_under_its_own_name_and_read_back` (module corrected by Task 4 execution); additional inventory question above. |
 | E5 | `repository::mutation::command::tests::only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation`; `only_a_command_whose_work_no_journal_records_has_no_operation`. |
 | E6/E7 | mutation_contract: every_bound_command_has_a_golden, every_schema_is_reachable_from_a_published_root, every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root; read_contract: published_enumerations_list_exactly_the_registered_values. |
 | Task 7 conformance | `every_command_of_this_target_keeps_the_rules_of_the_boundary` in each existing target mutation_replay, mutation_confirmation, mutation_bridges (module conformance), mutation_remote (SSH registered name matches function). Four separate commands; remote's host rows are separately homed by run_part. |
@@ -749,3 +750,208 @@ has not been executed by this Linux-only checkpoint.
   preflight/retained-candidate order; content proof versus exact-parent/clean-state
   proof; private index/ref orchestration versus extracted descriptor/metadata
   mechanics; preserved conservative coarse-backend stops.
+
+## Independent Task 3 review
+
+Recorded with the Task 4 checkpoint at `2026-10-26T04:13:16Z`, from the
+controller's explicit handoff. Both reviews **APPROVED with zero findings** for
+the full range `1f25f56..37bd2c3`:
+
+- Base: `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`.
+- Head: `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`.
+- SPEC: `ses_e89c7d13fffe4pSnuvk28e0DCu`.
+- QUALITY: `ses_e89c52231ffeq2JYI8dlaxLS1O`.
+
+This is the completed full extraction review, including active production
+callers and ownership sequencing, not just the documentation-only final commit.
+
+## Task 4: local journal, observation and reciprocal fences
+
+Checkpoint timestamp/ID issued at `2026-10-26T04:13:16Z`; verification continued
+after issuance. Base: `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. This bounded
+implementer used no subagents and worked only in the assigned ticket checkout.
+Entry status was clean. Start and checkpoint fetch/merge both found main
+`0464c42dae19a6dde000c7e7660e82762a41fada`, already merged; HEAD stayed at the
+task base. Ancestry and merge-tree passed (base tree
+`c0160e972bdc16d705bee9f549e074166efbc66c`).
+
+### Implemented boundaries and file ownership
+
+- Added `src/repository/local_sync/{mod,record,observe}.rs` and adjacent
+  `record_tests.rs`, `observe_tests.rs`, `admission_tests.rs`.
+- The live service seams are `observe_local_context_sync`,
+  `begin_local_context_sync`, `read_local_context_sync_record`, and
+  `take_over_local_context_sync`. The last three are domain journal APIs, not
+  the Task 5 Git executor or Task 7 mutation acceptance. They create/read a real
+  typed record through admission; tests never seed a new local parent by raw SQL.
+  Adversarial old-journal fixtures and corruption/epoch injections are explicitly
+  test-owned database edits.
+- Added same-database v1 record, ordered-step and resolution companion tables.
+  Exact table definitions, migration marker, SQLite CHECK/FK integrity, typed
+  record decoding, envelope/scope equality, generation/epoch and attempt
+  association are audited. Partial unmarked schemas, missing migrated tables,
+  missing companions, malformed evidence and orphaned children refuse.
+- Envelope plus frozen companion identity is one immediate transaction under the
+  common-Git lease and cache write guard. Creation rechecks authority and Git
+  inside that transaction. A writable connection is opened only after the cache
+  guard, avoiding a stale connection across database replacement. No id=0 or
+  directory-registry fallback. Typed PermissionDenied is injected at the actual
+  registry-opening seam and maps to `index_unavailable` before either row exists.
+- Original-observation re-entry reads scoped frozen evidence before fresh Git
+  observation; changed input mismatches. Takeover requires the exact previous
+  record/epoch/generation and a successful one-row CAS. It changes only
+  `owner_epoch`; refused/stale/ignored updates return no fabricated owner.
+- Read session A ends before Git reads. Session B is a new read-only transaction,
+  followed by Git recheck. Hashing uses versioned, length-delimited BLAKE3 over
+  registered identity, refs/parents, canonical item path, index/configuration and
+  semantic facts. Effective Git identity is excluded. Canonical item presence is
+  verified from the committed context blob, rather than trusting stale discovery.
+  Committed primary is used even with dirty primary files. Metadata/index probes
+  reuse the extracted pinned no-follow machinery; observation performs no Git,
+  SQL or transport effect and writes no token-issuance table.
+- Added `context_sync_local` and `local_sync_prepared` parsing/status coverage.
+  Old stored strings and Local/Remote/KeyMaterial family values are unchanged.
+  Operation enumeration, registration removal and rebuild validation audit the
+  companion; same-ID refresh requires integrated/released proof. The generic
+  row-only abandon path recognizes companion ownership and cannot split it.
+  Its exhaustive Writes match gained the necessary local-item arm; the domain
+  artifact-free abandonment protocol remains Task 6/7.
+- Closure preview, checkpoint's existing shared guard, adoption and stage
+  advancement recognize unfinished local ownership. Lifecycle parent admission
+  also refuses new work behind that owner. `closure/checkpoint.rs` itself needed
+  no edit: its existing calls now reach the strengthened shared guard. Existing
+  remote written-closure publication guards are unchanged.
+- Remote conflict reacquisition checks pending local-sync authority in its own
+  transaction before phase/epoch changes. Existing restart/reservation guards
+  already check the local envelope. Local admission checks retained remote step,
+  resolution/release/metadata and index obligations, including interrupted work
+  on another context. Only repository-internal reacquisition visibility expanded.
+- Published the exact eight-field observation DTO/schema, registered its golden,
+  schema root and enum inventory, and added the action to the E7 schema lists.
+  Generated only the new golden using `MANYHANDS_UPDATE_GOLDEN=1`; inspected it.
+  E4's approved two action inventories and step inventory are the only old
+  library-test expectation changes. E6/E7/E9 registry additions give the new
+  observation an executable contract owner. E9 `repair_data` remains Task 7.
+
+### Design checkpoint: observed answers
+
+| Question | Executed answer |
+| --- | --- |
+| Ordinary document and ticket contexts? | Admit a clean, current, existing registered context; journal creation leaves Git unchanged. |
+| Closure exception? | Only matching ticket, `Closing`, written checkpoint, exact closure fields and checkpoint/descendant proof. Bind the closure ID and checkpoint without changing the closure. |
+| Before checkpoint, wrong item/kind/stage, promotion? | Refuse with recovery semantics and no new local owner. Every integrating/cleanup stage is covered. |
+| Complete/abandoned closure history? | No special exception or closure binding. A remaining context is subject to ordinary admission. |
+| Other local/remote owners? | Refuse. Interrupted retained remote obligations fence even another context. After local refusal the remote can restart; local-first ownership prevents remote restart/reacquisition without altering its phase or epoch. |
+| Reciprocal closure fence? | Preview is blocked, checkpoint guard reports pending synchronization, adoption and integration-stage changes refuse. |
+| Global operation ID namespace? | Fifteen journal/child families exercised through new-local admission: local envelope, key material, key registry, promotion parent/context/primary, closure parent/context/primary, comment parent/child, remote parent, remote resolution, remote identity confirmation, local resolution. No closure ID reuse. |
+| Refresh/index-only confusion? | Prepared/pending ownership is not an index-only handoff; generic refresh and removal refuse. Healthy rebuild refusal preserves the record rather than completing it. |
+| Authority-only read race? | Registration or semantic-revision change with identical Git gives `external_change`; owner-only takeover leaves the observation unchanged. Serialization/reopen is stable. |
+| Permission/schema loss? | Typed journal PermissionDenied and directory registry return `index_unavailable`, with no Git changes or half-created rows. Missing/malformed companion authority refuses instead of reconstruction. |
+
+No observed admission/namespace/refusal result conflicts with the approved table.
+This is the Task 4 foundation checkpoint, not proof of the executor recovery table.
+
+### Test-first and debugging evidence
+
+All commands ran through Devenv in the ticket checkout. Initial new-seam run of
+`cargo test --all-features --locked --lib local_sync::` exited 101 for missing
+modules/API types, before production journal/observation implementation. It also
+exposed a new-test ambiguous glob import, corrected explicitly.
+
+Subsequent runtime red/green checkpoints:
+
+| Red run/filter | Observed failure before its fix |
+| --- | --- |
+| `local_sync::` (16 tests) | After correcting new fixture wiring, 14 passed / 2 failed: generic refresh accepted the local owner; closure preview ignored it. |
+| `local_sync::` (19 tests) | 16 passed / 3 failed: the preceding two fences plus missing local action/step mapping. |
+| `local_sync::` (23 tests) | 21 passed / 2 failed: malformed companion evidence was accepted and partial unmarked schema was repaired. |
+| `local_sync::` (24 tests) | 23 passed / 1 failed: retained remote conflict reacquisition returned ownership while local work was pending. |
+| `local_sync::` (27 tests) | 24 passed / 3 failed: changed routing, unowned merge metadata, and retained remote metadata after an applied step were accepted. |
+| `pending_local_owner_refuses_new_lifecycle_parent_and_closure_integration` | One failure on new promotion admission, then one on closure integration after the first guard; both assertions subsequently passed. |
+| `admission_rechecks_authority_in_its_creation_transaction` | 1 failed: registration changed after observation but creation still succeeded. |
+| `accepted_journal_reentry_reads_frozen_parents_before_live_observation` | 1 failed: frozen retry was rejected after primary advanced. |
+| `stale_discovery_cannot_observe_an_item_removed_from_the_context_commit` | 1 failed: stale discovery issued an observation for an absent committed item. |
+| `refused_epoch_update_cannot_return_a_fabricated_owner` | 1 failed: ignored SQL CAS was reported as a new owner. |
+| `accepted_reentry_cannot_borrow_a_different_registered_root` | 1 failed: accepted re-entry failed to scope the record lookup to the registered root. |
+| read-contract `local_context_sync_observation_matches_its_schema_and_golden` | 1 failed because the new schema did not exist; generated golden and registered schema then passed. |
+
+Initial runtime wiring failures were investigated rather than counted as intended
+reds: discovery stores shorthand branch names (converted to full refs); the remote
+fixture needed `state::configure`, as existing reservation fixtures do. The new
+generic-abandon test initially expected Err, but the established refusal is
+`Ok(AnotherJournal)`; its final assertion pins that refusal plus unchanged authority.
+The orphan test first exposed nullable digest CHECKs that wrongly rejected NULL
+(fixed with explicit nullable predicates), then required explicitly disabling
+fixture FKs to inject an orphan. Unsupported ResultCode/ItemId helper spellings
+and an `is_plain_relative` argument type were corrected from the existing source.
+These changes touched new code/fixtures only; no old assertion was weakened.
+
+### Final gates and exact selected tests
+
+Final Rust gates after the last scope/CAS changes:
+
+- `devenv shell -- cargo fmt --check`: exit 0.
+- `devenv shell -- cargo check --all-features --locked`: exit 0, 2.42s.
+- `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`:
+  exit 0, 10.42s, no warnings. The only new lint allowance is the established
+  `ReadError`-by-value `result_large_err` convention; no dead-code suppression.
+- `devenv shell -- cargo test --all-features --locked --lib local_sync::`:
+  **38 passed**, 0 failed/ignored/measured, 1284 filtered, 31.83s.
+- `git diff --check`: passed before checkpoint documentation.
+
+Each library selector below ran as
+`devenv shell -- cargo test --all-features --locked --lib <selector> -- --exact`,
+except `child_fence`, which deliberately uses substring selection. Each exact
+selector reported **one** passing test; `child_fence` reported **eight**.
+
+| Group | Exact selectors (one command per name) | Passed |
+| --- | --- | ---: |
+| E4 | `repository::read::status::tests::a_local_action_is_one_the_recovery_store_writes`; `repository::read::status::tests::every_action_the_recovery_store_writes_is_one_the_read_knows`; `repository::recovery::abandoned_row_tests::every_step_is_stored_under_its_own_name_and_read_back` | 3 |
+| Child fence | `child_fence` | 8 |
+| Closure observation | `repository::closure::observe::tests::local_operation_pending`; `repository::closure::observe::tests::pending_local_operation_blocks`; `repository::closure::observe::tests::comment_publication_pending`; `repository::closure::observe::tests::pending_comment_publication_blocks` | 4 |
+| Written closure publication | `repository::closure::run_tests::a_written_checkpoint_refuses_a_manual_context_synchronization`; `repository::closure::run_tests::an_active_manual_context_synchronization_holds_off_the_checkpoint`; `repository::closure::run_tests::an_interrupted_manual_context_synchronization_cannot_restart_after_the_checkpoint`; `repository::closure::run_tests::a_manual_context_synchronization_is_refused_while_publication_is_pending` | 4 |
+| Closure adoption | `repository::closure::checkpoint::tests::adopt_written_closure_only_while_closing`; `repository::closure::checkpoint::tests::reconcile_adoptable_descendant_is_checkpoint_written` | 2 |
+| Remote ownership controls | `repository::remote::reservation::tests::sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity`; `repository::remote::reservation::tests::sync_incomplete_action_cannot_coexist_with_a_same_id_local_refresh`; `repository::remote::reservation::tests::conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition` | 3 |
+
+Task 0's step selector used `recovery::tests`, which selected zero with `--exact`.
+That attempt is **not** pass evidence. Source inspection found
+`recovery::abandoned_row_tests`; the corrected exact command selected/passed one,
+and the inventory above is corrected. No zero-selection result is accepted.
+
+Additional published-boundary checks:
+
+- `devenv shell -- cargo test --all-features --locked --test read_contract`:
+  **72 passed**, including the new golden and exact enum/object-schema audits.
+- `devenv shell -- cargo test --all-features --locked --test mutation_contract every_schema_is_reachable_from_a_published_root -- --exact`:
+  **1 passed**.
+- `devenv shell -- cargo test --all-features --locked --test mutation_contract every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root -- --exact`:
+  **1 passed**.
+
+Selected unique total: **62 library + 74 contract tests = 136 passed**. Repeated
+red/green runs and repeated remote controls are not added to that unique total.
+No full package suite, native workflow, front-end smoke run, PR, merge, closure or
+cleanup was performed. Linux checks do not establish native Windows/macOS runtime
+behavior or real Windows ACL behavior.
+
+### Handoff boundaries and follow-up evidence
+
+Controller SPEC then QUALITY review is next, using the full Task 4 base above
+through the commit containing this checkpoint, including the new files. Task 5
+has not started. No unresolved policy ruling was discovered.
+
+- Task 5 must prepare/classify before using the journal boundary, then provide
+  deterministic Git execution and frozen-pair recovery. Creating a record alone
+  is not an integration success or proof of the incompatible-closure pre-effect
+  executor rule.
+- Tasks 5/6 populate durable effect/resolution evidence and own artifact release;
+  the current companion foundation is not proof of partial checkout/path recovery.
+- Task 7 must atomically create S/R/U request controls at F2 acceptance, preserve
+  intended-parent identity before FK linkage, fence request attempts, and connect
+  domain creation/takeover/settlement to those controls. None of that is claimed
+  by this Task 4 commit. The current journal APIs are the meaningful domain seam.
+- Full conflict token/content/historical-side reads, public inspection DTOs,
+  cancellation acknowledgement and atomic artifact-free abandonment remain their
+  approved Tasks 6/7 owners. Task 4 proves observation serialization/reopen and
+  owner/semantic freshness separately; it does not claim historical side reads.
+- Tasks 7/8 retain the public authority-only race, permissions, no-Drop/cross-process
+  lease and complete closure-resolution acceptance cases listed earlier.

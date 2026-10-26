@@ -626,6 +626,7 @@ pub(super) fn migrate_operation_records(
     }
     migrate_comment_bindings(&transaction)?;
     validate_comment_bindings(&transaction)?;
+    super::local_sync::record::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -681,6 +682,10 @@ fn begin_or_reconcile(
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
+    if action == "refresh" && !super::local_sync::record::refresh_allowed(&transaction, &requested)?
+    {
+        return Err(recovery_required(operation, root));
+    }
     // Both parent journals: promotion and closure IDs are never local ones.
     super::promotion::record::validate_local_identity(
         &transaction,
@@ -928,6 +933,8 @@ local_steps! {
     /// The row was closed by `abandon_operation`. Its ID is never begun
     /// again and never replayed.
     Abandoned => "abandoned";
+    /// Frozen local context inputs, before any Git effect.
+    LocalSyncPrepared => "local_sync_prepared";
 }
 
 impl LocalStep {
@@ -950,6 +957,7 @@ impl LocalStep {
             | Self::CommentCheckpointIntent
             | Self::CommentRegistrationPending => true,
             Self::BranchObserved
+            | Self::LocalSyncPrepared
             | Self::WorktreeObserved
             | Self::CommentDestinationPrepared
             | Self::AuthoringDestinationObserved
@@ -999,6 +1007,7 @@ impl LocalStep {
             | Self::ConfigurationWritten
             | Self::InitializationCommitted => Some(self),
             Self::BranchObserved
+            | Self::LocalSyncPrepared
             | Self::WorktreeObserved
             | Self::PublicationConfigurationWritten
             | Self::RepositoryInitialized
@@ -1411,6 +1420,9 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
+    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string())? {
+        return Err(recovery_required(operation, root));
+    }
     super::promotion::record::validate_local_identity(
         connection,
         root_path,
@@ -1782,6 +1794,9 @@ pub(super) fn held_by_another_journal(
         (REMOTE_JOURNAL_TABLE, "operation_ulid"),
         (KEY_JOURNAL_TABLE, "operation_id"),
         (KEY_REGISTRY_CHANGES_TABLE, "operation_id"),
+        // A local integration companion also requires its domain's atomic
+        // disposition. Generic row-only abandonment cannot release it.
+        ("local_context_sync_records", "operation_ulid"),
     ] {
         if !has_table(connection, table)? {
             continue;
@@ -2080,6 +2095,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
         RepositoryOperation::RepairItem => "repair_item",
+        RepositoryOperation::ContextSyncLocal => "context_sync_local",
         // No row is begun under the name of any of these: they have no
         // operation ID, or, as a folder's creation does, they begin the
         // row of the refresh that follows. Each is named, so that an
@@ -2117,6 +2133,7 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "save_ticket" => Some(RepositoryOperation::SaveTicket),
         "submit_comment" => Some(RepositoryOperation::SubmitComment),
         "repair_item" => Some(RepositoryOperation::RepairItem),
+        "context_sync_local" => Some(RepositoryOperation::ContextSyncLocal),
         _ => None,
     }
 }
@@ -2488,6 +2505,7 @@ mod abandoned_row_tests {
                 "completed",
                 "rejected",
                 "abandoned",
+                "local_sync_prepared",
             ]
         );
         for step in LocalStep::ALL {

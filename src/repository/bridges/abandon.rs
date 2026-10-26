@@ -207,7 +207,8 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::SaveTicket
         | RepositoryOperation::SubmitComment
         // A repair writes the corrected file in the item's own worktree.
-        | RepositoryOperation::RepairItem => Writes::Item,
+        | RepositoryOperation::RepairItem
+        | RepositoryOperation::ContextSyncLocal => Writes::Item,
         RepositoryOperation::CreateAndEnable
         | RepositoryOperation::Enable
         | RepositoryOperation::SetPublicationRemote => Writes::Configuration,

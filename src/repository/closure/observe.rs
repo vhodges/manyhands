@@ -397,7 +397,8 @@ fn pending_work(
         .map_err(RepositoryError::sqlite)?;
     let local_operation = targets
         .iter()
-        .any(|target| authoring_item(target.as_deref()).as_deref() == Some(item_text.as_str()));
+        .any(|target| authoring_item(target.as_deref()).as_deref() == Some(item_text.as_str()))
+        || super::super::local_sync::record::unfinished_context(tx, repository_id, item)?;
     let comment_publication = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM comment_publication_bindings b

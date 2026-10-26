@@ -765,6 +765,7 @@ contract_enum!(
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",
         RepairItem => "repair_item",
+        ContextSyncLocal => "context_sync_local",
         Poll => "poll",
         SynchronizeContext => "synchronize_context",
         SynchronizePrimary => "synchronize_primary",

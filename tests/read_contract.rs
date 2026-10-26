@@ -684,7 +684,7 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 13] = [
+const LOCAL_ACTIONS: [OperationAction; 14] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
@@ -698,12 +698,18 @@ const LOCAL_ACTIONS: [OperationAction; 13] = [
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,
     OperationAction::RepairItem,
+    OperationAction::ContextSyncLocal,
 ];
 
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
     vec![
+        (
+            "local_context_sync_observation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
         (
             "cli_help_command.schema.json",
             "repository",
@@ -1078,6 +1084,30 @@ fn id_new_matches_its_schema_and_golden() {
             sentinels: &[],
         },
         &envelope,
+    );
+    assert_git_transport_uninitialized();
+}
+
+#[test]
+fn local_context_sync_observation_matches_its_schema_and_golden() {
+    let dto = manyhands::repository::LocalContextSyncObservationDto {
+        kind: "ticket".into(),
+        item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        context_worktree: "/fixture/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        context_ref: "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+        primary_ref: "refs/heads/main".into(),
+        context_head: "1111111111111111111111111111111111111111".into(),
+        primary_head: "2222222222222222222222222222222222222222".into(),
+        observation: format!("local-sync-v1:{}", "a".repeat(64)),
+    };
+    golden::assert_contract(
+        &ContractCase {
+            name: "local_context_sync_observation",
+            data_schema: Some("local_context_sync_observation.schema.json"),
+            placeholders: &[],
+            sentinels: &[],
+        },
+        &Envelope::read_success("context observe-local", Scope::default(), dto),
     );
     assert_git_transport_uninitialized();
 }

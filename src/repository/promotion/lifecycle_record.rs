@@ -349,6 +349,9 @@ where
     if collision {
         return Err(mismatch(R::KIND));
     }
+    if existing.as_ref().is_none_or(|r| !r.step().terminal()) {
+        crate::repository::local_sync::record::require_no_pending(tx, id)?;
+    }
     if let Some(r) = existing {
         if r.item_id() != item || r.expectation() != expectation {
             return Err(mismatch(R::KIND));
