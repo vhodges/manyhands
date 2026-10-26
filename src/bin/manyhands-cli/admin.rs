@@ -20,7 +20,7 @@ use manyhands::{
 };
 use std::path::PathBuf;
 
-fn name(spec: &CommandSpec) -> String {
+pub(crate) fn name(spec: &CommandSpec) -> String {
     format!("{} {}", spec.resource, spec.verb)
 }
 
@@ -87,7 +87,7 @@ pub fn input_object(
     )
     .map_err(|e| input_failure(session, spec, request_id, e))
 }
-fn input_failure(
+pub(crate) fn input_failure(
     session: &Session,
     spec: &CommandSpec,
     request_id: Option<RequestId>,

@@ -1,0 +1,7 @@
+The request completed.
+request: <request-id>
+operation: <operation-id>
+effects: write=written checkpoint=committed discovery=current commit=<commit-oid>
+Adopted: true
+Id: 01ARZ3NDEKTSV4RRFFQ69G5FM4
+Path: .manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FM4/ticket.md

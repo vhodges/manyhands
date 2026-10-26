@@ -1,0 +1,33 @@
+{
+  "code": "slug_already_assigned",
+  "command": "ticket slug-assign",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+    "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FR1/ticket.md",
+    "rejected": [],
+    "slug": "mh-vh-k9x2b",
+    "unresolved": []
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The item already has a short code.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FR1",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

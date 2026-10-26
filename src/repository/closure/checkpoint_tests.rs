@@ -1161,6 +1161,8 @@ fn mismatched_confirmed_identity_persists_nothing() {
     f.missing_identity();
     let confirmation = f.confirmation();
     let r = f.confirmed_record(&confirmation);
+    // Saving the fixture can advance the persisted timestamp before the operation.
+    let r = f.reload(&r);
     let observation = f.observation_with(Some(confirmation.clone()));
     let other = ConfirmedCommitIdentity {
         identity: CommitIdentity {

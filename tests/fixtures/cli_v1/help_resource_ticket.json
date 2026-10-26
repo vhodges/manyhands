@@ -298,43 +298,204 @@
         "summary": "Find tickets by short code."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket create",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Create a ticket."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket save",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Save a ticket."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket repair",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Repair a ticket."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket slug-assign",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Assign a ticket short code."
       },
       {
-        "available": false,
+        "available": true,
         "command": "ticket check",
         "delivered_by": "C3",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--deps",
+            "required": false,
+            "summary": "Proposed dependencies, comma-separated; give once.",
+            "value": "ULID,..."
+          },
+          {
+            "name": "--parent",
+            "required": false,
+            "summary": "Proposed parent.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Check ticket relationships."
       },
       {

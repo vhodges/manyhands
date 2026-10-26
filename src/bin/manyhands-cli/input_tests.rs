@@ -414,3 +414,51 @@ fn schema_names_replace_verb_hyphens() {
         "repo_identity_set.schema.json"
     );
 }
+
+#[test]
+fn list_readers_preserve_order_repeats_empty_missing_and_null() {
+    use super::ListChange;
+    for values in [vec![], vec!["z", "a", "z", ""]] {
+        let input = object(&serde_json::json!({"deps":values}).to_string());
+        assert_eq!(ok(input.optional_string_list("deps")).unwrap(), values);
+        assert!(matches!(ok(input.tristate_list("deps")), ListChange::Value(v) if v == values));
+    }
+    assert!(ok(object("{}").optional_string_list("deps")).is_none());
+    assert!(matches!(
+        ok(object("{}").tristate_list("deps")),
+        ListChange::Missing
+    ));
+    assert!(matches!(
+        ok(object(r#"{"deps":null}"#).tristate_list("deps")),
+        ListChange::Null
+    ));
+    assert!(matches!(
+        object(r#"{"deps":null}"#).optional_string_list("deps"),
+        Err(InputError::WrongType { field: "deps", .. })
+    ));
+}
+
+#[test]
+fn list_readers_refuse_wrong_shapes_without_disclosing_values() {
+    for value in [
+        "true",
+        "1234567",
+        r#""VALUE-SENTINEL-41""#,
+        r#"{"VALUE-SENTINEL-41":1}"#,
+        r#"["VALUE-SENTINEL-41",1234567]"#,
+        r#"["VALUE-SENTINEL-41",null]"#,
+        r#"["VALUE-SENTINEL-41",{"secret":"VALUE-SENTINEL-41"}]"#,
+    ] {
+        let input = object(&format!("{{\"deps\":{value}}}"));
+        for error in [
+            error(input.optional_string_list("deps")),
+            error(input.tristate_list("deps")),
+        ] {
+            assert!(matches!(error, InputError::WrongType { field: "deps", .. }));
+            let detail = error.detail();
+            assert!(detail.contains("deps"));
+            assert!(!detail.contains(SENTINEL));
+            assert!(!detail.contains("1234567"));
+        }
+    }
+}

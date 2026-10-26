@@ -10,14 +10,21 @@ use manyhands::{
 #[path = "manyhands-cli/admin.rs"]
 mod admin;
 
+#[path = "manyhands-cli/authoring.rs"]
+mod authoring;
+
 #[path = "manyhands-cli/catalog.rs"]
 mod catalog;
 #[path = "manyhands-cli/dispatch.rs"]
 mod dispatch;
+#[path = "manyhands-cli/fill.rs"]
+mod fill;
 #[path = "manyhands-cli/human.rs"]
 mod human;
 #[path = "manyhands-cli/human_admin.rs"]
 mod human_admin;
+#[path = "manyhands-cli/human_authoring.rs"]
+mod human_authoring;
 #[path = "manyhands-cli/input.rs"]
 mod input;
 #[path = "manyhands-cli/mutate.rs"]

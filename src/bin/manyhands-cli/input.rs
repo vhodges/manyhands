@@ -19,6 +19,12 @@ pub enum Tristate {
     Value(String),
 }
 
+pub enum ListChange {
+    Missing,
+    Null,
+    Value(Vec<String>),
+}
+
 pub enum InputError {
     Unreadable,
     NotUtf8,
@@ -153,6 +159,36 @@ impl InputObject {
         }
     }
 
+    pub fn optional_string_list(
+        &self,
+        field: &'static str,
+    ) -> Result<Option<Vec<String>>, InputError> {
+        let wrong_type = || InputError::WrongType {
+            field,
+            expected: "an array of strings",
+        };
+        match self.fields.get(field) {
+            None => Ok(None),
+            Some(Json::Array(values)) => values
+                .iter()
+                .map(|value| match value {
+                    Json::String(value) => Ok(value.clone()),
+                    _ => Err(wrong_type()),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some),
+            _ => Err(wrong_type()),
+        }
+    }
+
+    pub fn tristate_list(&self, field: &'static str) -> Result<ListChange, InputError> {
+        if matches!(self.fields.get(field), Some(Json::Null)) {
+            return Ok(ListChange::Null);
+        }
+        self.optional_string_list(field)
+            .map(|values| values.map_or(ListChange::Missing, ListChange::Value))
+    }
+
     pub fn optional_object(&self, field: &'static str) -> Result<Option<InputObject>, InputError> {
         match self.fields.get(field) {
             None => Ok(None),
@@ -192,7 +228,7 @@ enum Json {
     Bool(#[allow(dead_code)] bool),
     Number(#[allow(dead_code)] serde_json::Number),
     String(String),
-    Array(#[allow(dead_code)] Vec<Json>),
+    Array(Vec<Json>),
     Object(BTreeMap<String, Json>),
 }
 

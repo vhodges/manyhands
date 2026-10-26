@@ -481,7 +481,62 @@ cancellation (`cancelled`/130).
 
 ### C3: CLI Authoring And Discovery Maintenance
 
-**Planned document:** `docs/Cycles/wave-03-cli-03-authoring-and-discovery.md`
+**Cycle document:** [C3: CLI Authoring And Discovery Maintenance](../Cycles/wave-03-cli-03-authoring-and-discovery.md)
+
+**Amended 2026-10-24 by C3.** The Cycle, design and plan were approved on
+2026-10-24 at `e7b2b71`. All thirteen verbs are implemented on the C3 ticket
+branch: document create/save/move/repair, folder create, ticket
+create/save/repair/slug-assign, index refresh/rebuild, path observe and ticket
+check. Parts A and B have spec and quality approval. The Part B checkpoint
+at `9a2a5170c4704ef03420ef2276911c6b1bfa3959` passed six local gates and
+**593 tests** (188 CLI unit, 290 CLI integration, 71 read-contract and
+44 mutation-contract), as recorded in the
+[execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md).
+This is the historical Task 8 checkpoint evidence. **Updated 2026-10-25:** C3
+is review-ready through Task 9 Step 5. Whole-branch SPEC/QUALITY approved
+`ad4d3f0..806057d3`, dogfooding completed in `8da3890`, and switch SPEC/QUALITY
+approved `8da3890..297bd781`. The owner accepted the original **4528 passed /
+1 failed / 1 ignored**, exit **101**, plus the authorized correction's **46
+distinct passing tests** and check/fmt/clippy as an explicit verification
+exception (`5cba600`). No green full-suite run or second full run is claimed.
+
+The product-owner decisions govern delivery:
+
+1. **Known defects, not prerequisites:** `01M4PB82G07RZSQMNJZN672S3W`
+   (partial database damage), `01M4PB80T7SVB23TQ6466RDHCB` (repeat committed
+   document move, whose existing F2 workaround is outside the lease), and
+   `01M4PB7YZMBFAFFM94AZY08HWS` (an interrupted save's step-less row is
+   rejected although its file was written). C3 adds no library workaround.
+   Index evidence covers deletion and whole-file corruption, removing WAL
+   sidecars first, not the partial-damage defect.
+2. **CLI-owned save patch:** one fill read when a draft field is omitted,
+   preserving the caller's observation. Later retries recompute omissions;
+   a changed omitted field can cause `request_mismatch` after a successful
+   save, while `request show` still exposes its stored result.
+3. **Dogfooding in Task 9, with the owner's go-ahead then:** save dependencies
+   C4 → C3 and gate `01M57SKVF6TQ3QM6AXJ35JGGSY`; C5 → C4 and gate;
+   D4 → D3; D5 → D4 and gate; D6 → D5; G1 → C5 and D6. The approved
+   procedure requires fresh preflight, clean checks, per-request records,
+   value checks and separately authorized pushes of those six branches.
+4. **One Cycle in two Parts:** A delivers shared CLI changes, both reads,
+   index/folder and document create/save/move; B delivers ticket authoring,
+   both repairs and the remaining evidence. Each Part has an all-feature
+   checkpoint and independent review; the final dogfooding switch is completed
+   and separately approved, as recorded below.
+5. **Fill-read failures pass through:** under the save command, retain the
+   read's code, scope and recovery plus the request ID, with no effects.
+   Wrong-kind/unfillable items give item-scoped `item_not_found`. The fill
+   read precedes replay, so a failed read can mask a finished result on
+   retry; `request show` still returns that result.
+6. **Exit evidence:** exit 4 has a reason backed by a library actor leaving
+   a save partial and the CLI completing it. Exit 5 is reached through a
+   child-held lease, and repair consent cancellation/130 through a Unix PTY.
+   The table accounts for exactly 40 library / 42 CLI-inclusive codes.
+7. **Accepted fill/full-field difference:** an unregistered-root fill read
+   gives `repository_not_registered` with no recovery. A full-field save
+   gives `repository_not_enabled` for a never-enabled root, or
+   `repository_not_registered` with `index.rebuild` after cache loss. Both
+   forms have evidence; the optional read-recovery library ticket was not filed.
 
 **Purpose:** Make local document/ticket lifecycle and explicit discovery repair
 available for agents and project dogfooding.
@@ -490,11 +545,21 @@ available for agents and project dogfooding.
 explicit repair/adoption, index refresh/rebuild and identity recovery, over
 the F2 bridges.
 Ticket create and save take `deps` and `parent`; add `ticket slug-assign`.
+Both relationships accept null: on create it means none; on save it clears,
+while omission leaves the relationship unchanged. `ticket check` checks a
+complete proposal, with omitted flags proposing none and rejection inside
+`ok`/exit 0. `path observe` reports what is at the path in the selected active
+context, including another item's file. Mutations have no `--context` in C3;
+the multi-item-context ticket remains later work. Index execution requires a
+request ID in JSON/noninteractive mode and takes no input. C3 adds no identity
+prompt; after configuring identity, a save retry uses a fresh observation
+because a refused save may have allocated a context, and can reuse the freed
+request ID. Only the two repairs use confirmation.
 **Amended 2026-10-20 by C2 (decision 5):** repository-local initials and the
 create/enable prefix ship in C2 with their administration verbs, not in C3.
 Record the Wave 03 Cycle dependencies in the project's own tickets when these
-operations meet this gate. Preserve unknown metadata, ULIDs and body content; use actual
-context provisioning and source/destination observations. Empty folders are
+operations meet this gate. Preserve unknown metadata values, ULIDs and body content;
+use actual context provisioning and source/destination observations. Empty folders are
 local until they contain tracked content; do not add hidden placeholder
 commits. Index-only actions never fetch or rewrite canonical state.
 
@@ -506,6 +571,50 @@ repair, adoption retry, move collision, index loss/corruption and commit-success
 refresh-failure preserve actual Git/filesystem state. New JSON schemas and
 documented command examples pass. Switch ticket create/update dogfooding to the
 CLI when those operations meet this gate.
+
+**Runtime qualifications and known limits:** these preserve the approved
+Task 0/3 rulings and the library as built.
+
+- Front matter is re-emitted in canonical style when rewritten; a hand-written
+  document save can commit normalization without changing values. Both save
+  no-ops require intended content already committed (HEAD-equal); equal
+  uncommitted ticket values may skip rewriting yet still checkpoint. A
+  current-token no-change save can provision a context without adding a commit.
+- Design fact 15's owner-approved correction: a primary-only document
+  committed at its current path can move to itself as `already_applied`/`noop`,
+  exit 0, without creating a context or commit. `Position::of` falls back to
+  primary HEAD when the document branch is absent.
+- Partial outcomes classify as Incomplete/exit 4 regardless of the code,
+  including the repair actor's `internal_error` and the interrupted-save
+  retry's `request_mismatch`/`external_change`. An actor has no process exit.
+- A pending save fences only requests reaching a new domain operation;
+  early binding no-ops/refusals and finished-request replay retain their
+  answers. A same-request retry completes while its intended bytes remain.
+  After an intervening edit, an omitted-field retry mismatches and a full-field
+  retry is stale. Restore the bytes it committed to finish in C3; otherwise
+  recovery waits for C4's `operation abandon`.
+- `index rebuild` retains the owner-approved root-selection exception: it
+  propagates only `repository_not_enabled` from ordinary root resolution,
+  then validates the selected Git repository's own workdir. There is no
+  universal `not_repository_root` promise for linked roots, and no claim
+  that every such rebuild succeeds; this qualification is source-inspected.
+- `folder create` is primary-only, with no placeholder commit. A repaired
+  document can be listed twice until its context merges. Item reads of
+  duplicated/mismatched contexts can give `item_not_found`, which fill inherits.
+- Native CI is post-merge and separately authorized. Windows repair consent
+  remains a native manual check; Linux evidence does not satisfy it.
+
+**Dogfooding and switch complete, 2026-10-25.** The owner separately authorized
+the saves/pushes and the fresh resume after the recorded checker error. All six
+saves, value checks and pushes succeeded (`8da3890`); the subsequent AGENTS.md /
+file-ticket switch (`297bd781`) has separate SPEC/QUALITY approval. At the
+historical Task 8 checkpoint these steps were owed and those files unchanged.
+Comments remain canonical until C4; closure remains canonical until C5, with
+the explicit working-on-a-ticket exception. The normal main-based CLI workflow
+becomes available after C3 merges. C3 is review-ready with its ticket **open**;
+closure, PR, merge, cleanup and native CI require their own authorization. The
+approved rule still forbids closure/merge while dogfooding evidence is owed
+unless amended by the owner; that evidence is now met.
 
 ### C4: CLI Discussion, Synchronization And Conflict Recovery
 

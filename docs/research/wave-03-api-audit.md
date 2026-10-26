@@ -22,6 +22,269 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Wave 03 CLI Cycle C3 refresh (2026-10-24)
+
+Task 0 source-inspected this refresh on **2026-10-25 UTC**, at
+`ad4d3f0d9a255125d93fe25b4e060cb7c29d2d4a`, with `origin/main` at
+`e49f978b499ee34d6b77061caaa3a6fb9d37a88b`. The heading retains the approved
+plan's date. All thirteen existing C3 inventory rows below are updated **in
+place**. F1/F2 provide the consumed APIs. **Amended 2026-10-24 by C3:** Task 8
+rechecked these rows against the built CLI at
+`9a2a5170c4704ef03420ef2276911c6b1bfa3959`; all thirteen verbs are available.
+Historical claims of absent folder/repair operations, missing confirmation
+or optional unguarded source observations do not describe these F2 bindings.
+This section supersedes those claims for C3, not the other historical rows.
+
+The governing contract is the
+[C3 Cycle](../Cycles/wave-03-cli-03-authoring-and-discovery.md), with Task 0's
+owner rulings and all 37 fact checks in the
+[execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md).
+The prescribed Devenv check, fmt and all-target/all-feature clippy passed.
+Targeted all-feature locked tests passed: CLI bin **172**, `cli` **177**,
+`read_contract` **71**, `mutation_contract` **44**: **464**, with zero failed,
+ignored or filtered. These are Linux baseline checks. Other cited test
+assertions were source evidence, not tests rerun for that baseline refresh.
+
+Task 8 records the later delivered implementation and retained Task 7 evidence:
+**188 CLI unit + 290 CLI integration + 71 read-contract + 44 mutation-contract
+= 593 passing**, with all six checkpoint gates passed. The owner conveyed
+**Part B spec and quality APPROVED** at the Task 8 handoff, over
+`452f031fd06d3a39e2c5de6cfe711b74256ab8a1..9a2a5170c4704ef03420ef2276911c6b1bfa3959`.
+Task 8 is documentation-only and runs no Rust gates. Task 9 final verification,
+whole-branch review and separately authorized dogfooding remain owed; this is
+not Cycle completion or native CI evidence.
+
+The source recheck follows `src/bin/manyhands-cli/catalog.rs:662–875`
+(thirteen literal `Available("C3")` entries), `dispatch.rs:490–568` (both F1
+reads and all eleven mutation arms), `authoring.rs` (the named F2 input
+constructors and unchanged driver), `fill.rs` (once-per-invocation fill,
+caller observation and scoped failures), and `parse.rs:191–242` (selectors
+and request-ID rules). The F1/F2 library tree is unchanged from Task 0;
+the signatures, result sets and root/fence qualifications below still match.
+The inventory rows now name the binary evidence files in place. Each mutation
+uses `identity_prompt: false`; only repairs are confirmed. C4–C5 remain planned.
+
+#### C3 signatures, inputs and result-set key
+
+Paths below are relative to `src/repository/` unless prefixed otherwise;
+`bind/` abbreviates `mutation/bind/`. Bare filenames in grouped citations
+retain the last named directory.
+**F2(V, I)** means `Mutation::V(I)` passed to these `RepositoryService`
+methods, not a direct call to the older domain operation:
+
+```rust
+prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto>
+execute<P: SessionCredentialProvider>(
+    &self, call: MutationCall, credentials: &mut SessionCredentials<P>,
+    progress: &mut dyn ProgressSink, cancel: &CancellationToken,
+) -> Envelope<MutationDataDto>
+```
+
+`MutationCall { request_id: RequestId, confirmation: Option<ConfirmationId>,
+mutation: Mutation }` is public (`mutation/mod.rs:389–428`); the methods are
+`mutation/confirm.rs:286` and `mutation/execute.rs:45–51`. Every input below
+is exported as `manyhands::repository::<Name>` (`mutation/mod.rs:76–94`,
+`src/repository.rs:83`). `root` is always `PathBuf` and `id` is `ItemId`:
+
+- `DocumentCreateInput { root, id, path: PathBuf, draft: DocumentDraft }`
+  (`mutation/bind/document.rs:47–54`).
+- `DocumentSaveInput { root, id, draft: DocumentDraft, observation: Option<String> }`
+  (`:59–66`); missing observation is refused as `invalid_input` (`:341–347`).
+- `DocumentMoveInput { root, id, observation: Option<String>, destination_path: PathBuf, destination_observation: String }`
+  (`:70–82`); the source observation is likewise mandatory at the boundary.
+- `TicketCreateInput { root, id, draft: TicketDraft, deps: Vec<String>, parent: Option<String>, initials: Option<String> }`
+  (`mutation/bind/ticket.rs:44–54`).
+- `TicketSaveInput { root, id, draft: TicketDraft, deps: RelationshipWrite<Vec<String>>, parent: RelationshipWrite<String>, observation: String }`
+  (`:58–67`).
+- `TicketSlugAssignInput { root, id, observation: String, initials: Option<String> }`
+  (`:948–955`).
+- `FolderCreateInput { root, path: String }` (`mutation/bind/folder.rs:58–61`).
+- `DocumentRepairInput` and `TicketRepairInput` each have
+  `{ root, path: PathBuf, observation: String, source: String }`
+  (`mutation/bind/repair.rs:100–123`).
+- `IndexRefreshInput { root }` and `IndexRebuildInput { root }`
+  (`mutation/bind/index.rs:36–45`).
+
+`DocumentDraft { title: String, body: String }` and
+`TicketDraft { title: String, ticket_type: String, status: String,
+project: Option<String>, team: Option<String>, body: String }` are complete
+drafts (`src/repository.rs:579–592`). `RelationshipWrite<T>` is
+`Unchanged | Clear | Set(T)`, default `Unchanged` (`:613–620`). C3 owns the
+approved omitted-field fill, not a new library patch API.
+
+**F1** rows give their exact read signatures below. Both first use
+`resolve_repository(&self, path: &Path) -> Result<ResolvedRepository, ReadError>`
+(`read/resolve.rs:228–240`). `ProposedRelationships { deps: Vec<ItemId>,
+parent: Option<ItemId> }` is a complete proposal, not a patch
+(`read/items.rs:107–116,2033–2054`).
+The save fill additionally uses
+`show_item(&self, repo: &ResolvedRepository, id: &ItemId) -> Result<ItemDto, ReadError>`
+only when a draft field is omitted (`read/items.rs:1784–1831`); its codes
+and the wrong-kind `item_not_found` are already in the save rows' sets.
+
+Codes in a row are the **union** of its named sets and explicit additions.
+They include prepare, execution, re-entry, replay, boundary storage and read
+failures, including defensive/race paths; inclusion is not a promise that a
+normal binary fixture can force the path. Stored diagnostic/problem codes
+inside a successful read are not top-level result codes.
+
+- **C3-S** = `ok busy index_unavailable internal_error`: read sessions and
+  request/confirmation storage (`read/mod.rs:257–272,430–451`,
+  `mutation/records.rs:810–816`).
+- **C3-P0** = `invalid_path not_repository bare_repository repository_inaccessible`:
+  domain root selection (`src/repository.rs:9570–9634`).
+- **C3-P** = C3-P0 + `not_repository_root`: F1 selection and ordinary F2
+  `resolve_root` (`read/resolve.rs`, `mutation/bind/mod.rs:93–103`).
+- **C3-R** = C3-P + `repository_not_registered repository_not_enabled`:
+  registration and never-enabled classification (`mutation/bind/mod.rs:111–123`).
+- **C3-M** = C3-S + `request_mismatch cancelled`: shared mutation paths
+  (`mutation/execute.rs:83–147,190–232,249–283`, `mutation/replay.rs:133–153`,
+  `mutation/reenter.rs:92–189`).
+- **C3-U** = `not_confirmable`: prepare, or a first execution presenting a
+  confirmation to an unconfirmed command (`mutation/confirm.rs:293–301,399–403`).
+- **C3-C** = `confirmation_required confirmation_not_found confirmation_mismatch confirmation_used confirmation_expired external_change`:
+  the two repairs' consent paths (`mutation/confirm.rs:393–428`,
+  `mutation/execute.rs:277–280,309–323`).
+- **C3-A** = C3-M + C3-R +
+  `already_applied external_change identity_required invalid_configuration item_not_found recovery_required worktree_not_clean wrong_branch discovery_pending`:
+  shared authoring save/context/checkpoint paths. Evidence:
+  `mutation/bind/save.rs:89–157,239–320,325–496`,
+  `mutation/outcome.rs:41–101,379–391,459–498`, and
+  `src/repository.rs:1785–1964,3301–3354,3517–3604,8773–8797,10635–10683`.
+  A checkpoint file disappearing can produce `item_not_found` even for a
+  create or repair. An abandoned in-flight operation maps to `external_change`
+  (`recovery.rs:1127–1150`; `mutation/outcome.rs:80–84`).
+
+Per-verb additions in the inventory are traced through
+`mutation/bind/document.rs:341–574`, `ticket.rs:350–633,751–773,1240–1290`,
+`folder.rs:80–177`, `index.rs:114–166,213–244,256–301` and
+`repair.rs:193–198,329–464,467–548,688–775`. Settlement/offering preserves
+the answer code (`mutation/settle.rs:80–107`); replay adds
+`recovery_required` if the reported commit is no longer reachable
+(`mutation/replay.rs:38–53`). Domain error mappings are followed only for
+calls these bindings make: unrelated key/transport/enablement mapper arms
+are not C3 codes. In particular, `worktree_conflicted` belongs to enablement's
+preflight, not the authoring context path; index configuration problems are
+reported in discovery data, not as `invalid_configuration` failures of a
+refresh/rebuild. `registration_pending` is included for folder creation's
+pre-directory stale mark (`bridges/folder.rs:504–520`,
+`src/repository.rs:10780–10818`); ordinary saves turn failed checkpoint marks
+and handoffs into discovery pending, not registration pending.
+
+**Root-handling exception, owner-approved in Task 0.** `index rebuild`
+propagates only `repository_not_enabled` from ordinary `resolve_root`, then
+uses domain root selection (`mutation/bind/index.rs:213–233,278–285`,
+`src/repository.rs:1533–1544,1647–1656,9570–9620`). Unlike the other mutations,
+its result set does not promise `not_repository_root` for a linked root; an
+inside-root path is `invalid_path`. C3 passes this through without a CLI
+guard. This is source-inspected behavior, **not fixture-proven success for
+every linked-root situation**.
+
+**Pending-operation qualification, owner-approved in Task 0.** The fence
+refuses another request reaching a new domain operation, not an early
+binding no-op/refusal or finished-request replay. The latter retain their
+existing answers (`mutation/execute.rs:190–208,254–258`,
+`tests/mutation_replay/documents.rs:573–614`). Task 3's blocked-request
+fixtures request actual new work; the interrupted-save retry expectations
+are unchanged.
+
+#### C3 exit-coverage union
+
+The thirteen row sets expand to these **40 F1/F2 codes**, unchanged from
+Task 0. `tests/cli/authoring_exits.rs` covers this exact set plus CLI_ONLY
+with **39 binary rows / 3 individually justified reasons** on Unix (38/4
+otherwise). The Unix reasons are `discovery_pending`, `registration_pending`
+and `confirmation_expired`; non-Unix also retains prompt cancellation as a
+reason. C2's audit block and tests are unchanged.
+
+```text
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change identity_ambiguous identity_required index_unavailable initials_required internal_error invalid_configuration invalid_input invalid_path invalid_relationship invalid_slug_configuration item_not_found not_confirmable not_repairable not_repository not_repository_root occupied_path ok path_not_found recovery_required registration_pending relationship_cycle repository_inaccessible repository_not_enabled repository_not_registered request_mismatch slug_already_assigned ticket_closed worktree_not_clean wrong_branch
+```
+
+The design's explicit `CLI_ONLY` inventory is `usage_error invalid_input
+invalid_id invalid_path cancelled internal_error`. Only `usage_error` and
+`invalid_id` extend the library union, giving **42 CLI-inclusive codes**.
+`noop` is an outcome, not a code: its code is `already_applied`.
+Partial-outcome precedence is authoritative (`src/results.rs:273–288`):
+the interrupted repair's `internal_error` with `partial` maps to **exit 4**,
+not 1, as approved during Task 0. A non-partial internal error still maps
+to 1. The actor's interruption itself is library evidence, not a CLI exit.
+
+#### C3 no-op capability
+
+Nine mutations can report `already_applied`/`noop`; the two index mutations
+cannot. A fresh request is distinct from replaying a finished record. Item
+fixtures use an existing editing context except the additional primary-only
+committed move-to-self case approved during Task 3. “No change” here means no changed
+canonical bytes or new checkpoint: it does not promise zero application
+cache writes or zero same-byte filesystem writes.
+
+For both save verbs, the intended owned content must already be committed
+(HEAD-equal) for a no-op. Equality with the current worktree file alone is
+insufficient: a ticket save can skip rewriting matching parsed content yet
+still checkpoint an uncommitted edit (`src/repository.rs:2646–2691`). The
+checkpoint compares the resulting tree with HEAD (`:3561–3590`). The existing
+test `tests/mutation_replay/execute.rs:1041–1078` asserts a commit without a
+rewrite; Task 0 inspected this test source, not a new run. This qualification
+is the fifth owner-approved Task 0 ruling, following quality review.
+
+| Mutation | Fresh-request no-op capability and binding rule |
+| --- | --- |
+| `folder create` | Yes: an existing directory is `AlreadyPresent` and maps to `already_applied` after refresh (`bind/folder.rs:149–154`). The refresh still runs; no folder or checkpoint is added. |
+| `document create` | Yes: same ID, path and intended content committed in the effective/context copy; create also requires empty unknown metadata (`bind/document.rs:311–329,399–443`). Other content/path is occupied, not a no-op. |
+| `document save` | Yes: the intended serialized content on the contextual item is already committed (HEAD-equal), so there is no new checkpoint; a stale token with intended content committed also answers already-applied (`bind/document.rs:489–503`, `bind/save.rs:124–139`; `tests/mutation_replay/documents.rs:249–286`). A current-token domain save may rewrite identical bytes; matching uncommitted content can still be checkpointed. Hand-written front-matter normalization is not a byte-preserving no-op. |
+| `document move` | Yes: the document is already at the destination, committed there and nowhere else on its document branch (`bind/document.rs:512–553`), or on primary when the branch is absent (`Position::of`, `mutation/evidence.rs:19–44`). Primary-only committed move-to-self is `already_applied`/`noop`, exit 0, without context creation; owner-approved Task 3 correction, backed by the binary checkpoint. |
+| `ticket create` | Yes: existing intended ticket committed, including the requested relationships; the already-written slug is retained rather than recomposed (`bind/ticket.rs:538–598`). |
+| `ticket save` | Yes: parsed fields and requested relationships match the contextual file, and that intended content is already committed (HEAD-equal): no file rewrite or new checkpoint. Matching parsed content skips the rewrite, not the checkpoint; uncommitted content can still produce a commit (`src/repository.rs:2646–2691,3561–3590`; `tests/mutation_replay/execute.rs:1041–1078`). |
+| `ticket slug-assign` | Yes: the composed code equals the committed existing slug (`bind/ticket.rs:1247–1268`); a different code is `slug_already_assigned`. |
+| `document repair` | Yes: the contextual file exactly equals the corrected source and is committed (`bind/repair.rs:469–508,688–695`). A fresh execution can use its own confirmation obtained before another actor completed the repair; a new prepare after completion itself returns the no-op with no confirmation. Reusing a consumed confirmation under a different request is not this case. |
+| `ticket repair` | Yes: the same shared repair rule, preserving the source's required closure values. The primary nonconforming file remains available until integration (`bind/repair.rs:446–508,741–752`). |
+| `index refresh` | No: each fresh request runs an explicit refresh; successful completion is `ok`, discovery current (`bind/index.rs:80–88,133–159`). Even a finished replay is `ok`, not `already_applied`. |
+| `index rebuild` | No: each fresh request explicitly rebuilds; completed work is `ok`, discovery current (`bind/index.rs:148–159,263–270`). An unchanged canonical tree does not turn index work into `noop`. |
+
+**Task 0 resolutions and evidence limits.** A current-token no-change save
+without a context provisions one before comparing/checkpointing
+(`src/repository.rs:2034–2065,2453–2492,2646–2678`); this answers design
+fact 17 without changing its contextual no-op fixtures. `initials_required`
+on new ticket creation happens before request acceptance, so there is no
+record to delete and the same request ID is free (`mutation/bind/ticket.rs:491–524,582–598`,
+`mutation/execute.rs:249–258`; `tests/mutation_replay/execute.rs:152–198`).
+
+After cache loss, before rebuild, committed saves are
+`repository_not_registered`. F2 offers `index.rebuild`; an omitted-field
+CLI fill read offers no recovery (decision 7). After rebuild with unchanged
+intended content, the old observation is stale but the committed end state
+produces `already_applied`/`noop`, with no second commit. Ticket evidence is
+`tests/mutation_replay/cache_loss.rs:23–49,115–132`; document evidence is the
+shared stale-token rule and `bind/document.rs:489–503`, also exercised without
+cache loss at `tests/mutation_replay/documents.rs:249–286`. The latter is
+source derivation, not a document cache-loss fixture executed by Task 0.
+Tasks 3 and 5 subsequently supplied both binary cases in
+`tests/cli/documents.rs::a_committed_save_retried_after_cache_loss_makes_no_second_commit`
+and `tests/cli/ticket_authoring.rs::a_committed_ticket_save_retried_after_cache_loss_makes_no_second_commit`,
+included in the retained Task 7 gate. Lost confirmation gives
+`confirmation_not_found` with `request.prepare`
+(`tests/mutation_confirmation.rs:304–331`; shared consent at
+`mutation/confirm.rs:399–410`), also proven through the binary in
+`tests/cli/repair.rs::a_confirmation_presented_after_cache_loss_is_confirmation_not_found`.
+
+The nine closed inputs and their examples are published under
+`schemas/input/v1/` and `tests/fixtures/cli_input_v1/`.
+`tests/cli/authoring_exits.rs::every_c3_example_input_runs` owns the nine-row
+outcome table copied into the [CLI RFC](../RFC/cli-contract.md#c3-evidence-and-documented-examples):
+all `ok`/exit 0, each in its own prepared fixture, with only observation fields
+substituted. IDs, paths, bodies and corrected source remain unchanged.
+
+For either repair, invalid corrected source, including a source of the wrong
+kind for its path, is `invalid_input`. A path that is no place of the command's
+kind, or a conforming ticket source whose ID differs from the directory's,
+is `not_repairable` (`bridges/repair.rs:146–179`). With valid source
+and a current observation, an already-conforming file is `not_repairable`,
+an absent/exact-case-missing file is `path_not_found`, and a path outside the
+readable boundary or through a symlink is `invalid_path`
+(`mutation/bind/repair.rs:18–45,193–198,329–371,446–464`). “No nonconforming
+entry” is not one universal error code; fixtures must specify the case.
+
 ### Wave 03 CLI Cycle C2 refresh (2026-10-20)
 
 Task 0 performed this refresh on **2026-10-22**, at implementation baseline
@@ -282,7 +545,8 @@ Signature/result key for refreshed rows:
 (amended 2026-10-20 by C2: now implemented with evidence below);
 `operation abandon` is planned for C4. Their rows below record availability,
 not new C1 dispatches. The original inventory also lacked `ticket slug-assign`;
-its planned C3 row completes the approved catalog without duplicating a verb.
+its then-planned C3 row completes the approved catalog without duplicating a
+verb. The C3 refresh now records all thirteen C3 verbs as delivered.
 `host inspect` is application-global and takes no `--repo` (decision 7).
 By-path `document show`/`ticket show` use `show_path`; C1 adds the approved
 wrong-kind `item_not_found` check. Planned-command help exposes only name,
@@ -549,8 +813,11 @@ pending with OID. Errors after effects do not provide a universal effects DTO;
 re-observation/recovery is required. `RecoveryInspection` lists pending local
 records only, not all completed operations or original body. Cache rebuild can
 lose intent/consent/history: no indefinite exactly-once claim. If Git/canonical
-facts cannot prove replay, W3-02 must return recovery_required, ask for original
-input where needed and never regenerate a comment ID or infer publication.
+facts cannot prove replay, the original audit required W3-02 recovery and
+original input where needed, never regenerating a comment ID or inferring
+publication. For C3, F2's specific cache-loss codes supersede that original
+generic refusal requirement; see the C3 refresh above and F2's
+[Departures from the RFCs](../plans/2026-10-08-wave-03-foundation-02-replay-confirmation-and-bridges-design.md#departures-from-the-rfcs).
 
 Document edit serializes then writes even an equivalent parsed item
 ([1640](../../src/repository.rs#L1640), [1730](../../src/repository.rs#L1730));
@@ -807,12 +1074,12 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `document list` — C1/D1 | F1 `list_documents(repo: &ResolvedRepository) -> R<ItemListDto>` (`read/items.rs:1662`); codes SR | Effective copies, path then ID; includes nonconforming entries | Read session: yes; index metadata only; freshness/completeness explicit | No consent/refresh/provisioning | No body/source in list | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `document show` — C1/D1 | F1 `show_item(repo: &ResolvedRepository, id: &ItemId) -> R<ItemDto>` (`read/items.rs:1784`), or `show_path(repo: &ResolvedRepository, context: Option<&Path>, path: &Path) -> R<ItemDto>` (`:1853`); codes SR + `repository_inaccessible`, with `item_not_found` by ID, `invalid_path`/`path_not_found` by path | Canonical ID or exact path and optional context; C1 wrong-kind check adds `item_not_found` | Read session: yes on valid input; guarded file read, no context provisioning | No consent/repair | Requested body/source and unknown metadata; fixed errors | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `folder list` — C1/D1 | F1 `list_document_folders(repo: &ResolvedRepository) -> R<DocumentFolderListDto>` (`read/items.rs:1672`); codes SR | Primary `docs/` folders, sorted path, empty flag | Read session: yes; index only, no live directory scan | No consent/create/refresh | Metadata only | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
-| `folder create` — W3-04/09 | Missing public folder-only operation; save_document's parent creation is not equivalent | Repository-relative docs path; context and absence observation | Explicit local empty directory, no placeholder/checkpoint/publication; replay absent | C2 request/absence; no implicit browsing creation | No SSH/secret; scoped symlink-safe path/errors | absent | W3-04 scoped filesystem addition, W3-02 safety; R-author |
-| `document create` — W3-04/09 | `save_document` E-document Create target + caller ItemId | Exact new docs destination; Missing required; owned shared context | Op ID; provision/write/scoped checkpoint/discovery, no publish; C1 | C2 adapter digest/progress/cancel missing | Local commit identity only; bodies excluded from logs | partially-present | W1-03/05; W3-02/04; R-author |
-| `document save` — W3-04/09 | `save_document` E-document Edit target | Destination observation mandatory; source observation optional, checked only for Some; missing-source-observation rejection absent C1; full draft not patch input | Op ID; values preserved, serializer header/no-op hazard C1; no publish | W3-02/04 must require source observation and prove None rejection before effects (C1); C2 missing patch/opaque token adapter | Local identity; body only explicit input, no diagnostics C0 | partially-present | W1-03/05; W3-01/02/04; R-author + R-adapter |
-| `document move` — W3-04/09 | `save_document` E-document source/destination pair | Destination observation mandatory; optional source observation checked only for Some before read/removal, None may remove unobserved current source; same ID/owned context C1 | Op ID binds pair; write/remove/checkpoint both paths, partial recovery C1; source-omission rejection not guaranteed | W3-02/04 require source observation and None-rejection/state-preservation tests (C1); C2 request/preview/progress missing; no force | Local identity, no remote; C0 path/error redaction | partially-present | W1-03/05; W3-02/04; R-author + R-adapter |
-| `document repair` — W3-04/09 | Missing public complete-source repair/adoption; E-canon validates only | Exact malformed path/base observation; uniqueness/context/ID invariant | Request/adoption ID replay absent; normal owned checkpoint, not primary patch | Explicit valid preview + confirmation missing C2 | Local identity; malformed source not logged C0 | absent | W3-04 repair/adoption + W3-02 safety; R-author |
-| `ticket repair` — W3-04/09 | Missing public complete-source ticket repair; E-canon not authoring service | Exact path/base, uniqueness/closure/no-reopening/owned context | Replay absent; preserve existing ID/closure, adoption explicit | Required preview/confirmation C2 missing | Local identity; source redaction C0 | absent | W3-04 boundary, W2-10 closure invariants; R-author + R-domain |
+| `folder create` — C3 | F2(FolderCreate, FolderCreateInput); signatures/input above; `mutation/bind/folder.rs`; CLI `authoring.rs::folder_create` | `--repo`, `--input` path under docs on primary; no item/context selector or observation input | Request/replay boundary; directory and discovery only, no checkpoint/publication; codes **C3-M + C3-R + C3-U + already_applied occupied_path invalid_input discovery_pending registration_pending recovery_required** | Unconfirmed; fresh existing-directory no-op still refreshes | No SSH or identity prompt; no placeholder file | Available; Linux binary evidence: `tests/cli/folders.rs`, `authoring_exits.rs` | F2 bridge + C3 adapter; R-author |
+| `document create` — C3 | F2(DocumentCreate, DocumentCreateInput); `mutation/bind/document.rs:399–452,676–748`; CLI `authoring.rs::document_create` | `--repo`, `--input` item_id/path/title/body; typed ItemId, docs path and complete DocumentDraft; absence enforced internally | Request/digest/replay; local owned checkpoint; codes **C3-A + C3-U + invalid_input occupied_path** | Unconfirmed; existing intended committed content can be a fresh no-op | Local identity, no prompt; body excluded from result/request stores; path is public data | Available; Linux binary evidence: `tests/cli/documents.rs`, `authoring_exits.rs` | F2 authoring + C3 adapter; R-author |
+| `document save` — C3 | F2(DocumentSave, DocumentSaveInput); `mutation/bind/document.rs:489–503,676–748`; CLI `authoring.rs::document_save`, `fill.rs` | `--repo`, `--id`, `--input` observation and optional title/body; full library draft and mandatory Some(observation); C3 fills once under decisions 2/5/7 | Local checkpoint; front matter re-emitted; codes **C3-A + C3-U + invalid_input**; fill read adds no new code to this set | Unconfirmed; HEAD-equal intended content required for no-op; fill precedes replay and preserves caller token | Local identity, no prompt; body never diagnostic; scope/read recovery and request ID pass through on fill failure | Available; Linux binary evidence: `tests/cli/documents.rs`, `authoring_exits.rs` | F2 complete draft; C3 patch; R-author + R-adapter |
+| `document move` — C3 | F2(DocumentMove, DocumentMoveInput); `mutation/bind/document.rs:536–574,676–748`; CLI `authoring.rs::document_move` | `--repo`, `--id`, `--input` observation/destination_path/destination_observation; context-bound destination token | One local source/destination checkpoint; F2's existing committed-move workaround retained; codes **C3-A + C3-U + invalid_input occupied_path** | Unconfirmed; same-path no-op requires the unique committed location on the document branch, or primary when that branch is absent (Task 3 owner ruling) | Local identity, no prompt; no publication; destination path is public result data | Available; Linux binary evidence: `tests/cli/documents.rs`, including primary-only committed move-to-self; `authoring_exits.rs` | Decision-1 move defect remains separate; R-author + R-adapter |
+| `document repair` — C3 | F2(DocumentRepair, DocumentRepairInput); `mutation/bind/repair.rs:688–775`; CLI `authoring.rs::document_repair` | `--repo`, `--input` primary nonconforming path/observation/source; corrected source supplies adopted ID | Corrected source written verbatim in item context; checkpoint/adoption replay; codes **C3-A + C3-C + invalid_input not_repairable identity_ambiguous path_not_found** | Confirmed; repair preview explicitly states adoption; committed exact source can be a no-op | Local identity, no prompt; no source in output/stores; path and adopted ID are public | Available; Linux binary/actor evidence: `tests/cli/repair.rs`, `authoring_exits.rs`; Windows consent manual | F2 repair bridge + C3 confirmed adapter; R-author |
+| `ticket repair` — C3 | F2(TicketRepair, TicketRepairInput); same shared repair signature/binding; CLI `authoring.rs::ticket_repair` | `--repo`, `--input` path/observation/source with directory-matching ID; closure preserved | Local context/checkpoint, including closed-ticket repair; codes **C3-A + C3-C + invalid_input not_repairable identity_ambiguous path_not_found** | Confirmed; no ticket-closed guard on repair; no implicit adoption | Local identity, no prompt; corrected source remains private; result has ID/path/adopted | Available; Linux binary evidence: `tests/cli/repair.rs`, `authoring_exits.rs`; Windows consent manual | F2 repair bridge + C3 adapter; R-author + R-domain |
 | `ticket list` — C1/D1 | F1 `list_tickets(repo: &ResolvedRepository, filter: &TicketFilter) -> R<ItemListDto>` (`read/items.rs:1696`); codes SR | Status/type/project/closure/slug/readiness filters; activity descending then ID; nonconforming entries retained | Read session: yes; cached metadata; lifecycle closure distinct from status | No consent/refresh | No list bodies/source | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `ticket show` — C1/D1 | F1 `show_item(repo: &ResolvedRepository, id: &ItemId) -> R<ItemDto>` (`read/items.rs:1784`), or `show_path(repo: &ResolvedRepository, context: Option<&Path>, path: &Path) -> R<ItemDto>` (`:1853`); codes SR + `repository_inaccessible`, with `item_not_found` by ID, `invalid_path`/`path_not_found` by path | Full ID or exact path/context; C1 wrong-kind check adds `item_not_found`; closed tickets readable | Read session: yes on valid input; guarded source read; no provisioning/reopening | No consent/repair | Requested body/source, closure and relationships | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `ticket ready` — C1/D1 | F1 `ticket_readiness(repo: &ResolvedRepository, filter: &TicketFilter) -> R<ItemListDto>` (`read/graph.rs:885`); codes SR | Open tickets; filter readiness Ready, other filters exact | Read session: yes; graph from effective indexed tickets | No consent/refresh | Metadata and readiness; no source | F1 baseline verified; CLI pending | F1 read; C1 Task 6; R-read |
@@ -823,11 +1090,11 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `ticket plan` — C1/D1 | F1 `ticket_plan(repo: &ResolvedRepository, filter: &TicketFilter) -> R<PlanDto>` (`read/graph.rs:1042`); codes SR | Open-ticket batches plus unplannable reasons; filters do not change graph | Read session: yes; no plan persistence | No consent/refresh | Metadata and fixed reasons | F1 baseline verified; CLI pending | F1 read; C1 Task 6; R-read |
 | `ticket critical-path` — C1/D1 | F1 `ticket_critical_path(repo: &ResolvedRepository) -> R<ItemListDto>` (`read/graph.rs:1093`); codes SR | Longest plannable open-ticket chain, deterministic ties | Read session: yes; no estimates or persistence | No consent/refresh | Metadata only | F1 baseline verified; CLI pending | F1 read; C1 Task 6; R-read |
 | `ticket find` — C1/D1 | F1 `find_tickets_by_slug(repo: &ResolvedRepository, slug: &str) -> R<ItemListDto>` (`read/graph.rs:1109`); codes SR | Whole short code, ASCII-case-insensitive; every match, empty/malformed input returns empty list | Read session: yes; slug never substitutes for ID | No consent/refresh | Metadata only | F1 baseline verified; CLI pending | F1 read; C1 Task 6; R-read |
-| `path observe` — C3 | F1 `observe_path`; CLI planned, moved out of C1 by decision 5 | Path/context observation for authoring | Read session: yes; no canonical write | C3 publishes CLI input rules | Opaque observation, no secrets | F1 API present; CLI planned | F1 read; C3 consumer |
-| `ticket check` — C3 | F1 `check_ticket_relationships`; CLI planned, moved out of C1 by decision 5 | Proposed ticket relationships | Read session: yes; rejection data may name `relationship_cycle`/`invalid_relationship` | C3 publishes CLI input rules | Fixed relationship results | F1 API present; CLI planned | F1 read; C3 consumer |
-| `ticket slug-assign` — C3 | F2 binding exists; CLI planned | Exact ticket; C3 publishes selectors | Request/replay boundary belongs to F2 | C3 publishes CLI mutation rules | No C1 mutation dispatch | CLI planned | F2 boundary; C3 consumer |
-| `ticket create` — W3-04/09 | `save_ticket` E-ticket Create; caller ID, full TicketDraft | Missing canonical ticket path/unique ID; status text closed allowed | Op ID; provision/write/checkpoint/discovery; closure fields omitted; no publish | C2 absence/digest/progress missing | Local identity only; no raw body logs | partially-present | W1-03/05; W3-02/04; R-author |
-| `ticket save` — W3-04/09 | `save_ticket` E-ticket Edit | Exact byte expected_path; project/team optional full draft, patch/null adapter missing | Op ID; preserves unknown/closure and semantic no-op; W2-10 domain guard refuses a closed ticket `TicketClosed` (2026-10-18) | C2; no closure via save, no force | Local identity only; C0 | partially-present | W1-03/05; W3-01/02/04, W2-10 guard; R-author + R-domain |
+| `path observe` — C3 | F1 `observe_path(&self, repo: &ResolvedRepository, context: Option<&Path>, path: &Path) -> Result<PathObservationDto, ReadError>` (`read/items.rs:1963–1995`); CLI `dispatch.rs::path_observe` | `--repo`, repository-relative `--path`, optional invocation-relative `--context`; canonical/listed nonconforming path; root or indexed active context; another item's path allowed | Read session; absent token is success; codes including resolution **C3-S + C3-P + repository_not_registered** | Read, no confirmation or mutation input | Opaque token/context/path; no canonical write or network | Available; Linux binary evidence: `tests/cli/authoring_reads.rs`, `authoring_exits.rs` | F1 read + C3 flags/human output |
+| `ticket check` — C3 | F1 `check_ticket_relationships(&self, repo: &ResolvedRepository, id: &ItemId, proposed: &ProposedRelationships) -> Result<RelationshipCheckDto, ReadError>` (`read/items.rs:2033–2054`); CLI `dispatch.rs::ticket_check` | `--repo`, `--id`, at least one of comma-separated `--deps` or `--parent`; typed complete proposal; ID need not already exist | Read session; codes including resolution **C3-S + C3-P + repository_not_registered**; relationship_cycle/invalid_relationship are rejection data inside ok, not top-level read failures | Read; no confirmation; omitted relationship proposes none; rejection is ok/exit 0 | Index-only, no canonical write or network; fixed rejection codes and public IDs | Available; Linux binary evidence: `tests/cli/authoring_reads.rs`, `ticket_authoring.rs`, `authoring_exits.rs` | F1 read + C3 flags; R-6 |
+| `ticket slug-assign` — C3 | F2(TicketSlugAssign, TicketSlugAssignInput); `mutation/bind/ticket.rs:948–955,1106–1140,1240–1290`; CLI `authoring.rs::ticket_slug_assign` | `--repo`, `--id`, `--input` observation/optional initials; composed slug, never caller-supplied slug | Local checkpoint; codes **C3-A + C3-U + occupied_path initials_required invalid_slug_configuration slug_already_assigned ticket_closed** | Unconfirmed; matching committed slug is a fresh no-op; different slug is refused | Local identity, no prompt; result echoes slug/initials, not body | Available; Linux binary evidence: `tests/cli/ticket_authoring.rs`, `authoring_exits.rs` | F2 slug binding + C3 adapter |
+| `ticket create` — C3 | F2(TicketCreate, TicketCreateInput); `mutation/bind/ticket.rs:582–598,681–702`; CLI `authoring.rs::ticket_create` | `--repo`, `--input` item_id/title/type/status; optional project/team/body/deps/parent/initials; full TicketDraft; missing/null deps/parent means none; no closure input | Local checkpoint; codes **C3-A + C3-U + invalid_input occupied_path invalid_relationship relationship_cycle initials_required invalid_slug_configuration ticket_closed** | Unconfirmed; validates relationships before context; domain closed-ticket guard can reject a raced create | Local identity, no prompt; missing initials leaves request ID free; slug/relationship IDs are public result data | Available; Linux binary evidence: `tests/cli/ticket_authoring.rs`, `authoring_exits.rs` | F2 relationships/slug + C3 input adapter; R-author |
+| `ticket save` — C3 | F2(TicketSave, TicketSaveInput); `mutation/bind/ticket.rs:601–634,681–702`; CLI `authoring.rs::ticket_save`, `fill.rs` | `--repo`, `--id`, `--input` observation and optional draft/relationship fields; C3 fills draft once, preserves token; null clears nullable fields | Local checkpoint; no-op requires intended content HEAD-equal; preserves closure/unknown values; codes **C3-A + C3-U + invalid_input occupied_path invalid_relationship relationship_cycle ticket_closed** | Unconfirmed; lifecycle-closed write refused; omitted deps/parent unchanged, null clears; [] clears deps | Local identity, no prompt; no body output; scoped fill failure/request ID passes through under decisions 5/7 | Available; Linux binary evidence: `tests/cli/ticket_authoring.rs`, `authoring_exits.rs` | F2 complete draft + C3 patch; R-author + R-domain |
 | `comment list` — C1/D4 | F1 `list_comments(repo: &ResolvedRepository, item: &ItemId) -> R<CommentListDto>` (`read/comments.rs:258`); codes SR + `item_not_found`, `repository_inaccessible` | Item's effective context; flattened threads, depth, nonconforming entries | Read session: yes; guarded item/comment reads; no checkpoint | No consent/context provisioning/refresh | F1 comment DTO includes requested content; no invented author | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
 | `comment add` — W3-05/10 | Compound `submit_comment`, original receipt and body-free `retry_comment_publication` E-comment; Cycle 07 acceptance in progress | Exact item/context/comment ID/parent + Missing destination; one bound sync child | Scoped checkpoint/discovery, then context sync; separate Saved publication/index state; original action reused on retry | Immediate configured context sync; explicit child restart/cancel; source separate from unsaved item drafts | Local commit identity; caller-owned selected-key session/host approval; confirmation only for child merge | implementation-in-progress | W2-07 over W1-03 and W2-05/06; W3-02/05; R-domain |
 | `item sync` — W3-05/10 | Missing public sync; E-observe/E-reserve and private transfer helpers not service | Exact item/shared context/remote/ref observations; never unsaved caller input | No sync outcomes/tests; future fetch/FF/merge/push/discovery effects C4 | C2 safe cancel + deleted-branch republish consent required | Future selected-key/trust C3 | pending-Wave-02 | W2-05 clean + W2-06 merge; W3-02/05; R-domain |
@@ -835,8 +1102,8 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `document promote` — W3-06/11 | Delivered headless `preview_document_promotion`, `promote_document`, `cancel_document_promotion`; Task 6 reviewed complete: SPEC PASS, QUALITY FINAL APPROVE, no findings | Exact item + whole branch/primary/remote/OIDs/paths/cleanup; local read-only Ready(preview/expectation) or Blocked | Complete(outcome) or IndexPending(same outcome); separate integration/publication/cleanup; identical-ID retry only unfinished work, completed replay no transport/deletion; completed publication wins over cancellation/lost return; accepted concurrency fence and approved T6-1 exception | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema and accepted-consent adapters pending; current F2 resume NotResumable | Local confirmed identity + selected-key/trust if remote; NoPublicationRemote still permits local cleanup | headless domain delivered/reviewed; 188 targeted tests GREEN; frontend pending | W2-09 Task 7/8 gates + C5/D5; R-domain |
 | `ticket close` — W3-06/11 | Delivered headless (W2-10, 2026-10-18): `preview_ticket_closure`, `close_ticket`, `cancel_ticket_closure` | Exact ticket + whole branch incl. code; local read-only Ready(preview/expectation binding `closed_by`) or every Blocked category | `Close ticket` checkpoint + `Integrate closed ticket` merge in one lease, publication, guarded cleanup; Complete(outcome) or IndexPending(same outcome); same-ID retry only unfinished work; contained-and-closed cleanup-only replay | C5/D5 F2 prepare/execute binding, ten-minute expiry, preview schema values and ready-ticket report pending; F2 resume `Close` stays NotResumable | Effective or confirmed Git identity (bound in the digest) + selected-key/trust if remote | headless domain delivered; frontend pending | W2-10 + C5/D5; R-domain |
 | `index status` — C1/D1 | F1 `index_status(repo: &ResolvedRepository) -> R<IndexStatusDto>` (`read/status.rs:657`); `ok`, `busy`, `internal_error`, `repository_not_registered`; own `index_unavailable` becomes DTO | Resolved root; freshness, counts, problems and pending local work; CLI resolution adds `index_unavailable` (R-2) | Read session: yes; no fetch/refresh | No consent; stale/unavailable explicit | Fixed problem guidance, no backend text | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
-| `index refresh` — W3-04/07 | `refresh_repository` E-index → Refreshed/RetryRequired/IndexPending | Registered root, re-observed contexts; races retain prior rows | Op ID; scan/cache/journal/heartbeat effects only; no Git/canonical rewrite/network | No public progress/cancel; C2; one-shot thread joins | No SSH; source not persisted; C0 | partially-present | W1-04/05; W3-02/04; R-author |
-| `index rebuild` — W3-04/07 | `rebuild_repository` E-index → RepositorySnapshot | Explicit root even after cache loss; observe/recheck, stale flag | Op ID; cache replacement/diagnostics/re-registration, trust/history fences; no draft/Git deletion | C2 progress/cancel missing; no implicit poll | No SSH; preserve trust reapproval fence C3/C4 | partially-present | W1-04/05, W2-03/04 fences; W3-02/04; R-author |
+| `index refresh` — C3 | F2(IndexRefresh, IndexRefreshInput); `mutation/bind/index.rs:36–38,114–166`; CLI `authoring.rs::index_refresh` | `--repo` registered root; no input payload or item selector | Explicit local scan/cache/journal; data null; codes **C3-M + C3-R + C3-U + recovery_required external_change**; success ok/discovery current, no noop | Unconfirmed; request ID required in JSON/noninteractive mode; bound progress/cancellation interface, no post-acceptance stop | No SSH/fetch/publication or canonical rewrite | Available; Linux binary evidence: `tests/cli/index.rs`, `authoring_exits.rs` (C3 refresh itself proves index_unavailable) | F2 index binding + C3 adapter; R-author |
+| `index rebuild` — C3 | F2(IndexRebuild, IndexRebuildInput); `mutation/bind/index.rs:43–45,148–159,213–244`; CLI `authoring.rs::index_rebuild` | Explicit `--repo`, possibly unregistered; no input/item selector; never-enabled refused; owner-approved root-selection exception above | Restore unavailable cache before acceptance, then rebuild; data null; codes **C3-M + C3-P0 + C3-U + repository_not_registered repository_not_enabled recovery_required external_change**; success ok, no noop | Unconfirmed; request ID required in JSON/noninteractive mode; partial-page damage remains decision-1 limit | No SSH/fetch or canonical/Git rewrite; trust/history-loss fences preserved | Available; Linux binary evidence: `tests/cli/index.rs`, `authoring_exits.rs`; linked-root behavior source-inspected only | F2 index binding + C3 adapter; no root workaround |
 | `poll status` — C1/D6 | F1 `polling_status(repo: &ResolvedRepository) -> R<PollingStatusDto>` (`read/status.rs:706`); codes SR | Stored policy, latest outcome/time, active operation and next eligibility | Read session: yes; no network or process discovery | No consent; no resident-worker claim | Fixed categories; no unlock | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
 | `poll configure` — W3-06/12 | `set_remote_polling` E-policy; interval 60–3600 | Exact registered root/policy; no observation token | No request ID; durable enabled/paused/interval transaction; future due logic C6 | C2 request/progress mapping absent, no scheduling now | No unlock; C0/C3 | partially-present | W2-04/08 policy; W3-02/06; R-adapter + R-domain |
 | `poll pause` — W3-06/12 | `set_remote_polling` E-policy updates tuple, no isolated pause request | Policy observation, preserve interval/enabled/backoff/unlock distinction | No request ID; caller must avoid overwriting newer tuple C6 | C2; active operation safe stop adapter missing | No unlock/prompt; pause not authentication block | partially-present | W2-04/08; W3-02/06; R-adapter + R-domain |

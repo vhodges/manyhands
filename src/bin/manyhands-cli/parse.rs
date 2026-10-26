@@ -117,7 +117,7 @@ pub fn parse(args: Vec<OsString>) -> Invocation {
         Ok(matches) => matches,
         Err(error) => {
             let target = raw_target(&args);
-            let detail = if matches!(&target,HelpTarget::Command(spec) if spec.delivered_by()=="C2")
+            let detail = if matches!(&target,HelpTarget::Command(spec) if spec.delivered_by()!="C1")
             {
                 "Invalid command options. Use --help for accepted options.".to_owned()
             } else {
@@ -205,6 +205,9 @@ fn validate(command: &CommandSpec, args: &ArgMatches) -> Result<(), String> {
             if args.contains_id("context") && !path {
                 return Err("--context requires --path.".to_owned());
             }
+        }
+        ("ticket", "check") if !args.contains_id("deps") && !args.contains_id("parent") => {
+            return Err("ticket check needs --deps or --parent.".to_owned());
         }
         ("ticket", "list") if args.get_flag("ready") && args.get_flag("blocked") => {
             return Err("--ready conflicts with --blocked.".to_owned());

@@ -63,9 +63,19 @@
 - For every Cycle in a Wave, create one Manyhands ticket before creating its
   implementation plan. The ticket is the record for the complete Cycle
   lifecycle: planning, implementation, verification, review, and closure.
-- Until the CLI supports the required operation, create and update tickets and
-  comments directly in the canonical `.manyhands/` filesystem paths. Switch to
-  the Manyhands CLI as soon as it supports the operation.
+- After C3 is merged, create and update tickets with `manyhands-cli ticket create`
+  and `ticket save` against the registered main checkout
+  `/home/vhodges/work/src/manyhands`. Run from an up-to-date main with
+  `devenv shell -- cargo run --locked --bin manyhands-cli -- …`; this ticket
+  branch's implementation does not make C3 available on main before merge.
+- Before `ticket save` of your own Cycle ticket, commit your owned edits to its
+  `ticket.md`: the CLI save checkpoints into that ticket's active worktree.
+- Comments remain canonical `.manyhands/comments/<item-id>/<comment-id>.md`
+  edits until C4's `comment add`; closure remains a canonical ticket-file edit
+  until C5's `ticket close`. Saving status text `closed` is not lifecycle closure.
+- Exception: `working-on-a-ticket` status edits and closure keep that skill's
+  own procedure until it is revised. Its loop runs in sandbox clones without
+  the main checkout's registration; C3 does not change that skill.
 - Perform all implementation work for a Cycle in the ticket's worktree and on
   its branch.
 - Add Manyhands comments to the ticket at implementation-plan checkpoints to

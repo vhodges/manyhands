@@ -15,14 +15,28 @@ mod support;
 #[path = "cli/admin.rs"]
 mod admin;
 
+#[path = "cli/authoring_exits.rs"]
+mod authoring_exits;
+
+#[path = "cli/authoring_reads.rs"]
+mod authoring_reads;
+
 #[path = "cli/boundaries.rs"]
 mod boundaries;
 
 #[path = "cli/content.rs"]
 mod content;
 
+#[path = "cli/documents.rs"]
+mod documents;
+
 #[path = "cli/help.rs"]
 mod help;
+
+#[path = "cli/folders.rs"]
+mod folders;
+#[path = "cli/index.rs"]
+mod index;
 
 #[path = "cli/exits.rs"]
 mod exits;
@@ -41,6 +55,8 @@ mod privacy;
 mod prompts;
 #[path = "cli/remotes.rs"]
 mod remotes;
+#[path = "cli/repair.rs"]
+mod repair;
 #[path = "cli/repository.rs"]
 mod repository;
 #[path = "cli/requests.rs"]
@@ -48,6 +64,9 @@ mod requests;
 
 #[path = "cli/relationships.rs"]
 mod relationships;
+
+#[path = "cli/ticket_authoring.rs"]
+mod ticket_authoring;
 
 #[test]
 fn fixture_directory_is_exactly_the_registered_cases() {
