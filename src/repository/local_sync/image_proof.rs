@@ -340,6 +340,51 @@ mod execute {
             .collect()
     }
     impl Proof {
+        // Previews deliberately have no worktree attribute files. Only a
+        // tracked, frozen-pair source may therefore exist at an applicable real
+        // worktree .gitattributes path. Ignore unrelated files/directories.
+        pub(in super::super) fn require_worktree_attributes(
+            &self,
+            git: &git2::Repository,
+        ) -> Result<(), Fault> {
+            let root = git.workdir().ok_or_else(Fault::authority)?;
+            let mut attributes = std::collections::BTreeSet::new();
+            for path in &self.paths {
+                for parent in Path::new(&path.path)
+                    .parent()
+                    .ok_or_else(Fault::authority)?
+                    .ancestors()
+                {
+                    attributes.insert(parent.join(".gitattributes"));
+                }
+            }
+            let mut current = git.index()?;
+            current.read(true)?;
+            for path in attributes {
+                // The same no-follow reader refuses symlink and special-file
+                // sources; none of these transient attribute bytes are stored.
+                if super::super::file_image::read(root, &path)
+                    .map_err(|_| Fault::authority())?
+                    .is_none()
+                {
+                    continue;
+                }
+                let tracked = current.get_path(&path, 0).ok_or_else(Fault::authority)?;
+                let bound = self
+                    .paths
+                    .iter()
+                    .find(|p| Path::new(&p.path) == path)
+                    .ok_or_else(Fault::authority)?;
+                if ![bound.before.as_ref(), bound.after.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|e| e.oid == tracked.id.to_string() && e.mode == tracked.mode)
+                {
+                    return Err(Fault::authority());
+                }
+            }
+            Ok(())
+        }
         // The ONE complete binding gate: both projections are validated before
         // any live-index mismatch, retained-image shortcut, or filter comparison.
         // Projections are cached only on this immutable decoded proof, never
@@ -446,7 +491,7 @@ mod execute {
                     digests: vec![*blake3::hash(&image.bytes).as_bytes()],
                 });
             }
-            Ok(Self {
+            let proof = Self {
                 bindings: std::cell::Cell::new(None),
                 baseline_v2: None,
                 version: 1,
@@ -455,7 +500,11 @@ mod execute {
                 primary: primary.to_string(),
                 tree: worker.find_commit(candidate)?.tree_id().to_string(),
                 paths: paths.into_values().collect(),
-            })
+            };
+            if disposition != Disposition::Noop {
+                proof.require_worktree_attributes(git)?;
+            }
+            Ok(proof)
         }
         pub(in super::super) fn insert(
             &self,
@@ -547,6 +596,7 @@ mod execute {
             candidate: git2::Oid,
         ) -> Result<bool, Fault> {
             self.validate_bindings(git)?;
+            self.require_worktree_attributes(git)?;
             if git.find_commit(candidate)?.tree_id().to_string() != self.tree {
                 return Err(Fault::authority());
             }

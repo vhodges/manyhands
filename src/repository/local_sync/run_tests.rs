@@ -2518,3 +2518,294 @@ fn spec_complete_bindings_match_git_directory_and_file_ordering() {
     assert_eq!(tip(&c), incoming);
     assert_eq!(execute(&f, id, &observation.observation), result);
 }
+
+fn ignored_attribute_fixture(f: &Fixture, nested: bool) -> (String, std::path::PathBuf) {
+    let c = f.context();
+    fs::create_dir_all(c.commondir().join("info")).unwrap();
+    let exclude = c.commondir().join("info/exclude");
+    let mut contents = fs::read_to_string(&exclude).unwrap_or_default();
+    contents.push_str("\n.gitattributes\nignored.txt\nscratch/\n");
+    fs::write(exclude, contents).unwrap();
+    let incoming = if nested {
+        "nested/deeper/incoming"
+    } else {
+        "incoming"
+    }
+    .to_owned();
+    let relative = if nested {
+        "nested/.gitattributes"
+    } else {
+        ".gitattributes"
+    };
+    let attrs = c.workdir().unwrap().join(relative);
+    fs::create_dir_all(attrs.parent().unwrap()).unwrap();
+    (incoming, attrs)
+}
+
+#[test]
+fn quality_ignored_worktree_attributes_refuse_before_acceptance() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            for nested in [false, true] {
+                let f = Fixture::new(kind);
+                graph(&f, shape);
+                let (incoming_path, attrs) = ignored_attribute_fixture(&f, nested);
+                let file = f.root.path().join(&incoming_path);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(&file, "committed primary\n").unwrap();
+                let p = primary(&f);
+                let incoming = commit(&p);
+                p.reference("refs/remotes/origin/main", incoming, true, "fixture")
+                    .unwrap();
+                fs::write(&attrs, "* text eol=crlf\n").unwrap();
+                let c = f.context();
+                let blob = p
+                    .find_commit(incoming)
+                    .unwrap()
+                    .tree()
+                    .unwrap()
+                    .get_path(Path::new(&incoming_path))
+                    .unwrap()
+                    .id();
+                assert_eq!(p.find_blob(blob).unwrap().content(), b"committed primary\n");
+                assert_eq!(
+                    integration::filtered::checkout_bytes(&c, incoming, blob, &incoming_path)
+                        .unwrap(),
+                    b"committed primary\r\n",
+                    "the real worktree source changes filtering"
+                );
+                let observation = f.observe();
+                let id = OperationId::new();
+                let image = f.image();
+                let logs = reflog_len(&f);
+                let result = execute(&f, id, &observation.observation);
+                no_owner(&f, id);
+                assert_eq!(result.code, ResultCode::RecoveryRequired);
+                assert_eq!(result.reason, Reason::AuthorityMissing);
+                assert!(!result.effects.is_durable());
+                assert_eq!(image, f.image());
+                assert_eq!(logs, reflog_len(&f));
+                refs_unchanged(&f, incoming);
+                assert_eq!(fs::read(&attrs).unwrap(), b"* text eol=crlf\n");
+                assert!(!c.workdir().unwrap().join(&incoming_path).exists());
+                assert!(matches!(
+                    f.service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: f.root.path().into(),
+                            operation_id: OperationId::new()
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ));
+                // Independent positive control AFTER all refusal assertions:
+                // actual safe checkout reads the ignored worktree attributes.
+                c.checkout_tree(
+                    c.find_commit(incoming).unwrap().as_object(),
+                    Some(git2::build::CheckoutBuilder::new().safe()),
+                )
+                .unwrap();
+                assert_eq!(
+                    fs::read(c.workdir().unwrap().join(&incoming_path)).unwrap(),
+                    b"committed primary\r\n"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn quality_new_worktree_attribute_sources_cannot_change_accepted_execution() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for nested in [false, true] {
+            for stop in [
+                FailurePoint::LocalSyncAfterIntent,
+                FailurePoint::LocalSyncAfterCheckout,
+            ] {
+                let f = Fixture::new(kind);
+                graph(&f, "fast_forward");
+                let (incoming_path, attrs) = ignored_attribute_fixture(&f, nested);
+                let file = f.root.path().join(&incoming_path);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(&file, "committed primary\n").unwrap();
+                let incoming = commit(&primary(&f));
+                let observation = f.observe();
+                let id = OperationId::new();
+                faults(&f, id, &observation.observation, stop);
+                fs::write(&attrs, "* text eol=crlf\n").unwrap();
+                let image = f.image();
+                let logs = reflog_len(&f);
+                let result = execute(&f, id, &observation.observation);
+                assert_eq!(
+                    result.code,
+                    ResultCode::RecoveryRequired,
+                    "{stop:?}: {result:?}"
+                );
+                assert_eq!(result.reason, Reason::AuthorityMissing);
+                assert_eq!(image, f.image());
+                assert_eq!(reflog_len(&f), logs);
+                assert_eq!(fs::read(&attrs).unwrap(), b"* text eol=crlf\n");
+                assert_eq!(
+                    result.effects.write,
+                    if stop == FailurePoint::LocalSyncAfterCheckout {
+                        WriteEffect::Written
+                    } else {
+                        WriteEffect::Unchanged
+                    }
+                );
+                fs::remove_file(&attrs).unwrap();
+                assert_eq!(
+                    execute(&f, id, &observation.observation).code,
+                    ResultCode::Ok
+                );
+                assert_eq!(tip(&f.context()), incoming);
+                assert_eq!(reflog_len(&f), logs + 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn quality_ordinary_ignored_files_and_irrelevant_attribute_directories_remain_allowed() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            let f = Fixture::new(kind);
+            graph(&f, shape);
+            ignored_attribute_fixture(&f, false);
+            let c = f.context();
+            let root = c.workdir().unwrap();
+            fs::write(root.join("ignored.txt"), "private ignored bytes").unwrap();
+            fs::create_dir_all(root.join("scratch")).unwrap();
+            fs::write(root.join("scratch/.gitattributes"), "* text eol=crlf\n").unwrap();
+            let observation = f.observe();
+            let result = execute(&f, OperationId::new(), &observation.observation);
+            assert_eq!(result.code, ResultCode::Ok, "{result:?}");
+            assert_eq!(
+                fs::read(root.join("ignored.txt")).unwrap(),
+                b"private ignored bytes"
+            );
+            assert_eq!(
+                fs::read(root.join("scratch/.gitattributes")).unwrap(),
+                b"* text eol=crlf\n"
+            );
+            assert_eq!(
+                fs::read(root.join("incoming")).unwrap(),
+                b"committed primary\n"
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn quality_ignored_symlink_attribute_sources_are_preserved_and_refused() {
+    use std::os::unix::fs::symlink;
+    for nested in [false, true] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "fast_forward");
+        let (incoming_path, attrs) = ignored_attribute_fixture(&f, nested);
+        let file = f.root.path().join(&incoming_path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "committed primary\n").unwrap();
+        commit(&primary(&f));
+        let observation = f.observe();
+        let outside = f.data.path().join("outside-attributes");
+        fs::write(&outside, "* text eol=crlf\n").unwrap();
+        symlink(&outside, &attrs).unwrap();
+        let id = OperationId::new();
+        let image = f.image();
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(result.code, ResultCode::RecoveryRequired, "{result:?}");
+        no_owner(&f, id);
+        assert_eq!(image, f.image());
+        assert_eq!(fs::read_link(&attrs).unwrap(), outside);
+        assert_eq!(fs::read(outside).unwrap(), b"* text eol=crlf\n");
+    }
+}
+
+#[test]
+fn quality_worktree_attribute_sources_are_rechecked_at_git_effect_boundaries() {
+    for (shape, point) in [
+        ("merge", FailurePoint::LocalSyncBeforeObjectImport),
+        ("fast_forward", FailurePoint::LocalSyncAfterCandidate),
+    ] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, shape);
+        let (_, attrs) = ignored_attribute_fixture(&f, false);
+        let observation = f.observe();
+        let id = OperationId::new();
+        let created = attrs.clone();
+        run::BOUNDARY_HOOK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |current| {
+                if current == point {
+                    fs::write(&created, "* text eol=crlf\n").unwrap();
+                }
+            }))
+        });
+        let image = f.image();
+        let logs = reflog_len(&f);
+        let result = execute(&f, id, &observation.observation);
+        run::BOUNDARY_HOOK.with(|slot| slot.borrow_mut().take());
+        assert_eq!(
+            result.code,
+            ResultCode::RecoveryRequired,
+            "{point:?}: {result:?}"
+        );
+        assert_eq!(result.reason, Reason::AuthorityMissing);
+        assert!(!result.effects.is_durable());
+        assert_eq!(image, f.image());
+        assert_eq!(logs, reflog_len(&f));
+        let row = f
+            .service
+            .read_local_context_sync_record(&f.repo, id)
+            .unwrap();
+        if shape == "merge" {
+            assert!(
+                f.context().find_commit(row.candidate.unwrap()).is_err(),
+                "no candidate object may be imported after the source changes"
+            );
+        }
+        fs::remove_file(attrs).unwrap();
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::Ok
+        );
+        assert_eq!(reflog_len(&f), logs + 1);
+    }
+}
+
+#[test]
+fn quality_untracked_attribute_sources_remain_dirty_and_noop_needs_no_checkout_source() {
+    let f = Fixture::new(AuthoringKind::Document);
+    graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    let c = f.context();
+    fs::write(
+        c.workdir().unwrap().join(".gitattributes"),
+        "* text eol=crlf\n",
+    )
+    .unwrap();
+    let image = f.image();
+    assert_eq!(
+        execute(&f, id, &observation.observation).code,
+        ResultCode::WorktreeNotClean
+    );
+    no_owner(&f, id);
+    assert_eq!(image, f.image());
+    for shape in ["equal", "contained"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, shape);
+        let (_, attrs) = ignored_attribute_fixture(&f, false);
+        fs::write(&attrs, "* text eol=crlf\n").unwrap();
+        let observation = f.observe();
+        let image = f.image();
+        let logs = reflog_len(&f);
+        assert_eq!(
+            execute(&f, OperationId::new(), &observation.observation).code,
+            ResultCode::AlreadyApplied
+        );
+        assert_eq!(image, f.image());
+        assert_eq!(logs, reflog_len(&f));
+        assert_eq!(fs::read(attrs).unwrap(), b"* text eol=crlf\n");
+    }
+}

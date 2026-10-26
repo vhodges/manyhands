@@ -43,8 +43,11 @@ additional P1 image gaps; their source-verified fixes and new evidence are recor
 in `01M5WFEQNTFFPE9ZHKK82ABC1C`. SPEC at `ef746ba` reports those two findings resolved
 and identifies one further P1: a retained image could borrow an unbound before-side
 OID. Its verified correction is recorded in `01M5WHV3951QADA81HKTX5B7XY`.
-**SPEC verification and QUALITY re-review remain pending**; prior approvals are not
-automatically extended.
+The controller subsequently reports **full Task 5 SPEC approval at `3177dba`**.
+QUALITY `ses_e878dbd29ffednm05pK3O5zlGc` resolved its original four findings but found
+one new P2 worktree-attribute-source gap. Its tested correction is recorded in
+`01M5WNVFNPVN42302WYENZCYEB`; independent re-review remains pending, and the SPEC
+approval is not automatically extended to the correction.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -59,7 +62,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Initial implementation `7856c61..5fde757`; SPEC fixes `5fde757..f282335` approved. QUALITY fixes `f282335..2b9ba0c`, then image fixes `2b9ba0c..ef746ba`. SPEC reports the latter two findings resolved and one new P1 mapping-composition gap. Current fix base `ef746ba7d060e8b0d087213998f4c656c1f2dd13`, checkpoint `01M5WHV3951QADA81HKTX5B7XY`: **107 local tests + 39 affected controls pass**, whole-tree gates pass. Independent verification pending; Task 7 production activation obligation retained. |
+| Task 5 | Full SPEC approved at `3177dba4a44f8f13abeb8aa8ac936942eca4151d` per controller. QUALITY original four findings resolved; one new P2 on ignored/untracked worktree attributes corrected from that base. Checkpoint `01M5WNVFNPVN42302WYENZCYEB`: **113 local tests + 7 shared controls + 4 compile-fail controls pass**, whole-tree gates pass. Independent re-review pending; Task 7 production activation obligation retained. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -2162,3 +2165,105 @@ merged; merge-tree passed with base tree `6fdeb937f58d9f9314f757248295bfe2b8edb6
 Status/diff/log inspected and diff checks passed. Ticket remains implementing;
 no subagent, PR/lifecycle action or native dispatch. Await SPEC verification of
 this correction, then QUALITY re-review of the full Task 5 range.
+
+## Task 5 QUALITY: unowned worktree attribute sources
+
+Recorded `2026-10-26T17:59:09Z`, comment `01M5WNVFNPVN42302WYENZCYEB`.
+Base **`3177dba4a44f8f13abeb8aa8ac936942eca4151d`**. Controller reports full Task 5
+SPEC approval at this head. QUALITY `ses_e878dbd29ffednm05pK3O5zlGc` reports its
+original four findings resolved and one new P2. This checkpoint records the new
+finding's implementer correction, not reviewer approval of the changed range.
+
+### Verification and minimal correction
+
+Confirmed in source: frozen previews select tree attributes through an empty
+workdir/in-memory index, while actual checkout reads real worktree `.gitattributes`
+before index fallback. An ignored source absent from both frozen trees can transform
+incoming LF bytes to CRLF, even though target status is clean and no prospective
+path collision exists. The previous executor could accept ownership and perform
+checkout before discovering that its own result was outside the frozen proof.
+
+Added a narrow `Proof::require_worktree_attributes` guard. It enumerates only
+`.gitattributes` paths in the ancestor directories of the frozen file set (root
+and applicable nested sources), not all ignored files or a recursive directory
+scan. An existing applicable source must be a no-follow regular file, tracked in
+the live index, with its OID/mode belonging to a frozen before/after entry. Otherwise
+the executor refuses using existing recovery_required / authority_missing: this
+is an unrepresented filter input, not an installed conflict or invalid Manyhands
+configuration. Source files and symlinks are preserved, not removed or tracked.
+
+The guard runs before accepting ref-changing work, during the existing before-effect
+filter checks, and again after the object-import interruption boundary before any
+candidate objects are imported. Accepted retries therefore cannot silently adopt a
+new ignored source. Historical effects remain truthful where checkout previously
+completed. Tracked attribute transitions continue through their existing frozen
+image proof; `.git/info/attributes` continues through the existing external-filter
+validation. No source proof format, schema, FFI or configuration change was needed.
+
+Equal/contained operations need no checkout source and remain valid. Ordinary
+ignored files and ignored attribute files in directories outside the frozen path
+ancestry remain allowed. Ordinary nonignored untracked attributes retain the
+existing dirty-worktree refusal. This is the contract-consistent unsupported-input
+guard requested by the controller, without a new product policy or owner question.
+
+### RED/GREEN and controls
+
+All library commands use
+`devenv shell -- cargo test --all-features --locked --lib <filter>`:
+
+| Filter | RED / control before implementation | GREEN |
+| --- | --- | --- |
+| `quality_ignored_worktree_attributes_refuse_before_acceptance` | 1 failed: ignored source produced a pending owner. A real-worktree filter positive control had already proved CRLF versus the committed LF blob. | 1 passed: eight kind × FF/merge × root/nested cases, no owner or Git effect, preserved source and successful unrelated refresh. After refusal assertions, an independent actual safe checkout confirms the CRLF transformation. |
+| `quality_new_worktree_attribute_sources_cannot_change_accepted_execution` | 1 failed: after acceptance the executor wrote files before rejecting its result as ForeignChange. | 1 passed: eight kind × source-location × accepted/checked-out cases; no new Git effect, historical effects retained, exact retry completes after caller removes the source. |
+| `quality_ignored_symlink_attribute_sources_are_preserved_and_refused` | 1 failed: execution wrote files before rejecting the result. | 1 passed: root and nested symlink sources preserved, outside target bytes unchanged, no owner/effects. Unix fixture executed on Linux. |
+| `quality_ordinary_ignored_files_and_irrelevant_attribute_directories_remain_allowed` | 1 passed as an unchanged-behavior positive control. | 1 passed: four kind/graph cases preserve ignored data and unrelated ignored attribute files. |
+
+Two supplementary tests pass: in-call source arrival at the before-object-import
+and after-candidate boundaries (including proof that the merge candidate was not
+imported), and ordinary untracked-source refusal plus equal/contained controls.
+They are not counted as additional pre-fix REDs. Total new coverage: **six tests,
+27 matrix/control cases**.
+
+The first fixture attempt overwrote `.git/info/exclude`, accidentally dropping the
+fixture's existing Manyhands-worktree exclusion and failing setup during a primary
+commit. Corrected the new helper to append exclusions, then reran the intended RED.
+That setup failure is not behavioral RED evidence. No old assertion was weakened.
+
+### Final checks and handoff
+
+All required whole-tree gates passed through Devenv:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+```
+
+Check: 3.04s; clippy: 14.76s, no warnings. Final relevant tests use
+`devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib local_sync::` | **113**, zero failed/ignored/measured, 1284 filtered, 280.32s |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--doc local_sync` | 4 |
+
+Unique selected total: **120 library + 4 compile-fail = 124 passing tests**. Existing
+tracked-attribute transitions, foreign-info attributes, immutable/private history,
+same-tree, filtered/ident, legacy, privacy, no-transport and 14 actual no-Drop child
+assertions remain green within the local group. No standalone storage/removal suite
+was repeated for this execution-only guard; no schema/removal behavior changed.
+No full suite or native run.
+
+Rust edits are confined to `local_sync/{image_proof,run,run_tests}.rs`. The temporary
+executor-only staging and Task 7 production activation/F2 obligations remain. No
+Task 6 implementation, public bypass, dependency, frontend or global enum change.
+Entry was clean; start/checkpoint fetches found main `0464c42` already incorporated.
+Merge-tree passed with base tree `76000e7c2f650004b7972bb1db42d5db7bc58f2f`; status,
+diff and log inspected, diff checks passed. Ticket remains implementing. No owner
+question, subagent, PR/lifecycle action or native dispatch. Await independent
+verification of this guard before Task 6.

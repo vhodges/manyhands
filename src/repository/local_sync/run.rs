@@ -638,6 +638,13 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
     }
     boundary(owner, FailurePoint::LocalSyncBeforeObjectImport)?;
     owner.authorize()?;
+    // Recheck real worktree attribute sources after the interruption boundary,
+    // before importing even the owned candidate objects.
+    evidence
+        .images
+        .as_ref()
+        .ok_or_else(Fault::authority)?
+        .require_worktree_attributes(&owner.git)?;
     integration::prepare::import_owned_tree::<Fault>(&owner.git, &prepared, || Ok(()))?;
     let object = odb.read(oid)?;
     owner.authorize()?;
