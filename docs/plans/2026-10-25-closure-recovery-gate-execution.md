@@ -28,14 +28,15 @@ PR, closure, merge, cleanup and native CI require separate authorization.
 Task 0 completed with no production/test/schema edits. Controller owns independent
 review. The owner answered both earlier named-edit questions with “yes”, explicitly
 approving E4's companion local-action partition and E9's repair DTO refusal arm;
-comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–3 are implemented
-and independently approved. Current status is **implementing**: the owner answered
-“yes” to the narrow key-file scope question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded
-in approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`. SPEC re-review approved all five
-Task 4 fixes at `f578bf7`, zero findings. QUALITY then reported three P2 findings;
-their implementation fixes and evidence are in `01M5VZZ5VXNW0PXCGTQWNXHYBV`.
-**QUALITY re-review and SPEC verification of these changed fixes remain pending.**
-Task 4 is not complete. Tasks 4/7 retain ownership of E4/E9 code.
+comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–4 are implemented
+and independently approved. The owner also approved the narrow key-file scope
+question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded in approval comment
+`01M5VWDPG57KWRAJ55Y2EMXRQR`. The latest controller handoff reports SPEC and QUALITY
+approval with zero findings at `4377944`, covering the full Task 4 range
+`37bd2c3..4377944`. Earlier pending-review entries below remain historical.
+Task 5 source preflight is complete; implementation awaits the internal-executor
+staging clarification in `01M5W0R66A877J9213TC9WTN42`. Tasks 4/7 retain ownership
+of E4/E9 code. Ticket lifecycle status has not been changed by this checkpoint.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -44,8 +45,9 @@ Task 4 is not complete. Tasks 4/7 retain ownership of E4/E9 code.
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
-| Task 4 | Initial base `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` approved all five corrections at `f578bf7a37b5c52e205ef5cb3e1aaae0c8e40f16`, zero findings. QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` reported three P2 findings; fixes from that head are recorded in `01M5VZZ5VXNW0PXCGTQWNXHYBV`. **Awaiting QUALITY re-review and SPEC verification of changed fixes; not complete.** |
-| Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
+| Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
+| Task 5 | Source/preflight only at `4377944`; awaiting narrow staging clarification `01M5W0R66A877J9213TC9WTN42`. No executor/test implementation or new recovery-outcome proof. |
+| Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -1324,3 +1326,69 @@ Ticket remains implementing. **No Task 5 advance until QUALITY re-review is gree
 and SPEC has verified the changed fixes.** No known implementation blocker remains;
 native platform runtime behavior and later executor/request protocols remain
 outside this checkpoint. No PR, merge, closure or cleanup was performed.
+
+## Task 4 final approvals and Task 5 staging clarification
+
+Recorded `2026-10-26T11:50:21Z`, canonical comment
+`01M5W0R66A877J9213TC9WTN42`. The fresh Task 5 controller handoff explicitly
+reports both reviews **APPROVED, zero findings at `4377944`**:
+
+- SPEC: `ses_e898c0189ffebSYYicNzmsZaXQ`.
+- QUALITY: `ses_e881a2165ffeEIJWyTo9j3HVR3`.
+- Full Task 4 review range:
+  `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`.
+
+These approvals supersede the pending-review status above; they are supplied by
+the controller, not newly performed reviews by this implementer.
+
+### Preflight and source findings
+
+Work stayed in the assigned ticket worktree/branch. Entry was clean at
+`4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Fetch and merge found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated; HEAD was unchanged
+and the ancestry check passed. Read current main AGENTS, the full authoritative
+contract/design, implementation plan and execution ledger, plus actual local
+record/observation and neutral integration interfaces. No subagents were used.
+
+The remaining question is task staging, not a change to the accepted recovery
+policy or a contradiction of Task 4's tested outcomes:
+
+- `local_sync/record.rs:510–514` intentionally compiles its internal store impl
+  only under `cfg(test)` until an executor calls it. The public observation API
+  is read-only; its compile-fail examples preserve the private store boundary.
+- The approved design keeps low-level execution library-owned; public execution
+  belongs to Mutation bindings. Implementation-plan Task 7 owns those bindings,
+  local resume routing and F2 request/control association.
+- Current `mutation/bind/resume.rs:339–366` has only generic local handoff and
+  original-request disposition, and `takes_up` at 399–413 has no local-sync
+  executor route. Searches in `src/repository/mutation` found no local-sync
+  command/type/route. Task 5 therefore has no existing production entry caller.
+- Publishing a direct executor solely to avoid unused-code warnings would violate
+  the explicit public-boundary restriction. Moving execution into observation
+  would violate its read-only contract. Adding the production mutation/resume
+  route now would bring forward Task 7 ownership work.
+
+**Clarification requested:** may the real internal Task 5 executor and its
+executor-only dependencies remain narrowly `cfg(test)` until Task 7 supplies the
+approved production caller? This would exercise actual domain execution through
+the adjacent unit and no-Drop child tests, preserve private visibility, and use
+no dead-code lint allowance. It would explicitly deliver domain proof rather than
+claim a production-reachable execution boundary at Task 5. The earlier store-only
+staging approval is not silently extended to the whole executor.
+
+### Evidence and outstanding outcomes
+
+This is a documentation-only checkpoint before test/code edits. No Rust command
+was run and no RED/GREEN count, Rust gate or recovery outcome is claimed. Task 4's
+previous results remain historical evidence, not rerun results. All Task 5 rows
+remain outstanding: equal/contained, fast-forward, clean merge, stale/frozen retry,
+intent/checkout/candidate/ref/index interruptions, identity and unrelated-history
+refusals, incompatible-closure preacceptance refusal, dirty/symlink preservation,
+transport negatives and no-Drop/operator proof. Conflict/resolution rows remain
+Task 6; request/control/replay rows remain Task 7; broader adversarial and closure
+acceptance rows remain Task 8. No completed outcome row has been changed.
+
+Only this ledger and the canonical clarification comment are changed. The feature
+commit `feat: integrate local primary into editing contexts` is reserved for an
+implemented and verified Task 5; this checkpoint is not that completion. No
+ticket lifecycle edit, PR, native CI, dependency, frontend or source change.
