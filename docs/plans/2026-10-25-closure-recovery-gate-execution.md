@@ -35,7 +35,7 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | --- | --- |
 | Approval recording | `51a0e96da11f8bc1f2f0689e72c88ed99470c96a`, `docs: approve closure recovery gate implementation`; pushed to ticket branch. |
 | Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
-| Task 1 | Starting after the separate E4/E9 approval checkpoint; bounded implementer, no subagents. |
+| Task 1 | Implemented and locally verified after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; code checkpoint is `fix: classify incompatible closures as external recovery`, containing comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Awaiting controller SPEC/QUALITY review. |
 | Tasks 2–9 | Not started. New local-operation outcomes below remain unproven. |
 
 All new commits use the requested trailer
@@ -222,7 +222,7 @@ E9 verified actual registries `tests/support/golden.rs::CASES`,
 use `MANYHANDS_UPDATE_GOLDEN`, reject CI updates and validate registered actions.
 No existing golden was regenerated. New fixtures/roots must have executable owners.
 
-### Owner questions: stop before Task 1
+### Historical Task 0 owner questions (resolved before Task 1)
 
 1. **E9 addition:** approve an explicit new-local-variant refusal arm in
    `tests/support/repair.rs::repair_data`, retaining its existing Repair success
@@ -443,3 +443,82 @@ Task 1 follows the approved red/green classification matrix, E1/E2 fresh-result
 changes, retained-attempt and mixed-set controls, then whole-tree fmt/check/clippy
 and targeted tests. Controller reviews its actual commit range before Task 2.
 PR, merge, closure, cleanup and native CI remain separately gated.
+
+## Task 1: honest incompatible-closure classification
+
+Recorded `2026-10-26T02:38:38Z`. Separate approval checkpoint/code base:
+`9b7879e3b03a888c8f6ab62608b0edede65a6982`. This task's code and evidence are in
+the commit titled `fix: classify incompatible closures as external recovery`.
+Review that commit from the code base, separately from the preceding approval
+commit (`5e6e7ad..9b7879e`). No subagents were used by this implementer.
+
+### Source and diff audit
+
+- `src/repository/remote/merge.rs`: added internal
+  `ConflictStructure::IncompatibleClosures`. Existing whole-set eligibility
+  already rejects every structure except RegularUtf8SamePath; it is unchanged.
+- `src/repository/remote/sync.rs::classify_conflict_entry`: after canonical
+  shape/kind/ID validation, compare all nonempty ticket closure pairs across
+  ancestor/local/incoming. Equality uses parsed `OffsetDateTime` and exact
+  `closed_by` text. More than one distinct pair returns the explicit structure.
+  Production diff: **17 inserted lines across two files**.
+- `src/repository/remote/sync_tests.rs`: six new classification tests cover both
+  fields differing, timestamp only, author case only, ancestor disagreement
+  (three placements), seven compatible controls (including UTC spelling and
+  status-text differences), and a mixed canonical set. Fixtures explicitly parse
+  before classification. E2 retains all eight original rows and every no-write
+  assertion; only its incompatible row now requires the external-only error.
+  `try_resolve_fixture` is used without changing either shared resolver helper.
+- `src/repository/remote/merge_tests.rs`: one new test pins explicit unsupported
+  structure rejection alone and with document/ticket/comment in either order.
+- `tests/ticket_closure/races.rs`: E1 requires fresh external-only classification
+  and refusal for either side; every image/ref/history assertion remains.
+- Rust diff: **5 files, 213 insertions, 14 deletions**. Only E1/E2 pre-existing
+  test semantics changed. `preserves_item_invariants`, external integration
+  validation, retained-attempt reconciliation, dependencies, frontend, schemas,
+  global ResultCode/RecoveryActionKind and E4/E9 code are unchanged.
+
+### TDD and targeted verification
+
+All commands below ran in the ticket worktree. Each library command has one
+positional filter; `--exact` uses the complete E2 unit name. No zero-case result
+was accepted.
+
+| Command | Red before production change | Green after change |
+| --- | --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib repository::remote::sync::tests::closure_conflict_classification` | Corrected-fixture run: 1 control passed, 5 failed with EligibleCanonical versus ExternalResolutionRequired; 1270 filtered. | 6 passed, 0 failed/ignored; 1271 filtered. |
+| `devenv shell -- cargo test --all-features --locked --lib repository::remote::sync::tests::all_recorded_ticket_sides_constrain_retained_closure_before_writes -- --exact` | 1 failed at fresh incompatible classification; 1275 filtered. | 1 passed, 0 failed/ignored; 1276 filtered; all eight rows exercised. |
+| `devenv shell -- cargo test --all-features --locked --test ticket_closure true_race_distinct_identities_needs_external_recovery -- --exact` | 1 SSH case failed, 0 passed; privacy-safe panic observation 153 identifies the changed classification assertion in races.rs, not fixture setup. Harness hook at ssh_harness.rs:67–71 emits panic line numbers. | 1 SSH case passed, zero failures. |
+| `devenv shell -- cargo test --all-features --locked --lib incompatible_closures_make_every_mixed_set_order_external_only` | Supplementary structure/ordering test added with the enum after behavioral red; no separate pre-fix run. | 1 passed, 0 failed/ignored; 1276 filtered. |
+| `devenv shell -- cargo test --all-features --locked --lib retained_candidate_cannot_bypass_all_side_closure_validation` | Unchanged regression, not rerun before edits. | 1 passed, 0 failed/ignored; 1276 filtered. |
+| `devenv shell -- cargo test --all-features --locked --lib mixed_canonical_and_code_conflict_is_whole_merge_external_only_without_writes` | Unchanged regression, not rerun before edits. | 1 passed, 0 failed/ignored; 1276 filtered. |
+
+Final targeted total: **10 library tests + 1 SSH case passed**. The legacy retained
+candidate still returns ValidationFailed and preserves refs/index/worktree/artifact
+counts. Fresh incompatible sets refuse earlier without accepting an attempt.
+
+The first new-unit run had five intended classification failures plus one invalid
+new control fixture: a non-UTC offset. Systematic debugging traced it to
+`canonical.rs::parse_time`'s existing UTC-only contract (1198–1203). Changed only
+the new fixture to equivalent `.000+00:00` versus `Z` spelling, then reran red:
+the compatible control passed and all five intended failures remained. No parser
+change or existing assertion adjustment was needed.
+
+### Gates and handoff
+
+- `devenv shell -- cargo fmt --check`: final exit 0. Initial formatting check
+  reported three new-code layout differences; applied exactly those layouts.
+- `devenv shell -- cargo check --all-features --locked`: exit 0 (4.01s).
+- `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`:
+  exit 0 (18.33s), no warnings.
+- `git diff --check`: exit 0. Inspected complete Task 1 source diff/status/recent
+  log before staging only owned source, ledger and checkpoint comment.
+- Checkpoint fetch still reports main `0464c42dae19a6dde000c7e7660e82762a41fada`;
+  ancestry passed. Precommit merge-tree exit 0, tree
+  `998da6e07931a0af25f590ab9be7708601ad330b` (committed approval HEAD).
+- Full suite, native CI and app smoke tests were not run for this library-only
+  targeted task. No native-platform claim; full suite/native remain post-merge.
+- No unresolved implementation question or out-of-scope old-test change found.
+  Immutable closure races remain unsupported; this task makes classification
+  honest, not a winner-selection policy. Controller SPEC then QUALITY review is
+  next. Ticket remains implementing; Task 2 has not started.

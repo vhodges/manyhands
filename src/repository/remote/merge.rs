@@ -157,6 +157,7 @@ pub(super) enum ConflictStructure {
     Rename,
     Delete,
     IdentityChanged,
+    IncompatibleClosures,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

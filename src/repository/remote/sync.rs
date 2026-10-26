@@ -4539,6 +4539,22 @@ impl RepositoryService {
             canonical::CanonicalItem::Ticket(_) => merge::ConflictEntryKind::Ticket,
             canonical::CanonicalItem::Comment(_) => merge::ConflictEntryKind::Comment,
         };
+        let mut closures = parsed.iter().filter_map(|item| match item {
+            canonical::CanonicalItem::Ticket(ticket) => {
+                ticket.closed_at.map(|at| (at, ticket.closed_by.as_deref()))
+            }
+            _ => None,
+        });
+        // No result can preserve two distinct immutable closure pairs, including
+        // one retained only by the ancestor. Compare parsed times, not YAML text.
+        if let Some(first_closure) = closures.next()
+            && closures.any(|closure| closure != first_closure)
+        {
+            return merge::ConflictCandidate {
+                kind,
+                structure: merge::ConflictStructure::IncompatibleClosures,
+            };
+        }
         merge::ConflictCandidate {
             kind,
             structure: merge::ConflictStructure::RegularUtf8SamePath,
