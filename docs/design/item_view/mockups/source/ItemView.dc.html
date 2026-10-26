@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://unpkg.com/lucide-static@0.469.0/font/lucide.css">
+<style>[class^="icon-"],[class*=" icon-"]{font-family:lucide!important;font-style:normal;font-weight:normal;line-height:1;display:inline-block;-webkit-font-smoothing:antialiased}@keyframes mhblink{50%{opacity:0}}@keyframes mhspin{to{transform:rotate(360deg)}}.iv-scroll::-webkit-scrollbar{width:10px}.iv-scroll::-webkit-scrollbar-thumb{background:#cfcbc4;border-radius:5px;border:2px solid #fff}.iv-dscroll::-webkit-scrollbar{width:8px}.iv-dscroll::-webkit-scrollbar-thumb{background:var(--iv-3a3f46,#3a3f46);border-radius:4px}button{font:inherit;color:inherit}a{color:#07596a}a:hover{color:#0a7a90}</style>
+</helmet>
+<div ref="{{rootRef}}" style="width:100%;height:100%;display:flex;flex-direction:column;background:var(--iv-1a1c20,#1a1c20);color:var(--iv-d5d8dd,#d5d8dd);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;border-radius:10px;border:1px solid var(--iv-3a3f46,#3a3f46);box-sizing:border-box;overflow:hidden;position:relative">
+
+  <div style="height:34px;flex:none;display:flex;align-items:stretch;background:var(--iv-1f2226,#1f2226);border-bottom:1px solid var(--iv-2e3238,#2e3238)">
+    <div style="display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;max-width:300px;background:var(--iv-1a1c20,#1a1c20);border-right:1px solid var(--iv-2e3238,#2e3238);box-shadow:inset 0 2px 0 var(--iv-e9ad36,#E9AD36)">
+      <i class="icon-{{tabIcon}}" style="font-size:13px;color:var(--iv-e9ad36,#E9AD36)"></i>
+      <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--iv-8d949e,#8d949e);white-space:nowrap">{{tabCode}}</span>
+      <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{title}}</span>
+      <sc-if value="{{isEdit}}"><span title="Unsaved changes" style="width:7px;height:7px;border-radius:50%;background:var(--iv-e9ad36,#E9AD36);flex:none"></span></sc-if>
+      <i class="icon-x" style="font-size:12px;color:var(--iv-646b75,#646b75);padding:4px"></i>
+    </div>
+    <div style="display:flex;align-items:center;gap:7px;padding:0 12px;color:var(--iv-8d949e,#8d949e);border-right:1px solid var(--iv-2e3238,#2e3238)"><i class="icon-{{otherIcon}}" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i><span style="white-space:nowrap">{{otherTitle}}</span></div>
+    <div style="flex:1"></div>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex">
+    <div ref="{{scrollRef}}" class="iv-scroll" style="flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;background:#ffffff;position:relative">
+
+      <div style="position:sticky;top:0;z-index:5">
+        <div style="background:var(--iv-262a30,#262a30);border-bottom:1px solid var(--iv-353a41,#353a41);padding:14px 28px 14px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--iv-8d949e,#8d949e);white-space:nowrap">
+            <i class="icon-folder-git-2" style="font-size:12px"></i><span>manyhands</span>
+            <i class="icon-chevron-right" style="font-size:11px;color:var(--iv-646b75,#646b75)"></i><span>{{crumb2}}</span>
+            <i class="icon-chevron-right" style="font-size:11px;color:var(--iv-646b75,#646b75)"></i><span style="font-family:'IBM Plex Mono',monospace;font-size:11px">{{crumb3}}</span>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap">
+            <div style="flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:8px">
+              <div style="font-size:20px;font-weight:600;line-height:1.25;color:var(--iv-eef0f2,#eef0f2);text-wrap:pretty">{{title}}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                <sc-if value="{{isDoc}}">
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:rgba(233,173,54,.13);color:var(--iv-e9ad36,#E9AD36);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Status</span>draft</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Author</span>Vince Hodges</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Date</span>2026-10-05</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Updated</span>25 min ago</button>
+                </sc-if>
+                <sc-if value="{{isTicket}}">
+                <button onClick="{{openFm}}" title="Edit details (front matter)" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Type</span>cycle</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:rgba(95,180,195,.13);color:var(--iv-5fb4c3,#5fb4c3);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Status</span>in progress</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Project</span>manyhands</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Team</span>core</button>
+                <button onClick="{{openFm}}" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);border:1px solid var(--iv-3a3f46,#3a3f46);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><span style="color:var(--iv-8d949e,#8d949e)">Parent</span>MH-VH-W03</button>
+                </sc-if>
+                <button onClick="{{openFm}}" title="All details" style="display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:transparent;border:1px dashed var(--iv-3a3f46,#3a3f46);color:var(--iv-8d949e,#8d949e);cursor:pointer;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3);color:var(--iv-d5d8dd,#d5d8dd)"><i class="icon-sliders-horizontal" style="font-size:12px"></i>All details</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap">
+              <span title="{{pillTip}}" style="display:flex;align-items:center;gap:6px;font-size:12px;color:{{pillColor}};padding:4px 10px;border-radius:5px;background:var(--iv-1f2226,#1f2226);border:1px solid var(--iv-353a41,#353a41);white-space:nowrap;cursor:help">
+                <sc-if value="{{prov}}">{{spinner}}</sc-if>
+                <sc-if value="{{noProv}}"><i class="icon-{{pillIcon}}" style="font-size:13px"></i></sc-if>
+                {{pillLabel}}
+              </span>
+              <sc-if value="{{showCommentsBtn}}">
+                <button onClick="{{commentsBtn}}" title="{{commentsBtnTip}}" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid {{cBtnBorder}};background:{{cBtnBg}};cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><i class="icon-message-square" style="font-size:13px"></i>Comments<span style="font-size:11px;padding:0 6px;border-radius:8px;background:var(--iv-353a41,#353a41);color:var(--iv-d5d8dd,#d5d8dd)">{{nComments}}</span></button>
+              </sc-if>
+              <sc-if value="{{isView}}">
+                <button onClick="{{startEdit}}" title="Edit (E). Makes a private working copy the first time." style="display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:5px;border:1px solid var(--iv-3a3f46,#3a3f46);background:var(--iv-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><i class="icon-pencil" style="font-size:13px"></i>Edit</button>
+              </sc-if>
+              <sc-if value="{{isEdit}}">
+                <button title="Save a checkpoint on this computer (Ctrl S)" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid var(--iv-3a3f46,#3a3f46);background:var(--iv-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><i class="icon-save" style="font-size:13px"></i>Save</button>
+                <button onClick="{{stopEdit}}" title="Stop editing. Unsaved changes stay as a draft." style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid var(--iv-3a3f46,#3a3f46);background:var(--iv-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><i class="icon-eye" style="font-size:13px"></i>Done</button>
+              </sc-if>
+              <button title="Bring in others' changes and share yours" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid var(--iv-3a3f46,#3a3f46);background:var(--iv-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--iv-5fb4c3,#5fb4c3)"><i class="icon-cloud-upload" style="font-size:13px"></i>Share</button>
+              <button style="padding:5px 10px;border-radius:5px;border:none;background:var(--iv-e9ad36,#E9AD36);color:var(--iv-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12px;white-space:nowrap" style-hover="background:var(--iv-f2bd4f,#f2bd4f)">{{finishLabel}}</button>
+            </div>
+          </div>
+        </div>
+
+        <sc-if value="{{isEdit}}" hint-placeholder-val="{{ false }}">
+          <div style="background:#f6f5f2;border-bottom:1px solid #dedbd5;padding:5px 20px;display:flex;align-items:center;gap:2px;color:#3b4047;flex-wrap:wrap">
+            <div style="display:flex;background:#ebe9e5;border-radius:5px;padding:2px;margin-right:8px">
+              <button onClick="{{setRich}}" style="border:none;padding:3px 9px;border-radius:4px;font-size:12px;cursor:pointer;background:{{richBg}};color:{{richFg}};box-shadow:{{richSh}};white-space:nowrap">Rich text</button>
+              <button onClick="{{setSource}}" style="border:none;padding:3px 9px;border-radius:4px;font-size:12px;cursor:pointer;background:{{srcBg}};color:{{srcFg}};box-shadow:{{srcSh}};white-space:nowrap">Markdown</button>
+            </div>
+            <sc-for list="{{tools}}" as="t">
+              <sc-if value="{{t.sep}}"><div style="width:1px;height:18px;background:#dedbd5;margin:0 6px"></div></sc-if>
+              <sc-if value="{{t.btn}}">
+                <button title="{{t.tip}}" style="height:28px;min-width:28px;padding:0 {{t.pad}}px;border:none;border-radius:4px;display:flex;align-items:center;justify-content:center;gap:4px;cursor:pointer;background:{{t.bg}};color:{{t.fg}};opacity:{{t.op}};font-size:12px;white-space:nowrap" style-hover="background:#e2dfda"><i class="icon-{{t.icon}}" style="font-size:15px"></i>{{t.label}}</button>
+              </sc-if>
+            </sc-for>
+            <div style="flex:1"></div>
+            <span title="Unsaved text is kept as a recoverable draft on this computer" style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#767a82;white-space:nowrap;margin-right:8px"><i class="icon-shield-check" style="font-size:12px;color:#2c7a43"></i>Draft kept · 2s ago</span>
+          </div>
+        </sc-if>
+      </div>
+
+      <div style="max-width:760px;margin:0 auto;padding:36px 48px 40px;color:#1f2328;font-size:15px;line-height:1.65;min-height:calc(100% - 200px);box-sizing:border-box">
+        <sc-if value="{{tRich}}">
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <p style="margin:0;text-wrap:pretty">Integrate <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;background:#f3f2ef;padding:1px 5px;border-radius:4px">zorite-editor</code> as the body editor for tickets and documents, with a Markdown source mode that shares one draft and one undo history.</p>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Planning</h2>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="display:flex;gap:10px;align-items:baseline"><span style="width:15px;height:15px;flex:none;border-radius:3px;background:#07596a;color:#fff;display:flex;align-items:center;justify-content:center;transform:translateY(2px)"><i class="icon-check" style="font-size:11px"></i></span><span style="color:#767a82;text-decoration:line-through">Create <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;background:#f3f2ef;padding:1px 5px;border-radius:4px">docs/Cycles/wave-03-desktop-03-editor.md</code>.</span></div>
+              <div style="display:flex;gap:10px;align-items:baseline"><span style="width:15px;height:15px;flex:none;border-radius:3px;border:1.5px solid #b5b0a8;box-sizing:border-box;transform:translateY(2px)"></span><span>Record the implementation-plan checkpoints as ticket comments.</span></div>
+            </div>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Entry gate</h2>
+            <p style="margin:0;text-wrap:pretty">D2 has review and verification evidence on main. <sc-if value="{{isEdit}}"><span style="background:#fbefd6;border-radius:2px">The feasibility record pins</span><span style="display:inline-block;width:2px;height:19px;background:#1f2328;vertical-align:-4px;margin:0 1px;animation:mhblink 1s steps(1) infinite"></span></sc-if><sc-if value="{{isView}}">The feasibility record pins</sc-if> <code style="font-family:'IBM Plex Mono',monospace;font-size:13px;background:#f3f2ef;padding:1px 5px;border-radius:4px">zorite-editor 0.10.0</code> and records its load normalization.</p>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Scope</h2>
+            <div style="border:1px solid #dedbd5;border-radius:6px;overflow:hidden;font-size:14px">
+              <div style="display:grid;grid-template-columns:1fr 1.3fr 1.2fr;background:#f6f5f2;font-weight:600;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Area</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">In scope</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Notes</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1.3fr 1.2fr;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Rich text</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Paragraphs, headings, lists, quotes, code</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">RFC minimum vocabulary</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1.3fr 1.2fr;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Tables</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Shown, edited in Markdown</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Rich editing later</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1.3fr 1.2fr"><span style="padding:7px 12px">Unsupported syntax</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Labeled source blocks</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Never dropped</span></div>
+            </div>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Exit evidence</h2>
+            <blockquote style="margin:0;padding:2px 0 2px 14px;border-left:3px solid #dedbd5;color:#575c64">Opening an item, switching modes and a no-change save write nothing and create no commit.</blockquote>
+            <div style="background:#f6f5f2;border:1px solid #e6e3de;border-radius:6px;padding:12px 14px;font-family:'IBM Plex Mono',monospace;font-size:13px;line-height:1.6;color:#2b3038;white-space:pre">devenv shell -- cargo test --features desktop editor_</div>
+            <div style="border:1px dashed #cfcbc4;border-radius:6px;overflow:hidden">
+              <div style="display:flex;align-items:center;gap:8px;padding:5px 10px;background:#f6f5f2;font-size:12px;color:#575c64"><i class="icon-file-code" style="font-size:13px"></i><span style="flex:1">HTML block · shown as source, not rendered</span><span style="color:#07596a;cursor:pointer">Edit source</span></div>
+              <div style="padding:8px 12px;font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:#575c64;white-space:pre">&lt;details&gt;&lt;summary&gt;Fixture list&lt;/summary&gt; … &lt;/details&gt;</div>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{dRich}}">
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <p style="margin:0;text-wrap:pretty;font-size:16px;color:#3b4047">Wave 03 turns the Wave 01 and 02 foundations into something the team can use every day: a desktop app and a CLI that cover the full ticket and document lifecycle.</p>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Goals</h2>
+            <ul style="margin:0;padding-left:22px;display:flex;flex-direction:column;gap:4px">
+              <li>Dogfood Manyhands for its own planning from the first desktop release.</li>
+              <li>Keep every lifecycle action usable by keyboard on all three platforms.</li>
+              <li>Never lose an unsaved edit, even across a crash.</li>
+            </ul>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Tracks</h2>
+            <div style="border:1px solid #dedbd5;border-radius:6px;overflow:hidden;font-size:14px">
+              <div style="display:grid;grid-template-columns:110px 1fr 120px;background:#f6f5f2;font-weight:600;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Track</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Cycles</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">State</span></div>
+              <div style="display:grid;grid-template-columns:110px 1fr 120px;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Foundation</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">F1 read boundary · F2 replay and bridges</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">Done</span></div>
+              <div style="display:grid;grid-template-columns:110px 1fr 120px;border-bottom:1px solid #dedbd5"><span style="padding:7px 12px">Desktop</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">D1 shell · D2 drafts · D3 editor · D4 discussion</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">D3 in progress</span></div>
+              <div style="display:grid;grid-template-columns:110px 1fr 120px"><span style="padding:7px 12px">CLI</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">C1 inspection · C2 repositories and keys</span><span style="padding:7px 12px;border-left:1px solid #dedbd5">C2 in review</span></div>
+            </div>
+            <h2 style="margin:10px 0 0;font-size:19px;font-weight:600;line-height:1.3">Track rules</h2>
+            <p style="margin:0;text-wrap:pretty">Shared-library changes are reviewed and merged to main on their own. A Cycle is review-ready on its local Devenv gates; native CI runs after merge.</p>
+            <blockquote style="margin:0;padding:2px 0 2px 14px;border-left:3px solid #dedbd5;color:#575c64">See the <a href="#">Desktop information architecture RFC</a> for the editor contract this Wave delivers against.</blockquote>
+          </div>
+        </sc-if>
+        <sc-if value="{{dSrc}}">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:13.5px;line-height:1.75;color:#2b3038;white-space:pre-wrap;display:flex;flex-direction:column">
+            <span>Wave 03 turns the Wave 01 and 02 foundations into something the team can use every day: a desktop app and a CLI that cover the full ticket and document lifecycle.</span>
+            <span>&#160;</span><span style="color:#07596a">## Goals</span><span>&#160;</span>
+            <span>- Dogfood Manyhands for its own planning from the first desktop release.</span>
+            <span>- Keep every lifecycle action usable by keyboard on all three platforms.</span>
+            <span>- Never lose an unsaved edit, even across a crash.<span style="display:inline-block;width:2px;height:18px;background:#1f2328;vertical-align:-4px;animation:mhblink 1s steps(1) infinite"></span></span>
+          </div>
+        </sc-if>
+        <sc-if value="{{tSrc}}">
+          <div style="font-family:'IBM Plex Mono',monospace;font-size:13.5px;line-height:1.75;color:#2b3038;white-space:pre-wrap;display:flex;flex-direction:column">
+            <span>Integrate `zorite-editor` as the body editor for tickets and documents, with a Markdown source mode that shares one draft and one undo history.</span>
+            <span>&#160;</span><span style="color:#07596a">## Planning</span><span>&#160;</span>
+            <span>- [x] Create `docs/Cycles/wave-03-desktop-03-editor.md`.</span>
+            <span>- [ ] Record the implementation-plan checkpoints as ticket comments.</span>
+            <span>&#160;</span><span style="color:#07596a">## Entry gate</span><span>&#160;</span>
+            <span>D2 has review and verification evidence on main. <span style="background:#fbefd6">The feasibility record pins</span><span style="display:inline-block;width:2px;height:18px;background:#1f2328;vertical-align:-4px;animation:mhblink 1s steps(1) infinite"></span> `zorite-editor 0.10.0` and records its load normalization.</span>
+            <span>&#160;</span><span style="color:#07596a">## Scope</span><span>&#160;</span>
+            <span>| Area | In scope | Notes |</span><span>| --- | --- | --- |</span><span>| Rich text | Paragraphs, headings, lists, quotes, code | RFC minimum vocabulary |</span><span>| Tables | Shown, edited in Markdown | Rich editing later |</span><span>| Unsupported syntax | Labeled source blocks | Never dropped |</span>
+            <span>&#160;</span><span style="color:#07596a">## Exit evidence</span><span>&#160;</span>
+            <span>&gt; Opening an item, switching modes and a no-change save write nothing and create no commit.</span>
+          </div>
+        </sc-if>
+      </div>
+
+      <sc-if value="{{inline}}">
+        <div ref="{{commentsRef}}" style="background:#f8f7f5;border-top:1px solid #dedbd5;padding:28px 48px 48px;color:#1f2328">
+          <div style="max-width:664px;margin:0 auto;display:flex;flex-direction:column;gap:18px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <i class="icon-message-square" style="font-size:16px;color:#575c64"></i>
+              <span style="font-size:16px;font-weight:600">Discussion</span>
+              <span style="font-size:12px;color:#767a82">{{nComments}} comments · oldest first</span>
+              <span style="flex:1"></span>
+              <button onClick="{{toTop}}" style="display:flex;align-items:center;gap:5px;border:none;background:transparent;color:#07596a;font-size:12.5px;cursor:pointer;white-space:nowrap"><i class="icon-arrow-up" style="font-size:13px"></i>Back to top</button>
+            </div>
+            <sc-for list="{{threads}}" as="th">
+              <div style="background:#ffffff;border:1px solid #dedbd5;border-radius:8px;display:flex;flex-direction:column">
+                <sc-for list="{{th.items}}" as="c">
+                  <div style="display:flex;gap:10px;padding:12px 14px;padding-left:{{c.indent}}px;border-top:{{c.sepLight}}">
+                    <div style="width:26px;height:26px;flex:none;border-radius:50%;background:{{c.color}};color:#fff;font-size:10.5px;font-weight:600;display:flex;align-items:center;justify-content:center">{{c.init}}</div>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                      <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><span style="font-weight:600;font-size:13px">{{c.who}}</span><span style="font-size:12px;color:#767a82">{{c.when}}</span>
+                        <sc-if value="{{c.pending}}"><span title="Saved as a commit on this computer; publication to origin failed" style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:#8f5e00;background:#fbefd6;padding:0 7px;border-radius:9px"><i class="icon-cloud-off" style="font-size:11px"></i>Saved on this computer · not shared yet</span></sc-if>
+                      </div>
+                      <div style="font-size:14px;line-height:1.55;text-wrap:pretty">{{c.body}}</div>
+                      <div style="display:flex;gap:14px;margin-top:2px;font-size:12px;color:#575c64">
+                        <sc-if value="{{c.root}}"><span onClick="{{th.onReply}}" style="cursor:pointer">Reply</span></sc-if>
+                        <sc-if value="{{c.pending}}"><span style="cursor:pointer;color:#07596a;font-weight:500">Retry sharing</span></sc-if>
+                      </div>
+                    </div>
+                  </div>
+                </sc-for>
+                <sc-if value="{{th.replying}}">
+                  <div style="display:flex;gap:10px;padding:10px 14px 14px 50px;border-top:1px solid #efede9">
+                    <div style="width:26px;height:26px;flex:none;border-radius:50%;background:#07596A;color:#fff;font-size:10.5px;font-weight:600;display:flex;align-items:center;justify-content:center">VH</div>
+                    <div style="flex:1;min-width:0;border:1px solid #07596a;border-radius:8px;box-shadow:0 0 0 3px rgba(7,89,106,.14);display:flex;flex-direction:column;background:#fff">
+                      <div style="display:flex;align-items:center;gap:2px;padding:4px 6px;border-bottom:1px solid #efede9;color:#3b4047">
+                        <span style="font-size:11.5px;color:#767a82;padding:0 6px 0 4px;white-space:nowrap">Replying to Jo Smith</span>
+                        <div style="width:1px;height:16px;background:#dedbd5;margin:0 4px"></div>
+                        <button title="Bold (Ctrl B)" style="width:26px;height:24px;border:none;border-radius:4px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#ebe9e5"><i class="icon-bold" style="font-size:14px"></i></button>
+                        <button title="Italic (Ctrl I)" style="width:26px;height:24px;border:none;border-radius:4px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#ebe9e5"><i class="icon-italic" style="font-size:14px"></i></button>
+                        <button title="Inline code" style="width:26px;height:24px;border:none;border-radius:4px;background:#e2dfda;cursor:pointer;display:flex;align-items:center;justify-content:center"><i class="icon-code" style="font-size:14px"></i></button>
+                        <button title="Link (Ctrl K)" style="width:26px;height:24px;border:none;border-radius:4px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#ebe9e5"><i class="icon-link" style="font-size:14px"></i></button>
+                        <button title="Bulleted list" style="width:26px;height:24px;border:none;border-radius:4px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#ebe9e5"><i class="icon-list" style="font-size:14px"></i></button>
+                        <span style="flex:1"></span>
+                        <span title="Your reply is kept as a draft if you close the tab or the app" style="font-size:11px;color:#767a82;display:flex;align-items:center;gap:4px;white-space:nowrap"><i class="icon-shield-check" style="font-size:11px;color:#2c7a43"></i>Draft kept</span>
+                      </div>
+                      <div style="padding:10px 12px;font-size:14px;line-height:1.55;min-height:64px;text-wrap:pretty">One more thing: the golden for <code style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;background:#f3f2ef;padding:1px 5px;border-radius:4px">fixtures/math.md</code> should note the pin, so the next bump flags it for review<span style="display:inline-block;width:2px;height:18px;background:#1f2328;vertical-align:-4px;margin-left:1px;animation:mhblink 1s steps(1) infinite"></span></div>
+                      <div style="display:flex;align-items:center;gap:8px;padding:7px 8px 7px 12px;border-top:1px solid #efede9">
+                        <span style="flex:1;font-size:11.5px;color:#767a82;text-wrap:pretty">Ctrl Enter to post · Esc to cancel · Also shares other saved work in this ticket</span>
+                        <button onClick="{{cancelReply}}" style="padding:5px 11px;border-radius:6px;border:1px solid #cfcbc4;background:#fff;font-size:12.5px;cursor:pointer;white-space:nowrap">Cancel</button>
+                        <button style="padding:5px 11px;border-radius:6px;border:none;background:#a86f00;color:#fff;font-weight:600;font-size:12.5px;cursor:pointer;white-space:nowrap">Reply and sync</button>
+                      </div>
+                    </div>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+            <div style="background:#ffffff;border:1px solid #cfcbc4;border-radius:8px;display:flex;flex-direction:column">
+              <div style="min-height:70px;padding:12px 14px;font-size:14px;color:#767a82">Add a comment. Markdown works here.</div>
+              <div style="display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;border-top:1px solid #e6e3de">
+                <span style="flex:1;font-size:12px;color:#767a82;text-wrap:pretty">Posting also shares other saved work in this {{kindNoun}}. Unsaved edits above are not included.</span>
+                <button style="padding:6px 12px;border-radius:6px;border:none;background:#a86f00;color:#fff;font-weight:600;font-size:12.5px;cursor:pointer;white-space:nowrap">Post and sync</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{inline}}">
+        <div style="position:sticky;bottom:16px;display:flex;justify-content:flex-end;padding:0 20px;pointer-events:none;height:0;overflow:visible">
+          <button onClick="{{toComments}}" title="Jump to comments (Ctrl Shift C)" style="pointer-events:auto;transform:translateY(-40px);display:{{jumpDisplay}};align-items:center;gap:6px;padding:7px 12px;border-radius:18px;border:1px solid #cfcbc4;background:#ffffff;color:#1f2328;font-size:12.5px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.14);white-space:nowrap"><i class="icon-message-square" style="font-size:13px;color:#07596a"></i>{{nComments}} comments<i class="icon-arrow-down" style="font-size:13px;color:#575c64"></i></button>
+        </div>
+      </sc-if>
+    </div>
+
+    <sc-if value="{{sideOpen}}" hint-placeholder-val="{{ false }}">
+      <sc-if value="{{sheetMode}}"><div onClick="{{closeSide}}" style="position:absolute;left:0;right:0;top:34px;bottom:0;background:rgba(10,11,13,.35);z-index:8"></div></sc-if>
+      <div style="position:{{sidePosition}};right:0;top:{{sideTop}};bottom:0;width:{{sideW}}px;flex:none;background:var(--iv-23272d,#23272d);border-left:1px solid var(--iv-3a3f46,#3a3f46);box-shadow:{{sideShadow}};display:flex;flex-direction:column;z-index:9">
+        <div style="height:{{sideHeadH}}px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 14px;border-bottom:1px solid var(--iv-2e3238,#2e3238);background:{{sideHeadBg}}">
+          <i class="icon-message-square" style="font-size:14px;color:var(--iv-8d949e,#8d949e)"></i>
+          <span style="font-weight:600">Comments</span><span style="font-size:11px;color:var(--iv-646b75,#646b75)">5</span>
+          <sc-if value="{{panelMode}}"><span style="font-size:11.5px;color:var(--iv-646b75,#646b75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">· follows MH-VH-7Q3</span></sc-if>
+          <span style="flex:1"></span>
+          <button onClick="{{closeSide}}" title="{{closeTip}}" style="width:26px;height:24px;border:none;background:transparent;color:var(--iv-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--iv-2e3238,#2e3238);color:var(--iv-d5d8dd,#d5d8dd)"><i class="icon-x" style="font-size:14px"></i></button>
+        </div>
+        <div class="iv-dscroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px;display:grid;align-content:start;gap:10px">
+          <sc-for list="{{threads}}" as="th">
+            <div style="background:var(--iv-1f2226,#1f2226);border:1px solid var(--iv-2e3238,#2e3238);border-radius:8px;display:flex;flex-direction:column">
+              <sc-for list="{{th.items}}" as="c">
+                <div style="display:flex;gap:9px;padding:10px 12px;padding-left:{{c.indentS}}px;border-top:{{c.sepDark}}">
+                  <div style="width:22px;height:22px;flex:none;border-radius:50%;background:{{c.color}};color:#fff;font-size:9.5px;font-weight:600;display:flex;align-items:center;justify-content:center">{{c.init}}</div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                    <div style="display:flex;align-items:baseline;gap:7px;flex-wrap:wrap"><span style="font-weight:600;font-size:12.5px">{{c.who}}</span><span style="font-size:11.5px;color:var(--iv-646b75,#646b75)">{{c.when}}</span></div>
+                    <sc-if value="{{c.pending}}"><span style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--iv-e9ad36,#E9AD36)"><i class="icon-cloud-off" style="font-size:11px"></i>Saved on this computer · not shared yet · <span style="color:var(--iv-5fb4c3,#5fb4c3);cursor:pointer">Retry</span></span></sc-if>
+                    <div style="font-size:13px;line-height:1.5;text-wrap:pretty">{{c.body}}</div>
+                    <sc-if value="{{c.root}}"><span style="font-size:11.5px;color:var(--iv-8d949e,#8d949e);cursor:pointer;margin-top:2px">Reply</span></sc-if>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex:none;border-top:1px solid var(--iv-2e3238,#2e3238);padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+          <div style="min-height:56px;padding:8px 10px;border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;background:var(--iv-1a1c20,#1a1c20);color:var(--iv-646b75,#646b75);font-size:13px">Add a comment</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="flex:1;font-size:11.5px;color:var(--iv-646b75,#646b75)">Also shares other saved work in this ticket</span><button style="padding:5px 11px;border-radius:6px;border:none;background:var(--iv-e9ad36,#E9AD36);color:var(--iv-1a1c20,#1a1c20);font-weight:600;font-size:12px;cursor:pointer;white-space:nowrap">Post and sync</button></div>
+        </div>
+      </div>
+    </sc-if>
+  </div>
+
+  <sc-if value="{{fmOpen}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{closeFm}}" style="position:absolute;left:0;right:0;top:34px;bottom:0;background:rgba(10,11,13,.5);z-index:20;display:flex;justify-content:flex-end">
+      <div onClick="{{stop}}" style="width:440px;height:100%;background:var(--iv-23272d,#23272d);border-left:1px solid var(--iv-3a3f46,#3a3f46);box-shadow:-24px 0 48px rgba(0,0,0,.45);display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:flex-start;gap:12px;padding:16px 18px 12px;border-bottom:1px solid var(--iv-2e3238,#2e3238)">
+          <div style="flex:1;display:flex;flex-direction:column;gap:3px">
+            <div style="font-size:15px;font-weight:600">{{fmTitle}}</div>
+            <div style="font-size:12.5px;color:var(--iv-8d949e,#8d949e);text-wrap:pretty">{{fmDesc}}</div>
+          </div>
+          <button onClick="{{closeFm}}" title="Close (Esc)" style="width:26px;height:26px;border:none;background:transparent;color:var(--iv-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--iv-2e3238,#2e3238);color:var(--iv-d5d8dd,#d5d8dd)"><i class="icon-x" style="font-size:15px"></i></button>
+        </div>
+        <div class="iv-dscroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px 18px;display:grid;align-content:start;gap:14px">
+          <sc-if value="{{isDoc}}">
+          <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px">
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Title <span style="color:var(--iv-e3787a,#e3787a)">*</span></label>
+              <div style="min-height:32px;display:flex;align-items:center;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-5fb4c3,#5fb4c3);border-radius:6px;box-shadow:0 0 0 2px rgba(95,180,195,.18);font-size:13px;opacity:{{fmOp}}">Wave 03: Dogfooding</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <label style="font-size:12px;font-weight:500">Status</label>
+                <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><span style="width:8px;height:8px;border-radius:50%;background:var(--iv-e9ad36,#E9AD36)"></span><span style="flex:1">draft</span><i class="icon-chevrons-up-down" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i></div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <label style="font-size:12px;font-weight:500">Date</label>
+                <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><i class="icon-calendar" style="font-size:13px;color:var(--iv-8d949e,#8d949e)"></i><span style="flex:1">2026-10-05</span></div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Author</label>
+              <div style="min-height:32px;display:flex;align-items:center;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}">Vince Hodges &lt;vhodges@gmail.com&gt; &amp;&amp; Codex</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Folder</label>
+              <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><i class="icon-folder" style="font-size:13px;color:var(--iv-8d949e,#8d949e)"></i><span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:12px">docs/Waves</span><span style="font-size:12px;color:var(--iv-5fb4c3,#5fb4c3)">Move…</span></div>
+            </div>
+            <div style="height:1px;background:var(--iv-2e3238,#2e3238)"></div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:8px"><label style="font-size:12px;font-weight:500;flex:1">Other fields</label><span style="font-size:11.5px;color:var(--iv-646b75,#646b75)">Kept exactly as written</span></div>
+              <div style="font-size:12px;color:var(--iv-8d949e,#8d949e)">None</div>
+              <span style="font-size:12px;color:var(--iv-5fb4c3,#5fb4c3);cursor:pointer">+ Add field</span>
+            </div>
+            <div style="display:grid;grid-template-columns:90px 1fr;row-gap:5px;column-gap:10px;align-items:center;padding:10px 12px;border-radius:6px;background:var(--iv-1f2226,#1f2226);border:1px solid var(--iv-2e3238,#2e3238);font-size:12px">
+              <span style="color:var(--iv-8d949e,#8d949e)">ID</span><span style="display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">01M5MHD4J983933AB0G40DK90W<i class="icon-copy" style="font-size:11px;color:var(--iv-8d949e,#8d949e);cursor:pointer"></i></span>
+              <span style="color:var(--iv-8d949e,#8d949e)">File</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">wave-03-dogfooding.md</span>
+              <span style="color:var(--iv-8d949e,#8d949e)">Main version</span><span style="color:var(--iv-8d949e,#8d949e)">Last approved Oct 21. Use Approve and merge… to update it.</span>
+            </div>
+            <span style="font-size:12px;color:var(--iv-5fb4c3,#5fb4c3);cursor:pointer;display:flex;align-items:center;gap:5px"><i class="icon-file-code" style="font-size:12px"></i>Inspect the raw front matter (YAML)…</span>
+          </div>
+          </sc-if>
+          <sc-if value="{{isTicket}}">
+          <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:14px">
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <label style="font-size:12px;font-weight:500">Title <span style="color:var(--iv-e3787a,#e3787a)">*</span></label>
+            <div style="min-height:32px;display:flex;align-items:center;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-5fb4c3,#5fb4c3);border-radius:6px;box-shadow:0 0 0 2px rgba(95,180,195,.18);font-size:13px;opacity:{{fmOp}}">Wave 03 D3: Rich-text editor integration</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Type <span style="color:var(--iv-e3787a,#e3787a)">*</span></label>
+              <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><i class="icon-repeat" style="font-size:13px;color:var(--iv-8d949e,#8d949e)"></i><span style="flex:1">cycle</span><i class="icon-chevron-down" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Status <span style="color:var(--iv-e3787a,#e3787a)">*</span></label>
+              <div title="Free text; suggestions come from this project" style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><span style="width:8px;height:8px;border-radius:50%;background:var(--iv-5fb4c3,#5fb4c3)"></span><span style="flex:1">in progress</span><i class="icon-chevrons-up-down" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Project</label>
+              <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><i class="icon-folder-kanban" style="font-size:13px;color:var(--iv-8d949e,#8d949e)"></i><span style="flex:1">manyhands</span><i class="icon-chevrons-up-down" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label style="font-size:12px;font-weight:500">Team</label>
+              <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><i class="icon-users" style="font-size:13px;color:var(--iv-8d949e,#8d949e)"></i><span style="flex:1">core</span><i class="icon-chevrons-up-down" style="font-size:13px;color:var(--iv-646b75,#646b75)"></i></div>
+            </div>
+          </div>
+          <div style="height:1px;background:var(--iv-2e3238,#2e3238)"></div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <label style="font-size:12px;font-weight:500">Parent</label>
+            <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:13px;opacity:{{fmOp}}"><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--iv-8d949e,#8d949e)">MH-VH-W03</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Wave 03: Dogfooding</span><i class="icon-x" style="font-size:12px;color:var(--iv-646b75,#646b75)"></i></div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <label style="font-size:12px;font-weight:500">Waiting on <span style="font-weight:400;color:var(--iv-646b75,#646b75)">· blocks this ticket until they're closed</span></label>
+            <div style="min-height:32px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:4px 8px;background:var(--iv-1a1c20,#1a1c20);border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:6px;font-size:12px;opacity:{{fmOp}}">
+              <span style="display:flex;align-items:center;gap:5px;padding:2px 7px;border-radius:4px;background:var(--iv-2a2e34,#2a2e34);white-space:nowrap"><i class="icon-circle-check" style="font-size:11px;color:var(--iv-7cc28f,#7cc28f)"></i><span style="font-family:'IBM Plex Mono',monospace;font-size:11px">MH-VH-4KD</span>D2 drafts<i class="icon-x" style="font-size:11px;color:var(--iv-646b75,#646b75)"></i></span>
+              <span style="color:var(--iv-646b75,#646b75)">Add…</span>
+            </div>
+            <span style="font-size:11.5px;color:var(--iv-8d949e,#8d949e)">MH-VH-4KD is closed, so this ticket is ready to work on.</span>
+          </div>
+          <div style="height:1px;background:var(--iv-2e3238,#2e3238)"></div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;align-items:center;gap:8px"><label style="font-size:12px;font-weight:500;flex:1">Other fields</label><span style="font-size:11.5px;color:var(--iv-646b75,#646b75)">Kept exactly as written</span></div>
+            <div style="display:grid;grid-template-columns:110px 1fr;gap:6px;font-size:12.5px">
+              <div style="height:28px;display:flex;align-items:center;padding:0 8px;border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:5px;background:var(--iv-1a1c20,#1a1c20);font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--iv-a9afb8,#a9afb8)">wave</div>
+              <div style="height:28px;display:flex;align-items:center;padding:0 8px;border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:5px;background:var(--iv-1a1c20,#1a1c20);opacity:{{fmOp}}">03</div>
+              <div style="height:28px;display:flex;align-items:center;padding:0 8px;border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:5px;background:var(--iv-1a1c20,#1a1c20);font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--iv-a9afb8,#a9afb8)">cycle</div>
+              <div style="height:28px;display:flex;align-items:center;padding:0 8px;border:1px solid var(--iv-3a3f46,#3a3f46);border-radius:5px;background:var(--iv-1a1c20,#1a1c20);opacity:{{fmOp}}">D3</div>
+            </div>
+            <span style="font-size:12px;color:var(--iv-5fb4c3,#5fb4c3);cursor:pointer">+ Add field</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-radius:6px;background:var(--iv-1f2226,#1f2226);border:1px solid var(--iv-2e3238,#2e3238);font-size:12px">
+            <div style="display:grid;grid-template-columns:90px 1fr;row-gap:5px;column-gap:10px;align-items:center">
+              <span style="color:var(--iv-8d949e,#8d949e)">Short code</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">MH-VH-7Q3</span>
+              <span style="color:var(--iv-8d949e,#8d949e)">ID</span><span style="display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:11.5px">01M5QX8D3RZ0B7Y2V4KQ1C9W7Q<i class="icon-copy" style="font-size:11px;color:var(--iv-8d949e,#8d949e);cursor:pointer"></i></span>
+              <span style="color:var(--iv-8d949e,#8d949e)">Closed</span><span style="color:var(--iv-8d949e,#8d949e)">Not closed. Use Close ticket… to close it.</span>
+            </div>
+          </div>
+          <span style="font-size:12px;color:var(--iv-5fb4c3,#5fb4c3);cursor:pointer;display:flex;align-items:center;gap:5px"><i class="icon-file-code" style="font-size:12px"></i>Inspect the raw front matter (YAML)…</span>
+          </div>
+          </sc-if>
+        </div>
+        <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 18px;border-top:1px solid var(--iv-2e3238,#2e3238)">
+          <span style="flex:1;font-size:11.5px;color:var(--iv-646b75,#646b75)">{{fmFoot}}</span>
+          <button onClick="{{closeFm}}" style="padding:6px 14px;border-radius:6px;border:none;background:var(--iv-e9ad36,#E9AD36);color:var(--iv-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12.5px">Done</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1120,&quot;height&quot;:860},&quot;kind&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;ticket&quot;,&quot;document&quot;],&quot;default&quot;:&quot;ticket&quot;,&quot;tsType&quot;:&quot;'ticket'|'document'&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;},&quot;mode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;view&quot;,&quot;edit&quot;],&quot;default&quot;:&quot;view&quot;,&quot;tsType&quot;:&quot;'view'|'edit'&quot;},&quot;comments&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;inline&quot;,&quot;sheet&quot;,&quot;panel&quot;],&quot;default&quot;:&quot;inline&quot;,&quot;tsType&quot;:&quot;'inline'|'sheet'|'panel'&quot;},&quot;reply&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;frontMatter&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;commentsOpen&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;scrollTo&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;&quot;,&quot;comments&quot;],&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const C = { VH: '#07596A', JS: '#8a5a00', AM: '#6b4fa0' };
+const THREADS = [
+  [{ who: 'Vince Hodges', init: 'VH', when: 'Oct 22, 10:14', body: 'Checkpoint 1: the feasibility record is merged. Starting on the host adapter next.' },
+   { who: 'Jo Smith', init: 'JS', when: 'Oct 22, 11:02', body: 'Can we keep table editing out of the first pass? Markdown mode already covers it.' },
+   { who: 'Vince Hodges', init: 'VH', when: 'Oct 22, 11:40', body: 'Agreed. Tables stay Markdown-only until a follow-up ticket.' }],
+  [{ who: 'Jo Smith', init: 'JS', when: 'Oct 24, 16:20', body: 'Load normalization moved a $$ block in fixtures/math.md. Is that the change the RFC amendment expects?' },
+   { who: 'Vince Hodges', init: 'VH', when: 'Today, 15:36', body: "Yes, that's the recorded 0.10.0 normalization. I've updated the golden file.", pending: true }],
+];
+const THREADS_DOC = [
+  [{ who: 'Jo Smith', init: 'JS', when: 'Oct 6, 09:12', body: 'Should C2 wait for the shared-key registry review, or can it run alongside D2?' },
+   { who: 'Vince Hodges', init: 'VH', when: 'Oct 6, 09:40', body: 'Alongside. C2 only consumes F1, same as D2.' }],
+  [{ who: 'Ana Moreau', init: 'AM', when: 'Yesterday, 14:05', body: 'The Tracks table says D3 is in progress, but MH-VH-7Q3 has no checkpoints yet. Update when the first one lands?' }],
+];
+const LIGHT = { '1a1c20': '#ffffff', '1f2226': '#f3f2ef', '212429': '#f8f7f5', '23272d': '#ffffff', '2a2e34': '#ebe9e5', '2e3238': '#dedbd5', '353a41': '#e2dfda', '3a3f46': '#cfcbc4', '4a5059': '#b5b0a8', '646b75': '#767a82', '8d949e': '#575c64', 'a9afb8': '#4a4f56', 'd5d8dd': '#1f2328', 'eef0f2': '#15181c', '262a30': '#ebe8e3', '5fb4c3': '#07596a', '7cc28f': '#2c7a43', 'e3787a': '#b3393c', 'e9ad36': '#a86f00', 'f2bd4f': '#8f5e00' };
+class Component extends DCLogic {
+  rootRef = el => { this.rootEl = el; this.applyTheme(); };
+  applyTheme() { if (!this.rootEl) return; const l = this.props.theme === 'light'; Object.keys(LIGHT).forEach(k => l ? this.rootEl.style.setProperty('--iv-' + k, LIGHT[k]) : this.rootEl.style.removeProperty('--iv-' + k)); }
+  state = { replyTo: this.props.reply ? 1 : -1, mode: this.props.mode || 'view', source: false, fm: !!this.props.frontMatter, side: !!this.props.commentsOpen, prov: false, nearEnd: false };
+  scrollRef = el => {
+    if (this.sc === el) return;
+    if (this.sc) this.sc.removeEventListener('scroll', this.onScroll);
+    this.sc = el; if (el) { el.addEventListener('scroll', this.onScroll); this.initialJump(); }
+  };
+  commentsRef = el => { this.cm = el; this.initialJump(); };
+  initialJump() {
+    if (this.didJump || (this.props.scrollTo !== 'comments' && !this.props.reply) || !this.sc || !this.cm) return;
+    this.didJump = true;
+    const off = this.props.reply ? 140 : 120; const go = () => { if (this.sc && this.cm) { this.sc.scrollTop = this.cm.offsetTop + (this.props.reply ? 180 : 0) - off; this.onScroll(); } };
+    go(); requestAnimationFrame(go); setTimeout(go, 400); setTimeout(go, 1200);
+  }
+  onScroll = () => {
+    if (!this.sc || !this.cm) return;
+    const near = this.sc.scrollTop + this.sc.clientHeight > this.cm.offsetTop + 60;
+    if (near !== this.state.nearEnd) this.setState({ nearEnd: near });
+  };
+  componentDidMount() { this.initialJump(); }
+  componentDidUpdate(p) {
+    if (p.theme !== this.props.theme) this.applyTheme();
+    if (p.reply !== this.props.reply) this.setState({ replyTo: this.props.reply ? 1 : -1 });
+    if (p.mode !== this.props.mode) this.setState({ mode: this.props.mode || 'view' });
+    if (p.frontMatter !== this.props.frontMatter) this.setState({ fm: !!this.props.frontMatter });
+    if (p.commentsOpen !== this.props.commentsOpen) this.setState({ side: !!this.props.commentsOpen });
+  }
+  componentWillUnmount() { clearTimeout(this.t); if (this.sc) this.sc.removeEventListener('scroll', this.onScroll); }
+  jump() { if (this.sc && this.cm) this.sc.scrollTo({ top: this.cm.offsetTop - 120, behavior: 'smooth' }); }
+  renderVals() {
+    const s = this.state, cm = this.props.comments || 'inline';
+    const isEdit = s.mode === 'edit';
+    const isDoc = this.props.kind === 'document';
+    const src = isDoc ? THREADS_DOC : THREADS;
+    const threads = src.map((t, ti) => ({ replying: s.replyTo === ti, onReply: () => this.setState({ replyTo: ti }), items: t.map((c, i) => Object.assign({}, c, {
+      color: C[c.init], root: i === 0, indent: i ? 50 : 14, indentS: i ? 43 : 12,
+      sepLight: i ? '1px solid #efede9' : 'none', sepDark: i ? '1px solid var(--iv-2a2e34,#2a2e34)' : 'none', pending: !!c.pending,
+    })) }));
+    const T = (icon, tip, o) => Object.assign({ btn: true, icon, tip, label: '', pad: 0, bg: 'transparent', fg: '#3b4047', op: s.source ? 0.35 : 1 }, o || {});
+    const tools = [
+      T('undo-2', 'Undo (Ctrl Z)', { op: 1 }), T('redo-2', 'Redo (Ctrl Shift Z)', { op: 1 }), { sep: true },
+      T('pilcrow', 'Paragraph style', { label: 'Paragraph', pad: 8 }), { sep: true },
+      T('bold', 'Bold (Ctrl B)', { bg: s.source ? 'transparent' : '#e2dfda' }), T('italic', 'Italic (Ctrl I)'), T('strikethrough', 'Strikethrough'), T('code', 'Inline code (Ctrl E)'), T('link', 'Link (Ctrl K)'), { sep: true },
+      T('list', 'Bulleted list'), T('list-ordered', 'Numbered list'), T('list-todo', 'Checklist'), T('text-quote', 'Quote'), T('square-code', 'Code block'), T('table', 'Table (edited in Markdown for now)'),
+    ];
+    const sheetMode = cm === 'sheet', panelMode = cm === 'panel';
+    const sideOpen = (sheetMode || panelMode) && s.side;
+    const spinner = React.createElement('span', { style: { width: 12, height: 12, borderRadius: '50%', border: '2px solid var(--iv-3a3f46,#3a3f46)', borderTopColor: 'var(--iv-5fb4c3,#5fb4c3)', display: 'inline-block', animation: 'mhspin .8s linear infinite', boxSizing: 'border-box' } });
+    return {
+      scrollRef: this.scrollRef, commentsRef: this.commentsRef, rootRef: this.rootRef,
+      isDoc, isTicket: !isDoc, kindNoun: isDoc ? 'document' : 'ticket',
+      nComments: String(src.reduce((a, t) => a + t.length, 0)),
+      tabIcon: isDoc ? 'file-text' : 'repeat', tabCode: isDoc ? '' : 'MH-VH-7Q3',
+      title: isDoc ? 'Wave 03: Dogfooding' : 'Wave 03 D3: Rich-text editor integration',
+      otherIcon: isDoc ? 'repeat' : 'file-text', otherTitle: isDoc ? 'Wave 03 D3: Rich-text editor…' : 'Wave 03: Dogfooding',
+      crumb2: isDoc ? 'docs/Waves' : 'Tickets', crumb3: isDoc ? 'wave-03-dogfooding.md' : 'MH-VH-7Q3',
+      finishLabel: isDoc ? 'Approve and merge…' : 'Close ticket…',
+      fmTitle: isDoc ? 'Document details' : 'Ticket details',
+      tRich: !isDoc && !(isEdit && s.source), dRich: isDoc && !(isEdit && s.source), tSrc: !isDoc && isEdit && s.source, dSrc: isDoc && isEdit && s.source,
+      cancelReply: () => this.setState({ replyTo: -1 }),
+      isEdit, isView: !isEdit, showRich: !(isEdit && s.source), showSource: isEdit && s.source, tools,
+      prov: s.prov, noProv: !s.prov, spinner,
+      pillLabel: s.prov ? 'Getting a private copy ready…' : isEdit ? 'Editing · unsaved changes' : 'Viewing the shared copy',
+      pillColor: s.prov ? 'var(--iv-5fb4c3,#5fb4c3)' : isEdit ? 'var(--iv-e9ad36,#E9AD36)' : 'var(--iv-7cc28f,#7cc28f)', pillIcon: isEdit ? 'pencil' : 'circle-check',
+      pillTip: isEdit ? (isDoc ? 'Branch manyhands/document/01M5MHD4… · worktree ~/.local/share/manyhands/worktrees/wave-03-dogfooding' : 'Branch manyhands/ticket/01M5QX…7Q3 · worktree ~/.local/share/manyhands/worktrees/MH-VH-7Q3') : 'Primary copy on main. Editing creates a private working copy.',
+      startEdit: () => { if (s.prov) return; this.setState({ prov: true }); this.t = setTimeout(() => this.setState({ prov: false, mode: 'edit' }), 900); },
+      stopEdit: () => this.setState({ mode: 'view', source: false }),
+      setRich: () => this.setState({ source: false }), setSource: () => this.setState({ source: true }),
+      richBg: s.source ? 'transparent' : '#ffffff', richFg: s.source ? '#575c64' : '#1f2328', richSh: s.source ? 'none' : '0 1px 2px rgba(0,0,0,.12)',
+      srcBg: s.source ? '#ffffff' : 'transparent', srcFg: s.source ? '#1f2328' : '#575c64', srcSh: s.source ? '0 1px 2px rgba(0,0,0,.12)' : 'none',
+      threads, inline: cm === 'inline', sheetMode, panelMode, sideOpen,
+      showCommentsBtn: cm !== 'inline' || true,
+      commentsBtn: () => cm === 'inline' ? this.jump() : this.setState(st => ({ side: !st.side })),
+      commentsBtnTip: cm === 'inline' ? 'Jump to the discussion below the ticket' : sheetMode ? 'Open comments' : 'Show the Comments panel',
+      cBtnBg: sideOpen ? 'var(--iv-353a41,#353a41)' : 'var(--iv-2a2e34,#2a2e34)', cBtnBorder: sideOpen ? 'var(--iv-5fb4c3,#5fb4c3)' : 'var(--iv-3a3f46,#3a3f46)',
+      toComments: () => this.jump(), toTop: () => this.sc && this.sc.scrollTo({ top: 0, behavior: 'smooth' }), jumpDisplay: s.nearEnd ? 'none' : 'flex',
+      closeSide: () => this.setState({ side: false }), closeTip: sheetMode ? 'Close (Esc)' : 'Hide panel',
+      sidePosition: sheetMode ? 'absolute' : 'relative', sideTop: sheetMode ? '34px' : '0px',
+      sideW: sheetMode ? 400 : 340, sideShadow: sheetMode ? '-24px 0 48px rgba(0,0,0,.45)' : 'none',
+      sideHeadH: sheetMode ? 48 : 32, sideHeadBg: sheetMode ? 'var(--iv-23272d,#23272d)' : 'var(--iv-1f2226,#1f2226)',
+      fmOpen: s.fm, openFm: () => this.setState({ fm: true }), closeFm: () => this.setState({ fm: false }), stop: e => e && e.stopPropagation && e.stopPropagation(),
+      fmDesc: isEdit ? 'Changes here become part of your draft and are saved with the ' + (isDoc ? 'document.' : 'ticket.') : 'Viewing the shared copy. Choose Edit to change these.',
+      fmFoot: isEdit ? 'Saved with the ' + (isDoc ? 'document' : 'ticket') + ' (Ctrl S)' : 'Read only while viewing',
+      fmOp: isEdit ? 1 : 0.75,
+    };
+  }
+}
+</script>
+</body>
+</html>
