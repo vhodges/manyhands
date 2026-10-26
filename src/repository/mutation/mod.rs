@@ -47,6 +47,7 @@ mod dto;
 mod evidence;
 mod execute;
 mod identity;
+mod local_control;
 mod observe;
 mod outcome;
 mod progress;

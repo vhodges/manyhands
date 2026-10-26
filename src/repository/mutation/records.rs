@@ -158,7 +158,9 @@ fn missing_request_tables(connection: &Connection) -> Result<Vec<&'static str>, 
 /// write lock before it looks again: of two processes that open an old
 /// index at once, the second waits for the first and then adds nothing.
 pub(in super::super) fn migrate(connection: &mut Connection) -> Result<(), RepositoryError> {
-    if missing_request_tables(connection)?.is_empty() {
+    if missing_request_tables(connection)?.is_empty()
+        && super::local_control::schema_current(connection)?
+    {
         return Ok(());
     }
     let transaction = connection
@@ -169,6 +171,7 @@ pub(in super::super) fn migrate(connection: &mut Connection) -> Result<(), Repos
             .execute_batch(definition)
             .map_err(RepositoryError::sqlite)?;
     }
+    super::local_control::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -608,6 +611,7 @@ fn insert_request(
             ],
         )?;
     }
+    super::local_control::accept(transaction, request)?;
     Ok(InsertRequestOutcome::Inserted)
 }
 
@@ -832,6 +836,9 @@ impl RepositoryService {
                     |row| row.get(0),
                 )
                 .optional()?;
+            if let Some(attempt) = attempt {
+                super::local_control::enter(transaction, &request_id.to_string(), attempt)?;
+            }
             attempt
                 .map(|attempt| u64::try_from(attempt).map_err(|_| invalid_stored_data()))
                 .transpose()

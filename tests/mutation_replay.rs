@@ -27,6 +27,9 @@ use serde_json::json;
 
 mod support;
 
+#[path = "mutation_replay/local_sync.rs"]
+mod local_sync;
+
 use support::{
     golden::ContractCase,
     items, mutation,
