@@ -396,9 +396,36 @@ Semantic checks additionally read the three E7 schema files, E9 mutation_golden
 and replay conformance registration, SSH harness, fixture and named regression
 functions above; their absence from the literal query is not an exemption.
 
+## Independent Task 0 review
+
+Controller reported both reviews **APPROVED**, each with zero findings, for
+`0cbeab0..9039e65` (full endpoints
+`0cbeab084d252e3823d317a468eee1f29c92c8ce` and
+`9039e65f882c169a70ae0f5b90da33b18760ea43`). Recorded at
+`2026-10-26T02:28:46Z` in canonical checkpoint comment
+`01M5V0KXPBH8XBCD5XP17C5CH6`.
+
+| Review | Session | Result |
+| --- | --- | --- |
+| SPEC | `ses_e89f8c6f0ffe8XoInnuqmMjdsA` | APPROVED; zero findings. |
+| QUALITY | `ses_e89f70347ffezlwXc1KFxZujfO` | APPROVED; zero findings. |
+
+Both reviewers source-verified E9's `tests/support/repair.rs::repair_data` and
+E4's companion first-13-action split as genuine omitted named edits, not Task 0
+defects. Their approvals accept this baseline/inventory checkpoint; the owner
+still must answer the two exact additions in question comment
+`01M5TZXJZ2348Z8GRMAQ7BSHPR`. Ticket and ledger remain waiting; Task 1 is not
+authorized to proceed past that stop.
+
+Review-record preflight: clean ticket checkout; fetched origin and merged current
+main `0464c42dae19a6dde000c7e7660e82762a41fada`, already up to date. HEAD before
+and after was `9039e65f882c169a70ae0f5b90da33b18760ea43`; ancestry check passed.
+This follow-up records reviews only; no implementation or baseline rerun.
+
 ## Handoff
 
 Baseline evidence is complete for the prescribed commands. The new recovery
-protocol remains unimplemented and unproven. Controller review and the two exact
-inventory clarifications are next; do not begin Task 1 while this checkpoint is
-waiting. No tests were weakened or baseline code altered.
+protocol remains unimplemented and unproven. Independent SPEC and QUALITY reviews
+approved Task 0 with zero findings. The two exact owner inventory clarifications
+remain outstanding; do not begin Task 1 while this checkpoint is waiting.
+No tests were weakened or baseline code altered.
