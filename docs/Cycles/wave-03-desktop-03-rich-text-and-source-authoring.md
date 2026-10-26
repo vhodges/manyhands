@@ -189,8 +189,9 @@ checkpoint review.
   - **Keyboard.**
     - The editor's own actions by key (undo, redo, bold, italic, code and
       strikethrough), plus Link.
-    - Tab indents inside the editor; Escape moves to the header's actions;
-      F6, Shift-F6 and the region keys leave it.
+    - Tab indents inside the editor. Escape closes an editor menu just
+      opened, or else moves to the header's Done. F6, Shift-F6 and the
+      region keys leave it.
     - Underline is not offered.
   - **Unsupported syntax** is shown literally and edited in place, unlabeled
     (decision 8). In rich text the caret steps over math and `key:: value`
@@ -241,13 +242,14 @@ checkpoint review.
   - **Closing a tab with unsaved text** always asks first, whether or not a
     draft is stored.
   - **Releasing an unused context.** Leaving an Edit or Create that created
-    a context in this desktop session, and saved nothing in it, releases
-    that context through `context release` (decisions 11 and 18). That
-    applies to Done, Discard and closing the tab, when:
+    a context in this run of the desktop (one process), and saved nothing
+    in it, releases that context through `context release` (decisions 11
+    and 18). That applies to Done, Discard and closing the tab, and to a
+    discard from the Drafts page, when:
     - nothing is being saved;
     - no draft of the item is kept.
 
-    A context this desktop session did not create is never released by
+    A context this run of the desktop did not create is never released by
     leaving or by Discard (decision 18).
 - **Part D: details editing, relationships and creation.**
   - **Named controls, in the details sheet while editing:**
@@ -270,7 +272,8 @@ checkpoint review.
       new-item draft that is already written to the draft store.
     - The first Save creates the item, and after it the tab is an ordinary
       edit session.
-    - Discarding a never-created item releases its context.
+    - Discarding a never-created item releases its context, when this run
+      of the desktop created it.
 - **Part E: moves, folders, repair and the gate.**
   - **Move** a document to a folder and file name, from the details sheet
     while viewing.
@@ -490,7 +493,7 @@ Planned evidence. Nothing in this table has been run.
 | Images | A local PNG renders while viewing and while editing. None of these is read or loaded: traversal, a symbolic link leaving the repository, `.git` in any letter case, a backslash or drive-letter path, SVG, an oversized file and a remote URL. A many-frame GIF decodes one frame, and an image over the dimension limit is refused. | B | Planned |
 | Edit and save | Edit provisions with progress before the editor is enabled; a document save and a ticket save commit once and retire the draft; editing on after a save, then saving again, commits the second change; unknown metadata survives by value. | C | Planned |
 | States | Each envelope maps to its words, including `already_applied`, `discovery_pending` with Resume, and a pending checkpoint with Retry under the same request ID, which commits once. | C | Planned |
-| Done | Done on unsaved text writes the draft, then returns to viewing with the draft kept, the unsaved mark and Continue editing, which resumes the same text and undo; Done waits for a save in flight; when the draft cannot be kept, or the item was never created, Done asks; a draft discarded from the Drafts page ends the tab's kept session. | C | Planned |
+| Done | Done on unsaved text writes the draft, then returns to viewing with the draft kept, the unsaved mark and Continue editing, which resumes the same text and undo; Done waits for a save in flight, and stops if that save does not commit; when the draft cannot be kept, or the item was never created, Done asks; a draft discarded from the Drafts page ends the tab's kept session; every row of the design's session-outcome table holds. | C | Planned |
 | Stale edit | A second actor in a child process changes the item; a refresh offers the review in a banner; the save answers `external_change`; the draft file is unchanged; the review chooses per field and Save writes exactly that. An unverified base opens the review before any save. | C | Planned |
 | Late results | A held read or save completing after newer typing or a reload changes nothing the user sees. | C | Planned |
 | Recovery | A restored draft continues and saves; the close dialog's Save saves and closes; a failed flush while editing stays visible and blocks no text; an unavailable store is said before editing. | C | Planned |
@@ -626,11 +629,12 @@ Decided on 2026-10-26, after the owner added the item-view design
     viewer is used instead. Remote images are then shown as their source
     text, not as the viewer's label (decision 9).
 18. **Release only what this session created.** Discarding a draft, or
-    leaving an Edit, releases a work context only when this desktop session
-    created it, by Edit or Create. A context made earlier, by another
-    session, the CLI or an agent, is never released that way, so nothing is
-    removed under a process that may be using it. This narrows decision 11
-    and replaces ruling R-45. It was the owner's answer to review round 4.
+    leaving an Edit, releases a work context only when this run of the
+    desktop (one process) created it, by Edit or Create. A context made
+    earlier, by another run, the CLI or an agent, is never released that
+    way, so the desktop never removes a context someone else made. This
+    narrows decision 11 and replaces ruling R-45. It was the owner's answer
+    to review round 4.
 
 ## Open Questions
 
