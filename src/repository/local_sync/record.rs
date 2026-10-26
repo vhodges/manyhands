@@ -12,6 +12,7 @@ const MARKER: &str = "local_context_sync_v1";
 const CASCADE_MARKER: &str = "local_context_sync_child_cascade_v2";
 const EXECUTION_MARKER: &str = "local_context_sync_execution_v3";
 const EXECUTION_AUTHORITY_MARKER: &str = "local_context_sync_execution_authority_v4";
+const CHECKOUT_IMAGE_MARKER: &str = "local_context_sync_checkout_image_v5";
 const EXECUTION: &str = "CREATE TABLE local_context_sync_execution (
  operation_ulid TEXT PRIMARY KEY NOT NULL REFERENCES local_context_sync_records(operation_ulid) ON DELETE CASCADE,
  format_version INTEGER NOT NULL CHECK(format_version=1),
@@ -29,6 +30,7 @@ const EXECUTION: &str = "CREATE TABLE local_context_sync_execution (
  checkout_observed INTEGER NOT NULL DEFAULT 0 CHECK(checkout_observed IN (0,1) AND checkout_observed<=checkout_started),
  ref_started INTEGER NOT NULL DEFAULT 0 CHECK(ref_started IN (0,1)),
  ref_observed INTEGER NOT NULL DEFAULT 0 CHECK(ref_observed IN (0,1) AND ref_observed<=ref_started),
+ baseline_worktree BLOB CHECK(baseline_worktree IS NULL OR (typeof(baseline_worktree)='blob' AND length(baseline_worktree)=32)),
  CHECK((commit_name IS NULL)=(commit_email IS NULL) AND (commit_name IS NULL)=(commit_time IS NULL) AND (commit_name IS NULL)=(commit_offset IS NULL))
 )";
 const RECORD: &str = "CREATE TABLE local_context_sync_records (
@@ -132,6 +134,21 @@ fn schemas(cascade: bool, execution_required: bool) -> [(&'static str, String); 
         ("local_context_sync_resolutions", child(RESOLUTIONS)),
     ]
 }
+fn execution_schema(checkout_image: bool) -> String {
+    if checkout_image {
+        EXECUTION.to_owned()
+    } else {
+        EXECUTION.replace(" baseline_worktree BLOB CHECK(baseline_worktree IS NULL OR (typeof(baseline_worktree)='blob' AND length(baseline_worktree)=32)),\n","")
+    }
+}
+fn checkout_image_marked(db: &Connection) -> Result<bool, RepositoryError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+        [CHECKOUT_IMAGE_MARKER],
+        |r| r.get(0),
+    )
+    .map_err(|_| failure())
+}
 
 // Called within recovery::migrate_operation_records' transaction. Upgrading
 // the two child FKs and recording the marker either commit together or roll
@@ -208,7 +225,8 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         if recovery::has_table(db, "local_context_sync_execution").map_err(|_| failure())? {
             return Err(failure());
         }
-        db.execute_batch(EXECUTION).map_err(|_| failure())?;
+        db.execute_batch(&execution_schema(false))
+            .map_err(|_| failure())?;
         db.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [EXECUTION_MARKER],
@@ -226,6 +244,17 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         db.execute(
             "INSERT INTO registry_migrations(name) VALUES(?1)",
             [EXECUTION_AUTHORITY_MARKER],
+        )
+        .map_err(|_| failure())?;
+    }
+    if !checkout_image_marked(db)? {
+        audit(db)?;
+        // Old records retain NULL: no pre-checkout filesystem image may be
+        // manufactured during migration. Existing full-image proof still applies.
+        db.execute_batch("ALTER TABLE local_context_sync_execution ADD COLUMN baseline_worktree BLOB CHECK(baseline_worktree IS NULL OR (typeof(baseline_worktree)='blob' AND length(baseline_worktree)=32))").map_err(|_|failure())?;
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CHECKOUT_IMAGE_MARKER],
         )
         .map_err(|_| failure())?;
     }
@@ -472,7 +501,7 @@ fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryErro
             |r| r.get(0),
         )
         .map_err(|_| failure())?;
-    if !marked || compact(&sql) != compact(EXECUTION) {
+    if !marked || compact(&sql) != compact(&execution_schema(checkout_image_marked(db)?)) {
         return Err(failure());
     }
     let integrity: String = db

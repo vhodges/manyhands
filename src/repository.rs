@@ -882,6 +882,8 @@ pub enum FailurePoint {
     LocalSyncBeforeIndex,
     LocalSyncAfterIndex,
     LocalSyncDuringCheckout,
+    LocalSyncBeforeCheckoutBackend,
+    LocalSyncAfterCheckoutBackend,
     LocalSyncInsideRefWindow,
     AfterConfirmed,
     AfterContextSync,

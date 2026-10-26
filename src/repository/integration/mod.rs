@@ -42,6 +42,9 @@
 //! adapter; sharing byte/path mechanics does not grant authority over those files.
 
 pub(super) mod artifacts;
+// Exclusive local-executor dependency; activate with its Task 7 callers.
+#[cfg(test)]
+pub(super) mod filtered;
 pub(super) mod prepare;
 pub(super) mod resolution;
 pub(super) mod validate;

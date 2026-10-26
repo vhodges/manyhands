@@ -137,6 +137,9 @@ fn prepare(
     let local = git2::Oid::from_str(&observation.context_head)?;
     let incoming = git2::Oid::from_str(&observation.primary_head)?;
     let disposition = classify(&git, local, incoming)?;
+    if disposition != Disposition::Noop {
+        recover::require_logging(&git)?;
+    }
     recover::clean_metadata(&git, &observation.context_ref)?;
     if !recover::exact_image(&git, local)? {
         return Err(Fault {
@@ -175,6 +178,15 @@ fn prepare(
         };
         let baseline = git.find_commit(local)?.tree()?;
         for entry in prospective.iter() {
+            // The bounded executor proves regular-file checkout images only.
+            // Unsupported structural input must not become retained ownership
+            // whose prospective result can never satisfy that proof.
+            if !matches!(entry.mode, 0o100644 | 0o100755) {
+                return Err(Fault {
+                    code: ResultCode::RecoveryRequired,
+                    reason: Reason::UnsupportedConflict,
+                });
+            }
             let path = std::str::from_utf8(&entry.path).map_err(|_| Fault::foreign())?;
             if baseline.get_path(std::path::Path::new(path)).is_err() {
                 let root = git.workdir().ok_or_else(Fault::foreign)?;
@@ -521,6 +533,13 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
         return Err(recover::mismatch_reason(&e));
     }
     if !result {
+        if e.checkout_baseline.is_none() {
+            let baseline = recover::checkout_image(owner)?;
+            owner.transaction(|tx,row| {
+                if tx.execute("UPDATE local_context_sync_execution SET baseline_worktree=?2 WHERE operation_ulid=?1 AND baseline_worktree IS NULL",params![row.operation_id.to_string(),baseline.as_slice()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+                Ok(())
+            })?;
+        }
         owner.step(1, "checkout", false, Some(candidate))?;
         owner.flag("checkout_started")?;
         owner.phase("applying")?;
@@ -656,7 +675,10 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
     let result = integration::artifacts::local_checkout(
         &git,
         candidate,
-        || owner.authorize(),
+        || {
+            owner.authorize()?;
+            boundary(owner, FailurePoint::LocalSyncBeforeCheckoutBackend)
+        },
         || {
             service
                 .check_failure(
@@ -667,11 +689,13 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
                 .map_err(|_| Fault::ambiguous())
         },
     );
+    // This test seam also restores child-only OS write limits on returned errors.
+    let after = boundary(owner, FailurePoint::LocalSyncAfterCheckoutBackend);
     if result.is_ok() || recover::checkout_progress(owner).unwrap_or(false) {
         owner.performed.wrote = true;
         owner.performed.oid = Some(candidate);
     }
-    result
+    result.and(after)
 }
 fn transition(owner: &mut Owner<'_>, candidate: git2::Oid, e: &Execution) -> Result<(), Fault> {
     if !recover::exact_image(&owner.git, candidate)? {

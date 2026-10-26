@@ -38,6 +38,7 @@ pub(super) struct Execution {
     pub checkout_observed: bool,
     pub ref_started: bool,
     pub ref_observed: bool,
+    pub checkout_baseline: Option<[u8; 32]>,
 }
 impl Execution {
     pub fn validate_graph(
@@ -71,6 +72,7 @@ impl Execution {
             checkout_observed: false,
             ref_started: false,
             ref_observed: false,
+            checkout_baseline: None,
         })
     }
     pub fn insert(&self, tx: &Connection, id: OperationId) -> Result<(), ReadError> {
@@ -82,7 +84,8 @@ impl Execution {
             let hash=|name| -> rusqlite::Result<[u8;32]> {r.get::<_,Vec<u8>>(name)?.try_into().map_err(|_|rusqlite::Error::InvalidQuery)};
             let disposition=match r.get::<_,String>("disposition")?.as_str() {"noop"=>Disposition::Noop,"fast_forward"=>Disposition::FastForward,"merge"=>Disposition::Merge,_=>return Err(rusqlite::Error::InvalidQuery)};
             let commit_identity=r.get::<_,Option<String>>("commit_name")?.map(|name| -> rusqlite::Result<_> {Ok((name,r.get("commit_email")?,r.get("commit_time")?,r.get("commit_offset")?))}).transpose()?;
-            Ok(Self {disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?})
+            let checkout_baseline=r.get::<_,Option<Vec<u8>>>("baseline_worktree")?.map(|bytes|bytes.try_into().map_err(|_|rusqlite::Error::InvalidQuery)).transpose()?;
+            Ok(Self {disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?,checkout_baseline})
         }).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))
     }
 }
@@ -97,6 +100,26 @@ pub(super) fn index_digest(git: &git2::Repository) -> Result<[u8; 32], ReadError
         .and_then(|m| m.digest("index"))
         .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?
         .ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))
+}
+
+pub(super) fn require_logging(git: &git2::Repository) -> Result<(), Fault> {
+    // This executor's exact ref proof requires both branch and HEAD append
+    // authority. Do not silently change the user's valid-but-unsupported setup.
+    // Reopen to observe current effective configuration at every effect boundary.
+    let current = git2::Repository::open(git.path())?;
+    let config = current.config()?;
+    let enabled = match config.get_bool("core.logallrefupdates") {
+        Ok(enabled) => enabled,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => !current.is_bare(),
+        Err(_) => config
+            .get_string("core.logallrefupdates")
+            .is_ok_and(|value| value == "always"),
+    };
+    if enabled {
+        Ok(())
+    } else {
+        Err(Fault::authority())
+    }
 }
 fn bytes(root: &Path, path: &Path) -> Result<Vec<u8>, ReadError> {
     owned_resolution_file_bytes(root, path, RepositoryOperation::ContextSyncLocal, root)
@@ -174,7 +197,13 @@ pub(super) fn exact_image(git: &git2::Repository, oid: git2::Oid) -> Result<bool
             root,
         )
         .map_err(|_| Fault::foreign())?;
-        if content.as_deref() != Some(git.find_blob(entry.id)?.content()) {
+        // Git can consider a literal LF blob clean even with autocrlf enabled.
+        // Enumerate those exact bytes AND the actual smudged checkout image;
+        // never substitute a lossy clean-filter roundtrip or cached stat proof.
+        if content.as_deref() != Some(git.find_blob(entry.id)?.content())
+            && content.as_deref()
+                != Some(integration::filtered::checkout_bytes(git, oid, entry.id, path)?.as_slice())
+        {
             return Ok(false);
         }
     }
@@ -285,8 +314,12 @@ impl Owner<'_> {
                 .ok()
                 .is_some_and(|w| w.path() == self.row.worktree)
         });
-        if !registered || routing(self.repo)? != self.evidence()?.routing {
+        let evidence = self.evidence()?;
+        if !registered || routing(self.repo)? != evidence.routing {
             return Err(Fault::foreign());
+        }
+        if !self.row.integration_proven && evidence.disposition != Disposition::Noop {
+            require_logging(&self.git)?;
         }
         Ok(())
     }
@@ -374,6 +407,16 @@ pub(super) fn mismatch_reason(e: &Execution) -> Fault {
 /// prove writes for effect reporting, but NEVER authorize partial reconciliation.
 /// Only exact_image of the complete baseline/result authorizes another effect.
 pub(super) fn checkout_progress(owner: &Owner<'_>) -> Result<bool, Fault> {
+    if let Some(baseline) = owner
+        .known_execution
+        .as_ref()
+        .and_then(|e| e.checkout_baseline)
+    {
+        // Any actual byte/presence change in the bounded checkout's path set
+        // proves a durable filesystem effect, even a truncated FIRST file.
+        // This digest is effect evidence ONLY, never partial-resume authority.
+        return Ok(checkout_image(owner)? != baseline);
+    }
     let Some(candidate) = owner.row.candidate else {
         return Ok(false);
     };
@@ -403,4 +446,40 @@ pub(super) fn checkout_progress(owner: &Owner<'_>) -> Result<bool, Fault> {
         }
     }
     Ok(false)
+}
+
+pub(super) fn checkout_image(owner: &Owner<'_>) -> Result<[u8; 32], Fault> {
+    let candidate = owner.row.candidate.ok_or_else(Fault::authority)?;
+    let old = owner.git.find_commit(owner.row.context_parent)?.tree()?;
+    let new = owner.git.find_commit(candidate)?.tree()?;
+    let paths = owner
+        .git
+        .diff_tree_to_tree(Some(&old), Some(&new), None)?
+        .deltas()
+        .flat_map(|d| {
+            [
+                d.old_file().path().map(Path::to_owned),
+                d.new_file().path().map(Path::to_owned),
+            ]
+        })
+        .flatten()
+        .collect::<std::collections::BTreeSet<_>>();
+    let root = owner.git.workdir().ok_or_else(Fault::foreign)?;
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"manyhands-local-coarse-checkout-image-v1");
+    for path in paths {
+        super::observe::field(&mut digest, path.as_os_str().as_encoded_bytes());
+        match owned_file_bytes(root, &path, RepositoryOperation::ContextSyncLocal, root)
+            .map_err(|_| Fault::foreign())?
+        {
+            None => {
+                digest.update(&[0]);
+            }
+            Some(bytes) => {
+                digest.update(&[1]);
+                super::observe::field(&mut digest, &bytes);
+            }
+        }
+    }
+    Ok(*digest.finalize().as_bytes())
 }

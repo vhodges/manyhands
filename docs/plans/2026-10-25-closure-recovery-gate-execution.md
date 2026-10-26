@@ -34,9 +34,12 @@ question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded in approval comment
 `01M5VWDPG57KWRAJ55Y2EMXRQR`. The latest controller handoff reports SPEC and QUALITY
 approval with zero findings at `4377944`, covering the full Task 4 range
 `37bd2c3..4377944`. Earlier pending-review entries below remain historical.
-Task 5 SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` requested four changes at `5fde757`.
-All four have source-verified implementer fixes and fresh verification, recorded in
-`01M5W6R1Q4F2SY8E86XKB838N9`; **SPEC re-review then QUALITY remain pending**.
+Task 5 SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` **approved with zero remaining findings
+at `f282335`**, as reported by the controller. QUALITY
+`ses_e878dbd29ffednm05pK3O5zlGc` then requested four corrections. Those now have
+source-verified implementer fixes and fresh verification in
+`01M5WAQG5RHQ4ZG571AB2DDCZA`. **QUALITY re-review and SPEC verification of changed
+fixes remain pending**; the prior SPEC approval is not automatically extended.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -51,7 +54,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Initial implementation `7856c61..5fde757`; SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` requested 3 P1 and 1 P2 fixes. Corrections start at `5fde75757182c5714a6069ceec7998a4f1f6ed33`, checkpoint `01M5W6R1Q4F2SY8E86XKB838N9`. **88 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. Internal executor remains narrowly test-gated until Task 7. Awaiting SPEC re-review then QUALITY; not reviewer-approved. |
+| Task 5 | Initial implementation `7856c61..5fde757`; SPEC corrections `5fde757..f282335` approved with zero remaining findings by `ses_e87b8a702ffe6HryC0itCXg4H5`. QUALITY `ses_e878dbd29ffednm05pK3O5zlGc` requested 3 P1 and 1 P2 corrections. Current fix base `f2823350120710cfaea4bb74dba4b2062d523899`, checkpoint `01M5WAQG5RHQ4ZG571AB2DDCZA`: **97 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. Awaiting independent re-review; executor remains narrowly test-gated until Task 7. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1725,3 +1728,167 @@ base tree `9b39ee2d8a1568c1f27f485e97921cc2ebce45f5`. Status/diff/log were inspe
 `git diff --check` passed. Ticket remains implementing; no owner question, subagent,
 Task 6 work, PR, lifecycle action or native dispatch. Next gate: controller SPEC
 re-review of all four fixes, then QUALITY on the full Task 5 range.
+
+## Task 5 QUALITY corrections: awaiting re-review
+
+Recorded `2026-10-26T14:44:44Z`, comment `01M5WAQG5RHQ4ZG571AB2DDCZA`.
+Base **`f2823350120710cfaea4bb74dba4b2062d523899`**. The controller reports SPEC
+**`ses_e87b8a702ffe6HryC0itCXg4H5` approved at this base with zero remaining
+findings**. QUALITY **`ses_e878dbd29ffednm05pK3O5zlGc` requested three P1 and one P2
+corrections** below. Each was verified in source before its failing regression.
+These are implementer dispositions pending independent re-review.
+
+### Verified findings and corrections
+
+1. **P1, raw blobs versus filtered checkout images — addressed.** The original
+   byte proof compared worktree content only to raw ODB blobs, while the backend
+   applied filters. A narrow shared `integration/filtered.rs` helper now uses the
+   **already-linked libgit2 public filter-list API in TO_WORKTREE direction** to
+   compute the actual checkout image in memory. The git2 0.20 wrapper lacks this
+   API, so the helper contains bounded C ABI declarations and paired RAII cleanup,
+   with documented handle/ABI lifetimes. No dependency or Git subprocess was added.
+   Neither input nor output bytes are stored or diagnosed.
+
+   Proof accepts exact literal blob bytes (a legitimate clean LF baseline) or
+   exact checkout-filtered bytes. It retains no-follow filesystem reads and complete
+   index comparison; it does not rely only on cached stat/status or a lossy
+   clean-filter roundtrip. **16 cases** cover both kinds, FF/merge, autocrlf=true or
+   attributes eol=crlf, and LF/CRLF baselines, with actual CRLF checkout followed by
+   retry, one ref effect and unchanged user configuration. A further ident test
+   positively proves that a forged expansion cleans to the same blob in a memory
+   ODB, while the executor's explicit byte proof refuses and preserves it.
+
+2. **P1, introduced unsupported modes accepted before impossible proof — addressed.**
+   Preparation validates every prospective mode before accepting ownership. The
+   bounded executor currently proves regular 100644/100755 files; symlinks and
+   gitlinks are refused before journal/Git effects using existing
+   recovery_required / unsupported_conflict (unsupported structural integration).
+   It does not label the target dirty or claim an installed conflict. **Eight
+   document/ticket × FF/merge × symlink/gitlink cases** prove no owner, no target
+   artifact, unchanged index/files/refs and successful unrelated refresh afterward.
+   This is the contract-consistent preacceptance unsupported refusal authorized by
+   the task, not a new product policy or a new global enum.
+
+3. **P1, partial FIRST-file damage reported unchanged — addressed.** Source inspection
+   of linked libgit2 1.9.7 `checkout.c:1520–1580` confirmed destination open with
+   O_CREAT|O_TRUNC before filter loading and stream writes. The old progress probe
+   only recognized completed output blobs/deletions. The executor now durably
+   records a single aggregate digest of the actual pre-checkout byte/presence
+   images of the changed-path set, under its lease and before the backend call.
+   A later observed difference proves a filesystem effect even if the first file
+   is empty or contains only a prefix. This is **effect evidence only**, not a
+   per-path journal or permission to resume an ambiguous partial checkout.
+
+   Additive marker `local_context_sync_checkout_image_v5` adds the nullable,
+   shape-audited digest field. Migration preserves old history and leaves unknown
+   preimages NULL rather than manufacturing them; legacy full-image proof remains.
+   Upgrade/rollback and malformed-digest refusal tests pass. There is no new
+   general checkout engine, reset or automatic path repair.
+
+   **Actual first-file window proof:** an isolated Unix child arms RLIMIT_FSIZE
+   immediately before the real libgit2 checkout, after SQL intents and authority
+   checks. Limits 0 and 3 cause actual truncation or a three-byte prefix during the
+   first file's backend write. SIGXFSZ either invokes async-signal-safe `_exit(86)`
+   without any Drop, or is ignored so the actual OS write error returns through
+   libgit2; returned-error children restore their own limit before further SQL.
+   Parent snapshots verify the first file's exact damage, untouched second file,
+   unchanged index, unchanged ref and no completed ref-log effect. Both kinds are
+   covered: **four actual no-Drop exits plus four returned-error child cases**.
+   FF has no made checkpoint, so Written / Partial comes from the observed file
+   damage, not a commit effect. Retry preserves/refuses the ambiguous image; explicit
+   fixture/operator baseline restoration then permits exactly one FF/ref effect.
+   No fixture writes the damaged partial bytes on the executor's behalf.
+
+4. **P2, disabled reflogs strand an already-moved ref — addressed.** Before accepting
+   any ref-changing operation, preparation verifies that effective Git logging can
+   provide this executor's required branch and HEAD append authority. The same
+   prerequisite is re-read from a fresh configuration handle before effects on
+   accepted work. Explicit false refuses; normal nonbare default and `always` are
+   supported. No-op/contained needs no append and remains valid with logging off.
+   No user configuration is changed. Refusal uses existing recovery_required /
+   authority_missing: configured backend recovery authority is unavailable, rather
+   than incorrectly calling valid Git configuration an invalid Manyhands config.
+
+   **16 cases** cover both kinds, new FF/merge refusal, changes after acceptance or
+   checkout, explicit caller re-enable/retry, and equal/contained controls. Three
+   additional controls cover unset/default, `always`, and an in-call disable after
+   checkout; the ref stays unchanged until the caller re-enables logging. Previously
+   completed effects remain truthful. No new result/recovery enum or policy question.
+
+### RED/GREEN commands and supplementary controls
+
+Each core finding used
+`devenv shell -- cargo test --all-features --locked --lib <filter>`:
+
+| Filter | Observed RED | GREEN |
+| --- | --- | --- |
+| `quality_filtered_checkout_bytes_are_proven_for_lf_and_crlf_baselines` | 1 failed: actual CRLF checkout succeeded, but retry returned RecoveryRequired/AmbiguousBackend. | 1 passed, all 16 matrix cases. |
+| `quality_introduced_symlink_and_gitlink_refuse_before_acceptance` | 1 failed: a pending owner existed for unsupported incoming mode. | 1 passed, eight cases. |
+| `quality_first_file_partial_write_is_partial_without_granting_resume_authority` | 1 failed **after actual child `_exit(86)` and verified first-file truncation**: retry reported Write Unchanged with no checkpoint. | 1 passed, eight child cases, four of them actual no-Drop exits. |
+| `quality_disabled_reflogs_refuse_before_effects_and_recheck_accepted_work` | 1 failed: disabled logging still installed a pending owner. | 1 passed, all 16 cases. |
+
+The supplementary group `local_sync::run_tests::quality_` selects **seven** tests;
+the nested first-write parent/child live under `checkout_write_tests` and are
+included by the full local selection. That group initially had 5 pass / 2 fail from
+new control-fixture assumptions: libgit2 status did not report the forged ident
+file clean, and a stale config writer retained its cached true value after another
+handle wrote false. Replaced the first assumption with an actual memory-ODB clean
+filter positive control and reopened the second fixture's configuration writer.
+The group then passed 7/7. No product assertion was weakened. The function-pointer
+signal cast warning was corrected using an explicit pointer cast, not suppressed.
+
+Additional tests cover v5 migration preservation/rollback, three malformed digest
+forms, exact ident proof, and supported/default plus in-call logging behavior.
+These are supplementary proofs, not additional claimed pre-fix RED executions.
+
+### Final verification and review boundary
+
+Required gates, all exit 0 on the final Rust tree:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: 4.41s; clippy: 17.55s, no warnings. Local selection: **97 passed**, zero
+failed/ignored/measured, 1284 filtered, 238.86s. This includes 88 previous tests plus
+nine new QUALITY tests; one new selected test is the child entry's normal no-op
+invocation, not an additional crash proof. Long-running fixture matrices finished
+successfully. The local selection now proves **12 actual no-Drop exits** (eight
+prior plus four first-file exits); child assertions are not double-counted.
+
+Additional commands use `devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--lib repository::registration_removal::tests` | 20 |
+| `--test repository_enablement remove_registration` | 8 |
+| `--doc local_sync` | 4 |
+
+Unique total: **124 library + 8 integration + 4 compile-fail = 136 passing tests**.
+No full suite or native workflow. The first-file RLIMIT/SIGXFSZ fixtures are Unix
+tests executed on Linux; no Windows/macOS runtime or ABI execution claim is made.
+
+New files are `integration/filtered.rs` and `local_sync/checkout_write_tests.rs`.
+Modified Rust files are `integration/mod.rs`, `local_sync/{record,recover,run,run_tests}.rs`
+and `repository.rs` (two narrow backend-boundary failure points). No dependency,
+frontend, public bypass, global result/recovery enum, test target or old semantic
+assertion changed.
+The filter helper is an exclusively executor-dependent, narrowly test-gated module.
+**Task 7 still must activate production execution and its helper gates, keep fixture
+hooks/tests test-only, add F2 attempt authority, and verify production boundaries
+with whole-tree gates.** Source/privacy/zero-transport controls remain green.
+
+Start/checkpoint fetches found main `0464c42dae19a6dde000c7e7660e82762a41fada`
+already merged. Entry was clean at the fix base. Merge-tree passed with base tree
+`c164c594ccb3ac1b703d590af07c55e46342add9`; status/diff/log inspected and diff checks
+passed. Ticket remains implementing. No owner question, subagent, Task 6 work,
+PR/lifecycle action or native dispatch. Await controller QUALITY re-review and SPEC
+verification of these changed fixes; prior SPEC approval applies to `f282335` only.

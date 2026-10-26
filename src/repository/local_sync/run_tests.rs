@@ -6,6 +6,10 @@ use super::{
 use crate::{repository::*, results::*};
 use std::{fs, path::Path};
 
+#[cfg(unix)]
+#[path = "checkout_write_tests.rs"]
+mod checkout_write_tests;
+
 fn primary(f: &Fixture) -> git2::Repository {
     git2::Repository::open(f.root.path()).unwrap()
 }
@@ -1577,5 +1581,410 @@ fn spec_corrupt_completed_noop_cannot_replay_fabricated_integration_effects() {
         assert!(!result.effects.is_durable());
         assert_eq!(rows, local_authority_rows(&f));
         assert_eq!(image, f.image());
+    }
+}
+
+#[test]
+fn quality_filtered_checkout_bytes_are_proven_for_lf_and_crlf_baselines() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            for attributes in [false, true] {
+                for crlf_baseline in [false, true] {
+                    let f = Fixture::new(kind);
+                    let c = f.context();
+                    if attributes {
+                        fs::write(
+                            c.workdir().unwrap().join(".gitattributes"),
+                            "* text eol=crlf\n",
+                        )
+                        .unwrap();
+                        commit(&c);
+                    }
+                    graph(&f, "equal");
+                    if shape == "merge" {
+                        fs::write(c.workdir().unwrap().join("context-only"), "local\n").unwrap();
+                        commit(&c);
+                    }
+                    let (context, incoming) = graph(&f, shape);
+                    if !attributes {
+                        c.config().unwrap().set_bool("core.autocrlf", true).unwrap();
+                    }
+                    if crlf_baseline {
+                        fs::remove_file(c.workdir().unwrap().join("ordinary")).unwrap();
+                        c.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                            .unwrap();
+                        assert_eq!(
+                            fs::read(c.workdir().unwrap().join("ordinary")).unwrap(),
+                            b"base\r\n"
+                        );
+                    }
+                    let configuration = fs::read(c.commondir().join("config")).unwrap();
+                    let observation = f.observe();
+                    let id = OperationId::new();
+                    let logs = reflog_len(&f);
+                    let stopped = faults(
+                        &f,
+                        id,
+                        &observation.observation,
+                        FailurePoint::LocalSyncAfterCheckout,
+                    );
+                    assert_eq!(
+                        stopped.effects.write,
+                        WriteEffect::Written,
+                        "{kind:?} {shape} attr={attributes} crlf={crlf_baseline}: {stopped:?}"
+                    );
+                    assert_eq!(
+                        fs::read(c.workdir().unwrap().join("incoming")).unwrap(),
+                        b"committed primary\r\n"
+                    );
+                    let result = execute(&f, id, &observation.observation);
+                    assert_eq!(result.code, ResultCode::Ok, "{result:?}");
+                    assert_eq!(reflog_len(&f), logs + 1);
+                    refs_unchanged(&f, incoming);
+                    if shape == "merge" {
+                        assert_eq!(
+                            c.find_commit(tip(&c))
+                                .unwrap()
+                                .parent_ids()
+                                .collect::<Vec<_>>(),
+                            [context, incoming]
+                        );
+                    }
+                    assert_eq!(
+                        fs::read(c.commondir().join("config")).unwrap(),
+                        configuration
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn quality_introduced_symlink_and_gitlink_refuse_before_acceptance() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            for mode in [0o120000, 0o160000] {
+                let f = Fixture::new(kind);
+                graph(&f, shape);
+                let p = primary(&f);
+                let parent = p.find_commit(tip(&p)).unwrap();
+                let mut tree = p.treebuilder(Some(&parent.tree().unwrap())).unwrap();
+                let object = if mode == 0o120000 {
+                    p.blob(b"ordinary").unwrap()
+                } else {
+                    parent.id()
+                };
+                tree.insert("unsupported-input", object, mode).unwrap();
+                let tree = p.find_tree(tree.write().unwrap()).unwrap();
+                let sig = p.signature().unwrap();
+                let incoming = p
+                    .commit(
+                        Some("HEAD"),
+                        &sig,
+                        &sig,
+                        "unsupported prospective mode",
+                        &tree,
+                        &[&parent],
+                    )
+                    .unwrap();
+                p.reference("refs/remotes/origin/main", incoming, true, "fixture")
+                    .unwrap();
+                let observation = f.observe();
+                let id = OperationId::new();
+                let image = f.image();
+                let logs = reflog_len(&f);
+                let result = execute(&f, id, &observation.observation);
+                no_owner(&f, id);
+                assert_eq!(result.code, ResultCode::RecoveryRequired);
+                assert_eq!(result.reason, Reason::UnsupportedConflict);
+                assert!(!result.effects.is_durable());
+                assert_eq!(image, f.image());
+                assert_eq!(logs, reflog_len(&f));
+                refs_unchanged(&f, incoming);
+                assert!(
+                    !f.context()
+                        .workdir()
+                        .unwrap()
+                        .join("unsupported-input")
+                        .exists()
+                );
+                assert!(matches!(
+                    f.service
+                        .refresh_repository(RefreshRepositoryRequest {
+                            root: f.root.path().into(),
+                            operation_id: OperationId::new()
+                        })
+                        .unwrap(),
+                    RefreshOutcome::Refreshed { .. }
+                ));
+            }
+        }
+    }
+}
+
+#[test]
+fn quality_disabled_reflogs_refuse_before_effects_and_recheck_accepted_work() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            for stop in [
+                None,
+                Some(FailurePoint::LocalSyncAfterIntent),
+                Some(FailurePoint::LocalSyncAfterCheckout),
+            ] {
+                let f = Fixture::new(kind);
+                let (_, incoming) = graph(&f, shape);
+                let c = f.context();
+                let observation = f.observe();
+                let id = OperationId::new();
+                if let Some(point) = stop {
+                    faults(&f, id, &observation.observation, point);
+                }
+                c.config()
+                    .unwrap()
+                    .set_bool("core.logallrefupdates", false)
+                    .unwrap();
+                let configuration = fs::read(c.commondir().join("config")).unwrap();
+                let image = f.image();
+                let logs = reflog_len(&f);
+                let result = execute(&f, id, &observation.observation);
+                if stop.is_none() {
+                    no_owner(&f, id);
+                }
+                assert_eq!(result.code, ResultCode::RecoveryRequired);
+                assert_eq!(result.reason, Reason::AuthorityMissing, "{result:?}");
+                assert_eq!(image, f.image());
+                assert_eq!(logs, reflog_len(&f));
+                refs_unchanged(&f, incoming);
+                assert_eq!(
+                    fs::read(c.commondir().join("config")).unwrap(),
+                    configuration
+                );
+                if stop == Some(FailurePoint::LocalSyncAfterCheckout) {
+                    assert_eq!(result.effects.write, WriteEffect::Written);
+                } else {
+                    assert!(!result.effects.is_durable());
+                }
+                // The caller changes configuration explicitly; the executor never does.
+                c.config()
+                    .unwrap()
+                    .set_bool("core.logallrefupdates", true)
+                    .unwrap();
+                assert_eq!(
+                    execute(&f, id, &observation.observation).code,
+                    ResultCode::Ok
+                );
+                assert_eq!(reflog_len(&f), logs + 1);
+            }
+        }
+        for shape in ["equal", "contained"] {
+            let f = Fixture::new(kind);
+            graph(&f, shape);
+            f.context()
+                .config()
+                .unwrap()
+                .set_bool("core.logallrefupdates", false)
+                .unwrap();
+            let observation = f.observe();
+            let image = f.image();
+            let logs = reflog_len(&f);
+            assert_eq!(
+                execute(&f, OperationId::new(), &observation.observation).code,
+                ResultCode::AlreadyApplied
+            );
+            assert_eq!(image, f.image());
+            assert_eq!(logs, reflog_len(&f));
+        }
+    }
+}
+
+#[test]
+fn quality_filtered_proof_rejects_lossy_clean_filter_equivalence() {
+    let f = Fixture::new(AuthoringKind::Document);
+    let c = f.context();
+    let path = c.workdir().unwrap().join("expanded.txt");
+    fs::write(
+        c.workdir().unwrap().join(".gitattributes"),
+        "expanded.txt ident\n",
+    )
+    .unwrap();
+    fs::write(&path, "$Id$\n").unwrap();
+    commit(&c);
+    graph(&f, "equal");
+    fs::remove_file(&path).unwrap();
+    c.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let valid = fs::read(&path).unwrap();
+    assert!(valid.starts_with(b"$Id: "));
+    let (_, incoming) = graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncAfterCheckout,
+    );
+    fs::write(&path, "$Id: foreign expansion $\n").unwrap();
+    // Positive control: an actual clean-filter roundtrip collapses the foreign
+    // expansion to the original blob. Keep its output in a memory ODB.
+    {
+        use std::io::Write;
+        let worker = git2::Repository::open(c.path()).unwrap();
+        let odb = worker.odb().unwrap();
+        let _memory = odb.add_new_mempack_backend(1000).unwrap();
+        let mut writer = worker.blob_writer(Some(Path::new("expanded.txt"))).unwrap();
+        writer.write_all(b"$Id: foreign expansion $\n").unwrap();
+        assert_eq!(
+            writer.commit().unwrap(),
+            c.head()
+                .unwrap()
+                .peel_to_tree()
+                .unwrap()
+                .get_path(Path::new("expanded.txt"))
+                .unwrap()
+                .id()
+        );
+    }
+    let image = f.image();
+    let result = execute(&f, id, &observation.observation);
+    assert_eq!(result.reason, Reason::AmbiguousBackend);
+    assert_eq!(image, f.image());
+    assert_eq!(fs::read(&path).unwrap(), b"$Id: foreign expansion $\n");
+    refs_unchanged(&f, incoming);
+    fs::write(&path, valid).unwrap();
+    assert_eq!(
+        execute(&f, id, &observation.observation).code,
+        ResultCode::Ok
+    );
+}
+
+#[test]
+fn quality_checkout_baseline_upgrade_preserves_history_and_rolls_back() {
+    for fail in [false, true] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "fast_forward");
+        let observation = f.observe();
+        let id = OperationId::new();
+        faults(
+            &f,
+            id,
+            &observation.observation,
+            FailurePoint::LocalSyncAfterCheckout,
+        );
+        let before = f
+            .service
+            .read_local_context_sync_record(&f.repo, id)
+            .unwrap();
+        let image = f.image();
+        f.db().execute_batch("ALTER TABLE local_context_sync_execution DROP COLUMN baseline_worktree; DELETE FROM registry_migrations WHERE name='local_context_sync_checkout_image_v5'").unwrap();
+        if fail {
+            f.db().execute_batch("CREATE TRIGGER stop_checkout_image_upgrade BEFORE INSERT ON registry_migrations WHEN NEW.name='local_context_sync_checkout_image_v5' BEGIN SELECT RAISE(ABORT,'fixture'); END").unwrap();
+            let rows = local_authority_rows(&f);
+            assert!(RepositoryService::open_at(f.data.path()).is_err());
+            assert_eq!(rows, local_authority_rows(&f));
+            assert_eq!(image, f.image());
+            f.db()
+                .execute_batch("DROP TRIGGER stop_checkout_image_upgrade")
+                .unwrap();
+        }
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(
+            before,
+            reopened
+                .read_local_context_sync_record(&f.repo, id)
+                .unwrap()
+        );
+        assert!(
+            super::recover::Execution::read(&f.db(), id)
+                .unwrap()
+                .checkout_baseline
+                .is_none(),
+            "migration must not invent a pre-write snapshot"
+        );
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::Ok
+        );
+    }
+}
+
+#[test]
+fn quality_checkout_baseline_corruption_is_not_recovery_authority() {
+    for value in ["x'00'", "'not a digest'", "42"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "fast_forward");
+        let observation = f.observe();
+        let id = OperationId::new();
+        faults(
+            &f,
+            id,
+            &observation.observation,
+            FailurePoint::LocalSyncAfterCheckout,
+        );
+        let image = f.image();
+        f.db().execute_batch(&format!("PRAGMA ignore_check_constraints=ON; UPDATE local_context_sync_execution SET baseline_worktree={value}")).unwrap();
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::RecoveryRequired
+        );
+        assert_eq!(image, f.image());
+    }
+}
+
+#[test]
+fn quality_logging_default_always_and_in_call_disable_are_observed() {
+    for setting in ["default", "always", "disable_during_checkout"] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "fast_forward");
+        let c = f.context();
+        if setting == "default" {
+            c.config().unwrap().remove("core.logallrefupdates").unwrap();
+        }
+        if setting == "always" {
+            c.config()
+                .unwrap()
+                .set_str("core.logallrefupdates", "always")
+                .unwrap();
+        }
+        let observation = f.observe();
+        let id = OperationId::new();
+        let before = tip(&c);
+        let logs = reflog_len(&f);
+        if setting == "disable_during_checkout" {
+            let root = f.root.path().to_owned();
+            run::BOUNDARY_HOOK.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move |point| {
+                    if point == FailurePoint::LocalSyncAfterCheckout {
+                        git2::Repository::open(&root)
+                            .unwrap()
+                            .config()
+                            .unwrap()
+                            .set_bool("core.logallrefupdates", false)
+                            .unwrap();
+                    }
+                }))
+            });
+        }
+        let result = execute(&f, id, &observation.observation);
+        run::BOUNDARY_HOOK.with(|slot| slot.borrow_mut().take());
+        if setting == "disable_during_checkout" {
+            assert_eq!(result.reason, Reason::AuthorityMissing);
+            assert_eq!(result.effects.write, WriteEffect::Written);
+            assert_eq!(tip(&c), before);
+            assert_eq!(reflog_len(&f), logs);
+            // The hook wrote through another handle. Reopen rather than asking
+            // a stale config writer to set the value it already caches as true.
+            primary(&f)
+                .config()
+                .unwrap()
+                .set_bool("core.logallrefupdates", true)
+                .unwrap();
+            let retried = execute(&f, id, &observation.observation);
+            assert_eq!(retried.code, ResultCode::Ok, "{retried:?}");
+        } else {
+            assert_eq!(result.code, ResultCode::Ok);
+        }
+        assert_eq!(reflog_len(&f), logs + 1);
     }
 }
