@@ -139,7 +139,7 @@ allowance. This is the repository's convention (`services/requests.rs:337`).
 
 **Test-first.** Write each behavior's test before its code.
 
-**Existing tests.** They change only as named edits E-1 to E-29. Any other
+**Existing tests.** They change only as named edits E-1 to E-29, and E-30 (added by the owner on 2026-10-26). Any other
 change to a pre-existing test, even a new lint, stops for the owner.
 
 **Commits.** Commit per task with a conventional message ending
@@ -220,7 +220,7 @@ Crafted link and image paths (`..`, a symbolic link out of the repository,
 | `src/desktop/assets.rs`, `desktop/mod.rs`, `view/item/tokens.rs`, `view/tabs.rs`, `view/tabs_tests.rs`, `view/settings/mod_tests.rs` | 4 | Icons, item colours, the tab strip; E-27, E-28, E-29. |
 | `view/item.rs`, `view/item/page.rs`, `view/scroll.rs`, `view/scroll_tests.rs`, `view/workspace/{render,content}.rs` | 5a | The layout, the item's scroll region and Back to top; E-25. |
 | `view/item/{header,chips,pill,banners}.rs`, `model/item.rs`, `model/item_tests.rs`, `view/item_tests.rs` | 5b | The header, chips, pill and banners; E-6 (labels), E-7 (first half). |
-| `view/item/sheet.rs`, `view/item/sheet/{ticket,document,facts}.rs`, `view/relationships.rs`, `view/workspace/render.rs`, `view/item_tests.rs`, `view/relationships_tests.rs`, `view/keyboard_tests.rs`, `view/keyboard_tests/actions.rs` | 6 | The details sheet while viewing; E-23, E-26. |
+| `view/item/sheet.rs`, `view/item/sheet/{ticket,document,facts}.rs`, `view/relationships.rs`, `view/workspace/render.rs`, `view/item_tests.rs`, `view/relationships_tests.rs`, `view/keyboard_tests.rs`, `view/keyboard_tests/actions.rs`, `view/{find,tickets,documents}_tests.rs` | 6 | The details sheet while viewing; E-23, E-26, E-30. |
 | `view/item/page.rs`, `view/editor/style.rs`, `view/item/source.rs`, `view/item_tests.rs`, `view/tabs_tests.rs` | 7 | The read view; E-1 to E-5. |
 | `view/item/discussion.rs`, `model/discussion.rs`, `keys.rs`, `view/item_tests.rs` | 8 | The discussion; E-24. |
 | `src/desktop/view/editor/host.rs`, `keys.rs` | 9 | The editor host. |
@@ -711,7 +711,7 @@ pub(crate) fn open_details(pane: &Entity<ItemPane>, field: ChipField, window: &m
 // workspace/render.rs: unless_dialog also refuses while window.has_active_sheet(cx) (R-60)
 ```
 
-- [ ] **Step 1: Apply E-23 and E-26, and write the tests first**
+- [ ] **Step 1: Apply E-23, E-26 and E-30 (owner, 2026-10-26), and write the tests first**
   (`view/item/sheet_tests.rs`).
   - `each_chip_and_all_details_open_the_sheet_and_focus_its_field`
   - `the_sheet_is_read_only_while_viewing`
