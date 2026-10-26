@@ -242,3 +242,68 @@ pub(in super::super) fn install_conflict(
         .merge(&[&annotated], None, Some(&mut checkout))
         .map_err(|_| Error::RecoveryRequired)
 }
+
+// Task 7 activation obligation: these helpers are exclusively used by the
+// temporarily test-gated local executor; remove the gates with its real callers.
+#[cfg(test)]
+pub(in super::super) fn local_checkout<E: From<Error>>(
+    repository: &git2::Repository,
+    candidate: git2::Oid,
+    authorize: impl FnOnce() -> Result<(), E>,
+    mut progress: impl FnMut() -> Result<(), E>,
+) -> Result<(), E> {
+    authorize()?;
+    let commit = repository
+        .find_commit(candidate)
+        .map_err(|_| Error::RecoveryRequired)?;
+    let mut interrupted = None;
+    let result = {
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        checkout
+            .safe()
+            .overwrite_ignored(false)
+            .progress(|path, completed, _| {
+                if path.is_some() && completed > 0 && interrupted.is_none() {
+                    interrupted = progress().err();
+                }
+            });
+        repository.checkout_tree(commit.as_object(), Some(&mut checkout))
+    };
+    if let Some(error) = interrupted {
+        return Err(error);
+    }
+    result.map_err(|_| Error::RecoveryRequired.into())
+}
+
+#[cfg(test)]
+pub(in super::super) fn local_reference<E: From<Error>>(
+    repository: &git2::Repository,
+    transition: (&str, git2::Oid, git2::Oid),
+    signature: &git2::Signature<'_>,
+    message: &str,
+    mut authorize: impl FnMut() -> Result<(), E>,
+    before_commit: impl FnOnce() -> Result<(), E>,
+) -> Result<(), E> {
+    authorize()?;
+    let (branch, old, new) = transition;
+    let mut tx = repository
+        .transaction()
+        .map_err(|_| Error::RecoveryRequired)?;
+    tx.lock_ref(branch).map_err(|_| Error::RecoveryRequired)?;
+    if repository.refname_to_id(branch).ok() != Some(old)
+        || repository
+            .head()
+            .ok()
+            .and_then(|h| h.name().map(str::to_owned))
+            .as_deref()
+            != Some(branch)
+    {
+        return Err(Error::ExternalChange.into());
+    }
+    authorize()?;
+    tx.set_target(branch, new, Some(signature), message)
+        .map_err(|_| Error::RecoveryRequired)?;
+    // A process exit here leaves libgit2's actual lock file, without Drop.
+    before_commit()?;
+    tx.commit().map_err(|_| Error::RecoveryRequired.into())
+}

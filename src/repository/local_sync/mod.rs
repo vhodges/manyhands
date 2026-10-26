@@ -6,6 +6,15 @@ mod observe;
 pub(super) mod record;
 pub use observe::LocalContextSyncObservationDto;
 
+// Controller staging decision: Task 7 MUST remove these gates when it adds
+// production mutation/resume callers and their request-attempt authority.
+#[cfg(test)]
+mod recover;
+#[cfg(test)]
+mod run;
+#[cfg(test)]
+mod run_tests;
+
 #[cfg(test)]
 mod admission_tests;
 #[cfg(test)]

@@ -34,9 +34,12 @@ question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded in approval comment
 `01M5VWDPG57KWRAJ55Y2EMXRQR`. The latest controller handoff reports SPEC and QUALITY
 approval with zero findings at `4377944`, covering the full Task 4 range
 `37bd2c3..4377944`. Earlier pending-review entries below remain historical.
-Task 5 source preflight is complete; implementation awaits the internal-executor
-staging clarification in `01M5W0R66A877J9213TC9WTN42`. Tasks 4/7 retain ownership
-of E4/E9 code. Ticket lifecycle status has not been changed by this checkpoint.
+Task 5 is implemented and locally verified, awaiting controller SPEC then QUALITY.
+The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
+decision**, not a new owner approval: narrowly test-gate the real internal executor
+until Task 7 supplies its production callers. Task 7's explicit activation obligation
+is recorded below and in `01M5W3AMDN1J5BTZNCW0X798QF`. Tasks 4/7 retain ownership of
+E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -46,7 +49,7 @@ of E4/E9 code. Ticket lifecycle status has not been changed by this checkpoint.
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Source/preflight only at `4377944`; awaiting narrow staging clarification `01M5W0R66A877J9213TC9WTN42`. No executor/test implementation or new recovery-outcome proof. |
+| Task 5 | Implemented from `7856c619f157febf3c327f5d643cba1a4557cb8a` (original supplied Rust base `4377944`); checkpoint `01M5W3AMDN1J5BTZNCW0X798QF`. **81 local tests, 7 shared-integration controls and 4 compile-fail tests pass**; whole-tree fmt/check/clippy pass. Internal executor remains narrowly test-gated until Task 7. Controller SPEC then QUALITY pending. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1392,3 +1395,194 @@ Only this ledger and the canonical clarification comment are changed. The featur
 commit `feat: integrate local primary into editing contexts` is reserved for an
 implemented and verified Task 5; this checkpoint is not that completion. No
 ticket lifecycle edit, PR, native CI, dependency, frontend or source change.
+
+## Task 5: local integration executor and exact recovery
+
+Checkpoint ID/time issued at `2026-10-26T12:35:22Z`; final verification continued
+after issuance. Comment `01M5W3AMDN1J5BTZNCW0X798QF` records the controller staging
+decision and implementation evidence. Code base:
+**`7856c619f157febf3c327f5d643cba1a4557cb8a`**. Original task-supplied Rust base:
+`4377944cffa6dc9c00e43d97053d00f8a7fbdc19`; the intervening commit changes only the
+ledger and question comment. Review the implementation commit from `7856c61`, or
+the complete Task 5 documentation/code range from `4377944`.
+
+### Controller decision and mandatory Task 7 activation
+
+The controller directed: **“Proceed with temporary narrow cfg(test) gating for the
+internal executor and exclusively executor-only dependencies until Task7 introduces
+real production mutation/resume callers.”** This is an internal compile-staging
+decision consistent with Task 4, **not a new owner policy, scope or authorization
+approval**. The prior question is resolved. No owner escalation is needed for
+bounded contract-consistent internal wiring. Ticket status was already implementing
+and was left so.
+
+The executed implementation is real domain/Git/SQL code, not a mock or success
+stub. Its temporary entry gates are `local_sync/mod.rs::{run,recover}`, the two
+local-only bounded Git helpers in `integration/artifacts.rs`, and the existing
+executor-only store/observation helpers. No public execution bypass or dead-code
+allowance was added. Production schema migration/audit/fences remain active.
+
+**Task 7 MUST** remove the executor and exclusively executor-dependent gates when
+adding the approved mutation/resume bindings; activate only the internal store
+helpers those callers actually need; retain fixture-only hooks/tests under test
+configuration; add F2 acceptance/linkage and current request-attempt checks to
+creation, takeover, each effect and settlement; run production-boundary tests and
+whole-tree fmt/check/all-target clippy. The current all-target clippy compiles the
+real test path. This checkpoint does **not** claim a production-reachable local
+execution feature, Accepted S/R/U controls, public DTO output, or request settlement.
+
+### Implemented interfaces and sequencing
+
+- `local_sync/run.rs::execute` is internal and returns content-free typed reason,
+  optional retained phase and shared effects. It consults accepted intent before
+  fresh observation checks. The store preparation callback runs under the common
+  Git lease before the envelope/companion/execution identity transaction.
+- New `local_context_sync_execution` has migration marker
+  `local_context_sync_execution_v3`, exact SQL shape, FK cascade, CHECK/integrity
+  audits and parent/object-intent consistency checks. It retains graph disposition,
+  routing/index/log digests, effect flags and frozen commit identity/time metadata;
+  never source or candidate object bytes. Existing v1/v2 history is preserved.
+- Preparation refuses unrelated histories, incompatible closure conflicts, missing
+  required identity and dirty targets before accepting domain ownership. Both
+  context kinds use committed configured primary. Ignored prospective-path
+  collisions, untracked/tracked edits and symlink substitution are preserved.
+- Execution uses the common-directory lease and an exact scoped parent-row check
+  (including epoch/generation). Owner takeover requires a successful epoch update;
+  ignored intent/phase updates cannot authorize Git. Every bounded Git helper
+  performs its authority callback before effects; ref movement rechecks under
+  its actual backend lock. Recorded step kind/parents/generation must match retry.
+- Equal/contained does no Git write and creates no commit. Fast-forward adopts the
+  frozen primary tip. Clean merge prepares in the memory ODB, durably freezes one
+  ordered `[context, primary]` candidate and usable configured signature, then
+  imports that exact object. Before/after-import retries reconstruct/adopt the same
+  OID even if configured identity changes. No identity configuration is written.
+- `local_sync/recover.rs` compares full index entries and no-follow file bytes
+  against the frozen baseline/result, force-reloading the disk index. Ref proof
+  checks both branch and HEAD reflog prefixes plus the exact intended append.
+  Backend lock/merge metadata or unproven partial images are preserved. Matching
+  changed paths establish truthful partial-write effects, **not per-path resume
+  authority**. There is no reset, rollback, automatic lock removal or new general
+  checkout engine.
+- Integration/release is recorded before indexing. Under the lease, two discovery
+  observations must agree; existing `persist_observation` is reused. Discovery,
+  companion completion and envelope completion commit atomically. Generic refresh
+  refuses this executor-owned pending handoff because it can only settle the old
+  envelope; exact local retry completes it without another ref effect.
+- Stable scoped evidence reads retain historical effects after input mismatch,
+  owner loss or a lease contender. `Outcome::of_mutation` and `Envelope` derive
+  classes from those effects: the same RequestMismatch code is ordinary before
+  effects and Incomplete after a write. Index failure is typed `index_pending` /
+  `discovery_pending`, retaining complete integration and the result OID.
+- The no-network control registers a fixture-only libgit2 transport that counts
+  and refuses calls before any socket exists. Local execution uses a configured
+  unreachable URL with zero calls; an explicit fixture fetch exercises the spy
+  afterward as its positive control. Primary dirty bytes and tracking refs remain
+  unchanged. No network progress source is present in the domain executor.
+
+Files: new `local_sync/{run,recover,run_tests}.rs`; modified `local_sync/{mod,record}.rs`,
+`integration/artifacts.rs` and `repository.rs` (narrow local failure points only).
+The existing observation API needed no behavior change. No pre-existing test
+assertion, dependency, frontend, global ResultCode/RecoveryActionKind, Cargo target
+or native workflow changed. No Task 6 conflict resolution was implemented.
+
+### TDD and debugging record
+
+All commands were run from the ticket worktree through Devenv. Library selections
+use one positional filter. New-seam compilation failed first for missing modules
+and local failure points. A temporary always-refusing seam then established runtime
+red; it was replaced by real execution and is absent from the final tree.
+
+| Command/filter (prefix `devenv shell -- cargo test --all-features --locked --lib`) | Observed RED before correction | GREEN evidence |
+| --- | --- | --- |
+| `local_sync::run_tests`, initial 7 | 1 passed / 6 failed: graph effects, frozen retry, identity, immutable closure reason, retained authority and fault recovery absent. The unrelated-history case matched the refusing seam and was not counted as independent red proof. | All seven pass with the actual executor and positive graph controls. |
+| `local_sync_required_outcomes_fault_matrix` | Retry after ref transition refused because the initial proof incorrectly expected HEAD's reflog unchanged. Diagnostic booleans confirmed the HEAD append. | Exact expected append now checked in both logs; 24 scenarios pass. |
+| `local_sync::run_tests`, 12 | 10 passed / 2 failed: ignored prospective file was admitted, and child returned 101 instead of exiting at a real backend boundary. | Preaccept no-follow collision check; actual checkout progress/ref-lock hooks. |
+| Same 12 after shared adapter wiring | 6 passed / 6 failed: separate Git handles left the owner's cached index stale after checkout. | Force reload of durable index before comparison; no assertion weakened. |
+| `local_sync::run_tests`, 16 | 14 passed / 2 failed: partial checkout reported unchanged writes; ownership-loss hook not yet exercised. | Partial intended-image evidence retained, actual epoch/lease loss fenced with historical effects. |
+| `local_sync_object_intent_retries_the_exact_candidate_across_identity_changes` | 1 failed: retry created a different candidate after identity changed across object intent. | Candidate OID/signature/ordered intent frozen atomically before import; both boundaries pass. |
+| `local_sync_valid_oid_corruption_cannot_substitute_an_unrelated_candidate` | 1 failed: a syntactically valid substituted OID was accepted. | Candidate/intent/disposition audit and actual parent/signature/invariant proof refuse it. |
+| `local_sync_ignored_epoch_or_intent_update_never_authorizes_git_effects` | 1 failed: ignored epoch update allowed execution. | Required one-row updates and exact intent checks; epoch and checkout-intent cases pass. |
+| `local_sync_index_handoff_cannot_be_settled_by_generic_refresh` | 1 failed: generic refresh took the executor's handoff. | Executor-owned handoff remains with its atomic settlement adapter. |
+| `local_sync_lease_contender_cannot_erase_historical_effects` | 1 failed: Busy dropped the earlier committed checkpoint effect. | One scoped evidence snapshot supplies historical effects even when the executor cannot acquire its lease. |
+
+Compilation-only corrections were a missing existing validate_identity operation
+argument, a typed rusqlite closure annotation and an unused import; these were not
+counted as behavioral RED. No unexplained old-test failure or policy contradiction
+was encountered. The last four no-Drop object/ref-log cases are supplementary
+crash proofs over the corrected protocols, not a separate pre-fix RED claim.
+
+### Partial required-outcome table at Task 5
+
+This supplements the original 25-row ownership table; it does not mark later
+conflict/request outcomes complete.
+
+| Original row / requirement | Task 5 executed proof | Remaining owner |
+| --- | --- | --- |
+| 1: intent before Git effects | Both kinds, frozen pair and exact same operation/observation retry; one branch ref append. | Task 7 public S acceptance/replay. |
+| 2: coarse checkout interruption | Actual child exit during partial checkout; preserve/refuse ambiguity; explicit operator clean-baseline restoration permits retry of the same candidate. Both kinds, merge path. | Task 6 conflict installation; Task 8 broader backend/platform cases. |
+| 3: primary advances | Original frozen pair finishes; new primary file is absent from the completed context. | Task 8 closure follow-on sync; Task 7 public binding. |
+| 4: foreign context progress | Foreign files/logs/locks, lost epoch/lease, changed input and invalid valid-OID candidate preserve state and refuse. | Task 6 partial-resolution foreign changes. |
+| 7: candidate/ref before settlement | Before/after object import, checkout, ref and index boundaries; candidate identity frozen, ordered parents, no second ref/commit. Actual no-Drop after object import and after ref plus both logs. | Task 6 resolution/owned metadata retirement; Task 7 independent request settlement. |
+| 20: incompatible closure preparation | Typed immutable-disagreement refusal, no local owner or Git change; unrelated refresh succeeds. | Task 7 no Accepted F2 request retained. |
+| 21: no-Drop backend ambiguity | Child dies while actual libgit2 ref lock is held; lock and partial checkout persist. Incomplete operator repair refuses; exact baseline or full intended ref/log result permits retry with one candidate. | Task 8 deeper backend windows; Task 6 conflict metadata. |
+| Additional graph/effect requirements | 8 kind/graph scenarios, 24 kind/graph/fault scenarios, exact ordered parents and primary/tracking invariance. | Production-boundary DTO/progress contracts in Task 7. |
+| Additional identity requirements | Six kind/acceptance/candidate scenarios; two object-intent identity-change scenarios. No-op/FF manufacture no commit. | Task 7 repo.identity_set recovery action and request-ID reuse/retention. |
+| Privacy/no transport/dirty targets | Real positive-controlled transport spy; committed-primary-only input; six dirty-file fixtures, two Unix symlink fixtures; source sentinel present in owned file but absent from journal/request tables and diagnostics. | Broader wire/source/path/native proofs in Tasks 7/8. |
+
+**Outstanding:** rows 5–6 (tokens and partial resolution sources), 8–9
+(cancellation and two-request settlement), 10–11 (complete closure acceptance),
+12–13 (executor recovery across rebuild/full journal loss), 14–18 and 23–25 (F2
+attempts, cancellation generations, unlinked contenders and atomic abandonment),
+and 22 (proven per-member metadata retirement). Row 19's Task 4 admission proof is
+retained, not relabeled as new Task 5 execution. All conflict installation,
+inspection, source resolution and metadata retirement remain Task 6. Admissible
+conflicts currently stop at the internal preparation seam; this is not a delivered
+conflict-recovery API. Local completion never calls closure resume.
+
+The two no-Drop parent tests launch **eight child processes**, all exiting with
+the real configured status 86 without unwinding: checkout/ref-lock ambiguity and
+object-import/ref-plus-log progress, each for document and ticket contexts. The
+child entry itself returns immediately in a normal parent test run; that one
+selected harness test is not an additional crash proof.
+
+### Final gates and selected counts
+
+Final required Rust gate commands, all exit 0 on the final Rust tree:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Final check: 4.01s; clippy: 17.27s, no warnings; local selection: **81 passed**,
+0 failed/ignored/measured, 1284 filtered, 155.77s. This is 58 prior local tests plus
+23 new Task 5 tests (including the child entry). Long-running fixture-matrix notices
+completed successfully; no timeout or zero-selection result is counted as a pass.
+
+Additional relevant verification (same code paths; the later change only retained
+local historical effects on lease failure and added supplementary child tests):
+
+| Command (prefix `devenv shell -- cargo test --all-features --locked`) | Passed |
+| --- | ---: |
+| `--doc local_sync` | 4 compile-fail API-boundary tests |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+
+Selected unique total: **88 library tests plus 4 compile-fail doctests = 92**.
+Child-process assertions are part of their parent tests, not added to that total.
+Full-suite/native execution remains separately gated; Linux evidence does not prove
+Windows/macOS runtime behavior. No frontend smoke run was needed for this internal
+library task.
+
+Start and final fetch both found main `0464c42dae19a6dde000c7e7660e82762a41fada`
+already merged. Final merge-tree succeeded with committed base tree
+`3aa14f2f5204d69f14551e3a968d1c834a41302c`. Inspected status/diff/log and owned files;
+`git diff --check` passed. This implementer used no subagents. Next is controller
+**independent SPEC, then QUALITY**, covering the full Task 5 range and the mandatory
+Task 7 activation obligation. No Task 6 implementation, PR, lifecycle action or
+native dispatch is included.

@@ -10,6 +10,26 @@ use std::path::PathBuf;
 
 const MARKER: &str = "local_context_sync_v1";
 const CASCADE_MARKER: &str = "local_context_sync_child_cascade_v2";
+const EXECUTION_MARKER: &str = "local_context_sync_execution_v3";
+const EXECUTION: &str = "CREATE TABLE local_context_sync_execution (
+ operation_ulid TEXT PRIMARY KEY NOT NULL REFERENCES local_context_sync_records(operation_ulid) ON DELETE CASCADE,
+ format_version INTEGER NOT NULL CHECK(format_version=1),
+ disposition TEXT NOT NULL CHECK(disposition IN ('noop','fast_forward','merge')),
+ routing_digest BLOB NOT NULL CHECK(typeof(routing_digest)='blob' AND length(routing_digest)=32),
+ baseline_index BLOB NOT NULL CHECK(typeof(baseline_index)='blob' AND length(baseline_index)=32),
+ baseline_log BLOB NOT NULL CHECK(typeof(baseline_log)='blob' AND length(baseline_log)=32),
+ baseline_head_log BLOB NOT NULL CHECK(typeof(baseline_head_log)='blob' AND length(baseline_head_log)=32),
+ ref_time INTEGER NOT NULL CHECK(typeof(ref_time)='integer'),
+ commit_name TEXT,
+ commit_email TEXT,
+ commit_time INTEGER CHECK(commit_time IS NULL OR typeof(commit_time)='integer'),
+ commit_offset INTEGER CHECK(commit_offset IS NULL OR (typeof(commit_offset)='integer' AND commit_offset BETWEEN -1439 AND 1439)),
+ checkout_started INTEGER NOT NULL DEFAULT 0 CHECK(checkout_started IN (0,1)),
+ checkout_observed INTEGER NOT NULL DEFAULT 0 CHECK(checkout_observed IN (0,1) AND checkout_observed<=checkout_started),
+ ref_started INTEGER NOT NULL DEFAULT 0 CHECK(ref_started IN (0,1)),
+ ref_observed INTEGER NOT NULL DEFAULT 0 CHECK(ref_observed IN (0,1) AND ref_observed<=ref_started),
+ CHECK((commit_name IS NULL)=(commit_email IS NULL) AND (commit_name IS NULL)=(commit_time IS NULL) AND (commit_name IS NULL)=(commit_offset IS NULL))
+)";
 const RECORD: &str = "CREATE TABLE local_context_sync_records (
  operation_ulid TEXT PRIMARY KEY NOT NULL,
  local_record_id INTEGER NOT NULL UNIQUE REFERENCES operation_records(id) ON DELETE CASCADE,
@@ -167,6 +187,24 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         )
         .map_err(|_| failure())?;
     }
+    let execution_marked: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [EXECUTION_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    if !execution_marked {
+        if recovery::has_table(db, "local_context_sync_execution").map_err(|_| failure())? {
+            return Err(failure());
+        }
+        db.execute_batch(EXECUTION).map_err(|_| failure())?;
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [EXECUTION_MARKER],
+        )
+        .map_err(|_| failure())?;
+    }
     audit(db)
 }
 fn compact(sql: &str) -> String {
@@ -247,7 +285,7 @@ fn strict_oid(text: &str) -> rusqlite::Result<git2::Oid> {
     Ok(oid)
 }
 
-fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
+pub(super) fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
     let invalid = || rusqlite::Error::InvalidQuery;
     let operation_id =
         OperationId::parse(&r.get::<_, String>("operation_ulid")?).map_err(|_| invalid())?;
@@ -373,7 +411,44 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if !cascaded {
         return Err(failure());
     }
-    audit_with_schema(db, true)
+    audit_with_schema(db, true)?;
+    let marked: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [EXECUTION_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    let sql: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='local_context_sync_execution'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    if !marked || compact(&sql) != compact(EXECUTION) {
+        return Err(failure());
+    }
+    let integrity: String = db
+        .query_row(
+            "PRAGMA integrity_check(local_context_sync_execution)",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    if integrity != "ok"
+        || db
+            .prepare("PRAGMA foreign_key_check(local_context_sync_execution)")
+            .and_then(|mut s| s.exists([]))
+            .map_err(|_| failure())?
+    {
+        return Err(failure());
+    }
+    let broken:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_execution e JOIN local_context_sync_records p ON p.operation_ulid=e.operation_ulid WHERE (e.commit_name IS NOT NULL)!=(e.disposition='merge' AND p.candidate_oid IS NOT NULL) OR (e.disposition='noop' AND (p.candidate_oid IS NOT NULL OR p.result_oid IS NOT NULL OR e.checkout_started!=0 OR e.ref_started!=0)) OR (e.disposition='fast_forward' AND p.candidate_oid IS NOT NULL AND p.candidate_oid!=p.primary_parent) OR (e.disposition='merge' AND p.candidate_oid IS NOT NULL AND NOT EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=p.operation_ulid AND s.ordinal=0 AND s.kind='objects' AND s.expected_old_oid=p.context_parent AND s.expected_new_oid=p.candidate_oid)))",[],|r|r.get(0)).map_err(|_|failure())?;
+    if broken {
+        return Err(failure());
+    }
+    Ok(())
 }
 
 fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryError> {
@@ -481,7 +556,7 @@ fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryErr
 thread_local! { pub(super) static WRITE_FAULT: std::cell::Cell<Option<std::io::ErrorKind>>=const {std::cell::Cell::new(None)}; }
 
 #[cfg(test)]
-fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> {
+pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> {
     // Typed failures are injected at the actual registry-opening boundary,
     // before either identity row can be inserted (and before any Git effect).
     let access: std::io::Result<()> = {
@@ -577,6 +652,26 @@ impl RepositoryService {
         observation: &str,
         between: impl FnOnce(),
     ) -> Result<LocalContextSyncRecord, ReadError> {
+        self.begin_local_context_sync_prepared(
+            repo,
+            (operation, kind, item, observation),
+            |_, _| {
+                between();
+                Ok(None)
+            },
+        )
+    }
+
+    pub(super) fn begin_local_context_sync_prepared(
+        &self,
+        repo: &ResolvedRepository,
+        input: (OperationId, AuthoringKind, &ItemId, &str),
+        prepare: impl FnOnce(
+            &git2::Repository,
+            &LocalContextSyncObservationDto,
+        ) -> Result<Option<super::recover::Execution>, ReadError>,
+    ) -> Result<LocalContextSyncRecord, ReadError> {
+        let (operation, kind, item, observation) = input;
         if !std::fs::symlink_metadata(&self.registry_path)
             .map_err(journal_io)?
             .is_file()
@@ -619,7 +714,7 @@ impl RepositoryService {
         if current.observation != observation {
             return Err(ReadError::new(ResultCode::ExternalChange));
         }
-        between();
+        let execution = prepare(&git, &current)?;
         let _cache =
             cache_write_guard(&self.registry_path, repo.root(), RepositoryOperation::Read)?;
         // Open only after taking the cache guard: never keep a writable
@@ -647,6 +742,9 @@ impl RepositoryService {
                 decode,
             )
             .map_err(recovery_error)?;
+        if let Some(execution) = execution {
+            execution.insert(&tx, operation)?;
+        }
         tx.commit().map_err(sql_error)?;
         Ok(row)
     }
@@ -871,6 +969,13 @@ pub(in super::super) fn refresh_allowed(
     match row {
         None => Ok(!owned_identity(db, operation)?),
         Some((integrated, released, state)) => {
+            // The real executor settles discovery and BOTH local identities in
+            // one transaction. Generic refresh only knows the envelope and may
+            // not split this handoff, even though Git artifacts are released.
+            let executor:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_execution WHERE operation_ulid=?1)",[operation],|r|r.get(0)).map_err(|_|failure())?;
+            if executor && state != "complete" {
+                return Ok(false);
+            }
             let matches_root:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.root_path=?2)",params![operation,root.to_str()],|r|r.get(0)).map_err(|_|failure())?;
             Ok(integrated
                 && released

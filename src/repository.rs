@@ -872,6 +872,17 @@ pub const FAILURE_POINT_EXIT_STATUS: i32 = 86;
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    LocalSyncAfterIntent,
+    LocalSyncBeforeExecuteLease,
+    LocalSyncAfterCandidate,
+    LocalSyncBeforeObjectImport,
+    LocalSyncAfterObjectImport,
+    LocalSyncAfterCheckout,
+    LocalSyncAfterRef,
+    LocalSyncBeforeIndex,
+    LocalSyncAfterIndex,
+    LocalSyncDuringCheckout,
+    LocalSyncInsideRefWindow,
     AfterConfirmed,
     AfterContextSync,
     BeforeIntegrationRef,
