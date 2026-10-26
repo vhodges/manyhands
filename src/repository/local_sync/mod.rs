@@ -2,6 +2,9 @@
 // ReadError intentionally carries the shared result scope by value.
 #![allow(clippy::result_large_err)]
 
+#[cfg(test)]
+mod file_image;
+mod image_proof;
 mod observe;
 pub(super) mod record;
 pub use observe::LocalContextSyncObservationDto;

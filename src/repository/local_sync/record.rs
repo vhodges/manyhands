@@ -247,6 +247,7 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
         )
         .map_err(|_| failure())?;
     }
+    super::image_proof::migrate(db)?;
     if !checkout_image_marked(db)? {
         audit(db)?;
         // Old records retain NULL: no pre-checkout filesystem image may be
@@ -483,7 +484,8 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if !execution_authority_marked(db)? {
         return Err(failure());
     }
-    audit_execution(db, true)
+    audit_execution(db, true)?;
+    super::image_proof::audit(db)
 }
 
 fn audit_execution(db: &Connection, required: bool) -> Result<(), RepositoryError> {

@@ -525,30 +525,50 @@ fn local_sync_no_drop_child() {
         return;
     };
     let data = std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_DATA").unwrap();
-    let point = match std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_POINT")
-        .unwrap()
-        .as_str()
-    {
+    let child_point = std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_POINT").unwrap();
+    let point = match child_point.as_str() {
         "checkout" => FailurePoint::LocalSyncDuringCheckout,
         "reference" => FailurePoint::LocalSyncInsideRefWindow,
         "ref_logs" => FailurePoint::LocalSyncAfterRef,
         "objects" => FailurePoint::LocalSyncAfterObjectImport,
+        "mode" => FailurePoint::LocalSyncDuringCheckout,
         _ => panic!("unknown child boundary"),
     };
-    let service =
-        RepositoryService::open_at_with_exit_point_for_testing(Path::new(&data), point).unwrap();
+    let service = if child_point == "mode" {
+        RepositoryService::open_at(Path::new(&data)).unwrap()
+    } else {
+        RepositoryService::open_at_with_exit_point_for_testing(Path::new(&data), point).unwrap()
+    };
     let repo = service.resolve_repository(Path::new(&root)).unwrap();
     let kind = if std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_KIND").unwrap() == "ticket" {
         AuthoringKind::Ticket
     } else {
         AuthoringKind::Document
     };
-    let item = std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_ITEM")
+    let item: crate::canonical::ItemId = std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_ITEM")
         .unwrap()
         .parse()
         .unwrap();
     let id = OperationId::parse(&std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_ID").unwrap()).unwrap();
     let observation = std::env::var("MANYHANDS_LOCAL_SYNC_CHILD_OBSERVATION").unwrap();
+    #[cfg(unix)]
+    if child_point == "mode" {
+        use std::os::unix::fs::PermissionsExt;
+        let path = repo
+            .root()
+            .join(".manyhands/worktrees")
+            .join(item.to_string())
+            .join("mode-only");
+        run::BOUNDARY_HOOK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move |point| {
+                if point == FailurePoint::LocalSyncDuringCheckout
+                    && fs::metadata(&path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+                {
+                    std::process::exit(FAILURE_POINT_EXIT_STATUS);
+                }
+            }))
+        });
+    }
     let _ = run::execute(&service, &repo, kind, &item, id, &observation);
     panic!("child did not exit at its real backend boundary");
 }
@@ -1987,4 +2007,396 @@ fn quality_logging_default_always_and_in_call_disable_are_observed() {
         }
         assert_eq!(reflog_len(&f), logs + 1);
     }
+}
+
+#[test]
+fn spec_attribute_changes_preserve_trusted_unchanged_images_and_filter_changed_blobs() {
+    for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
+        for shape in ["fast_forward", "merge"] {
+            for from in ["crlf", "lf"] {
+                for changed_blob in [false, true] {
+                    let f = Fixture::new(kind);
+                    let c = f.context();
+                    let root = c.workdir().unwrap();
+                    fs::write(
+                        root.join(".gitattributes"),
+                        format!("ordinary text eol={from}\n"),
+                    )
+                    .unwrap();
+                    commit(&c);
+                    graph(&f, "equal");
+                    fs::remove_file(root.join("ordinary")).unwrap();
+                    c.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                        .unwrap();
+                    let baseline = fs::read(root.join("ordinary")).unwrap();
+                    assert_eq!(
+                        baseline,
+                        if from == "crlf" {
+                            b"base\r\n".as_slice()
+                        } else {
+                            b"base\n"
+                        }
+                    );
+                    if shape == "merge" {
+                        fs::write(root.join("context-only"), "local\n").unwrap();
+                        commit(&c);
+                    }
+                    let context = tip(&c);
+                    let to = if from == "crlf" { "lf" } else { "crlf" };
+                    fs::write(
+                        f.root.path().join(".gitattributes"),
+                        format!("ordinary text eol={to}\n"),
+                    )
+                    .unwrap();
+                    if changed_blob {
+                        fs::write(f.root.path().join("ordinary"), "new primary\n").unwrap();
+                    }
+                    let p = primary(&f);
+                    let incoming = commit(&p);
+                    p.reference("refs/remotes/origin/main", incoming, true, "fixture")
+                        .unwrap();
+                    let observation = f.observe();
+                    let id = OperationId::new();
+                    let logs = reflog_len(&f);
+                    faults(
+                        &f,
+                        id,
+                        &observation.observation,
+                        FailurePoint::LocalSyncAfterCheckout,
+                    );
+                    let expected = if changed_blob {
+                        if to == "crlf" {
+                            b"new primary\r\n".to_vec()
+                        } else {
+                            b"new primary\n".to_vec()
+                        }
+                    } else {
+                        baseline
+                    };
+                    assert_eq!(
+                        fs::read(root.join("ordinary")).unwrap(),
+                        expected,
+                        "actual safe checkout image"
+                    );
+                    let result = execute(&f, id, &observation.observation);
+                    assert_eq!(
+                        result.code,
+                        ResultCode::Ok,
+                        "{kind:?} {shape} {from}->{to} changed={changed_blob}: {result:?}"
+                    );
+                    assert_eq!(fs::read(root.join("ordinary")).unwrap(), expected);
+                    assert_eq!(reflog_len(&f), logs + 1);
+                    refs_unchanged(&f, incoming);
+                    if shape == "merge" {
+                        assert_eq!(
+                            c.find_commit(tip(&c))
+                                .unwrap()
+                                .parent_ids()
+                                .collect::<Vec<_>>(),
+                            [context, incoming]
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn spec_retained_image_does_not_accept_a_forged_ident_after_attribute_change() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    let c = f.context();
+    let root = c.workdir().unwrap();
+    fs::write(root.join(".gitattributes"), "ordinary ident\n").unwrap();
+    fs::write(root.join("ordinary"), "$Id$\n").unwrap();
+    commit(&c);
+    graph(&f, "equal");
+    fs::remove_file(root.join("ordinary")).unwrap();
+    c.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+        .unwrap();
+    let baseline = fs::read(root.join("ordinary")).unwrap();
+    fs::write(f.root.path().join(".gitattributes"), "ordinary -ident\n").unwrap();
+    commit(&primary(&f));
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncAfterCheckout,
+    );
+    fs::write(root.join("ordinary"), "$Id: forged $\n").unwrap();
+    let before = f.image();
+    assert_ne!(
+        execute(&f, id, &observation.observation).code,
+        ResultCode::Ok
+    );
+    assert_eq!(before, f.image());
+    fs::write(root.join("ordinary"), baseline).unwrap();
+    assert_eq!(
+        execute(&f, id, &observation.observation).code,
+        ResultCode::Ok
+    );
+}
+
+#[test]
+fn spec_frozen_filter_inputs_do_not_follow_fresh_foreign_attributes() {
+    for external in [false, true] {
+        let f = Fixture::new(AuthoringKind::Document);
+        let c = f.context();
+        let root = c.workdir().unwrap();
+        fs::write(root.join(".gitattributes"), "ordinary text eol=lf\n").unwrap();
+        commit(&c);
+        graph(&f, "equal");
+        fs::write(f.root.path().join("ordinary"), "new primary\n").unwrap();
+        let incoming = commit(&primary(&f));
+        let observation = f.observe();
+        let id = OperationId::new();
+        faults(
+            &f,
+            id,
+            &observation.observation,
+            FailurePoint::LocalSyncAfterCandidate,
+        );
+        let path = if external {
+            fs::create_dir_all(c.commondir().join("info")).unwrap();
+            c.commondir().join("info/attributes")
+        } else {
+            root.join(".gitattributes")
+        };
+        let previous = fs::read(&path).ok();
+        fs::write(&path, "ordinary text eol=crlf\n").unwrap();
+        let before = f.image();
+        let logs = reflog_len(&f);
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(result.code, ResultCode::ExternalChange, "{result:?}");
+        assert_eq!(before, f.image());
+        assert_eq!(reflog_len(&f), logs);
+        assert_eq!(fs::read(&path).unwrap(), b"ordinary text eol=crlf\n");
+        if let Some(bytes) = previous {
+            fs::write(&path, bytes).unwrap();
+        } else {
+            fs::remove_file(&path).unwrap();
+        }
+        assert_eq!(
+            execute(&f, id, &observation.observation).code,
+            ResultCode::Ok
+        );
+        assert_eq!(tip(&c), incoming);
+        assert_eq!(reflog_len(&f), logs + 1);
+    }
+}
+
+fn edit_image_manifest(f: &Fixture, id: OperationId, edit: impl FnOnce(&mut serde_json::Value)) {
+    let bytes: Vec<u8> = f
+        .db()
+        .query_row(
+            "SELECT manifest FROM local_context_sync_images WHERE operation_ulid=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    edit(&mut value);
+    f.db()
+        .execute(
+            "UPDATE local_context_sync_images SET manifest=?2 WHERE operation_ulid=?1",
+            rusqlite::params![id.to_string(), serde_json::to_vec(&value).unwrap()],
+        )
+        .unwrap();
+}
+
+#[test]
+fn spec_image_manifest_loss_corruption_and_version_mismatch_refuse() {
+    for corrupt in [
+        "missing",
+        "version",
+        "coarse_version",
+        "missing_path",
+        "baseline_v2_missing",
+        "legacy_version_with_v2",
+    ] {
+        let f = Fixture::new(AuthoringKind::Ticket);
+        graph(&f, "fast_forward");
+        let observation = f.observe();
+        let id = OperationId::new();
+        let stop = if matches!(corrupt, "baseline_v2_missing" | "legacy_version_with_v2") {
+            FailurePoint::LocalSyncAfterCheckout
+        } else {
+            FailurePoint::LocalSyncAfterCandidate
+        };
+        faults(&f, id, &observation.observation, stop);
+        let before = f.image();
+        let logs = reflog_len(&f);
+        match corrupt {
+            "missing" => {
+                f.db()
+                    .execute(
+                        "DELETE FROM local_context_sync_images WHERE operation_ulid=?1",
+                        [id.to_string()],
+                    )
+                    .unwrap();
+            }
+            "baseline_v2_missing" => {
+                f.db().execute("UPDATE local_context_sync_images SET baseline_v2=NULL WHERE operation_ulid=?1",[id.to_string()]).unwrap();
+            }
+            "legacy_version_with_v2" => {
+                edit_image_manifest(&f, id, |v| v["coarse_version"] = 1.into())
+            }
+            "missing_path" => edit_image_manifest(&f, id, |v| {
+                v["paths"].as_array_mut().unwrap().remove(0);
+            }),
+            field => edit_image_manifest(&f, id, |v| v[field] = 99.into()),
+        }
+        let result = execute(&f, id, &observation.observation);
+        assert_eq!(
+            result.code,
+            ResultCode::RecoveryRequired,
+            "{corrupt}: {result:?}"
+        );
+        assert_eq!(before, f.image());
+        assert_eq!(logs, reflog_len(&f));
+    }
+}
+
+#[test]
+fn spec_image_manifest_stores_metadata_and_never_rebuilds_lost_authority() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    let c = f.context();
+    let secret = "PRIVATE-FROZEN-IMAGE-SOURCE-NEVER-IN-JOURNAL";
+    fs::write(c.workdir().unwrap().join("ordinary"), secret).unwrap();
+    commit(&c);
+    graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncAfterIntent,
+    );
+    let bytes: Vec<u8> = f
+        .db()
+        .query_row(
+            "SELECT manifest FROM local_context_sync_images WHERE operation_ulid=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(!bytes.windows(secret.len()).any(|b| b == secret.as_bytes()));
+    assert_eq!(
+        fs::read(c.workdir().unwrap().join("ordinary")).unwrap(),
+        secret.as_bytes()
+    );
+    f.db()
+        .execute(
+            "DELETE FROM local_context_sync_images WHERE operation_ulid=?1",
+            [id.to_string()],
+        )
+        .unwrap();
+    let before = f.image();
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(
+        run::execute(
+            &reopened,
+            &f.repo,
+            f.kind,
+            &f.item,
+            id,
+            &observation.observation
+        )
+        .code,
+        ResultCode::RecoveryRequired
+    );
+    assert_eq!(before, f.image());
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT count(*) FROM local_context_sync_images WHERE operation_ulid=?1",
+                [id.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn spec_coarse_versions_are_separate_and_valid_legacy_bytes_are_not_reinterpreted() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncBeforeCheckoutBackend,
+    );
+    let evidence = super::recover::Execution::read(&f.db(), id).unwrap();
+    assert_ne!(
+        evidence.checkout_baseline,
+        evidence.images.as_ref().unwrap().baseline_v2
+    );
+    edit_image_manifest(&f, id, |v| v["coarse_version"] = 1.into());
+    f.db()
+        .execute(
+            "UPDATE local_context_sync_images SET baseline_v2=NULL WHERE operation_ulid=?1",
+            [id.to_string()],
+        )
+        .unwrap();
+    let row = f
+        .service
+        .read_local_context_sync_record(&f.repo, id)
+        .unwrap();
+    let evidence = super::recover::Execution::read(&f.db(), id).unwrap();
+    let git = f.context();
+    {
+        let owner = super::recover::Owner {
+            service: &f.service,
+            repo: &f.repo,
+            lease: repository_lease(&git, f.root.path(), RepositoryOperation::ContextSyncLocal)
+                .unwrap(),
+            git: f.context(),
+            row,
+            known_execution: Some(evidence),
+            performed: super::recover::Performed::default(),
+        };
+        assert!(
+            !super::recover::checkout_progress(&owner).unwrap(),
+            "do not compare a legacy v1 hash with a v2 image"
+        );
+    }
+    assert_eq!(
+        execute(&f, id, &observation.observation).code,
+        ResultCode::Ok
+    );
+}
+
+#[test]
+fn spec_missing_after_only_image_refuses_before_checkout() {
+    let f = Fixture::new(AuthoringKind::Ticket);
+    graph(&f, "fast_forward");
+    let observation = f.observe();
+    let id = OperationId::new();
+    faults(
+        &f,
+        id,
+        &observation.observation,
+        FailurePoint::LocalSyncAfterCandidate,
+    );
+    edit_image_manifest(&f, id, |v| {
+        v["paths"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|p| p["path"] != "incoming")
+    });
+    let image = f.image();
+    let logs = reflog_len(&f);
+    let result = execute(&f, id, &observation.observation);
+    assert_ne!(result.code, ResultCode::Ok);
+    assert!(!result.effects.is_durable(), "{result:?}");
+    assert_eq!(image, f.image());
+    assert_eq!(logs, reflog_len(&f));
+    assert!(!f.context().workdir().unwrap().join("incoming").exists());
 }

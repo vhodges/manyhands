@@ -38,8 +38,10 @@ Task 5 SPEC `ses_e87b8a702ffe6HryC0itCXg4H5` **approved with zero remaining find
 at `f282335`**, as reported by the controller. QUALITY
 `ses_e878dbd29ffednm05pK3O5zlGc` then requested four corrections. Those now have
 source-verified implementer fixes and fresh verification in
-`01M5WAQG5RHQ4ZG571AB2DDCZA`. **QUALITY re-review and SPEC verification of changed
-fixes remain pending**; the prior SPEC approval is not automatically extended.
+`01M5WAQG5RHQ4ZG571AB2DDCZA`. Subsequent SPEC verification at `2b9ba0c` found two
+additional P1 image gaps; their source-verified fixes and new evidence are recorded
+in `01M5WFEQNTFFPE9ZHKK82ABC1C`. **SPEC verification and QUALITY re-review remain
+pending**; prior approvals are not automatically extended.
 The controller resolved `01M5W0R66A877J9213TC9WTN42` as an **internal staging
 decision**, not a new owner approval: narrowly test-gate the real internal executor
 until Task 7 supplies its production callers. Task 7's explicit activation obligation
@@ -54,7 +56,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
-| Task 5 | Initial implementation `7856c61..5fde757`; SPEC corrections `5fde757..f282335` approved with zero remaining findings by `ses_e87b8a702ffe6HryC0itCXg4H5`. QUALITY `ses_e878dbd29ffednm05pK3O5zlGc` requested 3 P1 and 1 P2 corrections. Current fix base `f2823350120710cfaea4bb74dba4b2062d523899`, checkpoint `01M5WAQG5RHQ4ZG571AB2DDCZA`: **97 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. Awaiting independent re-review; executor remains narrowly test-gated until Task 7. |
+| Task 5 | Initial implementation `7856c61..5fde757`; SPEC corrections `5fde757..f282335` approved with zero remaining findings. QUALITY corrections `f282335..2b9ba0c` followed. SPEC verification `ses_e87b8a702ffe6HryC0itCXg4H5` then found two P1 image gaps. Current fix base `2b9ba0cb72850e478094c310f92b2406c8221acc`, checkpoint `01M5WFEQNTFFPE9ZHKK82ABC1C`: **105 local tests + 39 affected controls pass**, whole-tree fmt/check/clippy pass. SPEC verification then QUALITY re-review pending; executor remains narrowly test-gated until Task 7. |
 | Tasks 6–9 | Not started. Resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1892,3 +1894,164 @@ already merged. Entry was clean at the fix base. Merge-tree passed with base tre
 passed. Ticket remains implementing. No owner question, subagent, Task 6 work,
 PR/lifecycle action or native dispatch. Await controller QUALITY re-review and SPEC
 verification of these changed fixes; prior SPEC approval applies to `f282335` only.
+
+## Task 5 SPEC image verification corrections
+
+Recorded `2026-10-26T16:07:19Z`, comment `01M5WFEQNTFFPE9ZHKK82ABC1C`.
+Base **`2b9ba0cb72850e478094c310f92b2406c8221acc`**. SPEC verifier
+`ses_e87b8a702ffe6HryC0itCXg4H5` confirmed the preceding four fixtures were fixed,
+but found **two further P1 image gaps**. The controller also reports that the
+reviewer verified the filter helper's unsafe signatures, lifetimes, layout and
+cleanup; `integration/filtered.rs` is unchanged in this correction.
+
+Both findings were reproduced before correction. No new product policy or owner
+question was needed; these are internal changes to the accepted exact-image proof.
+
+### 1. Frozen attribute/image authority — addressed
+
+Verified root cause: the old helper's commit argument supplies a repository owner;
+it does not select the attribute tree. Safe checkout can replace `.gitattributes`
+while retaining a CRLF file with unchanged blob/mode. Comparing that file to raw LF
+or a fresh LF-filtered image cannot prove the operation's own legitimate result.
+
+Added `local_sync/image_proof.rs` and additive, exact-shape-audited
+`local_context_sync_frozen_images_v6` / `local_context_sync_images` evidence.
+Creation is atomic with the accepted envelope/execution record. The manifest stores
+only versioned paths, OIDs, modes and digests, bound to the ordered accepted parents,
+expected result tree, generation and owner epoch. No source bytes are persisted.
+The public observation/read API and global enums are unchanged.
+
+The initial actual baseline image is captured after clean-input proof. Prospective
+filtered images are enumerated using private repository handles with an empty
+temporary workdir and an in-memory index selecting the **accepted baseline or
+candidate attribute tree**. The ODB is memory-backed; `set_workdir(false)` changes
+only the private handle and writes no user configuration. No source file is
+materialized and no checkout runs in this preview. Both frozen filter alternatives
+are retained because libgit2 may cache baseline attributes during safe preflight.
+
+Accepted retry uses this immutable evidence, not live attribute reinterpretation:
+
+- An unchanged blob **and** mode may retain its exact trusted baseline image.
+- Changed entries must match an enumerated prospective image; a changed blob cannot
+  borrow a baseline digest merely because its path is the same.
+- Complete index/tree/path-set binding and no-follow file proof remain mandatory.
+  A missing after-only entry is refused before checkout, not discovered after writes.
+- Current external filter inputs are re-evaluated against the frozen alternatives
+  before effects. Fresh foreign tracked attributes and `.git/info/attributes`
+  changes refuse; they cannot redefine an accepted result.
+- Forged ident expansions still fail exact byte proof, even when Git cleaning
+  would collapse them to the same blob. Existing same-tree and filtered tests pass.
+
+The image manifest is immutable input evidence, **not a per-path checkout journal**:
+there is no path-progress resume, rollback, reset or automatic repair. Legacy
+unfinished operations lacking this new proof are preserved/refused rather than
+having authority reconstructed from current files; completed historical replay
+does not restart Git work. Missing/corrupt/version-inconsistent proof is tested.
+
+### 2. Mode-aware coarse effect evidence — addressed
+
+Verified root cause: v1 coarse hashes bind paths, presence and bytes but no physical
+executable mode. Actual mode-only checkout progress can therefore compare equal to
+the preimage despite a durable filesystem change.
+
+Added `local_sync/file_image.rs`: on Unix it reads the regular file's bytes and
+normalized Git executable mode through the **same descriptor**, with pinned
+no-follow parents and leaf. It checks metadata stability across the read. Windows
+uses the existing safe byte reader and explicitly has no portable Unix-mode value;
+this is not Windows ACL or executable-bit evidence.
+
+New coarse images use domain `manyhands-local-coarse-checkout-image-v2`, including
+the verified mode (or explicit platform-unavailable tag). They live in the separate
+`baseline_v2` field of the new image table. The existing `baseline_worktree` v1 field
+and v1 domain are unchanged, so an old hash is never silently compared to a v2 image.
+The manifest's coarse-version discriminator is audited: version 1 cannot carry a
+v2 digest, and a started version-2 checkout requires its v2 baseline. Unknown versions,
+missing v2 authority and inconsistent combinations refuse. A valid legacy v1 control
+shows no invented write effect from a format/domain change and completes normally.
+
+**Actual mode-only no-Drop proof:** document and ticket FF fixtures change only
+100644→100755 with identical blob bytes. The child exits without Drop after the
+backend recreates/chmods the path but before the index is persisted. Parent snapshots
+positively prove the new executable mode, unchanged bytes, old index and old ref.
+The mode-aware probe reports Written; retry returns Partial/AmbiguousBackend and
+preserves the mode instead of treating a partial image as baseline/result authority.
+Only explicit fixture/operator mode restoration permits retry and one ref effect.
+These two executions are Linux evidence; no Windows/macOS runtime claim.
+
+### TDD and additional proof
+
+All library commands used
+`devenv shell -- cargo test --all-features --locked --lib <filter>`:
+
+| Filter | RED before correction | GREEN evidence |
+| --- | --- | --- |
+| `spec_attribute_changes_preserve_trusted_unchanged_images_and_filter_changed_blobs` | 1 failed: document FF CRLF→LF with unchanged blob remained Applying/AmbiguousBackend after its own checkout. | 1 passed, **16 cases** across both kinds, FF/merge, both EOL directions and unchanged/modified blobs. |
+| `spec_mode_only_no_drop_is_partial_and_requires_complete_image_proof` | Corrected-window run: 1 failed after actual no-Drop, verified executable mode and unchanged bytes/index/ref; progress probe returned false. | 1 passed, **two actual mode-only no-Drop child exits**, truthful Written/Partial and operator-proof retry. |
+| `spec_missing_after_only_image_refuses_before_checkout` | 1 failed: an incomplete prospective path set was caught only after a file write. | 1 passed; complete result-tree/path-set validation precedes checkout and merge-object import. |
+
+The first mode-child setup exited at libgit2's removal progress event, leaving the
+path absent. That was not counted as the requested mode RED. The fixture now selects
+the existing progress boundary only after the executable mode is actually present;
+then the intended byte-only-digest failure was reproduced before its fix.
+
+Five supplementary tests cover: retained ident after an attribute change; two fresh
+foreign attribute sources; six manifest-loss/corruption/version cases; metadata-only
+privacy plus refusal to reconstruct lost proof; and separate v1/v2 domains with valid
+legacy handling. These controls are not claimed as independent pre-fix REDs.
+
+An initial clippy run found the runtime-only baseline field unread by the production
+auditor, a complex stored-row tuple type and a now-redundant `Ok(...?)`. The auditor
+now decodes and validates the same typed baseline field; a private row alias and the
+direct result remove the other findings. No lint allowance or public scaffold was
+added. No old semantic assertion was weakened.
+
+### Final verification and handoff
+
+Final whole-tree gates, all exit 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: 2.67s; clippy: 10.40s, no warnings. Final local selection: **105 passed**,
+zero failed/ignored/measured, 1284 filtered, 256.91s. This includes 97 prior tests
+and eight new tests. Same-tree, filtered, ident, first-file partial-byte, old journal
+migration, source-privacy and transport-spy assertions all pass unchanged. Long-running
+matrix notices completed successfully. There are now **14 actual no-Drop exits**
+inside the parent tests: twelve prior plus two mode-only cases; not double-counted.
+
+Additional relevant checks used `devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib repository::integration::tests` | 3 |
+| `--lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 |
+| `--lib external_repair_exact_ordered_parent_clean_only` | 1 |
+| `--lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 |
+| `--lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 |
+| `--lib repository::registration_removal::tests` | 20 |
+| `--test repository_enablement remove_registration` | 8 |
+| `--doc local_sync` | 4 |
+
+These shared/registration paths were checked before the final local-only path-set
+tightening; they were unchanged by it. Unique selected total: **132 library +
+8 integration + 4 compile-fail = 144 passing tests**. No full suite or native run.
+
+Rust scope: new `local_sync/{image_proof,file_image}.rs`, modified
+`local_sync/{mod,record,recover,run,run_tests,checkout_write_tests}.rs`. The already
+reviewed unsafe filter helper is unchanged. The image-table codec/audit is active
+in production; executable proof construction and file-image helpers retain narrow
+test gates. **Task 7 must activate them with real production mutation/resume callers,
+preserve fixture-only hooks, enforce F2 authority and run production-boundary tests
+and whole-tree gates.** No new dependency, frontend, global result/recovery enum,
+test target, public bypass or Task 6 implementation.
+
+Start/checkpoint fetches found main `0464c42dae19a6dde000c7e7660e82762a41fada`
+already merged. Entry was clean; merge-tree passed with base tree
+`e4463e4c46b80acef277803ded9cd2247ee4ae5a`. Status/diff/log inspected and diff checks
+passed. Ticket remains implementing. No owner question, subagent, PR/lifecycle action
+or native dispatch. Await SPEC verification of these two corrections, then QUALITY
+re-review of the complete Task 5 range; no independent approval is claimed here.

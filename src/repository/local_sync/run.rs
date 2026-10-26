@@ -207,12 +207,13 @@ fn prepare(
             }
         }
     }
-    Ok(Execution::prepare(
+    Execution::prepare(
         repo,
         &git,
         &observation.context_ref,
         disposition,
-    )?)
+        (local, incoming),
+    )
 }
 
 pub(super) fn execute(
@@ -460,7 +461,7 @@ fn drive(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     let expected = owner.row.result.unwrap_or(owner.row.context_parent);
     recover::clean_metadata(&owner.git, &owner.row.context_ref)?;
     if owner.git.refname_to_id(&owner.row.context_ref)? != expected
-        || !recover::exact_image(&owner.git, expected)?
+        || !recover::owned_image(owner, expected)?
     {
         return Err(Fault::foreign());
     }
@@ -488,7 +489,7 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
     let head = owner.git.refname_to_id(&owner.row.context_ref)?;
     if e.disposition == Disposition::Noop {
         if head != owner.row.context_parent
-            || !recover::exact_image(&owner.git, head)?
+            || !recover::owned_image(owner, head)?
             || !recover::ref_proof(owner, &e, false)?
         {
             return Err(Fault::foreign());
@@ -497,7 +498,7 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
     }
     if owner.row.candidate.is_none() || e.disposition == Disposition::Merge && !e.commit_observed {
         if head != owner.row.context_parent
-            || !recover::exact_image(&owner.git, head)?
+            || !recover::owned_image(owner, head)?
             || !recover::ref_proof(owner, &e, false)?
         {
             return Err(Fault::foreign());
@@ -515,7 +516,7 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
     validate_candidate(owner, &e)?;
     if head == candidate {
         if !e.ref_started
-            || !recover::exact_image(&owner.git, candidate)?
+            || !recover::owned_image(owner, candidate)?
             || !recover::ref_proof(owner, &e, true)?
         {
             return Err(recover::mismatch_reason(&e));
@@ -527,8 +528,8 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
     if head != owner.row.context_parent || !recover::ref_proof(owner, &e, false)? {
         return Err(recover::mismatch_reason(&e));
     }
-    let baseline = recover::exact_image(&owner.git, owner.row.context_parent)?;
-    let result = recover::exact_image(&owner.git, candidate)?;
+    let baseline = recover::owned_image(owner, owner.row.context_parent)?;
+    let result = recover::owned_image(owner, candidate)?;
     if !baseline && !(e.checkout_started && result) {
         return Err(recover::mismatch_reason(&e));
     }
@@ -538,6 +539,15 @@ fn integrate(owner: &mut Owner<'_>) -> Result<(), Fault> {
             owner.transaction(|tx,row| {
                 if tx.execute("UPDATE local_context_sync_execution SET baseline_worktree=?2 WHERE operation_ulid=?1 AND baseline_worktree IS NULL",params![row.operation_id.to_string(),baseline.as_slice()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
                 Ok(())
+            })?;
+        }
+        if e.images
+            .as_ref()
+            .is_some_and(|p| p.coarse_version == 2 && p.baseline_v2.is_none())
+        {
+            let baseline = recover::checkout_image_v2(owner)?;
+            owner.transaction(|tx,row| {
+                if tx.execute("UPDATE local_context_sync_images SET baseline_v2=?2 WHERE operation_ulid=?1 AND baseline_v2 IS NULL",params![row.operation_id.to_string(),baseline.as_slice()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}Ok(())
             })?;
         }
         owner.step(1, "checkout", false, Some(candidate))?;
@@ -603,6 +613,14 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
         oid,
     )? {
         return Err(Fault::authority());
+    }
+    if !evidence
+        .images
+        .as_ref()
+        .ok_or_else(Fault::authority)?
+        .filters_match(&worker, oid)?
+    {
+        return Err(Fault::foreign());
     }
     if let Some(recorded) = owner.row.candidate {
         if recorded != oid {
@@ -677,9 +695,15 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
         candidate,
         || {
             owner.authorize()?;
+            recover::frozen_filters(owner, candidate)?;
             boundary(owner, FailurePoint::LocalSyncBeforeCheckoutBackend)
         },
         || {
+            BOUNDARY_HOOK.with(|slot| {
+                if let Some(hook) = slot.borrow_mut().as_mut() {
+                    hook(FailurePoint::LocalSyncDuringCheckout);
+                }
+            });
             service
                 .check_failure(
                     FailurePoint::LocalSyncDuringCheckout,
@@ -698,9 +722,10 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
     result.and(after)
 }
 fn transition(owner: &mut Owner<'_>, candidate: git2::Oid, e: &Execution) -> Result<(), Fault> {
-    if !recover::exact_image(&owner.git, candidate)? {
+    if !recover::owned_image(owner, candidate)? {
         return Err(Fault::foreign());
     }
+    recover::frozen_filters(owner, candidate)?;
     let git = git2::Repository::open(owner.git.path())?;
     let branch = owner.row.context_ref.clone();
     let old = owner.row.context_parent;

@@ -26,6 +26,7 @@ impl Disposition {
 /// Only hashes, OIDs and effect flags are durable. No source or candidate bytes.
 #[derive(Clone)]
 pub(super) struct Execution {
+    pub images: Option<super::image_proof::Proof>,
     pub disposition: Disposition,
     pub routing: [u8; 32],
     pub index: [u8; 32],
@@ -58,8 +59,15 @@ impl Execution {
         git: &git2::Repository,
         branch: &str,
         disposition: Disposition,
-    ) -> Result<Self, ReadError> {
+        parents: (git2::Oid, git2::Oid),
+    ) -> Result<Self, Fault> {
         Ok(Self {
+            images: Some(super::image_proof::Proof::build(
+                git,
+                parents.0,
+                parents.1,
+                disposition,
+            )?),
             disposition,
             routing: routing(repo)?,
             index: index_digest(git)?,
@@ -77,16 +85,22 @@ impl Execution {
     }
     pub fn insert(&self, tx: &Connection, id: OperationId) -> Result<(), ReadError> {
         tx.execute("INSERT INTO local_context_sync_execution(operation_ulid,format_version,disposition,routing_digest,baseline_index,baseline_log,baseline_head_log,ref_time) VALUES(?1,1,?2,?3,?4,?5,?6,?7)",params![id.to_string(),self.disposition.name(),self.routing.as_slice(),self.index.as_slice(),self.log.as_slice(),self.head_log.as_slice(),self.ref_time])?;
+        self.images
+            .as_ref()
+            .ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))?
+            .insert(tx, id)?;
         Ok(())
     }
     pub fn read(db: &Connection, id: OperationId) -> Result<Self, ReadError> {
-        db.query_row("SELECT e.*,EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=e.operation_ulid AND s.kind='objects' AND s.phase='observed') AS commit_observed FROM local_context_sync_execution e WHERE operation_ulid=?1",[id.to_string()],|r| {
+        let mut execution=db.query_row("SELECT e.*,EXISTS(SELECT 1 FROM local_context_sync_steps s WHERE s.operation_ulid=e.operation_ulid AND s.kind='objects' AND s.phase='observed') AS commit_observed FROM local_context_sync_execution e WHERE operation_ulid=?1",[id.to_string()],|r| {
             let hash=|name| -> rusqlite::Result<[u8;32]> {r.get::<_,Vec<u8>>(name)?.try_into().map_err(|_|rusqlite::Error::InvalidQuery)};
             let disposition=match r.get::<_,String>("disposition")?.as_str() {"noop"=>Disposition::Noop,"fast_forward"=>Disposition::FastForward,"merge"=>Disposition::Merge,_=>return Err(rusqlite::Error::InvalidQuery)};
             let commit_identity=r.get::<_,Option<String>>("commit_name")?.map(|name| -> rusqlite::Result<_> {Ok((name,r.get("commit_email")?,r.get("commit_time")?,r.get("commit_offset")?))}).transpose()?;
             let checkout_baseline=r.get::<_,Option<Vec<u8>>>("baseline_worktree")?.map(|bytes|bytes.try_into().map_err(|_|rusqlite::Error::InvalidQuery)).transpose()?;
-            Ok(Self {disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?,checkout_baseline})
-        }).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))
+            Ok(Self {images:None,disposition,routing:hash("routing_digest")?,index:hash("baseline_index")?,log:hash("baseline_log")?,head_log:hash("baseline_head_log")?,ref_time:r.get("ref_time")?,commit_identity,commit_observed:r.get("commit_observed")?,checkout_started:r.get("checkout_started")?,checkout_observed:r.get("checkout_observed")?,ref_started:r.get("ref_started")?,ref_observed:r.get("ref_observed")?,checkout_baseline})
+        }).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))?;
+        execution.images = super::image_proof::Proof::read(db, id)?;
+        Ok(execution)
     }
 }
 
@@ -227,6 +241,28 @@ pub(super) fn exact_image(git: &git2::Repository, oid: git2::Oid) -> Result<bool
     Ok(true)
 }
 
+pub(super) fn owned_image(owner: &Owner<'_>, oid: git2::Oid) -> Result<bool, Fault> {
+    owner
+        .known_execution
+        .as_ref()
+        .and_then(|e| e.images.as_ref())
+        .ok_or_else(Fault::authority)?
+        .matches(&owner.git, oid)
+}
+pub(super) fn frozen_filters(owner: &Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
+    if owner
+        .known_execution
+        .as_ref()
+        .and_then(|e| e.images.as_ref())
+        .ok_or_else(Fault::authority)?
+        .filters_match(&owner.git, candidate)?
+    {
+        Ok(())
+    } else {
+        Err(Fault::foreign())
+    }
+}
+
 pub(super) struct Owner<'a> {
     pub service: &'a RepositoryService,
     pub repo: &'a ResolvedRepository,
@@ -315,6 +351,9 @@ impl Owner<'_> {
                 .is_some_and(|w| w.path() == self.row.worktree)
         });
         let evidence = self.evidence()?;
+        if evidence.images.is_none() {
+            return Err(Fault::authority());
+        }
         if !registered || routing(self.repo)? != evidence.routing {
             return Err(Fault::foreign());
         }
@@ -407,6 +446,15 @@ pub(super) fn mismatch_reason(e: &Execution) -> Fault {
 /// prove writes for effect reporting, but NEVER authorize partial reconciliation.
 /// Only exact_image of the complete baseline/result authorizes another effect.
 pub(super) fn checkout_progress(owner: &Owner<'_>) -> Result<bool, Fault> {
+    if let Some(proof) = owner
+        .known_execution
+        .as_ref()
+        .and_then(|e| e.images.as_ref())
+        && proof.coarse_version == 2
+    {
+        let baseline = proof.baseline_v2.ok_or_else(Fault::authority)?;
+        return Ok(checkout_image_v2(owner)? != baseline);
+    }
     if let Some(baseline) = owner
         .known_execution
         .as_ref()
@@ -449,6 +497,12 @@ pub(super) fn checkout_progress(owner: &Owner<'_>) -> Result<bool, Fault> {
 }
 
 pub(super) fn checkout_image(owner: &Owner<'_>) -> Result<[u8; 32], Fault> {
+    checkout_image_version(owner, 1)
+}
+pub(super) fn checkout_image_v2(owner: &Owner<'_>) -> Result<[u8; 32], Fault> {
+    checkout_image_version(owner, 2)
+}
+fn checkout_image_version(owner: &Owner<'_>, version: u32) -> Result<[u8; 32], Fault> {
     let candidate = owner.row.candidate.ok_or_else(Fault::authority)?;
     let old = owner.git.find_commit(owner.row.context_parent)?.tree()?;
     let new = owner.git.find_commit(candidate)?.tree()?;
@@ -466,18 +520,31 @@ pub(super) fn checkout_image(owner: &Owner<'_>) -> Result<[u8; 32], Fault> {
         .collect::<std::collections::BTreeSet<_>>();
     let root = owner.git.workdir().ok_or_else(Fault::foreign)?;
     let mut digest = blake3::Hasher::new();
-    digest.update(b"manyhands-local-coarse-checkout-image-v1");
+    digest.update(if version == 1 {
+        b"manyhands-local-coarse-checkout-image-v1"
+    } else {
+        b"manyhands-local-coarse-checkout-image-v2"
+    });
     for path in paths {
         super::observe::field(&mut digest, path.as_os_str().as_encoded_bytes());
-        match owned_file_bytes(root, &path, RepositoryOperation::ContextSyncLocal, root)
-            .map_err(|_| Fault::foreign())?
-        {
+        match super::file_image::read(root, &path).map_err(|_| Fault::foreign())? {
             None => {
                 digest.update(&[0]);
             }
-            Some(bytes) => {
+            Some(image) => {
                 digest.update(&[1]);
-                super::observe::field(&mut digest, &bytes);
+                if version == 2 {
+                    match image.mode {
+                        Some(mode) => {
+                            digest.update(&[1]);
+                            digest.update(&mode.to_be_bytes());
+                        }
+                        None => {
+                            digest.update(&[0]);
+                        }
+                    }
+                }
+                super::observe::field(&mut digest, &image.bytes);
             }
         }
     }
