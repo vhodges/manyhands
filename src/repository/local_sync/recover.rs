@@ -457,6 +457,64 @@ pub(super) fn mismatch_reason(e: &Execution) -> Fault {
     }
 }
 
+/// Artifact-free release proof follows the recorded integration provenance.
+/// A no-op has no result, a clean/FF integration has frozen image/ref evidence,
+/// and only a canonical R has resolution paths and an owned merge candidate.
+pub(super) fn verify_released_integration(owner: &mut Owner<'_>) -> Result<(), Fault> {
+    owner.authorize()?;
+    if !owner.row.integration_proven || !owner.row.artifacts_released {
+        return Err(Fault::authority());
+    }
+    clean_metadata(&owner.git, &owner.row.context_ref)?;
+    let evidence = owner.evidence()?;
+    if owner.row.active_resolution.is_some() {
+        if evidence.disposition != Disposition::Merge
+            || !evidence.conflict_observed
+            || owner.row.result != owner.row.candidate
+        {
+            return Err(Fault::authority());
+        }
+        super::run::validate_candidate(owner, &evidence)?;
+        return super::resolve::verify_integrated(owner);
+    }
+    if evidence.conflict_started {
+        if evidence.disposition != Disposition::Merge
+            || !evidence.conflict_observed
+            || owner.row.candidate.is_some()
+        {
+            return Err(Fault::authority());
+        }
+        return super::resolve::verify_external_integrated(owner);
+    }
+    let (expected, transitioned) = match evidence.disposition {
+        Disposition::Noop => {
+            if owner.row.result.is_some() || owner.row.candidate.is_some() || evidence.ref_started {
+                return Err(Fault::authority());
+            }
+            (owner.row.context_parent, false)
+        }
+        Disposition::FastForward | Disposition::Merge => {
+            let result = owner.row.result.ok_or_else(Fault::authority)?;
+            if Some(result) != owner.row.candidate
+                || !evidence.ref_started
+                || !evidence.ref_observed
+                || (evidence.disposition == Disposition::Merge && !evidence.commit_observed)
+            {
+                return Err(Fault::authority());
+            }
+            super::run::validate_candidate(owner, &evidence)?;
+            (result, true)
+        }
+    };
+    if owner.git.refname_to_id(&owner.row.context_ref)? != expected
+        || !owned_image(owner, expected)?
+        || !ref_proof(owner, &evidence, transitioned)?
+    {
+        return Err(Fault::foreign());
+    }
+    Ok(())
+}
+
 /// Coarse checkout has no per-path resume authority. Matching changed paths can
 /// prove writes for effect reporting, but NEVER authorize partial reconciliation.
 /// Only exact_image of the complete baseline/result authorizes another effect.

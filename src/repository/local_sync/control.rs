@@ -127,7 +127,7 @@ pub(super) fn abandon(
         return Err(Fault::foreign());
     }
     if integrated {
-        resolve::verify_integrated(&mut owner)?;
+        recover::verify_released_integration(&mut owner)?;
     }
     owner.transaction(|db,row| {
         // Until Task 7's all-associated atomic disposition exists, never delete

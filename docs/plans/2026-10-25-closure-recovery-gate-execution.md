@@ -69,7 +69,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
-| Task 6 | Domain implementation and local verification complete in the feature commit containing checkpoint `01M5WTE43WQ76N6VDJXB70519K`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. **142 local + 7 shared + 4 compile-fail = 153 selected passing tests**. Controller independent SPEC then QUALITY pending. |
+| Task 6 | Implemented at `3dc7d15616819fcdef49164182614b2195ce1877`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. SPEC `ses_e864b2dfbffemfrKBcgnvISO55`: **REQUEST CHANGES, four Important findings**. Checkpoint `01M5WX1PHGK4REHFEHJGBQ5PAW` records source-verified fixes and **150 local + 4 shared = 154 passing tests**, with whole-tree gates green. Independent SPEC re-review is pending, then QUALITY; the blanket domain-completion claim remains qualified until reviewed. |
 | Tasks 7–9 | Not started. Public F2 requests/DTOs/activation and end-to-end closure acceptance remain unproven; precise obligations below. |
 
 All new commits use the requested trailer
@@ -2407,7 +2407,11 @@ subsequent complete selections used a 600-second tool limit.
 
 ### Design checkpoint: actual outcomes and retained owners
 
-All **Task 6 domain-owned** required-outcome rows pass. This table supplements,
+At the initial checkpoint the selected **Task 6 domain-owned** tests passed;
+SPEC subsequently identified four missing compositions (whole-result preflight,
+early backend evidence, import-before-observation recovery, and non-resolution
+abandonment). Thus this is historical selected-test evidence, **not a current
+all-domain-outcomes completion claim** until the corrections are reviewed. This table supplements,
 and does not rewrite, the original 25 required outcomes or earlier evidence.
 W/C/I/D below mean write/checkpoint/integration/discovery effects.
 
@@ -2497,3 +2501,130 @@ Next gate is controller **independent SPEC, then QUALITY**, over the full Task 6
 range from the supplied base, including these activation and required-outcome
 boundaries. This implementer claims no independent review approval and starts no
 Task 7 implementation. Ticket remains implementing.
+
+## Task 6 SPEC corrections: four Important findings, awaiting re-review
+
+Recorded **2026-10-26T20:04:52Z**, comment `01M5WX1PHGK4REHFEHJGBQ5PAW`.
+Fix base **`3dc7d15616819fcdef49164182614b2195ce1877`**. Review
+**`ses_e864b2dfbffemfrKBcgnvISO55`, REQUEST CHANGES, four Important findings**.
+All four were verified against the actual ordering/proof calls before test/code
+changes. These are implementer corrections, not independent approval. The initial
+all-domain-required-outcomes claim is explicitly qualified above until re-review.
+
+### Source verification and dispositions
+
+| Finding | Verified cause at base | Correction and proof | Disposition |
+| --- | --- | --- | --- |
+| 1. Whole-result invariants checked after path writes | `validate` constrained conflict entries and live stage-zero prospective dependencies; the frozen-tree all-side check only ran in `make_candidate`, after the path loop. An unrelated automatically merged closed ticket could therefore invalidate an already accepted/written R. | Shared private `prepared_candidate` builds the full candidate in a memory-only ODB and validates it against the three frozen trees before R acceptance or any path replacement. Real candidate creation uses the same routine. The counterexample proves zero attempts, zero owned-write calls, unchanged files/index/refs/logs/metadata and unchanged persistent object set. | Addressed; SPEC re-review pending. |
+| 2. Backend locks and same-OID reflog changes checked too late | `verify_paths` omitted backend lock/ref-log evidence. `backend_unlocked` and the exact before-ref proof ran only after paths/objects or index work. | `verify_backend` reuses the existing lock and exact two-log pre/post proofs before fresh acceptance, partial-path reconciliation, each actual path write, object import, candidate/index continuation and ref transition. It runs outside the backend primitive's own transient locks; a proven owned post-ref append remains valid. Fourteen fresh/partial cases and nine in-call boundary cases prove no additional file/index/object effects and preserved foreign evidence. | Addressed; SPEC re-review pending. |
+| 3. Imported candidate without observed objects step lost checkpoint attribution | The commit ODB write precedes step observation. Existing-candidate continuation validated the candidate but never reconciled that missing observation, so successful completion/replay reported Checkpoint Unchanged. | After frozen signature/parents, full invariants, accepted path/output and complete result checks, continuation also proves the active resolution's candidate binding and observes its existing objects intent before proceeding. Four actual child exits occur after commit import and before SQL observation; exact R and source-free resume both complete with Checkpoint Committed, same candidate, one ref append and unchanged object set. Foreign-signature substitution and missing attempt binding refuse without observing the object. | Addressed; SPEC re-review pending. |
+| 4. Released non-resolution integrations could not be abandoned | `control::abandon` always called the canonical-resolution verifier, requiring a result/manifest/path intents/owned candidate append that other proven dispositions do not have. | `verify_released_integration` chooses the proof from recorded disposition/provenance: unchanged baseline/logs for no-op, frozen candidate/image/CAS/log evidence for FF/clean merge, existing canonical-R proof for R, or recorded external-result observation plus exact ordered-parent/all-side clean proof for external repair. Both integration/release flags and artifact-free checks remain mandatory. Ten two-kind positive cases and ten dirty-file/lock controls pass. | Addressed; SPEC re-review pending. |
+
+The full-memory preflight is not a new persistent checkpoint or source store.
+Prepared source blobs, trees and preview commits stay in the temporary ODB; the
+regression enumerates actual persistent OIDs before and after refused input.
+The original source digest/attempt matching still precedes fresh-token validation
+on exact partial retry. No existing immutable-field predicate was weakened.
+
+Backend checks distinguish owned progress from foreign state. The before-ref case
+requires both recorded log baselines. The after-ref case requires the recorded
+candidate, started ref intent and exact expected appends in both logs. Merge
+metadata remains owned by the existing manifest/release protocol. No unproven lock
+is removed or claimed; no reset/rollback was added. Restoring the foreign fixture
+evidence permits the original complete R input to finish normally.
+
+The new `CandidateImported` hook is **after** the successful real commit-object
+write and **before** observing the objects step. Parent tests positively inspect
+the existing commit and ordered parents, the still-prepared objects step and old
+context ref. Four child processes exit with status **79 without Drop** (document/
+ticket × exact-R/source-free continuation). Successful R and starting-operation
+domain replays retain Committed and perform no further Git effects. These are
+domain replay proofs, not claims about F2 request result settlement. There are now
+**21 actual no-Drop exits** in the full local group (17 previous + 4 new); the
+ordinary child-entry invocation is not counted as another exit.
+
+### Test-first evidence
+
+Commands below use the prefix
+`devenv shell -- cargo test --all-features --locked --lib` and the single filter
+listed. Every finding had a runtime failure before its correction; supplementary
+negative controls are distinguished from RED claims.
+
+| Filter | RED | GREEN |
+| --- | --- | --- |
+| `spec_whole_result_immutable_preflight_precedes_attempt_and_path_writes` | 1 failed: one resolution attempt existed instead of zero after the auto-stage-zero closure-author violation. | 1 passed; also asserts zero write calls and no persistent Git effects. |
+| `spec_foreign_` | 2 failed: a pre-first-path index.lock and a lock arriving at Path(0) still allowed file/object effects. | 2 passed, **23 cases**: seven lock/log variants × fresh/partial R, plus three boundary points × index-lock/branch-log/HEAD-log. |
+| `spec_no_drop_import_before_observation_reconciles_owned_checkpoint_on_resume_and_replay` | 1 failed after an actual child exit at the exact window: successful resolution reported Checkpoint Unchanged. | 1 passed, **four actual no-Drop cases**; Committed across completion and both domain replays, one ref effect. |
+| `spec_artifact_free_abandon_uses_each_integration_disposition_and_provenance` | 1 failed: document/equal returned AuthorityMissing despite released IndexPending proof. | 1 passed, **ten cases**: both kinds × equal/contained/FF/clean merge/external repair. |
+| `spec_disposition_abandon_preserves_foreign_files_and_backend_artifacts` | 1 failed: after restoring the no-op's foreign file, safe abandonment still refused. | 1 passed, **ten cases**: each disposition × foreign file/index lock, no Git or authority changes on refusal, success after restoration. |
+
+Supplementary `spec_existing_external_object_cannot_be_observed_as_the_owned_candidate`
+passes two negative controls: an external same-tree/ordered-parent object with a
+foreign signature cannot borrow frozen candidate ownership, and an absent
+resolution-candidate binding cannot be treated as observation authority. The
+objects step remains prepared and Git unchanged in both cases. It is not claimed
+as a separate pre-fix RED. The child harness entry is the eighth new selected test.
+
+### Actual artifact-free abandonment matrix
+
+All rows start at **IndexPending**, with `integration_proven=true` and
+`artifacts_released=true`, following injected discovery failure.
+
+| Provenance | Result/candidate evidence used | Successful domain abandon |
+| --- | --- | --- |
+| Equal / contained | No result or candidate; frozen context image and unchanged branch/HEAD logs. | Abandoned, epoch revoked; no Git effect. |
+| Fast-forward | Adopted primary result equals frozen candidate; exact image and owned ref/log transition. | Abandoned, adopted OID retained; no Git effect. |
+| Clean merge | Made candidate signature, ordered parents and all-side proof; frozen image and owned ref/log transition. | Abandoned, made OID retained; no second commit/ref effect. |
+| Canonical resolution | Existing accepted-path/result/candidate/ref proof, plus full owned candidate validation. | Existing canonical-R controls remain green; no unsafe release. |
+| Exact external repair | Recorded observed external reference step; clean result with exact ordered frozen parents and all-side invariants. No owned-candidate append is invented. | Abandoned, external OID retained; no made checkpoint or Git effect. |
+
+Dirty files and backend artifacts refuse before parent/epoch/attempt changes for
+every newly covered provenance. Existing prepared-before-effects and unsafe
+conflict/partial-R abandonment controls remain green. The production generic
+bridge guard and refusal of an associated public operation owner remain in place.
+**Atomic S/R/U settlement, including unlinked intended-parent requests, is still
+Task 7 and is not implemented or claimed by these fixes.**
+
+### Final gates, scope and next review
+
+All final whole-tree gates exited 0 through Devenv:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: **2.65s**; clippy: **18.97s**, no warnings. Final local selection:
+**150 passed**, zero failed/ignored/measured, 1284 filtered, **483.54s**. This is
+142 existing local tests plus eight new SPEC tests. Long-running matrix notices
+completed normally. Existing permission-loss, foreign-member retirement,
+source/privacy, cancellation and Task 5 frozen-image/ref controls remain green.
+
+Each required shared anchor ran separately with the same Devenv test prefix and
+one positional filter, selecting/passing **one** test:
+
+```text
+public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally
+external_repair_exact_ordered_parent_clean_only
+clean_merge_integration_fault_matrix_resumes_each_durable_transition_once
+cancellation_with_a_pending_conflict_is_a_recoverable_stop
+```
+
+**154 selected library tests pass** at this correction checkpoint. No unrelated
+test target, full suite, native workflow or additional old gate was run.
+
+Rust scope: new `local_sync/spec_tests.rs`; modified `local_sync/{resolve,recover,
+control,mod}.rs`, plus mechanical visibility of the existing fixture setup helper
+in `conflict_tests.rs`. No old assertion changed. No schema, dependency, frontend,
+global enum, public API or F2 change. Narrow internal staging and all Task 7
+activation/association/cancellation/atomic-disposition obligations remain.
+
+Entry was clean at the fix base. Start/checkpoint fetch and merge found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated; merge-tree exited 0,
+base tree `2c1cd4472a8f3b543d5e08ed143d65b6de90db15`. Status/diff/log and owned scope
+were inspected; diff checks passed. No subagents, owner-policy changes, PR or
+lifecycle actions. **Next: SPEC re-review of all four findings on the full Task 6
+range, then QUALITY.** The blanket completion claim remains qualified until those
+independent gates approve the corrections.

@@ -1173,7 +1173,7 @@ fn resolution_journal_access_loss_retains_last_proven_effects() {
 pub(super) fn fixture(kind: AuthoringKind) -> (Fixture, Vec<PathBuf>) {
     fixture_with(kind, |_, _| {})
 }
-fn fixture_with(
+pub(super) fn fixture_with(
     kind: AuthoringKind,
     setup: impl FnOnce(&Fixture, &git2::Repository),
 ) -> (Fixture, Vec<PathBuf>) {

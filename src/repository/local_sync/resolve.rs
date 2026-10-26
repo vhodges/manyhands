@@ -21,6 +21,7 @@ pub(super) enum Point {
     Accepted,
     Path(usize),
     CandidateIntent,
+    CandidateImported,
     Candidate,
     Index,
     Ref,
@@ -272,6 +273,7 @@ fn apply(
         if !inspection.can_start_resolution || inspection.observation != observation {
             return Err(Fault::foreign());
         }
+        verify_backend(owner)?;
         let ordered = validate(owner, sources)?;
         run::identity(&owner.git)?;
         let baseline = recover::index_digest(&owner.git)?;
@@ -333,6 +335,7 @@ fn apply(
                 // Typed permission injection sits immediately at the owned write.
                 boundary(Point::Path(i))?;
                 owner.authorize()?;
+                verify_backend(owner)?;
                 write_path(owner, path, source.source.as_bytes(), before)?;
             }
             owner.transaction(|db,row| {db.execute("UPDATE local_context_sync_steps SET phase='observed',owner_epoch=?3 WHERE operation_ulid=?1 AND ordinal=?2",params![row.operation_id.to_string(),100+i as i64,row.owner_epoch])?;Ok(())})?;
@@ -384,6 +387,18 @@ fn validate<'a>(
     if !integration::validate::validates_prospective_context(&owner.git, &replacements)? {
         return Err(invalid());
     }
+    // Stage-zero canonical entries are part of the result too. Validate a full
+    // prospective tree against all three frozen trees BEFORE binding R or writing
+    // paths. All generated source blobs/tree/commit objects stay in this overlay.
+    let worker = git2::Repository::open(owner.git.path())?;
+    let odb = worker.odb()?;
+    let _memory = odb.add_new_mempack_backend(1000)?;
+    let preview = git2::Signature::new(
+        "Manyhands",
+        "preview@manyhands.invalid",
+        &git2::Time::new(0, 0),
+    )?;
+    prepared_candidate(&worker, &owner.row, &ordered, &preview)?;
     Ok(ordered)
 }
 fn path_intent(owner: &mut Owner<'_>, i: usize) -> Result<([u8; 32], [u8; 32], bool), Fault> {
@@ -398,6 +413,7 @@ fn verify_paths(
     owner: &mut Owner<'_>,
     ordered: &[(conflict::Entry, &Source)],
 ) -> Result<(), Fault> {
+    verify_backend(owner)?;
     let expected = conflict::stored(owner)?
         .flatten()
         .ok_or_else(Fault::authority)?;
@@ -443,35 +459,8 @@ fn make_candidate(
     let worker = git2::Repository::open(owner.git.path())?;
     let odb = worker.odb()?;
     let _memory = odb.add_new_mempack_backend(1000)?;
-    let mut index = conflict::prepared(&worker, &owner.row)?;
-    for (entry, source) in ordered {
-        integration::resolution::stage_result(
-            &worker,
-            &mut index,
-            &entry.path,
-            source.source.as_bytes(),
-        )?;
-    }
-    let tree = index.write_tree_to(&worker)?;
-    let candidate = worker.commit(
-        None,
-        &signature,
-        &signature,
-        "Resolve local context conflicts",
-        &worker.find_tree(tree)?,
-        &[
-            &worker.find_commit(owner.row.context_parent)?,
-            &worker.find_commit(owner.row.primary_parent)?,
-        ],
-    )?;
-    if !integration::validate::validates_external_integration(
-        &worker,
-        owner.row.context_parent,
-        owner.row.primary_parent,
-        candidate,
-    )? {
-        return Err(Fault::foreign());
-    }
+    let candidate = prepared_candidate(&worker, &owner.row, ordered, &signature)?;
+    let tree = worker.find_commit(candidate)?.tree_id();
     let baseline = recover::index_digest(&owner.git)?;
     if let Some(recorded) = owner.row.candidate {
         if recorded != candidate {
@@ -488,6 +477,7 @@ fn make_candidate(
     }
     boundary(Point::CandidateIntent)?;
     owner.authorize()?;
+    verify_backend(owner)?;
     let target = owner.git.odb()?;
     let mut objects = vec![tree];
     while let Some(oid) = objects.pop() {
@@ -510,11 +500,53 @@ fn make_candidate(
     drop(target);
     owner.performed.committed = true;
     owner.performed.oid = Some(candidate);
+    boundary(Point::CandidateImported)?;
     owner.step(0, "objects", true, Some(candidate))?;
     Ok(())
 }
+
+/// Caller owns a memory-backed ODB. This routine cannot authorize persistent
+/// effects; both preacceptance validation and candidate preparation use it.
+fn prepared_candidate(
+    worker: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    ordered: &[(conflict::Entry, &Source)],
+    signature: &git2::Signature<'_>,
+) -> Result<git2::Oid, Fault> {
+    let mut index = conflict::prepared(worker, row)?;
+    for (entry, source) in ordered {
+        integration::resolution::stage_result(
+            worker,
+            &mut index,
+            &entry.path,
+            source.source.as_bytes(),
+        )?;
+    }
+    let tree = index.write_tree_to(worker)?;
+    let candidate = worker.commit(
+        None,
+        signature,
+        signature,
+        "Resolve local context conflicts",
+        &worker.find_tree(tree)?,
+        &[
+            &worker.find_commit(row.context_parent)?,
+            &worker.find_commit(row.primary_parent)?,
+        ],
+    )?;
+    if !integration::validate::validates_external_integration(
+        worker,
+        row.context_parent,
+        row.primary_parent,
+        candidate,
+    )? {
+        return Err(invalid());
+    }
+    Ok(candidate)
+}
 pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     owner.authorize()?;
+    verify_backend(owner)?;
     let evidence = owner.evidence()?;
     run::validate_candidate(owner, &evidence)?;
     conflict::backend_unlocked(owner)?;
@@ -545,6 +577,18 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
         return Err(Fault::foreign());
     }
     let head = owner.git.refname_to_id(&owner.row.context_ref)?;
+    // The process may have died after the commit object reached the ODB but
+    // before observing its objects intent. Signature/parents/all-side invariants,
+    // full result files and accepted path digests have now been checked above;
+    // require the same resolution's candidate binding before attributing it.
+    if !evidence.commit_observed {
+        owner.transaction(|db,row| {
+            let bound:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1 AND operation_ulid=?2 AND generation=?3 AND candidate_oid=?4)",params![row.active_resolution.map(|id|id.to_string()),row.operation_id.to_string(),row.generation,oid.to_string()],|r|r.get(0))?;
+            if !bound {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+            Ok(())
+        })?;
+        owner.step(0, "objects", true, Some(oid))?;
+    }
     if current.index != conflict::entries(&expected) {
         if current.index != snapshot.index || head != owner.row.context_parent {
             return Err(Fault::foreign());
@@ -557,6 +601,7 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
     }
     owner.step(11, "index", true, Some(oid))?;
     boundary(Point::Index)?;
+    verify_backend(owner)?;
     let evidence = owner.evidence()?;
     if head == owner.row.context_parent {
         if !recover::ref_proof(owner, &evidence, false)? {
@@ -594,6 +639,22 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
     boundary(Point::Ref)?;
     super::control::safe_point(owner)?;
     finish(owner)
+}
+/// A same-OID ref is not proof that its logs or backend namespace are unchanged.
+/// Called outside owned backend primitives (which hold their own transient locks)
+/// before acceptance and before each next persistent Git/path effect.
+fn verify_backend(owner: &mut Owner<'_>) -> Result<(), Fault> {
+    conflict::backend_unlocked(owner)?;
+    let evidence = owner.evidence()?;
+    let head = owner.git.refname_to_id(&owner.row.context_ref)?;
+    let after = head != owner.row.context_parent;
+    if after && (Some(head) != owner.row.candidate || !evidence.ref_started) {
+        return Err(Fault::foreign());
+    }
+    if !recover::ref_proof(owner, &evidence, after)? {
+        return Err(Fault::foreign());
+    }
+    Ok(())
 }
 fn verify_result_files(owner: &mut Owner<'_>, index: &git2::Index) -> Result<(), Fault> {
     let original = conflict::stored(owner)?
@@ -731,7 +792,7 @@ pub(super) fn adopt_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault>
     finish_external(owner)
 }
 fn finish_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
-    external_proof(owner, owner.row.result.ok_or_else(Fault::authority)?)?;
+    verify_external_integrated(owner)?;
     super::control::safe_point(owner)?;
     run::boundary(owner, FailurePoint::LocalSyncBeforeIndex).map_err(|_| Fault {
         code: ResultCode::DiscoveryPending,
@@ -740,6 +801,15 @@ fn finish_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     super::control::safe_point(owner)?;
     finish_index(owner)?;
     Ok(ResultCode::Ok)
+}
+pub(super) fn verify_external_integrated(owner: &mut Owner<'_>) -> Result<(), Fault> {
+    let result = owner.row.result.ok_or_else(Fault::authority)?;
+    owner.transaction(|db,row| {
+        let recorded:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13 AND kind='reference' AND phase='observed' AND generation=?2 AND expected_old_oid=?3 AND expected_new_oid=?4)",params![row.operation_id.to_string(),row.generation,row.context_parent.to_string(),result.to_string()],|r|r.get(0))?;
+        if !recorded {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        Ok(())
+    })?;
+    external_proof(owner, result)
 }
 fn finish_index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     run::index(owner).map_err(|fault| {
