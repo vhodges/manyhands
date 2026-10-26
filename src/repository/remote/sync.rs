@@ -7,6 +7,7 @@ mod tests;
 #[path = "windows_resolution.rs"]
 mod windows_resolution;
 use super::*;
+use crate::repository::integration::{artifacts, prepare, resolution, validate};
 use crate::repository::promotion::record::ChildExecution;
 use crate::repository::{keys::*, transport::*, *};
 use reservation::{PublicationIntent, PublicationSettlement, PushIntentRelation};
@@ -221,7 +222,7 @@ use std::{fmt, io::Read, path::Path};
 #[cfg(unix)]
 use std::{
     ffi::CString,
-    io::{Seek, SeekFrom, Write},
+    io::Write,
     os::{
         fd::{AsRawFd, FromRawFd},
         unix::{ffi::OsStrExt, fs::MetadataExt},
@@ -423,6 +424,14 @@ impl std::error::Error for SynchronizationError {}
 impl From<RepositoryError> for SynchronizationError {
     fn from(error: RepositoryError) -> Self {
         Self::Repository(error)
+    }
+}
+impl From<integration::Error> for SynchronizationError {
+    fn from(error: integration::Error) -> Self {
+        match error {
+            integration::Error::RecoveryRequired => Self::RecoveryRequired,
+            integration::Error::ExternalChange => Self::ExternalChange,
+        }
     }
 }
 impl From<SshTransportError> for SynchronizationError {
@@ -673,33 +682,9 @@ fn target_ref(plan: &RemoteRefPlan, target: &SynchronizationTarget) -> RemoteRef
         SynchronizationTarget::Context { kind, item_id } => plan.context(*kind, item_id),
     }
 }
-/// Mode of a submodule entry: its OID names a commit of another repository.
-const GITLINK_MODE: u32 = 0o160000;
+pub(in super::super) use prepare::{MergePreparation, PreparedMerge};
 
-struct PreparedMergeEntry {
-    entry: git2::IndexEntry,
-    /// Kind and bytes of an object the in-memory merge created. `None` for an
-    /// object the repository already stores and for a submodule entry, whose
-    /// commit belongs to another repository.
-    generated: Option<(git2::ObjectType, Vec<u8>)>,
-}
-
-pub(in super::super) struct PreparedMerge {
-    entries: Vec<PreparedMergeEntry>,
-}
-
-/// Ephemeral ODB-only source evidence. Shape and bytes are retained even when
-/// decoding/parsing fails; neither failure can hide a changed canonical path.
-pub(in super::super) struct CanonicalTreeSnapshot {
-    pub(in super::super) sources: std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-    pub(in super::super) entries:
-        std::collections::BTreeMap<Vec<u8>, (git2::Oid, i32, Option<git2::ObjectType>)>,
-}
-
-pub(in super::super) enum MergePreparation {
-    Clean(PreparedMerge),
-    Conflict,
-}
+pub(in super::super) use validate::CanonicalTreeSnapshot;
 
 fn stage_name(stage: merge::IntegrationStage) -> SynchronizationStage {
     match stage {
@@ -721,15 +706,7 @@ pub(in super::super) fn prepare_clean_merge(
     local: git2::Oid,
     incoming: git2::Oid,
 ) -> Result<MergePreparation, SynchronizationError> {
-    let worker =
-        git2::Repository::open(path).map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let odb = worker
-        .odb()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let _mempack = odb
-        .add_new_mempack_backend(1000)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    prepare_clean_merge_in(&worker, path, local, incoming)
+    prepare::prepare_clean_merge(path, local, incoming).map_err(Into::into)
 }
 
 /// `prepare_clean_merge` on a caller's handle that already has a
@@ -742,48 +719,7 @@ pub(in super::super) fn prepare_clean_merge_in(
     local: git2::Oid,
     incoming: git2::Oid,
 ) -> Result<MergePreparation, SynchronizationError> {
-    let odb = worker
-        .odb()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let local = worker
-        .find_commit(local)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let incoming = worker
-        .find_commit(incoming)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let index = worker
-        .merge_commits(&local, &incoming, None)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    if index.has_conflicts() {
-        return Ok(MergePreparation::Conflict);
-    }
-    // A handle without the memory backend tells stored objects from the ones
-    // this merge created.
-    let stored =
-        git2::Repository::open(path).map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let stored = stored
-        .odb()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let entries = index
-        .iter()
-        .filter(|entry| entry.flags & 0x3000 == 0)
-        .map(|entry| {
-            if entry.mode == GITLINK_MODE || stored.exists(entry.id) {
-                return Ok(PreparedMergeEntry {
-                    entry,
-                    generated: None,
-                });
-            }
-            let object = odb
-                .read(entry.id)
-                .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            Ok(PreparedMergeEntry {
-                generated: Some((object.kind(), object.data().to_vec())),
-                entry,
-            })
-        })
-        .collect::<Result<Vec<_>, SynchronizationError>>()?;
-    Ok(MergePreparation::Clean(PreparedMerge { entries }))
+    prepare::prepare_clean_merge_in(worker, path, local, incoming).map_err(Into::into)
 }
 
 /// Import the objects the merge created and write its tree. An entry that was
@@ -792,71 +728,19 @@ pub(in super::super) fn import_prepared_tree(
     repository: &git2::Repository,
     prepared: &PreparedMerge,
 ) -> Result<git2::Oid, SynchronizationError> {
-    let destination = repository
-        .odb()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let mut index = git2::Index::new().map_err(|_| SynchronizationError::RecoveryRequired)?;
-    for prepared_entry in &prepared.entries {
-        if let Some((kind, bytes)) = &prepared_entry.generated
-            && destination
-                .write(*kind, bytes)
-                .map_err(|_| SynchronizationError::RecoveryRequired)?
-                != prepared_entry.entry.id
-        {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        index
-            .add(&prepared_entry.entry)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    }
-    index
-        .write_tree_to(repository)
-        .map_err(|_| SynchronizationError::RecoveryRequired)
+    prepare::import_prepared_tree(repository, prepared).map_err(Into::into)
 }
 
 /// Descriptor-observed bytes and filesystem identity of a regular index artifact.
 #[cfg(any(unix, windows))]
-struct IndexFileImage {
-    bytes: Vec<u8>,
-    device: u64,
-    inode: u64,
-}
+use artifacts::IndexFileImage;
 
 #[cfg(unix)]
 fn index_file_image_at(
     parent: &std::fs::File,
     name: &CString,
 ) -> Result<(std::fs::File, IndexFileImage), SynchronizationError> {
-    let fd = unsafe {
-        libc::openat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
-        )
-    };
-    if fd < 0 {
-        return Err(SynchronizationError::ExternalChange);
-    }
-    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-    let metadata = file
-        .metadata()
-        .map_err(|_| SynchronizationError::ExternalChange)?;
-    if !metadata.is_file() || metadata.mode() & 0o111 != 0 {
-        return Err(SynchronizationError::ExternalChange);
-    }
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)
-        .map_err(|_| SynchronizationError::ExternalChange)?;
-    file.seek(SeekFrom::Start(0))
-        .map_err(|_| SynchronizationError::ExternalChange)?;
-    Ok((
-        file,
-        IndexFileImage {
-            bytes,
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        },
-    ))
+    artifacts::index_file_image_at(parent, name).map_err(Into::into)
 }
 
 #[cfg(any(unix, windows))]
@@ -955,22 +839,7 @@ fn index_leaf_present(
     parent: &std::fs::File,
     name: &CString,
 ) -> Result<bool, SynchronizationError> {
-    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
-    let result = unsafe {
-        libc::fstatat(
-            parent.as_raw_fd(),
-            name.as_ptr(),
-            metadata.as_mut_ptr(),
-            libc::AT_SYMLINK_NOFOLLOW,
-        )
-    };
-    if result == 0 {
-        Ok(true)
-    } else if std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound {
-        Ok(false)
-    } else {
-        Err(SynchronizationError::ExternalChange)
-    }
+    artifacts::index_leaf_present(parent, name).map_err(Into::into)
 }
 
 #[cfg(unix)]
@@ -2526,37 +2395,13 @@ impl ResolutionIndexLock {
     }
 }
 
-fn preflight_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_be_bytes());
-    hasher.update(bytes);
-}
-
-fn preflight_path_bytes(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().as_bytes().to_vec()
-}
+use resolution::{preflight_bytes, resolution_status_options};
 
 fn conflict_worktree_digest(
     root: &Path,
     relative: &Path,
 ) -> Result<[u8; 32], SynchronizationError> {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"manyhands-resolution-prewrite-v1\0");
-    match owned_resolution_file_bytes(
-        root,
-        relative,
-        RepositoryOperation::RepositorySnapshot,
-        root,
-    ) {
-        Ok(Some(bytes)) => {
-            digest.update(&[1]);
-            preflight_bytes(&mut digest, &bytes);
-        }
-        Ok(None) => {
-            digest.update(&[0]);
-        }
-        Err(_) => return Err(SynchronizationError::ExternalChange),
-    }
-    Ok(*digest.finalize().as_bytes())
+    resolution::conflict_worktree_digest(root, relative).map_err(Into::into)
 }
 
 fn resolution_path_needs_write(
@@ -2565,56 +2410,25 @@ fn resolution_path_needs_write(
     result: &[u8],
     durable: &state::ResolutionPathEvidence,
 ) -> Result<bool, SynchronizationError> {
-    if durable.ordinal != token.ordinal || *blake3::hash(result).as_bytes() != durable.result_digest
-    {
+    if durable.ordinal != token.ordinal {
         return Err(SynchronizationError::ExternalChange);
     }
     let relative = Path::new(
         std::str::from_utf8(&token.path).map_err(|_| SynchronizationError::ExternalChange)?,
     );
-    let bytes = owned_resolution_file_bytes(
+    resolution::path_needs_write(
         root,
         relative,
-        RepositoryOperation::RepositorySnapshot,
-        root,
+        result,
+        durable.result_digest,
+        durable.prewrite_digest,
+        durable.applied,
     )
-    .map_err(|_| SynchronizationError::ExternalChange)?;
-    if bytes
-        .as_deref()
-        .map(|bytes| *blake3::hash(bytes).as_bytes())
-        == Some(durable.result_digest)
-    {
-        return Ok(false);
-    }
-    if !durable.applied {
-        let mut prewrite = blake3::Hasher::new();
-        prewrite.update(b"manyhands-resolution-prewrite-v1\0");
-        match bytes {
-            Some(bytes) => {
-                prewrite.update(&[1]);
-                preflight_bytes(&mut prewrite, &bytes);
-            }
-            None => {
-                prewrite.update(&[0]);
-            }
-        }
-        if *prewrite.finalize().as_bytes() == durable.prewrite_digest {
-            return Ok(true);
-        }
-    }
-    Err(SynchronizationError::ExternalChange)
+    .map_err(Into::into)
 }
 
 fn owned_result_digest(root: &Path, relative: &Path) -> Result<[u8; 32], SynchronizationError> {
-    let bytes = owned_resolution_file_bytes(
-        root,
-        relative,
-        RepositoryOperation::RepositorySnapshot,
-        root,
-    )
-    .map_err(|_| SynchronizationError::ExternalChange)?
-    .ok_or(SynchronizationError::ExternalChange)?;
-    Ok(*blake3::hash(&bytes).as_bytes())
+    resolution::owned_result_digest(root, relative).map_err(Into::into)
 }
 
 fn conflict_token_digest(token: &merge::ConflictPathToken) -> [u8; 32] {
@@ -2649,132 +2463,11 @@ fn resolution_preflight(
     repository: &git2::Repository,
     resolutions: &[(merge::ConflictPathToken, merge::RedactedConflictBytes)],
 ) -> Result<[u8; 32], SynchronizationError> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"manyhands-resolution-preflight-v1\0");
-
-    let index = repository
-        .index()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let mut entries = index
+    let paths = resolutions
         .iter()
-        .map(|entry| {
-            (
-                entry.path.clone(),
-                (entry.flags >> 12) & 3,
-                entry.mode,
-                entry.id,
-            )
-        })
+        .map(|(token, _)| (token.ordinal, token.path.as_slice()))
         .collect::<Vec<_>>();
-    entries.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
-    hasher.update(&(entries.len() as u64).to_be_bytes());
-    for (path, stage, mode, oid) in entries {
-        preflight_bytes(&mut hasher, &path);
-        hasher.update(&stage.to_be_bytes());
-        hasher.update(&mode.to_be_bytes());
-        hasher.update(oid.as_bytes());
-    }
-
-    let mut options = resolution_status_options();
-    let statuses = repository
-        .statuses(Some(&mut options))
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let mut status_entries = statuses
-        .iter()
-        .filter(|entry| !entry.status().is_ignored())
-        .map(|entry| {
-            let mut paths = Vec::new();
-            if let Some(path) = entry.path() {
-                paths.push(path.as_bytes().to_vec());
-            }
-            for delta in [entry.head_to_index(), entry.index_to_workdir()]
-                .into_iter()
-                .flatten()
-            {
-                for file in [delta.old_file(), delta.new_file()] {
-                    if let Some(path) = file.path() {
-                        paths.push(preflight_path_bytes(path));
-                    }
-                }
-            }
-            paths.sort();
-            (entry.status().bits(), paths)
-        })
-        .collect::<Vec<_>>();
-    status_entries.sort();
-    hasher.update(&(status_entries.len() as u64).to_be_bytes());
-    for (status, paths) in status_entries {
-        hasher.update(&status.to_be_bytes());
-        hasher.update(&(paths.len() as u64).to_be_bytes());
-        for path in paths {
-            preflight_bytes(&mut hasher, &path);
-        }
-    }
-
-    let workdir = repository
-        .workdir()
-        .ok_or(SynchronizationError::RecoveryRequired)?;
-    let mut paths = resolutions.iter().collect::<Vec<_>>();
-    paths.sort_by_key(|(token, _)| token.ordinal);
-    if paths
-        .windows(2)
-        .any(|pair| pair[0].0.ordinal == pair[1].0.ordinal)
-    {
-        return Err(SynchronizationError::RecoveryRequired);
-    }
-    hasher.update(&(paths.len() as u64).to_be_bytes());
-    for (token, _) in paths {
-        let path_text =
-            std::str::from_utf8(&token.path).map_err(|_| SynchronizationError::ExternalChange)?;
-        let path = Path::new(path_text);
-        if path.as_os_str().is_empty()
-            || !path
-                .components()
-                .all(|component| matches!(component, std::path::Component::Normal(_)))
-        {
-            return Err(SynchronizationError::ExternalChange);
-        }
-        preflight_bytes(&mut hasher, &token.ordinal.to_be_bytes());
-        preflight_bytes(&mut hasher, &token.path);
-        // One descriptor-based O_NOFOLLOW open both verifies the leaf and
-        // reads it. Do not split this into metadata followed by fs::read:
-        // another process could replace the leaf with a symlink in between.
-        match owned_resolution_file_bytes(
-            workdir,
-            path,
-            RepositoryOperation::RepositorySnapshot,
-            workdir,
-        ) {
-            Ok(Some(bytes)) => {
-                hasher.update(&[1]);
-                preflight_bytes(&mut hasher, &bytes);
-            }
-            Ok(None) => {
-                hasher.update(&[0]);
-            }
-            Err(_) => return Err(SynchronizationError::ExternalChange),
-        }
-    }
-    Ok(*hasher.finalize().as_bytes())
-}
-
-/// The non-conflicting stage-zero portion of an owned merge is wholly
-/// determined by its recorded parents. Never accept a caller's unrelated
-/// staged entry merely because the conflict paths themselves still match.
-/// One status policy for initial preflight, final validation, and candidate
-/// recovery. Ignored entries are requested so the policy is explicit, then
-/// excluded from mutable-input evidence: ignored files are deliberately
-/// permitted and must not make an exact post-ref retry non-idempotent.
-fn resolution_status_options() -> git2::StatusOptions {
-    let mut options = git2::StatusOptions::new();
-    options
-        .include_untracked(true)
-        .recurse_untracked_dirs(true)
-        .include_ignored(true)
-        .recurse_ignored_dirs(true)
-        .renames_head_to_index(true)
-        .renames_index_to_workdir(true);
-    options
+    resolution::resolution_preflight(repository, &paths).map_err(Into::into)
 }
 
 fn only_resolution_paths_are_dirty(
@@ -2792,44 +2485,7 @@ fn only_paths_are_dirty(
     repository: &git2::Repository,
     allowed: &std::collections::BTreeSet<Vec<u8>>,
 ) -> Result<bool, SynchronizationError> {
-    let mut options = resolution_status_options();
-    for entry in repository
-        .statuses(Some(&mut options))
-        .map_err(|_| SynchronizationError::RecoveryRequired)?
-        .iter()
-    {
-        if entry.status().is_ignored() {
-            continue;
-        }
-        // HEAD -> index changes include Git's clean incoming merge entries.
-        // The authoritative merge-index comparison fences unrelated staging;
-        // this gate fences only worktree/untracked changes outside the tokens.
-        if !entry.status().intersects(
-            git2::Status::WT_NEW
-                | git2::Status::WT_MODIFIED
-                | git2::Status::WT_DELETED
-                | git2::Status::WT_TYPECHANGE
-                | git2::Status::WT_RENAMED
-                | git2::Status::CONFLICTED,
-        ) {
-            continue;
-        }
-        let mut paths = Vec::new();
-        if let Some(path) = entry.path() {
-            paths.push(path.as_bytes().to_vec());
-        }
-        if let Some(delta) = entry.index_to_workdir() {
-            for file in [delta.old_file(), delta.new_file()] {
-                if let Some(path) = file.path() {
-                    paths.push(preflight_path_bytes(path));
-                }
-            }
-        }
-        if paths.is_empty() || paths.iter().any(|path| !allowed.contains(path)) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    resolution::only_paths_are_dirty(repository, allowed).map_err(Into::into)
 }
 
 fn recorded_merge_index_matches_index(
@@ -2851,55 +2507,14 @@ fn prepare_recorded_merge_index(
     local: git2::Oid,
     incoming: git2::Oid,
 ) -> Result<git2::Index, SynchronizationError> {
-    let worker = git2::Repository::open(repository.path())
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let odb = worker
-        .odb()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let _mempack = odb
-        .add_new_mempack_backend(1000)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let local = worker
-        .find_commit(local)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let incoming = worker
-        .find_commit(incoming)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    worker
-        .merge_commits(&local, &incoming, None)
-        .map_err(|_| SynchronizationError::RecoveryRequired)
+    prepare::prepare_recorded_merge_index(repository, local, incoming).map_err(Into::into)
 }
 
 fn prepared_merge_index_matches_index(
     expected: &git2::Index,
     actual: &git2::Index,
 ) -> Result<bool, SynchronizationError> {
-    let conflicts = expected
-        .conflicts()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?
-        .map(|conflict| {
-            let conflict = conflict.map_err(|_| SynchronizationError::RecoveryRequired)?;
-            conflict
-                .our
-                .or(conflict.their)
-                .or(conflict.ancestor)
-                .map(|entry| entry.path)
-                .ok_or(SynchronizationError::RecoveryRequired)
-        })
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    let stage = |entry: &git2::IndexEntry| (entry.flags >> 12) & 3;
-    let entries = |index: &git2::Index| {
-        index
-            .iter()
-            .filter(|entry| stage(entry) == 0 && !conflicts.contains(&entry.path))
-            .map(|entry| (entry.path.clone(), entry.mode, entry.id))
-            .collect::<Vec<_>>()
-    };
-    let mut expected_entries = entries(expected);
-    let mut actual_entries = entries(actual);
-    expected_entries.sort();
-    actual_entries.sort();
-    Ok(expected_entries == actual_entries)
+    validate::prepared_merge_index_matches_index(expected, actual).map_err(Into::into)
 }
 
 fn recorded_merge_index_matches(
@@ -3032,111 +2647,7 @@ fn prepared_conflict_digest(
     ))
 }
 
-/// The target's own gitdir, pinned so merge metadata is observed and retired
-/// by fixed leaf name without following links. Cooperative-writer convention,
-/// not an expected-inode exchange.
-#[cfg(unix)]
-struct MergeMetadataDirectory {
-    parent: std::fs::File,
-}
-
-#[cfg(unix)]
-impl MergeMetadataDirectory {
-    fn open(repository: &git2::Repository) -> Result<Self, SynchronizationError> {
-        native_resolution::open_directory(repository.path())
-            .map(|parent| Self { parent })
-            .map_err(|_| SynchronizationError::RecoveryRequired)
-    }
-
-    /// Digest of one regular, non-executable, singly linked member; None when
-    /// absent. A member with another hard link is shared with a name this
-    /// operation never wrote, so it is not owned and nothing is retired.
-    fn digest(&self, member: &str) -> Result<Option<[u8; 32]>, SynchronizationError> {
-        let name = fixed_index_name(member);
-        if !index_leaf_present(&self.parent, &name)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?
-        {
-            return Ok(None);
-        }
-        let (file, image) = index_file_image_at(&self.parent, &name)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        if file
-            .metadata()
-            .map_err(|_| SynchronizationError::RecoveryRequired)?
-            .nlink()
-            != 1
-        {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        Ok(Some(*blake3::hash(&image.bytes).as_bytes()))
-    }
-
-    /// Unlink a member only while its bytes still equal the recorded digest.
-    fn retire(&self, member: &str, expected: [u8; 32]) -> Result<(), SynchronizationError> {
-        if self.digest(member)? != Some(expected) {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        let name = fixed_index_name(member);
-        if unsafe { libc::unlinkat(self.parent.as_raw_fd(), name.as_ptr(), 0) } != 0 {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        self.parent
-            .sync_all()
-            .map_err(|_| SynchronizationError::RecoveryRequired)
-    }
-}
-
-#[cfg(windows)]
-struct MergeMetadataDirectory {
-    parent: native_resolution::Directory,
-}
-
-#[cfg(windows)]
-impl MergeMetadataDirectory {
-    fn open(repository: &git2::Repository) -> Result<Self, SynchronizationError> {
-        native_resolution::Directory::open(repository.path())
-            .map(|parent| Self { parent })
-            .map_err(|_| SynchronizationError::RecoveryRequired)
-    }
-
-    fn digest(&self, member: &str) -> Result<Option<[u8; 32]>, SynchronizationError> {
-        Ok(self
-            .parent
-            .image(member)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?
-            .map(|image| *blake3::hash(&image.bytes).as_bytes()))
-    }
-
-    fn retire(&self, member: &str, expected: [u8; 32]) -> Result<(), SynchronizationError> {
-        let image = self
-            .parent
-            .image(member)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?
-            .ok_or(SynchronizationError::RecoveryRequired)?;
-        if *blake3::hash(&image.bytes).as_bytes() != expected {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        self.parent
-            .retire(member, image)
-            .map_err(|_| SynchronizationError::RecoveryRequired)
-    }
-}
-
-#[cfg(not(any(unix, windows)))]
-struct MergeMetadataDirectory;
-
-#[cfg(not(any(unix, windows)))]
-impl MergeMetadataDirectory {
-    fn open(_repository: &git2::Repository) -> Result<Self, SynchronizationError> {
-        Err(SynchronizationError::RecoveryRequired)
-    }
-    fn digest(&self, _member: &str) -> Result<Option<[u8; 32]>, SynchronizationError> {
-        Err(SynchronizationError::RecoveryRequired)
-    }
-    fn retire(&self, _member: &str, _expected: [u8; 32]) -> Result<(), SynchronizationError> {
-        Err(SynchronizationError::RecoveryRequired)
-    }
-}
+use artifacts::MergeMetadataDirectory;
 
 /// Digests of the merge metadata this operation's own `merge` just wrote.
 /// Called under the lease directly after that effect; None when the exact
@@ -3943,7 +3454,12 @@ fn integrate_divergence(
                         },
                     };
                     let identity = committing_identity(service, root, owner, &repository, request)?;
-                    let tree = import_prepared_tree(&repository, &prepared)?;
+                    let tree = prepare::import_owned_tree(&repository, &prepared, || {
+                        state::with_transaction(service, root, |tx, id| {
+                            reservation::owned(service, tx, id, owner).map(|_| ())
+                        })
+                        .map_err(SynchronizationError::from)
+                    })?;
                     let local_commit = repository
                         .find_commit(local)
                         .map_err(|_| SynchronizationError::RecoveryRequired)?;
@@ -3995,15 +3511,7 @@ fn integrate_divergence(
                         ordinal,
                         None,
                     )?;
-                    let annotated = repository
-                        .find_annotated_commit(incoming)
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                    let mut checkout = git2::build::CheckoutBuilder::new();
-                    checkout.safe().overwrite_ignored(false);
-                    repository
-                        .merge(&[&annotated], None, Some(&mut checkout))
-                        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                    drop(annotated);
+                    artifacts::install_conflict(&repository, incoming)?;
                     // Still under the lease that covered this merge: its
                     // metadata is provably this operation's own exactly now.
                     // Without this record a later remnant is never retired.
@@ -4431,168 +3939,7 @@ impl RepositoryService {
         repository: &git2::Repository,
         conflict: &git2::IndexConflict,
     ) -> merge::ConflictCandidate {
-        let entries = [
-            conflict.ancestor.as_ref(),
-            conflict.our.as_ref(),
-            conflict.their.as_ref(),
-        ];
-        let Some(path) = entries.iter().flatten().next().map(|entry| &entry.path) else {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Delete,
-            };
-        };
-        if entries.iter().any(Option::is_none) {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Delete,
-            };
-        }
-        if entries.iter().flatten().any(|entry| entry.path != *path) {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Rename,
-            };
-        }
-        if entries.iter().flatten().any(|entry| entry.mode != 0o100644) {
-            let structure = if entries.iter().flatten().any(|entry| entry.mode == 0o120000) {
-                merge::ConflictStructure::Symlink
-            } else {
-                merge::ConflictStructure::Executable
-            };
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure,
-            };
-        }
-        let Ok(path) = std::str::from_utf8(path) else {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Binary,
-            };
-        };
-        if std::path::Path::new(path)
-            .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
-        {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Rename,
-            };
-        }
-        let parsed = entries
-            .iter()
-            .flatten()
-            .map(|entry| {
-                repository.find_blob(entry.id).ok().and_then(|blob| {
-                    std::str::from_utf8(blob.content()).ok().and_then(|text| {
-                        canonical::parse_item(std::path::Path::new(path), text).ok()
-                    })
-                })
-            })
-            .collect::<Option<Vec<_>>>();
-        let Some(parsed) = parsed else {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Binary,
-            };
-        };
-        let Some(first) = parsed.first() else {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::Delete,
-            };
-        };
-        let identity = match first {
-            canonical::CanonicalItem::Document(value) => &value.id,
-            canonical::CanonicalItem::Ticket(value) => &value.id,
-            canonical::CanonicalItem::Comment(value) => &value.id,
-        };
-        if parsed.iter().any(|item| {
-            let same_kind = matches!(
-                (first, item),
-                (
-                    canonical::CanonicalItem::Document(_),
-                    canonical::CanonicalItem::Document(_)
-                ) | (
-                    canonical::CanonicalItem::Ticket(_),
-                    canonical::CanonicalItem::Ticket(_)
-                ) | (
-                    canonical::CanonicalItem::Comment(_),
-                    canonical::CanonicalItem::Comment(_)
-                )
-            );
-            !same_kind
-                || match item {
-                    canonical::CanonicalItem::Document(value) => &value.id != identity,
-                    canonical::CanonicalItem::Ticket(value) => &value.id != identity,
-                    canonical::CanonicalItem::Comment(value) => &value.id != identity,
-                }
-        }) {
-            return merge::ConflictCandidate {
-                kind: merge::ConflictEntryKind::Noncanonical,
-                structure: merge::ConflictStructure::IdentityChanged,
-            };
-        }
-        let kind = match first {
-            canonical::CanonicalItem::Document(_) => merge::ConflictEntryKind::Document,
-            canonical::CanonicalItem::Ticket(_) => merge::ConflictEntryKind::Ticket,
-            canonical::CanonicalItem::Comment(_) => merge::ConflictEntryKind::Comment,
-        };
-        let mut closures = parsed.iter().filter_map(|item| match item {
-            canonical::CanonicalItem::Ticket(ticket) => {
-                ticket.closed_at.map(|at| (at, ticket.closed_by.as_deref()))
-            }
-            _ => None,
-        });
-        // No result can preserve two distinct immutable closure pairs, including
-        // one retained only by the ancestor. Compare parsed times, not YAML text.
-        if let Some(first_closure) = closures.next()
-            && closures.any(|closure| closure != first_closure)
-        {
-            return merge::ConflictCandidate {
-                kind,
-                structure: merge::ConflictStructure::IncompatibleClosures,
-            };
-        }
-        merge::ConflictCandidate {
-            kind,
-            structure: merge::ConflictStructure::RegularUtf8SamePath,
-        }
-    }
-
-    fn canonical_item_id(item: &canonical::CanonicalItem) -> canonical::ItemId {
-        match item {
-            canonical::CanonicalItem::Document(value) => value.id.clone(),
-            canonical::CanonicalItem::Ticket(value) => value.id.clone(),
-            canonical::CanonicalItem::Comment(value) => value.id.clone(),
-        }
-    }
-
-    fn preserves_item_invariants(
-        expected: &canonical::CanonicalItem,
-        result: &canonical::CanonicalItem,
-    ) -> bool {
-        match (expected, result) {
-            (canonical::CanonicalItem::Document(_), canonical::CanonicalItem::Document(_)) => true,
-            (canonical::CanonicalItem::Ticket(old), canonical::CanonicalItem::Ticket(new)) => {
-                old.closed_at.is_none()
-                    || (old.closed_at == new.closed_at && old.closed_by == new.closed_by)
-            }
-            (canonical::CanonicalItem::Comment(old), canonical::CanonicalItem::Comment(new)) => {
-                old.item_id == new.item_id
-                    && old.parent_id == new.parent_id
-                    && old.created_at == new.created_at
-                    // Creator and legacy author metadata are immutable comment
-                    // provenance, including their absence on legacy comments.
-                    // A creator that names somebody is the field; any other
-                    // value is left among the unknown keys.
-                    && old.created_by == new.created_by
-                    && old.unknown.get("created_by") == new.unknown.get("created_by")
-                    && old.unknown.get("author") == new.unknown.get("author")
-            }
-            _ => false,
-        }
+        validate::classify_conflict_entry(repository, conflict)
     }
 
     fn validates_resolution_sides(
@@ -4600,37 +3947,13 @@ impl RepositoryService {
         token: &merge::ConflictPathToken,
         bytes: &[u8],
     ) -> Result<bool, SynchronizationError> {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            return Ok(false);
-        };
-        let path = Path::new(std::str::from_utf8(&token.path).unwrap_or_default());
-        let Ok(item) = canonical::parse_item(path, text) else {
-            return Ok(false);
-        };
-        let side_ids = [token.base, token.local, token.incoming];
-        if side_ids.iter().all(Option::is_none) {
-            return Ok(false);
-        }
-        // No side is authoritative over another: the caller result must
-        // retain every recorded immutable value. Disagreement therefore
-        // requires external recovery, even when the base is still open.
-        for side_oid in side_ids.into_iter().flatten() {
-            let blob = repository
-                .find_blob(side_oid)
-                .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            let Ok(side_text) = std::str::from_utf8(blob.content()) else {
-                return Ok(false);
-            };
-            let Ok(expected) = canonical::parse_item(path, side_text) else {
-                return Ok(false);
-            };
-            if Self::canonical_item_id(&item) != Self::canonical_item_id(&expected)
-                || !Self::preserves_item_invariants(&expected, &item)
-            {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        validate::validates_resolution_sides(
+            repository,
+            &token.path,
+            [token.base, token.local, token.incoming],
+            bytes,
+        )
+        .map_err(Into::into)
     }
 
     /// Validate the prospective merged canonical context without a common-Git
@@ -4643,113 +3966,15 @@ impl RepositoryService {
             (&merge::ConflictPathToken, &merge::RedactedConflictBytes),
         >,
     ) -> Result<bool, SynchronizationError> {
-        let mut sources = std::collections::BTreeMap::<Vec<u8>, Vec<u8>>::new();
-        let index = repository
-            .index()
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        for entry in index.iter() {
-            if entry.flags >> 12 & 3 != 0 {
-                continue;
-            }
-            let Ok(path) = std::str::from_utf8(&entry.path) else {
-                continue;
-            };
-            let Ok(blob) = repository.find_blob(entry.id) else {
-                return Err(SynchronizationError::RecoveryRequired);
-            };
-            if let Ok(text) = std::str::from_utf8(blob.content())
-                && canonical::parse_item(std::path::Path::new(path), text).is_ok()
-            {
-                sources.insert(entry.path.clone(), blob.content().to_vec());
-            }
-        }
-        // The recorded Git-selected stage-zero entries are the baseline, with
-        // observed local (or available immutable) conflict sides substituted.
-        // Missing conflict entries must not manufacture baseline orphan errors.
-        let mut baseline = sources.clone();
-        for (token, _) in replacements.values() {
-            if let Some(oid) = token.local.or(token.incoming).or(token.base) {
-                let blob = repository
-                    .find_blob(oid)
-                    .map_err(|_| SynchronizationError::RecoveryRequired)?;
-                baseline.insert(token.path.clone(), blob.content().to_vec());
-            }
-        }
-        let mut affected = std::collections::BTreeSet::new();
-        for (token, bytes) in replacements.values() {
-            let Some(item) = std::str::from_utf8(&token.path).ok().and_then(|path| {
-                std::str::from_utf8(bytes.bytes())
-                    .ok()
-                    .and_then(|text| canonical::parse_item(Path::new(path), text).ok())
-            }) else {
-                return Ok(false);
-            };
-            affected.insert(Self::canonical_item_id(&item));
-            sources.insert(token.path.clone(), bytes.bytes().to_vec());
-        }
-        Ok(Self::validates_context_sources(
-            &baseline, &sources, affected,
-        ))
-    }
-
-    fn validates_context_sources(
-        baseline: &std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-        sources: &std::collections::BTreeMap<Vec<u8>, Vec<u8>>,
-        mut affected: std::collections::BTreeSet<canonical::ItemId>,
-    ) -> bool {
-        let context_sources = |sources: &std::collections::BTreeMap<Vec<u8>, Vec<u8>>| {
-            sources
-                .iter()
-                .filter_map(|(path, bytes)| {
-                    Some((
-                        PathBuf::from(std::str::from_utf8(path).ok()?),
-                        std::str::from_utf8(bytes).ok()?.to_owned(),
-                    ))
-                })
-                .collect::<Vec<_>>()
-        };
-        let prospective_sources = context_sources(sources);
-        let items = prospective_sources
-            .iter()
-            .filter_map(|(path, text)| {
-                canonical::parse_item(path, text)
-                    .ok()
-                    .map(|item| (path.clone(), item))
+        let sources = replacements
+            .values()
+            .map(|(token, bytes)| validate::ResolutionSource {
+                path: &token.path,
+                sides: [token.base, token.local, token.incoming],
+                bytes: bytes.bytes(),
             })
             .collect::<Vec<_>>();
-        // Close over item/thread dependencies in both directions, including
-        // nonconforming candidates omitted from ValidatedContext.items. This
-        // rejects inherited problems affecting touched identities or parents.
-        loop {
-            let before = affected.len();
-            for (_, item) in &items {
-                if let canonical::CanonicalItem::Comment(comment) = item
-                    && (affected.contains(&comment.id)
-                        || affected.contains(&comment.item_id)
-                        || comment
-                            .parent_id
-                            .as_ref()
-                            .is_some_and(|id| affected.contains(id)))
-                {
-                    affected.insert(comment.id.clone());
-                    affected.insert(comment.item_id.clone());
-                    affected.extend(comment.parent_id.iter().cloned());
-                }
-            }
-            if before == affected.len() {
-                break;
-            }
-        }
-        let baseline_context = canonical::validate_context(context_sources(baseline));
-        let context = canonical::validate_context(prospective_sources);
-        context.problems.iter().all(|problem| {
-            let path = preflight_path_bytes(&problem.path);
-            baseline.get(&path) == sources.get(&path)
-                && baseline_context.problems.contains(problem)
-                && !items.iter().any(|(path, item)| {
-                    path == &problem.path && affected.contains(&Self::canonical_item_id(item))
-                })
-        })
+        validate::validates_prospective_context(repository, &sources).map_err(Into::into)
     }
 
     /// An external repair is a whole committed merge, including unsupported
@@ -4760,190 +3985,20 @@ impl RepositoryService {
         step: &state::IntegrationStepEvidence,
         candidate: git2::Oid,
     ) -> Result<bool, SynchronizationError> {
-        let local = repository
-            .find_commit(step.intent.local_oid)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let incoming = repository
-            .find_commit(step.intent.incoming_oid)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let base = repository
-            .merge_base(local.id(), incoming.id())
-            .and_then(|oid| repository.find_commit(oid))
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let result = repository
-            .find_commit(candidate)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let result_tree = result
-            .tree()
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let sides = [base.tree(), local.tree(), incoming.tree()]
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let baseline = Self::canonical_tree_sources(repository, &sides[1])?;
-        let prospective = Self::canonical_tree_sources(repository, &result_tree)?;
-        for (path, shape) in &prospective.entries {
-            if baseline.entries.get(path) == Some(shape) {
-                // Preserve genuinely unchanged unrelated baseline problems,
-                // including invalid encoding and unsupported legacy shapes.
-                continue;
-            }
-            if std::str::from_utf8(path).is_err()
-                || shape.1 != 0o100644
-                || shape.2 != Some(git2::ObjectType::Blob)
-                || prospective
-                    .sources
-                    .get(path)
-                    .is_none_or(|bytes| std::str::from_utf8(bytes).is_err())
-            {
-                return Ok(false);
-            }
-        }
-        let mut changed = std::collections::BTreeSet::new();
-        for side in &sides {
-            let diff = repository
-                .diff_tree_to_tree(Some(side), Some(&result_tree), None)
-                .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            for delta in diff.deltas() {
-                for file in [delta.old_file(), delta.new_file()] {
-                    if let Some(path) = file.path() {
-                        changed.insert(path.to_owned());
-                    }
-                }
-            }
-        }
-        let parse = |tree: &git2::Tree<'_>, path: &Path| {
-            tree.get_path(path).ok().and_then(|entry| {
-                repository.find_blob(entry.id()).ok().and_then(|blob| {
-                    std::str::from_utf8(blob.content())
-                        .ok()
-                        .and_then(|text| canonical::parse_item(path, text).ok())
-                })
-            })
-        };
-        let mut affected = std::collections::BTreeSet::new();
-        for path in changed {
-            let result_item = parse(&result_tree, &path);
-            for side in &sides {
-                if let Some(old) = parse(side, &path) {
-                    let Some(new) = &result_item else {
-                        return Ok(false);
-                    };
-                    if Self::canonical_item_id(&old) != Self::canonical_item_id(new)
-                        || !Self::preserves_item_invariants(&old, new)
-                    {
-                        return Ok(false);
-                    }
-                    affected.insert(Self::canonical_item_id(&old));
-                }
-            }
-            if let Some(item) = result_item {
-                affected.insert(Self::canonical_item_id(&item));
-            }
-        }
-        Ok(Self::validates_context_sources(
-            &Self::canonical_context_tree_sources(&baseline),
-            &Self::canonical_context_tree_sources(&prospective),
-            affected,
-        ))
+        validate::validates_external_integration(
+            repository,
+            step.intent.local_oid,
+            step.intent.incoming_oid,
+            candidate,
+        )
+        .map_err(Into::into)
     }
 
     pub(in super::super) fn canonical_tree_sources(
         repository: &git2::Repository,
         tree: &git2::Tree<'_>,
     ) -> Result<CanonicalTreeSnapshot, SynchronizationError> {
-        let mut sources = std::collections::BTreeMap::new();
-        let mut entries = std::collections::BTreeMap::new();
-        let mut failed = false;
-        tree.walk(git2::TreeWalkMode::PreOrder, |parent, entry| {
-            let mut path = parent.as_bytes().to_vec();
-            path.extend_from_slice(entry.name_bytes());
-            let path_text = std::str::from_utf8(&path).ok();
-            let canonical_path = (path.ends_with(b".md")
-                && (path.starts_with(b"docs/")
-                    || path.starts_with(b".manyhands/tickets/")
-                    || path.starts_with(b".manyhands/comments/")))
-                || path_text
-                    .is_some_and(|path| Self::is_canonical_tree_source_path(Path::new(path)));
-            if canonical_path {
-                entries.insert(path.clone(), (entry.id(), entry.filemode(), entry.kind()));
-            }
-            if entry.kind() != Some(git2::ObjectType::Blob) {
-                return git2::TreeWalkResult::Ok;
-            }
-            match repository.find_blob(entry.id()) {
-                Ok(blob) => {
-                    if canonical_path
-                        || path_text.is_some_and(|path| {
-                            std::str::from_utf8(blob.content())
-                                .ok()
-                                .is_some_and(|text| {
-                                    Self::is_canonical_tree_source(Path::new(path), text)
-                                })
-                        })
-                    {
-                        entries.insert(path.clone(), (entry.id(), entry.filemode(), entry.kind()));
-                        sources.insert(path, blob.content().to_vec());
-                    }
-                }
-                Err(_) => failed = true,
-            }
-            git2::TreeWalkResult::Ok
-        })
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        if failed {
-            return Err(SynchronizationError::RecoveryRequired);
-        }
-        Ok(CanonicalTreeSnapshot { sources, entries })
-    }
-
-    /// Called after shape/encoding comparison: any undecodable source omitted
-    /// here has already been proved byte-and-shape-identical to the baseline.
-    fn canonical_context_tree_sources(
-        snapshot: &CanonicalTreeSnapshot,
-    ) -> std::collections::BTreeMap<Vec<u8>, Vec<u8>> {
-        snapshot
-            .sources
-            .iter()
-            .filter_map(|(path, bytes)| {
-                let path_text = std::str::from_utf8(path).ok()?;
-                let text = std::str::from_utf8(bytes).ok()?;
-                Self::is_canonical_tree_source(Path::new(path_text), text)
-                    .then(|| (path.clone(), bytes.clone()))
-            })
-            .collect()
-    }
-
-    fn is_canonical_tree_source_path(path: &Path) -> bool {
-        canonical::item_path_kind(path).is_ok()
-            || ((path.starts_with(".manyhands/tickets") || path.starts_with(".manyhands/comments"))
-                && path.extension().is_some_and(|extension| extension == "md"))
-    }
-
-    fn is_canonical_tree_source(path: &Path, text: &str) -> bool {
-        if path.starts_with(".manyhands/tickets") || path.starts_with(".manyhands/comments") {
-            return true;
-        }
-        // Match discovery's declared-managed document boundary without reading
-        // any live or caller-supplied path. Include malformed declared items so
-        // the affected-context gate can reject new diagnostics.
-        let normalized = text.replace("\r\n", "\n");
-        let Some(front_matter) = normalized
-            .strip_prefix("---\n")
-            .and_then(|text| text.split_once("\n---").map(|(header, _)| header))
-        else {
-            return false;
-        };
-        serde_yaml::from_str::<serde_yaml::Value>(front_matter)
-            .ok()
-            .and_then(|value| value.as_mapping().cloned())
-            .and_then(|values| {
-                values
-                    .get(serde_yaml::Value::String("manyhands_managed".into()))
-                    .cloned()
-            })
-            .and_then(|value| value.as_bool())
-            == Some(true)
+        validate::canonical_tree_sources(repository, tree).map_err(Into::into)
     }
 
     /// Inspect only the exact conflict retained by this synchronization. This
@@ -5929,30 +4984,7 @@ impl RepositoryService {
                     )?;
                 }
             }
-            let blob = repository
-                .blob(result.bytes())
-                .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            for stage in 1..=3 {
-                index
-                    .remove(relative, stage)
-                    .map_err(|_| SynchronizationError::RecoveryRequired)?;
-            }
-            index
-                .add(&git2::IndexEntry {
-                    ctime: git2::IndexTime::new(0, 0),
-                    mtime: git2::IndexTime::new(0, 0),
-                    dev: 0,
-                    ino: 0,
-                    mode: 0o100644,
-                    uid: 0,
-                    gid: 0,
-                    file_size: result.bytes().len() as u32,
-                    id: blob,
-                    flags: 0,
-                    flags_extended: 0,
-                    path: token.path.clone(),
-                })
-                .map_err(|_| SynchronizationError::RecoveryRequired)?;
+            resolution::stage_result(&repository, &mut index, &token.path, result.bytes())?;
         }
         if index.has_conflicts() {
             return Ok(merge::ResolveSynchronizationOutcome::RecoveryRequired);
@@ -7720,52 +6752,19 @@ pub(in super::super) fn fast_forward(
     old: git2::Oid,
     new: git2::Oid,
 ) -> Result<(), SynchronizationError> {
-    let commit = repository
-        .find_commit(new)
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    // Lock/compare before effects. Locked git2 has no checkout baseline setter:
-    // safe checkout must see the OLD HEAD, then the single ref commit follows.
-    let mut transaction = repository
-        .transaction()
-        .map_err(|_| SynchronizationError::ExternalChange)?;
-    transaction
-        .lock_ref(branch)
-        .map_err(|_| SynchronizationError::ExternalChange)?;
-    if repository.refname_to_id(branch).ok() != Some(old)
-        || repository
-            .find_reference("HEAD")
-            .ok()
-            .and_then(|r| r.symbolic_target().map(str::to_owned))
-            .as_deref()
-            != Some(branch)
-    {
-        return Err(SynchronizationError::ExternalChange);
-    }
-    let mut checkout = git2::build::CheckoutBuilder::new();
-    // SAFE alone defaults to overwriting ignored user entries in locked libgit2.
-    checkout.safe().overwrite_ignored(false);
-    repository
-        .checkout_tree(commit.as_object(), Some(&mut checkout))
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    #[cfg(test)]
-    super::observation_tests::checkpoint(RemoteOperationSafePoint::BeforeLocalMutation);
-    if repository.refname_to_id(branch).ok() != Some(old)
-        || repository
-            .find_reference("HEAD")
-            .ok()
-            .and_then(|r| r.symbolic_target().map(str::to_owned))
-            .as_deref()
-            != Some(branch)
-    {
-        return Err(SynchronizationError::RecoveryRequired);
-    }
-    transaction
-        .set_target(branch, new, None, "manyhands synchronization")
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    transaction
-        .commit()
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    Ok(())
+    // Existing callers already passed their distinct synchronization, polling or
+    // lifecycle owner gate under the lease. Keep that policy in those adapters.
+    artifacts::fast_forward(
+        repository,
+        branch,
+        old,
+        new,
+        || Ok(()),
+        || {
+            #[cfg(test)]
+            super::observation_tests::checkpoint(RemoteOperationSafePoint::BeforeLocalMutation);
+        },
+    )
 }
 fn identity_mismatch() -> SynchronizationError {
     identity_error().into()

@@ -39,6 +39,7 @@ pub use comment_publication::*;
 #[cfg(test)]
 mod comment_publication_tests;
 mod discovery;
+mod integration;
 pub mod keys;
 mod mutation;
 #[cfg(unix)]

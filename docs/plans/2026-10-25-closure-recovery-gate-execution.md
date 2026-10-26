@@ -36,8 +36,9 @@ Task 1 is now authorized; Tasks 4/7 retain ownership of E4/E9 code respectively.
 | Approval recording | `51a0e96da11f8bc1f2f0689e72c88ed99470c96a`, `docs: approve closure recovery gate implementation`; pushed to ticket branch. |
 | Task 0 | Source/selector inventory and required baseline completed; checkpoint `9039e65`, comment `01M5TZXJZ2348Z8GRMAQ7BSHPR`. Both independent reviews approved; owner questions resolved below. |
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
-| Task 2 | Implemented and locally verified from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; code checkpoint `fix: use lifecycle parent wording for child mismatches`, containing comment `01M5V1QEB9WYETHHG1H765DVH7`. Awaiting controller SPEC then QUALITY review. |
-| Tasks 3–9 | Not started. New local-operation outcomes below remain unproven. |
+| Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
+| Task 3 | Extracted and locally verified from `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`; checkpoint `refactor: share owned integration mechanics without transport`, comment `01M5V38TV55N7WRG6SM1HAPDQT`. Awaiting controller review of actual moved code and ownership sequencing. |
+| Tasks 4–9 | Not started. New local-operation outcomes below remain unproven. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -599,3 +600,135 @@ new target, schema, or existing-test semantic changes were needed. No unresolved
 issue or owner question. Controller independently reviews SPEC then QUALITY for
 the commit from the recorded task base; Task 3 is not started. Ticket remains
 implementing. Commit/push are authorized; PR/lifecycle/native actions are not.
+
+## Independent Task 2 review
+
+Recorded from the controller's Task 3 handoff at `2026-10-26T03:14:25Z`:
+both reviews **APPROVED, zero findings**, range `76a1ff5..1f25f56`
+(`76a1ff547a20dc3b112d5cc9417ef29e287f4b3a` through
+`1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`).
+
+| Review | Session | Result |
+| --- | --- | --- |
+| SPEC | `ses_e89e1ee10ffel5fclITUqdJmJA` | APPROVED; zero findings. |
+| QUALITY | `ses_e89e109a8ffeZq9AWjP725U5xx` | APPROVED; zero findings. |
+
+Task 2 evidence remains **8 child_fence + 1 handoff test green**, all prescribed
+fmt/check/clippy gates green. Those unchanged tests were not rerun for Task 3.
+
+## Task 3: transport-neutral mechanics extraction
+
+Recorded `2026-10-26T03:14:25Z`. Task/code base:
+`1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`. This bounded implementer used no
+subagents. Entry branch/HEAD matched the handoff and status was clean. Fetched
+origin, read current main's AGENTS, and merged main
+`0464c42dae19a6dde000c7e7660e82762a41fada`: already up to date, HEAD unchanged.
+Checkpoint fetch found the same main; ancestry and merge-tree passed (committed
+base tree `848c7660f04674ba55d044b651276f32c942df9d`).
+
+### Source map and private boundaries
+
+Before moving production code, read and mapped clean/fast-forward/conflict install
+and retained/fresh resolution order in `remote/sync.rs`. The new
+`integration/mod.rs` records the sequence, exact caller preconditions, callback
+lease/authority contract, coarse-backend limitation and remaining adapter duties.
+
+| Shared module | Actual moved mechanics / old production callers |
+| --- | --- |
+| `prepare.rs` | Ordered graph classification from `remote/merge.rs`; priority-1000 memory preparation, generated-object import, and recorded merge-index reconstruction from `remote/sync.rs`. Remote divergence/inspection/recovery use them; existing promotion/closure preview callers retain their adapter signatures. |
+| `validate.rs` | Whole-set eligibility, Task 1 three-side closure classification, immutable canonical provenance, prospective context/dependency validation, non-conflicting stage-zero comparison, canonical tree snapshots and external-result canonical validation. Old inspection/fresh resolution/retained resolution/external-repair paths call them. |
+| `resolution.rs` | Complete index/status/path preflight, ignored-file policy, dirty-path gate, no-follow preimage/result digests, already-applied/preimage/third-image decision, and result-blob/private-index staging. Old resolver and candidate recovery call them. |
+| `artifacts.rs` | Safe old-HEAD checkout/ref transaction, coarse conflict installation, Unix descriptor-based index image/presence inspection, and Unix/Windows pinned merge-metadata digest/retirement. Old integration, private index-lock implementation and metadata recovery call them. |
+
+Every extracted helper is reachable through an old production path; no future
+local scaffold, dependency or lint suppression was added. Shared inputs are
+explicit OIDs, paths already bound by an adapter, borrowed sources and digests;
+there are **no remote tokens, reservations, SQL rows or transport imports** in the
+new machinery. Its two content-free internal errors map to the same remote errors.
+
+Public ConflictEligibility keeps its existing remote re-export. Internal shared
+items are repository-visible using `pub(in super::super)`; prepared entries and
+metadata directory descriptors remain private. Remote capability fields, stage/
+window selection, journal schema, identity confirmation, request/attempt fencing,
+ResolutionIndexLock and ref-log manifests remain private to the remote adapter.
+Their stateful acquire/persist/ref-proof/checkpoint/release orchestration is not
+replaced by a new generic owner. No visibility expansion in reservation.rs or
+state.rs was necessary. The existing repository-level digest-guarded path writer
+continues at the same point in the adapter's all-path-check/write/observe sequence.
+
+The new import callback performs a fresh `reservation::owned` check under the
+already-held lease before persistent object import, propagating its original
+error. It adds no cancellation safe point or ownership acquisition. The generic
+checkout callback can reject before backend locks; the compatibility wrapper's
+callers retain their existing synchronization/poll/lifecycle owner gates. Its
+after-checkout fixture hook stays at the original interleaving boundary.
+
+Exact-parent proof and clean-worktree proof still precede external canonical
+validation in the remote adapter. Retained-candidate reconciliation still precedes
+fresh inspection, and metadata/sentinel retirement still follows final proof and
+durable checkpoint. Shared content validation is explicitly **not** write authority.
+There is no per-path initial-checkout journal or expanded no-Drop promise.
+
+Only one existing-test edit (E8): `comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read`
+now calls `validate::preserves_item_invariants` directly. Its complete assertion
+and all test inputs remain unchanged. All other existing assertions are untouched.
+
+### Test-first evidence and debugging
+
+Added three adjacent shared-seam tests and module documentation/declaration before
+production extraction. Ran `devenv shell -- cargo test --all-features --locked
+--lib repository::integration::tests`: **exit 101, four E0583 missing-module errors**
+for the not-yet-created prepare/artifacts/validate/resolution seams, as permitted
+by the approved new-seam TDD rule. No runtime test was selected in that red build.
+
+After extraction, runtime was initially **2 passed, 1 failed**. The new path test
+incorrectly treated `.git/config` and missing parents as rejected image reads.
+Source tracing to `owned_file_bytes_with_mode_policy` showed that it checks real
+relative no-follow filesystem images, while canonical/token authority belongs to
+the caller, and missing parents deliberately represent an absent preimage. Fixed
+only the new fixture: traversal/absolute/empty/directory and symlink refusal, with
+a positive absent-preimage control. Added the complete preflight assertions and
+an actual common-Git lease to the owner-loss test. No production behavior changed
+to accommodate that mistaken fixture expectation.
+
+The owner-loss adapter revokes authority after memory preparation, then both
+import and checkout/ref effects refuse before objects/index/ref/worktree/lock
+changes. The memory test produces a genuinely new merged blob, proves it absent
+from the persistent ODB alongside unchanged refs/index/worktree, then separately
+imports and proves that blob exists (positive control).
+
+### Final selected verification
+
+Each row used `devenv shell -- cargo test --all-features --locked --lib <filter>`
+with **one positional filter**. All passed; zero failed/ignored/measured.
+
+| Filter | Selected/passed | Filtered |
+| --- | ---: | ---: |
+| `repository::integration::tests` | 3 | 1281 |
+| `public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | 1 | 1283 |
+| `external_repair_exact_ordered_parent_clean_only` | 1 | 1283 |
+| `clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | 1 | 1283 |
+| `cancellation_with_a_pending_conflict_is_a_recoverable_stop` | 1 | 1283 |
+| `all_recorded_ticket_sides_constrain_retained_closure_before_writes` | 1 | 1283 |
+| `closure_conflict_classification` | 6 | 1278 |
+| `comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read` | 1 | 1283 |
+| `merge_metadata_retirement_` | 2 | 1282 |
+| `resolution_preflight_` | 2 | 1282 |
+
+Total: **19 library tests passed**, including all four anchors run separately.
+Required whole-tree gates: `devenv shell -- cargo fmt --check` exit 0;
+`devenv shell -- cargo check --all-features --locked` exit 0 (2.90s);
+`devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+exit 0 (22.24s), no warnings. `git diff --check` passed.
+
+An earlier clippy run found restricted `pub(in crate::repository)` paths invalid
+in existing SSH targets that include lib.rs under `mod production`. Replaced only
+new visibilities with the established relative `pub(in super::super)` convention;
+no harness/assertion edit. A subsequent fmt check requested five line-wrap changes
+after those shorter qualifiers; applied them and reran all three gates green.
+
+No unexpected remote runtime change or unresolved owner question was found.
+Controller must independently review the **full Task 3 range**, actual moved code
+and ownership sequencing before local execution is built. Task 4 is not started.
+No full suite, native run, PR or lifecycle action; native Windows/macOS behavior
+has not been executed by this Linux-only checkpoint.

@@ -10386,7 +10386,7 @@ fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read
     for old in values {
         for new in values {
             assert_eq!(
-                RepositoryService::preserves_item_invariants(&comment(old), &comment(new)),
+                validate::preserves_item_invariants(&comment(old), &comment(new)),
                 old == new,
                 "{old:?} -> {new:?}"
             );

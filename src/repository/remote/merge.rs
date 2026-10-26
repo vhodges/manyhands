@@ -30,43 +30,11 @@ pub(super) fn integration_stages(
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum IntegrationDisposition {
-    Equal,
-    IncomingAlreadyIntegrated,
-    FastForward,
-    MergeRequired,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum IntegrationClassificationError<E> {
-    Ancestry(E),
-    UnrelatedHistories,
-}
-
-/// Classify exactly one ordered `(local, incoming)` integration pair.  The
-/// callbacks are intentionally supplied by the caller so this pure seam cannot
-/// accidentally inspect stale repository state or mutate it.
-pub(super) fn classify_integration<E>(
-    local: Oid,
-    incoming: Oid,
-    mut is_ancestor: impl FnMut(Oid, Oid) -> Result<bool, E>,
-    mut merge_base_exists: impl FnMut(Oid, Oid) -> Result<bool, E>,
-) -> Result<IntegrationDisposition, IntegrationClassificationError<E>> {
-    if local == incoming {
-        return Ok(IntegrationDisposition::Equal);
-    }
-    if is_ancestor(incoming, local).map_err(IntegrationClassificationError::Ancestry)? {
-        return Ok(IntegrationDisposition::IncomingAlreadyIntegrated);
-    }
-    if is_ancestor(local, incoming).map_err(IntegrationClassificationError::Ancestry)? {
-        return Ok(IntegrationDisposition::FastForward);
-    }
-    if !merge_base_exists(local, incoming).map_err(IntegrationClassificationError::Ancestry)? {
-        return Err(IntegrationClassificationError::UnrelatedHistories);
-    }
-    Ok(IntegrationDisposition::MergeRequired)
-}
+#[cfg(test)]
+pub(super) use crate::repository::integration::prepare::IntegrationClassificationError;
+pub(super) use crate::repository::integration::prepare::{
+    IntegrationDisposition, classify_integration,
+};
 
 /// Opaque optimistic precondition for one observed synchronization conflict.
 /// Its private fields bind the operation, stage, target state and conflict set;
@@ -132,59 +100,12 @@ impl fmt::Debug for ConflictPathToken {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConflictEligibility {
-    EligibleCanonical,
-    ExternalResolutionRequired,
-}
-
-/// Classification is deliberately structural rather than marker-text based:
-/// these facts are derived from the actual three index stages.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConflictEntryKind {
-    Document,
-    Ticket,
-    Comment,
-    Noncanonical,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ConflictStructure {
-    RegularUtf8SamePath,
-    Binary,
-    Executable,
-    Symlink,
-    Rename,
-    Delete,
-    IdentityChanged,
-    IncompatibleClosures,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ConflictCandidate {
-    pub kind: ConflictEntryKind,
-    pub structure: ConflictStructure,
-}
-
-/// A whole conflict set is eligible only if every entry is an owned canonical
-/// regular UTF-8 same-path conflict.  This encodes the approved mixed-set
-/// boundary: a single unsupported entry requires external repair for all.
-pub(super) fn conflict_eligibility(entries: &[ConflictCandidate]) -> ConflictEligibility {
-    if !entries.is_empty()
-        && entries.iter().all(|entry| {
-            matches!(
-                entry.kind,
-                ConflictEntryKind::Document
-                    | ConflictEntryKind::Ticket
-                    | ConflictEntryKind::Comment
-            ) && entry.structure == ConflictStructure::RegularUtf8SamePath
-        })
-    {
-        ConflictEligibility::EligibleCanonical
-    } else {
-        ConflictEligibility::ExternalResolutionRequired
-    }
-}
+pub use crate::repository::integration::validate::ConflictEligibility;
+pub(super) use crate::repository::integration::validate::{
+    ConflictCandidate, conflict_eligibility,
+};
+#[cfg(test)]
+pub(super) use crate::repository::integration::validate::{ConflictEntryKind, ConflictStructure};
 
 /// Ephemeral conflict content. Callers may consume bytes but diagnostics never
 /// render their contents.
