@@ -177,15 +177,12 @@ fn prepare(
                     reason: Reason::ImmutableClosureDisagreement,
                 });
             }
-            return Execution::prepare(
-                repo,
-                &git,
-                &observation.context_ref,
-                disposition,
-                (local, incoming),
-            );
+            // Conflicts still need the same complete prospective representation
+            // checks below, including stage-zero additions and every stage mode.
+            // Canonical eligibility alone is not checkout/image authority.
+        } else {
+            identity(&git)?;
         }
-        identity(&git)?;
     }
     if disposition != Disposition::Noop {
         let prospective = if disposition == Disposition::Merge {
@@ -853,6 +850,10 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     if !changed_contexts(&before, &after, owner.repo.root()).is_empty() {
         return Err(Fault::foreign());
     }
+    // Matching discovery snapshots do not establish integration authority: both
+    // may observe the same foreign ref/log/lock state. Recheck the actual frozen
+    // disposition/release proof after all index boundaries, before terminal SQL.
+    recover::verify_released_integration(owner)?;
     let root = owner.repo.root();
     let cancelled=owner.transaction(|tx,row| {
         if super::control::acknowledge_pending(tx,row)? {return Ok(true);}

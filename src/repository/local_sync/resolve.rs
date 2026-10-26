@@ -693,22 +693,16 @@ fn verify_result_files(owner: &mut Owner<'_>, index: &git2::Index) -> Result<(),
 }
 pub(super) fn finish(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     owner.authorize()?;
-    conflict::backend_unlocked(owner)?;
-    verify_integrated(owner)?;
     let snapshot = conflict::stored(owner)?
         .flatten()
         .ok_or_else(Fault::authority)?;
     let metadata = integration::artifacts::MergeMetadataDirectory::open(&owner.git)?;
-    // Complete member preflight prevents retiring any member alongside foreign data.
-    for (member, expected) in conflict::MEMBERS.iter().zip(snapshot.metadata) {
-        let actual = metadata.digest(member)?;
-        if actual.is_some() && actual != expected {
-            return Err(Fault::foreign());
-        }
-    }
+    release_preflight(owner, &metadata, snapshot.metadata)?;
     owner.step(12, "metadata_release", false, owner.row.candidate)?;
     for (i, (member, expected)) in conflict::MEMBERS.iter().zip(snapshot.metadata).enumerate() {
-        owner.authorize()?;
+        // A previous member's retirement is a safe boundary, not permission to
+        // consume the rest after foreign ref/log/lock/member changes arrive.
+        release_preflight(owner, &metadata, snapshot.metadata)?;
         if let (Some(actual), Some(expected)) = (metadata.digest(member)?, expected) {
             if actual != expected {
                 return Err(Fault::foreign());
@@ -739,6 +733,24 @@ pub(super) fn finish(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     super::control::safe_point(owner)?;
     finish_index(owner)?;
     Ok(ResultCode::Ok)
+}
+fn release_preflight(
+    owner: &mut Owner<'_>,
+    metadata: &integration::artifacts::MergeMetadataDirectory,
+    expected: [Option<[u8; 32]>; 3],
+) -> Result<(), Fault> {
+    owner.authorize()?;
+    conflict::backend_unlocked(owner)?;
+    verify_integrated(owner)?;
+    // Inspect the whole remaining set before any next unlink. Also reject a
+    // foreign reappearance at an already-retired name rather than ignoring it.
+    for (member, expected) in conflict::MEMBERS.iter().zip(expected) {
+        let actual = metadata.digest(member)?;
+        if actual.is_some() && actual != expected {
+            return Err(Fault::foreign());
+        }
+    }
+    Ok(())
 }
 pub(super) fn verify_integrated(owner: &mut Owner<'_>) -> Result<(), Fault> {
     let oid = owner.row.result.ok_or_else(Fault::authority)?;
@@ -780,6 +792,7 @@ pub(super) fn adopt_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault>
     let oid = owner.git.refname_to_id(&owner.row.context_ref)?;
     external_proof(owner, oid)?;
     owner.step(13, "reference", false, Some(oid))?;
+    bind_external_logs(owner)?;
     owner.step(13, "reference", true, Some(oid))?;
     owner.transaction(|db,row| {
         db.execute("UPDATE local_context_sync_records SET state='index_pending',integration_proven=1,artifacts_released=1,result_oid=?2,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",params![row.operation_id.to_string(),oid.to_string()])?;
@@ -803,7 +816,31 @@ pub(super) fn verify_external_integrated(owner: &mut Owner<'_>) -> Result<(), Fa
     if !external_integration_recorded(owner)? {
         return Err(Fault::authority());
     }
-    external_proof(owner, result)
+    external_proof(owner, result)?;
+    let logs = recover::current_log_digests(&owner.git, &owner.row.context_ref)?;
+    owner.transaction(|db,row| {
+        let (branch,head):(Vec<u8>,Option<Vec<u8>>)=db.query_row("SELECT baseline_metadata_digest,expected_metadata_digest FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13",[row.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        let head=head.ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
+        if branch!=logs[0] || head!=logs[1] {return Err(ReadError::new(ResultCode::ExternalChange));}
+        Ok(())
+    })
+}
+/// External adoption has no library-made reflog append. Its reference step stores
+/// the validated post-adoption branch/HEAD log digests in the two metadata digest
+/// fields. Once bound they cannot be refreshed from a later foreign observation.
+fn bind_external_logs(owner: &mut Owner<'_>) -> Result<(), Fault> {
+    let logs = recover::current_log_digests(&owner.git, &owner.row.context_ref)?;
+    owner.transaction(|db,row| {
+        let (branch,head,phase):(Vec<u8>,Option<Vec<u8>>,String)=db.query_row("SELECT baseline_metadata_digest,expected_metadata_digest,phase FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13",[row.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+        if let Some(head)=head {
+            if branch!=logs[0] || head!=logs[1] {return Err(ReadError::new(ResultCode::ExternalChange));}
+        } else {
+            let unbound=blake3::hash(b"local-sync-no-merge-metadata-v1");
+            if phase!="prepared" || branch.as_slice()!=unbound.as_bytes() {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+            if db.execute("UPDATE local_context_sync_steps SET baseline_metadata_digest=?2,expected_metadata_digest=?3 WHERE operation_ulid=?1 AND ordinal=13 AND phase='prepared' AND expected_metadata_digest IS NULL",params![row.operation_id.to_string(),logs[0].as_slice(),logs[1].as_slice()])?!=1 {return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        }
+        Ok(())
+    })
 }
 pub(super) fn external_integration_recorded(owner: &mut Owner<'_>) -> Result<bool, Fault> {
     owner.transaction(|db,row| {

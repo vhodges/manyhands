@@ -69,7 +69,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
-| Task 6 | Implemented at `3dc7d15616819fcdef49164182614b2195ce1877`, base `7283ad210abbb0e9f6fd108362c48d488ee7fad4`. SPEC `ses_e864b2dfbffemfrKBcgnvISO55` re-reviewed `4104895b4ccb90c4410eb64cc035146cace7cbc9`: whole-result preflight and early backend checks closed; **two Important findings remain** in candidate-observation composition and external-abandon provenance. Checkpoint `01M5WYJ5NR8CQ09A8JMGPDX847` records verified corrections and **153 local + 4 shared = 157 passing tests**, with whole-tree gates green. SPEC re-review is pending; QUALITY has not started. The blanket domain-completion claim remains qualified until reviewed. |
+| Task 6 | Controller reports **SPEC APPROVED, zero outstanding at `fd1b356eb67403bc1dbcf6a7fad7ac8425dcecdc`**, session `ses_e864b2dfbffemfrKBcgnvISO55`. QUALITY `ses_e8613a466ffe3Dlw50236N05X9` requests three P2 corrections. Checkpoint `01M5X0P7E9XE73WJYHYSSQN09A` records verified fixes and **159 local + 4 shared = 163 passing tests**, with whole-tree gates green. Next: SPEC delta verification and QUALITY re-review. The approved base's SPEC result is not automatically extended to these changes. |
 | Tasks 7–9 | Not started. Public F2 requests/DTOs/activation and end-to-end closure acceptance remain unproven; precise obligations below. |
 
 All new commits use the requested trailer
@@ -2746,3 +2746,105 @@ incorporated; merge-tree passed with base tree
 `23c13023a64a35900ba5e82d90415924c53891ae`. Status/diff/log and owned scope were
 inspected, and diff checks passed. **Next gate: SPEC re-review must be green before
 QUALITY begins.** Overall Task 6 completion remains qualified pending that review.
+
+## Task 6 QUALITY corrections: continuation and representation boundaries
+
+Recorded **2026-10-26T21:22:06Z**, comment `01M5X0P7E9XE73WJYHYSSQN09A` (ID
+issued earlier by the main checkout's existing CLI). Fix base:
+**`fd1b356eb67403bc1dbcf6a7fad7ac8425dcecdc`**.
+
+The controller reports Task 6 SPEC **APPROVED with zero outstanding findings at
+this base**, session **`ses_e864b2dfbffemfrKBcgnvISO55`**. QUALITY
+**`ses_e8613a466ffe3Dlw50236N05X9` requests three P2 corrections**. All three
+were verified from source and reproduced before correction. The following are
+implementer fixes pending SPEC delta verification and QUALITY re-review.
+
+### Verified findings, corrections and actual owner states
+
+| Finding | Verified base behavior | Correction / resulting proof |
+| --- | --- | --- |
+| 1. Stale integration proof at index handoff | Result/ref proof ran before `LocalSyncBeforeIndex`; the common index function then trusted two agreeing discovery observations and SQL owner checks. Both observations could agree on a foreign ref/log/lock image and incorrectly complete the parent, R and envelope. | The shared `run::index` rechecks `verify_released_integration` after both index boundaries and discovery observations, immediately before terminal SQL. This covers canonical R, external result, equal, contained, FF and clean merge. Foreign evidence leaves IndexPending, `index_complete=false`, and parent/R/envelope nonterminal; exact restoration permits discovery-only completion without another Git effect. |
+| 2. Stale metadata-release preflight after one removal | Backend/ref and complete member checks ran once. After a normal-return `Retired(0)` hook changed a lock/log/ref or later member, the loop could unlink additional owned members before a late failure. | `release_preflight` checks current authority, backend locks, integrated ref/log/index/file proof, and the complete remaining metadata set before each removal. Foreign reappearance at an already-retired name is checked too. A foreign arrival after MERGE_HEAD removal now stops with only that member retired, Integrated/release-pending authority and the release step still prepared. Restoration resumes the verified remainder without another commit/ref effect. |
+| 3. Conflict early return skipped prospective structural checks | The conflict branch returned execution preparation before the existing whole-index UTF-8/regular-mode/collision checks. An incoming nonconflicting symlink or non-UTF-8 path could therefore install effects and leave Applying with an unobserved image. | Removed the early return. Conflicts now pass the same complete prospective-entry checks, including every conflict stage and stage-zero addition, before journal acceptance. Unsupported representations refuse owner-free and Git-unchanged. Representable code, executable-file and binary conflicts still install as whole-set external-only; canonical eligibility policy is unchanged. |
+
+External integration has no library-made reflog append. To detect a **same-OID**
+foreign log change after adoption, reference step 13 now binds the validated
+post-adoption branch and HEAD log digests in its existing metadata-digest fields.
+Only digests are stored, not log contents or source. Verification requires those
+exact retained digests in addition to the recorded external result, ordered
+parents, all-side invariants, clean image and released artifacts. This preserves
+external provenance without inventing an owned candidate/ref append.
+
+First binding requires a prepared reference intent with the original unbound
+metadata sentinel. A retained branch digest with a missing HEAD digest is partial
+authority loss, not permission to capture fresh foreign logs. Existing observed
+external records lacking the proof likewise refuse rather than reconstructing
+authority. The SQL schema shape and global enums are unchanged. A regression
+positively reproduced improper rebaselining of a partially lost prepared proof
+during development; the sentinel check corrected it before this checkpoint.
+
+### Test-first record and fixture matrix
+
+All commands used Devenv and one positional filter. Test prefix:
+`devenv shell -- cargo test --all-features --locked --lib`.
+
+| Filter | Observed RED before correction | Final GREEN |
+| --- | --- | --- |
+| `quality_completion_revalidates_all_dispositions_after_index_boundaries` | 1 failed: changing canonical R's ref at LocalSyncBeforeIndex still returned Ok/Complete. | 1 passed, **48 cases**: six provenances × both index boundaries × ref/branch-log/HEAD-log/lock mutation. Parent, attempt and envelope remain pending; foreign Git image is unchanged; exact restoration finishes with no second Git effect. |
+| `quality_metadata_retirement_rechecks_remaining_evidence_before_each_unlink` | 1 failed: retirement events were `[0,1,2]` rather than `[0]` after the normal-return hook introduced a foreign lock. | 1 passed, **six cases**: lock/ref/both logs/later MERGE_MODE/current MERGE_MSG. No additional member is removed; foreign evidence survives; repaired continuation finishes the same candidate. |
+| `quality_conflict_` | 2 failed: symlink and non-UTF-8 cases returned retained Applying/Written instead of owner-free refusal. | 2 passed: **eight** kind × symlink/gitlink × stage-zero/conflict-stage cases, plus **two** Unix non-UTF-8 cases. Every refusal preserves files/index/refs/metadata and persistent object IDs. |
+| `quality_representable_unsupported_conflicts_remain_external_only` | Passed as an unchanged-policy control before the structural fix. | 1 passed, **three** code/executable/binary controls. Not counted as a RED. |
+| `quality_external_log_authority_is_not_recreated_from_current_git` | The added partially-lost-prepared composition failed by returning Ok and adopting fresh foreign logs. | 1 passed, **three** missing/corrupt/partially-lost-proof controls. Two retries and abandon refuse, preserving authority and Git. |
+
+These are **six new tests, 70 matrix/control cases**, in
+`local_sync/task6_quality_tests.rs`, registered as an adjacent child test module
+of the existing SPEC fixtures. Existing semantic assertions were not edited.
+The retirement hooks return normally: an injected error is not what stops the
+loop. These new tests add no child-exit count; all **21 existing actual no-Drop
+exit assertions** remain green in the complete local selection.
+
+### Final verification and next gates
+
+Final whole-tree checks, all exit 0:
+
+```sh
+devenv shell -- cargo fmt --check
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo test --all-features --locked --lib local_sync::
+```
+
+Check: **0.32s**; clippy: **6.94s**, no warnings. Final local selection:
+**159 passed**, zero failed/ignored/measured, 1284 filtered, **608.94s**. This
+includes the 153 previous local tests plus all six new QUALITY tests. The final
+run followed the additional prepared-log-proof-loss correction; earlier passing
+runs are not substituted for that final verification.
+
+Each required shared anchor then ran separately with the same Devenv test prefix,
+selecting/passing exactly **one** test:
+
+```text
+public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally
+external_repair_exact_ordered_parent_clean_only
+clean_merge_integration_fault_matrix_resumes_each_durable_transition_once
+cancellation_with_a_pending_conflict_is_a_recoverable_stop
+```
+
+Unique selected total: **163 passing library tests**. No full suite, unrelated
+target, native workflow, frontend/dependency/global-enum edit, PR, lifecycle action
+or subagent. The non-UTF-8 filesystem cases execute on Unix/Linux; no native Windows
+or macOS runtime evidence is claimed.
+
+Rust scope: `local_sync/{run,recover,resolve,spec_tests}.rs` and new
+`local_sync/task6_quality_tests.rs`. Preparation and recovery reuse the existing
+neutral primitives and disposition/image/ref proofs. No Task 7 production caller,
+F2 association/cancellation/settlement or public DTO was implemented; its explicit
+activation obligations remain. Source/privacy and all prior authority, external
+repair, metadata retirement and frozen-image regressions remain green.
+
+Entry was clean at `fd1b356`. Start/final fetch/merge found main `0464c42` already
+incorporated; merge-tree passed with base tree
+`ee50257d353a5c79342342168947a950ce3f89ef`. Status/diff/log and owned scope were
+inspected; diff checks passed. **Next: SPEC delta verification, then QUALITY
+re-review of these three corrections.** Prior SPEC approval applies to the base;
+no approval of the changed tree or Task 7 advance is claimed.

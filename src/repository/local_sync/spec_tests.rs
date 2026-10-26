@@ -1,4 +1,6 @@
 //! Task 6 SPEC compositions, from review ses_e864b2dfbffemfrKBcgnvISO55.
+#[path = "task6_quality_tests.rs"]
+mod quality;
 use super::{
     conflict_tests::{fixture, fixture_with, input, start},
     record_tests::{Fixture, commit},

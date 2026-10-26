@@ -158,6 +158,12 @@ fn log_digest(git: &git2::Repository, branch: &str) -> Result<[u8; 32], ReadErro
 fn head_log_digest(git: &git2::Repository) -> Result<[u8; 32], ReadError> {
     Ok(*blake3::hash(&bytes(git.path(), Path::new("logs/HEAD"))?).as_bytes())
 }
+pub(super) fn current_log_digests(
+    git: &git2::Repository,
+    branch: &str,
+) -> Result<[[u8; 32]; 2], Fault> {
+    Ok([log_digest(git, branch)?, head_log_digest(git)?])
+}
 
 pub(super) fn clean_metadata(git: &git2::Repository, branch: &str) -> Result<(), Fault> {
     let metadata = integration::artifacts::MergeMetadataDirectory::open(git)?;
