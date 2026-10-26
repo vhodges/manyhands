@@ -307,7 +307,7 @@ fn local_action_and_prepared_step_have_exact_store_and_read_names() {
 #[test]
 fn additive_migration_does_not_repair_a_missing_migrated_table() {
     let f = Fixture::new(AuthoringKind::Ticket);
-    f.db().execute_batch("DROP TABLE local_context_sync_resolutions; DROP TABLE local_context_sync_steps; DROP TABLE local_context_sync_records; DELETE FROM registry_migrations WHERE name='local_context_sync_v1'").unwrap();
+    f.db().execute_batch("DROP TABLE local_context_sync_resolutions; DROP TABLE local_context_sync_steps; DROP TABLE local_context_sync_records; DELETE FROM registry_migrations WHERE name IN ('local_context_sync_v1','local_context_sync_child_cascade_v2')").unwrap();
     let reopened = RepositoryService::open_at(f.data.path()).unwrap();
     assert_eq!(
         f.observe(),

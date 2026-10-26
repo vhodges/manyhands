@@ -11,6 +11,8 @@ mod admission_tests;
 #[cfg(test)]
 mod observe_tests;
 #[cfg(test)]
+mod quality_tests;
+#[cfg(test)]
 mod record_tests;
 #[cfg(test)]
 mod review_tests;

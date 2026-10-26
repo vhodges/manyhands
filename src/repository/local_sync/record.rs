@@ -9,6 +9,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use std::path::PathBuf;
 
 const MARKER: &str = "local_context_sync_v1";
+const CASCADE_MARKER: &str = "local_context_sync_child_cascade_v2";
 const RECORD: &str = "CREATE TABLE local_context_sync_records (
  operation_ulid TEXT PRIMARY KEY NOT NULL,
  local_record_id INTEGER NOT NULL UNIQUE REFERENCES operation_records(id) ON DELETE CASCADE,
@@ -40,7 +41,7 @@ const RECORD: &str = "CREATE TABLE local_context_sync_records (
  CHECK(index_complete=0 OR (integration_proven=1 AND artifacts_released=1))
 )";
 const STEPS: &str = "CREATE TABLE local_context_sync_steps (
- operation_ulid TEXT NOT NULL REFERENCES local_context_sync_records(operation_ulid),
+ operation_ulid TEXT NOT NULL REFERENCES local_context_sync_records(operation_ulid) ON DELETE CASCADE,
  ordinal INTEGER NOT NULL CHECK(ordinal>=0),
  generation INTEGER NOT NULL CHECK(generation>0),
  owner_epoch INTEGER NOT NULL CHECK(owner_epoch>0),
@@ -56,7 +57,7 @@ const STEPS: &str = "CREATE TABLE local_context_sync_steps (
 )";
 const RESOLUTIONS: &str = "CREATE TABLE local_context_sync_resolutions (
  attempt_ulid TEXT PRIMARY KEY NOT NULL,
- operation_ulid TEXT NOT NULL REFERENCES local_context_sync_records(operation_ulid),
+ operation_ulid TEXT NOT NULL REFERENCES local_context_sync_records(operation_ulid) ON DELETE CASCADE,
  request_ulid TEXT NOT NULL UNIQUE,
  generation INTEGER NOT NULL CHECK(generation>0),
  owner_epoch INTEGER NOT NULL CHECK(owner_epoch>0),
@@ -88,6 +89,24 @@ fn sql_error(error: rusqlite::Error) -> ReadError {
     })
 }
 
+fn schemas(cascade: bool) -> [(&'static str, String); 3] {
+    let child = |sql: &str| {
+        if cascade {
+            sql.to_owned()
+        } else {
+            sql.replace(" ON DELETE CASCADE", "")
+        }
+    };
+    [
+        ("local_context_sync_records", RECORD.to_owned()),
+        ("local_context_sync_steps", child(STEPS)),
+        ("local_context_sync_resolutions", child(RESOLUTIONS)),
+    ]
+}
+
+// Called within recovery::migrate_operation_records' transaction. Upgrading
+// the two child FKs and recording the marker either commit together or roll
+// back together; existing v1 authority is audited before any table is rebuilt.
 pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> {
     let migrated: bool = db
         .query_row(
@@ -96,17 +115,23 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
             |r| r.get(0),
         )
         .map_err(|_| failure())?;
+    let cascaded: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CASCADE_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    if cascaded && !migrated {
+        return Err(failure());
+    }
     if !migrated {
         let partial:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name IN ('local_context_sync_records','local_context_sync_steps','local_context_sync_resolutions'))",[],|r|r.get(0)).map_err(|_|failure())?;
         if partial {
             return Err(failure());
         }
     }
-    for (name, sql) in [
-        ("local_context_sync_records", RECORD),
-        ("local_context_sync_steps", STEPS),
-        ("local_context_sync_resolutions", RESOLUTIONS),
-    ] {
+    for (name, sql) in schemas(cascaded || !migrated) {
         let actual: Option<String> = db
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
@@ -117,15 +142,30 @@ pub(in super::super) fn migrate(db: &Connection) -> Result<(), RepositoryError> 
             .map_err(|_| failure())?;
         match actual {
             None if !migrated => {
-                db.execute_batch(sql).map_err(|_| failure())?;
+                db.execute_batch(&sql).map_err(|_| failure())?;
             }
-            Some(actual) if compact(&actual) == compact(sql) => {}
+            Some(actual) if compact(&actual) == compact(&sql) => {}
             _ => return Err(failure()),
         }
     }
     if !migrated {
         db.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| failure())?;
+    }
+    if !cascaded {
+        if migrated {
+            audit_with_schema(db, false)?;
+            for (name, sql) in schemas(true).into_iter().skip(1) {
+                // Both audited layouts have identical columns/order; only the
+                // parent FK delete action changes. No authority is synthesized.
+                db.execute_batch(&format!("ALTER TABLE {name} RENAME TO {name}_before_cascade; {sql}; INSERT INTO {name} SELECT * FROM {name}_before_cascade; DROP TABLE {name}_before_cascade;")).map_err(|_|failure())?;
+            }
+        }
+        db.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [CASCADE_MARKER],
+        )
+        .map_err(|_| failure())?;
     }
     audit(db)
 }
@@ -199,6 +239,14 @@ pub(in super::super) struct LocalContextSyncRecord {
     pub(crate) index_complete: bool,
 }
 
+fn strict_oid(text: &str) -> rusqlite::Result<git2::Oid> {
+    let oid = git2::Oid::from_str(text).map_err(|_| rusqlite::Error::InvalidQuery)?;
+    if oid.is_zero() || oid.to_string() != text {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(oid)
+}
+
 fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
     let invalid = || rusqlite::Error::InvalidQuery;
     let operation_id =
@@ -214,23 +262,7 @@ fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
     }
     let oid = |column| -> rusqlite::Result<Option<git2::Oid>> {
         r.get::<_, Option<String>>(column)?
-            .map(|s| {
-                if s.len() != 40
-                    || s.bytes()
-                        .any(|b| !b.is_ascii_digit() && !(b'a'..=b'f').contains(&b))
-                {
-                    return Err(invalid());
-                }
-                git2::Oid::from_str(&s)
-                    .map_err(|_| invalid())
-                    .and_then(|oid| {
-                        if oid.is_zero() {
-                            Err(invalid())
-                        } else {
-                            Ok(oid)
-                        }
-                    })
-            })
+            .map(|s| strict_oid(&s))
             .transpose()
     };
     let flag = |column| -> rusqlite::Result<bool> {
@@ -265,10 +297,8 @@ fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
         context_ref: r.get("context_ref")?,
         primary_ref: r.get("primary_ref")?,
         observation: r.get("observation")?,
-        context_parent: git2::Oid::from_str(&r.get::<_, String>("context_parent")?)
-            .map_err(|_| invalid())?,
-        primary_parent: git2::Oid::from_str(&r.get::<_, String>("primary_parent")?)
-            .map_err(|_| invalid())?,
+        context_parent: strict_oid(&r.get::<_, String>("context_parent")?)?,
+        primary_parent: strict_oid(&r.get::<_, String>("primary_parent")?)?,
         owner_epoch: r.get("owner_epoch")?,
         semantic_revision: r.get("semantic_revision")?,
         generation: r.get("generation")?,
@@ -276,10 +306,7 @@ fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
             .get::<_, Option<String>>("closure_operation")?
             .map(|s| OperationId::parse(&s).map_err(|_| invalid()))
             .transpose()?,
-        closure_checkpoint: r
-            .get::<_, Option<String>>("closure_checkpoint")?
-            .map(|s| git2::Oid::from_str(&s).map_err(|_| invalid()))
-            .transpose()?,
+        closure_checkpoint: oid("closure_checkpoint")?,
     };
     if result.cancel_issued < 0
         || result.cancel_acknowledged < 0
@@ -322,7 +349,34 @@ fn valid_observation(s: &str) -> bool {
     })
 }
 
+// rusqlite's i64 decoder requires SQLite INTEGER storage, not merely numeric
+// affinity. A REAL or TEXT that passes SQLite comparisons is not an epoch.
+fn validate_child_authority(row: &rusqlite::Row<'_>) -> rusqlite::Result<()> {
+    let generation: i64 = row.get("generation")?;
+    let epoch: i64 = row.get("owner_epoch")?;
+    let parent_generation: i64 = row.get("parent_generation")?;
+    let parent_epoch: i64 = row.get("parent_epoch")?;
+    if generation <= 0 || epoch <= 0 || generation != parent_generation || epoch > parent_epoch {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    Ok(())
+}
+
 pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
+    let cascaded: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [CASCADE_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| failure())?;
+    if !cascaded {
+        return Err(failure());
+    }
+    audit_with_schema(db, true)
+}
+
+fn audit_with_schema(db: &Connection, cascade: bool) -> Result<(), RepositoryError> {
     let marked: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -333,11 +387,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if !marked {
         return Err(failure());
     }
-    for (name, sql) in [
-        ("local_context_sync_records", RECORD),
-        ("local_context_sync_steps", STEPS),
-        ("local_context_sync_resolutions", RESOLUTIONS),
-    ] {
+    for (name, sql) in schemas(cascade) {
         let actual: String = db
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
@@ -345,7 +395,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
                 |r| r.get(0),
             )
             .map_err(|_| failure())?;
-        if compact(&actual) != compact(sql) {
+        if compact(&actual) != compact(&sql) {
             return Err(failure());
         }
         if db
@@ -381,27 +431,21 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
             || db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE attempt_ulid=?1)",[row.operation_id.to_string()],|r|r.get::<_,bool>(0)).map_err(|_|failure())? {
             return Err(failure());
         }
-        let invalid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_steps WHERE operation_ulid=?1 AND (generation!=?2 OR owner_epoch>?3)) OR EXISTS(SELECT 1 FROM local_context_sync_resolutions WHERE operation_ulid=?1 AND (generation!=?2 OR owner_epoch>?3))",params![row.operation_id.to_string(),row.generation,row.owner_epoch],|r|r.get(0)).map_err(|_|failure())?;
-        if invalid {
-            return Err(failure());
-        }
     }
     let mut steps = db
-        .prepare("SELECT kind,expected_old_oid,expected_new_oid FROM local_context_sync_steps")
+        .prepare("SELECT s.kind,s.expected_old_oid,s.expected_new_oid,s.ordinal,s.generation,s.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_steps s JOIN local_context_sync_records p ON p.operation_ulid=s.operation_ulid")
         .map_err(|_| failure())?;
     let mut rows = steps.query([]).map_err(|_| failure())?;
     while let Some(row) = rows.next().map_err(|_| failure())? {
+        validate_child_authority(row).map_err(|_| failure())?;
+        if row.get::<_, i64>("ordinal").map_err(|_| failure())? < 0 {
+            return Err(failure());
+        }
         let kind: String = row.get(0).map_err(|_| failure())?;
         let parse = |column| -> Result<Option<git2::Oid>, RepositoryError> {
             row.get::<_, Option<String>>(column)
                 .map_err(|_| failure())?
-                .map(|text| {
-                    let oid = git2::Oid::from_str(&text).map_err(|_| failure())?;
-                    if oid.is_zero() || oid.to_string() != text {
-                        return Err(failure());
-                    }
-                    Ok(oid)
-                })
+                .map(|text| strict_oid(&text).map_err(|_| failure()))
                 .transpose()
         };
         let (old, new) = (parse(1)?, parse(2)?);
@@ -412,9 +456,10 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
             return Err(failure());
         }
     }
-    let mut attempts=db.prepare("SELECT attempt_ulid,operation_ulid,request_ulid,observation,candidate_oid FROM local_context_sync_resolutions").map_err(|_|failure())?;
+    let mut attempts=db.prepare("SELECT a.attempt_ulid,a.operation_ulid,a.request_ulid,a.observation,a.candidate_oid,a.generation,a.owner_epoch,p.generation AS parent_generation,p.owner_epoch AS parent_epoch FROM local_context_sync_resolutions a JOIN local_context_sync_records p ON p.operation_ulid=a.operation_ulid").map_err(|_|failure())?;
     let mut rows = attempts.query([]).map_err(|_| failure())?;
     while let Some(row) = rows.next().map_err(|_| failure())? {
+        validate_child_authority(row).map_err(|_| failure())?;
         for column in 0..3 {
             OperationId::parse(&row.get::<_, String>(column).map_err(|_| failure())?)
                 .map_err(|_| failure())?;
@@ -426,10 +471,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
             return Err(failure());
         }
         if let Some(oid) = row.get::<_, Option<String>>(4).map_err(|_| failure())? {
-            let parsed = git2::Oid::from_str(&oid).map_err(|_| failure())?;
-            if parsed.is_zero() || parsed.to_string() != oid {
-                return Err(failure());
-            }
+            strict_oid(&oid).map_err(|_| failure())?;
         }
     }
     Ok(())

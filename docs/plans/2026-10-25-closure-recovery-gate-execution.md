@@ -31,10 +31,11 @@ approving E4's companion local-action partition and E9's repair DTO refusal arm;
 comment `01M5V0RYTAKJE3F155FH4QTP53` records that ruling. Tasks 1–3 are implemented
 and independently approved. Current status is **implementing**: the owner answered
 “yes” to the narrow key-file scope question `01M5V7SPS9W51SSF5XYTJR5J08`, recorded
-in approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`. All five Task 4 SPEC findings
-have implementation fixes and targeted evidence recorded in checkpoint
-`01M5VXXM7XSZCBTGB0HTVKV246`; **controller SPEC then QUALITY re-review is pending**.
-Task 4 is not approved or complete. Tasks 4/7 retain ownership of E4/E9 code.
+in approval comment `01M5VWDPG57KWRAJ55Y2EMXRQR`. SPEC re-review approved all five
+Task 4 fixes at `f578bf7`, zero findings. QUALITY then reported three P2 findings;
+their implementation fixes and evidence are in `01M5VZZ5VXNW0PXCGTQWNXHYBV`.
+**QUALITY re-review and SPEC verification of these changed fixes remain pending.**
+Task 4 is not complete. Tasks 4/7 retain ownership of E4/E9 code.
 
 | Work | Evidence/state |
 | --- | --- |
@@ -43,7 +44,7 @@ Task 4 is not approved or complete. Tasks 4/7 retain ownership of E4/E9 code.
 | Task 1 | Implemented at `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`, after approval checkpoint `9b7879e3b03a888c8f6ab62608b0edede65a6982`; comment `01M5V15ZJFXBEMM7KQ4G18Y3RC`. Controller SPEC and QUALITY both approved with zero findings; sessions below. |
 | Task 2 | Implemented at `1f25f56e6ce8c69f0f0b53c8939fe4443aa46c07`, from `76a1ff547a20dc3b112d5cc9417ef29e287f4b3a`; comment `01M5V1QEB9WYETHHG1H765DVH7`. Controller SPEC and QUALITY approved with zero findings; sessions below. |
 | Task 3 | Implemented at `87431fcffe18dd7125bf99962795129c9d5d578b`, review-range checkpoint `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. Controller SPEC and QUALITY approved the full `1f25f56..37bd2c3` range, zero findings; sessions below. |
-| Task 4 | Initial implementation `00a75e7742b6a9cc9284c91d2e18c9d5aec37599`, from `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ`: REQUEST CHANGES, five findings. Scope approval/code-fix base `9b40deda19d7fee34a7956a54743e1483359d230`; all five addressed in the commit containing review-fix checkpoint `01M5VXXM7XSZCBTGB0HTVKV246`. **Awaiting controller SPEC then QUALITY re-review; not approved or complete.** |
+| Task 4 | Initial base `37bd2c36ace84e56920d4cf15f55539d63c7d1c7`. SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` approved all five corrections at `f578bf7a37b5c52e205ef5cb3e1aaae0c8e40f16`, zero findings. QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` reported three P2 findings; fixes from that head are recorded in `01M5VZZ5VXNW0PXCGTQWNXHYBV`. **Awaiting QUALITY re-review and SPEC verification of changed fixes; not complete.** |
 | Tasks 5–9 | Not started. Executor, resolution and request-boundary outcomes remain unproven. |
 
 All new commits use the requested trailer
@@ -1189,3 +1190,137 @@ known unresolved implementation findings or policy questions, but **Task 4 await
 controller SPEC then QUALITY re-review and is not done**. Future executor/request
 control/historical content/abandonment evidence remains with Tasks 5–7; this commit
 does not claim it. Linux evidence is not native Windows/macOS runtime evidence.
+
+## Task 4 QUALITY fixes: awaiting re-review
+
+Recorded `2026-10-26T11:36:41Z`, canonical checkpoint
+`01M5VZZ5VXNW0PXCGTQWNXHYBV`. Code-fix base:
+**`f578bf7a37b5c52e205ef5cb3e1aaae0c8e40f16`**. Entry was clean; start and
+checkpoint fetch/merge of `origin/main` `0464c42dae19a6dde000c7e7660e82762a41fada`
+were no-ops. Merge-tree passed with base tree
+`df27f70b9aa98c8ea9e61681b2e96d8d66d1d331`. No subagents were used.
+
+### Review record
+
+- Controller reports **SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` APPROVED all five
+  earlier findings, zero findings at `f578bf7`**. That approval is preserved as
+  evidence for that head, not extended automatically to this change.
+- **QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3`: three P2 findings** on child-history
+  deletion, child integer authority and closure-checkpoint OID decoding.
+- Source verification confirmed each before editing: the child FKs omitted
+  ON DELETE CASCADE while public removal deletes envelopes first; SQLite numeric
+  affinity/CHECKs do not establish INTEGER storage and the audit read no child
+  integer fields; closure_checkpoint used direct Oid::from_str instead of the
+  existing strict nullable OID path.
+
+### Corrections and proof
+
+1. **Terminal child-history removal — addressed.** Both child tables now cascade
+   from their local companion. The existing public removal transaction can delete
+   envelope, companion, children and registration together without a normal-path
+   FK failure or orphaned removal intent. Pending admission/refusal rules remain.
+   A public regression starts through the real store, retains a step and resolution,
+   and establishes an audited abandoned-before-effects historical fixture. Removal
+   succeeds and leaves no registration/envelope/child rows, with Git unchanged.
+   A pending control preserves all rows and creates no removal intent. An injected
+   registration DELETE failure proves the cascade rolls back with the transaction;
+   same-ID retry then succeeds.
+
+   Existing v1 journals are not discarded or silently accepted under a changed
+   definition. New marker **`local_context_sync_child_cascade_v2`** versions the FK
+   upgrade. Migration audits the exact legacy layouts and all authority, rebuilds
+   only the two child tables with identical columns/data plus cascading FKs, and
+   records the marker inside the existing migration transaction. Tests cover
+   pending and terminal evidence preservation, terminal removal after upgrade,
+   both-table/marker rollback on injected failure, and refusal of corrupt legacy
+   authority without repair. Exact schema audits recognize the appropriate
+   migration stage. The old fresh-schema fixture now clears both migration markers;
+   every existing assertion is retained.
+2. **Child integer authority — addressed.** Both child queries now decode stored
+   generation and owner_epoch as i64, and steps also decode ordinal as i64. Thus
+   REAL/TEXT storage cannot masquerade as integer authority through SQLite affinity.
+   Ordinal is nonnegative within the signed SQLite INTEGER range; generations and
+   epochs are positive, generation must equal the parent generation, and a child
+   epoch cannot exceed its parent epoch. These checks replace the SQL-only parent
+   comparison rather than inventing a new numeric limit. **32 corruption scenarios**
+   across all five child integer fields cover text, fractions, out-of-range numeric
+   representation, negatives, zero where prohibited and values beyond parent
+   authority. Both real internal read and takeover return RecoveryRequired with
+   unchanged parent epoch/generation/revision and Git. Ordinals 0/i64::MAX and a
+   retained older child epoch after takeover remain valid controls.
+3. **Closure checkpoint OID — addressed.** Extracted one strict nonzero canonical
+   full-OID decoder, reused by persisted parent/candidate/result/checkpoint OIDs,
+   step OIDs and resolution candidates. The closure_checkpoint path now uses it.
+   Four corrupt spellings (zero, uppercase, short, invalid) of a genuinely admitted
+   Closing fixture refuse real read and takeover, preserving owner epoch and Git.
+   Existing genuine-checkpoint, valid-descendant and changed-closure controls pass.
+
+The only production file changed is `local_sync/record.rs`. New tests are in
+`local_sync/quality_tests.rs`, registered by mod.rs. No executor, public API,
+request-control, key behavior or global enum change. Historical-state fixture
+edits test cleanup of valid retained journal history; they are not a Task 6/7
+abandonment implementation. New local parents are created through the real store.
+
+### Red/green evidence
+
+All runs used
+`devenv shell -- cargo test --all-features --locked --lib local_sync::quality_tests`:
+
+| Stage | Result |
+| --- | --- |
+| Before production fixes, five tests | **2 passed / 3 failed**: public removal hit FK failure; noninteger ordinal read succeeded; zero checkpoint OID read succeeded. |
+| After typed integer and strict OID fixes | **4 passed / 1 failed**: only the terminal-history removal FK failure remained. |
+| Added upgrade/rollback/legacy-corruption tests before migration implementation | **5 passed / 3 failed**: removal FK failure, absent cascade upgrade, and absent marker-insertion failure path. |
+| After versioned cascade migration | **8 passed**, zero failures. |
+| Final group with public deletion-rollback control | All **9 QUALITY tests** passed within the full local_sync selection below. |
+
+No test failure was worked around by weakening an assertion. No new owner policy
+question arose. The migration-fixture marker cleanup is the sole change to an
+existing test setup and preserves its exact missing-table refusal assertions.
+
+### Verification
+
+Required whole-tree gates, through Devenv, all exit 0:
+
+- `cargo fmt --check`.
+- `cargo check --all-features --locked` (2.94s).
+- `cargo clippy --all-targets --all-features --locked -- -D warnings` (11.50s).
+
+Targeted commands use `devenv shell -- cargo test --all-features --locked`:
+
+| Selection | Passed |
+| --- | ---: |
+| `--lib local_sync::` (49 prior + 9 new QUALITY tests) | 58 |
+| `--lib repository::registration_removal::tests` | 20 |
+| `--test repository_enablement remove_registration` | 8 |
+| `--lib child_fence` | 8 |
+| `--doc local_sync` | 4 |
+
+Each following selector ran individually with `--lib <selector> -- --exact`,
+selecting/passing **one** test:
+
+```text
+repository::read::status::tests::a_local_action_is_one_the_recovery_store_writes
+repository::read::status::tests::every_action_the_recovery_store_writes_is_one_the_read_knows
+repository::recovery::abandoned_row_tests::every_step_is_stored_under_its_own_name_and_read_back
+repository::closure::checkpoint::tests::checkpoint_authority_reads_commit_not_config
+repository::closure::checkpoint::tests::adopt_written_closure_only_while_closing
+repository::closure::checkpoint::tests::reconcile_adoptable_descendant_is_checkpoint_written
+repository::remote::reservation::tests::sync_authoritative_same_id_refresh_replay_allows_only_exact_refresh_identity
+repository::remote::reservation::tests::sync_incomplete_action_cannot_coexist_with_a_same_id_local_refresh
+repository::remote::reservation::tests::conflict_release_fences_stale_owner_and_requires_explicit_matching_reacquisition
+```
+
+Unique total: **95 library + 8 integration + 4 compile-fail doctests = 107 passing
+tests**, zero failures/ignored and no zero-selection evidence. The local group
+finished in 66.18s; its 32-fixture integer corruption matrix accounted for the
+long-running-test notice and completed successfully. No full suite or native run.
+
+### Next gate
+
+The three QUALITY findings have implementer fixes and evidence, not reviewer
+approval. Review this commit from `f578bf7a37b5c52e205ef5cb3e1aaae0c8e40f16`.
+Ticket remains implementing. **No Task 5 advance until QUALITY re-review is green
+and SPEC has verified the changed fixes.** No known implementation blocker remains;
+native platform runtime behavior and later executor/request protocols remain
+outside this checkpoint. No PR, merge, closure or cleanup was performed.
