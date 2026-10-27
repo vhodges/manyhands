@@ -1061,7 +1061,7 @@ tests.
 | The item changed under a dirty or kept draft | amber | "Someone changed this file outside Manyhands. Your edits are kept." | Compare… (opens the review) | D3 save states (R-68) |
 | Review before saving | amber | D3's | Review… | D3 save states |
 | Another refusal | red | the library's message | its recovery | D3 save states |
-| A ticket with no type, or another nonconforming file | amber | "This ticket has no type, so Manyhands can't save it yet.", or D1's reason | Repair… (Part E) | D1's problem and repair line |
+| A nonconforming file, a ticket with no type included | amber | D1's reason (the problem's guidance); the library's `missing_field` does not name the field, so a missing type is not told apart (owner, 2026-10-27, from Task 5b) | Repair… (Part E) | D1's problem and repair line |
 | Unmanaged document | amber | the handoff's | Adopt… (repair with adoption, Part E) | D1 |
 | Link not found, or opened as the nearest match | info | D3's | — | D3's link messages |
 
@@ -2508,6 +2508,9 @@ R-45 by decision 18.
   was lost, sent again after a release, makes the context again. Release
   still refuses any context that holds work. The desktop never sends
   either again across the other (Task 17).
+- "Needs fixing" shows D1's reason for every nonconforming file. A ticket
+  with no type is not singled out as "This ticket has no type…", because
+  the library's problem names no field (owner, 2026-10-27).
 - The pinned normalization is not idempotent (fact 81, R-79). A body saved
   from a text of that shape, after a real edit, can be normalized again
   when it is next opened, as any body read is. When a restored draft or the

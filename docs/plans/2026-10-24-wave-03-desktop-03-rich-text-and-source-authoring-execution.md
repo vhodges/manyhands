@@ -442,3 +442,15 @@ Notes for later tasks: Task 22 leaves `targets()` in
   region end. `opening_a_tab_does_not_change_the_selection` proves the
   details are drawn with a tab open. — If wrong: a pane opened another way
   would lack the repository details.
+- Owner decision, 2026-10-27 (from Task 5b's review): a library gap. The
+  design's "This ticket has no type, so Manyhands can't save it yet."
+  cannot be produced. `ProblemDto` has only a code, a path and a target
+  ID, and `missing_field` covers every required key. "Needs fixing" shows
+  D1's reason for every nonconforming file. The design's Banners row and
+  Known Limits say so. No library change, no ticket.
+- Ruling (Task 5b, E-7): the header shows one primary action, by kind
+  (the design says "Close ticket… or Approve and merge…"). E-7 defines
+  the test's rows as "the header's later actions", so for a ticket file
+  the test drops "Approve and merge…" as well as "Comment". — Within
+  E-7's text. — If wrong: one line in `header_later` and one in the
+  test's filter.
