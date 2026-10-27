@@ -4,7 +4,7 @@ use super::{
     recover::{self, Disposition, Execution, Owner},
 };
 use crate::{canonical::ItemId, repository::*, results::*};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 #[cfg(test)]
 type BoundaryHook = Box<dyn FnMut(FailurePoint)>;
@@ -378,7 +378,11 @@ pub(super) fn read_evidence(
     super::record::store_access(true)?;
     let (row,mut evidence)=service.read_session(RepositoryOperation::Read,|db| {
         super::record::audit(db).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))?;
-        let row=db.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.id=?2 AND r.root_path=?3",params![id.to_string(),repo.registration_id(),repo.root().to_str()],super::record::decode)?;
+        let row = db.query_row(
+            "SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.id=?2 AND r.root_path=?3",
+            params![id.to_string(),repo.registration_id(),repo.root().to_str()],
+            super::record::decode,
+        ).optional()?.ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))?;
         Ok((row,Execution::read(db,id)?))
     })?;
     let git = git2::Repository::open(repo.root())

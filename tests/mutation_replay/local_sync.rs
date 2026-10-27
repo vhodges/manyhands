@@ -1243,3 +1243,807 @@ fn local_sync_unlinked_request_keeps_its_control_after_reopen() {
     );
     assert_eq!(world.count("SELECT count(*) FROM local_context_sync_request_control WHERE parent_operation IS NULL AND resolution_attempt IS NULL"),1);
 }
+
+type AuthorityImage = Vec<(String, Vec<Vec<rusqlite::types::Value>>)>;
+
+fn task8_authority_image(world: &mutation::World) -> AuthorityImage {
+    let db = items::index(world.data.path());
+    let tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'local_context_sync_%' OR name IN ('request_records','request_operations','operation_records','repositories','contexts','configuration_observations')) ORDER BY name").unwrap().query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(
+        tables
+            .iter()
+            .filter(|t| t.starts_with("local_context_sync_"))
+            .count(),
+        8,
+        "every local companion including images and request control"
+    );
+    tables
+        .into_iter()
+        .map(|table| {
+            let mut query = db
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = query.column_count();
+            let rows = query
+                .query_map([], |r| (0..columns).map(|c| r.get(c)).collect())
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            (table, rows)
+        })
+        .collect()
+}
+
+#[test]
+fn lost_journal_distinguishes_conflict_checkout_and_completed_state() {
+    for shape in ["conflict", "dirty_checkout", "private_lock", "complete"] {
+        let mut f = ConflictWorld::new();
+        let input = f.input();
+        let context = git2::Repository::open(f.world.worktree(items::TICKET_A)).unwrap();
+        if shape != "conflict" {
+            assert_eq!(
+                f.world
+                    .execute(
+                        mutation::REQUEST_3,
+                        Mutation::LocalContextResolve(copy_input(&input))
+                    )
+                    .code,
+                ResultCode::Ok
+            );
+        }
+        if shape == "dirty_checkout" {
+            for path in ["incoming-a", "incoming-b", "incoming-c"] {
+                items::write(&f.world.root, path, "private partial checkout bytes");
+            }
+            items::commit(
+                &f.world.fixture,
+                &["incoming-a", "incoming-b", "incoming-c"],
+                items::COMMITTED_AT,
+            );
+            let observation = f
+                .world
+                .service
+                .observe_local_context_sync(
+                    &f.world.resolved(),
+                    AuthoringKind::Ticket,
+                    &items::item_id(items::TICKET_A),
+                )
+                .unwrap();
+            f.start_observation = observation.observation;
+            f.world.service = super::support::FailOnce::at(FailurePoint::LocalSyncDuringCheckout)
+                .open_service(f.world.data.path());
+            let stopped = f.world.execute(super::REQUEST_A, f.start());
+            assert_ne!(stopped.code, ResultCode::Ok);
+            assert_eq!(stopped.effects.write, WriteEffect::Written);
+            f.operation = OperationId::parse(stopped.operation_id.as_deref().unwrap()).unwrap();
+            assert!(!context.path().join("MERGE_HEAD").exists());
+            assert!(!context.index().unwrap().has_conflicts());
+            assert!(!context.statuses(None).unwrap().is_empty());
+        }
+        if shape == "private_lock" {
+            std::fs::write(
+                context.path().join("index.lock"),
+                "private interrupted backend lock",
+            )
+            .unwrap();
+        }
+        let git = super::support::repository_and_worktree_snapshot(&f.world.fixture);
+        let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+        f.world.lose_cache();
+        assert!(f.world.record(mutation::REQUEST_2).is_none());
+        let before_rebuild = f.world.execute(mutation::REQUEST_2, f.start());
+        assert_eq!(before_rebuild.code, ResultCode::RepositoryNotRegistered);
+        let _ = f
+            .world
+            .service
+            .rebuild_repository(RebuildRepositoryRequest {
+                root: f.world.root.clone(),
+                operation_id: OperationId::new(),
+            });
+        let resolved = f.world.resolved();
+        let rows = task8_authority_image(&f.world);
+        assert_eq!(
+            f.world
+                .service
+                .inspect_local_context_sync(&resolved, f.operation)
+                .unwrap_err()
+                .code(),
+            ResultCode::RecoveryRequired
+        );
+        assert_eq!(
+            f.world
+                .service
+                .read_local_context_conflict(&resolved, f.operation, &input.resolutions[0].token)
+                .err()
+                .unwrap()
+                .code(),
+            ResultCode::RecoveryRequired
+        );
+        for table in [
+            "local_context_sync_records",
+            "local_context_sync_request_control",
+        ] {
+            assert_eq!(
+                items::index(f.world.data.path())
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+        let observation = f.world.service.observe_local_context_sync(
+            &resolved,
+            AuthoringKind::Ticket,
+            &items::item_id(items::TICKET_A),
+        );
+        if shape == "complete" {
+            let observation = observation.unwrap();
+            assert_eq!(
+                observation.context_head,
+                context.head().unwrap().target().unwrap().to_string()
+            );
+        } else {
+            let error = observation.unwrap_err();
+            // Discovery cannot index conflict-marked/invalid canonical source.
+            // Missing item authority is also a refusal, never Git adoption.
+            assert_eq!(
+                error.code(),
+                match shape {
+                    "conflict" => ResultCode::ItemNotFound,
+                    "dirty_checkout" => ResultCode::WorktreeNotClean,
+                    "private_lock" => ResultCode::RecoveryRequired,
+                    _ => unreachable!(),
+                },
+                "{shape}: {error:?}"
+            );
+        }
+        assert!(
+            f.world.record(mutation::REQUEST_2).is_none(),
+            "no invented starting request"
+        );
+        assert!(f.world.record(mutation::REQUEST_3).is_none());
+        assert_eq!(rows, task8_authority_image(&f.world));
+        assert_eq!(
+            git,
+            super::support::repository_and_worktree_snapshot(&f.world.fixture),
+            "{shape}"
+        );
+        assert_eq!(
+            artifacts,
+            super::support::repository_git_file_bytes(&f.world.fixture),
+            "{shape}"
+        );
+    }
+}
+
+#[test]
+fn local_sync_healthy_rebuild_preserves_public_conflict_and_partial_resolution() {
+    for partial in [false, true] {
+        let mut f = ConflictWorld::new();
+        let input = f.input();
+        if partial {
+            f.world.service =
+                super::support::FailOnce::at(FailurePoint::LocalSyncAfterResolutionPath)
+                    .open_service(f.world.data.path());
+            assert_ne!(
+                f.world
+                    .execute(
+                        mutation::REQUEST_3,
+                        Mutation::LocalContextResolve(copy_input(&input))
+                    )
+                    .code,
+                ResultCode::Ok
+            );
+            f.world.reopen();
+        }
+        let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
+        let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+        let rows = task8_authority_image(&f.world);
+        let view = f
+            .world
+            .service
+            .inspect_local_context_sync(&f.world.resolved(), f.operation)
+            .unwrap();
+        assert!(
+            f.world
+                .service
+                .rebuild_repository(RebuildRepositoryRequest {
+                    root: f.world.root.clone(),
+                    operation_id: OperationId::new()
+                })
+                .is_err()
+        );
+        assert_eq!(rows, task8_authority_image(&f.world));
+        assert_eq!(
+            before,
+            super::support::repository_and_worktree_snapshot(&f.world.fixture)
+        );
+        assert_eq!(
+            artifacts,
+            super::support::repository_git_file_bytes(&f.world.fixture)
+        );
+        assert_eq!(
+            view,
+            f.world
+                .service
+                .inspect_local_context_sync(&f.world.resolved(), f.operation)
+                .unwrap()
+        );
+        assert_eq!(
+            f.world
+                .execute(
+                    mutation::REQUEST_3,
+                    Mutation::LocalContextResolve(copy_input(&input))
+                )
+                .code,
+            ResultCode::Ok
+        );
+    }
+}
+
+#[test]
+fn local_sync_full_public_output_excludes_positive_source_and_progress_sentinels() {
+    const PRIVATE: &str = "TASK8-RESOLUTION-SOURCE-3f27d1";
+    let mut f = ConflictWorld::new();
+    let mut input = f.input();
+    input.resolutions[0].source.push_str(PRIVATE);
+    let mut events = mutation::Events::default();
+    f.world.service = super::support::FailOnce::at(FailurePoint::LocalSyncAfterResolutionPath)
+        .open_service(f.world.data.path());
+    let result = f.world.service.execute(
+        MutationCall {
+            request_id: RequestId::parse(mutation::REQUEST_3).unwrap(),
+            confirmation: None,
+            mutation: Mutation::LocalContextResolve(copy_input(&input)),
+        },
+        &mut keys::SessionCredentials::new(mutation::NoPassphrase),
+        &mut events,
+        &CancellationToken::new(),
+    );
+    assert_ne!(result.code, ResultCode::Ok);
+    assert!(
+        f.world.worktree_source(items::TICKET_A).contains(PRIVATE),
+        "positive owned-file control"
+    );
+    let partial_rows = task8_authority_image(&f.world);
+    mutation::assert_request_stores_exclude(
+        f.world.data.path(),
+        &[PRIVATE, mutation::SENTINELS[0], mutation::SENTINELS[1]],
+    );
+    f.world.reopen();
+    let view = f
+        .world
+        .service
+        .inspect_local_context_sync(&f.world.resolved(), f.operation)
+        .unwrap();
+    let explicit = f
+        .world
+        .service
+        .read_local_context_conflict(
+            &f.world.resolved(),
+            f.operation,
+            &input.resolutions[0].token,
+        )
+        .unwrap();
+    assert!(
+        explicit.local.unwrap().contains(mutation::SENTINELS[1]),
+        "positive committed-side control"
+    );
+    let read_error = f
+        .world
+        .service
+        .read_local_context_conflict(&f.world.resolved(), f.operation, "invalid-token")
+        .err()
+        .unwrap();
+    let mut changed = copy_input(&input);
+    changed.resolutions[0].source.push_str("changed");
+    let mismatch = f
+        .world
+        .execute(mutation::REQUEST_3, Mutation::LocalContextResolve(changed));
+    assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+    let completed = f.world.execute(
+        mutation::REQUEST_3,
+        Mutation::LocalContextResolve(copy_input(&input)),
+    );
+    assert_eq!(completed.code, ResultCode::Ok);
+    let git = git2::Repository::open(f.world.worktree(items::TICKET_A)).unwrap();
+    let tree = git.head().unwrap().peel_to_tree().unwrap();
+    let entry = tree
+        .get_path(std::path::Path::new(&items::ticket_path(items::TICKET_A)))
+        .unwrap();
+    assert!(
+        std::str::from_utf8(git.find_blob(entry.id()).unwrap().content())
+            .unwrap()
+            .contains(PRIVATE)
+    );
+    let replay = f.world.execute(
+        mutation::REQUEST_3,
+        Mutation::LocalContextResolve(copy_input(&input)),
+    );
+    let shown = f
+        .world
+        .service
+        .show_request(RequestId::parse(mutation::REQUEST_3).unwrap());
+    let output = format!(
+        "{} {read_error:?} {read_error}",
+        serde_json::json!([result, view, mismatch, completed, replay, events.0, shown])
+    );
+    assert!(!events.0.is_empty());
+    for sentinel in [PRIVATE, mutation::SENTINELS[0], mutation::SENTINELS[1]] {
+        assert!(!output.contains(sentinel));
+    }
+    mutation::assert_request_stores_exclude(
+        f.world.data.path(),
+        &[PRIVATE, mutation::SENTINELS[0], mutation::SENTINELS[1]],
+    );
+    // Discovery legitimately indexes titles; scan the eight local request /
+    // journal companions, including the image manifest, rather than discovery.
+    for (table, rows) in task8_authority_image(&f.world)
+        .into_iter()
+        .chain(partial_rows)
+    {
+        if !table.starts_with("local_context_sync_") {
+            continue;
+        }
+        for value in rows.into_iter().flatten() {
+            let bytes = match value {
+                rusqlite::types::Value::Text(text) => text.into_bytes(),
+                rusqlite::types::Value::Blob(bytes) => bytes,
+                _ => continue,
+            };
+            for sentinel in [PRIVATE, mutation::SENTINELS[0], mutation::SENTINELS[1]] {
+                assert!(
+                    !bytes
+                        .windows(sentinel.len())
+                        .any(|w| w == sentinel.as_bytes()),
+                    "{table}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn local_sync_process_owner_child() {
+    use std::io::{Read, Write};
+    let Ok(payload) = std::env::var("MANYHANDS_TASK8_OWNER_CHILD") else {
+        return;
+    };
+    let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    if json["mode"] == "lease" {
+        let git = git2::Repository::open(json["root"].as_str().unwrap()).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(git.commondir().join("manyhands-operation.lock"))
+            .unwrap();
+        fs4::fs_std::FileExt::lock_exclusive(&lock).unwrap();
+        println!("TASK8-ACCEPTED");
+        std::io::stdout().flush().unwrap();
+        std::io::stdin().read_exact(&mut [0]).unwrap();
+        fs4::fs_std::FileExt::unlock(&lock).unwrap();
+        return;
+    }
+    let service =
+        RepositoryService::open_at(std::path::Path::new(json["data"].as_str().unwrap())).unwrap();
+    service.set_request_hook_for_testing(|| {
+        println!("TASK8-ACCEPTED");
+        std::io::stdout().flush().unwrap();
+        let mut release = [0];
+        std::io::stdin().read_exact(&mut release).unwrap();
+    });
+    let result = mutation::execute_with(
+        &service,
+        mutation::REQUEST_3,
+        Mutation::LocalContextResolve(LocalContextResolveInput {
+            root: json["root"].as_str().unwrap().into(),
+            operation_id: OperationId::parse(json["operation"].as_str().unwrap()).unwrap(),
+            observation: json["observation"].as_str().unwrap().into(),
+            resolutions: vec![LocalConflictResolutionInput {
+                token: json["token"].as_str().unwrap().into(),
+                source: json["source"].as_str().unwrap().into(),
+            }],
+        }),
+    );
+    // A terminal winner's immutable receipt is returned by F2 settlement;
+    // the stale executor itself cannot write or settle it again.
+    assert_eq!(result.code, ResultCode::Ok);
+}
+
+#[test]
+fn local_sync_cross_process_attempt_loss_cannot_write_or_settle_after_winner() {
+    use std::io::{BufRead, Write};
+    let f = ConflictWorld::new();
+    let input = f.input();
+    let payload = serde_json::json!({"data":f.world.data.path(),"root":f.world.root,"operation":f.operation.to_string(),"observation":input.observation,"token":input.resolutions[0].token,"source":input.resolutions[0].source});
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "local_sync::local_sync_process_owner_child",
+            "--nocapture",
+        ])
+        .env("MANYHANDS_TASK8_OWNER_CHILD", payload.to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert_ne!(
+            output.read_line(&mut line).unwrap(),
+            0,
+            "child never reached acceptance barrier"
+        );
+        if line.trim() == "TASK8-ACCEPTED" {
+            break;
+        }
+    }
+    assert_eq!(f.world.record(mutation::REQUEST_3).unwrap().attempt, 1);
+    assert_eq!(
+        f.world
+            .execute(
+                mutation::REQUEST_3,
+                Mutation::LocalContextResolve(copy_input(&input))
+            )
+            .code,
+        ResultCode::Ok
+    );
+    let rows = task8_authority_image(&f.world);
+    let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
+    let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+    child.stdin.take().unwrap().write_all(b"x").unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(rows, task8_authority_image(&f.world));
+    assert_eq!(
+        before,
+        super::support::repository_and_worktree_snapshot(&f.world.fixture)
+    );
+    assert_eq!(
+        artifacts,
+        super::support::repository_git_file_bytes(&f.world.fixture)
+    );
+}
+
+#[test]
+fn local_sync_cross_process_lease_refuses_resolution_without_second_authority() {
+    use std::io::{BufRead, Write};
+    let f = ConflictWorld::new();
+    let input = f.input();
+    let payload = serde_json::json!({"mode":"lease","root":f.world.root});
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "local_sync::local_sync_process_owner_child",
+            "--nocapture",
+        ])
+        .env("MANYHANDS_TASK8_OWNER_CHILD", payload.to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
+    loop {
+        let mut line = String::new();
+        assert_ne!(output.read_line(&mut line).unwrap(), 0);
+        if line.trim() == "TASK8-ACCEPTED" {
+            break;
+        }
+    }
+    let rows = task8_authority_image(&f.world);
+    let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
+    let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+    let result = f.world.execute(
+        mutation::REQUEST_3,
+        Mutation::LocalContextResolve(copy_input(&input)),
+    );
+    // Release/join before asserting so even a regression does not strand a child.
+    child.stdin.take().unwrap().write_all(b"x").unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+    assert_eq!(result.code, ResultCode::Busy);
+    assert_eq!(rows, task8_authority_image(&f.world));
+    assert_eq!(
+        before,
+        super::support::repository_and_worktree_snapshot(&f.world.fixture)
+    );
+    assert_eq!(
+        artifacts,
+        super::support::repository_git_file_bytes(&f.world.fixture)
+    );
+    assert_eq!(
+        f.world
+            .execute(mutation::REQUEST_3, Mutation::LocalContextResolve(input))
+            .code,
+        ResultCode::Ok
+    );
+}
+
+fn frozen_pair_public(remote: bool) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut world = mutation::World::new();
+    assert_eq!(
+        world
+            .execute(
+                mutation::REQUEST_1,
+                world.save(items::TICKET_A, &world.token(items::TICKET_A))
+            )
+            .code,
+        ResultCode::Ok
+    );
+    if remote {
+        let spy = calls.clone();
+        unsafe {
+            git2::transport::register("manyhands-task8-public", move |_| {
+                spy.fetch_add(1, Ordering::SeqCst);
+                Err(git2::Error::from_str("fixture transport refuses"))
+            })
+            .unwrap();
+        }
+        // Fixture-only protocol, as in the domain transport-spy control. The
+        // public remote setter correctly requires SSH; local sync must not
+        // consult transport even when this directly configured endpoint exists.
+        world
+            .fixture
+            .repository
+            .remote(
+                "origin",
+                "manyhands-task8-public://unreachable.invalid/repository",
+            )
+            .unwrap();
+        let path = world.root.join(".manyhands/config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(path, format!("{config}\npublication_remote = \"origin\"\n")).unwrap();
+        items::commit(
+            &world.fixture,
+            &[".manyhands/config.toml"],
+            items::COMMITTED_AT,
+        );
+        items::refresh_completely(&world.service, &world.root);
+    }
+    items::write(&world.root, "incoming", "frozen incoming");
+    items::commit(&world.fixture, &["incoming"], items::COMMITTED_AT);
+    let observation = world
+        .service
+        .observe_local_context_sync(
+            &world.resolved(),
+            AuthoringKind::Ticket,
+            &items::item_id(items::TICKET_A),
+        )
+        .unwrap();
+    let start = || {
+        Mutation::LocalContextSync(LocalContextSyncInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: items::item_id(items::TICKET_A),
+            observation: observation.observation.clone(),
+        })
+    };
+    let failing = super::support::FailOnce::at(FailurePoint::LocalSyncAfterIntent)
+        .open_service(world.data.path());
+    assert_ne!(
+        mutation::execute_with(&failing, mutation::REQUEST_2, start()).code,
+        ResultCode::Ok
+    );
+    items::write(&world.root, "later", "later committed primary");
+    items::commit(&world.fixture, &["later"], items::COMMITTED_AT);
+    let primary = world.fixture.repository.head().unwrap().target().unwrap();
+    assert_eq!(
+        world.execute(mutation::REQUEST_2, start()).code,
+        ResultCode::Ok
+    );
+    let context = git2::Repository::open(world.worktree(items::TICKET_A)).unwrap();
+    let first = context.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(
+        first.parent_id(1).unwrap().to_string(),
+        observation.primary_head
+    );
+    assert!(!context.workdir().unwrap().join("later").exists());
+    assert_eq!(
+        world.fixture.repository.head().unwrap().target(),
+        Some(primary)
+    );
+    let before = super::support::repository_and_worktree_snapshot(&world.fixture);
+    let artifacts = super::support::repository_git_file_bytes(&world.fixture);
+    let rows = task8_authority_image(&world);
+    assert_eq!(
+        world.execute(mutation::REQUEST_2, start()).code,
+        ResultCode::Ok
+    );
+    assert_eq!(rows, task8_authority_image(&world));
+    assert_eq!(
+        before,
+        super::support::repository_and_worktree_snapshot(&world.fixture)
+    );
+    assert_eq!(
+        artifacts,
+        super::support::repository_git_file_bytes(&world.fixture)
+    );
+    let fresh = world
+        .service
+        .observe_local_context_sync(
+            &world.resolved(),
+            AuthoringKind::Ticket,
+            &items::item_id(items::TICKET_A),
+        )
+        .unwrap();
+    assert_eq!(
+        world
+            .execute(
+                mutation::REQUEST_3,
+                Mutation::LocalContextSync(LocalContextSyncInput {
+                    root: world.root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: items::item_id(items::TICKET_A),
+                    observation: fresh.observation
+                })
+            )
+            .code,
+        ResultCode::Ok
+    );
+    assert!(context.workdir().unwrap().join("later").is_file());
+    assert_eq!(
+        world.fixture.repository.head().unwrap().target(),
+        Some(primary)
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    if remote {
+        assert!(
+            world
+                .fixture
+                .repository
+                .find_remote("origin")
+                .unwrap()
+                .fetch(&["main"], None, None)
+                .is_err()
+        );
+        assert!(
+            calls.load(Ordering::SeqCst) > 0,
+            "live transport negative control"
+        );
+    }
+    world.reopen();
+}
+
+#[test]
+fn local_sync_public_frozen_pair_without_any_remote() {
+    frozen_pair_public(false);
+}
+
+#[test]
+fn local_sync_public_frozen_pair_with_unreachable_configured_remote() {
+    frozen_pair_public(true);
+}
+
+#[test]
+fn local_sync_public_malformed_companion_refuses_without_repair_or_acceptance() {
+    let f = ConflictWorld::new();
+    let input = f.input();
+    items::index(f.world.data.path())
+        .execute(
+            "ALTER TABLE local_context_sync_records ADD COLUMN unexpected TEXT",
+            [],
+        )
+        .unwrap();
+    let rows = task8_authority_image(&f.world);
+    let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
+    let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+    assert!(
+        f.world
+            .service
+            .inspect_local_context_sync(&f.world.resolved(), f.operation)
+            .is_err()
+    );
+    let result = f
+        .world
+        .execute(mutation::REQUEST_3, Mutation::LocalContextResolve(input));
+    assert_eq!(result.code, ResultCode::RecoveryRequired);
+    assert!(f.world.record(mutation::REQUEST_3).is_none());
+    assert_eq!(rows, task8_authority_image(&f.world));
+    assert_eq!(
+        before,
+        super::support::repository_and_worktree_snapshot(&f.world.fixture)
+    );
+    assert_eq!(
+        artifacts,
+        super::support::repository_git_file_bytes(&f.world.fixture)
+    );
+}
+
+#[test]
+fn local_sync_public_immutable_closure_race_leaves_no_owner_and_allows_other_work() {
+    let world = mutation::World::new();
+    assert_eq!(
+        world
+            .execute(
+                mutation::REQUEST_1,
+                world.save(items::TICKET_A, &world.token(items::TICKET_A))
+            )
+            .code,
+        ResultCode::Ok
+    );
+    let path = items::ticket_path(items::TICKET_A);
+    let context = git2::Repository::open(world.worktree(items::TICKET_A)).unwrap();
+    for (git, who) in [(&context, "One"), (&world.fixture.repository, "Two")] {
+        let file = git.workdir().unwrap().join(&path);
+        let source = std::fs::read_to_string(&file).unwrap().replacen(
+            "---\n",
+            &format!("---\nclosed_at: 2026-10-25T12:00:00Z\nclosed_by: {who}\n"),
+            1,
+        );
+        manyhands::canonical::parse_item(std::path::Path::new(&path), &source).unwrap();
+        std::fs::write(file, source).unwrap();
+        let mut index = git.index().unwrap();
+        index.add_path(std::path::Path::new(&path)).unwrap();
+        index.write().unwrap();
+        let tree = git.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = git.head().unwrap().peel_to_commit().unwrap();
+        let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        git.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "independent closure",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
+    }
+    let observation = world
+        .service
+        .observe_local_context_sync(
+            &world.resolved(),
+            AuthoringKind::Ticket,
+            &items::item_id(items::TICKET_A),
+        )
+        .unwrap();
+    let rows = task8_authority_image(&world);
+    let before = super::support::repository_and_worktree_snapshot(&world.fixture);
+    let artifacts = super::support::repository_git_file_bytes(&world.fixture);
+    let result = world.execute(
+        mutation::REQUEST_2,
+        Mutation::LocalContextSync(LocalContextSyncInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: items::item_id(items::TICKET_A),
+            observation: observation.observation,
+        }),
+    );
+    assert_eq!(result.code, ResultCode::RecoveryRequired);
+    let MutationDataDto::LocalContextSync(dto) = result.data.unwrap() else {
+        panic!("local result");
+    };
+    assert_eq!(
+        dto.reason,
+        LocalContextSyncReason::ImmutableClosureDisagreement
+    );
+    assert!(world.record(mutation::REQUEST_2).is_none());
+    assert_eq!(rows, task8_authority_image(&world));
+    assert_eq!(
+        before,
+        super::support::repository_and_worktree_snapshot(&world.fixture)
+    );
+    assert_eq!(
+        artifacts,
+        super::support::repository_git_file_bytes(&world.fixture)
+    );
+    assert!(
+        world
+            .service
+            .refresh_repository(RefreshRepositoryRequest {
+                root: world.root.clone(),
+                operation_id: OperationId::new()
+            })
+            .is_ok()
+    );
+}

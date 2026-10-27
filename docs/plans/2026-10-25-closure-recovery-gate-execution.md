@@ -70,8 +70,9 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | Controller reports **full SPEC approval at `077f421`**, session `ses_e8554c7d2ffe8o3xfJnBqcRrQO`. QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` raised **two P2 findings**. Checkpoint `01M5XTX949G7GTX75FGCSB1SXZ` records their verified corrections and **182 passing selected tests/cases**, with whole-tree fmt/check/clippy green. Await **SPEC delta verification and QUALITY re-review**; the base approval is not extended to this delta. Task 8 remains unstarted. |
-| Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
+| Task 7 | **Complete and approved at `0d1b8d006980bf0da116828db54b16728bf55cbd`**, full range `41bce3e..0d1b8d0`. Task 8 controller handoff reports SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` and QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` both approved with zero findings. Prior 182 selected checks remain recorded evidence. |
+| Task 8 | Implemented from `0d1b8d006980bf0da116828db54b16728bf55cbd`; checkpoint `01M5XX9Y76ZM2D6FJQKBJS2D13`. Public closure acceptance, 25-row/18-case audit, adversarial evidence and one RED/GREEN missing-authority correction. **243 distinct selected tests/cases pass**. Await controller SPEC then QUALITY review of the full Task 8 delta. |
+| Task 9 | Not started; Task 8 independent reviews remain prerequisites. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -339,7 +340,7 @@ name as one filter, never brace syntax in Cargo. Remote reservation controls:
 and `sync_incomplete_action_cannot_coexist_with_a_same_id_local_refresh` under
 `repository::remote::reservation::tests`.
 
-## Required outcomes: test owners, not executed facts
+## Historical Task 0 required outcomes: test owners, not then executed facts
 
 Every row below is an approved **required outcome**, transcribed from the design
 recovery table. None is proved for the new local operation by the old baseline.
@@ -3731,3 +3732,223 @@ ticket worktree without subagents. Both P2 findings are locally addressed, pendi
 **SPEC delta verification and QUALITY re-review**. No approval of this delta is
 claimed. Ticket remains implementing; Task 8 has not started. No PR, closure, merge
 into main, native workflow or cleanup was performed.
+
+## Task 8: closure acceptance and adversarial evidence
+
+Checkpoint **`01M5XX9Y76ZM2D6FJQKBJS2D13`**, recorded with UTC clock
+`2026-10-27T05:28:37Z`; ID minted by the main checkout's existing
+`target/debug/manyhands-cli --json id new`. Implementation/review base:
+**`0d1b8d006980bf0da116828db54b16728bf55cbd`**. Review the whole delta from that
+base, not just the production correction. All work stayed in this ticket worktree
+on its existing branch; this implementer used no subagents.
+
+### Prerequisite reviews and preflight
+
+The controller explicitly reports **APPROVED, zero findings** for both Task 7
+reviews at the base above, over **`41bce3e..0d1b8d0`**:
+
+- SPEC: `ses_e8554c7d2ffe8o3xfJnBqcRrQO`.
+- QUALITY: `ses_e846d6706ffeMZlWpMYjwDMnGU`.
+
+These are controller-supplied reviews, not reviews performed here. They supersede
+the historical pending-review status immediately above. The actual Task 0–7 source,
+ledger and covering assertions were inspected; completed proof was not reimplemented.
+The approved E4 companion, E9 repair DTO arm, three key guards, migration fixture
+and REQUEST_TABLES decisions remain intact.
+
+Entry status was clean at the supplied base. Fetch and `git merge origin/main`
+at entry and checkpoint both reported already up to date; main remains
+`0464c42dae19a6dde000c7e7660e82762a41fada`. Entry ancestry check passed. Before
+publication `git merge-tree --write-tree HEAD origin/main` passed with tree
+`101c92905b2aeb65bfab0cd3afdb5415f5a8a301` (the committed Task 8 base). No rebase.
+
+### Implemented acceptance and adversarial composition
+
+1. **E3, exactly the two authorized old tests.** Both now reach a real written
+   closure checkpoint, advance primary into an actual canonical ticket conflict,
+   and observe closure's merge refusal. `synchronize_closing_context` uses production
+   `execute(LocalContextSync)`, inspection, explicit immutable-side content read,
+   and `execute(LocalContextResolve)`. It proves pending local work fences closure,
+   the ordered parents are `[context, primary]`, primary stays put, and the closure
+   record is unchanged until an explicit `close_ticket` continuation. The original
+   adopted context, `closure_oid`, `closed_at`, F4 one-merge and retirement assertions
+   remain, with explicit `closed_by` assertions added. The hand-merge helper and its
+   other old consumer were not changed.
+2. **Newer primary requires explicit work.** Two new closure tests exercise another
+   conflicting primary advance after the first local sync, then a second explicit
+   sync and closure resume. No-remote and configured-remote fixtures are separate;
+   neither starts SSH. Configured closure uses existing injected child IO only;
+   local synchronization and resolution are production public calls. Its tracking
+   updates model already-explicit primary synchronization, preserving C9 D2 readiness;
+   local sync itself changes neither tracking nor closure state. Two additional public
+   mutation tests stop after accepted intent, advance primary, retry the frozen pair,
+   replay with exact Git/SQL snapshots, then explicitly sync the newer primary.
+   The configured case has a live, refusing, fixture-only transport callback with
+   a positive explicit-fetch control and zero calls from local synchronization.
+3. **Real process contention.** Isolated current-test-executable children use flushed
+   stdout/stdin pipe barriers, no sleep-based ordering. One child holds the common
+   Git lease while public resolution returns Busy without any authority/image change;
+   after release the same input succeeds. Another pauses after accepting R; the parent
+   takes over the same ID and completes, then the stale child returns the winner's
+   immutable receipt. Files, raw indexes, all refs, objects/reflogs/Git artifacts,
+   request rows, eight local companion tables and registration/context/routing rows
+   are identical before/after the losing continuation. This is not simulated process
+   isolation or a claim that a returned injected fault is process death.
+4. **Healthy versus lost database.** Healthy rebuild during public conflict and
+   partial-R states refuses without changing Git, any retained authority row or the
+   public inspection, and exact R still completes. Four separate lost-DB fixtures
+   retain (a) real conflict metadata/index, (b) actual partially applied clean
+   checkout, with Written effect and dirty state but no conflict/merge metadata,
+   (c) a deliberately planted private index lock on an otherwise clean result, and
+   (d) a clean committed result. Rebuild does not invent S/R or local companions.
+   Old inspection/content reads return RecoveryRequired in all four. Fresh observation
+   succeeds **only** for (d); the precise earlier refusals are ItemNotFound for
+   unindexable conflict-marked canonical content, WorktreeNotClean for partial checkout,
+   and RecoveryRequired for the lock. Git/files/index/refs/artifacts remain identical.
+5. **Additional public edges.** Malformed companion shape refuses inspection and R
+   before acceptance, with all authority/Git snapshots equal. Independently committed
+   incompatible closures produce the immutable-disagreement DTO before a retained
+   request/owner or Git effect; unrelated refresh still succeeds. Existing public
+   input-collision, lost-output, index-failure, foreign-metadata and cancellation
+   regressions are retained and selected, not duplicated.
+6. **Positive privacy controls.** The new public privacy test plants a resolution
+   sentinel in a genuinely owned partial path, then a committed result blob. The
+   original source sentinel is actually returned by the explicit immutable-side DTO.
+   Ordinary inspection, partial/mismatch/success/replay/request-show envelopes,
+   nonempty progress output and ReadError Debug/Display contain none of the source,
+   body or title sentinels. Base request/journal stores and **all eight local
+   companions including images** are scanned at partial and completed states.
+   Discovery titles are not misclassified as request storage.
+
+### RED/GREEN correction and fixture debugging
+
+The strict four-case lost-journal regression ran RED: public inspection returned
+**InternalError instead of RecoveryRequired** after database loss. Source tracing
+found `local_sync/run.rs::read_evidence` propagating `QueryReturnedNoRows` through
+the generic read error conversion. The narrow production correction uses
+`OptionalExtension` and maps only an absent scoped local row to RecoveryRequired,
+matching `record.rs::read_local_context_sync_record`. No recovery identity, parent,
+content, candidate or authority is synthesized. The exact test then passed all
+four fixtures and both read APIs; the full relevant local/public groups pass after
+the correction. Other SQL errors retain their existing mapping.
+
+Earlier test-development failures were fixture assumptions, not waived contract
+failures: missing imports; conflict-marked content absent from discovery; a stale
+same-ID caller replaying its completed winner rather than returning a new refusal;
+the public remote setter correctly rejecting the test-only protocol; and remote
+closure requiring already-synchronized tracking-primary readiness. The transport
+fixture now creates its context first, directly configures the isolated test-only
+protocol as the existing domain spy does, commits routing and refreshes discovery.
+No production behavior was changed to accommodate those fixtures.
+
+### All 25 required outcomes: actual assertion owners
+
+This table supersedes the historical Task 0 planned-ownership table. D denotes
+domain/library tests under `src/repository/local_sync/`; P denotes production
+public mutation/read composition in `tests/mutation_replay/local_sync*.rs`; R is
+`tests/read_items/local_sync.rs`; C is `src/repository/closure/run_tests.rs`.
+Names below were checked against their source/assertions and selected in the
+executed groups below. **D is not relabeled as wire-level evidence**. All are local
+Linux evidence; no row claims native Windows/macOS verification.
+
+| # | Actual owner(s) and assertion evidence |
+| --- | --- |
+| 1 | D `run_tests::local_sync_required_outcomes_fault_matrix`: durable-intent retry keeps both parents and one ref append. P `local_sync_public_frozen_pair_without_any_remote` and `local_sync_public_frozen_pair_with_unreachable_configured_remote`: accepted public intent, later primary, exact retry and immutable replay. |
+| 2 | D `run_tests::no_drop_backend_ambiguity_preserves_until_operator_proof`, `conflict_tests::no_drop_conflict_backend_window_preserves_until_exact_operator_baseline`, and actual first-file/mode no-Drop controls: preserved ambiguous backend and invalid repair refusal; exact operator baseline/result permits continuation. P lost-journal case independently preserves actual partial checkout after DB loss. |
+| 3 | D `local_sync_required_outcomes_stale_and_frozen_parent_retry`; P frozen-pair tests assert old incoming parent and absence of later file until fresh explicit sync; C two new second-advance tests assert closure still requires explicit sync/resume. |
+| 4 | D `local_sync_required_outcomes_foreign_change_preserves_historical_effects`; P `inspection_spec::spec_non_resolution_foreign_file_or_index_requires_external_repair` and `spec::spec_inspection_foreign_images_and_candidate_identity_are_read_only`: foreign image retained, advice/effects constrained by original evidence. |
+| 5 | D `conflict_tests::complete_preflight_refuses_every_invalid_set_before_any_path_write` and `opaque_tokens_refuse_wrong_operation_generation_mode_and_malformed_input`: complete-set/stale/foreign/duplicate/missing checks before writes. R historical-side test and P inspection-spec phase tests prove wire tokens retain only their recorded authority. |
+| 6 | D `permission_loss_after_one_resolution_path_preserves_recovery`; P `inspection_spec::spec_partial_two_path_resolution_keeps_untouched_preimages_retryable`, including no-Drop written-before-observation: U requires R, retained original per-path images, exact R finishes. |
+| 7 | D `resolution_candidate_ref_index_and_release_interruptions_finish_once` and `spec_no_drop_import_before_observation_reconciles_owned_checkpoint_on_resume_and_replay`: same candidate, one log append, release evidence. P `local_sync_unimported_candidate_requires_exact_resolution_before_resume_takeover` and lost-settlement receipts protect public continuation. |
+| 8 | D `control_tests::cancellation_before_effects_is_terminal_and_conflict_cancellation_retains_owner`, `only_artifact_free_domain_abandonment_can_revoke_authority`; P `cancelled_partial_resolution_remains_accepted_and_resendable`: preserved effects and recoverable Accepted S/R, exact resend. |
+| 9 | P `local_sync_lost_resolution_settlement_and_start_receipts_are_independent`, `local_sync_public_resolution_and_start_settle_independently`: lost R settlement does not invent S's answer or repeat Git. New frozen-pair replay additionally compares full SQL and Git snapshots. |
+| 10 | C E3 helper actually attempts closure while local conflict is pending and verifies unchanged closure authority; inspection and explicit side reads remain usable. D admission tests preserve reciprocal incompatible-owner fences. |
+| 11 | C both modified E3 tests: public canonical resolution then explicit closure resume, exact adopted OID, original closure OID/time/author, F4 reconciliation and one retirement. |
+| 12 | P `local_sync_healthy_rebuild_preserves_public_conflict_and_partial_resolution`: conflict/partial-R fixtures, full authority/Git/inspection equality across refused rebuild, then successful exact resolution. D prior enumeration/rebuild controls remain selected. |
+| 13 | P `lost_journal_distinguishes_conflict_checkout_and_completed_state`: four independent fixtures and exact missing-authority read errors; no cleanup, no reconstructed S/R/companion; fresh observation only on clean committed result. |
+| 14 | P `local_sync_no_drop_acceptance_handover_and_acknowledgement_preserve_requests`: actual process exits at acceptance, owned path, handover acceptance and acknowledgement; reopened S/R remain Accepted; exact R finishes. `cancelled_partial_resolution_remains_accepted_and_resendable` pins U's required R. |
+| 15 | P `new_cancellation_survives_acknowledgement_and_resume` and `spec::spec_cancel_reply_does_not_acknowledge_a_new_generation`: a coordinated newer issuance leaves counters `(2,1)`, then another stop, then explicit progress; no boolean-loss shortcut. |
+| 16 | P `artifact_free_abandon_settles_all_associated_requests_atomically`: index-pending R plus unlinked R/U are settled together, cancelled results replay, changed input mismatches. D `spec_artifact_free_abandon_uses_each_integration_disposition_and_provenance` and public terminal quality tests preserve existing finished receipts. |
+| 17 | P `unlinked_accepted_resolution_cannot_write_after_attempt_loss`, actual no-Drop acceptance case, and new cross-process same-ID winner: stale attempt cannot add an effect/settle over the current owner; exact retry or immutable winner receipt is used. |
+| 18 | P `accepted_resolution_observation_is_part_of_request_identity` and `spec_no_drop_written_unobserved_path_has_read_only_mismatch_history`: changing only observation yields RequestMismatch with historical effects and unchanged request attempt/files/authority. |
+| 19 | D `admission_tests::retained_remote_and_local_admission_never_deadlock` tests same/other context and both acquisition orders; `retained_conflict_reacquisition_checks_local_before_phase_or_epoch` verifies refused remote phase/epoch and local record unchanged; `retained_remote_metadata_blocks_local_even_after_step_applied` checks retained release debt. These are domain admission proofs, not a claim of a live remote transport race. |
+| 20 | D `immutable_closure_disagreement_never_fences_the_repository`; new P `local_sync_public_immutable_closure_race_leaves_no_owner_and_allows_other_work`: explicit typed reason, no retained request or local owner, full files/index/refs/artifact/row equality, subsequent refresh succeeds. |
+| 21 | D `no_drop_backend_ambiguity_preserves_until_operator_proof` exits inside real checkout/ref lock windows; first-file/mode controls and conflict-installation child prove actual effects without Drop, preserved private artifacts, invalid-repair refusal, and exact operator-proof continuation. Returned faults alone are not counted as this proof. |
+| 22 | D `no_drop_owned_metadata_retirement_finishes_automatically`: two child exits after MERGE_HEAD removal; absence counts as retired, exact remainder retires without a new commit/log effect; substituted MERGE_MSG remains refused and preserved. `quality_metadata_retirement_rechecks_remaining_evidence_before_each_unlink` covers later-member changes. |
+| 23 | P `request_attempt_handover_preserves_resolution_and_cancellation`: partial R, attempt advancement before domain link, counters retained, old finish rejected, one resolution row. Actual no-Drop request-child case covers death at that handover boundary. |
+| 24 | P `unlinked_contender_observes_parent_completion_or_abandonment` plus `artifact_free_abandon_settles_all_associated_requests_atomically`: unlinked R0/U included in cancellation or released on completed parent; terminal quality tests cover all terminal states without dangling Accepted work. |
+| 25 | P `spec::spec_parent_completion_between_resume_read_and_link_releases_unlinked_u`, unlinked contender and terminal R/U quality cases: completed parent produces ExternalChange/no own effects, releases unlinked request, creates no new resolution/parent transition. |
+
+### Mandatory Task 8 named-case audit (all 18 exist and were selected)
+
+These are the plan's exact names, with actual file owner and coverage, not a
+zero-selection claim. Names shared between D and P/R are listed separately.
+
+| Mandatory name | Actual owner / assertion coverage |
+| --- | --- |
+| `unrelated_histories_refuse_before_acceptance` | D run_tests, Task 5; both kinds, typed unrelated refusal, no owner/image change. |
+| `immutable_closure_disagreement_never_fences_the_repository` | D run_tests, Task 5; same-ID conflicting pairs before acceptance; Task 8 public companion above adds request boundary and complete preservation. |
+| `identity_missing_then_set_retries_the_same_local_intent` | D run_tests (5) and P local_sync (7): missing before acceptance, removed after intent, and journaled candidate cases; public confirmed identity setting permits same-ID retry and candidate author stays frozen. |
+| `accepted_resolution_observation_is_part_of_request_identity` | P local_sync (7); top-level observation participates in exact R identity with historical effects. |
+| `cancelled_partial_resolution_remains_accepted_and_resendable` | P local_sync (7); Accepted S/R, required R, explicit continuation. |
+| `new_cancellation_survives_acknowledgement_and_resume` | P local_sync (7), supplemented by P spec cancellation generation regression. |
+| `artifact_free_abandon_settles_all_associated_requests_atomically` | P local_sync (7), with D all-disposition/provenance and P terminal-state controls. |
+| `unlinked_accepted_resolution_cannot_write_after_attempt_loss` | P local_sync (7); exact handover fences, plus Task 8 actual-process contender. |
+| `request_attempt_handover_preserves_resolution_and_cancellation` | P local_sync (7); old attempt cannot settle, counters/source association retained, one resolution; real process death supplied by the request-child companion. |
+| `unlinked_contender_observes_parent_completion_or_abandonment` | P local_sync (7); R/U terminal completion and delegated atomic-abandon scenario, supplemented by P quality terminal matrices. |
+| `retained_remote_and_local_admission_never_deadlock` | D admission_tests (4); both orders and same/other context, retained reacquisition/metadata companions. |
+| `authority_only_change_is_seen_by_fresh_read_session` | D observe_tests (4) and R local_sync (7); semantic/registration change between A/B refuses, owner-only epoch does not invalidate the token. |
+| `journal_permission_failure_precedes_git_effects` | D record_tests (4); typed PermissionDenied at actual journal write seam, IndexUnavailable, no envelope or Git change. |
+| `side_read_permission_failure_is_read_only` | R local_sync (7); typed side-read seam, RepositoryInaccessible and no side/mutation; P spec adds real Unix path-permission denial. |
+| `permission_loss_after_one_resolution_path_preserves_recovery` | D conflict_tests (6); actual next-write seam, one observed path, retained R, original-request requirement, exact continuation; Unix real-directory-permission companion selected too. |
+| `no_drop_backend_ambiguity_preserves_until_operator_proof` | D run_tests (5), with actual conflict backend/first-file/mode companions from 5/6. Full assertions retained. |
+| `no_drop_owned_metadata_retirement_finishes_automatically` | D conflict_tests (6), two actual no-Drop children including foreign metadata refusal. Full assertions retained. |
+| `lost_journal_distinguishes_conflict_checkout_and_completed_state` | New P local_sync (8), four independent states described above; strict read-error assertion drove the narrow production fix. |
+
+### Commands, counts and limitations
+
+All Rust commands used Devenv. Final relevant group reruns after the production
+correction are intentional; earlier successful unchanged Task 5–7 baseline work
+was not recreated. Counts below are **distinct test functions/cases**, not loop
+iterations or an invented total of recovery scenarios. Child entry tests are in
+the library/harness counts; their parent assertions establish actual process exits.
+
+| Command after `devenv shell -- cargo` | Observed result |
+| --- | --- |
+| `fmt --check` | Exit 0 on final Rust tree. |
+| `check --all-features --locked` | Exit 0. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, no warnings. |
+| `test --all-features --locked --lib local_sync:: -- --test-threads=4` | **159 passed**, 1286 filtered; 289.56s final group run. Includes existing genuine no-Drop/backend/retirement and Linux permission proofs. |
+| `test --all-features --locked --test mutation_replay local_sync -- --test-threads=4` | **66 passed**, 308 filtered; 99.74s. Prior 56 plus 10 new tests (one child entry, nine adversarial/public cases). Later additional partial-state privacy scan rerun by its exact selector. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**, 76 filtered. |
+| `test --all-features --locked --lib repository::closure::run_tests::conflicting_advance_after_the_checkpoint_needs_a_deliberate_synchronization -- --exact` | **1 passed**, 1444 filtered. |
+| `test --all-features --locked --lib repository::closure::run_tests::adopted_context_is_merged_reconciled_after_f4_and_retired -- --exact` | **1 passed**, 1444 filtered. |
+| `test --all-features --locked --lib repository::closure::run_tests::local_sync` | **2 passed**, 1443 filtered; separate no-remote/configured-remote second-advance cases. |
+| `test --all-features --locked --lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | **1 passed**. |
+| `test --all-features --locked --lib external_repair_exact_ordered_parent_clean_only` | **1 passed**. |
+| `test --all-features --locked --lib clean_merge_integration_fault_matrix_resumes_each_durable_transition_once` | **1 passed**. |
+| `test --all-features --locked --lib cancellation_with_a_pending_conflict_is_a_recoverable_stop` | **1 passed**. |
+| `test --all-features --locked --lib retained_candidate_cannot_bypass_all_side_closure_validation` | **1 passed**. |
+| `test --all-features --locked --lib all_recorded_ticket_sides_constrain_retained_closure_before_writes` | **1 passed**, all retained eight-row assertions. |
+| `test --all-features --locked --lib mixed_canonical_and_code_conflict_is_whole_merge_external_only_without_writes` | **1 passed**. |
+| `test --all-features --locked --test ticket_closure true_race_distinct_identities_needs_external_recovery -- --exact` | **1 SSH cases passed**, actual exact harness selection. |
+
+Total: **159 + 66 + 6 + 4 + 7 = 242 Rust tests, plus 1 SSH case = 243**.
+Focused repetitions are not added again. One concurrently entered Devenv shell
+reported a transient `.devenv/load-exports` chmod race even though Cargo's retained
+candidate test passed; that exact test was rerun serially with clean shell setup
+and passed. Subsequent commands ran serially. No test assertion failure remains.
+
+Platform evidence is **Linux x86_64, UID 1000**. Actual non-root Unix permissions,
+typed permission seams and real isolated child processes were exercised. No native
+Windows ACL/macOS behavior or broad arbitrary-backend auto-recovery is inferred.
+The no-network acceptance fixtures do not use `ticket_closure::Pair(false)`.
+No dependency, frontend, schema/global enum, Cargo/test target or native workflow
+changed. Only E3's two approved old tests changed semantics. Full-suite/native
+verification remains outside this bounded task.
+
+Task 8's promised Linux domain/public outcomes now have assertion-level evidence.
+**Independent Part review remains required: controller SPEC, then QUALITY, before
+Task 9.** This is implementer verification, not an independent approval. No material
+contract contradiction or additional owner scope decision is pending. Ticket remains
+implementing. PR, lifecycle closure, merge, cleanup and native dispatch were not run.
