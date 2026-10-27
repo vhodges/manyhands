@@ -12,7 +12,7 @@
 use super::{
     item::text,
     item::{
-        DraftDiscarded, ItemPane, ReviewInDrafts,
+        DraftDiscarded, ItemPane, OpenDetails, ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -191,9 +191,9 @@ pub(crate) struct TabContent {
     panes: HashMap<TabId, Entity<ItemPane>>,
     focus: HashMap<TabId, FocusHandle>,
     close_focus: HashMap<TabId, FocusHandle>,
-    /// Each pane's related item opened, its Review in Drafts, and its
-    /// restored draft discarded.
-    related: HashMap<TabId, [Subscription; 3]>,
+    /// Each pane's related item opened, its Review in Drafts, its restored
+    /// draft discarded, and its chips' requests for the details sheet.
+    related: HashMap<TabId, [Subscription; 4]>,
     scroll: ContentScroll,
 }
 
@@ -259,7 +259,11 @@ impl TabContent {
             let discarded = cx.subscribe(&pane, |this, _, _: &DraftDiscarded, cx| {
                 this.draft_discarded(cx)
             });
-            self.related.insert(id, [related, review, discarded]);
+            let details = cx.subscribe(&pane, |this, pane, event: &OpenDetails, cx| {
+                this.ask_details(&pane, event.0, cx)
+            });
+            self.related
+                .insert(id, [related, review, discarded, details]);
             self.panes.insert(id, pane);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());

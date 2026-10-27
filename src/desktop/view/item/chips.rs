@@ -1,6 +1,6 @@
 //! The header's chips (design, Header block): each is a button that asks
-//! for the details sheet on its field, by emitting `OpenDetails`; Task 6
-//! opens the sheet from it.
+//! for the details sheet on its field, by emitting `OpenDetails`; the
+//! workspace opens the sheet from it (`sheet::open_details`).
 //!
 //! A ticket shows Type, Status (tinted for known values), Project, Team,
 //! Parent by its short code, and Waiting on while it is blocked. A
@@ -92,7 +92,8 @@ impl ChipField {
         }
     }
 
-    fn index(self) -> usize {
+    /// Where the pane keeps this field's chip focus and sheet focus.
+    pub(super) fn index(self) -> usize {
         Self::FIELDS
             .iter()
             .position(|field| *field == self)
@@ -100,8 +101,8 @@ impl ChipField {
     }
 }
 
-/// A chip asked for the details sheet on its field; Task 6 opens it.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 6.
+/// A chip asked for the details sheet on its field; the workspace opens
+/// it, focused there.
 pub(crate) struct OpenDetails(pub ChipField);
 
 impl EventEmitter<OpenDetails> for ItemPane {}
@@ -207,7 +208,7 @@ pub(crate) fn relative_time(at: &str, now: OffsetDateTime) -> String {
 /// What a blocked ticket waits on: each open or unresolved dependency the
 /// readiness names, by its short code once the tree named it, else its
 /// ID; a cycle alone is "a dependency cycle".
-fn waiting_on(item: &ItemDto, relationships: Option<&Relationships>) -> Option<String> {
+pub(super) fn waiting_on(item: &ItemDto, relationships: Option<&Relationships>) -> Option<String> {
     let readiness = item.readiness.as_ref()?;
     if readiness.state != ReadinessState::Blocked {
         return None;

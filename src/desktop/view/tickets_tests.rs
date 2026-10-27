@@ -208,8 +208,11 @@ fn arrows_move_in_the_list_and_enter_opens(cx: &mut TestAppContext) {
             id: first.id.as_deref().unwrap().parse().unwrap(),
         })
     );
+    // E-30: the kind and ID are in the details sheet.
+    shell.click("chip-all", cx);
     assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Ticket"));
     assert_eq!(shell.label("item-id", cx), first.id.clone());
+    shell.keys("escape", cx);
 
     // The last row is the nonconforming entry: it opens by path.
     let last = list.items.len() - 1;

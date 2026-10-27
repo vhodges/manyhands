@@ -1,5 +1,7 @@
-//! Identity details, provenance, named fields, problems and unknown
-//! metadata, on the page until the details sheet takes them (Task 6). The
+//! D1's identity details, provenance, named fields, problems and unknown
+//! metadata. An item tab shows them in its details sheet (`sheet`); a
+//! file read by its path has no sheet, so its page keeps them, and names
+//! the file by its kind and ID, or as nonconforming when it has no ID. The
 //! title is the header's, and a context problem the recovery banner's.
 
 use gpui_kit::{
@@ -12,9 +14,9 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::{ClosureState, ItemDto, ItemDtoKind};
+use manyhands::repository::{ClosureState, ItemDto, ItemDtoKind, ProblemDto};
 
-use super::{COPY_ID, COPY_SLUG, ItemPane, NONCONFORMING_FILE};
+use super::{COPY_ID, COPY_SLUG, ItemPane, NONCONFORMING_FILE, banners};
 use crate::desktop::{
     model::{
         item::{
@@ -24,7 +26,10 @@ use crate::desktop::{
         navigation::OpenTarget,
         relationships::RELATIONSHIP_PROBLEMS,
     },
-    view::tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
+    view::{
+        scroll::ContentScroll,
+        tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
+    },
 };
 
 /// Shared with relationship rows through the parent view's stable path.
@@ -40,7 +45,8 @@ pub(in crate::desktop::view) fn text(
         .child(value)
 }
 
-fn field(
+/// A named value: its name, muted, in a 120 px column, then the value.
+pub(super) fn field(
     id: &'static str,
     name: &'static str,
     value: String,
@@ -58,85 +64,91 @@ fn field(
         .child(text(id, value).text_sm())
 }
 
-fn kind_label(kind: ItemDtoKind) -> &'static str {
+pub(super) fn kind_label(kind: ItemDtoKind) -> &'static str {
     match kind {
         ItemDtoKind::Document => "Document",
         ItemDtoKind::Ticket => "Ticket",
     }
 }
 
+/// What D1's Copy controls copy.
+#[derive(Clone, Copy)]
+pub(super) enum Copied {
+    ShortCode,
+    Id,
+}
+
 impl ItemPane {
+    /// The identity of a file read by its path: its kind once read, or that
+    /// it is nonconforming, which a file without an ID is; its short code
+    /// and ID, each with Copy; and its path.
     pub(super) fn identity(
         &self,
         item: Option<&ItemDto>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
-        let mut header = v_flex().gap_1();
-        let (kind, id, path) = match self.model.target() {
-            OpenTarget::Item { kind, id, .. } => (
-                Some(kind_label(*kind)),
-                Some(id.to_string()),
-                item.map(|item| item.path.clone()),
-            ),
-            OpenTarget::Inspect { path, .. } => (None, None, Some(path.clone())),
-        };
-        let mut line = h_flex().gap_2();
-        line = match kind {
-            Some(kind) => line.child(text("item-kind", kind).text_xs().text_color(muted)),
-            None => line.child(
+        let line = item.map(|item| {
+            if banners::nonconforming(item) {
                 text("item-nonconforming", NONCONFORMING_FILE)
                     .text_xs()
-                    .text_color(muted),
-            ),
-        };
-        header = header.child(line);
-        let slug = item.and_then(|item| item.slug.clone());
+                    .text_color(muted)
+            } else {
+                text("item-kind", kind_label(item.kind))
+                    .text_xs()
+                    .text_color(muted)
+            }
+        });
         let mut codes = h_flex().gap_2();
-        if let Some(slug) = slug.clone() {
+        if let Some(slug) = item.and_then(|item| item.slug.clone()) {
             codes = codes
                 .child(text("item-slug", slug.clone()).text_sm())
-                .child(
-                    div()
-                        .id("copy-slug")
-                        .test_support()
-                        .aria_label(COPY_SLUG)
-                        .track_focus(&self.copy_focus[0])
-                        .child(
-                            Button::new("copy-slug-button")
-                                .ghost()
-                                .label(COPY_SLUG)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(slug.clone()))
-                                }),
-                        ),
-                );
+                .child(self.copy(Copied::ShortCode, slug, None));
         }
-        if let Some(id) = id {
-            let copied = id.clone();
+        if let Some(id) = item.and_then(|item| item.id.clone()) {
             codes = codes
-                .child(text("item-id", id).text_sm().text_color(muted))
-                .child(
-                    div()
-                        .id("copy-id")
-                        .test_support()
-                        .aria_label(COPY_ID)
-                        .track_focus(&self.copy_focus[1])
-                        .child(
-                            Button::new("copy-id-button")
-                                .ghost()
-                                .label(COPY_ID)
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))
-                                }),
-                        ),
-                );
+                .child(text("item-id", id.clone()).text_sm().text_color(muted))
+                .child(self.copy(Copied::Id, id, None));
         }
-        header = header.child(codes);
-        if let Some(path) = path {
-            header = header.child(text("item-path", path).text_xs().text_color(muted));
-        }
-        header
+        let path = match self.model.target() {
+            OpenTarget::Inspect { path, .. } => Some(path.clone()),
+            OpenTarget::Item { .. } => item.map(|item| item.path.clone()),
+        };
+        v_flex()
+            .gap_1()
+            .child(h_flex().gap_2().children(line))
+            .child(codes)
+            .children(path.map(|path| text("item-path", path).text_xs().text_color(muted)))
+    }
+
+    /// D1's Copy control for `value`: a wrapper that holds the focus of the
+    /// Kit's button inside it, revealed in `reveal` when it takes focus.
+    pub(super) fn copy(
+        &self,
+        copied: Copied,
+        value: String,
+        reveal: Option<&ContentScroll>,
+    ) -> impl IntoElement + use<> {
+        let (id, button, label, focus) = match copied {
+            Copied::ShortCode => ("copy-slug", "copy-slug-button", COPY_SLUG, 0),
+            Copied::Id => ("copy-id", "copy-id-button", COPY_ID, 1),
+        };
+        let focus = &self.copy_focus[focus];
+        div()
+            .id(id)
+            .test_support()
+            .aria_label(label)
+            .track_focus(focus)
+            .relative()
+            .child(
+                Button::new(button)
+                    .ghost()
+                    .label(label)
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(value.clone()))
+                    }),
+            )
+            .children(reveal.map(|scroll| scroll.marker_within(focus)))
     }
 
     /// Context problems replace provenance: the recovery banner says what
@@ -182,17 +194,21 @@ impl ItemPane {
             .into_any_element()
     }
 
+    /// The lifecycle, as D1 named it: Open or Closed.
+    pub(super) fn lifecycle(item: &ItemDto) -> Option<&'static str> {
+        item.closure.as_ref().map(|closure| match closure.state {
+            ClosureState::Closed => LIFECYCLE_CLOSED,
+            _ => LIFECYCLE_OPEN,
+        })
+    }
+
     pub(super) fn fields(
         &self,
         item: &ItemDto,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let mut fields = v_flex().gap_1();
-        if let Some(closure) = &item.closure {
-            let lifecycle = match closure.state {
-                ClosureState::Closed => LIFECYCLE_CLOSED,
-                _ => LIFECYCLE_OPEN,
-            };
+        if let (Some(lifecycle), Some(closure)) = (Self::lifecycle(item), &item.closure) {
             fields = fields.child(field(
                 "item-lifecycle",
                 "Lifecycle",
@@ -220,7 +236,19 @@ impl ItemPane {
         fields
     }
 
-    /// Context and relationship problems are displayed by their own sections.
+    /// The item's own problems: context and relationship problems are
+    /// displayed by their own sections.
+    pub(super) fn own_problems<'a>(&self, item: &'a ItemDto) -> Vec<&'a ProblemDto> {
+        item.problems
+            .iter()
+            .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code))
+            .filter(|problem| {
+                self.model.relationships().is_none()
+                    || !RELATIONSHIP_PROBLEMS.contains(&problem.code)
+            })
+            .collect()
+    }
+
     pub(super) fn problems(
         &self,
         item: &ItemDto,
@@ -228,13 +256,8 @@ impl ItemPane {
     ) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
         v_flex().gap_1().children(
-            item.problems
-                .iter()
-                .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code))
-                .filter(|problem| {
-                    self.model.relationships().is_none()
-                        || !RELATIONSHIP_PROBLEMS.contains(&problem.code)
-                })
+            self.own_problems(item)
+                .into_iter()
                 .enumerate()
                 .map(|(ix, problem)| {
                     v_flex()
@@ -254,15 +277,20 @@ impl ItemPane {
         )
     }
 
+    /// Each unknown key but those in `skip`, in the library's order, with
+    /// its value as the library's JSON or text. None is editable.
     pub(super) fn metadata(
         &self,
         item: &ItemDto,
+        skip: &[&str],
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
+        let theme = cx.theme();
+        let (muted, mono) = (theme.muted_foreground, theme.mono_font_family.clone());
         v_flex().gap_1().children(
             item.unknown_metadata
                 .iter()
+                .filter(|(key, _)| !skip.contains(&key.as_str()))
                 .enumerate()
                 .map(|(ix, (key, value))| {
                     let value = metadata_value(value);
@@ -275,6 +303,7 @@ impl ItemPane {
                         .child(
                             text(("meta-key", ix), key.clone())
                                 .text_xs()
+                                .font_family(mono.clone())
                                 .text_color(muted)
                                 .w(px(120.)),
                         )

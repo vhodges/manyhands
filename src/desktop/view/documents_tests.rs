@@ -177,8 +177,11 @@ fn arrows_move_in_the_tree_and_enter_opens(cx: &mut TestAppContext) {
             id: TOP.parse().unwrap(),
         })
     );
+    // E-30: the kind and ID are in the details sheet.
+    shell.click("chip-all", cx);
     assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Document"));
     assert_eq!(shell.label("item-id", cx).as_deref(), Some(TOP));
+    shell.keys("escape", cx);
 }
 
 /// Review Focus 1: A's document read is held while B is selected; B's

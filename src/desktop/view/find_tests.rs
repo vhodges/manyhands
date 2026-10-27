@@ -113,10 +113,13 @@ fn a_ulid_opens_its_ticket_closed_or_not(cx: &mut TestAppContext) {
     find(&shell, &CLOSED.to_ascii_lowercase(), cx);
     assert_eq!(opened(&shell, cx), Some(ticket(&root, CLOSED)));
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Closed one"));
+    // E-30: the lifecycle is in the details sheet.
+    shell.click("chip-all", cx);
     assert_eq!(
         shell.label("item-lifecycle", cx).as_deref(),
         Some(LIFECYCLE_CLOSED)
     );
+    shell.keys("escape", cx);
     assert_eq!(
         tab_keys(&shell, cx),
         [OPEN, CLOSED].map(|id| TabKey::for_target(&ticket(&root, id)))
@@ -166,7 +169,10 @@ fn a_shared_short_code_lists_both_and_choosing_one_opens_it_by_id(cx: &mut TestA
     let second = library.items[1].id.clone().unwrap();
     shell.click(("find-match-open", 1usize), cx);
     assert_eq!(opened(&shell, cx), Some(ticket(&root, &second)));
+    // E-30: the ID is in the details sheet.
+    shell.click("chip-all", cx);
     assert_eq!(shell.label("item-id", cx), Some(second.clone()));
+    shell.keys("escape", cx);
     for key in tab_keys(&shell, cx) {
         let TabKey::Item { id, .. } = key else {
             panic!("a ticket's tab is keyed by its ID");

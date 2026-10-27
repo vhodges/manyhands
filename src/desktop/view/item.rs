@@ -8,14 +8,15 @@
 //!
 //! The header holds the breadcrumb, the title, the `chips`, the actions
 //! with the state `pill`, and the `banners`, where D1's status lines now
-//! show. `reads` owns the ordered per-tab read and refresh job, `status`
-//! D1's loading and recovery controls, `details` the identity details,
-//! provenance and metadata (on the page until the details sheet takes
-//! them), `source` the retained read-only textarea, `discussion` the
-//! comment thread, and `draft` the banner of a stored draft and the
-//! section of one restored here, with `draft_actions` its Export… and
-//! Discard…. Relationships remain in the sibling view. All children use
-//! the same entity, stamped model and subscriptions; none writes the item.
+//! show. A chip opens the details `sheet`, which holds D1's identity
+//! details, provenance, fields, metadata, problems and, from the sibling
+//! view, relationships; a file read by its path has no sheet, so its page
+//! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
+//! job, `status` D1's loading and recovery controls, `source` the retained
+//! read-only textarea, `discussion` the comment thread, and `draft` the
+//! banner of a stored draft and the section of one restored here, with
+//! `draft_actions` its Export… and Discard…. All children use the same
+//! entity, stamped model and subscriptions; none writes the item.
 
 mod banners;
 mod chips;
@@ -27,6 +28,7 @@ mod header;
 mod page;
 mod pill;
 mod reads;
+mod sheet;
 mod source;
 mod status;
 pub(crate) mod tokens;
@@ -44,11 +46,13 @@ use crate::desktop::{
     model::{item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope},
     services::{Services, requests::DesktopRequestId},
 };
+pub(crate) use chips::{ChipField, OpenDetails};
 pub(super) use details::text;
 #[cfg(test)]
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{EDITOR_LATER, NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
+pub(crate) use sheet::open_details;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
 pub(crate) const SOURCE_NOT_UTF8: &str =
@@ -81,6 +85,13 @@ pub(crate) struct ItemPane {
     /// One per chip field, so focus can return to the chip that asked for
     /// the details sheet.
     chip_focus: Vec<FocusHandle>,
+    /// One per chip field: the sheet's field each chip opens it on.
+    sheet_focus: Vec<FocusHandle>,
+    /// Around the sheet's Inspect link, whose own focus is the Kit's.
+    link_focus: FocusHandle,
+    /// The details sheet's own scroll, where its focused controls are
+    /// revealed.
+    pub(super) sheet_scroll: ContentScroll,
     refreshing: Option<DesktopRequestId>,
     /// Last source plus the same textarea entity, preserving selection/focus.
     source: Option<(String, Entity<TextareaState>)>,
@@ -117,6 +128,9 @@ impl ItemPane {
             row_focus: HashMap::new(),
             copy_focus: [cx.focus_handle(), cx.focus_handle()],
             chip_focus: chips::chip_focus(cx),
+            sheet_focus: sheet::sheet_focus(cx),
+            link_focus: cx.focus_handle(),
+            sheet_scroll: scroll.region(),
             refreshing: None,
             source: None,
             scroll: scroll.region(),
@@ -192,32 +206,32 @@ impl Render for ItemPane {
         self.sync_source(window, cx);
         let item = self.model.item().rows().cloned();
         let (header, later) = self.header(item.as_ref(), window, cx);
-        let identity = self.identity(item.as_ref(), cx);
+        // An item tab's details are in its sheet. A file read by its path
+        // has no sheet, so its page keeps D1's; a nonconforming file shows
+        // its problems in "Needs fixing".
+        let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
+        let identity = inspect.then(|| self.identity(item.as_ref(), cx));
         let banner = self.draft_banner(item.as_ref(), cx);
         let section = self.draft_section(window, cx);
-        let relationships = match &item {
-            Some(_) => self.relationships_panel(window, cx),
-            None => None,
-        };
-        if relationships.is_none() {
-            self.row_focus.clear();
-        }
-        // A nonconforming file shows its problems in "Needs fixing".
         let body = item.as_ref().map(|item| {
+            let details = inspect.then(|| {
+                v_flex()
+                    .gap_3()
+                    .child(self.provenance(item, cx))
+                    .child(self.fields(item, cx))
+                    .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
+                    .child(self.metadata(item, &[], cx))
+            });
             v_flex()
                 .gap_3()
-                .child(self.provenance(item, cx))
-                .child(self.fields(item, cx))
-                .children(relationships)
-                .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
-                .child(self.metadata(item, cx))
+                .children(details)
                 .child(self.source(item, cx))
         });
-        // D1's details and D2's draft, on the page until Tasks 6, 7 and 18
-        // move them.
+        // The source and D2's draft, on the page until Tasks 7 and 18 move
+        // them.
         let content = v_flex()
             .gap_3()
-            .child(identity)
+            .children(identity)
             .children(banner)
             .children(section)
             .children(body);
@@ -250,3 +264,7 @@ mod frame_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/header_tests.rs"]
 mod header_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/sheet_tests.rs"]
+mod sheet_tests;

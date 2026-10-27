@@ -60,7 +60,7 @@ fn repository_name(repo: &str) -> String {
 }
 
 /// `path`'s folder, when it has one, and file name.
-fn folder_and_file(path: &str) -> (Option<String>, String) {
+pub(super) fn folder_and_file(path: &str) -> (Option<String>, String) {
     match path.rsplit_once('/') {
         Some((folder, file)) if !folder.is_empty() => (Some(folder.to_owned()), file.to_owned()),
         _ => (None, path.to_owned()),
@@ -180,7 +180,7 @@ pub(crate) fn header_later(kind: Option<ItemDtoKind>) -> Vec<&'static str> {
 impl ItemPane {
     /// The kind of the item shown: its tab's, or for a file read by path,
     /// what the read gave.
-    fn shown_kind(&self, item: Option<&ItemDto>) -> Option<ItemDtoKind> {
+    pub(super) fn shown_kind(&self, item: Option<&ItemDto>) -> Option<ItemDtoKind> {
         match self.model.target() {
             OpenTarget::Item { kind, .. } => Some(*kind),
             OpenTarget::Inspect { .. } => item.map(|item| item.kind),

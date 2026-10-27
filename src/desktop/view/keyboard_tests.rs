@@ -378,6 +378,9 @@ impl Walk {
     fn follow_a_relationship(&self, cx: &mut TestAppContext) {
         self.keys("secondary-3", cx);
         self.on(("tab", 1usize), Region::Content, cx);
+        // E-26: the details sheet, opened by All details, holds the row.
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         self.tab_to("tab", ("rel-dependency", 0usize), cx);
         self.on(("rel-dependency", 0usize), Region::Content, cx);
         self.enter(cx);
@@ -425,10 +428,16 @@ impl Walk {
 
         self.find(CLOSED, cx);
         assert_eq!(self.opened(cx), Some(self.ticket(CLOSED)));
+        // E-30: the lifecycle is in the details sheet, opened by All
+        // details and closed before going on.
+        self.keys("secondary-3", cx);
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         assert_eq!(
             self.shell.label("item-lifecycle", cx).as_deref(),
             Some(LIFECYCLE_CLOSED)
         );
+        self.keys("escape", cx);
         assert_eq!(self.tab_count(cx), 5);
     }
 

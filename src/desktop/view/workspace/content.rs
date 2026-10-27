@@ -16,7 +16,7 @@ use crate::desktop::{
     view::{
         close_draft::{self, CloseWithDraft},
         drafts::DraftsEvent,
-        item::{ItemPane, RegionEnd},
+        item::{ChipField, ItemPane, RegionEnd, open_details},
         scroll::ContentScroll,
         sidebar,
     },
@@ -208,7 +208,54 @@ impl Workspace {
             .update(cx, |settings, cx| settings.retry_generation(id, window, cx));
     }
 
+    /// A chip asked for its tab's details sheet: the next frame, which
+    /// supplies its window, opens it.
+    pub(in crate::desktop::view) fn ask_details(
+        &mut self,
+        pane: &Entity<ItemPane>,
+        field: ChipField,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.details = Some((pane.downgrade(), field));
+        cx.notify();
+    }
+
+    /// Opens the details sheet a chip asked for, while its tab is shown
+    /// and no dialog is open; and closes the sheet once its tab is not the
+    /// one shown: closed, left, or another item opened from the sheet
+    /// (fact 80). Root then gives focus back to the chip, or, when the
+    /// chip went with its tab, the content region takes it.
+    pub(super) fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.shown_item(cx);
+        if window.has_active_sheet(cx) {
+            let owned = match (&self.content.sheet, &shown) {
+                (Some(owner), Some(pane)) => *owner == pane.downgrade(),
+                _ => false,
+            };
+            if !owned {
+                window.close_sheet(cx);
+            }
+        }
+        if !window.has_active_sheet(cx) {
+            self.content.sheet = None;
+        }
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let Some((pane, field)) = self.content.details.take() else {
+            return;
+        };
+        if let Some(pane) = pane.upgrade().filter(|pane| shown.as_ref() == Some(pane)) {
+            open_details(&pane, field, window, cx);
+            self.content.sheet = Some(pane.downgrade());
+        }
+    }
+
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        // Whatever opens an item closes the details sheet at the next
+        // frame: only the sheet's own rows and link can open one while it
+        // is open.
+        self.content.sheet = None;
         self.content.show_tabs(cx);
         self.content.tabs.open(target, &self.services, cx);
         if let Some(pane) = self.content.tabs.shown() {
@@ -477,6 +524,11 @@ impl Workspace {
         &self,
     ) -> Option<gpui_kit::Entity<crate::desktop::view::item::ItemPane>> {
         self.content.tabs.shown()
+    }
+    /// The shown tab, for a test that closes it by its own action.
+    #[cfg(test)]
+    pub(crate) fn shown_tab(&self) -> Option<TabId> {
+        self.content.tabs.active()
     }
     #[cfg(test)]
     pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {

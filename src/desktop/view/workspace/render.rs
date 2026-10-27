@@ -18,7 +18,7 @@ use gpui_kit::{
     App, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Root, WindowExt, h_flex, v_flex},
-    px,
+    deferred, div, px,
 };
 
 impl Workspace {
@@ -31,13 +31,14 @@ impl Workspace {
     }
 }
 
-/// Except Quit, workspace actions must not escape a dialog's focus trap.
+/// Except Quit, workspace actions must not escape a dialog's focus trap,
+/// nor act behind the details sheet (R-60).
 pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
     cx: &mut Context<Workspace>,
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(move |this, action: &A, window, cx| {
-        if !window.has_active_dialog(cx) {
+        if !window.has_active_dialog(cx) && !window.has_active_sheet(cx) {
             f(this, action, window, cx)
         }
     })
@@ -47,6 +48,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
+        self.sync_sheet(window, cx);
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
         }
@@ -76,7 +78,17 @@ impl Render for Workspace {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(self.content_scroll().handle());
-        let content = content.children(self.content_body(selection, window, cx));
+        // Root's sheet layer is drawn inside the content region, whose item
+        // tab opens the sheet: its focus then counts as the region's, and
+        // its keys pass the region's context before the workspace's, where
+        // R-60 refuses them. The sheet places itself over the whole window
+        // (fact 61); deferred, it is painted above the rest of the window
+        // and below dialogs, popups and tooltips, which are deferred higher.
+        let sheet = Root::render_sheet_layer(window, cx)
+            .map(|layer| div().absolute().child(deferred(layer)));
+        let content = content
+            .children(self.content_body(selection, window, cx))
+            .children(sheet);
         let top = h_flex()
             .flex_1()
             .min_h_0()
@@ -120,7 +132,7 @@ impl Render for Workspace {
             )
             .w_full()
             .h(px(260.));
-        // Root's first child draws its layers.
+        // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
             .key_context("Workspace")
@@ -199,7 +211,6 @@ impl Render for Workspace {
             .bg(cx.theme().background)
             .child(top)
             .child(operations)
-            .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

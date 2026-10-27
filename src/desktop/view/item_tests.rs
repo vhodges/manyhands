@@ -85,6 +85,11 @@ fn shown(shell: &Shell, root: &Path, id: &str) -> ItemDto {
     service.show_item(&repo, &item_id(id)).unwrap()
 }
 
+/// E-23: opens the shown tab's details sheet with All details, by click.
+fn details(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("chip-all", cx);
+}
+
 fn present(shell: &Shell, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> bool {
     let id = id.into();
     shell.frame(cx, |window, _| {
@@ -104,6 +109,7 @@ fn the_provenance_says_primary_or_active_with_its_branch_and_worktree(cx: &mut T
     shell.fixture.save_ticket(&root, SAVED, "Saved");
 
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let primary = shown(&shell, &root, PRIMARY);
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("In primary"));
     assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Ticket"));
@@ -124,6 +130,7 @@ fn the_provenance_says_primary_or_active_with_its_branch_and_worktree(cx: &mut T
     );
 
     open(&shell, ticket(&root, SAVED), cx);
+    details(&shell, cx);
     let saved = shown(&shell, &root, SAVED);
     let worktree = root.join(".manyhands/worktrees").join(SAVED);
     assert_eq!(saved.context.worktree, key(&worktree));
@@ -154,6 +161,7 @@ fn lifecycle_closure_and_project_status_are_separate_fields(cx: &mut TestAppCont
     });
 
     open(&shell, ticket(&root, CLOSED), cx);
+    details(&shell, cx);
     let closed = shown(&shell, &root, CLOSED);
     let closure = closed.closure.clone().unwrap();
     assert_eq!(shell.label("item-lifecycle", cx).as_deref(), Some("Closed"));
@@ -162,6 +170,7 @@ fn lifecycle_closure_and_project_status_are_separate_fields(cx: &mut TestAppCont
     assert_eq!(shell.label("item-status", cx).as_deref(), Some("done"));
 
     open(&shell, ticket(&root, SAYS_CLOSED), cx);
+    details(&shell, cx);
     assert_eq!(shell.label("item-lifecycle", cx).as_deref(), Some("Open"));
     assert_eq!(shell.label("item-status", cx).as_deref(), Some("closed"));
     assert!(!present(&shell, "item-closed-at", cx));
@@ -181,6 +190,7 @@ fn unknown_metadata_is_listed_and_a_null_value_is_not_representable(cx: &mut Tes
         );
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let item = shown(&shell, &root, PRIMARY);
     let keys: Vec<&str> = item.unknown_metadata.keys().map(String::as_str).collect();
     assert_eq!(keys, ["nested", "tagged", "zeta"]);
@@ -424,6 +434,7 @@ fn an_item_whose_context_is_rejected_shows_the_librarys_answer_and_no_context_ch
         id: item_id(DOCUMENT),
     };
     open(&shell, target.clone(), cx);
+    details(&shell, cx);
     assert_eq!(
         shell.label("provenance-kind", cx).as_deref(),
         Some(KIND_ACTIVE)
@@ -533,6 +544,7 @@ fn copy_writes_the_id_to_the_clipboard(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Copied", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     shell.click("copy-id", cx);
     assert_eq!(
         cx.read_from_clipboard()
@@ -550,6 +562,7 @@ fn each_copy_leaves_exactly_the_short_code_or_the_ulid(cx: &mut TestAppContext) 
         fixture.commit_ticket(root, PRIMARY, "Copied", "slug: ae-k9x2b\n");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let clipboard = |cx: &mut TestAppContext| cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(shell.label("item-slug", cx).as_deref(), Some("ae-k9x2b"));
     for (button, wanted) in [
@@ -569,6 +582,7 @@ fn a_ticket_without_a_short_code_offers_none_to_copy(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Uncoded", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     assert!(!present(&shell, "copy-slug", cx));
     assert!(present(&shell, "copy-id", cx));
 }

@@ -24,6 +24,7 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
+    item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
     sidebar::RepositoriesPane,
@@ -54,6 +55,12 @@ struct ContentArea {
     /// A tab's restored draft was discarded: the next frame focuses the
     /// tab's content.
     refocus: bool,
+    /// A chip's request for its tab's details sheet, for the next frame to
+    /// open.
+    details: Option<(WeakEntity<ItemPane>, ChipField)>,
+    /// The tab whose details sheet is open: the sheet closes once another
+    /// is shown.
+    sheet: Option<WeakEntity<ItemPane>>,
 }
 
 pub(crate) struct Workspace {
@@ -215,6 +222,8 @@ impl Workspace {
                 drafts: drafts_page,
                 review: None,
                 refocus: false,
+                details: None,
+                sheet: None,
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,
