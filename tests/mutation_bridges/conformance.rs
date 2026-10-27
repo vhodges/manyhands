@@ -11,26 +11,29 @@
 //! source, which is another ID. The preview is made stale by an edit of
 //! the file, committed on primary.
 //!
+//! `context prepare` needs none, and is refused an edit of an item nothing holds.
+//!
 //! `folder create` needs none. The request that is refused is one the
 //! domain refuses, for a file at its path: it was accepted first, and
 //! the rule is that nothing of it is left.
 
 use manyhands::repository::{
-    FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput, TicketRepairInput,
+    AuthoringKind, ContextPrepareInput, ContextPrepareIntent, FolderCreateInput, InitialsChange,
+    Mutation, RepoIdentitySetInput, TicketRepairInput,
 };
 
 use super::support::{
     confirmation::{Desk, Plain},
     conformance::{Ask, Home as Target, Row, run},
     git_home, items,
-    mutation::{World, drive_confirmed, drive_plain},
+    mutation::{TICKET_NEW, World, drive_confirmed, drive_plain},
     repair::{self, Shelf},
 };
 
 /// What someone commits on primary over the file a preview was of.
 const EDITED: &str = "---\nmanyhands_managed: true\n---\nEdited since the preview.\n";
 
-const ROWS: [Row; 4] = [
+const ROWS: [Row; 5] = [
     Row::new("document repair", true, "confirmation_not_found", |rule| {
         git_home::isolated();
         let shelf = Shelf::new();
@@ -78,6 +81,33 @@ const ROWS: [Row; 4] = [
             },
             &|| {
                 shelf.commit_on_primary(&path, EDITED);
+            },
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("context prepare", false, "item_not_found", |rule| {
+        git_home::isolated();
+        let world = World::new();
+        let prepare = |id: &str, intent| {
+            Mutation::ContextPrepare(ContextPrepareInput {
+                root: world.root.clone(),
+                kind: AuthoringKind::Ticket,
+                id: items::item_id(id),
+                intent,
+            })
+        };
+        drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => {
+                    prepare(items::TICKET_A, ContextPrepareIntent::Edit)
+                }
+                // The same item, for another purpose.
+                Ask::Changed => prepare(items::TICKET_A, ContextPrepareIntent::Create),
+                // A ticket no repository holds.
+                Ask::Refused => prepare(TICKET_NEW, ContextPrepareIntent::Edit),
             },
             rule,
         );

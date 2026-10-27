@@ -216,6 +216,7 @@ and 2 keep the `Command::ALL` invariants in `command.rs`.
 | Task | Commits | Tests run | Result | Notes |
 | --- | --- | --- | --- | --- |
 | 0 | this ledger's first commit | baseline above: 4,529 passed, 0 failed, 1 ignored | complete | E-30 added by the owner; see Rulings |
+| 1 | `feat: add context prepare` (this commit) | mutation_bridges `prepare_` → 16; mutation_replay / mutation_confirmation `keeps_the_rules_of_the_boundary` → 1 each; mutation_remote same filter → 2 SSH cases; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; lib `mutation::` → 107; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | complete, with one concern | `discovery_pending` of `context prepare` offers `request.retry`, not `operation.resume`: the row keeps step `worktree_observed`, which `operation resume` leaves to the original request; see the Task 1 report |
 
 ## Rulings during implementation
 

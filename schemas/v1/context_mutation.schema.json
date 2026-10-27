@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 context mutation data",
+  "description": "The data of a context prepare envelope that provisioned a work context or found one: the branch and the worktree an item is edited in. It accompanies success and discovery_pending, the one partial result, in which the context is there and only the index hand-off is owed. A request that is refused carries no data. It never holds a body, a source or a draft.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "kind", "branch", "worktree", "created"],
+  "properties": {
+    "id": {
+      "description": "The ID of the item the context is for.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "The item's kind: ticket or document.",
+      "enum": ["ticket", "document"]
+    },
+    "branch": {
+      "description": "The context's branch: manyhands/<kind>/<id>.",
+      "type": "string"
+    },
+    "worktree": {
+      "description": "The context's worktree, as an absolute path.",
+      "type": "string"
+    },
+    "created": {
+      "description": "Whether this request made the context. False when it was there already, made by an earlier request.",
+      "type": "boolean"
+    }
+  }
+}

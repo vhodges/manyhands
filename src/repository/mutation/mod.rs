@@ -59,6 +59,7 @@ mod settle;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
+    context::ContextPrepareBinding,
     document::DocumentBinding,
     folder::FolderCreateBinding,
     host::HostBinding,
@@ -75,6 +76,7 @@ use bind::{
 };
 pub use bind::{
     abandon::OperationAbandonInput,
+    context::{ContextPrepareInput, ContextPrepareIntent},
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
@@ -95,14 +97,15 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
-    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationMutationDto, TicketMutationDto,
+    CancelDto, ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto,
+    HostPreviewDto, HostReplacementDto, IdentityMutationDto, IdentityPreviewDto,
+    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
+    MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
+    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
+    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
+    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -426,6 +429,7 @@ pub enum Mutation {
     FolderCreate(FolderCreateInput),
     DocumentRepair(DocumentRepairInput),
     TicketRepair(TicketRepairInput),
+    ContextPrepare(ContextPrepareInput),
 }
 
 impl Mutation {
@@ -466,6 +470,7 @@ impl Mutation {
             Self::FolderCreate(_) => Command::FolderCreate,
             Self::DocumentRepair(_) => Command::DocumentRepair,
             Self::TicketRepair(_) => Command::TicketRepair,
+            Self::ContextPrepare(_) => Command::ContextPrepare,
         }
     }
 
@@ -507,7 +512,8 @@ impl Mutation {
             | Self::ItemSync(_)
             | Self::RepoSync(_)
             | Self::OperationResume(_)
-            | Self::FolderCreate(_) => None,
+            | Self::FolderCreate(_)
+            | Self::ContextPrepare(_) => None,
         }
     }
 
@@ -543,6 +549,7 @@ impl Mutation {
             Self::FolderCreate(input) => Box::new(FolderCreateBinding::from(input)),
             Self::DocumentRepair(input) => Box::new(RepairBinding::from(input)),
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
+            Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
         }
     }
 }

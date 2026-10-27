@@ -547,6 +547,7 @@ pub enum MutationDataDto {
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
     Repair(RepairMutationDto),
+    Context(ContextMutationDto),
 }
 
 /// What `document repair` and `ticket repair` report about the item the
@@ -574,6 +575,37 @@ impl RepairMutationDto {
                 serde_json::Value::Null => None,
                 adopted => Some(adopted.as_bool()?),
             },
+        })
+    }
+}
+
+/// What `context prepare` reports: the item and the work context (the
+/// branch and the worktree) it is edited in. It never holds a body or a
+/// source.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextMutationDto {
+    /// The item the context is for.
+    pub id: String,
+    /// `ticket` or `document`.
+    pub kind: String,
+    /// The context's branch, as a branch is named: `manyhands/<kind>/<id>`.
+    pub branch: String,
+    /// The context's worktree, as an absolute path.
+    pub worktree: String,
+    /// Whether this request made the context, rather than finding it.
+    pub created: bool,
+}
+
+impl ContextMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| stored.get(key)?.as_str().map(str::to_owned);
+        Some(Self {
+            id: text("id")?,
+            kind: text("kind")?,
+            branch: text("branch")?,
+            worktree: text("worktree")?,
+            created: stored.get("created")?.as_bool()?,
         })
     }
 }
@@ -985,7 +1017,8 @@ impl MutationDataDto {
             // A host command is itself the approval: its results offer
             // none.
             | Self::Host(_)
-            | Self::Repair(_) => None,
+            | Self::Repair(_)
+            | Self::Context(_) => None,
         }
     }
 
@@ -1020,6 +1053,7 @@ impl MutationDataDto {
             Command::DocumentRepair | Command::TicketRepair => {
                 RepairMutationDto::from_stored(stored).map(Self::Repair)
             }
+            Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for.
             Command::ItemSync | Command::RepoSync | Command::OperationResume => {
