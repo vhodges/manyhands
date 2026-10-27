@@ -383,3 +383,11 @@ Notes for later tasks: Task 22 leaves `targets()` in
   rework is excluded, and D1's `opening_a_tab_does_not_change_the_selection`
   reads `selection-name` with a tab open. The other way, hiding the panel
   under a tab, needed a new named edit.
+- Owner decision, 2026-10-27 (revised, from Task 5a's review): the review
+  measured the cost of a fixed panel. With it, the item's scroll region
+  was about 58 px tall in a 1440 × 700 window (about 258 px at 900 px).
+  The owner then chose to draw D1's repository details at the end of the
+  item's own scroll region, after the discussion, "for now", as D1 drew
+  them at the end of the content column. The owner wants to see it on
+  screen. The Design Deviations row is rewritten to match, and native
+  checklist step 1 gains the check. No test changes.

@@ -1260,7 +1260,7 @@ reports it.
 | Arrow keys along the toolbar | Built by the app. | Fact 67. |
 | A view-mode renderer | The read editor. | Decision 17. |
 | IBM Plex fonts | The Kit's fonts. | Not bundled; not decided. |
-| The item tab filling the content area, the white page reaching its bottom | D1's repository selection panel (name, configuration, index, Retry, Remove) stays drawn below an item tab in the content column. The page fills the item tab's scroll region, above the panel. | No workspace rework (Cycle exclusions); D1's `opening_a_tab_does_not_change_the_selection` reads the panel with a tab open. Product owner, 2026-10-27, from Task 5a. |
+| The item tab filling the content area, its scroll region holding the page and then the discussion | The item's scroll region ends, after the discussion, with D1's details of the selected repository (name, configuration, index, Retry, Remove), which D1 drew at the end of the content column. The page still fills the region's height. | No workspace rework (Cycle exclusions); D1's `opening_a_tab_does_not_change_the_selection` reads `selection-name` with a tab open; a fixed panel below the tab left the region about 58 px tall in a 700 px window. Product owner, 2026-10-27, from Task 5a ("for now"; the owner checks it on screen, checklist step 1). |
 
 ### Not Built In D3
 
@@ -2063,6 +2063,9 @@ On a throwaway branch of this project's repository:
      focus to the chip.
    - The floating comments button hides once the discussion shows.
    - Share and the primary action are disabled, with their tooltip.
+   - The selected repository's details sit at the end of the item's
+     scroll, after the discussion, and the page still fills the region
+     (owner, 2026-10-27: to be seen on screen).
 2. **Read view.** Commit a fixture document with a words-mixed `$$` pair
    and an image under `docs/`, then open it.
    - It renders with its image.
