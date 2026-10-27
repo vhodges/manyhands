@@ -1,19 +1,20 @@
 //! The page and the item's scroll region (R-47; design, Layout and Page).
 //!
 //! The region sits below the tab strip and the header, which stay in
-//! place, and holds the page and then the discussion. The page is white in
+//! place, and holds the page, then the discussion, then the workspace's
+//! details of the selected repository (owner, 2026-10-27). The page is white in
 //! both themes, its column at most 760 px wide and centred, and it is at
 //! least as tall as the region was in the last frame, so the white reaches
 //! the bottom and the discussion starts below the fold. For now it holds
 //! D1's content; Task 7 puts the read editor in it.
 //!
 //! The region shows the Kit's vertical scrollbar on its own handle, thumb
-//! in `page-border-strong`, laid over the region as the Kit's own
-//! scrollables lay it.
+//! in `page-border-strong` at rest, hovered and dragged, laid over the
+//! region as the Kit's own scrollables lay it.
 
 use gpui_kit::{
-    App, FocusHandle, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window,
+    AnyElement, App, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, scroll::Scrollbar, v_flex},
     div, px,
 };
@@ -92,20 +93,33 @@ impl Page {
     }
 }
 
-/// The item's scroll region, holding `page` and then `discussion`, with
-/// the Kit's scrollbar over it.
+/// The item's scroll region, holding `page`, then `discussion`, then
+/// `end`, the selected repository's details, with the Kit's scrollbar
+/// over it.
 pub(super) fn region<P: IntoElement, D: IntoElement>(
     scroll: &ContentScroll,
     page: P,
     discussion: Option<D>,
+    end: Option<AnyElement>,
     cx: &App,
 ) -> impl IntoElement + use<P, D> {
+    // One light thumb at rest, under the pointer and while dragged, so it
+    // stays light against the page in either theme.
     let thumb = item_colors(cx).page_border_strong;
+    let end = end.map(|end| {
+        div()
+            .id("item-region-end")
+            .w_full()
+            .pt_3()
+            .pb_3()
+            .child(end)
+    });
     div()
         .id("item-region")
         .relative()
         .flex_1()
         .min_h_0()
+        .overflow_hidden()
         .w_full()
         .child(
             v_flex()
@@ -115,7 +129,8 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                 .overflow_y_scroll()
                 .track_scroll(scroll.handle())
                 .child(page)
-                .children(discussion),
+                .children(discussion)
+                .children(end),
         )
         .child(
             div()
@@ -127,7 +142,12 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                     Scrollbar::vertical(scroll.handle())
                         .id("item-scrollbar-bar")
                         .viewport_from_layout()
-                        .styles(|styles| styles.thumb(|style| style.bg(thumb))),
+                        .styles(|styles| {
+                            styles
+                                .thumb(|style| style.bg(thumb))
+                                .thumb_hover(|style| style.bg(thumb))
+                                .thumb_active(|style| style.bg(thumb))
+                        }),
                 ),
         )
 }

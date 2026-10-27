@@ -16,15 +16,18 @@ use crate::desktop::{
     view::{
         close_draft::{self, CloseWithDraft},
         drafts::DraftsEvent,
+        item::{ItemPane, RegionEnd},
         scroll::ContentScroll,
+        sidebar,
     },
 };
 use gpui_kit::{
-    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Styled, Window,
+    AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement, Styled,
+    Window,
     component::{WindowExt, v_flex},
 };
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{collections::BTreeSet, path::PathBuf, rc::Rc};
 
 enum ContentPage {
     Tabs,
@@ -208,6 +211,10 @@ impl Workspace {
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
         self.content.show_tabs(cx);
         self.content.tabs.open(target, &self.services, cx);
+        if let Some(pane) = self.content.tabs.shown() {
+            let details = Self::repository_details(cx);
+            pane.update(cx, |pane, _| pane.end_region_with(details));
+        }
         cx.notify();
     }
 
@@ -363,26 +370,54 @@ impl Workspace {
         self.content.tabs.scroll()
     }
 
+    /// The item tab the content region shows, if it shows one.
+    pub(super) fn shown_item(&self, cx: &App) -> Option<Entity<ItemPane>> {
+        match self.content.page(cx) {
+            ContentPage::Tabs => self.content.tabs.shown(),
+            ContentPage::Settings | ContentPage::Drafts => None,
+        }
+    }
+
     /// What the page keys move: while an item tab is shown, its own scroll
     /// region below the strip and the header (R-47); else the column.
     pub(super) fn scroll_target(&self, cx: &App) -> ContentScroll {
-        let shown = match self.content.page(cx) {
-            ContentPage::Tabs => self.content.tabs.shown(),
-            ContentPage::Settings | ContentPage::Drafts => None,
-        };
-        match shown {
+        match self.shown_item(cx) {
             Some(pane) => pane.read(cx).region().clone(),
             None => self.content_scroll().clone(),
         }
     }
 
+    /// The details of the selected repository, as the end of an item's
+    /// scroll region: drawn there, and revealed by that region (owner,
+    /// 2026-10-27). D1 drew them at the end of the content column.
+    fn repository_details(cx: &mut Context<Self>) -> RegionEnd {
+        let workspace = cx.entity().downgrade();
+        Rc::new(
+            move |scroll: &ContentScroll, _: &mut Window, cx: &mut App| {
+                workspace
+                    .update(cx, |workspace, cx| {
+                        sidebar::selection(
+                            &workspace.navigation,
+                            &workspace.remove_focus,
+                            &workspace.retry_focus,
+                            scroll,
+                            cx,
+                        )
+                        .into_any_element()
+                    })
+                    .ok()
+            },
+        )
+    }
+
     /// Keep selection construction and secret clearing in their existing frame
     /// order; leaving Settings does not replace its cached pages or scroll.
     /// Leaving Keys for the tabs or the Drafts page empties a typed
-    /// passphrase alike.
+    /// passphrase alike. `selection` is drawn by the empty pane; an item
+    /// tab draws its own at the end of its scroll region.
     pub(super) fn content_body(
         &self,
-        selection: AnyElement,
+        selection: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
@@ -406,21 +441,20 @@ impl Workspace {
                 if self.content.tabs.shown().is_none() {
                     // The empty pane keeps D1's single scrolling column.
                     let mut body = tabs;
-                    body.push(selection);
+                    body.extend(selection);
                     return body;
                 }
                 // An item tab fills the column: the strip, then the pane,
-                // whose header stays above its own scroll region. The
-                // selection stays drawn below it.
+                // whose header stays above its own scroll region. It has no
+                // zero minimum: never shorter than the strip and the
+                // header, it lets the column scroll in a short window.
                 vec![
                     v_flex()
                         .id("item-tab")
                         .flex_1()
-                        .min_h_0()
                         .w_full()
                         .children(tabs)
                         .into_any_element(),
-                    selection,
                 ]
             }
         }

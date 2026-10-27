@@ -54,13 +54,18 @@ impl Render for Workspace {
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
-        let selection = sidebar::selection(
-            &self.navigation,
-            &self.remove_focus,
-            &self.retry_focus,
-            self.content_scroll(),
-            cx,
-        );
+        // An item tab draws the selection at the end of its own scroll
+        // region instead.
+        let selection = self.shown_item(cx).is_none().then(|| {
+            sidebar::selection(
+                &self.navigation,
+                &self.remove_focus,
+                &self.retry_focus,
+                self.content_scroll(),
+                cx,
+            )
+            .into_any_element()
+        });
         let navigation = self.navigation_pane(window, cx);
         self.content_scroll()
             .note_focus(window.focused(cx).as_ref());
@@ -71,7 +76,7 @@ impl Render for Workspace {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(self.content_scroll().handle());
-        let content = content.children(self.content_body(selection.into_any_element(), window, cx));
+        let content = content.children(self.content_body(selection, window, cx));
         let top = h_flex()
             .flex_1()
             .min_h_0()

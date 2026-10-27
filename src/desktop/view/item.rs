@@ -3,7 +3,9 @@
 //! An item tab is a column (R-47): the tab strip, which the workspace draws,
 //! then a header placeholder holding D1's identity line, which stays in
 //! place, then the item's own scroll region with the page and the
-//! discussion (`page`).
+//! discussion (`page`). The region ends with the workspace's details of
+//! the selected repository, which D1 drew at the end of the content
+//! column (owner, 2026-10-27).
 //!
 //! `reads` owns the ordered per-tab read and refresh job, `status` its loading
 //! and recovery controls, `details` the identity/provenance/metadata, `source`
@@ -23,11 +25,11 @@ mod source;
 mod status;
 pub(crate) mod tokens;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, rc::Rc};
 
 use gpui_kit::{
-    Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render, Styled,
-    Subscription, Task, TestSupportExt, Window,
+    AnyElement, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, Subscription, Task, TestSupportExt, Window,
     component::{ActiveTheme, input::TextareaState, v_flex},
     div, px,
 };
@@ -60,6 +62,12 @@ const COMMENT_INDENT: f32 = 16.;
 /// (`item_view/01-item-frame.md`).
 const HEADER_PADDING: (f32, f32) = (14., 28.);
 
+/// Builds what ends the item's scroll region, after the discussion: the
+/// workspace's details of the selected repository, revealed by the region
+/// it is given. It is built as the pane is drawn, so it is always the
+/// frame's own.
+pub(crate) type RegionEnd = Rc<dyn Fn(&ContentScroll, &mut Window, &mut App) -> Option<AnyElement>>;
+
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
     services: Services,
@@ -77,6 +85,8 @@ pub(crate) struct ItemPane {
     page: page::Page,
     /// The discussion's Back to top, a tab stop.
     back_to_top: FocusHandle,
+    /// Set by the workspace when it opens the tab.
+    region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
@@ -106,6 +116,7 @@ impl ItemPane {
             scroll: scroll.region(),
             page: page::Page::new(cx),
             back_to_top: cx.focus_handle().tab_stop(true),
+            region_end: None,
             draft: draft::TabDraft::default(),
             _operations: operations,
             _drafts: drafts,
@@ -130,6 +141,11 @@ impl ItemPane {
     /// is shown.
     pub(super) fn region(&self) -> &ContentScroll {
         &self.scroll
+    }
+
+    /// What ends the item's scroll region, after the discussion.
+    pub(super) fn end_region_with(&mut self, end: RegionEnd) {
+        self.region_end = Some(end);
     }
 
     /// Back to top: the region at its top, and the page focused.
@@ -202,6 +218,10 @@ impl Render for ItemPane {
             .child(self.later(cx));
         let page = self.page.render(content, &self.scroll, window, cx);
         let discussion = self.discussion(window, cx);
+        let end = self
+            .region_end
+            .clone()
+            .and_then(|end| end(&self.scroll, window, cx));
         let (vertical, horizontal) = HEADER_PADDING;
         let header = div()
             .id("item-header")
@@ -213,14 +233,15 @@ impl Render for ItemPane {
             .border_b_1()
             .border_color(cx.theme().border)
             .child(identity);
+        // No zero minimum: the pane is never shorter than its header, so a
+        // window too short for the header scrolls the content column.
         v_flex()
             .id("item-view")
             .test_support()
             .flex_1()
-            .min_h_0()
             .w_full()
             .child(header)
-            .child(page::region(&self.scroll, page, discussion, cx))
+            .child(page::region(&self.scroll, page, discussion, end, cx))
     }
 }
 
