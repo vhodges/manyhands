@@ -4682,6 +4682,7 @@ dependencies = [
  "futures",
  "git2",
  "gpui-kit",
+ "image",
  "libc",
  "libssh2-sys",
  "rusqlite",
@@ -4698,6 +4699,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zorite-editor",
+ "zorite-markdown",
 ]
 
 [[package]]

@@ -47,6 +47,7 @@ pub(crate) fn run() {
         .run(|cx| {
             gpui_kit::init(cx);
             keys::bind(cx);
+            view::editor::keys::bind(cx);
             let opener: Opener = Rc::new(RepositoryService::open_default);
             cx.spawn(async move |cx| {
                 cx.update(|cx| start(opener, cx));

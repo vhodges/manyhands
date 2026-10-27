@@ -89,6 +89,7 @@ impl Shell {
     ) -> Self {
         cx.update(gpui_kit::init);
         cx.update(keys::bind);
+        cx.update(super::editor::keys::bind);
         // Dialogs open without their entrance animation, so a frame finds
         // them where they rest.
         cx.update(|cx| cx.set_reduce_motion(true));
