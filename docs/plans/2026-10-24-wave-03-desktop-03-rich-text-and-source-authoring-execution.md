@@ -415,6 +415,26 @@ Notes for later tasks: Task 22 leaves `targets()` in
   Follow-up: make both repo-wide (`Cargo.toml` dev profile and/or
   `AGENTS.md`) as their own change on main, with a ticket the owner
   approves.
+- Owner decision, 2026-10-27 (from the controller's timing): line tables
+  are dropped. Timings after a one-line desktop edit, at `25dbbb4`, full
+  debug info first, line tables second:
+
+  | Step | Full debug info | Line tables |
+  | --- | --- | --- |
+  | Test-binary build | 6 s | 5 s |
+  | `view::item` run, 36 tests | 12 s | 20 s |
+  | `clippy --features desktop` | 1 s | 131 s |
+  | `clippy --all-targets --all-features` | 4 s | 92 s |
+
+  The two line-tables clippy runs include the setting's one-time rebuild.
+  The test binary's one-time rebuild took 236 s.
+
+  Incremental builds are not the bottleneck. The time goes to the long
+  targets: the full suite (over 2 h), `mutation_remote` (about 18 min)
+  and `ticket_closure`. It also goes to cold builds in a new worktree.
+  The trimmed gate stays. The repo-wide follow-up now targets those long
+  targets and shared compiled dependencies (for example sccache), not
+  debug info.
 - Ruling (Task 5a fix round, controller re-review): approved after
   reading the diff in full. Every tab opens through `open_item`
   (`content.rs:213` is the only `tabs.open` call), so every pane gets its
