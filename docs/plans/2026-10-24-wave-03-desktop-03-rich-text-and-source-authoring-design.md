@@ -822,7 +822,13 @@ impl RepositoryService { pub fn release_context(&self, request: ReleaseContextRe
    current tip, then delete it with an oid check.
    - A changed tip answers `external_change`. The row stays pending, the
      worktree is already gone, and the user retries, or abandons the row
-     and Edits again.
+     and Edits again. When the new tip holds a commit of its own, that Edit
+     answers `recovery_required` (fact 18) and a new release answers
+     `external_change`: the work is kept, and the branch is repaired by
+     hand (`repo.inspect`) (owner, 2026-10-26, from the Part 0 review).
+   - When this row removed no worktree (a new row on the branch-only
+     path), nothing was touched, and a refusal here discards the row, as
+     in step 4 (Part 0 review).
    - On success, record `LocalStep::ContextBranchReleased`.
    - Failure point: `AfterContextBranchRelease`.
 7. **Hand off, as the saves do** (R-32).
@@ -2422,6 +2428,20 @@ Each ruling reads: decision — why — cost if wrong.
   would change journal behavior every local operation shares — the
   operation area's own Resume of that row answers
   `original_request_required`.
+- **R-78** (product owner, 2026-10-26, from the Part 0 review) Decision
+  11's exception for the context commands is stated, not fixed in the
+  library. Neither `context prepare` nor `context release` records a
+  checkpoint (`ended_without_checkpoint` is `DidNothing`), so a request
+  whose answer was lost runs again as new when it is sent again: a
+  release sent again after a later Edit releases that newer context, and a
+  prepare sent again after a release makes the context again (Known
+  Limits). No saved work is lost, because release refuses any context that
+  holds work. The desktop keeps a request's `RequestId` for every retry,
+  so Task 17 never retries a release of an item once a later prepare of
+  it was sent, and never sends a prepare again once a release of that item
+  was sent — recording a checkpoint would change the step rules that
+  resume, abandon and replay share — a client other than the desktop that
+  sends such a request again sees the exception.
 
 R-6, R-7, R-10, R-28 to R-31 and R-45 are retired: R-6 by R-64; R-7 and
 R-31 by decision 17, since no viewer parse, rewrite or warm-up remains;
@@ -2432,6 +2452,12 @@ R-45 by decision 18.
 - An Edit left open at quit keeps its context.
 - A retried `context prepare` that answers `Reused` for a context it made is
   kept.
+- Decision 11's exception for the context commands (R-78): a `context
+  release` whose answer was lost, sent again after a later Edit, releases
+  that newer context when it is clean; a `context prepare` whose answer
+  was lost, sent again after a release, makes the context again. Release
+  still refuses any context that holds work. The desktop never sends
+  either again across the other (Task 17).
 - A context is kept in three more cases:
   - a tab closed while its Edit was preparing, when the answer was
     `discovery_pending`;

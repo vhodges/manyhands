@@ -329,3 +329,26 @@ Notes for later tasks: Task 22 leaves `targets()` in
   shared helper, and changing its mapping is beyond Task 2. Carried to the
   whole-branch review. — If wrong: a rare I/O failure tells the user to
   clean files they do not have.
+- Owner decision, 2026-10-26 (from the Part 0 review, Minor 1): **R-78**.
+  Neither context command records a checkpoint, so a request whose answer
+  was lost runs again as new: a release sent again after a later Edit
+  releases that newer clean context, and a prepare sent again after a
+  release makes the context again. Cycle decision 11 requires the design to
+  state such an exception; it now does (Known Limits, R-78), with no
+  library change. Task 17 gains two tests: the desktop never retries a
+  release once the item is prepared again, and never sends a prepare again
+  once its context is released. In the same amendment the owner approved
+  the correction of design step 6 (Minor 4): a moved tip with a commit of
+  its own is repaired by hand.
+- Ruling (Part 0 review, Minor 2): a step-6 refusal on a new row that
+  removed no worktree (the branch-only path) discards the row, as step 4
+  does, and the design's step 6 says so. Fixed in the Part 0 checkpoint,
+  in Task 2's file, with a test. — Nothing was touched, which is the
+  design's own reason for discarding; a pending row would refuse every
+  local operation on the root until abandoned. — If wrong: a refused
+  branch-only release leaves no row to inspect.
+- Ruling (Part 0 review, Minor 3, parked): abandon's `writes` arm for a
+  release stays `Writes::Nothing`, so its preview names no item. The
+  design names that arm, and the row's target still names the item.
+  Carried to the whole-branch review. — If wrong: the preview of a stuck
+  release does not say whose branch is left.

@@ -1298,6 +1298,12 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `closing_the_tab_while_preparing_releases_the_context_it_made`
   - `discard_is_disabled_while_a_save_is_in_flight`
   - `a_stranded_context_can_be_released_from_the_tab` (R-40)
+  - `a_release_is_not_retried_once_the_item_is_prepared_again` (R-78,
+    owner, 2026-10-26: a release request of an item is never retried, under
+    its `RequestId`, after a later `context prepare` of that item was sent)
+  - `a_prepare_is_not_sent_again_once_its_context_is_released` (R-78: once
+    a release of the item was sent, its earlier prepare request is never
+    sent again, R-77's Resume during Loading included)
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Verify.**
 
@@ -1694,7 +1700,7 @@ git merge-tree --write-tree HEAD origin/main
 | Edit; R-11, R-12, R-13, R-35, R-70 (Loading), R-72 (classification), R-75 (the set) | 14 |
 | Save; states; untouched bytes; not dirty (repository); R-14, R-69, R-70; session outcomes for Task 15 | 15 |
 | Done; R-15, R-41, R-58, R-68 (kept), R-71, R-73; session outcomes for Task 16 | 16 |
-| Release on leave; R-37, R-40, R-75; decision 18; session outcomes for Task 17 | 17 |
+| Release on leave; R-37, R-40, R-75, R-78; decision 18; session outcomes for Task 17 | 17 |
 | Late results; recovery; R-16, R-17, R-19, R-38, R-42 (Continue editing), R-70; the close-dialog outcome | 18 |
 | Stale edit; R-18, R-36, R-44, R-68; the review's session outcome | 19 |
 | Metadata; R-27, R-38 (sheet), R-57, R-74; decision 14 | 20 |
