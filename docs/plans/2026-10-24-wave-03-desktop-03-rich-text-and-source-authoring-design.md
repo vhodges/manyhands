@@ -1038,6 +1038,10 @@ always go together, never colour alone.
 | The same, with a selected publication remote | `pencil`, amber | Editing · saved on this computer · not shared yet |
 | A closed ticket | `archive`, secondary | Closed |
 | The item's context needs recovery | `circle-alert`, red | Needs attention |
+| A closed ticket, with a kept or stored draft | `archive`, secondary | Closed · unsaved changes kept |
+| Needs recovery, with a kept or stored draft | `circle-alert`, red | Needs attention · unsaved changes kept |
+
+While viewing, recovery comes first, then closure, then a kept draft, then the copy. A kept or stored draft is never hidden: with recovery or closure, the pill adds "unsaved changes kept" to their words and keeps their icon (contract 16; product owner, 2026-10-27, from the Part A review).
 
 ### Banners
 
@@ -1259,6 +1263,8 @@ reports it.
 | Toolbar active marks | Read from the text around the caret. | Fact 73; R-55. |
 | Arrow keys along the toolbar | Built by the app. | Fact 67. |
 | A view-mode renderer | The read editor. | Decision 17. |
+| A view mode with no editing handles | On hover, the read view shows the editor's own handles: the block drag grip, a table's +/− pills and column-resize bands, and a callout's fold arrow. Using one changes nothing; the guard reverts it. | The read view is the editor, read-only (decision 17); the pinned editor has no switch to hide them. Product owner, 2026-10-27, from the Part A review (checklist step 2). |
+| Waiting on as a chip per dependency, while viewing | D1's dependency rows (code, title, lifecycle; each opens its ticket), with the readiness note. The chips come with editing (Task 21). | E-23 and E-26 read the rows' IDs. Product owner, 2026-10-27, from the Part A review. |
 | IBM Plex fonts | The Kit's fonts. | Not bundled; not decided. |
 | The item tab filling the content area, its scroll region holding the page and then the discussion | The item's scroll region ends, after the discussion, with D1's details of the selected repository (name, configuration, index, Retry, Remove), which D1 drew at the end of the content column. The page still fills the region's height. | No workspace rework (Cycle exclusions); D1's `opening_a_tab_does_not_change_the_selection` reads `selection-name` with a tab open; a fixed panel below the tab left the region about 58 px tall in a 700 px window. Product owner, 2026-10-27, from Task 5a ("for now"; the owner checks it on screen, checklist step 1). |
 
@@ -2072,6 +2078,8 @@ On a throwaway branch of this project's repository:
    - Select a paragraph and copy it: the paste is its Markdown.
    - Typing, pasting, a middle-click paste, a checkbox click, a table
      column drag and a right-click change nothing.
+   - Hovering shows the editor's block grip and table handles (a Design
+     Deviation); using them changes nothing.
    - Arrow through the `$$` block: the caret passes it.
    - The sheet's Inspect link shows the file.
    - `git status` is unchanged.

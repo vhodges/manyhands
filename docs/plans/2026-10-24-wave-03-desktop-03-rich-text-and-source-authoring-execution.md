@@ -586,3 +586,34 @@ Notes for later tasks: Task 22 leaves `targets()` in
   only. The shared caret-reveal helper is carried to Task 9, where the
   edit editor needs the same reveal. — If wrong: one formatter form, or
   one helper extracted now.
+- Owner decisions, 2026-10-27, from the Part A checkpoint review:
+  - **Minor 2.** The state pill never hides a kept or stored draft.
+    With recovery or closure, it reads "Needs attention · unsaved
+    changes kept" or "Closed · unsaved changes kept" and keeps their
+    icon (contract 16). The design's State pill table records it.
+    Task 5b's `the_pill_reads_each_viewing_state` follows it by ruling,
+    since it is D3's own test.
+  - **Minor 3.** The read view's hover handles (block grip, table +/−
+    pills and column bands, callout fold arrow) are a Design Deviations
+    row. Checklist step 2 checks them on screen.
+  - **Minor 4.** Waiting on shows D1's dependency rows while viewing, as
+    a Design Deviations row. The chips come with Task 21's picker.
+- Ruling (Part A review, Minor 1): the details sheet says "Viewing your
+  private copy. Choose Edit to change these." for an item read from its
+  own context, as the pill does. — The handoff's line assumes the shared
+  copy. — If wrong: one string.
+- Ruling (Part A checkpoint): `--test drafts` is left out of Step 2. It
+  tests the library's `src/drafts/` store, which Part A does not change
+  (owner decision, 2026-10-27). It runs where Task 22 changes
+  `src/drafts/`. — If wrong: a drafts regression from main is found
+  later; main tests its own library code.
+- Ruling (Part A review, Minors 6 to 8): parked or done.
+  - **Minor 6.** The Undo stop is proven by a new test with real
+    history. The Redo stop cannot be proven from behind the guard,
+    because only a leaked undo fills the redo stack and the revert then
+    clears it.
+  - **Minor 7.** AltGr text on Windows passes the keystroke layer. Only
+    the backstop catches it, and that goes to the post-merge native
+    evidence.
+  - **Minor 8.** The CLI isolation check was re-run through Devenv:
+    exit 0.
