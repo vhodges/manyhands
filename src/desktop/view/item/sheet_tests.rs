@@ -30,6 +30,10 @@ use crate::desktop::{
         navigation::OpenTarget,
         relationships::{CHILDREN, DEPENDENCIES, DEPENDENTS, NONE, PARENT, RELATIONSHIPS},
     },
+    services::{
+        JobKind,
+        requests::{Intent, Lane, RequestState},
+    },
     test_support::{
         fixtures::{Fixture, item_id, ticket_path},
         snapshot::RepositorySnapshot,
@@ -38,6 +42,7 @@ use crate::desktop::{
         harness::{Shell, key},
         settings::Shown,
         tickets::{LIFECYCLE_CLOSED, LIFECYCLE_OPEN},
+        workspace::QuitPhase,
     },
 };
 
@@ -775,6 +780,10 @@ fn closing_the_tab_by_its_action_closes_the_sheet(cx: &mut TestAppContext) {
     assert!(!shell.present("sheet-heading", cx));
     assert_eq!(tabs(&shell, cx), 1);
     assert_eq!(opened(&shell, cx), Some(ticket(&root, FIRST)));
+    assert!(
+        focused(&shell, ("tab", 0usize), cx),
+        "focus is on the remaining tab, in the content region"
+    );
 
     shell.click(ChipField::All.id(), cx);
     assert!(has_sheet(&shell, cx));
@@ -782,6 +791,55 @@ fn closing_the_tab_by_its_action_closes_the_sheet(cx: &mut TestAppContext) {
         shell.label("sheet-title-value", cx).as_deref(),
         Some("First")
     );
+}
+
+/// Quit asked for behind the sheet while a job runs closes the sheet, as
+/// it closes a dialog, and Quit now holds focus, in view; the next frame
+/// opens nothing over it. Quitting while drafts are saved waits in the same
+/// way (`wait_to_quit`).
+#[gpui_kit::test]
+async fn quit_behind_the_sheet_closes_it_and_focuses_quit_now(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, MAIN, "Main", "project: p\n");
+    });
+    open(&shell, ticket(&root, MAIN), cx);
+    let held = shell.backend.hold_job(JobKind::IndexRefresh);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::IndexRefresh { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell.click(ChipField::Project.id(), cx);
+    assert!(has_sheet(&shell, cx));
+
+    shell.keys("secondary-q", cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert_eq!(phase, QuitPhase::Finishing(id));
+    assert!(!has_sheet(&shell, cx), "the sheet closes");
+    assert!(focused(&shell, "quit-now", cx), "Quit now holds focus");
+    let shown = shell.frame(cx, |window, _| window.find("quit-now").visible());
+    assert!(shown, "Quit now is in view");
+    shell.run(cx);
+    assert!(!has_sheet(&shell, cx));
+    assert!(focused(&shell, "quit-now", cx));
+
+    // The worker must not outlive the test: let the held job end.
+    held.release();
+    shell
+        .until(cx, move |operations| {
+            matches!(
+                operations.request(id).map(|request| &request.state),
+                Some(RequestState::Finished(..))
+            )
+        })
+        .await;
 }
 
 /// A read again while the sheet is open updates it in place: it stays

@@ -70,10 +70,17 @@ impl Workspace {
         }
     }
 
-    /// Quitting waits: every dialog closes and Quit now takes focus.
+    /// Quitting waits: every dialog and the details sheet close, no sheet a
+    /// chip asked for opens over it, and Quit now takes focus. Closing the
+    /// sheet gives focus back to its chip, so Quit now is focused after it.
     fn wait_to_quit(&mut self, phase: QuitPhase, window: &mut Window, cx: &mut Context<Self>) {
         self.set_quit(phase, cx);
         window.close_all_dialogs(cx);
+        self.content.details = None;
+        self.content.sheet = None;
+        if window.has_active_sheet(cx) {
+            window.close_sheet(cx);
+        }
         window.focus(&self.quit_focus, cx);
         self.last_region = Some(Region::Operations);
         cx.notify();

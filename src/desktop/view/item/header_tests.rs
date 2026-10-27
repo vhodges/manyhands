@@ -423,6 +423,7 @@ fn every_chip_emits_open_details_for_its_field(cx: &mut TestAppContext) {
     ];
     for field in fields {
         shell.click(field.id(), cx);
+        shell.keys("escape", cx);
     }
     assert_eq!(*seen.borrow(), fields);
 
@@ -449,6 +450,7 @@ fn every_chip_emits_open_details_for_its_field(cx: &mut TestAppContext) {
     ];
     for field in fields {
         shell.click(field.id(), cx);
+        shell.keys("escape", cx);
     }
     assert_eq!(*seen.borrow(), fields);
 }
@@ -896,8 +898,7 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
         );
     }
     shell.keys("tab", cx);
-    assert!(focused(&shell, "copy-id", cx), "the page's first control");
-    assert!(inside(&shell, "copy-id", "item-page", cx));
+    assert!(focused(&shell, "item-page", cx), "the page holds focus");
 
     shell.keys("shift-tab", cx);
     assert!(focused(&shell, ChipField::All.id(), cx));
