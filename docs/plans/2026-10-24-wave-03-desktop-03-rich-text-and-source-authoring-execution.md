@@ -619,3 +619,17 @@ Notes for later tasks: Task 22 leaves `targets()` in
     evidence.
   - **Minor 8.** The CLI isolation check was re-run through Devenv:
     exit 0.
+- Ruling (Task 9, R-59): the `pressed` flag survives the events a press
+  itself causes, until the next frame. A right press moves the caret,
+  which emits `SelectionChanged`, then opens its menu. Read literally,
+  R-59 would clear the flag on that same press, so Escape could never
+  close the menu. One flag serves R-59 and R-66. — The review confirmed
+  this against zorite's source (lib.rs 3615–3640). — If wrong: one extra
+  Escape.
+- Ruling (Task 9 review, Minors 2 and 4, carried):
+  - `secondary-shift-m` is bound in `"EditHost"` only. Task 10b or
+    Task 15 widens it to the editing tab and forwards it to the host.
+  - Task 14 calls `EditorHost::place` right after `new`.
+
+  — Both are staged, not defects. — If wrong: a key that works only
+  inside the editor.
