@@ -12,8 +12,9 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 
 ## Status
 
-**Draft, 2026-10-26.** Written for product-owner review. Nothing is built,
-and no build or test was run for planning.
+**Draft, 2026-10-26, revised after the first review round.** Written for
+product-owner review. Nothing is built, and no build or test was run for
+planning.
 
 The other planning documents:
 
@@ -108,8 +109,10 @@ Authority, in order:
     authoring rows, comment submission included;
   - `01M4PB7YZMBFAFFM94AZY08HWS`: an interrupted save whose row recorded no
     step is closed as `rejected`.
-- **Entry-gate item 3.** Task 0 refreshes the API audit's C4 rows, which
-  still describe a pre-Wave-02 baseline.
+- **Entry-gate item 3 (decision 16).** The API audit's C4 rows still
+  describe a pre-Wave-02 baseline. That departs from the item's timing. The
+  design's Baseline Facts, read from current source, serve as the planning
+  audit, and Task 0 updates the audit's rows in place.
 - **Entry-gate item 7.** Task 0 runs the baseline checks on the merged main.
 
 ## Scope
@@ -129,23 +132,26 @@ Authority, in order:
   - **Merging synchronization (decision 3):** the `item sync` and
     `repo sync` bindings merge divergent history. A conflict leaves the
     operation recoverable.
-  - **`conflict show`:** a read over the recorded conflict. Its path tokens
-    and observation are strings that a later process can present.
+  - **`conflict show`:** a read over the recorded conflict, with each path's
+    kind (decision 12). Its path tokens and observation are strings that a
+    later process can present.
   - **`conflict resolve`:** a mutation binding that resolves every
     conflicted owned canonical path, checkpoints the result and continues the
-    operation's publication.
+    operation's publication. The same request finishes an interrupted
+    resolution (decision 13).
   - **`operation resume`:** it also takes up a comment's publication, and a
     synchronization a resolution or an outside repair finished.
-  - **`item republish` (decision 7):** a confirmed binding that republishes
-    exactly the branch its preview showed.
+  - **`item republish` (decisions 7 and 11):** a confirmed binding that
+    republishes exactly the commit its preview showed, integrating nothing.
   - **The next step (decision 8):** a result that stops on a conflict
     carries typed data naming the operation and its next step. No result code
     or recovery-action kind is added.
 - **Confirmation.** `item republish` and `operation abandon` are confirmed.
-  The other six answer `not_confirmable` to `--prepare`.
-- **Cancellation.** A Ctrl-C while a synchronizing command runs stops it at
-  its next safe point, and the result names what completed. The CLI installs
-  that handler only while such a command executes.
+  The other five mutations answer `not_confirmable` to `--prepare`.
+  `conflict show`, a read, refuses `--prepare` as a usage error.
+- **Cancellation (decision 14).** A Ctrl-C while a synchronizing command runs
+  stops it at its next safe point, and the result names what completed. The
+  CLI installs that handler only while such a command executes.
 - **Mutation input.** As C2 decision 2: selectors are flags, and everything
   else is one JSON object from `--input`. `comment add` and
   `conflict resolve` take input. Each publishes a closed input schema and an
@@ -154,9 +160,13 @@ Authority, in order:
   output, with progress on stderr as in C2. `comment add`'s human output
   says that publishing the comment also publishes the context's other
   checkpointed work, but not unsaved drafts.
-- **Dogfooding.** In the final task, with the owner's go-ahead at that step,
-  the branch-built CLI adds the C4 ticket's review-ready comment with
-  `comment add`. AGENTS.md and the skills then direct comments to the CLI.
+- **Dogfooding.** In the final task, with the owner's go-ahead at that step:
+  1. the branch-built CLI adds a verification comment to the C4 ticket with
+     `comment add`;
+  2. AGENTS.md and the skills then direct comments to the CLI, with the
+     extended exception of decision 15;
+  3. after the documents are review-ready, the review-ready comment is also
+     added through the CLI.
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -178,12 +188,21 @@ Authority, in order:
 - **A pending remote conflict blocks the repository.** Until it is resolved
   or repaired outside, other synchronizations answer `busy` and authoring in
   that item's context answers `recovery_required` (decision 6).
+- **A mixed conflict is repaired outside as a whole (decision 12).** If any
+  conflicted path is not canonical, no path of that conflict is resolved
+  in-app.
+- **A cancelled operation is final.** A new request completes the work.
+  A Ctrl-C during a blocked network call may answer `transport_unavailable`
+  with its effects intact (decision 14).
+- **`working-on-a-ticket` keeps canonical comments (decision 15).** It and
+  `scripts/ticket-loop` keep writing comment files, with the noreply
+  `created_by`, until that skill is revised.
 - **`request cancel` does not reach a resume.** As F2 binds it. Ctrl-C does
   reach it (design fact 41, which Task 0 confirms).
 - **Native evidence.** C4 is proven on Linux. Its tests join existing test
   targets, which are already in the native workflow's list. Windows Ctrl-C is
-  a native manual check. Native CI runs on main after merge, with its own
-  approval.
+  a native manual check, owed after merge; its handler is first compiled
+  natively then. Native CI runs on main after merge, with its own approval.
 
 ## Required Contract
 
@@ -224,18 +243,27 @@ Authority, in order:
 5. **Republish (decision 7).**
    - Ordinary synchronization never recreates a remotely deleted branch. It
      answers `remote_branch_deleted`, exit 3.
-   - `item republish` is confirmed. Its preview names the branch, its last
-     published commit and the local commit to publish. Confirming publishes
-     exactly that, and any change in between is `external_change`.
+   - `item republish` is confirmed. Its preview is built from the deletion a
+     prior fetch recorded. It names the branch, the remote, the last
+     published commit and the local commit to publish.
+   - Confirming pushes exactly that local commit and integrates nothing
+     (decision 11). The next `item sync` integrates primary as usual.
+   - Any change in between, the local branch moving or the remote branch
+     reappearing, is `external_change`, and nothing is pushed.
 6. **Conflicts.**
    - `conflict show` reports the operation, the conflict's state, its
-     observation and each path's token, kind and sides, and the next step.
+     observation, each path's token, kind, structure and sides, and the next
+     step.
    - `conflict resolve` validates every resolution before any write. It
      writes only owned canonical Markdown, checkpoints the merge, and
      continues the operation's publication.
-   - A changed observation is `external_change`. A path that cannot be
-     resolved here is reported with outside-repair guidance and is never
-     written.
+   - A changed observation, or a token from another conflict, is
+     `external_change`.
+   - A conflict with any path that cannot be resolved here is reported with
+     outside-repair guidance as a whole, and nothing of it is written
+     (decision 12).
+   - A retry of the same request finishes an interrupted resolution with the
+     same commit, and makes no second one (decision 13).
    - After an outside repair, `conflict show` reports it and
      `operation resume` continues.
 7. **Operations.**
@@ -246,10 +274,15 @@ Authority, in order:
 8. **Request identity, consent, prompts, retry and refusals.** As C2's
    Required Contract items 3, 4, 6, 8 and 10, and C3's. C2's bounded retry
    applies unchanged, and never follows a cancellation.
-9. **Cancellation and lost output.**
+9. **Cancellation and lost output (decision 14).**
    - A Ctrl-C during `item sync`, `repo sync`, `item republish`,
      `comment add`, `conflict resolve` or `operation resume` stops it at the
      next safe point. It exits 130, and its effects name any completed work.
+   - A Ctrl-C during a blocked network call may instead answer
+     `transport_unavailable`, exit 5, with its effects intact.
+   - A cancelled operation is final. A same-ID retry returns the stored
+     result, and a new request completes the work.
+   - A Ctrl-C at an unlock prompt still answers `unlock_required`, exit 3.
    - A second Ctrl-C ends the process at once. That is interruption, not
      rollback.
    - A lost stdout exits 1. The work's effects stay, and the request's
@@ -270,27 +303,28 @@ Authority, in order:
 | Stale resolutions | `conflict resolve` with an observation taken before a change is `external_change`, and nothing is written. An incomplete set and an unknown token are refused before any write. A second, different resolution after a completed one is refused. |
 | Outside repair of a noncanonical conflict | A conflict in a code file is reported with outside-repair guidance, and `conflict resolve` writes nothing. After the user commits a two-parent merge in the worktree, `conflict show` reports the repair and `operation resume` publishes it. Removing markers alone, staging without a commit, or wrong parents is not accepted. |
 | No secret or raw-server output | Every C4 journey's stdout and stderr pass the output scan: no private key, passphrase, sentinel, server text or remote URL credential. Bodies and sources never reach a diagnostic or the request stores. |
-| Ctrl-C | Through the pseudo-terminal: a Ctrl-C while `item sync` is held at a safe point exits 130. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed and its publication resumable. |
+| Ctrl-C | Through the pseudo-terminal, over SSH: a Ctrl-C while `item sync` is held exits 130, or exit 5 under decision 14. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed, and a new `item sync` publishes it. A second Ctrl-C ends the process. A Ctrl-C at an unlock prompt is still `unlock_required`. |
 | Lost stdout | With stdout closed, `item sync` and `comment add` exit 1. `request show` returns the stored result, and a replay under the same request ID makes no second push, file or checkpoint. |
-| Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds the C4 ticket's review-ready comment with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI. |
+| Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds a verification comment to the C4 ticket with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI, with decision 15's exception. The review-ready comment is then added through the CLI too. |
 
 Also required:
 
 - **Republish.** Two-clone SSH: after the remote deletes a published item
   branch, `item sync` answers `remote_branch_deleted` and does not recreate
   it. `item republish --prepare` shows the branch and both commits.
-  `--confirm` republishes it once. A prepare whose local branch then moves is
-  refused at confirm with `external_change`.
+  `--confirm` pushes exactly the shown local commit, once. A prepare whose
+  local branch then moves is refused at confirm with `external_change`.
 - **Resume and abandon.**
-  - `operation resume` publishes a comment whose publication stopped, and a
-    synchronization that a resolution or an outside repair finished.
+  - `operation resume` publishes a comment whose publication stopped
+    without a cancellation, and a synchronization that a resolution or an
+    outside repair finished.
   - `operation abandon` closes C3's interrupted save, its known limit, after
     prepare and confirm, and its file stays.
   - Abandoning a remote operation is refused.
 - **Identity.** A divergent sync with no usable identity answers
-  `identity_required` with `repo.identity_set`. After `repo identity-set`,
-  the same request completes the merge. This needs a test machine whose
-  system Git configuration sets no identity, as C2's ruling R-17 has it.
+  `identity_required` with `repo.identity_set`. `repo identity-set` is not
+  refused by the stopped merge, and the same request then completes the
+  merge. The SSH harness keeps any system identity out.
 - **Outcome tables.** Every row of the design's required-outcome tables
   holds:
   - divergent synchronization;
@@ -309,14 +343,16 @@ Also required:
   input schema and an example under `tests/fixtures/cli_input_v1/`. Every C4
   verb has JSON goldens checked against the published output schemas. Every
   new output DTO has a closed schema.
-- **Mutating-Cycle evidence (track rule 7).** For each mutating verb:
+- **Mutating-Cycle evidence (track rule 7).** Every cell of the design's
+  evidence-by-verb matrix holds, or carries its stated reason:
   - progress lines in human mode, and empty JSON stderr;
   - prepare, confirm and interactive cases for the two confirmed verbs;
-  - safe-point cancellation by Ctrl-C and by `request cancel`;
+  - safe-point cancellation by Ctrl-C, and by `request cancel` for the
+    verbs it reaches;
   - redaction;
   - stale writes;
   - replay of a finished request, `request_mismatch`, and completion of a
-    stopped request under its own ID.
+    stopped request under its own ID, where the library continues one.
 - **Unchanged behavior.**
   - Help and version start no transport and open no data directory.
   - C5 verbs still answer `command_unavailable`.
@@ -333,8 +369,9 @@ Answered before drafting:
 
 1. **The library part is in C4.** The `comment add`, `conflict show` and
    `conflict resolve` bindings land in C4's branch, as an approved exception
-   to track rule 5. Decisions 3, 4, 7 and 9 extend it to the
-   synchronization, republish and authorship changes those verbs need.
+   to track rule 5. Decisions 3, 4, 7, 9, 11 and 13 extend it to the
+   synchronization, republish, authorship and resolution-state changes those
+   verbs need.
 2. **The gate lands first.** C4's implementation starts after
    `01M57SKVF6TQ3QM6AXJ35JGGSY` merges, and Task 0 re-grounds on that main.
 3. **Divergent synchronization merges.** `item sync` and `repo sync` merge
@@ -362,6 +399,33 @@ Answered before drafting:
     `src/desktop/view/confirm.rs`, and whichever of C4 or D3 merges second
     resolves the merge.
 
+Answered after the first review round:
+
+11. **Republish pushes exactly the previewed commit.** Confirm pushes the
+    local branch tip the preview showed, unchanged, and integrates nothing.
+    The next `item sync` integrates primary. The Git RFC is amended.
+12. **A per-path kind, with the set-wide rule kept.** `conflict show` reports
+    each path's kind and structure. Resolution stays all-or-nothing, as
+    Wave 02 built it, so a mixed conflict is repaired outside as a whole.
+    That is a known limit.
+13. **The same request finishes an interrupted resolution.** As the gate
+    orders it, a retry of the exact request reconciles its stored attempt
+    before any live token is checked. It finishes with the same commit and no
+    second one. The library keeps what it needs, never a body. Task 4a stops
+    if a row cannot be met.
+14. **A Ctrl-C handler, with a spike first.** A handler with `SA_RESTART`
+    sets the token, and a second Ctrl-C ends the process. Task 7 starts with
+    a spike against a held transfer. A Ctrl-C during blocked I/O may answer
+    `transport_unavailable` with its effects intact, recorded as a limit.
+    Anything worse stops.
+15. **The comment exception is extended.** AGENTS.md says explicitly that
+    `working-on-a-ticket` and `scripts/ticket-loop` keep canonical comment
+    files, with the noreply `created_by`, until that skill is revised.
+    Everything else switches to `comment add`.
+16. **The audit timing is accepted as a departure.** The design's Baseline
+    Facts serve as the planning audit for entry-gate item 3, and Task 0
+    updates the audit's rows in place.
+
 The following were stated to the owner on 2026-10-26 with the outline, and
 the owner approved the outline:
 
@@ -373,16 +437,25 @@ the owner approved the outline:
 - the known defects being known limits;
 - Ctrl-C through `libc` and `windows-sys`, with no new crate.
 
-The design proposes engineering rulings R-1 to R-30. These narrow or
+The design proposes engineering rulings R-1 to R-33. These narrow or
 condition the contract or its evidence:
 
 - R-5: the operation ID `conflict show` accepts;
+- R-7: `created_by`'s form, its 256-byte limit, and that it is not
+  authenticated;
 - R-9: the string token's derivation and lifetime;
-- R-12: `conflict show` taking the repository lease;
-- R-14: the deterministic resolution attempt;
-- R-17: identity during a merge;
+- R-12: `conflict show` taking the repository lease, so a read can answer
+  `busy`;
+- R-14: the derived resolution attempt and its durable state;
+- R-15: `conflict resolve` also publishing;
+- R-18: the republish consent's check at each refusal point;
 - R-21: the Ctrl-C handler's window;
-- R-26: the dogfooding procedure.
+- R-22: exit 130 after a durable effect;
+- R-23: C2's bounded retry re-running a refused push;
+- R-26: the dogfooding procedure;
+- R-32: the new commands' predicates;
+- R-33: the two-clone fixture's premise, and a foreign token being
+  `external_change`.
 
 Named edits E-1 to E-11 change pre-existing tests and goldens. All of these
 are submitted for approval with these documents.
@@ -401,12 +474,16 @@ are submitted for approval with these documents.
 | Planning, source | `comment add` stamps the repository's Git identity, which is the owner's in every worktree, and `scripts/ticket-loop` tells agents from people by a noreply address. | Decision | Decision 9. |
 | Planning, source | A new preview-details variant meets the desktop's exhaustive match, which D3 edits. | Decision | Decision 10. |
 | Planning, source | The library's conflict tokens cannot leave a process: their fields are private and they have no serialization. | Ruling | String tokens re-derived from the live conflict (design R-9). |
-| Planning, source | An interrupted resolution resumes only from an identical in-memory request. A separate CLI process cannot rebuild it after the index is installed. | Ruling | The interrupted-resolution table, written first, with a stop (design R-14). |
-| Planning, source | A merge without an identity leaves its reservation held, and `repo identity-set` refuses while one is held. | Ruling | The divergent-synchronization table's identity rows, written first, with a stop (design R-17). |
+| Planning, source | An interrupted resolution resumes only from an identical in-memory request. A separate CLI process cannot rebuild it after the index is installed. | Decision | Decision 13, with the interrupted-resolution table written first and a stop (design R-14). |
+| Planning, source | The first draft said a merge without an identity leaves `repo identity-set` refused. The source review showed it is not refused by a pending operation (`bridges/identity.rs:44-47`). | Settled | Design fact 28 corrected; R-17 needs no workaround. |
 | Planning, source | `comment add`'s publication takes no observer, so it cannot stop at a safe point. | Ruling | An observed submission inside the library (design R-3). |
 | Planning, source | The CLI never cancels its token and installs no Ctrl-C handler. | Ruling | Design R-21. |
 | Planning, source | The RFC's `comment add` example uses the code `publication_pending`, which does not exist. | Settled | The real codes are used, and the example is amended (design Document Amendments). |
-| Planning, source | The API audit's C4 rows describe a pre-Wave-02 baseline. | Settled | Task 0's refresh. |
+| Planning, source | The API audit's C4 rows describe a pre-Wave-02 baseline, later than entry-gate item 3 allows. | Decision | Decision 16. |
+| Independent review, contract lens (2026-10-26, `03f3059`) | 40 findings: 2 blocking, 23 important, 15 minor. Blocking: republish published a commit its preview never showed, and `conflict show` had no per-path kind. Important findings included: `conflict resolve` checked live tokens before replay; dogfooding posted the review-ready comment too early; AGENTS.md's exception was misstated; malformed IDs inside input are `invalid_input`; the library file list blocked needed edits; the per-verb evidence was unplanned; `not_confirmable` was miscounted; the second Ctrl-C and the unlock prompt were untested; amendments to F2, the Wave capability rows, D5 and C5 were missing; the mixed-conflict limit, cancellation recovery, republish's observation, data DTOs and missing outcome rows (dirty worktree, push race, discovery pending) were unstated; and Tasks 2, 4 and 12 were too large. | Decision, ruling, settled | Decisions 11, 12, 13, 14, 15 and 16. Rulings R-31 to R-33 added. The fixes are applied to all three documents: Tasks 4 and 12 split, the evidence matrix and command-predicate table added, outcome rows corrected and added, and amendments listed. Finding 14 (R-17 as a workaround) was resolved by the source correction above. |
+| Independent review, source lens (2026-10-26, `03f3059`) | 32 findings: 4 blocking, 14 important, 14 minor. Blocking: a cancelled publication is final, so "`operation resume` publishes after Ctrl-C" was false; writing `created_by` needs `src/repository.rs`; a binding reaches credentials only through `Session::synchronize`, so the observed submission needs a synchronizer; and a preview cannot contact the remote. Important findings included: re-entry after `identity_required`; unspecified predicates; an unlisted confirmed-and-stoppable recovery test; `Plan` and `Boundary` literals in `mutate_tests.rs`; E-7's `UNBOUND_COMMANDS`; `tests/support/mod.rs` mounting; SSH filters matching case names only; the markers-removed row; the gate's `integration/` moves; Ctrl-C and `EINTR`; R-23; two-clone prerequisites; `mutation_bridges` not run; and golden support not mounted in two targets. | Ruling, settled | Design facts 54–66 added, and facts 25, 28, 30, 31, 33, 35, 36, 43 and 53 corrected or marked. The library tables move into `tests/mutation_remote/` as `c4_` cases. The Ctrl-C window sits in the `Boundary` impl with no signature change. The fixes are applied to all three documents. |
+
+The first round's revisions have not yet had their scoped re-review.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing
