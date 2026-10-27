@@ -391,3 +391,33 @@ Notes for later tasks: Task 22 leaves `targets()` in
   them at the end of the content column. The owner wants to see it on
   screen. The Design Deviations row is rewritten to match, and native
   checklist step 1 gains the check. No test changes.
+- Owner decision, 2026-10-27 (during Task 5a's fix round): "We don't
+  really need tests for that kind of thing." Desktop layout and sizing
+  need no automated tests: region heights, short-window overlap,
+  extra-frame timing, a control's place in a row, thumb colours. Task 5a's
+  fix round made its layout changes without them, and reviewers do not
+  raise "untested" findings for pure layout. The plan's own listed tests
+  stay ("for now keep the tests").
+- Owner decisions, 2026-10-27 (builds take very long on this machine).
+  Both apply to the rest of D3:
+  - **The per-task gate is trimmed.** The task's test filters run once,
+    at the end, then `clippy --features desktop --bin manyhands` and
+    `clippy --all-targets --all-features` once each. There is no
+    separate `check --features desktop`; clippy covers it. A fix round
+    reruns only the tests it touched, plus the all-features clippy.
+    Minor review findings are parked unless trivial, and the controller
+    reviews small fix diffs itself. Part checkpoints and Task 27 keep
+    their full runs.
+  - **Line tables only.** Every D3 cargo command carries
+    `CARGO_PROFILE_DEV_DEBUG=line-tables-only`. The repository does not
+    change.
+
+  Follow-up: make both repo-wide (`Cargo.toml` dev profile and/or
+  `AGENTS.md`) as their own change on main, with a ticket the owner
+  approves.
+- Ruling (Task 5a fix round, controller re-review): approved after
+  reading the diff in full. Every tab opens through `open_item`
+  (`content.rs:213` is the only `tabs.open` call), so every pane gets its
+  region end. `opening_a_tab_does_not_change_the_selection` proves the
+  details are drawn with a tab open. — If wrong: a pane opened another way
+  would lack the repository details.
