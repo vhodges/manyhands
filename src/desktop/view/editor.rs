@@ -1,30 +1,83 @@
-//! The Markdown editor: how one is made, its keys, and the read-only guard
-//! every read editor sits in.
+//! The Markdown editor: how one is made, its style, its keys, the
+//! read-only guard every read editor sits in, and the caret reveal.
 //!
 //! Every editor loads `editor_text::crlf_to_lf(body)`; the editor applies
 //! its own math-fence rewrite, so `text()` is `editor_text::load(body)`.
-//! An editor is styled as rich text from the start.
+//! An editor is styled as rich text from the start, from the page tokens
+//! (`style`).
 
 pub(crate) mod keys;
 pub(crate) mod read_only;
+pub(crate) mod style;
 
 use std::ops::Range;
 
-use gpui_kit::{App, AppContext, Entity, Window, component::ActiveTheme, font};
-use zorite_editor::{EditorEvent, EditorState, SyntaxStyle};
+use gpui_kit::{App, AppContext, Entity, Pixels, Window, point, px};
+use zorite_editor::{EditorEvent, EditorState};
 
-use crate::desktop::model::editor_text::crlf_to_lf;
+use crate::desktop::{model::editor_text::crlf_to_lf, view::scroll::ContentScroll};
 
 /// A new editor holding `body` as rich text, its caret at the start.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState> {
     let text = crlf_to_lf(body);
-    let style = rich_style(cx);
+    let style = style::page_style(cx);
     cx.new(|cx| {
         let mut editor = EditorState::new(window, cx).with_text(text);
         editor.set_markdown_style(style, cx);
         editor
     })
+}
+
+/// R-67: keeps `editor`'s caret in view in the region `scroll` scrolls.
+/// The editor never scrolls itself (fact 70), and no focus-reveal marker
+/// sits on it, since a marker would move a tall editor to its top on
+/// every click (fact 80). So this moves the region the least that shows
+/// the caret's line: its top to the region's top when the line is above
+/// it, its bottom to the region's bottom when below. Nothing moves while
+/// the caret is in view, or before the first paint.
+///
+/// Positions are the last paint's, which a caret move or focus keeps
+/// valid. The caller's own change asks for the frame that draws the new
+/// offset.
+pub(crate) fn reveal_caret(editor: &Entity<EditorState>, scroll: &ContentScroll, cx: &mut App) {
+    let Some((top, bottom)) = caret_line(editor.read(cx)) else {
+        return;
+    };
+    let handle = scroll.handle();
+    let viewport = handle.bounds();
+    if viewport.size.height <= px(0.) {
+        return;
+    }
+    let offset = handle.offset();
+    let y = if top < viewport.top() {
+        offset.y + (viewport.top() - top)
+    } else if bottom > viewport.bottom() {
+        offset.y - (bottom - viewport.bottom())
+    } else {
+        return;
+    };
+    let y = y.min(px(0.)).max(-handle.max_offset().y);
+    if y != offset.y {
+        handle.set_offset(point(offset.x, y));
+    }
+}
+
+/// The window-space top and bottom of the caret's line, from the last
+/// paint. A line far outside the window is laid out but not shaped
+/// (fact 70), so the caret has no box there; its line's top and its first
+/// row's height stand in.
+fn caret_line(editor: &EditorState) -> Option<(Pixels, Pixels)> {
+    if let Some(caret) = editor.caret_screen_bounds() {
+        return Some((caret.top(), caret.bottom()));
+    }
+    let cursor = editor.cursor();
+    let top = editor.offset_screen_top(cursor)?;
+    let row = editor.text().as_bytes()[..cursor]
+        .iter()
+        .filter(|byte| **byte == b'\n')
+        .count();
+    let (_, height) = editor.row_layout().get(row).copied()?;
+    Some((top, top + height))
 }
 
 /// R-66: in rich text the editor cannot move its caret across a math or
@@ -99,39 +152,6 @@ fn beyond(text: &str, range: Range<usize>, inline: bool, forward: bool) -> Optio
             .is_some_and(|rest| rest.starts_with('\n'))
             .then_some(range.end + 1),
         (false, false) => range.start.checked_sub(1),
-    }
-}
-
-/// The rich-text style until the page tokens arrive (Task 7's
-/// `page_style`): the Kit theme's colours and its monospace font.
-fn rich_style(cx: &App) -> SyntaxStyle {
-    let theme = cx.theme();
-    SyntaxStyle {
-        marker: theme.muted_foreground,
-        code: theme.foreground,
-        code_bg: theme.muted,
-        link: theme.link,
-        tag: theme.link,
-        quote: theme.muted_foreground,
-        alert_note: theme.info,
-        alert_tip: theme.success,
-        alert_important: theme.primary,
-        alert_warning: theme.warning,
-        alert_caution: theme.danger,
-        alert_icons: None,
-        rule: theme.border,
-        mark_bg: theme.selection,
-        block_label: None,
-        block_label_gen: 0,
-        block_ref_count: None,
-        popover_bg: theme.popover,
-        popover_border: theme.border,
-        popover_fg: theme.popover_foreground,
-        popover_hover: theme.accent,
-        popover_divider: theme.border,
-        popover_danger: theme.danger,
-        mono: font(theme.mono_font_family.clone()),
-        property_icon: None,
     }
 }
 

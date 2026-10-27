@@ -4,7 +4,8 @@
 //! then the header block (`header`), which stays in place, then the item's
 //! own scroll region with the page and the discussion (`page`). The region
 //! ends with the workspace's details of the selected repository, which D1
-//! drew at the end of the content column (owner, 2026-10-27).
+//! drew at the end of the content column (owner, 2026-10-27). While
+//! viewing, the page holds the body in a read editor (decision 17).
 //!
 //! The header holds the breadcrumb, the title, the `chips`, the actions
 //! with the state `pill`, and the `banners`, where D1's status lines now
@@ -12,11 +13,13 @@
 //! details, provenance, fields, metadata, problems and, from the sibling
 //! view, relationships; a file read by its path has no sheet, so its page
 //! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
-//! job, `status` D1's loading and recovery controls, `source` the retained
-//! read-only textarea, `discussion` the comment thread, and `draft` the
-//! banner of a stored draft and the section of one restored here, with
-//! `draft_actions` its Export… and Discard…. All children use the same
-//! entity, stamped model and subscriptions; none writes the item.
+//! job, `status` D1's loading and recovery controls, `source` the
+//! read-only textarea of a file read by its path (an Inspect tab, which
+//! the sheet's Inspect link opens: R-64), `discussion` the comment thread,
+//! and `draft` the banner of a stored draft and the section of one
+//! restored here, with `draft_actions` its Export… and Discard…. All
+//! children use the same entity, stamped model and subscriptions; none
+//! writes the item.
 
 mod banners;
 mod chips;
@@ -93,7 +96,8 @@ pub(crate) struct ItemPane {
     /// revealed.
     pub(super) sheet_scroll: ContentScroll,
     refreshing: Option<DesktopRequestId>,
-    /// Last source plus the same textarea entity, preserving selection/focus.
+    /// An Inspect tab's last source plus the same textarea entity,
+    /// preserving selection/focus.
     source: Option<(String, Entity<TextareaState>)>,
     /// The item's own scroll region, which the page keys move while this
     /// tab is shown, and where its controls are revealed.
@@ -151,6 +155,18 @@ impl ItemPane {
         self.model.target()
     }
 
+    /// The read view of an item tab, once a read gave a body.
+    #[cfg(test)]
+    pub(crate) fn read_view(&self) -> Option<Entity<super::editor::read_only::ReadOnly>> {
+        self.page.read().cloned()
+    }
+
+    /// The read view's editor.
+    #[cfg(test)]
+    pub(crate) fn read_editor(&self, cx: &App) -> Option<Entity<zorite_editor::EditorState>> {
+        Some(self.page.read()?.read(cx).editor().clone())
+    }
+
     /// The vertical offset of the item's scroll region.
     #[cfg(test)]
     pub(crate) fn region_offset(&self) -> gpui_kit::Pixels {
@@ -204,6 +220,7 @@ impl ItemPane {
 impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
+        self.sync_read(window, cx);
         let item = self.model.item().rows().cloned();
         let (header, later) = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
@@ -222,13 +239,16 @@ impl Render for ItemPane {
                     .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
                     .child(self.metadata(item, &[], cx))
             });
-            v_flex()
-                .gap_3()
-                .children(details)
-                .child(self.source(item, cx))
+            // An item tab reads its body in the read view (decision 17); a
+            // file read by its path keeps D1's source view (R-64).
+            let text = if inspect {
+                self.source(item, cx)
+            } else {
+                self.read_body(item, cx)
+            };
+            v_flex().gap_3().children(details).child(text)
         });
-        // The source and D2's draft, on the page until Tasks 7 and 18 move
-        // them.
+        // D2's draft, on the page until Task 18 moves its banner.
         let content = v_flex()
             .gap_3()
             .children(identity)
@@ -268,3 +288,7 @@ mod header_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/sheet_tests.rs"]
 mod sheet_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/page_tests.rs"]
+mod page_tests;

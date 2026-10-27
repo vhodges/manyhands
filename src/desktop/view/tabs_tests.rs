@@ -4,12 +4,13 @@
 
 use std::{fs, path::PathBuf, time::Duration};
 
-use gpui_kit::{Entity, TestAppContext, component::input::TextareaState, test::TestWindowExt};
+use gpui_kit::{Entity, Focusable, TestAppContext, test::TestWindowExt};
 use manyhands::{
     drafts::{DraftFields, DraftId, Held},
     repository::{ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
     results::ResultCode,
 };
+use zorite_editor::EditorState;
 
 use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
@@ -139,10 +140,11 @@ fn submit_refresh(
     })
 }
 
-fn source_state(shell: &Shell, cx: &mut TestAppContext) -> Option<Entity<TextareaState>> {
+/// The shown tab's read editor (E-3 to E-5), after a frame.
+fn read_editor(shell: &Shell, cx: &mut TestAppContext) -> Option<Entity<EditorState>> {
     shell.frame(cx, |_, _| ());
     shell.workspace.read_with(cx, |workspace, cx| {
-        workspace.item_pane()?.read(cx).source_state().cloned()
+        workspace.item_pane()?.read(cx).read_editor(cx)
     })
 }
 
@@ -193,7 +195,8 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
 
 /// Refresh of `a` reads every open tab of `a` again, once, in place: the
 /// strip keeps its order and the shown tab, `b`'s tab is not read, and the
-/// shown tab's source keeps its text field and its focus.
+/// shown tab's read editor keeps its entity, its focus and its cursor
+/// (R-19).
 #[gpui_kit::test]
 async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -204,10 +207,7 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     shell.click(("tab", 0usize), cx);
     assert_eq!(strip(&shell, cx), ["One", "Other", "Two"]);
 
-    let source = source_state(&shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
+    let source = focus_read(&shell, cx);
 
     shell.fixture.commit_ticket(&a, ONE, "One again", "");
     shell.fixture.commit_ticket(&a, TWO, "Two again", "");
@@ -223,11 +223,14 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     assert_eq!(shown(&shell, cx), Some(0));
     assert_eq!(title(&shell, cx).as_deref(), Some("One again"));
     assert_eq!(item_reads(&shell) - reads, 2, "one read per tab of a");
-    let after = source_state(&shell, cx).expect("the source is shown");
-    assert_eq!(after, source, "the same text field");
-    assert!(shell.visual(cx).update(|window, cx| {
-        gpui_kit::Focusable::focus_handle(after.read(cx), cx).is_focused(window)
-    }));
+    let after = read_editor(&shell, cx).expect("the read view is shown");
+    assert_eq!(after, source, "the same read editor");
+    assert!(read_focused(&shell, &after, cx));
+    assert_eq!(
+        after.read_with(cx, |editor, _| editor.cursor()),
+        CURSOR,
+        "the cursor is kept"
+    );
 }
 
 /// Review Focus 1 (jobs): a job for `a` finishes while `b` is selected.
@@ -574,17 +577,15 @@ fn past_the_retries(shell: &Shell, cx: &mut TestAppContext) {
 }
 
 /// A reload that stays busy keeps what the tab shows: the item, the
-/// source's text field with its focus, and the tab's title, and says it
-/// could not refresh, with Busy's message and Retry. Retry loads again in
-/// place: while its load is held, the item is still shown, not Loading.
+/// read editor with its focus and its cursor (R-19), and the tab's title,
+/// and says it could not refresh, with Busy's message and Retry. Retry
+/// loads again in place: while its load is held, the item is still shown,
+/// not Loading.
 #[gpui_kit::test]
 fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext) {
     let Two { shell, a, .. } = two(cx);
     open(&shell, ticket(&a, ONE), cx);
-    let source = source_state(&shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
+    let source = focus_read(&shell, cx);
 
     let lease = hold_cache_write(&shell, &a);
     let pane = shell
@@ -611,11 +612,14 @@ fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext
         Some(ResultCode::Busy.as_str())
     );
     assert!(shell.present("item-not-refreshed-retry", cx));
-    let kept = source_state(&shell, cx).expect("the source is still shown");
-    assert_eq!(kept, source, "the same text field");
-    assert!(shell.visual(cx).update(|window, cx| {
-        gpui_kit::Focusable::focus_handle(kept.read(cx), cx).is_focused(window)
-    }));
+    let kept = read_editor(&shell, cx).expect("the read view is still shown");
+    assert_eq!(kept, source, "the same read editor");
+    assert!(read_focused(&shell, &kept, cx));
+    assert_eq!(
+        kept.read_with(cx, |editor, _| editor.cursor()),
+        CURSOR,
+        "the cursor is kept"
+    );
 
     drop(lease);
     let held = shell.backend.hold_read(ReadKind::Item);
@@ -630,31 +634,36 @@ fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext
     shell.run(cx);
     assert!(!shell.present("item-not-refreshed", cx));
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
-    assert_eq!(source_state(&shell, cx), Some(source));
+    assert_eq!(read_editor(&shell, cx), Some(source));
 }
 
-/// Focuses the shown tab's source text field, as a click into it does.
-fn focus_source(shell: &Shell, cx: &mut TestAppContext) -> Entity<TextareaState> {
-    let source = source_state(shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
-    assert!(source_focused(shell, &source, cx));
-    source
+/// Where E-3 and E-4 put the read editor's caret before a reload.
+const CURSOR: usize = 5;
+
+/// Focuses the shown tab's read editor with its caret at `CURSOR`, as a
+/// click into it does, and draws a frame.
+fn focus_read(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorState> {
+    let editor = read_editor(shell, cx).expect("the read view is shown");
+    editor.update(cx, |editor, cx| editor.set_cursor(CURSOR, cx));
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    shell.frame(cx, |window, cx| window.focus(&handle, cx));
+    shell.frame(cx, |_, _| ());
+    assert!(read_focused(shell, &editor, cx));
+    editor
 }
 
-fn source_focused(shell: &Shell, source: &Entity<TextareaState>, cx: &mut TestAppContext) -> bool {
+fn read_focused(shell: &Shell, editor: &Entity<EditorState>, cx: &mut TestAppContext) -> bool {
     shell.frame(cx, |window, cx| {
-        gpui_kit::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        editor.read(cx).focus_handle(cx).is_focused(window)
     })
 }
 
-/// The tab keys work with focus in the shown item's read-only source:
+/// The tab keys work with focus in the shown item's read view:
 /// `ctrl-tab` and `ctrl-shift-tab` move to the next and previous tab and
 /// `secondary-w` closes the shown one, each with focus following. Tab
-/// and shift-Tab leave the source, which takes no indent.
+/// and shift-Tab leave the read editor, which takes no indent.
 #[gpui_kit::test]
-fn the_tab_keys_work_from_inside_the_source(cx: &mut TestAppContext) {
+fn the_tab_keys_work_from_inside_the_read_view(cx: &mut TestAppContext) {
     let Two { shell, a, .. } = two(cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&a, TWO), cx);
@@ -662,41 +671,41 @@ fn the_tab_keys_work_from_inside_the_source(cx: &mut TestAppContext) {
     shell.click(("tab", 1usize), cx);
     assert_eq!(title(&shell, cx).as_deref(), Some("Two"));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("ctrl-tab", cx);
     assert_eq!(shown(&shell, cx), Some(2));
     assert!(tab_focused(&shell, 2, cx));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("ctrl-shift-tab", cx);
     assert_eq!(shown(&shell, cx), Some(1));
     assert!(tab_focused(&shell, 1, cx));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("secondary-w", cx);
     assert_eq!(strip(&shell, cx), ["One", "Three"]);
     assert_eq!(shown(&shell, cx), Some(1));
     assert!(tab_focused(&shell, 1, cx));
 
-    let source = focus_source(&shell, cx);
-    let text = source.read_with(cx, |state, _| state.value().to_string());
+    let source = focus_read(&shell, cx);
+    let text = source.read_with(cx, |editor, _| editor.text().to_owned());
     shell.keys("tab", cx);
     assert!(
-        !source_focused(&shell, &source, cx),
-        "Tab leaves the source"
+        !read_focused(&shell, &source, cx),
+        "Tab leaves the read editor"
     );
     assert!(
         shell.frame(cx, |window, cx| window.focused(cx).is_some()),
         "for the next control"
     );
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("shift-tab", cx);
     assert!(
-        !source_focused(&shell, &source, cx),
-        "shift-Tab leaves the source"
+        !read_focused(&shell, &source, cx),
+        "shift-Tab leaves the read editor"
     );
     assert_eq!(
-        source.read_with(cx, |state, _| state.value().to_string()),
+        source.read_with(cx, |editor, _| editor.text().to_owned()),
         text,
         "no indent was made"
     );

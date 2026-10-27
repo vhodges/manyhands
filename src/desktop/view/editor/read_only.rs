@@ -15,10 +15,16 @@
 //! Moving, selecting, Select All, Copy and link clicks work. The wrapper
 //! emits nothing: a writer subscribes to it, never to the inner editor's
 //! own `Changed`.
+//!
+//! The wrapper is the read view's tab stop. The editor makes its own
+//! focus with GPUI's default, which Tab passes by, so Tab lands on the
+//! wrapper, which hands focus to the editor. Shift-Tab leaves from the
+//! wrapper's place, or it would land on the wrapper again.
 
 use gpui_kit::{
-    Action, App, Context, Entity, EventEmitter, InteractiveElement, IntoElement, KeyDownEvent,
-    Keystroke, MouseButton, MouseDownEvent, ParentElement, Render, Subscription, Window, div,
+    Action, App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
+    KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, ParentElement, Render, Subscription,
+    Window, div,
 };
 use zorite_editor::{
     Backspace, Bold, Code, Cut, Delete, Down, EditorEvent, EditorState, Indent, Italic, Left,
@@ -30,9 +36,10 @@ use super::{open_editor, step_over_blocks};
 use crate::desktop::model::editor_text::crlf_to_lf;
 
 /// A read editor and its guard.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 pub(crate) struct ReadOnly {
     editor: Entity<EditorState>,
+    /// The read view's tab stop, which hands focus to the editor.
+    focus: FocusHandle,
     /// The text the editor shows: `editor_text::load` of the body.
     shown: String,
     /// The caret while the text was `shown`, restored with it.
@@ -43,7 +50,6 @@ pub(crate) struct ReadOnly {
     _subscriptions: [Subscription; 2],
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 impl ReadOnly {
     pub(crate) fn new(body: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let editor = open_editor(body, window, cx);
@@ -57,6 +63,7 @@ impl ReadOnly {
         ];
         Self {
             editor,
+            focus: cx.focus_handle().tab_stop(true),
             shown,
             cursor,
             pressed: false,
@@ -138,8 +145,20 @@ impl ReadOnly {
 impl EventEmitter<EditorEvent> for ReadOnly {}
 
 impl Render for ReadOnly {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.focus.is_focused(window) {
+            // Tab landed on the wrapper: focus belongs in the editor. It
+            // moves once this frame is drawn, as a focus listener's would;
+            // GPUI sends those only to an active window.
+            cx.defer_in(window, |this, window, cx| {
+                if this.focus.is_focused(window) {
+                    this.editor
+                        .update(cx, |editor, cx| editor.focus(window, cx));
+                }
+            });
+        }
         div()
+            .track_focus(&self.focus)
             .capture_action(stop::<Backspace>)
             .capture_action(stop::<Delete>)
             .capture_action(stop::<Newline>)
@@ -157,10 +176,13 @@ impl Render for ReadOnly {
                 cx.stop_propagation();
                 window.focus_next(cx);
             })
-            .capture_action(|_: &Outdent, window, cx| {
+            // From the wrapper's place: the previous tab stop from the
+            // editor's own is the wrapper.
+            .capture_action(cx.listener(|this, _: &Outdent, window, cx| {
                 cx.stop_propagation();
+                window.focus(&this.focus, cx);
                 window.focus_prev(cx);
-            })
+            }))
             .capture_action(moved::<Left>(cx))
             .capture_action(moved::<Right>(cx))
             .capture_action(moved::<Up>(cx))
@@ -184,21 +206,18 @@ impl Render for ReadOnly {
 }
 
 /// Stops an editing action before the editor sees it.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 fn stop<A: Action>(_: &A, _: &mut Window, cx: &mut App) {
     cx.stop_propagation();
 }
 
 /// Notes a key move, one of those that can enter a block, and lets the
 /// editor make it.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 fn moved<A: Action>(cx: &mut Context<ReadOnly>) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(|this, _: &A, _, _| this.pressed = false)
 }
 
 /// A keystroke inserts text when it carries a character and no Control,
 /// Command or Function modifier.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
 fn inserts_text(keystroke: &Keystroke) -> bool {
     let modifiers = &keystroke.modifiers;
     keystroke.key_char.is_some() && !modifiers.control && !modifiers.platform && !modifiers.function

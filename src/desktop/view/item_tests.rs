@@ -218,6 +218,8 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
         fixture.commit_ticket(root, PRIMARY, "Plain", "extra: kept\n");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    // E-1: the assertions run in the item's Inspect tab (R-64).
+    inspect_from_sheet(&shell, cx);
     let item = shown(&shell, &root, PRIMARY);
     assert!(item.source.as_deref().unwrap().contains("extra: kept\n"));
     assert!(present(&shell, "item-source", cx));
@@ -232,6 +234,24 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
         Some(SOURCE_NOT_UTF8)
     );
     assert!(!present(&shell, "item-source", cx));
+}
+
+/// E-1, E-2: opens the shown item's Inspect tab from its details sheet,
+/// with All details and then the sheet's Inspect link (R-64). The link
+/// sits below the sheet's fold, so it is reached by Tab and pressed by
+/// Enter.
+fn inspect_from_sheet(shell: &Shell, cx: &mut TestAppContext) {
+    details(shell, cx);
+    let mut presses = 0;
+    while !shell.frame(cx, |window, _| {
+        gpui_kit::test::TestWindowExt::try_find(window, "sheet-inspect")
+            .is_some_and(|link| link.focused() == Some(true))
+    }) {
+        presses += 1;
+        assert!(presses < 40, "Tab never reached the Inspect link");
+        shell.keys("tab", cx);
+    }
+    shell.press("enter", cx);
 }
 
 /// The text the item view shows the source in, after a frame.
@@ -253,6 +273,8 @@ fn the_source_rejects_every_edit(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Kept", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    // E-2: in the item's Inspect tab (R-64).
+    inspect_from_sheet(&shell, cx);
     let source = shown(&shell, &root, PRIMARY).source.unwrap();
     assert_eq!(source_value(&shell, cx).as_deref(), Some(source.as_str()));
     let before = RepositorySnapshot::take(&root);

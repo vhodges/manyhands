@@ -20,18 +20,14 @@ pub(crate) struct ItemColors {
     pub faint: Hsla,
     pub page: Hsla,
     pub page_text: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_text_secondary: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_muted: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border_soft: Hsla,
     pub page_border_strong: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_fill: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub code_inline: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub discussion: Hsla,
@@ -39,17 +35,11 @@ pub(crate) struct ItemColors {
     pub toolbar_hover: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
     pub segmented: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub selection: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_teal: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_teal_hover: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_amber: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_amber_text: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_green: Hsla,
 }
 
