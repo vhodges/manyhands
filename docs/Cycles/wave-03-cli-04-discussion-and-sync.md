@@ -12,22 +12,24 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 
 ## Status
 
-**Draft, 2026-10-26, revised after the third review round.** Written for
-product-owner review. Nothing is built, and no build or test was run for
-planning.
+**Draft, 2026-10-26.** Revised after the third review round, and re-grounded
+on 2026-10-27 after the gate ticket merged. Written for product-owner review.
+Nothing is built. Planning ran one test, a single existing test on main's
+code, to confirm the main-side failure recorded as design fact 81.
 
 The other planning documents:
 
 - [Design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md)
 - [Implementation plan](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-implementation.md)
 
-Ticket: `01M4CC0VMWEQQ9G4W0DAG7ADPY`. On 2026-10-26 the ticket branch merged
-`origin/main` at `0464c42` as merge commit `219ec57`. It was merged, not
-rebased.
+Ticket: `01M4CC0VMWEQQ9G4W0DAG7ADPY`. The ticket branch merged `origin/main`
+twice, never rebasing:
+- on 2026-10-26, at `0464c42`, as merge commit `219ec57`;
+- on 2026-10-27, at `a372edb`, as merge commit `e920043`. The gate ticket
+  `01M57SKVF6TQ3QM6AXJ35JGGSY` is merged and closed there (decision 2).
 
-Implementation does not start until the gate ticket
-`01M57SKVF6TQ3QM6AXJ35JGGSY` is merged to main (decision 2). Task 0 then
-merges that main and re-checks every fact the design cites.
+The design's facts were re-checked at `e920043` (Review Record). Task 0
+re-checks them again if main has moved.
 
 ## Purpose And Authority
 
@@ -71,21 +73,31 @@ Authority, in order:
    progress and cancellation, which C4 extends.
 7. The C1, C2 and C3 Cycles and designs: parsing, envelopes, exit statuses,
    isolation, goldens and the mutation driver.
-8. The gate ticket's design
-   (`docs/plans/2026-10-25-closure-recovery-gate-design.md` on its branch),
-   for the local-synchronization shapes that C4's conflict DTOs follow.
+8. The gate ticket's Cycle and design
+   (`docs/Cycles/wave-03-closure-recovery-gate.md`,
+   `docs/plans/2026-10-25-closure-recovery-gate-design.md`), and its
+   amendments to items 1–3 and to the API audit (design fact 85). They give
+   the local-synchronization shapes, which C4's remote conflict DTOs follow
+   where the remote operation allows (decisions 19 and 20).
 
 ## Entry Evidence And Dependency Boundary
 
 - **Wave 02.** Cycles 06 (merge and conflict recovery) and 07 (comment
   publication) are closed on main, with `closed_at` set (entry-gate item 2).
 - **Wave 03.** F1, F2, C1, C2 and C3 are closed and merged to main.
-- **Gate ticket (decision 2).** `01M57SKVF6TQ3QM6AXJ35JGGSY` is
-  implementing on its own branch. C4's implementation starts only after it is
-  merged to main. It adds local context synchronization, classifies a true
-  closure race as `ExternalResolutionRequired`, and words closure child
-  errors. It edits the mutation files C4 extends, so C4's library tasks
-  follow it.
+- **Gate ticket (decision 2).** `01M57SKVF6TQ3QM6AXJ35JGGSY` is merged to
+  main and closed at `a372edb` (`closed_at: 2026-10-27T12:51:51Z`). It added:
+  - local context synchronization, as the F2 commands `context sync-local`
+    and `context resolve-local`, absent from the CLI catalog;
+  - the classification of a true closure race as external-only
+    (`incompatible_closures`);
+  - closure child-error wording.
+
+  It edited the mutation files C4 extends. Its local verbs stay with C5
+  (decision 19).
+- **Main is red on one test** after the gate:
+  `registry_creates_repository_and_discovery_metadata_schema` lacks the
+  gate's tables (design fact 81). The fix belongs on main, outside C4.
 - **Track rule 5 (decision 1).** C4's branch carries the library additions
   its verbs need. Nothing else under `src/repository*` changes.
 - **Track rule 2 (decision 5).** D4 waits until all of C4 is merged. D4's
@@ -173,7 +185,10 @@ Authority, in order:
 - **Out of scope:**
   - promotion, closure and cleanup adapters (C5);
   - the gate's local-synchronization verbs `context sync-local` and
-    `context resolve-local`, which C5 exposes with ticket closure;
+    `context resolve-local`, which C5 exposes with ticket closure, and any
+    CLI inspection of a local-sync conflict (decision 19). C4's
+    `conflict show` and `conflict resolve` take remote synchronizations
+    only;
   - automatic retries of manual lifecycle intent;
   - arbitrary code, binary or structural conflict writes, and blanket "keep
     mine" or "keep theirs" policies;
@@ -188,9 +203,18 @@ Authority, in order:
 - **A pending remote conflict blocks the repository.** Until it is resolved
   or repaired outside, other synchronizations answer `busy` and authoring in
   that item's context answers `recovery_required` (decision 6).
+- **An unfinished local-context sync blocks remote work.** While one is
+  unfinished anywhere in the repository, C4's synchronizing verbs, `comment
+  add` and `conflict resolve` answer `recovery_required`. That is the gate's
+  library rule. No C4 verb can start one (decision 19).
 - **A mixed conflict is repaired outside as a whole (decision 12).** If any
   conflicted path is not canonical, no path of that conflict is resolved
   in-app.
+- **A remote closure race is repaired outside.** A ticket that two clones
+  closed differently makes its conflict external-only. The Git RFC does not
+  promise that an outside repair choosing one closure is accepted, and the
+  operation cannot be abandoned (decision 6). So it may have no way out
+  until `01M4H33R34Z7C7EEKTY1ZCT950` lands.
 - **A cancelled operation is final.** A new request completes the work.
   A Ctrl-C during a blocked network call may answer `transport_unavailable`
   with its effects intact (decision 14).
@@ -264,13 +288,18 @@ Authority, in order:
      `external_change`.
    - A conflict with any path that cannot be resolved here is reported with
      outside-repair guidance as a whole, and nothing of it is written
-     (decision 12).
+     (decision 12). A ticket closed differently on two sides is such a path.
+   - A local-context sync's operation ID is `invalid_input` to both verbs
+     (decision 19).
    - A retry of the same request finishes an interrupted resolution with the
      same commit, and makes no second one (decision 13).
    - A resolution whose request is lost has a way out (decision 18).
      `operation resume` finishes one whose commit is prepared, from durable
      state. A new request supersedes one that has only written paths, if
-     those paths still hold exactly what it wrote.
+     those paths still hold exactly what it wrote. On one with only written
+     paths, `operation resume` answers `original_request_required` and names
+     the request. The gate's local resolution has no supersede, and its RFC
+     sentences are scoped to the local operation (decision 20).
    - After an outside repair, `conflict show` reports it and
      `operation resume` continues.
 7. **Operations.**
@@ -278,6 +307,8 @@ Authority, in order:
      action. It continues only the work the operation recorded.
    - `operation abandon` is confirmed. It closes a pending local operation's
      journal record without changing files.
+   - On a local-context sync, both pass through to the gate's routing and
+     abandonment, unchanged, and human output shows its data (decision 19).
 8. **Request identity, consent, prompts, retry and refusals.** As C2's
    Required Contract items 3, 4, 6, 8 and 10, and C3's. C2's bounded retry
    applies unchanged, and never follows a cancellation.
@@ -370,7 +401,7 @@ Also required:
 - **Documents.** The RFCs, the Wave, the API audit, AGENTS.md and the skills
   carry the amendments the design lists.
 
-## Product-Owner Decisions (2026-10-26)
+## Product-Owner Decisions (2026-10-26 and 2026-10-27)
 
 Answered before drafting:
 
@@ -381,6 +412,8 @@ Answered before drafting:
    verbs need.
 2. **The gate lands first.** C4's implementation starts after
    `01M57SKVF6TQ3QM6AXJ35JGGSY` merges, and Task 0 re-grounds on that main.
+   It merged on 2026-10-27 at `a372edb`, and planning re-grounded on it the
+   same day.
 3. **Divergent synchronization merges.** `item sync` and `repo sync` merge
    as the Git RFC describes. A canonical conflict is resolved with
    `conflict show` and `conflict resolve`. Any other conflict gets
@@ -395,7 +428,8 @@ Answered before drafting:
    it only when a branch was deleted.
 8. **The next step is typed data.** A result that stops on a conflict keeps
    the code `recovery_required` and carries `conflict: {operation_id,
-   next_action}` in its data, as the gate's local-synchronization DTO does.
+   next_action}` in its data. The gate's local-synchronization DTO also
+   carries a next action, but flat rather than nested.
    The recovery-action enum is unchanged, so no desktop match changes for it.
    This replaces the `conflict.show` recovery action of the outline.
 9. **`comment add` takes an optional `created_by`.** It is validated as
@@ -450,6 +484,24 @@ Answered after the third review round:
 
     Outside repair is accepted again once no attempt is unfinished.
 
+Answered after re-grounding on the merged gate (2026-10-27):
+
+19. **The local verbs stay with C5.** The gate's Wave and CLI RFC text says
+    "C4/D5 must adapt the local boundary". The owner kept the outline's
+    assignment instead:
+    - C4's `conflict show` and `conflict resolve` take remote synchronization
+      IDs only, and a local-sync ID is `invalid_input`;
+    - `operation resume` and `operation abandon` pass a local sync through to
+      the gate's behavior, with human output for its data;
+    - C4 amends the gate's sentences to name C5/D5 for the local boundary,
+      and records that C4 delivered the remote wire bindings.
+20. **Decision 18's supersede stays for remote.** The gate's local
+    resolution lets only the original request continue an attempt, with its
+    source bytes. C4 keeps the remote supersede, and scopes the gate's CLI
+    and Git RFC sentences to the local operation, recording the difference.
+    Resume on a remote attempt with only written paths answers
+    `original_request_required` and names the request, as the gate's does.
+
 The following were stated to the owner on 2026-10-26 with the outline, and
 the owner approved the outline:
 
@@ -457,11 +509,12 @@ the owner approved the outline:
   source}]}`, replacing the RFC's per-entry `{path, observation, source}`;
 - `operation resume` taking up a comment's publication, as the CLI RFC's
   example shows;
-- the gate's local-synchronization verbs staying with C5;
+- the gate's local-synchronization verbs staying with C5, which decision 19
+  reaffirms;
 - the known defects being known limits;
 - Ctrl-C through `libc` and `windows-sys`, with no new crate.
 
-The design proposes engineering rulings R-1 to R-36. These narrow or
+The design proposes engineering rulings R-1 to R-41. These narrow or
 condition the contract or its evidence:
 
 - R-5: the operation ID `conflict show` accepts;
@@ -481,11 +534,19 @@ condition the contract or its evidence:
 - R-33: the two-clone fixture's premise, and a foreign token being
   `external_change`;
 - R-34: a comment that wrote nothing releasing its binding;
-- R-35: a resolution attempt belonging to the request that made it, so
-  any other request meets `original_request_required`;
-- R-36: one Ctrl-C latch per run, stopping C2's bounded retry.
+- R-35: a resolution attempt belonging to the request that made it. Any
+  other request meets the design's step 3: a supersede under decision 18,
+  `original_request_required`, or `operation resume`;
+- R-36: one Ctrl-C latch per run, stopping C2's bounded retry;
+- R-37: local-sync operations in C4's verbs (decision 19);
+- R-38: an unfinished local-context sync answered `recovery_required` by
+  every C4 verb that reserves, begins a comment or re-acquires a conflict;
+- R-40: `incompatible_closures` reported as external-only, with no
+  in-product way out;
+- R-41: the association table's name, `remote_resolution_owners`, and its
+  shape, with no foreign key.
 
-Named edits E-1 to E-11 change pre-existing tests and goldens. All of these
+Named edits E-1 to E-12 change pre-existing tests and goldens. All of these
 are submitted for approval with these documents.
 
 ## Review Record
@@ -516,8 +577,18 @@ are submitted for approval with these documents.
 
 | Third round, scoped and adversarial (2026-10-26, `580d4ad..bea46e4`) | 17 findings: 1 blocking, 10 important, 6 minor. Blocking: an unfinished resolution attempt whose request could not be resent locked the context for good, because outside repair is refused while an attempt exists and abandonment is excluded. Important findings were:<br>- a new column on `remote_resolution_attempts` would make main's binaries refuse a migrated registry (fact 75);<br>- the observation cannot be rebuilt, because the configuration digest is not stored;<br>- the path rebuild missed local-side resolutions;<br>- republish's push still met the push-absence boundary, and its preview needed a reservation;<br>- resume could push a merge under a republish's operation;<br>- fact 74 was misapplied within one call;<br>- three cases of R-34: a written file, two-step release, a final child;<br>- Task 6's allowlist missed `human_admin.rs`. | Decision, ruling, settled | Decision 18. The association moves to a new table, with the input digest. The attempt ID adds the synchronization, window and ordinal. Republish gets a reservation-free evidence read, a push that leaves out the refusal points, and a resume guard. R-34 is refined, facts 68, 71, 72 and 74 are corrected, and facts 75–79 are added. The minors are applied. This is the third round in the resolution mechanism, so it is not rewritten again: its table rows and Task 4a's stop are the contract. |
 
-**The third round's edits had no independent review.** They are listed in
-the row above, and the owner reviews them with the documents.
+| Planning, gate merged (2026-10-27) | The gate merged at `a372edb` with 11 commits after the `0b75184` read point. It also amended C4's authorities: the CLI RFC, the Git RFC, the Wave and the API audit. | Settled | Main merged as `e920043`; the facts and citations re-checked (rows below). |
+| Planning, gate authority text | The gate's Wave and CLI RFC text says "C4/D5 must adapt the local boundary", against the approved outline's assignment of the local verbs to C5. | Decision | Decision 19. |
+| Planning, gate authority text | The gate's local resolution has no supersede, and its RFC sentences on resending the same request are worded generally, against decision 18. | Decision | Decision 20. |
+| Planning, source run | `registry_creates_repository_and_discovery_metadata_schema` fails on `a372edb`, because its exact table list lacks the gate's tables. It was confirmed by running that one test. | Settled | Design fact 81 and the Risks row: the fix belongs on main, outside C4. E-12 adds only C4's own table. Task 0 and Task 4a stop on it if it is still red. |
+| Re-grounding, gate-boundary lens (2026-10-27, `e920043`) | 12 findings: 1 blocking, 6 important, 5 minor. Blocking: E-6's rewrite asserted that every stopping command has an operation, which the gate's `LocalContextResolve` breaks. Important:<br>- `incompatible_closures` missing;<br>- sides without `historical`, and the claim "follows the gate's shape";<br>- the supersede against the gate's RFC sentences;<br>- no resume row for a remote attempt with only written paths;<br>- the gate's "C4/D5 must adapt" text and its capability row;<br>- departures needing RFC entries. | Decision, ruling, settled | Decisions 19 and 20. Rulings R-37, R-39 and R-40 added, and R-10, R-11, R-12 and R-20 revised. E-6 rewritten. The resume row and the validation order added. The Document Amendments now amend the gate's sentences. `request_id` keeps its name rather than the gate's `required_request_id`, because under decision 18 that request is not always required. |
+| Re-grounding, remote-library lens (2026-10-27, `e920043`) | 8 findings: 1 blocking, 3 important, 4 minor, and 6 stale citations. Blocking: a new conflict structure, `incompatible_closures`, had no value in Task 3's mapping. Important:<br>- kind and structure must come from `classify_conflict_entry`;<br>- an unfinished local sync now refuses remote resolution, reservations and comment begins;<br>- the tasks editing `remote/` must also run the local executor's tests. | Ruling, settled | Facts 30, 33, 64, 72, 75, 76 and 80 rewritten. Ruling R-38 added, and R-14 revised. Rows for the unfinished local sync added to four tables. `--lib remote`, `--lib local_sync` and `--lib integration` added to the tasks that edit `remote/`. The gate moved only helpers, so the library file list is narrowed: C4 edits nothing in `integration/` or `local_sync/`. |
+| Re-grounding, boundary, CLI and test lens (2026-10-27, `e920043`) | 6 findings: 1 blocking, 2 important, 3 minor, and 13 stale citations. Blocking: the planned table `remote_resolution_requests` would fail `tests/mutation_replay.rs:400`, which forbids a surviving object named with `request`. Important:<br>- the registry's exact table list needs a named edit, and it already fails on main;<br>- E-6 was wrong on `a372edb`. | Ruling, settled | R-41: the table is renamed `remote_resolution_owners`, with no foreign key. E-12 added. Fact 49 refreshed, with `authority()`, the read golden `CASES` and the `type`-guarded `from_stored` arm. Task 0's grep classification gains a fourth class. Task 1 updates the two "never merge" comments. All citations corrected. |
+
+**Neither the third round's edits nor the re-grounding edits had an
+independent review.** They are listed in the rows above, and the owner
+reviews them with the documents. The re-grounding reviewers checked the
+documents as they stood at `e920043`, before these edits.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing

@@ -12,7 +12,7 @@ id: "01M5X4YWRNZ1SFGXH5J8E9QD2J"
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Draft, 2026-10-26, revised after the third review round.** Not approved. Implementation is not authorized, and does not start until the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` is merged to main (Cycle decision 2).
+**Draft, 2026-10-26.** Revised after the third review round, and re-grounded on 2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged at `a372edb` (Cycle decision 2). Not approved, and implementation is not authorized.
 
 **Goal:** Add C4's library part and its eight CLI verbs, so that an agent or a person can comment, synchronize, resolve or repair conflicts, republish a deleted branch, and resume or abandon operations through `manyhands-cli`. Then switch this project's comment dogfooding to the CLI.
 
@@ -46,14 +46,14 @@ id: "01M5X4YWRNZ1SFGXH5J8E9QD2J"
   - `src/repository/comment_publication.rs` and `src/repository/recovery.rs`;
   - `src/repository.rs`, for the new crate-private `checkpoint_comment_locally_with`, `checkpoint_comment_locally`'s delegation to it, and the re-exports only;
   - `src/repository/remote/{mod,sync,refs,reservation,state,merge}.rs`, and the new `remote/conflict_read.rs`;
-  - after the gate, the `src/repository/integration/` files it moved that code into;
+  - nothing in `src/repository/integration/` or `src/repository/local_sync/`. The gate moved only helpers there (fact 25), and its local executor shares them. `conflict_read.rs` calls `integration::validate::classify_conflict_entry` read-only (fact 30);
   - `src/repository/read/mod.rs` and `read/dto.rs`, for exports only;
   - `schemas/v1/`.
 
   Also:
   - No new `ResultCode` or `RecoveryActionKind` (decision 8).
   - No field is added to a public struct that tests build by literal (R-4).
-  - No column, trigger or listed object of an audited table changes (fact 75). New durable state goes in new tables, so main's binaries still open a registry the branch has migrated.
+  - No column, trigger or listed object of an audited table changes (fact 75), the gate's eight `local_context_sync_*` tables included. New durable state goes in new tables, so main's binaries still open a registry the branch has migrated.
   - A gap beyond these files stops the task for the owner.
 - **Desktop.** Only Task 5's one arm in `src/desktop/view/confirm.rs` (decision 10). That task also runs `cargo check --locked --features desktop` and `cargo clippy --all-targets --locked --features desktop -- -D warnings`, with the desktop feature alone.
 - **Bin.** CLI code lives in `src/bin/manyhands-cli.rs` and `src/bin/manyhands-cli/`. New modules follow C1's pattern: `#[path = "manyhands-cli/<name>.rs"] mod <name>;`, with `#[cfg(test)] #[path = "<name>_tests.rs"] mod tests;`. A module that `tests/cli_remote.rs` mounts must still resolve there. `Boundary`'s signature and `Plan`'s fields do not change (fact 61).
@@ -77,10 +77,11 @@ id: "01M5X4YWRNZ1SFGXH5J8E9QD2J"
   - An identity case built on `World` removes the local identity `World` sets (fact 44) before it starts.
   - Tests never touch developer keys, global Git configuration, the real terminal or real application data.
   - PTY cases are `#[cfg(unix)]` (fact 43).
-- **Pre-existing tests.** Only named edits E-1 to E-11, in the tasks the design names. `tests/support/pty.rs` gains one additive helper. Any other semantic edit, including a new lint on an old test, stops for owner review.
+- **Pre-existing tests.** Only named edits E-1 to E-12, in the tasks the design names. `tests/support/pty.rs` gains one additive helper. Any other semantic edit, including a new lint on an old test, stops for owner review.
 - **Outcome tables.** Each table's test is written first, in its task's first step, and run to see it fail before any implementation. The test and the code that makes it pass are committed together, so no commit is left red or uncompiled. If the code answers a row differently, stop for a ruling. Never edit a table to fit.
 - **Test runs (owner, 2026-10-17, 2026-10-19 and 2026-10-24).**
   - Each task runs only the targets and filters its steps name. Check that more than zero tests ran.
+  - A task that edits `src/repository/remote/` also runs `cargo test --all-features --locked --lib remote`, `--lib local_sync` and `--lib integration`, each as its own command. The gate's local executor calls into those modules.
   - Cargo takes **one** positional test filter per command.
   - Clippy in a task step is `cargo clippy --all-targets --all-features --locked -- -D warnings`.
   - The Part checkpoints (Tasks 6 and 11) run the checkpoint gate. The full suite runs once, in Task 15, detached, with a two-hour budget. It took 1 h 44 min in C3. Use a 600-second tool timeout for gate commands.
@@ -144,7 +145,7 @@ These are inputs the spec implies but no table lists. Each has its test in the o
 | 2a | A | `tests/mutation_remote/comment_domain.rs` | `comment_publication.rs`, `src/repository.rs` (`checkpoint_comment_locally_with`), `recovery.rs`, `bind/sync.rs` (`Watch` constructor), `tests/mutation_remote.rs` |
 | 2b | A | `bind/comment.rs`, `tests/mutation_remote/comment.rs`, `schemas/v1/comment_mutation.schema.json`, mutation goldens `comment_add*` | `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs`, `bind/mod.rs`, `tests/mutation_remote.rs`, E-6, E-7, E-8, E-9, E-10 |
 | 3 | A | `remote/conflict_read.rs`, `tests/mutation_remote/conflict_read.rs`, `schemas/v1/conflict.schema.json`, `conflict_path.schema.json`, read goldens `conflict_show_*` | `remote/mod.rs`, `read/mod.rs`, `read/dto.rs` (exports), `src/repository.rs` (re-export), `tests/mutation_remote.rs`, `tests/support/golden.rs`, E-8 |
-| 4a | A | `bind/conflict.rs`, `tests/mutation_remote/resolution.rs`, `schemas/v1/conflict_resolution_mutation.schema.json`, mutation goldens `conflict_resolve*` | `remote/{sync,state,merge}.rs` or their `integration/` successors (R-14, R-35), `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs`, `bind/mod.rs`, `tests/mutation_remote.rs`, E-6, E-7, E-8, E-9, E-10 |
+| 4a | A | `bind/conflict.rs`, `tests/mutation_remote/resolution.rs`, `schemas/v1/conflict_resolution_mutation.schema.json`, mutation goldens `conflict_resolve*` | `remote/{sync,state,merge}.rs` (R-14, R-35, R-41), `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs`, `bind/mod.rs`, `tests/mutation_remote.rs`, `tests/repository_enablement.rs` (E-12), E-6, E-7, E-8, E-9, E-10 |
 | 4b | A | `tests/mutation_remote/resume.rs` | `bind/resume.rs`, `dto.rs` (`from_stored`), `tests/mutation_remote.rs`, E-11 |
 | 5 | A | `bind/republish.rs`, `tests/mutation_remote/republish.rs`, `schemas/v1/item_republish_preview.schema.json`, mutation goldens `item_republish*` | `remote/{sync,state}.rs` (the push-only path), `mutation/progress.rs` (`Session::republish`), `command.rs`, `mod.rs`, `dto.rs`, `schemas/v1/preview_effect.schema.json`, `src/desktop/view/confirm.rs` (one arm), `src/bin/manyhands-cli/human_admin.rs` (the two preview matches), E-5, E-6, E-7, E-8, E-9 |
 | 6 | A | — | ledger, ticket comment |
@@ -170,19 +171,20 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 - Modify: `docs/research/wave-03-api-audit.md`
 
 - [ ] **Step 1: Confirm the base.**
-  - `git fetch origin`. Confirm that `git show origin/main:.manyhands/tickets/01M57SKVF6TQ3QM6AXJ35JGGSY/ticket.md` has `closed_at`. If it does not, stop: implementation is not authorized yet (decision 2).
-  - `git merge origin/main`, then `git merge-tree --write-tree HEAD origin/main`.
+  - `git fetch origin`. Confirm that `git show origin/main:.manyhands/tickets/01M57SKVF6TQ3QM6AXJ35JGGSY/ticket.md` has `closed_at`. It did at `a372edb`, on 2026-10-27.
+  - `git merge origin/main`, then `git merge-tree --write-tree HEAD origin/main`. Record whether main moved past `a372edb`. If it did not, the facts stand as the design's 2026-10-27 re-grounding recorded them, and Step 2 re-checks only fact 81's red test. If it did, Step 2 re-checks every fact.
   - Read `git show origin/main:AGENTS.md`.
   - For each known-limit ticket in the Cycle's Entry Evidence, check its `closed_at` on `origin/main` the same way. A closed one changes a known limit, and the controller rules before Task 1.
   - Check whether D3 (`01M4CC0VN0MFTGKQ4HGTTC5H63`) is closed on main, and record it. It decides who resolves the `confirm.rs` merge (decision 10).
   - Record HEAD and `origin/main`.
-- [ ] **Step 2: Re-check every Baseline Fact** (1–79) against the merged source, and record each as confirmed or changed, with its new paths and line numbers. In particular:
-  - the gate's delivered changes to every file Part A touches (fact 53): new commands, `local_control` hooks, resume routing, the `integration/` moves, inventory sizes;
+- [ ] **Step 2: Re-check the Baseline Facts** (1–86) against the merged source, as Step 1 says, and record each as confirmed or changed, with its new paths and line numbers. In particular:
+  - any change since `a372edb` to the files Part A touches, or to the gate's `local_sync/`, `integration/`, `local_control.rs` and `bind/local_sync.rs` (facts 25, 53 and 80);
   - fact 28: `set_local_identity` is still not refused by a pending operation;
-  - what `operation abandon` answers for a comment operation whose publication is pending (fact 10). If it would close the comment's binding while its checkpoint stays unpublished, stop for a ruling.
+  - what `operation abandon` answers for a comment operation whose publication is pending (fact 10). If it would close the comment's binding while its checkpoint stays unpublished, stop for a ruling;
+  - fact 81: whether `registry_creates_repository_and_discovery_metadata_schema` still fails on main for the gate's tables. Run `devenv shell -- cargo test --all-features --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema`. If it still fails, record it, and stop for the owner before Task 4a (E-12).
 
   A changed fact that alters a task stops here for a controller ruling.
-- [ ] **Step 3: Prove E-1 to E-11 are the only named edits.**
+- [ ] **Step 3: Prove E-1 to E-12 are the only named edits.**
 
   ```sh
   grep -rn -E 'refuse_divergence|REFUSING|merge_required|MergeRequired|is_comment_synchronization|LeftToInspect' tests src/repository/mutation
@@ -192,8 +194,11 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
   Classify every hit as one of:
   - the production code a task changes;
-  - an E-1 to E-11 site;
-  - a loop over an inventory that takes the new entries unchanged.
+  - an E-1 to E-12 site;
+  - a loop over an inventory that takes the new entries unchanged;
+  - a single-variant match with a fallback, such as `let Some(MutationDataDto::LocalContextSync(..)) = … else { panic!(…) }` in `tests/mutation_replay/local_sync*.rs`, or the wildcard matches at `tests/mutation_remote.rs:1441`, `tests/mutation_remote/host.rs:332` and `tests/mutation_confirmation/abandon.rs:825`. A new variant leaves these unchanged.
+
+  The 2026-10-27 re-grounding ran these greps on `a372edb`: grep 3 had 311 hits, and greps 1 and 2 had no gate-added hits.
 
   For E-3, record each listed test as binding-level (edited) or domain-level (unchanged), from whether it reaches the binding's `SETTINGS` or its own `REFUSING`. Any other hit stops for an owner ruling.
 - [ ] **Step 4: Baseline checks.**
@@ -212,7 +217,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   devenv shell -- cargo test --all-features --locked
   ```
 
-  Record per-target counts. A failure outside C4's files stops for the owner. It is not fixed here.
+  Record per-target counts. A failure outside C4's files stops for the owner. It is not fixed here. Fact 81's test is expected to fail unless main has fixed it, and its failure is recorded with that reference.
 - [ ] **Step 5: Refresh the API audit.**
   - Add a section, "Wave 03 CLI Cycle C4 refresh", dated, citing decision 16.
   - Update the C4 rows in place: `comment add`, `item sync`, `repo sync`, `conflict show`, `conflict resolve`, `operation resume` and `operation abandon`. Add `item republish`. For each, record the planned binding and signature, whether it is confirmed, its input type, and every result code it can return as designed. Read the existing codes from `outcome.rs`, `execute.rs`, `confirm.rs` and the binding.
@@ -222,7 +227,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - baseline;
   - confirmed facts;
   - audit refresh;
-  - Cycle decisions 1–18, rulings R-1 to R-36 and named edits E-1 to E-11;
+  - Cycle decisions 1–20, rulings R-1 to R-41 and named edits E-1 to E-12;
   - owed native checks, starting with the Windows Ctrl-C check;
   - the planning review record;
   - an empty task log.
@@ -240,17 +245,19 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - `pub struct ConflictNextDto { pub operation_id: String, pub next_action: ConflictNextAction }` and `contract_enum! ConflictNextAction { Resolve => "resolve", ExternalRepair => "external_repair" }`, in `mutation/dto.rs`;
   - `pub struct SynchronizationConflictMutationDto { pub r#type: SynchronizationConflictType, pub conflict: ConflictNextDto }`, where the single-value enum is `"synchronization_conflict"`;
   - `MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto)`;
-  - `pub(super) const MERGING: SynchronizationSettings` and `pub(crate) fn conflict_next(service: &RepositoryService, root: &Path, operation_id: OperationId) -> ConflictNextDto` in `bind/sync.rs`, which later tasks call.
+  - `pub(super) const MERGING: SynchronizationSettings` and `pub(crate) fn conflict_next(service: &RepositoryService, root: &Path, operation_id: OperationId) -> ConflictNextDto` in `bind/sync.rs`, which later tasks call;
+  - a test helper `fn leave_local_sync_conflict(world: &World) -> OperationId` in `tests/mutation_remote.rs`, which Tasks 2b, 4a and 5 reuse (R-38).
 
 - [ ] **Step 1: Write the divergent-synchronization table as cases** in `tests/mutation_remote/merging.rs`, one `c4_merging_<row>` case per row, for both `item sync` and `repo sync`, through `RepositoryService::execute`.
   - Use `World` and its raw peer to make the remote diverge, with `commit` plus `push_peer`.
   - Each case asserts code, outcome, effects, data and recovery exactly as the row says. For merge rows it also asserts parent order and subject, and that the remote keeps its earlier tip as an ancestor.
   - The identity rows remove `World`'s local identity first. They run `repo identity-set` through `prepare` and `execute` with its confirmation (it is confirmed), then re-execute the first `MutationCall`.
+  - The unfinished-local-sync row (R-38) first leaves a `context sync-local` stopped in a conflict, through `Mutation::LocalContextSync`, as `ConflictWorld::with_incoming` does (`tests/mutation_replay/local_sync.rs:164-212`). Later tasks reuse the same helper for their rows.
 
   Register the module and its cases in `tests/mutation_remote.rs`.
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_merging`. Expected: it does not compile, because the new DTOs do not exist yet. That is the failing state; nothing is committed until Step 6.
 - [ ] **Step 3: Implement.**
-  - Replace `SETTINGS` with `MERGING`, `refuse_divergence: false`, and update the module doc and the comments of fact 6 (R-16).
+  - Replace `SETTINGS` with `MERGING`, `refuse_divergence: false`, and update the module doc, the comments of fact 6, and `bind/sync.rs:100` and `:590` (fact 84), which say nothing merges (R-16).
   - On `ConflictPending`, return `recovery_required` with `integration: pending` and the data from `conflict_next` (R-8). `next_action` is `resolve` when the inspection's eligibility is `EligibleCanonical`, else `external_repair`.
   - The identity rows need no workaround (R-17).
   - Add the two schemas, and register the DTO in `DATA_ROOTS` and `contract_enumerations`.
@@ -323,7 +330,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
 - [ ] **Step 1: Write the comment-submission table as cases** in `tests/mutation_remote/comment.rs`, one `c4_comment_<row>` case per row, through `execute`.
   - Use `World` and `use super::*` for the target's private helpers, as the existing cases do.
-  - The server-refusal row uses the fixture's refusal hook. The conflict rows have the peer push a conflicting edit to the item's context branch. The other-item row first leaves a conflict on another item.
+  - The server-refusal row uses the fixture's refusal hook. The conflict rows have the peer push a conflicting edit to the item's context branch. The other-item row first leaves a conflict on another item. The unfinished-local-sync row uses Task 1's helper (R-38).
 
   Register the module and its cases.
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_comment`. Expected: it does not compile, because `Mutation::CommentAdd` does not exist yet. Nothing is committed until Step 6.
@@ -337,7 +344,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 - [ ] **Step 4: Review Focus 1 and 5,** as `c4_comment_` cases.
   - A body with CRLF, a non-BMP character, a `---` line and no final newline round-trips through `list_comments`, byte for byte.
   - A self-parent is `item_not_found`, and no binding row stays.
-  - `request_mismatch`: the same request ID sent again with another body. It is exit 4 when the first request checkpointed, else 2 (`replay.rs:140-150`).
+  - `request_mismatch`: the same request ID sent again with another body. It is exit 4 when the first request checkpointed, else 2 (`replay.rs:153-163`).
 - [ ] **Step 5: Verify.**
 
   ```sh
@@ -372,16 +379,19 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - The `busy` row holds the repository lease from a library-level actor.
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_conflict_read`. Expected: it does not compile.
 - [ ] **Step 3: Implement** `conflict_read.rs`.
-  - Read the step's phase with the internal state functions, then inspect when a conflict is live (fact 29).
+  - Look the operation ID up in the gate's local-sync records first, and answer `invalid_input` for a local sync (decision 19, R-37).
+  - Read the step's phase with the internal state functions, then inspect when a conflict is live (fact 29). At `ResolutionPrepared` the inspection still issues an observation (fact 86). If it does not, stop at a design checkpoint.
   - Derive the tokens and the observation by R-9.
-  - Report each path's kind and structure from its classification (fact 30, decision 12).
-  - Read the sides for readable paths (fact 32, R-10), and escape display paths (R-11).
+  - Report each path's kind and structure by calling `crate::repository::integration::validate::classify_conflict_entry` on each index conflict, because the inspection carries only token and eligibility (fact 30, decision 12). Map all eight structures, `incompatible_closures` included (R-40).
+  - Read the sides for readable paths (fact 32, R-10), set `historical` (R-39), and escape display paths by R-11's rule.
   - Report the repaired and refused states with `validates_external_integration`, read-only.
   - Accept a comment's operation ID (R-5).
   - Prove it writes nothing (R-12): a case compares the database file's bytes before and after.
 - [ ] **Step 4: Schemas, goldens and Review Focus 2.**
   - Closed schemas, each registered as a data root, and the enums in `contract_enumerations` (E-8).
   - A `c4_conflict_read_hostile_path` case: a path with an escape sequence and a newline. Its token resolves, and no raw control byte appears in a diagnostic or a `Debug` rendering.
+  - A `c4_conflict_read_display_path` case pins R-11 byte for byte: a control byte, a backslash, a non-ASCII UTF-8 character and an invalid byte.
+  - A `c4_conflict_read_incompatible_closures` case: two clones close the same ticket with different `closed_at`, and the read reports that path's structure and `external_repair` (R-40).
 - [ ] **Step 5: Verify.**
 
   ```sh
@@ -397,7 +407,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
 **Files:**
 - Create: `src/repository/mutation/bind/conflict.rs`, `tests/mutation_remote/resolution.rs`, `schemas/v1/conflict_resolution_mutation.schema.json`, mutation goldens `conflict_resolve`, `conflict_resolve_external_change`, `conflict_resolve_invalid_input`, `conflict_resolve_original_request_required`
-- Modify: `src/repository/remote/{sync,state,merge}.rs`, or their `integration/` successors (R-14, R-35), `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs`, `bind/mod.rs`, `tests/mutation_remote.rs`, E-6, E-7, E-8, E-9, E-10
+- Modify: `src/repository/remote/{sync,state,merge}.rs` (R-14, R-35, R-41), `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs`, `bind/mod.rs`, `tests/mutation_remote.rs`, `tests/repository_enablement.rs` (E-12), E-6, E-7, E-8, E-9, E-10
 
 **Interfaces:**
 - Consumes: `path_tokens`, `observation_text` and `show_conflict` (Task 3); `MERGING` and `conflict_next` (Task 1); `retry_comment_publication_with` (Task 2a); fact 33.
@@ -407,13 +417,14 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - `ConflictResolutionMutationDto { r#type, operation_id, commit_oid: Option<String>, publication: PublicationEffect, conflict: Option<ConflictNextDto> }`.
 
 - [ ] **Step 1: Write the interrupted-resolution table as cases** in `tests/mutation_remote/resolution.rs`, one `c4_resolution_<row>` case per row.
-  - Interruptions use the library's `FailurePoint`s around resolution and publication. Find them with `grep -n 'FailurePoint::' src/repository/remote/sync.rs` and their `integration/` successors, and record them in the ledger.
+  - Interruptions use the library's `FailurePoint`s around resolution and publication. Find them with `grep -n 'FailurePoint::' src/repository/remote/sync.rs src/repository/remote/state.rs`, and record them in the ledger. They are in `sync.rs:4625-5253` and `state.rs`; `integration/` has none, and the `LocalSync*` points are the gate's local executor's (fact 64).
+  - The unfinished-local-sync row uses Task 1's helper (R-38).
   - Row 1 has no failure point (fact 64). Its case installs an SQL trigger that refuses the first resolution-path insert.
   - Each retry runs in a fresh `RepositoryService` opened on the same data directory (decision 13).
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_resolution`. Expected: it does not compile.
 - [ ] **Step 3: Implement the durable state (R-14, R-35).**
   - Derive the attempt ID from a domain-separated BLAKE3 digest of the request ID, the synchronization's ID, the integration window and the stage ordinal (fact 72).
-  - Record the association in a new table, `remote_resolution_requests`, with the attempt ID, the request ID and the presented input's digest. No audited table changes (fact 75).
+  - Record the association in a new table, `remote_resolution_owners`, with the attempt ID, the request ID and the presented input's digest, as values with no foreign key, created by its own migration step (R-41). No audited table changes (fact 75). Apply E-12.
   - Make the library finish an attempt without storing a body:
     - at `ResolutionPrepared`, with the presented input and the live inspection;
     - at `CommitPrepared` or `Applied`, from `remote_resolution_attempts` and `remote_resolution_paths` alone (fact 34). That also serves `operation resume` (decision 18).
@@ -422,7 +433,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - Fill `ConflictDto.request_id` in `conflict_read.rs` from the new table. Until this task, Task 3 reports it as null. Extend Task 3's `c4_conflict_read_` case for `resolution_prepared` to assert it.
   - If any row cannot be met within the Global Constraints' library files, **stop** at a design checkpoint, and record what each row answers.
 - [ ] **Step 4: Implement the binding** in `bind/conflict.rs`.
-  - It follows steps 1–7 of the design's Conflict Resolution section: syntax, replay first, association, validation, resolve, continuation (R-15) and outcome mapping.
+  - It follows steps 1–7 of the design's Conflict Resolution section: syntax, replay first, association, validation in step 4's order, resolve, continuation (R-15) and outcome mapping.
   - The continuation's `Watch` owner is the resolve request (R-35).
   - Add the command to every closed inventory (E-6, E-7, E-8, E-9, E-10).
   - **Review Focus 3** as `c4_resolution_` cases: a duplicate token is `invalid_input`, and a token from another operation's conflict is `external_change`. Neither writes, and no source text appears in the envelope or the request stores.
@@ -434,9 +445,16 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   devenv shell -- cargo test --all-features --locked --test mutation_bridges
   devenv shell -- cargo test --all-features --locked --test mutation_contract
   devenv shell -- cargo test --all-features --locked --test read_contract
+  devenv shell -- cargo test --all-features --locked --test repository_enablement
+  devenv shell -- cargo test --all-features --locked --test remote_merge_recovery
   devenv shell -- cargo test --all-features --locked --lib mutation
+  devenv shell -- cargo test --all-features --locked --lib remote
+  devenv shell -- cargo test --all-features --locked --lib local_sync
+  devenv shell -- cargo test --all-features --locked --lib integration
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
   ```
+
+  `--test mutation_replay` proves that `tests/mutation_replay.rs:400` still passes, and `--lib remote` proves `state_tests.rs`' drop tests still pass (R-41). If `repository_enablement` fails only for the gate's tables (fact 81), stop for the owner.
 
 - [ ] **Step 6: Commit** `feat: bind conflict resolution that the same request can finish`. Add a ticket comment and push.
 
@@ -448,11 +466,15 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
 **Interfaces:**
 - Consumes: `retry_comment_publication_with` (Task 2a) and `comment_synchronization` (Task 2b); `MERGING` and `conflict_next` (Task 1).
-- Produces: resume's three routes (R-20).
+- Produces: resume's new routes (R-20).
 
-- [ ] **Step 1: Write the resume table as cases** in `tests/mutation_remote/resume.rs`, one `c4_resume_<row>` case per row. Add a case showing that `list_operations` lists the comment and resolved-synchronization operations that resume can now act on.
+- [ ] **Step 1: Write the resume table as cases** in `tests/mutation_remote/resume.rs`, one `c4_resume_<row>` case per row. Add a case showing that `list_operations` lists the comment and resolved-synchronization operations that resume can now act on. The local-context-sync row asserts that the gate's routing answers exactly as before C4, using Task 1's helper.
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_resume`.
-- [ ] **Step 3: Implement the routes** in `bind/resume.rs`, in place of `LeftToInspect` for those cases, including finishing a prepared resolution candidate from durable state (decision 18). Extend `from_stored`.
+- [ ] **Step 3: Implement the routes** in `bind/resume.rs`, in place of `LeftToInspect` for those cases:
+  - finishing a prepared resolution candidate from durable state (decision 18);
+  - for an attempt with only written paths, `original_request_required` naming the attempt's request from `remote_resolution_owners` (R-20, decision 20).
+
+  Leave the gate's local routing untouched (fact 9). Extend `from_stored`, keeping the gate's arm guarded on `type: local_context_sync` first, and matching C4's shapes by their own `type` after it (fact 49).
   - Apply E-11 to the tests Task 0 found.
   - **Review Focus 2:** a `c4_resume_hostile_path` case resolves a conflict on a hostile path through `execute`, and only that path changes in the resolution commit.
 - [ ] **Step 4: Verify.**
@@ -486,12 +508,13 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - First publish the item, then have the peer delete its branch on the bare remote, then run `item sync` so the deletion is recorded. The push-absence row instead records the deletion through a push.
   - The primary-moved and ancestor rows have the peer advance remote primary first.
   - The busy row leaves the refused `item sync` request holding its reservation.
+  - The unfinished-local-sync row uses Task 1's helper (R-38).
   - Run `prepare`, then `execute` with the confirmation, covering every row.
 - [ ] **Step 2: Run it to see it fail.** `devenv shell -- cargo test --all-features --locked --test mutation_remote -- c4_republish`.
 - [ ] **Step 3: Implement the push-only path (decision 11, R-18).**
   - A reservation-free read classifies the deletion evidence from the same records as `synchronization_push_absence_boundary`, for the preview. Only `Deleted` makes a preview.
   - `republish_context` fetches and proves the absence. It refuses an advertised context or a moved local tip as `external_change`, before any push.
-  - It pushes exactly `local_oid`, leaving out the push-absence boundary (`sync.rs:7161-7165`) and the per-record refusal (`reservation.rs:2741-2758`). It records the publication and integrates nothing. It does not use the clean plan (fact 69).
+  - It pushes exactly `local_oid`, leaving out the push-absence boundary (`sync.rs:6209-6213`) and the per-record refusal (`reservation.rs:2742-2759`), and keeping the reservation's other checks (fact 80). It records the publication and integrates nothing. It does not use the clean plan (fact 69).
   - A lifecycle-closed ticket is `ticket_closed` (decision 17).
   - `operation resume` on an operation an `item republish` request holds answers `original_request_required` (fact 78). Add that route to `bind/resume.rs`, with its case.
   - Ordinary `item sync` is unchanged.
@@ -509,6 +532,9 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   devenv shell -- cargo test --all-features --locked --test mutation_contract
   devenv shell -- cargo test --all-features --locked --test read_contract
   devenv shell -- cargo test --all-features --locked --lib mutation
+  devenv shell -- cargo test --all-features --locked --lib remote
+  devenv shell -- cargo test --all-features --locked --lib local_sync
+  devenv shell -- cargo test --all-features --locked --lib integration
   devenv shell -- cargo check --locked --features desktop
   devenv shell -- cargo clippy --all-targets --locked --features desktop -- -D warnings
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -524,10 +550,10 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   ```sh
   git fetch origin
   git diff --quiet origin/main...HEAD -- src/results.rs src/lib.rs src/runtime.rs src/canonical.rs src/drafts
-  git diff --name-only origin/main...HEAD -- src | grep -v -E '^src/repository/(mutation/|comment_publication\.rs$|recovery\.rs$|remote/(mod|sync|refs|reservation|state|merge|conflict_read)\.rs$|integration/|read/(mod|dto)\.rs$)|^src/repository\.rs$|^src/desktop/view/confirm\.rs$|^src/bin/manyhands-cli/human_admin\.rs$'
+  git diff --name-only origin/main...HEAD -- src | grep -v -E '^src/repository/(mutation/|comment_publication\.rs$|recovery\.rs$|remote/(mod|sync|refs|reservation|state|merge|conflict_read)\.rs$|read/(mod|dto)\.rs$)|^src/repository\.rs$|^src/desktop/view/confirm\.rs$|^src/bin/manyhands-cli/human_admin\.rs$'
   ```
 
-  The three-dot diff compares from the merge base, so it shows C4's own changes and not main's. The first must exit 0, and the second must print nothing. Then read `src/repository.rs`'s diff: it must touch only `checkpoint_comment_locally_with`, `checkpoint_comment_locally`'s delegation and the re-exports. To prove the filter can fail, pipe `printf 'src/canonical.rs\nsrc/desktop/model/item.rs\n'` through the same `grep -v -E` and see both lines printed.
+  The three-dot diff compares from the merge base, so it shows C4's own changes and not main's. The first must exit 0, and the second must print nothing. Then read `src/repository.rs`'s diff: it must touch only `checkpoint_comment_locally_with`, `checkpoint_comment_locally`'s delegation and the re-exports. To prove the filter can fail, pipe `printf 'src/canonical.rs\nsrc/desktop/model/item.rs\nsrc/repository/integration/validate.rs\nsrc/repository/local_sync/run.rs\n'` through the same `grep -v -E` and see all four lines printed.
 - [ ] **Step 3:** An independent review of Part A's range: spec, then quality. Use the adversarial brief on decision 13's mechanism and on R-18. Fix or rule every finding, and rerun the gate after the fixes.
 - [ ] **Step 4:** Record counts and reviews in the ledger. Add a ticket comment and push.
 
@@ -553,7 +579,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - Windows: `SetConsoleCtrlHandler`. The first `CTRL_C_EVENT` cancels, sets the latch and returns `TRUE`; the second returns `FALSE`.
   - Teardown restores the disposition, clears the slot, then drops the token. The handler checks for null, and a drop guard covers an unwind.
 - [ ] **Step 3: Wire the window.**
-  - In the `Boundary` impl (`mutate.rs:52-62`): when the call's `Mutation` is `ItemSync`, `RepoSync`, `ItemRepublish`, `CommentAdd`, `ConflictResolve` or `OperationResume`, call `RepositoryService::execute` inside `during` with its token. Otherwise pass a fresh token, as now.
+  - In the `Boundary` impl (`mutate.rs:50-62`): when the call's `Mutation` is `ItemSync`, `RepoSync`, `ItemRepublish`, `CommentAdd`, `ConflictResolve` or `OperationResume`, call `RepositoryService::execute` inside `during` with its token. Otherwise pass a fresh token, as now.
   - In `mutate::run`: reset the run's latch on entry, and stop the retry loop once it is set (R-36). Because every test that raises a signal or sets the latch runs in a child process (Step 1), `mutate_tests` needs no change.
   - `Boundary`'s signature, `Plan` and `FakeBoundary` are unchanged (fact 61). The retry loop still never follows `cancelled` (R-23).
 - [ ] **Step 4: Dispatch four verbs** in `collaboration.rs`: `item sync`, `repo sync`, `operation resume` and `operation abandon`.
@@ -571,6 +597,8 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 - [ ] **Step 6: Human output** in `human_collaboration.rs`:
   - the conflict and next lines, with the root quoted and escaped;
   - the `remote_branch_deleted` next line;
+  - `original_request_required`'s next line naming the request. For a remote resolution with only written paths, it adds the supersede note (Resume);
+  - the gate's `LocalContextSyncMutationDto` from `operation resume` and `operation abandon`: its `state`, `reason`, `next_action`, and a `next:` line naming `required_request_id` (R-37). Test it in `human_collaboration_tests.rs` by rendering the gate's goldens `tests/fixtures/mutation_v1/local_sync_*.json`;
   - progress.
 - [ ] **Step 7: Goldens and tests** in `tests/cli/collaboration.rs`, without SSH:
   - `repo_sync_publication_remote_required`, `item_sync_item_not_found`, `operation_resume_operation_not_found` and `operation_abandon_preview`;
@@ -638,6 +666,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - In `tests/cli/conflicts.rs`, without SSH:
     - `conflict_show_operation_not_found`, exit 2;
     - `conflict show` on a local operation that is no synchronization, `invalid_input`;
+    - `conflict show` and `conflict resolve` on a local-context sync's operation ID, `invalid_input` (decision 19). The sync is made with the gate's library mutation in the test's setup, because no verb starts one;
     - `conflict resolve` with a malformed token, `invalid_input`, exit 2;
     - `conflict show --prepare`, a usage error;
     - the `conflict_resolve.json` example, validated by schema.
@@ -645,7 +674,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   A live conflict needs a remote, so the show-and-resolve journey, its text golden and a stale observation are Task 12b's.
 - [ ] **Step 2: Implement** `object_list`, both verbs and their human output. `conflict show` prints sides only in JSON (design, Human Output).
 - [ ] **Step 3:** Flip both verbs and regenerate the help goldens (E-1).
-- [ ] **Step 4: Review Focus 2's escaping** in `human_collaboration_tests.rs`: a `ConflictDto` whose display path holds an escape sequence and a newline renders as text with no raw control byte, and with the library's escaping not doubled.
+- [ ] **Step 4: Review Focus 2's escaping** in `human_collaboration_tests.rs`: a `ConflictDto` whose display path holds an escape sequence and a newline renders as text with no raw control byte, and with the library's escaping not doubled. A `ConflictDto` with an `incompatible_closures` path prints the design's note.
 - [ ] **Step 5: Verify.** As Task 8, Step 4.
 - [ ] **Step 6: Commit** `feat: add conflict show and conflict resolve`. Add a ticket comment and push.
 
@@ -748,7 +777,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
 - [ ] **Step 1:** Make every amendment in the design's Document Amendments, except AGENTS.md and the skills. Use the dated form "Amended <date> by C4", and cite the decision or ruling.
 - [ ] **Step 2:** Reconcile the API audit's C4 rows with what was delivered.
-- [ ] **Step 3:** Grep the amended RFCs, the Wave and the audit for stale terms: `publication_pending`, `conflict.show`, `{path, observation, source}`, "never merges", "refuse divergence", "`operation show` re-observes". The only expected hits are in amendment text that names what it replaces. The planning documents name these terms on purpose, in their decisions, rulings and amendment lists, and are not grepped.
+- [ ] **Step 3:** Grep the amended RFCs, the Wave and the audit for stale terms: `publication_pending`, `conflict.show`, `{path, observation, source}`, "never merges", "refuse divergence", "`operation show` re-observes", "future CLI adapter contract", "C4/D5 must adapt". The only expected hits are in amendment text that names what it replaces. Check that each of the gate's sentences fact 85 lists is scoped to the local operation (decision 20), and that the gate's capability row keeps its local half. The planning documents name these terms on purpose, in their decisions, rulings and amendment lists, and are not grepped.
 - [ ] **Step 4: Commit** `docs: amend RFCs, Wave, F2 design and audit for C4`. Add a ticket comment and push.
 
 ## Task 15: Full Verification, Review, Dogfooding, Switch And Handoff
@@ -802,26 +831,27 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 
 | Task | Rulings |
 | --- | --- |
-| 1 | R-8, R-16, R-17 |
+| 1 | R-8, R-16, R-17, R-38 |
 | 2a | R-3, R-4, R-7, R-34 |
-| 2b | R-5, R-6, R-32, R-34 |
-| 3 | R-9, R-10, R-11, R-12, R-13 |
-| 4a | R-14, R-15, R-32, R-33, R-35 |
-| 4b | R-20 |
-| 5 | R-18, R-19, R-32 |
-| 7 | R-1, R-2, R-21, R-22, R-23, R-30, R-36 |
-| 8–10 | R-1, R-2 |
+| 2b | R-5, R-6, R-32, R-34, R-38 |
+| 3 | R-9, R-10, R-11, R-12, R-13, R-37, R-39, R-40 |
+| 4a | R-14, R-15, R-32, R-33, R-35, R-38, R-40, R-41 |
+| 4b | R-20, R-37 |
+| 5 | R-18, R-19, R-32, R-38 |
+| 7 | R-1, R-2, R-21, R-22, R-23, R-30, R-36, R-37 |
+| 8–10 | R-1, R-2; 9 also R-37 and R-40 |
 | 12a, 12b | R-24, R-33 |
 | 13 | R-25, R-27 |
 | Every task | R-28, R-29, R-31 |
 | 15 | R-26 |
 
-**Named edits:** E-1 in 7–10; E-2 in 10; E-3 and E-4 in 1; E-5 in 1 and 5; E-6 in 2b, 4a and 5; E-7 and E-8 in 1, 2b, 3, 4a and 5; E-9 in 2b, 4a and 5; E-10 in 1, 2b and 4a; E-11 in 4b.
+**Named edits:** E-1 in 7–10; E-2 in 10; E-3 and E-4 in 1; E-5 in 1 and 5; E-6 in 2b, 4a and 5; E-7 and E-8 in 1, 2b, 3, 4a and 5; E-9 in 2b, 4a and 5; E-10 in 1, 2b and 4a; E-11 in 4b; E-12 in 4a.
 
 **Stops built in:**
-- Task 0: the gate not closed; a changed fact; an unlisted test hit; abandon closing a pending comment.
+- Task 0: the gate not closed; a changed fact; an unlisted test hit; abandon closing a pending comment; fact 81's test still red on main.
 - Tasks 1, 2a, 2b, 3, 4a, 4b, 5: each outcome-table row.
-- Task 4a: decision 13's mechanism.
+- Task 3: no observation at `ResolutionPrepared` (fact 86).
+- Task 4a: decision 13's mechanism; `repository_enablement` red only for the gate's tables.
 - Task 7: the spike misreporting effects.
 - Task 15: dogfooding.
 

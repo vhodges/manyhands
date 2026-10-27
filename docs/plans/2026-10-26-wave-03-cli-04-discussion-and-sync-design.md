@@ -12,9 +12,11 @@ id: "01M5X4YWQMNJJT3VXP0BY9JGG9"
 
 ## Execution Status
 
-**Draft, 2026-10-26, revised after the third review round.** Written for
-product-owner review. Nothing is built. Implementation waits for the gate
-ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` to merge (Cycle decision 2).
+**Draft, 2026-10-26.** Revised after the third review round, and re-grounded
+on 2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged
+(`a372edb`). Written for product-owner review. Nothing is built.
+Implementation needs the gate merged (Cycle decision 2), which it now is, and
+the owner's authorization.
 
 ## Intent And Approval Boundary
 
@@ -25,12 +27,12 @@ this design, and this design governs the
 
 Approval of this design covers:
 
-- the library part of Cycle decisions 1, 3, 4, 7, 8, 9, 11, 12, 13, 17
-  and 18;
+- the library part of Cycle decisions 1, 3, 4, 7, 8, 9, 11, 12, 13, 17,
+  18, 19 and 20;
 - the per-verb grammar and input fields;
 - the five required-outcome tables and the resume table;
-- rulings R-1 to R-36;
-- named edits E-1 to E-11;
+- rulings R-1 to R-41;
+- named edits E-1 to E-12;
 - the document amendments listed below.
 
 It does not authorize implementation, pushing beyond the ticket branch,
@@ -56,10 +58,21 @@ No result code or recovery-action kind is added (decision 8).
 
 ## Baseline Facts
 
-Read at branch head `219ec57` (main `0464c42` merged), and on the gate branch
-at `0b75184`. Facts marked **(gate)** may change when the gate merges. Task 0
-re-checks every fact before any code, and a changed fact that alters a task
-stops there for a controller ruling.
+First read at branch head `219ec57` (main `0464c42` merged), and on the gate
+branch at `0b75184`.
+
+**Re-grounded on 2026-10-27 at `e920043`.** That commit merges `origin/main`
+at `a372edb`, where the gate is merged and closed. Its `src/` and `tests/` are
+identical to `a372edb`. Three read-only reviewers re-read every fact, and the
+citations elsewhere in all three documents:
+- facts 1, 3, 8–11, 19, 25, 30, 33, 49, 53, 64, 67, 72, 75 and 76 changed, and
+  are rewritten below;
+- the rest moved or hold, and their citations are updated;
+- facts 80–86 are new.
+
+The **(gate)** markers are resolved. Task 0 re-checks every fact again if main
+moves before execution. A changed fact that alters a task stops there for a
+controller ruling.
 
 Facts 1–53 were read for the first draft. The first review round confirmed
 facts 1–27, 29–35, 37–41 and 44–52 against the source, and corrected facts
@@ -72,11 +85,13 @@ the check.
 
 **The mutation boundary.**
 
-1. `Command` (`src/repository/mutation/command.rs:37-68`) has `ItemSync`
+1. `Command` (`src/repository/mutation/command.rs:37-70`) has `ItemSync`
    ("item sync"), `RepoSync` ("repo sync"), `OperationResume` ("operation
-   resume") and `OperationAbandon` ("operation abandon"). It has no comment
-   or conflict command. `Mutation` is at `src/repository/mutation/mod.rs:398`
-   **(gate)**.
+   resume") and `OperationAbandon` ("operation abandon"). The gate added
+   `LocalContextSync` ("context sync-local") and `LocalContextResolve`
+   ("context resolve-local"), so `Command::ALL` has 32 entries. There is no
+   comment command and no remote conflict command. `Mutation` is at
+   `src/repository/mutation/mod.rs:401`.
 2. The inputs:
    - `ItemSyncInput { root, kind: AuthoringKind, id: ItemId }`
      (`bind/sync.rs:61`);
@@ -85,10 +100,13 @@ the check.
    - `OperationAbandonInput { root, operation_id }` (`bind/abandon.rs:33`).
 
    `ItemSyncInput` and `RepoSyncInput` do not derive `Clone`.
-3. `needs_confirmation` (`command.rs:436`) is a `const fn` of the command
+3. `needs_confirmation` (`command.rs:447`) is a `const fn` of the command
    alone. It is true for `OperationAbandon`, and false for `ItemSync`,
-   `RepoSync` and `OperationResume`. `stops_at_safe_points` (`:268`) is true
-   only for `ItemSync` and `RepoSync`.
+   `RepoSync`, `OperationResume` and both local commands.
+   `stops_at_safe_points` (`:275`) is true for `ItemSync`, `RepoSync`,
+   `LocalContextSync` and `LocalContextResolve` (`:277`).
+   `LocalContextResolve` has no operation (`:89-90`) but stops at safe points.
+   Both local commands report `Observing`.
 4. The synchronization bindings pass
    `SETTINGS = SynchronizationSettings { refuse_divergence: true }`
    (`bind/sync.rs:101-103`) at `:643` and `:679`. The module doc (`:5-8`)
@@ -113,28 +131,43 @@ the check.
    - `discovery_pending` is offered `[operation.resume]`;
    - a synchronization left accepted has `request.retry` put first
      (`:993-996`).
-8. `SynchronizationMutationDto` (`dto.rs:657`) holds only host data: "A
+8. `SynchronizationMutationDto` (`dto.rs:658`) holds only host data: "A
    synchronization reports no other data". `MutationDataDto` is at
-   `dto.rs:540` **(gate)**.
-9. `operation resume` (`bind/resume.rs:1-20`) takes up two kinds of work: a
-   local operation's owed index hand-off, and a synchronization, "and
-   nothing is merged".
+   `dto.rs:540`. Its first variant is now the gate's `LocalContextSync`.
+   `MutationDataDto::authority()` (`dto.rs:977-992`) matches every variant.
+9. `operation resume` (`bind/resume.rs:1-34`) takes up three kinds of work:
+   - a local operation's owed index hand-off;
+   - a remote synchronization, "and nothing is merged";
+   - since the gate, a local-context sync. It is routed by operation ID into
+     `bind/local_sync.rs:330-513`, from `prepare` (`resume.rs:826-830`),
+     `run` (`:864-866`), `reenter` (`:887-896`) and `rerun` (`:952-954`). A
+     local sync whose resolution request is unfinished answers
+     `original_request_required`. It names `required_request_id`, with
+     `LocalContextSyncMutationDto` data (`bind/local_sync.rs:355-383`).
+
+   For the remote cases:
    - A comment's synchronization is left to inspect, so resume answers it
      `recovery_required` (`:217-232`).
    - An ended row answers `already_applied`, and a cancelled one is left to
      inspect, `recovery_required` (`:246-274`, `:464-467`).
-
-   **(gate: the gate adds local-sync routing here.)**
-10. `operation abandon` (`bind/abandon.rs`):
+10. `operation abandon` (`bind/abandon.rs`, unchanged by the gate):
     - it is confirmed, with `OperationAbandonPreviewDto`;
     - an ID the remote or key journal holds is `invalid_input`;
-    - it calls `abandon_operation` (`bridges/abandon.rs:428`);
-    - a `SubmitComment` row counts as `Writes::Item` (`:208`);
-    - **(gate)** the gate refuses generic abandonment of a local-sync
-      operation.
+    - it calls `abandon_operation` (`bridges/abandon.rs:432`);
+    - a `SubmitComment` row counts as `Writes::Item` (`:208`), and a
+      `ContextSyncLocal` row is listed beside it (`:211`);
+    - a bound local-sync operation goes to `local_sync::abandon_bound`
+      (`bridges/abandon.rs:456-476`, `local_sync/control.rs:215-265`).
+      - It succeeds only for an artifact-free `Prepared` or a proven-released
+        `IndexPending`.
+      - It finishes every associated accepted request as `cancelled`
+        (`mutation/local_control.rs:274-325`).
+      - Only the generic fall-through is refused (`bridges/abandon.rs:542-559`).
 11. `cancel_request` (`progress.rs:366`) asks only a command whose
     `stops_at_safe_points` is true (`:383`). `request cancel` therefore does
-    not reach a resume.
+    not reach a resume. It does reach `context resolve-local`, which has no
+    operation: its acknowledgement is read from the gate's control counters
+    (`progress.rs:427-433`, `records.rs:906-915`).
 12. `prepare` (`confirm.rs:286`) answers `not_confirmable` when
     `mutation.confirmed()` is `None`. `CONFIRMATION_LIFETIME_SECONDS = 600`
     (`:47`). A confirmable command provides five things:
@@ -153,7 +186,7 @@ the check.
     stores `true` with `SeqCst`.
 16. `execute(&self, call: MutationCall, credentials, progress, cancel) ->
     Envelope<MutationDataDto>` is at `execute.rs:45`. `show_request` is at
-    `mod.rs:367`, and `cancel_request` at `progress.rs:366`.
+    `mod.rs:370`, and `cancel_request` at `progress.rs:366`.
 
 **Comments.**
 
@@ -162,25 +195,30 @@ the check.
     CommentSubmissionError>` (`src/repository/comment_publication.rs:178`).
     - `PublishCommentRequest { comment, approval, confirmed_identity }`.
     - `SubmitCommentRequest { target: AuthoringTarget, comment_id,
-      parent_id, body, expected_destination }` (`src/repository.rs:653`).
+      parent_id, body, expected_destination }` (`src/repository.rs:656`).
     - It takes no observer and no cancellation token.
 18. Publication calls `synchronize_remote` on the context target, under the
     binding's child `synchronization_id` (`comment_publication.rs:499`). That
     function uses `SynchronizationSettings::default()`, which merges, and no
-    observer (`remote/sync.rs:6219`).
-19. `checkpoint_comment_locally` (`src/repository.rs:2737`) refuses:
-    - a context with a pending synchronization conflict (`:3619`);
-    - a lifecycle-closed ticket (`refuse_closed_ticket`, `:249`);
-    - an intent other than `Edit` (`:2795`);
+    observer (`remote/sync.rs:5267-5278`).
+19. `checkpoint_comment_locally` (`src/repository.rs:2759`) refuses, in this
+    order:
+    - a context with a pending synchronization conflict (call `:2770`,
+      function `:3642`);
+    - an operation ID that a local-context sync owns, at `begin_lifecycle`
+      (`:2776`, `recovery.rs:691-693`). The gate added this check;
+    - a lifecycle-closed ticket (`refuse_closed_ticket`, function `:252`,
+      call `:2810`);
+    - an intent other than `Edit` (`:2817`);
     - a parent that is not a conforming comment of the same item, with
-      `MissingAuthoringTarget` (`:2861-2873`), which becomes `item_not_found`
+      `MissingAuthoringTarget` (`:2883-2895`), which becomes `item_not_found`
       (`outcome.rs:68`);
-    - a new row whose `expected_destination` is not `Missing` (`:2892`).
+    - a new row whose `expected_destination` is not `Missing` (`:2914`).
 
-    The binding row is inserted at `:2803`, before the parent check.
+    The binding row is inserted at `:2825-2826`, before the parent check.
 20. `created_by` is set from the Git identity at the checkpoint:
     `comment.created_by = Some(format!("{} <{}>", identity.name,
-    identity.email))` (`src/repository.rs:3042`).
+    identity.email))` (`src/repository.rs:3064`).
     - With no identity, the answer is `IdentityRequired { context }`. That
       happens after the binding row is inserted and before the file is
       written.
@@ -207,20 +245,24 @@ the check.
 **Synchronization and conflicts.**
 
 24. `synchronize_remote_observed(request, session, settings, observer)` is at
-    `remote/sync.rs:6236`. `SynchronizeRemoteRequest { root, operation_id,
+    `remote/sync.rs:5284`. `SynchronizeRemoteRequest { root, operation_id,
     target, approval, confirmed_identity, restart }` (`remote/state.rs:1730`)
     has no republish field.
-25. Merging is `integrate_divergence` (`sync.rs:3741`) **(gate: the gate
-    moves this code into `src/repository/integration/`)**:
-    - with `refuse_divergence: false`, a context target merges the remote
-      context first (ordinal 0) and then primary (ordinal 1). A primary
-      target merges primary only;
-    - the subjects are "Merge remote context {id}", "Merge primary into
-      {kind} {id}" and "Merge remote primary";
-    - a conflict leaves index stages and `MERGE_HEAD` in the target
-      worktree, releases the reservation (phase `interrupted`,
-      `reservation.rs:1876-1879`) and returns `ConflictPending`
-      (`sync.rs:3990-4033`).
+25. Merging is `integrate_divergence` (`sync.rs:3252`). It stayed in
+    `remote/sync.rs`. The gate moved only its helpers (`classify_integration`,
+    `install_conflict`, `fast_forward`, `import` and the validation functions)
+    into `src/repository/integration/{prepare,artifacts,validate}.rs`, and
+    `sync.rs` keeps thin wrappers.
+    - With `refuse_divergence: false` (`sync.rs:353`), a context target merges
+      the remote context first (ordinal 0) and then primary (ordinal 1). A
+      primary target merges primary only.
+    - The subjects are "Merge remote context {id}", "Merge primary into
+      {kind} {id}" and "Merge remote primary" (`:3441-3452`).
+    - A conflict leaves index stages and `MERGE_HEAD` in the target worktree
+      (`install_conflict`, `integration/artifacts.rs:232`). It releases the
+      reservation (phase `interrupted`, `reservation.rs:1875-1879`), and
+      returns `ConflictPending` (`sync.rs:3506-3540`). The import first
+      re-checks the reservation's owner (`:3457-3462`), with the same behavior.
 26. Restarting an operation:
     - the same operation without `restart` is `RecoveryRequired`;
     - with `restart` before a resolution, it is `ConflictPending`, offline;
@@ -230,12 +272,12 @@ the check.
     - every new synchronization reservation is `Busy`
       (`reservation.rs:1152-1161`);
     - authoring in that context is `RecoveryRequired`
-      (`src/repository.rs:3642-3655`).
+      (`src/repository.rs:3665-3678`).
 28. Merge identity:
-    - `select_committing_identity` (`sync.rs:3255-3280`) returns
+    - `select_committing_identity` (`sync.rs:2766-2791`) returns
       `IdentityRequired { target, expected_configuration }`;
     - the integration step's intent is persisted before that check
-      (`:3835`);
+      (`:3346-3351`);
     - `set_local_identity` is not refused by a pending operation: "An
       operation that stopped for want of an identity is taken up again once
       there is one" (`bridges/identity.rs:44-47`). It takes only the
@@ -244,69 +286,89 @@ the check.
       `repo identity-set` merges.
 29. `inspect_synchronization_recovery(root, operation_id) ->
     Result<SynchronizationConflictInspection, SynchronizationError>`
-    (`sync.rs:4935`):
+    (`sync.rs:4006`):
     - it runs SELECTs in IMMEDIATE transactions, and takes the repository
       lease;
     - it needs one step in `ConflictPending`, `ResolutionPrepared` or
-      `CommitPrepared`;
-    - a HEAD other than the step's local parent is `ExternalChange`.
-30. `SynchronizationConflictInspection` (`sync.rs:261`) holds `operation_id`,
+      `CommitPrepared` (`:4035-4040`);
+    - a HEAD other than the step's local parent, or an index fingerprint other
+      than the stored conflict digest, is `ExternalChange` (`:4056-4063`). So
+      at `ResolutionPrepared` the index stages are still intact, and the
+      inspection still issues an observation and tokens.
+30. `SynchronizationConflictInspection` (`sync.rs:262`) holds `operation_id`,
     `target`, `stage`, `local_parent`, `incoming_parent`, `observation` and
     `paths`. Each path is `SynchronizationConflictPath { token, eligibility }`
-    (`:254`). Eligibility is one value for the whole set (`merge.rs:171`).
-    Each entry is classified by `ConflictEntryKind` (`Document`, `Ticket`,
-    `Comment`, `Noncanonical`) and `ConflictStructure` (`RegularUtf8SamePath`,
-    `Binary`, `Executable`, `Symlink`, `Rename`, `Delete`,
-    `IdentityChanged`) (`merge.rs:144-160`), which are `pub(super)`
-    **(gate)**.
-31. `ConflictObservation` and `ConflictPathToken` (`merge.rs:75`, `:117`)
+    (`:255`), so it carries no kind or structure.
+    - Eligibility is one value for the whole set (`conflict_eligibility`,
+      `integration/validate.rs:42-57`).
+    - Each entry is classified by `classify_conflict_entry`
+      (`validate.rs:59`), whose service wrapper is private to `sync`
+      (`sync.rs:3938`).
+    - The kinds are `ConflictEntryKind` (`Document`, `Ticket`, `Comment`,
+      `Noncanonical`; `validate.rs:16-21`).
+    - The structures are `ConflictStructure` (`RegularUtf8SamePath`, `Binary`,
+      `Executable`, `Symlink`, `Rename`, `Delete`, `IdentityChanged`, and the
+      gate's `IncompatibleClosures`; `:24-33`).
+    - The gate classifies a ticket path whose sides carry different
+      `closed_at`/`closed_by` as `IncompatibleClosures`, with kind still
+      `Ticket` (`:166-184`). That makes the whole set external-only.
+    - Both enums are `pub(in crate::repository)`. `remote::merge` re-exports
+      them only under `cfg(test)` (`merge.rs:107-108`).
+31. `ConflictObservation` and `ConflictPathToken` (`merge.rs:43`, `:85`)
     have only `pub(super)` fields and no `Serialize`. Two inspections of
     unchanged state compare equal. The fingerprint is index-based
-    (`sync.rs:3007`), so removing markers in the worktree alone leaves it
-    unchanged **(gate)**.
+    (`integration_conflict_digest`, `sync.rs:2622`; `conflict_digest`
+    `:2574`), so removing markers in the worktree alone leaves it unchanged.
 32. `read_synchronization_conflict(&ConflictPathToken) ->
-    Result<EphemeralSynchronizationConflictSides, _>` (`sync.rs:5051`):
+    Result<EphemeralSynchronizationConflictSides, _>` (`sync.rs:4122`):
     - it returns base, local and incoming from index stages 1, 2 and 3;
-    - `current` is always `None` (`:5111`);
-    - non-UTF-8 content is `ExternalResolutionRequired`.
+    - `current` is always `None` (`:4189`);
+    - non-UTF-8 content is `ExternalResolutionRequired` (`:4191-4199`).
 33. `resolve_synchronization(ResolveSynchronizationRequest) ->
     Result<ResolveSynchronizationOutcome, SynchronizationError>`
-    (`sync.rs:5593`) resolves "without transport or publication"
-    **(gate)**.
+    (`sync.rs:4664`) resolves "without transport or publication".
     - `ResolveSynchronizationRequest::new(root, synchronization_id,
-      attempt_id, observation, resolutions, identity)` (`merge.rs:280`).
+      attempt_id, observation, resolutions, identity)` (`merge.rs:202`).
     - Its outcomes are `LocalCheckpointComplete { commit_oid }`,
       `IdentityRequired`, `StaleObservation`, `ValidationFailed` and
-      `RecoveryRequired` (`merge.rs:314-321`).
+      `RecoveryRequired` (`merge.rs:236-243`).
+    - An external-only set, including incompatible closures, is now
+      `Err(ExternalResolutionRequired)` before any write
+      (`sync.rs:4686-4695`). It used to be `Ok(ValidationFailed)`.
+    - Re-acquiring the conflict calls `local_sync::record::require_no_pending`
+      (`reservation.rs:1917`). So while any local-context sync in the
+      repository is unfinished, both a fresh resolution (`sync.rs:4734`) and
+      an identical retry of a retained candidate (`:4315`) fail with
+      `Repository(RecoveryRequired)`, before any attempt row or write.
 34. Resuming a resolution:
     - at `CommitPrepared` or `Applied`, `reconcile_resolution_candidate`
-      (`sync.rs:5133`) accepts only the identical attempt and input digest;
+      (`sync.rs:4204`) accepts only the identical attempt and input digest;
     - at `ResolutionPrepared`, the attempt is reused when the inputs match
-      (`state.rs:4542-4577`);
+      (`state.rs:4543-4578`);
     - a new attempt after success is `RecoveryRequired`;
     - `remote_resolution_attempts` and `remote_resolution_paths`
       (`state.rs:818-851`) are durable.
 
     Every test of resumption reuses the in-memory request
-    (`comment_publication.rs:2913`; `sync_tests.rs:6651`).
+    (`tests/comment_publication.rs:2913`; `sync_tests.rs:6651`).
 35. An outside repair is accepted when:
     - HEAD has exactly the parents `[local, incoming]`;
     - the target is clean;
-    - `validates_external_integration` (`sync.rs:4742`) passes.
+    - `validates_external_integration` passes (`integration/validate.rs:505`,
+      wrapper `sync.rs:3983`). The parents and validation are checked at
+      `sync.rs:2953-2961`.
 
-    A restart then continues it (`reconcile_pending_candidate`, `:3348`).
+    A restart then continues it (`reconcile_pending_candidate`, `:2859`).
     Removing markers alone, staging without a commit, or wrong parents are
-    refused (`tests/remote_merge_recovery.rs`, `refused_false_repairs`)
-    **(gate: `validates_external_integration` moves to
-    `integration/validate.rs`)**.
+    refused (`refused_false_repairs`, `tests/remote_merge_recovery.rs:2457`).
 36. Remote deletion:
     - an absent, previously published context is `RemoteContextDeleted`
       (`refs.rs:262-268`), which becomes `remote_branch_deleted`;
-    - the same state is refused at `sync.rs:6767-6786` and `:7161-7165`,
+    - the same state is refused at `sync.rs:5815-5834` and `:6209-6213`,
       which surface `RemoteContextDeleted`, `HistoryUnknown` or
       `RecoveryRequired` through `PushAbsenceBoundary::error`
-      (`sync.rs:443-449`);
-    - it is also refused at `reservation.rs:2689-2696` and `:2751-2758`,
+      (`sync.rs:452-459`);
+    - it is also refused at `reservation.rs:2690-2697` and `:2752-2759`,
       which surface `RecoveryRequired`;
     - a fetch marks an absent published context `remotely_deleted` in
       `remote_context_states` (`state.rs:89-99`, `:2431`), keeping
@@ -377,23 +439,38 @@ the check.
 
 **Inventories and tests.**
 
-49. A new `Command` joins these closed inventories **(gate)**:
-    - `command.rs`'s predicates (`:85`, `:151`, `:188`, `:226`, `:268`,
-      `:316`, `:351`, `:394`, `:436`) and their tests (`:491-651`);
-    - `Mutation`, `kind()`, `confirmed()` and `into_binding()` in `mod.rs`;
-    - `recorded_effects` (`bind/mod.rs:899`) and `from_stored`
-      (`dto.rs:994`), including `OperationResume`'s arm (`:1025`);
-    - `CASES` in `tests/support/mutation_golden.rs:21`;
-    - in `tests/mutation_contract.rs`: `DATA_ROOTS` (`:1510`),
-      `CODES_NO_MUTATION_GOLDEN_HAS` (`:1713`) and
-      `CODES_NO_FIXTURE_CAN_PRODUCE` (`:1674`);
-    - in `tests/read_contract.rs`: `contract_enumerations` (`:703`) and
-      `published_enumerations_list_exactly_the_registered_values` (`:1018`);
-    - `HOMES` (`tests/support/conformance.rs:59`) and each home's table, run
-      by `mutation_bridges` among others;
-    - `preview_schema` (`tests/support/confirmation.rs:49-62`);
-    - the data accessors (`tests/support/mutation.rs:596-775`) and
+49. A new `Command` joins these closed inventories. The gate's two commands
+    joined every one:
+    - `command.rs`'s predicates (`:87`, `:155`, `:193`, `:232`, `:275`,
+      `:324`, `:360`, `:404`, `:447`) and their tests (`:491-698`);
+    - `Mutation` (`mod.rs:401`), `kind()` (`:442`), `confirmed()` (`:482`)
+      and `into_binding()` (`:522`);
+    - `recorded_effects` (`bind/mod.rs:903`, match `:930`), which now
+      short-circuits on `local_control::effects` (`:904-906`);
+    - `from_stored` (`dto.rs:996`). It has two `OperationResume` arms: one
+      guarded on the stored `type` (`:1002-1007`, `local_context_sync`), and
+      the general arm (`:1037`);
+    - `MutationDataDto::authority()` (`dto.rs:977-992`), which the compiler
+      enforces;
+    - `CASES` in `tests/support/mutation_golden.rs:21`, and the read golden
+      `CASES` in `tests/support/golden.rs:26`;
+    - in `tests/mutation_contract.rs`: `DATA_ROOTS` (`:1510`, now 50 entries),
+      `CODES_NO_MUTATION_GOLDEN_HAS` (`:1717`) and
+      `CODES_NO_FIXTURE_CAN_PRODUCE` (`:1678`);
+    - in `tests/read_contract.rs`: `contract_enumerations` (`:704`), now a
+      `let mut` vector extended at `:1009-1036`, and
+      `published_enumerations_list_exactly_the_registered_values` (`:1052`);
+    - `HOMES` (`tests/support/conformance.rs:59`, now 32 entries) and each
+      home's table, run by `mutation_bridges` among others. The per-target
+      chain is `tests/mutation_replay/conformance.rs:12-18`;
+    - `preview_schema` (`tests/support/confirmation.rs:48-61`);
+    - the data accessors (`tests/support/mutation.rs:596-794`) and
       `tests/support/repair.rs:333`.
+
+    The commit-reachability exemption (`replay.rs:41-54`) and the
+    operation-action lists (`read_contract.rs:687`, `bridges/abandon.rs:211`)
+    are command-specific, but they are not closed inventories. C4 adds
+    nothing to them.
 
     `UNBOUND_COMMANDS` (`mutation_contract.rs:1455`) lists commands that
     `execute` does not bind, so a bound command never joins it.
@@ -409,18 +486,32 @@ the check.
 
 **The gate.**
 
-53. At `0b75184` the gate:
-    - adds `observe_local_context_sync` and `RepositoryOperation::ContextSyncLocal`
-      (gate `src/repository.rs:1052`);
-    - adds a request-control table (`mutation/local_control.rs`), which
-      `insert_request` and `enter_request` call for every request;
-    - moves merge and validation code from `remote/sync.rs` and
-      `remote/merge.rs` into `src/repository/integration/`, with
-      re-exports;
-    - plans `LocalContextSync` and `LocalContextResolve` mutations and their
-      DTOs, including `display_path`, in its design only.
-
-    Task 0 re-reads all of it after the merge.
+53. As merged at `a372edb`, the gate:
+    - adds `observe_local_context_sync` (`local_sync/observe.rs:360`) and
+      `RepositoryOperation::ContextSyncLocal` (`src/repository.rs:1057`);
+    - adds a request-control table, `local_context_sync_request_control`
+      (`mutation/local_control.rs:17`). `accept` (`records.rs:614`), `enter`
+      (`:852`) and `may_settle` (`:625`, `:666`) call it for every request.
+      It asks nothing of a command that is not local: `accept` returns `Ok`
+      (`local_control.rs:161`), and `enter` and `may_settle` pass through when
+      there is no row (`:180-187`, `:244-251`);
+    - moves merge helpers into `src/repository/integration/` (fact 25);
+    - delivers the `LocalContextSync` and `LocalContextResolve` mutations
+      (`bind/local_sync.rs:10-25`) and their reads (`read/local_sync.rs:39-125`).
+      Its local resolution takes a top-level observation and a complete
+      `{token, source}` set (`bind/local_sync.rs:16-25`). It checks syntax
+      first and replays before it checks live tokens (`:240-256`, `:287-295`;
+      `local_sync/resolve.rs:307-321`);
+    - reads a local conflict's sides separately, with nullable `base`,
+      `local` and `incoming`, and `historical: true` while a resolution
+      attempt is accepted (`local_sync/conflict.rs:218-283`);
+    - gives an attempt to one request only. Another request's active attempt
+      is `external_change` (`local_sync/resolve.rs:335-339`), and resume
+      answers `original_request_required` naming it (fact 9). There is no
+      supersede;
+    - checks a resolution's path count first, as `invalid_input`
+      (`resolve.rs:435-437`), and then membership, as `external_change`
+      (`:440-443`).
 
 **Added after the first review round.**
 
@@ -436,7 +527,7 @@ the check.
     whose `synchronize` returns `None` (`progress.rs:296-313`). A preview
     cannot contact the remote.
 56. A cancellation is final. A restart that acknowledges a cancelled or
-    interrupted row answers `Interrupted` (`sync.rs:6372-6385`). After a
+    interrupted row answers `Interrupted` (`sync.rs:5420-5433`). After a
     cancelled comment publication, `retry_comment_publication(restart: true)`
     answers `Pending(Synchronization(Interrupted))`. Only a new ordinary
     synchronization publishes the comment
@@ -454,7 +545,7 @@ the check.
     SSH case.
 61. `Boundary::execute` (`mutate.rs:40-48`) takes no token, and `Plan`
     literals appear in `mutate_tests.rs:199`, `:368` and `:412`, with a
-    `FakeBoundary` at `:111`.
+    `FakeBoundary` at `:103` (impl `:111`).
 62. `tests/cli_remote.rs` uses the `manyhands` crate (`:2`), not the library
     as a module, so it reaches public items only. `mutation_remote`,
     `comment_publication` and `remote_merge_recovery` mount `src/lib.rs` as
@@ -463,10 +554,14 @@ the check.
     `remote_world.rs` (`tests/mutation_remote.rs:6-28`). The other two
     mount none of the golden support.
 63. A fast-forward of a behind local branch with nothing to push answers
-    `AlreadyCurrent` (`refs.rs:281-285`; `sync.rs:7206`, `:7695`), which is
+    `AlreadyCurrent` (`refs.rs:281-285`; `sync.rs:6254`, `:6743`), which is
     `already_applied`.
 64. No library `FailurePoint` precedes the first conflicted path write in a
-    resolution (`src/repository.rs:950-956`).
+    remote resolution (`src/repository.rs:971-977`). The first remote point
+    follows a path write (`sync.rs:4981`). The gate's 18 new `LocalSync*`
+    points serve the local executor only. All remote resolution points and
+    the attempt and reconcile code are in `sync.rs:4625-5253` and
+    `state.rs`. `integration/` has none.
 65. After a comment's `IdentityRequired` no checkpoint exists, so
     `retry_comment_publication` fails to prove a receipt
     (`comment_publication.rs:338-343`, `:548-555`). The submit path continues
@@ -477,16 +572,21 @@ the check.
 
 **Added after the second review round.**
 
-67. Settlement (`settle.rs:40-72`) keeps a record for `Owed`, `Unconfirmed`
+67. Settlement (`settle.rs:40-75`) keeps a record for `Owed`, `Unconfirmed`
     and an unread journal. It finishes one whose journal row was cancelled or
     retained, and deletes a stopped record whose row is completed and not in
     flight. A command with no operation reads its row as `Absent`
-    (`bind/mod.rs:517-525`), so any stop deletes its record.
+    (`bind/mod.rs:518-529`), so any stop deletes its record.
+    - `read_journal_row` asks `local_control::journal` first (`:522-524`).
+      That returns `None` for every command that is not local, so a remote
+      `conflict resolve` still reads `Absent`.
+    - `settled` replays early for local-control requests only
+      (`settle.rs:86-94`).
 68. `bind_comment_publication` refuses a new binding whose comment ID is
     already bound in the repository (`recovery.rs:292-297`, unique
     `(root_digest, comment_ulid)` at `:61`). A comment request whose record
     was deleted, and that comes back under a new operation ID, is refused.
-    The local row is completed on `IdentityRequired` (`src/repository.rs:3164-3167`).
+    The local row is completed on `IdentityRequired` (`src/repository.rs:3186-3189`).
 69. For a context target, the clean plan makes the final commit descend
     cleanly from both the remote context and remote primary
     (`refs.rs:247-286`, `clean_descendant` `:289-302`). So item sync's path
@@ -494,16 +594,22 @@ the check.
     ancestor.
 70. `remote_resolution_paths` stores a `path_digest`, not the path
     (`state.rs:838-851`). `reconcile_resolution_candidate` hashes each
-    token's path into its input digest (`sync.rs:5185-5202`).
+    token's path into its input digest (`sync.rs:4256-4273`).
 71. `prepare_resolution_attempt_in_window` accepts a new attempt while a step
     is `ResolutionPrepared`, `CommitPrepared` or `Applied`
-    (`state.rs:4520-4529`, insert at `:4587`).
-72. `validate_child_id` (`state.rs:4446-4461`) refuses a child ULID equal to
-    any operation, confirmation or attempt ULID.
+    (`state.rs:4521-4530`, insert at `:4588`).
+72. `validate_child_id` (`state.rs:4446-4462`) refuses a child ULID equal to
+    any operation, confirmation or attempt ULID. Since the gate it also
+    refuses a ULID a local-context sync owns (`:4450`), as `OperationMismatch`
+    rather than `recovery_required`. The same local-ownership check runs:
+    - on every non-refresh local begin (`recovery.rs:691-693`);
+    - on a comment's child ID (`recovery.rs:299`);
+    - in `local_sync/record.rs:946-970`.
 73. `checkpoint_comment_locally` is called directly by existing tests:
     `src/repository/ticket_guard_tests.rs:331`,
     `src/repository/remote/sync_tests.rs:2404`, `:2484`, `:2491`, `:2547`
-    and `:6868`, and `tests/remote_merge_recovery.rs:955`.
+    and `:6868`, and `tests/remote_merge_recovery.rs:955`. Its one production
+    caller is `comment_publication.rs:232`. The gate added none.
 74. A call that begins with an unsettled push from an earlier call, and is
     then cancelled, answers `not_confirmed`: `recovery_required` with
     `Standing::Final`, not `cancelled` (`bind/sync.rs:811-819`). `unsettled`
@@ -513,14 +619,32 @@ the check.
 
 **Added after the third review round.**
 
-75. At service start, `audit_registry` (`state.rs:5328-5336`) checks each
-    audited table's exact column list (`validate_merge_evidence_schema`,
-    `:1284-1366`, `if columns != required`) and each listed object's SQL. A new
-    column on an existing table therefore makes main's binaries answer
+75. At service start, `audit_registry` (`state.rs:5333-5337`) checks:
+    - the exact column lists of four tables: `remote_integration_steps`,
+      `remote_identity_confirmations`, `remote_resolution_attempts` and
+      `remote_resolution_paths` (`validate_merge_evidence_schema`,
+      `:1284-1369`, compared at `:1366`);
+    - the SQL of `MERGE_SCHEMA_OBJECTS` (`:1261`);
+    - foreign keys on 17 remote tables (`:5364-5381`).
+
+    So a new column on an existing table makes main's binaries answer
     `recovery_required` on a registry the branch has migrated. A new table is
-    not checked by binaries that do not list it.
-76. While a resolution attempt row exists, an outside repair is refused
-    (`sync.rs:3405-3416`).
+    not checked by binaries that do not list it, and no code enumerates
+    unknown tables.
+
+    The gate added no column. It added eight tables, each audited by its
+    exact SQL on every registry migration (`recovery.rs:630`, `records.rs:162`,
+    `:174`):
+    - `local_context_sync_records`, `_steps`, `_resolutions` and `_execution`
+      (`local_sync/record.rs:14-90`);
+    - `_conflicts` and `_resolution_cancellation`
+      (`local_sync/conflict_record.rs:7`, `:12`);
+    - `_images` (`local_sync/image_proof.rs:7`);
+    - `_request_control` (`mutation/local_control.rs:17`).
+76. While a resolution attempt row exists, an outside repair is refused.
+    `observe_external_integration` refuses when
+    `integration_has_resolution_attempt` (`state.rs:3405-3416`, helper
+    `:3384-3394`), and `sync.rs:3023-3030` relies on it.
 77. `push_exact` has no guard on the remote ref's old value
     (`transport/remote.rs:184-199`). Only deletion has one
     (`callbacks.rs:178-188`). `src/repository/transport/` is outside C4's
@@ -530,11 +654,81 @@ the check.
     is recorded as `synchronize_context`. Resume routes any pending such row
     to `sync::resumed` (`resume.rs:253-266`). `records::operation_holder`
     names the request that holds an operation (`resume.rs:186-197`).
-79. A request record holds only `accepted.operation()` (`execute.rs:306`).
+79. A request record holds only `accepted.operation()` (`execute.rs:307`).
     A comment's child synchronization ID is created later
-    (`recovery.rs:298`), so `request cancel` on a `comment add` request sets
-    that request's flag but never calls `cancel_remote_operation` for the
-    child.
+    (`recovery.rs:298`, with the gate's local-ownership check at `:299`), so
+    `request cancel` on a `comment add` request sets that request's flag but
+    never calls `cancel_remote_operation` for the child.
+
+**Added after re-grounding on the merged gate (2026-10-27).**
+
+80. An unfinished local-context sync anywhere in the repository blocks
+    remote work. A local sync counts as unfinished when its state is not
+    `complete`, `cancelled` or `abandoned` (`local_sync/record.rs:1082-1089`).
+    - Every remote reservation answers `recovery_required`, through
+      `require_no_pending_local` (`reservation.rs:1146`). That check runs
+      before the `Busy` checks.
+    - Beginning a comment's lifecycle answers `recovery_required`
+      (`recovery.rs:1348`, `:791`).
+    - Re-acquiring a remote conflict answers `recovery_required` (fact 33).
+
+    No CLI or desktop verb can start a local sync before C5 or D5 delivers
+    `context sync-local` (decision 19). Until then only the library can make
+    this state.
+81. Two tests pin the registry's exact set of tables:
+    - `the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`
+      (`tests/mutation_replay.rs:400`). It drops `REQUEST_TABLES` (`:347`,
+      four entries), and asserts that no remaining object's name contains
+      `request` (`:442`). After migration it asserts that exactly
+      `REQUEST_TABLES` was added (`:464`).
+    - `registry_creates_repository_and_discovery_metadata_schema`
+      (`tests/repository_enablement.rs:475`) asserts the exact table list
+      (`:581-624`). **It fails on `a372edb`**, because the list lacks the
+      gate's `local_context_sync_*` tables. This was run on 2026-10-27, as the
+      one test of its target; it was the only Cargo run in planning.
+82. The remote state tests drop and re-create the resolution tables
+    (`src/repository/remote/state_tests.rs:1898`, `:2008`, `:2071`, `:2114`,
+    `:2203`, `:2470`).
+83. The gate's private `display_path` hex-escapes every byte outside printable
+    ASCII, valid UTF-8 included, and doubles backslashes
+    (`local_sync/request.rs:317-330`).
+84. `bind/sync.rs` says "The bindings never merge." (`:100`) and "Only a merge
+    commits, and nothing here merges." (`:590`).
+85. The gate amended C4's authorities in `4e3a67a` and `baea8ee`:
+    - **CLI RFC**, "Conflict and cancellation behavior" (`cli-contract.md:753-781`):
+      - `conflict show` and `conflict resolve` remain "a future CLI adapter
+        contract";
+      - "C4/D5 must adapt this contract deliberately and still provide
+        separate remote-conflict wire bindings";
+      - the local shapes, among them nullable sides plus `historical`, and
+        escaped display paths;
+      - "A partial accepted resolution must resend the same R
+        request/source when `required_request_id` names R";
+      - "Safe-point cancellation preserves recoverable Accepted requests";
+      - "abandonment requires artifact-free proof".
+    - **Git RFC**: the "Dedicated Local-Primary Into Context Synchronization"
+      section, and a "Local recovery amendment". The amendment says:
+      - "partial R without a fully prepared candidate requires its original
+        source bytes";
+      - "`operation resume` names R through `original_request_required`";
+      - incompatible closures are external-only, and "choosing one
+        incompatible closure is not proof of completion".
+    - **Wave**: the gate note, which says "C4/D5 must adapt the local boundary
+      and still provide the separate remote-conflict wire boundary". It also
+      rewrote the capability row "Conflict inspection read", which now begins
+      "Local boundary: closure-recovery gate; remote boundary: first of C4 or
+      D5".
+    - **API audit**: the section "closure-recovery-library-amendment-2026-10-27".
+      Among other things, it says reads "do not take the write lease".
+86. **(confirm)** A remote resolution writes each path in the worktree, and
+    stages its result into the locked authoritative index in memory
+    (`resolution::stage_result`). It writes a tree from that index
+    (`sync.rs:4940-5000`). The failure point `ResolutionAfterPathWrite`
+    fires before that tree is written. Read from the code, an attempt stopped
+    at `ResolutionPrepared` leaves the index stages on disk intact. The
+    inspection then still matches the stored digest (fact 29), and the sides
+    are still readable. Task 3's `resolution_prepared` row proves this, and a
+    different answer stops there.
 
 ## Module Layout
 
@@ -548,7 +742,10 @@ the check.
   binding.
 - `src/repository/remote/conflict_read.rs` (new): the conflict read and the
   string tokens. It sits inside `remote` because the tokens' fields are
-  `pub(super)` (fact 31).
+  `pub(super)` (fact 31). It gets each path's kind and structure by calling
+  `crate::repository::integration::validate::classify_conflict_entry` on
+  each index conflict (fact 30). That call is read-only, and it edits nothing
+  in `integration/`.
 - Edited:
   - `bind/sync.rs` (merging settings, conflict data, `Watch` made
     `pub(super)`);
@@ -564,9 +761,10 @@ the check.
     beside `synchronize` (R-18);
   - `remote/mod.rs` (module registration);
   - `remote/sync.rs`, `remote/refs.rs`, `remote/reservation.rs`,
-    `remote/state.rs` and `remote/merge.rs`, or their `integration/`
-    successors after the gate (the push-only republish path, and resolution
-    association and resumption).
+    `remote/state.rs` and `remote/merge.rs`, for the push-only republish
+    path, and for resolution association and resumption. Every function C4
+    edits stayed in these files (facts 25 and 64). C4 edits nothing in
+    `integration/` or `local_sync/`, which the gate's local executor shares.
 - New schemas under `schemas/v1/`:
   - `comment_mutation`;
   - `conflict` and `conflict_path`;
@@ -617,12 +815,18 @@ No new `[[test]]` target (R-29).
 | `needs_confirmation` | false | false | true |
 
 - `finishes_as_a_synchronization` equals "stops at safe points, or resume",
-  as `command.rs:546`'s test asserts.
-- `ConflictResolve` holds no operation and no reservation of its own, so
-  `request cancel` asks nothing of it (fact 11). The Ctrl-C window still
-  covers it (R-21).
-- `CommentAdd` is the first stopping command whose stage is not
-  `Connecting`. E-6 covers the test that assumes it is.
+  as `command.rs:574`'s test asserts (`:576-580`).
+- `ConflictResolve` does not stop at safe points, so `request cancel` asks
+  nothing of it (fact 11). That is C4's choice (R-32, R-35), not a
+  consequence of holding no operation. The gate's `LocalContextResolve` also
+  holds no operation, yet stops at safe points, and `request cancel` reaches
+  it through the gate's control counters (facts 3 and 11). C4 does not reuse
+  those counters, because they belong to the local executor. The Ctrl-C
+  window still covers `conflict resolve` (R-21).
+- `CommentAdd` reports `Writing`. The stopping commands' stages are now
+  `Connecting` for the remote synchronizations and `item republish`,
+  `Observing` for the gate's two local commands, and `Writing` for
+  `comment add`. E-6 covers the test that pins them.
 
 ## Comment Submission (`comment add`)
 
@@ -671,7 +875,7 @@ every field, the body by digest.
     no write step and the comment file is absent, one registry transaction
     deletes the binding and marks the local row `rejected`. The record stays
     accepted. A retry under the same request ID then begins the same
-    operation again as new, and binds afresh (`recovery.rs:794-810`). A
+    operation again as new, and binds afresh (`recovery.rs:804-820`). A
     checkpoint that landed in the context meanwhile changes nothing (fact
     68).
   - **`IdentityRequired` after a write.** If an earlier attempt of this
@@ -714,6 +918,7 @@ ruling.
 | Publication meets a canonical conflict | `recovery_required` | partial, 4, after C2's retry re-runs it offline (facts 26, 66) | checkpoint committed, integration pending, publication pending | `conflict: {operation_id: <synchronization_id>, next_action: resolve}` |
 | Another item's conflict is pending | `busy` | partial, 4, after C2's bounded retry | checkpoint committed, publication pending | `pending_reason: synchronization` |
 | This item's context has a pending conflict | `recovery_required` | blocked, 3 | nothing | `[repo.inspect]` |
+| A local-context sync anywhere in the repository is unfinished (fact 80, R-38) | `recovery_required` | blocked, 3 | nothing; no binding row | `[repo.inspect]` |
 | Lifecycle-closed ticket | `ticket_closed` | blocked, 3 | nothing; no context or binding left | none |
 | No identity and no `created_by` | `identity_required` | blocked, 3 | nothing written; binding released and row rejected; record kept (R-34) | `[request.retry, repo.identity_set]`; after `repo identity-set`, the same request ID succeeds and writes once |
 | `created_by` given, no Git identity | `identity_required` | blocked, 3 | as the row above | `[request.retry, repo.identity_set]` |
@@ -763,6 +968,7 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 | Conflict in a noncanonical path | `recovery_required` | blocked, 3 | integration pending; `next_action: external_repair` |
 | The same request again, conflict still pending | `recovery_required` | blocked, 3 | the same conflict data; no transport (fact 26) |
 | A new sync while another operation's conflict is pending | `busy` | transient, 5, after C2's bounded retry | nothing |
+| A local-context sync anywhere in the repository is unfinished (fact 80, R-38) | `recovery_required` | blocked, 3 | nothing; `[repo.inspect]`. This is checked before the `busy` row's check |
 | Target worktree not clean | `worktree_not_clean` | blocked, 3 | nothing |
 | Target worktree in an unfinished outside merge | `worktree_conflicted` | blocked, 3 | nothing |
 | Advertisement moved between fetch and push | `external_change` | blocked, 3 | nothing pushed |
@@ -794,7 +1000,7 @@ derives `Clone`.
     36);
   - the earlier operations' push evidence, as
     `synchronization_push_absence_boundary` classifies it
-    (`sync.rs:7450-7505`), without taking a reservation.
+    (`sync.rs:6498-6553`), without taking a reservation.
 
   Only a `Deleted` classification makes a preview. `Ambiguous`, `Unknown` or
   no evidence gives the no-op preview, which says to run `item sync` first.
@@ -815,9 +1021,10 @@ derives `Clone`.
      - the context advertised again is `external_change`;
      - a local tip other than `local_oid` is `external_change`.
   3. It pushes exactly `local_oid`. The push leaves out the push-absence
-     boundary (`sync.rs:7161-7165`) and the per-record refusal
-     (`reservation.rs:2741-2758`), which are what refuse a deleted branch;
-     the consent replaces them.
+     boundary (`sync.rs:6209-6213`) and the per-record refusal
+     (`reservation.rs:2742-2759`), which are what refuse a deleted branch;
+     the consent replaces them. It keeps the reservation's other checks,
+     the unfinished local-sync refusal among them (fact 80).
   4. It records the publication, so the context is published again.
 
   - It integrates nothing, and the next `item sync` integrates primary as
@@ -856,6 +1063,7 @@ Written as a test first (Task 5).
 | `--confirm` after the local branch moved | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
 | `--confirm` after the branch reappeared on the remote | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
 | `--confirm` while the refused `item sync` request still holds its reservation (`01M4R19PC0T6ZPKM39X9DF26HX`) | `busy`, exit 5, after C2's bounded retry; human output names `request cancel` for that request first |
+| `--confirm` while a local-context sync in the repository is unfinished (fact 80, R-38) | `recovery_required`, exit 3; nothing pushed; `[repo.inspect]` |
 | `--confirm` meeting a transport, unlock or host stop | the code `item sync` gives it, such as `transport_unavailable` (5), `unlock_required` (3) or `host_approval_required` (3); nothing pushed; the same request continues |
 | Replay of a confirmed request | Its stored result; no second push |
 | `item sync` after a republish, primary unchanged | `already_applied` |
@@ -879,26 +1087,32 @@ operation_id: OperationId) -> Result<ConflictDto, ReadError>`. It is a read
 | `stage` | `context` or `primary` |
 | `state` | `conflict_pending`, `resolution_prepared`, `resolved`, `repaired`, `repair_refused`, `cancelled` or `complete` |
 | `next_action` | `resolve`, `retry_resolution`, `external_repair`, `resume`, `synchronize` or `none` |
-| `request_id` | string or null: the request whose resolution attempt is unfinished, which alone may continue it (R-35) |
+| `request_id` | string or null: the request whose resolution attempt is unfinished. That request may continue it, and under decision 18 a new request may supersede it (R-35) |
 | `eligibility` | `eligible_canonical`, `external_resolution_required` or null |
 | `local_parent`, `incoming_parent` | strings |
 | `observation` | string or null (R-9) |
+| `historical` | boolean: true when an attempt has written paths, so the sides are the recorded conflict's and the worktree may already hold results (R-39) |
 | `paths` | array of `ConflictPathDto` |
 
 `ConflictPathDto` holds:
 
-- `display_path`, escaped for control and non-UTF-8 bytes (R-11);
+- `display_path`, escaped by C4's rule (R-11);
 - `token`, a string (R-9);
 - `kind`: `document`, `ticket`, `comment` or `noncanonical` (decision 12);
 - `structure`: `regular`, `binary`, `executable`, `symlink`, `rename`,
-  `delete` or `identity_changed`;
+  `delete`, `identity_changed` or `incompatible_closures` (fact 30, R-40);
 - `content_available`, a boolean;
 - `base`, `local` and `incoming`, each a string or null.
 
 Sides are present only when the library returns them (fact 32, R-10). Paths
 are ordered by raw path bytes. Eligibility stays one value for the whole set
-(decision 12). A conflict with any path that is not canonical is repaired
-outside as a whole.
+(decision 12). A conflict with any path that is not canonical, or any
+`incompatible_closures` path, is repaired outside as a whole.
+
+`show_conflict` takes remote synchronizations only (decision 19). A
+local-context sync's operation ID is `invalid_input`. It is found in the
+gate's records before the remote lookup, so it is never reported as
+`operation_not_found` (R-37).
 
 ### Required outcomes: conflict states
 
@@ -906,10 +1120,11 @@ Written as a test first (Task 3).
 
 | State of the operation | `state` | `next_action` | Paths and observation |
 | --- | --- | --- | --- |
-| Conflict pending, every path canonical | `conflict_pending` | `resolve` | every path with kind and sides; observation present |
+| Conflict pending, every path canonical with structure `regular` | `conflict_pending` | `resolve` | every path with kind and sides; observation present |
 | Conflict pending, any path noncanonical or structural | `conflict_pending` | `external_repair` | every path with kind; sides only where readable; observation present |
-| Markers removed in the worktree, stages intact | `conflict_pending` | as the two rows above | as above (fact 31) |
-| A resolution stopped after writing paths | `resolution_prepared` | `retry_resolution`, with `request_id` | as the conflict; observation null, so no new request starts a second attempt (fact 71) unless decision 18's supersede rule allows it |
+| Conflict pending, two sides of a ticket closed differently (fact 30) | `conflict_pending` | `external_repair` | that path with kind `ticket` and structure `incompatible_closures`; observation present. `conflict resolve` is refused for the whole set (R-40) |
+| Markers removed in the worktree, stages intact | `conflict_pending` | as the rows above | as above (fact 31) |
+| A resolution stopped after writing paths | `resolution_prepared` | `retry_resolution`, with `request_id` | as the conflict, with `historical: true` and the observation present (fact 86). The same request continues it. A new request is admitted only by decision 18's supersede rule (step 3), never beside it (fact 71) |
 | A resolution stopped with its commit prepared, the ref not yet moved | `resolution_prepared` | `resume`: `operation resume` finishes it from durable state (decision 18) | empty; observation null |
 | Resolved and checkpointed, not yet published | `resolved` | `resume` | empty; observation null |
 | Resolved, then a local save in the context before publication | `resolved` | `resume`, which publishes the branch tip, containing the resolution | empty; observation null |
@@ -921,6 +1136,7 @@ Written as a test first (Task 3).
 | The repository lease is held | `busy`, exit 5 | — | — |
 | An unknown operation ID | `operation_not_found`, exit 2 | — | — |
 | An operation that is no synchronization | `invalid_input`, exit 2 | — | — |
+| A local-context sync's operation ID (decision 19) | `invalid_input`, exit 2 | — | — |
 
 ## Conflict Resolution (`conflict resolve`)
 
@@ -940,8 +1156,16 @@ pub struct ConflictResolutionInput {
 }
 ```
 
-These follow the gate's local-resolution shape. They derive no `Debug`,
-`Display` or `Serialize`. The command is not confirmed. Like `operation
+The input shape matches the gate's local resolution: a top-level
+observation and a complete `{token, source}` set (fact 53). The binding also
+orders its checks as the gate does: syntax first, then replay. It departs from
+the gate where the remote operation needs it, and Document Amendments records
+each departure:
+- decision 18's supersede (step 3);
+- sides given inline, with `historical` (R-10, R-39);
+- the lease (R-12).
+
+The types derive no `Debug`, `Display` or `Serialize`. The command is not confirmed. Like `operation
 resume`, it holds no operation of its own and does not stop at safe points
 in the library's sense (R-32, R-35). The Ctrl-C window covers it. The digest
 covers the resolved synchronization's ID, the observation and every
@@ -950,7 +1174,9 @@ token/source pair in token order.
 The binding works in seven steps.
 
 1. **Syntax.** A malformed observation or token, an empty set or a
-   duplicate token is `invalid_input`, before anything is read.
+   duplicate token is `invalid_input`, before anything is read. A
+   local-context sync's operation ID is `invalid_input` too (decision 19,
+   R-37).
 2. **Replay first (decision 13, R-35).** If this request has a recorded
    attempt for this synchronization, the binding reconciles it before it
    checks any live token, as the gate orders it. The comparison is with the
@@ -964,7 +1190,9 @@ The binding works in seven steps.
    - at `ResolutionPrepared`, a new request supersedes it if every path the
      attempt wrote still holds exactly what it wrote, as the attempt's
      recorded digests show. The old attempt is closed, and the new one
-     proceeds;
+     proceeds. The gate's local resolution has no such rule. Decision 20
+     keeps it for remote, and scopes the gate's "resend the same R"
+     sentences to the local operation;
    - at `ResolutionPrepared`, with a written path since changed, the answer
      is `original_request_required`, naming the request;
    - at `CommitPrepared` or `Applied`, the answer is `recovery_required`
@@ -974,13 +1202,20 @@ The binding works in seven steps.
    A new request never starts a second attempt beside an unfinished one
    (fact 71).
 4. **Validate.** It re-derives the live conflict's observation and tokens
-   (R-9), and compares them with the input:
-   - a different observation is `external_change`;
-   - a well-formed token that is not in this conflict is `external_change`,
-     as the gate has it (R-33);
-   - a missing path is `invalid_input`;
-   - an operation whose conflict is already resolved is
-     `recovery_required`, with `[repo.inspect]` (fact 34).
+   (R-9), and compares them with the input. It checks in this order, and
+   answers the first that applies:
+   1. an operation whose conflict is already resolved is
+      `recovery_required`, with `[repo.inspect]` (fact 34);
+   2. a different observation is `external_change`;
+   3. an external-only set, including `incompatible_closures`, is
+      `recovery_required` with `next_action: external_repair`. The gate
+      answers `external_change` for its local equivalent, and Document
+      Amendments records the difference;
+   4. a count of resolutions other than the conflict's path count is
+      `invalid_input`. A missing path falls here;
+   5. a well-formed token that is not in this conflict is `external_change`,
+      as the gate has it (R-33). Count before membership is the gate's order
+      too (fact 53).
 
    Nothing is written in any of these cases.
 5. **Resolve.** It calls `resolve_synchronization` under the derived
@@ -994,15 +1229,18 @@ The binding works in seven steps.
    The continuation's `Watch` owner is this request, whose flag nothing sets
    (fact 11). So the Ctrl-C token stops it. So does `request cancel` on the
    original synchronization request, which still holds the operation
-   (`progress.rs:441-455`), and the resolve then reports `cancelled`. A
+   (`progress.rs:448-462`), and the resolve then reports `cancelled`. A
    Ctrl-C seen before the continuation starts stops after the checkpoint,
    with the synchronization left `resolved` and resumable.
 7. **Map the other outcomes, and give the data:**
    - `StaleObservation` is `external_change`;
    - `ValidationFailed` is `invalid_input`, and nothing is written;
    - `IdentityRequired` is `identity_required` with `repo.identity_set`;
-   - `ExternalResolutionRequired` is `recovery_required` with
-     `next_action: external_repair`;
+   - `ExternalResolutionRequired`, now an `Err` before any write (fact 33),
+     is `recovery_required` with `next_action: external_repair`;
+   - `Repository(RecoveryRequired)` while a local-context sync is unfinished
+     (fact 80) is `recovery_required` with `[repo.inspect]`, and nothing is
+     written (R-38);
    - the data is `ConflictResolutionMutationDto`, tagged
      `type: "conflict_resolution"`. It holds `operation_id`, `commit_oid`,
      `publication` and `conflict`, and `conflict` is set when publication
@@ -1032,6 +1270,7 @@ stops at a design checkpoint (decision 13).
 | `config.toml` changed after the paths are written, then the same request | `ok`, exit 0: the stored input digest matches | as row 2 |
 | Published by another request (`operation resume` or a sync), then the same request | `already_applied`, exit 0, with the same commit | nothing written or pushed |
 | After success, a new request with any resolution | `recovery_required`, exit 3, `[repo.inspect]` (fact 34) | nothing written |
+| Any of the above, retried while a local-context sync in the repository is unfinished (fact 80) | `recovery_required`, exit 3, `[repo.inspect]` | nothing written; the attempt kept, so the same retry finishes it once the local sync ends |
 | After success and before publication, `operation resume` | `ok`, exit 0 | published |
 | After publication, `operation resume` | `already_applied`, exit 0 | nothing |
 | Ctrl-C during the local resolution, before publication | `cancelled`, exit 130 | the checkpoint is committed; the synchronization stays `resolved`, and `operation resume` publishes it |
@@ -1039,8 +1278,9 @@ stops at a design checkpoint (decision 13).
 
 ## Resume (R-20)
 
-`operation resume` adds three routes to fact 9's two. The gate's local-sync
-routing stays as the gate delivers it.
+`operation resume` adds four routes to fact 9's remote cases. The gate's
+local-sync routing stays as the gate delivers it (decision 19). C4 changes
+nothing in it, and gives the CLI human output for its data (R-37).
 
 | Operation | Resume does | Data |
 | --- | --- | --- |
@@ -1048,13 +1288,17 @@ routing stays as the gate delivers it.
 | A comment request that stopped at `identity_required` | Nothing to take up: its binding was released (R-34). Resume answers its completed local row as F2 does, `already_applied`; the same `comment add` request ID writes the comment | none |
 | A synchronization with a resolution checkpointed or an accepted outside repair | A restart with the merging settings: publishes it | null |
 | A synchronization whose resolution attempt has its commit prepared, or its ref moved, unpublished | Finishes the attempt from durable state alone, with no input (decision 18), then publishes it | null |
+| A synchronization whose resolution attempt has written paths only (`ResolutionPrepared`) | `original_request_required`, exit 3, naming the attempt's request, as the gate's local resume does (decision 20). Human output adds that a new `conflict resolve` may supersede it while the written paths are unchanged (decision 18). Nothing is written | none; the `original_request` recovery action names the request, as for a republish |
 | An operation held by an `item republish` request | `original_request_required`, naming that request (fact 78) | none |
 | A synchronization whose conflict is still pending | `recovery_required`, exit 3, with no transport | `SynchronizationConflictMutationDto` |
 | A cancelled operation | As F2: `recovery_required`, left to inspect (fact 9). A new request completes the work (fact 56) | none |
+| A local-context sync | The gate's routing, unchanged (fact 9) | the gate's `LocalContextSyncMutationDto` |
 
-`from_stored`'s `OperationResume` arm accepts these data shapes. Resume is
-not confirmed, and `request cancel` still does not reach it (fact 11). A
-Ctrl-C does (fact 41, R-21).
+`from_stored`'s `OperationResume` arm accepts these data shapes. The gate's
+arm guarded on `type: local_context_sync` stays first (fact 49). C4's shapes
+are matched by their own `type` values after it. Resume is not confirmed,
+and `request cancel` still does not reach it (fact 11). A Ctrl-C does
+(fact 41, R-21).
 
 ## The Next Step (decision 8)
 
@@ -1204,6 +1448,15 @@ Schemas: `schemas/input/v1/comment_add.schema.json` and
   kind, structure and token. `display_path` is printed as the library
   escaped it, without escaping it again. A side is printed only with
   `--json`, so a terminal is never repainted by content.
+- An `incompatible_closures` path prints
+  `note: two clones closed this ticket differently; repair it outside Manyhands.`
+- `operation resume` and `operation abandon` on a local-context sync print the
+  gate's `LocalContextSyncMutationDto` (R-37):
+  - its `state`, `reason` and `next_action`;
+  - for `original_request_required`, a `next:` line naming
+    `required_request_id`.
+
+  No local verb is named, because C5 delivers them (decision 19).
 
 ## Exit Statuses
 
@@ -1296,6 +1549,14 @@ In the final task, and only with the owner's go-ahead at that step:
     deadlines bound any hold (fact 43).
 - **Second actor (track rule 4):** a raw Git peer pushes divergent history
   and deletes a branch.
+- **An unfinished local sync (R-38):** the library rows that fact 80 adds
+  are seeded through the gate's own `context sync-local` mutation, left
+  stopped in a conflict. They run in `tests/mutation_remote/`, which mounts
+  the library as a module (fact 62). No CLI journey covers them, because no
+  C4 verb starts a local sync.
+- **Shared code:** the tasks that edit `remote/` also run `--lib remote`,
+  `--lib local_sync` and `--lib integration`, because the gate's local
+  executor calls into the same modules.
 - **Redaction:** every `cli_remote` case runs through `scan_output`.
 - **Platforms:** the PTY cases are `#[cfg(unix)]` (fact 43). The Windows
   console handler is a native manual check, owed after merge and recorded in
@@ -1323,19 +1584,28 @@ In the final task, and only with the owner's go-ahead at that step:
 | E-1 | 7–10 | `tests/fixtures/cli_v1/help_root.json` and `help_root_text.txt` are regenerated as each C4 verb becomes available, and for `item republish`'s new row. The diff may change only the verb's availability, repository rule and options, plus the one added row. |
 | E-2 | 10 | `src/bin/manyhands-cli/catalog_tests.rs`: `DESIGN`'s C4 row (`:81-92`) gains the string `"item republish"`. |
 | E-3 | 1 | `tests/mutation_remote.rs`: the binding-level tests that assert a refusal to merge are rewritten. The synchronization tests go to the divergent-synchronization table's outcomes: `a_divergent_remote_is_merge_required_and_holds_its_reservation` (`:1324`), `a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge` (`:2697`) and `merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased` (`:2754`). The resume tests go to the resume table's, because `resumed` shares the binding's settings (`bind/sync.rs:516-519`): `a_resume_never_merges_and_leaves_nothing_of_a_merge` (`:3614`) and `a_resume_does_not_continue_a_merge_made_some_other_way` (`:3654`). Tests that call the domain with their own `REFUSING` settings (`:365`), such as `the_sibling_refuses_divergence_and_the_existing_function_merges_the_same_fixture` (`:493`) and `the_sibling_does_not_continue_a_merge_it_is_set_to_refuse` (`:590`), test the domain setting and stay unchanged. Task 0 classifies each. |
-| E-4 | 1 | `tests/fixtures/mutation_v1/repo_sync_merge_required.json` is replaced by `repo_sync_recovery_required.json`, the conflict-pending golden, and its registration in `tests/support/mutation_golden.rs` is renamed. |
+| E-4 | 1 | `tests/fixtures/mutation_v1/repo_sync_merge_required.json` is replaced by `repo_sync_recovery_required.json`, the conflict-pending golden, and its registration (`tests/support/mutation_golden.rs:143`) is renamed. |
 | E-5 | 1, 5 | `src/repository/mutation/outcome_tests.rs`: `every_synchronization_error_has_its_code` (`:705`, table `:646-673`) for the conflict rows; and `an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection` (`:1536`), because `item republish` is the first confirmed command that stops at safe points. The tests at `:1565` and `:1633` stay unchanged: `never_finished_by_the_same_request` does not change. The loops over `Command::ALL` take the new commands unchanged. |
-| E-6 | 2b, 4a, 5 | `src/repository/mutation/command.rs`'s tests (`:491-651`) gain the three commands, as the Command Predicates table gives them. `only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation` (`:525`) becomes "the commands that stop at safe points all have an operation; the synchronizations and `item republish` report `Connecting` and `comment add` reports `Writing`; only `item republish` needs confirmation". `only_a_command_whose_work_no_journal_records_has_no_operation` (`:586`) gains `ConflictResolve`. |
-| E-7 | 1–5 | `tests/mutation_contract.rs`: `DATA_ROOTS` (`:1510`), `CODES_NO_MUTATION_GOLDEN_HAS` (`:1713`) and `CODES_NO_FIXTURE_CAN_PRODUCE` (`:1674`) gain the new entries, with `merge_required`'s reason. `UNBOUND_COMMANDS` is unchanged (fact 49). |
-| E-8 | 1–5 | `tests/read_contract.rs`: `contract_enumerations` (`:703`) gains the new enums, so `published_enumerations_list_exactly_the_registered_values` (`:1018`) counts them. |
-| E-9 | 2b, 4a, 5 | `tests/support/conformance.rs`'s `HOMES` (`:59`) and each home's table gain rows for the three commands. `tests/support/confirmation.rs`'s `preview_schema` (`:49-62`) gains `item republish`. |
-| E-10 | 1, 2b, 4a | `tests/support/mutation.rs`'s data accessors (`:596-775`) and `tests/support/repair.rs:333` gain arms for the new `MutationDataDto` variants. |
-| E-11 | 4b | The resume tests that assert a comment's synchronization is left to inspect, in `tests/mutation_replay/resume.rs` and `src/repository/mutation/bind/` unit tests, change to publication (R-20). Task 0 finds them with the plan's grep. |
+| E-6 | 2b, 4a, 5 | `src/repository/mutation/command.rs`'s tests (`:491-698`) gain the three commands, as the Command Predicates table gives them. `only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation` (`:537`) already treats the gate's two local commands apart: `LocalContextResolve` stops with no operation, and both report `Observing`. It keeps that. It gains `comment add` and `item republish` as stopping commands with an operation: `comment add` reports `Writing`, and `item republish` reports `Connecting` and is the only stopping command that needs confirmation. `ConflictResolve` is checked as not stopping. The test is renamed `the_stopping_commands_and_their_stages_and_confirmation`, because a stopping command can now need confirmation. `only_a_command_whose_work_no_journal_records_has_no_operation` (`:614`) gains `ConflictResolve`; its `names_another_s` list already includes `LocalContextResolve` (`:625-628`). |
+| E-7 | 1–5 | `tests/mutation_contract.rs`: `DATA_ROOTS` (`:1510`), `CODES_NO_MUTATION_GOLDEN_HAS` (`:1717`) and `CODES_NO_FIXTURE_CAN_PRODUCE` (`:1678`) gain the new entries, with `merge_required`'s reason. `UNBOUND_COMMANDS` (`:1455`) is unchanged (fact 49). |
+| E-8 | 1–5 | `tests/read_contract.rs`: `contract_enumerations` (`:704`, extended at `:1009-1036`) gains the new enums, so `published_enumerations_list_exactly_the_registered_values` (`:1052`) counts them. |
+| E-9 | 2b, 4a, 5 | `tests/support/conformance.rs`'s `HOMES` (`:59`) and each home's table gain rows for the three commands. `tests/support/confirmation.rs`'s `preview_schema` (`:48-61`) gains `item republish`. |
+| E-10 | 1, 2b, 4a | `tests/support/mutation.rs`'s data accessors (`:596-794`) and `tests/support/repair.rs:333` gain arms for the new `MutationDataDto` variants. |
+| E-11 | 4b | The resume tests that assert a comment's synchronization is left to inspect, in `tests/mutation_replay/resume.rs` (`a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered`, `:1090`) and `src/repository/mutation/bind/` unit tests, change to publication (R-20). Task 0 finds them with the plan's grep. |
+| E-12 | 4a | `tests/repository_enablement.rs`: `registry_creates_repository_and_discovery_metadata_schema`'s exact table list (`:581-624`) gains `remote_resolution_owners` (R-41). The test already fails on `a372edb`, because it lacks the gate's tables (fact 81). C4 does not add those; that fix belongs on main (see Risks). Task 4a runs the test, and if it still fails for the gate's tables, Task 4a stops for the owner. |
 
 No other pre-existing test changes. `tests/support/pty.rs` gains an additive
-helper and changes no existing function. Task 0 proves the list with the
-plan's greps, run after the gate merges. A hit outside this table stops for
-an owner ruling.
+helper and changes no existing function. The new table's name avoids
+`request`, so `tests/mutation_replay.rs:400` needs no edit (fact 81, R-41).
+It holds no foreign key into the tables that `state_tests.rs` drops, so
+those tests need none either (fact 82). Task 4a's runs of `--test
+mutation_replay` and `--lib remote` prove both.
+
+Task 0 proves the list with the plan's greps, re-run on the main it
+starts from. Those greps were re-run on `a372edb` by the 2026-10-27
+re-grounding. They found no gate test that asserts a refusal to merge, pins
+the C4 verbs, or pins help. A hit outside this table stops for an owner
+ruling.
 
 ## Document Amendments
 
@@ -1360,14 +1630,40 @@ Task 14 makes these, except where noted.
 - conflict data in place of a recovery action (decision 8);
 - Ctrl-C's window, a cancellation's finality and lost stdout (decision 14,
   R-21, R-22);
-- the C4 rows of the input-schema table, and the evidence paragraph.
+- the C4 rows of the input-schema table, and the evidence paragraph;
+- **the gate's paragraph (fact 85, decisions 19 and 20).** Its
+  "Library-boundary amendment, 2026-10-27" (`cli-contract.md:753-781`) is
+  amended in place:
+  - `conflict show` and `conflict resolve` are delivered by C4 for remote
+    synchronizations. They are no longer a "future CLI adapter contract";
+  - "C4/D5 must adapt this contract" becomes C5/D5 for the local verbs.
+    C4 delivers the separate remote-conflict wire bindings;
+  - the sentences on resending the same R request and source, on
+    cancellation preserving Accepted requests, and on abandonment proof are
+    scoped to the local operation. A remote attempt that has only written
+    paths may be superseded (decision 18), and a remote cancellation is final
+    (fact 56);
+  - C4's remote departures from the local shapes are listed: inline sides
+    with `historical` (R-10, R-39), the lease (R-12), identity reported by
+    code and `repo.identity_set` rather than `set_identity` (The Next Step),
+    and an external-only set answered `recovery_required` rather than
+    `external_change` (Conflict Resolution, step 4).
 
 **Git workflow RFC:**
 
 - the bindings merge (decision 3);
 - a conflict's next step is in data;
 - republish is its own confirmed command, pushing exactly the previewed
-  commit, and the next item sync integrates primary (decision 11).
+  commit, and the next item sync integrates primary (decision 11);
+- the gate's "Local recovery amendment" is scoped to the local operation,
+  with the remote rule beside it: a new request may supersede a remote
+  attempt that has only written paths, while those paths are unchanged
+  (decisions 18 and 20). Its resume rule, naming R through
+  `original_request_required`, applies to remote too (Resume);
+- an incompatible-closure conflict's limit on remote: it is external-only,
+  and an outside repair that chooses one closure is not promised to be
+  accepted (fact 85). Abandonment stays on `01M4H33R34Z7C7EEKTY1ZCT950`
+  (decision 6).
 
 **Canonical content and comment schema RFC:** `created_by` comes from the
 caller's validated input when given, else the Git identity (decision 9).
@@ -1377,29 +1673,40 @@ Comment Author rule "A caller cannot supply it" is replaced by decision 9.
 
 **Wave 03:**
 
-- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–18, the
+- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–20, the
   delivery and the known limits;
 - the track-rule-5 exception (decision 1);
 - the D4 section records that D4 waits for C4 (decision 5). The D5 section
   records that D5 consumes C4's conflict read and resolution through D4;
-- the C5 section records that C5 exposes the gate's local-sync verbs;
+- the C5 section records that C5 exposes the gate's local-sync verbs, and
+  any local conflict inspection they need (decision 19);
+- the gate's "Final gate checkpoint, 2026-10-27" paragraph: its "C4/D5 must
+  adapt the local boundary" becomes C5/D5. It keeps "C4/D5 … still provide
+  the separate remote-conflict wire boundary", and records that C4 delivered
+  that (decision 19);
 - the Capability Ownership rows:
   - "Comment author (`created_by`)" (decision 9);
-  - "Conflict inspection read", landed in C4;
+  - "Conflict inspection read": the gate's rewritten row is kept. Only its
+    remote half is updated, to "remote boundary: C4", and its local half is
+    left as the gate wrote it;
   - "Discussion/sync/conflict and resume", whose bindings C4 adds;
 - the entry-gate item 3 departure (decision 16);
 - the Windows Ctrl-C manual check, owed after merge.
 
-**The gate's shapes:** three departures are recorded in the design's
-Rulings:
+**The gate's shapes.** The departures listed under the CLI contract RFC
+above are recorded in the RFC itself, and also in the design's rulings:
 - R-9: the token inputs;
+- R-10 and R-39: the sides;
 - R-12: the lease;
 - The Next Step: `set_identity`.
 
-The gate's documents are not edited.
+The gate's own Cycle, design, implementation and execution documents are
+not edited. Its amendments to C4's authorities are edited as listed here.
 
 **API audit:** the C4 refresh section (Task 0), and the C4 rows updated in
-place.
+place. The gate's section "closure-recovery-library-amendment-2026-10-27"
+gains a note naming C4's remote departures, and it is not otherwise
+changed.
 
 **AGENTS.md and the skills of fact 48:** the switch and the extended
 exception (decision 15), in Task 15 after the verification comment
@@ -1481,18 +1788,25 @@ Each ruling is listed with its cost if wrong.
   *Cost:* a token from before any change is refused, which is the intended
   staleness rule.
 - **R-10 Sides inline.** `conflict show` returns sides in its data, and only
-  for paths the library can read as UTF-8 canonical text. *Cost:* large
-  conflicts make a large response. Items are already bounded by their
-  limits.
-- **R-11 Display paths (gate).** Escaped for control and non-UTF-8 bytes, as
-  the gate's design specifies `display_path`. Never used as a writable path.
-  *Cost:* none.
+  for paths the library can read as UTF-8 canonical text. The gate reads
+  local sides separately (fact 53), and this departure is recorded in the CLI
+  RFC. *Cost:* large conflicts make a large response. Items are already
+  bounded by their limits.
+- **R-11 Display paths.** C4's conflict read escapes each path byte outside
+  printable ASCII as `\xNN`, and doubles a backslash, which is the rule the
+  gate's `display_path` applies (fact 83). That function is private to a gate
+  file C4 does not edit, so C4 writes its own copy of the rule. Task 3's test
+  pins it byte for byte on a control byte, a backslash, a non-ASCII UTF-8
+  character and an invalid byte. A display path is never used as a writable
+  path. *Cost:* two copies of one rule. A later change to the gate's copy
+  is not caught by C4's test.
 - **R-12 `conflict show` is a read.**
   - It takes no request ID and writes nothing.
   - It takes the repository lease while it reads Git, as fact 29's
     inspection does, and a test proves the database unchanged.
   - A held lease answers `busy`, exit 5.
-  - This departs from the gate's read-only sessions, which take no lease.
+  - This departs from the gate's local reads, which "do not take the write
+    lease" (fact 85). The departure is recorded in the CLI RFC.
 
   *Cost:* a read can answer `busy`.
 - **R-13 States.** As the conflict-states table. *Cost:* a new state later
@@ -1501,8 +1815,11 @@ Each ruling is listed with its cost if wrong.
   - **The attempt ID.** It is a ULID made from a domain-separated BLAKE3
     digest of the request ID, the synchronization's ID, the integration window
     and the stage ordinal. So a reused request ID never meets another
-    conflict's attempt, and the ID never equals an operation, confirmation or
-    attempt ULID (fact 72).
+    conflict's attempt. `validate_child_id` refuses an ID equal to an
+    operation, confirmation, attempt or local-sync ULID (fact 72), and a
+    digest-derived ID is not expected to meet one. If it ever does, the
+    refusal is reported as the library maps it, and Task 4a asserts that
+    nothing was written.
   - **What the library keeps.** It finishes an attempt at
     `ResolutionPrepared`, `CommitPrepared` or `Applied` from its durable rows
     (fact 34), without storing a body:
@@ -1512,7 +1829,7 @@ Each ruling is listed with its cost if wrong.
       serves `operation resume` (decision 18).
   - **Rebuilt tokens.** The library rebuilds its tokens only for
     `reconcile_resolution_candidate`, which checks window, ordinal and
-    operation (`sync.rs:5157-5162`). Each path's bytes come from hashing
+    operation (`sync.rs:4226-4231`). Each path's bytes come from hashing
     every path of the candidate tree and matching `path_digest` (fact 70).
     A path resolved to its local side is found too. The binding compares the
     presented input with the digest stored with the association, never with
@@ -1537,8 +1854,8 @@ Each ruling is listed with its cost if wrong.
     proves the absence, refuses an advertised context or a moved local tip
     as `external_change`, then pushes exactly `local_oid`.
   - It does not use the clean plan (fact 69). Its push leaves out the
-    push-absence boundary (`sync.rs:7161-7165`) and the per-record refusal
-    (`reservation.rs:2741-2758`), which the consent replaces.
+    push-absence boundary (`sync.rs:6209-6213`) and the per-record refusal
+    (`reservation.rs:2742-2759`), which the consent replaces.
   - The preview uses a new reservation-free read of the same evidence, and
     accepts only a `Deleted` classification.
   - Resume answers `original_request_required` for an operation a republish
@@ -1550,8 +1867,10 @@ Each ruling is listed with its cost if wrong.
 - **R-19 Republish preview.** `ItemRepublishPreviewDto`, the effect
   `branch_republished` and one desktop arm. *Cost:* a small cross-track
   merge with D3 (decision 10).
-- **R-20 Resume routes.** As the resume table. *Cost:* resume can now publish
-  a comment. That is what the RFC's example shows.
+- **R-20 Resume routes.** As the resume table. A remote attempt that has
+  only written paths answers `original_request_required`, naming its
+  request, as the gate's local resume does. *Cost:* resume can now publish a
+  comment. That is what the RFC's example shows.
 - **R-21 The Ctrl-C window.** Installed by the `Boundary` impl around
   `execute` of the six stoppable verbs, matched on the `Mutation` variant,
   with `SA_RESTART`. The first Ctrl-C cancels, and a second ends the
@@ -1623,10 +1942,10 @@ Each ruling is listed with its cost if wrong.
     own, so settlement deletes its record on any stop (fact 67). The durable
     state is the resolution attempt.
   - **A new table.** The attempt's association lives in a new table,
-    `remote_resolution_requests`, with the attempt ID, the request ID and the
-    presented input's digest, as the gate keeps its own in a new table. No
-    audited table changes, so main's binaries still open the registry (fact
-    75).
+    `remote_resolution_owners` (R-41), with the attempt ID, the request ID
+    and the presented input's digest, as the gate keeps its own in a new
+    table. No audited table changes, so main's binaries still open the
+    registry (fact 75).
   - **Who may continue.** A retry under that request ID finds and continues
     the attempt. Any other request is answered by step 3's rules (decision
     18).
@@ -1645,6 +1964,48 @@ Each ruling is listed with its cost if wrong.
   on entry. Every test that raises a signal or sets the latch runs in a
   child process, so no in-process test, `mutate_tests` included, sees it set.
   *Cost:* none.
+- **R-37 Local-sync operations in C4's verbs (decision 19).**
+  - `conflict show` and `conflict resolve` look an operation ID up in the
+    gate's local-sync records before the remote ones, and answer
+    `invalid_input` for a local sync.
+  - `operation resume` and `operation abandon` pass a local sync to the
+    gate's routing and abandonment, unchanged (facts 9 and 10).
+  - The CLI's human output renders `LocalContextSyncMutationDto` (Human
+    Output). Its JSON passes through unchanged.
+  - Task 9's human-output tests render the gate's goldens
+    `tests/fixtures/mutation_v1/local_sync_*.json`, because no C4 verb can
+    start a local sync.
+
+  *Cost:* a local conflict has no CLI inspection until C5.
+- **R-38 An unfinished local sync (fact 80).** Every C4 verb that reserves,
+  begins a comment or re-acquires a conflict answers the library's
+  `recovery_required` with `[repo.inspect]`, and writes nothing. The four
+  tables carry that row, and the library tests seed it through the gate's
+  own `context sync-local` mutation, as `ConflictWorld::with_incoming` does
+  (`tests/mutation_replay/local_sync.rs:164-212`). *Cost:* none; C4 adds no
+  check of its own.
+- **R-39 `historical`.** `ConflictDto.historical` is true when an attempt has
+  written paths, which is the `resolution_prepared` state with paths. The
+  sides are then the recorded conflict's, and the worktree may already hold
+  results. This matches the gate's local content shape (fact 53) at
+  `conflict show`'s level. *Cost:* one boolean.
+- **R-40 Incompatible closures.** `structure` gains `incompatible_closures`
+  (fact 30). The set is external-only, `next_action` is `external_repair`,
+  and human output says why. `conflict resolve` answers `recovery_required`
+  with `next_action: external_repair` (step 4). *Cost:* a remote closure race
+  has no in-product way out (Known Limits).
+- **R-41 The association table's name and shape.** It is named
+  `remote_resolution_owners`, not `…_requests`. Two things follow from the
+  name and shape:
+  - `tests/mutation_replay.rs:442` asserts that no object surviving the drop
+    of `REQUEST_TABLES` has `request` in its name (fact 81);
+  - it holds the attempt and request IDs as values, with no foreign key, so
+    `state_tests.rs`'s drop-and-recreate tests are unaffected (fact 82).
+
+  It is created by its own migration step, so a registry made before C4
+  gains it on open. E-12 adds it to the enablement test's list. *Cost:* the
+  attempt row's lifecycle is enforced by the binding's transactions, not by
+  SQLite. Task 4a's rows test it.
 
 ## Known Limits
 
@@ -1653,6 +2014,17 @@ Each ruling is listed with its cost if wrong.
   or repaired.
 - A conflict with any noncanonical or structural path is repaired outside as
   a whole. Its canonical paths are not resolved in-app (decision 12).
+- A remote conflict in which two clones closed one ticket differently is
+  external-only (R-40). The Git RFC does not promise that an outside repair
+  choosing one closure is accepted, and the operation cannot be abandoned
+  (decision 6). Such a conflict may have no way out until
+  `01M4H33R34Z7C7EEKTY1ZCT950` delivers abandonment.
+- While a local-context sync is unfinished anywhere in the repository, every
+  C4 verb that reserves, begins a comment or re-acquires a conflict answers
+  `recovery_required` (R-38). No C4 verb can start or finish a local sync
+  (decision 19), so before C5 this happens only to a sync the library or a
+  later build started.
+- `conflict show` does not inspect a local-context sync (decision 19).
 - A cancelled operation is final. A new request completes the work
   (fact 56).
 - A Ctrl-C during a blocked network call may answer `transport_unavailable`
@@ -1713,6 +2085,11 @@ Each ruling is listed with its cost if wrong.
   String tokens are re-derived (R-9).
 - **A separate content read, as the gate has.** One `conflict show` call
   gives a CLI user everything to write a resolution (R-10).
+- **Local-sync IDs in `conflict show` and `conflict resolve`.** C5 owns the
+  local verbs (decision 19).
+- **No supersede, as the gate's local resolution has.** A remote attempt with
+  only written paths would then have no way out once its request is lost
+  (decisions 18 and 20).
 - **An identity prompt in sync.** C3 has none for saves, and the RFC routes
   identity through `repo identity-set`.
 
@@ -1720,7 +2097,9 @@ Each ruling is listed with its cost if wrong.
 
 | Risk | Control |
 | --- | --- |
-| The gate's Task 7 changes the inventories and records C4 extends | Decision 2: C4 starts after it merges; Task 0 re-greps E-1 to E-11 |
+| The gate changed the inventories and records C4 extends | Done: the gate merged at `a372edb`, and the 2026-10-27 re-grounding re-read every fact and named edit there. Task 0 re-greps E-1 to E-12 if main moves again |
+| Main is red: `registry_creates_repository_and_discovery_metadata_schema` lacks the gate's tables (fact 81) | A fix on main, outside C4, before Task 0. If it has not landed, Task 0's full suite and Task 4a stop on it for the owner |
+| C4's `remote/` edits break the gate's local executor, which shares those modules | Tasks that edit `remote/` also run `--lib local_sync` and `--lib integration` (Testing) |
 | Finishing an interrupted resolution needs more library change than planned | Decision 13's table, written first, with a stop |
 | Merging changes the premise of many F2 tests at once | E-3 to E-5 list them; Task 0 classifies each before code |
 | A Ctrl-C handler interrupts blocking I/O | Task 7's spike; decision 14 bounds the acceptable answers |
