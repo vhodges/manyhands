@@ -750,6 +750,34 @@ requested refresh is incomplete and must be represented separately.
 
 ## Conflict and cancellation behavior
 
+**Library-boundary amendment, 2026-10-27:** the following `conflict show` /
+`conflict resolve` interaction remains a **future CLI adapter contract**, not a
+delivered verb or an input schema for the new local library operation. The
+[closure-recovery gate](../Cycles/wave-03-closure-recovery-gate.md) has production
+library reads and F2 identities `context sync-local` / `context resolve-local`
+on its ticket branch (`03a27cb`), with final gates/review/merge pending. These
+identities are absent from the CLI catalog/dispatch. No CLI human-mode conflict
+artifact export/edit/import workflow or desktop in-app conflict editor is supplied
+by the gate. Existing generic operation/request inspection is not that workflow.
+
+The actual local API observes committed **local primary** into an existing context,
+with no fetch/push or primary mutation. It uses top-level observations and opaque
+`{token, source}` submissions, not caller-chosen writable paths. Explicit content
+reads return nullable `base`, `local`, `incoming` plus `historical`, never mutable
+`current` content. Display paths are already escaped presentation strings. C4/D5
+must adapt this contract deliberately and still provide separate remote-conflict
+wire bindings; C5/D5's lifecycle bindings are also downstream. See the
+[API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
+
+Fresh incompatible immutable ticket closures are external-only for the whole set;
+that does not promise that choosing either closure externally can resume. Local
+preparation refuses a known incompatible pair without a pending owner/effect.
+Retries freeze the accepted parents. A partial accepted resolution must resend the
+same R request/source when `required_request_id` names R; it cannot be replaced by
+a fresh observation or an automatic resume. Safe-point cancellation preserves
+recoverable Accepted requests, and abandonment requires artifact-free proof.
+Cooperative-writer/backend-ambiguity limits remain as documented in the Git RFC.
+
 `conflict show` returns operation scope, merge observations and each affected
 path's base/local/remote source and conflict kind. `conflict resolve` takes an
 array of `{path, observation, source}` resolutions for every conflicted owned

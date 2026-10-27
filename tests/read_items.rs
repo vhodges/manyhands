@@ -28,6 +28,8 @@ use support::items::{
     ticket_path, ticket_source, ticket_source_with, write,
 };
 
+#[path = "read_items/local_sync.rs"]
+mod local_sync;
 mod support;
 
 /// No read test may initialize the Git transport; every test ends with this.

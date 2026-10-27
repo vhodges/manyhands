@@ -187,3 +187,42 @@ independent review and the existing scoped Task 4 checkpoint rules. Approval
 does not waive tests, acceptance blockers, or any delivery/lifecycle restriction.
 An explicitly unaccepted local WIP snapshot may preserve the existing agent-owned
 dirty work for the required main rebase; it does not constitute Task 4 acceptance.
+
+## Closure Classification And Local Recovery Amendment (2026-10-27)
+
+The [closure-recovery gate](../Cycles/wave-03-closure-recovery-gate.md), implemented
+through `03a27cb` on its ticket branch, changes fresh conflict classification:
+for an otherwise eligible same-ID ticket, compare every nonempty parsed
+`(closed_at, closed_by)` pair across base, local and incoming. Distinct pairs make
+the **whole conflict set** `ExternalResolutionRequired`. Timestamp spelling and
+status text do not determine equality; author text is exact. Identical closures
+and open sides remain eligible subject to the existing shape/identity checks.
+Inspection and refused fresh resolution write nothing. Legacy accepted attempts
+still undergo all-side immutable validation; this amendment does not choose a
+winning closure or make an external merge that drops provenance admissible.
+
+Transport-neutral preparation, artifact and canonical validation mechanics now
+live in `src/repository/integration/`, with distinct remote/local authority
+adapters. Remote transport and merge policy remain unchanged, apart from reciprocal
+pending-owner admission: retained remote integration/resolution/release/index debt
+blocks local start, and local ownership blocks remote reacquisition before its
+phase or epoch changes.
+
+The dedicated local operation consumes committed local primary into an existing
+registered document/ticket context, with no fetch/push, primary modification or
+context creation. Its production entry points are `observe_local_context_sync`,
+`inspect_local_context_sync`, `read_local_context_conflict`, and F2
+`Mutation::LocalContextSync` / `Mutation::LocalContextResolve`; existing
+`Mutation::OperationResume` routes local recovery. See the
+[API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27)
+for inputs, schemas, fixed-parent retry and original-resolution request handling.
+Known incompatible closure pairs refuse local start before an owner or Git effect.
+
+The cooperative-writer and ambiguous-backend operator boundary above is retained.
+Exact owned per-member metadata retirement remains automatically recoverable;
+unknown partial checkout/ref/log/lock effects are preserved, not reset or guessed.
+The new local API neither automatically resumes closure nor implements CLI verbs,
+human-mode conflict artifacts or desktop editing. Tasks 0–8 have controller-reported
+approval and recorded Linux evidence; Task 9 final controller gates and whole-branch
+review remain pending. Old Cycle 06 test results are historical, not retroactively
+rerun or relabeled by this amendment.

@@ -4408,3 +4408,236 @@ fn child_fence_refuses_unreserved_closure_children_after_cancellation() {
         Err(RepositoryErrorKind::OperationMismatch)
     );
 }
+
+/// Build a valid, unreserved child through the parent APIs before changing one
+/// fence input. Closure fixtures also carry the required checkpoint evidence.
+fn wording_child(
+    service: &RepositoryService,
+    root: &Path,
+    kind: crate::repository::promotion::lifecycle::LifecycleKind,
+    role: crate::repository::promotion::record::ChildRole,
+) -> (
+    crate::repository::promotion::record::ChildExecution,
+    OperationId,
+) {
+    use crate::repository::{
+        PromotionExpectation,
+        promotion::{
+            lifecycle::LifecycleKind,
+            record::{self as promotion, ChildRole, IntegrationKind, PromotionStep},
+        },
+    };
+    if kind == LifecycleKind::TicketClosure {
+        let (parent, execution) = match role {
+            ChildRole::Context => close_child(service, root),
+            ChildRole::Primary => close_primary_child(service, root),
+        };
+        let child = match role {
+            ChildRole::Context => parent.context_sync_id,
+            ChildRole::Primary => parent.primary_sync_id,
+        };
+        return (execution, child.unwrap());
+    }
+    let parent = state::with_transaction(service, root, |tx, id| {
+        let mut r = promotion::begin_record(
+            tx,
+            id,
+            OperationId::new(),
+            &close_item(),
+            PromotionExpectation::from_bytes([7; 32]),
+            Some("origin"),
+        )?;
+        if role == ChildRole::Primary {
+            r.context_oid = Some(close_oid('1'));
+            r.step = PromotionStep::ContextSynchronized;
+            promotion::save_record(tx, id, &r)?;
+            r.base_oid = Some(close_oid('2'));
+            r.integration_kind = Some(IntegrationKind::Merged);
+            r.step = PromotionStep::Integrating;
+            promotion::save_record(tx, id, &r)?;
+            r.integration_oid = Some(close_oid('3'));
+            r.step = PromotionStep::Integrated;
+            promotion::save_record(tx, id, &r)?;
+        }
+        promotion::next_attempt(tx, id, r.operation_id, role)
+    })
+    .unwrap();
+    let execution = promotion::child_execution(&parent, role).unwrap();
+    let child = match role {
+        ChildRole::Context => parent.context_sync_id,
+        ChildRole::Primary => parent.primary_sync_id,
+    };
+    (execution, child.unwrap())
+}
+
+fn assert_child_fence_wording(
+    kind: crate::repository::promotion::lifecycle::LifecycleKind,
+    role: crate::repository::promotion::record::ChildRole,
+    expected: &str,
+) {
+    use crate::repository::{
+        AuthoringKind, SynchronizationTarget,
+        promotion::{lifecycle::LifecycleKind, record::ChildRole},
+    };
+    let mut cases = vec![
+        "request operation",
+        "request target role",
+        "repository",
+        "operation",
+        "parent disappeared",
+        "item binding",
+        "expectation binding",
+        "attempt",
+        "child binding",
+        "disallowed stage",
+        "cancellation",
+    ];
+    if role == ChildRole::Context {
+        cases.extend(["request target kind", "request target item"]);
+    }
+    let mut messages = Vec::new();
+    for case in &cases {
+        let (_data, root, service) = fixture();
+        let (execution, child) = wording_child(&service, root.path(), kind, role);
+        let authoring = match kind {
+            LifecycleKind::DocumentPromotion => AuthoringKind::Document,
+            LifecycleKind::TicketClosure => AuthoringKind::Ticket,
+        };
+        let mut request = context_request(root.path(), child, authoring);
+        if role == ChildRole::Primary {
+            request.target = SynchronizationTarget::Primary;
+        }
+        execution.validate_request(&request).unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            execution.validate(tx, id, child)
+        })
+        .unwrap();
+
+        let error = match *case {
+            "request operation" => {
+                request.operation_id = OperationId::new();
+                execution.validate_request(&request).unwrap_err()
+            }
+            "request target role" => {
+                request.target = match role {
+                    ChildRole::Context => SynchronizationTarget::Primary,
+                    ChildRole::Primary => context_request(root.path(), child, authoring).target,
+                };
+                execution.validate_request(&request).unwrap_err()
+            }
+            "request target kind" => {
+                request.target = context_request(
+                    root.path(),
+                    child,
+                    match authoring {
+                        AuthoringKind::Document => AuthoringKind::Ticket,
+                        AuthoringKind::Ticket => AuthoringKind::Document,
+                    },
+                )
+                .target;
+                execution.validate_request(&request).unwrap_err()
+            }
+            "request target item" => {
+                request.target = SynchronizationTarget::Context {
+                    kind: authoring,
+                    item_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().unwrap(),
+                };
+                execution.validate_request(&request).unwrap_err()
+            }
+            _ => state::with_transaction(&service, root.path(), |tx, id| {
+                let table = kind.table();
+                let prefix = match role {
+                    ChildRole::Context => "context",
+                    ChildRole::Primary => "primary",
+                };
+                let change = match *case {
+                    "repository" | "operation" => None,
+                    "parent disappeared" => Some(format!("DELETE FROM {table}")),
+                    "item binding" => Some(format!(
+                        "UPDATE {table} SET item_id='01ARZ3NDEKTSV4RRFFQ69G5FAW'"
+                    )),
+                    "expectation binding" => {
+                        Some(format!("UPDATE {table} SET expectation=zeroblob(32)"))
+                    }
+                    "attempt" => Some(format!(
+                        "UPDATE {table} SET {prefix}_attempt={prefix}_attempt+1"
+                    )),
+                    "child binding" => Some(format!(
+                        "UPDATE {table} SET {prefix}_sync_id='{}'",
+                        OperationId::new()
+                    )),
+                    "disallowed stage" => Some(format!("UPDATE {table} SET step='superseded'")),
+                    "cancellation" => Some(format!("UPDATE {table} SET cancel_requested=1")),
+                    _ => unreachable!(),
+                };
+                if let Some(change) = change {
+                    tx.execute_batch(&change).unwrap();
+                }
+                // Keep the inner RepositoryError: the transaction and public
+                // synchronization wrappers may mask its diagnostic wording.
+                Ok(execution.validate(
+                    tx,
+                    if *case == "repository" { id + 1 } else { id },
+                    if *case == "operation" {
+                        OperationId::new()
+                    } else {
+                        child
+                    },
+                ))
+            })
+            .unwrap()
+            .unwrap_err(),
+        };
+        assert_eq!(error.kind, RepositoryErrorKind::OperationMismatch, "{case}");
+        messages.push((*case, error.message));
+    }
+    // Collect every refusal before comparing text, so a red run exercises all
+    // paths rather than stopping at the first closure-wording mismatch.
+    assert_eq!(
+        messages,
+        cases
+            .into_iter()
+            .map(|case| (case, expected.to_owned()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn child_fence_closure_context_mismatches_use_closure_wording() {
+    use crate::repository::promotion::{lifecycle::LifecycleKind, record::ChildRole};
+    assert_child_fence_wording(
+        LifecycleKind::TicketClosure,
+        ChildRole::Context,
+        "the closure ID is bound to another operation",
+    );
+}
+
+#[test]
+fn child_fence_closure_primary_mismatches_use_closure_wording() {
+    use crate::repository::promotion::{lifecycle::LifecycleKind, record::ChildRole};
+    assert_child_fence_wording(
+        LifecycleKind::TicketClosure,
+        ChildRole::Primary,
+        "the closure ID is bound to another operation",
+    );
+}
+
+#[test]
+fn child_fence_promotion_context_mismatches_keep_promotion_wording() {
+    use crate::repository::promotion::{lifecycle::LifecycleKind, record::ChildRole};
+    assert_child_fence_wording(
+        LifecycleKind::DocumentPromotion,
+        ChildRole::Context,
+        "the promotion ID is bound to another operation",
+    );
+}
+
+#[test]
+fn child_fence_promotion_primary_mismatches_keep_promotion_wording() {
+    use crate::repository::promotion::{lifecycle::LifecycleKind, record::ChildRole};
+    assert_child_fence_wording(
+        LifecycleKind::DocumentPromotion,
+        ChildRole::Primary,
+        "the promotion ID is bound to another operation",
+    );
+}

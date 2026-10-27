@@ -332,6 +332,7 @@ impl Drop for Shelf {
 /// What a repair's envelope reports of its item.
 pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
     match envelope.data.as_ref() {
+        Some(MutationDataDto::LocalContextSync(_)) => panic!("local synchronization data"),
         Some(MutationDataDto::Repair(data)) => data,
         Some(
             MutationDataDto::Document(_)

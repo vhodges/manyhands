@@ -207,7 +207,8 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::SaveTicket
         | RepositoryOperation::SubmitComment
         // A repair writes the corrected file in the item's own worktree.
-        | RepositoryOperation::RepairItem => Writes::Item,
+        | RepositoryOperation::RepairItem
+        | RepositoryOperation::ContextSyncLocal => Writes::Item,
         RepositoryOperation::CreateAndEnable
         | RepositoryOperation::Enable
         | RepositoryOperation::SetPublicationRemote => Writes::Configuration,
@@ -385,10 +386,13 @@ impl RepositoryService {
         let Some(root_key) = root.to_str() else {
             return Err(ReadError::new(ResultCode::InvalidPath));
         };
+        let bound_local = super::super::local_sync::bound_to_request(self, &root, operation_id)?;
         let found = self.read_session(RepositoryOperation::Read, |connection| {
             // Asked first: such an ID is not a local operation's,
             // whatever the local journal holds under it.
-            if recovery::held_by_another_journal(connection, &operation_id.to_string())? {
+            if !bound_local
+                && recovery::held_by_another_journal(connection, &operation_id.to_string())?
+            {
                 return Ok(Err(AbandonableOperation::AnotherJournal));
             }
             let Some(row) = recovery::local_row(connection, root_key, operation_id)? else {
@@ -437,6 +441,39 @@ impl RepositoryService {
         } = request;
         self.require_index_available(operation, Some(&root))?;
         let root = journal_root(&root)?;
+        let map_local = |code| {
+            RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                if code == crate::results::ResultCode::Busy {
+                    RepositoryErrorKind::RepositoryBusy
+                } else {
+                    RepositoryErrorKind::RecoveryRequired
+                },
+                "local synchronization abandonment requires current authority",
+            )
+        };
+        if super::super::local_sync::bound_to_request(self, &root, operation_id)
+            .map_err(|e| map_local(e.code()))?
+        {
+            let remains = match self
+                .abandonable_operation(&root, operation_id)
+                .map_err(|e| map_local(e.code()))?
+            {
+                AbandonableOperation::Pending(left) => left,
+                AbandonableOperation::Abandoned => {
+                    return Ok(AbandonOperationOutcome::AlreadyAbandoned);
+                }
+                AbandonableOperation::Completed => return Ok(AbandonOperationOutcome::Completed),
+                _ => return Err(map_local(crate::results::ResultCode::RecoveryRequired)),
+            };
+            let repo = self
+                .resolve_repository(&root)
+                .map_err(|e| map_local(e.code()))?;
+            super::super::local_sync::abandon_bound(self, &repo, operation_id, expected.as_ref())
+                .map_err(|e| map_local(e.code))?;
+            return Ok(AbandonOperationOutcome::Abandoned(remains));
+        }
         let root_key = super::super::registry_root_key(&root, operation)?;
         let data_directory = self
             .registry_path
@@ -501,6 +538,24 @@ impl RepositoryService {
             && (expected.state != row.state || expected.step != row.step)
         {
             return Ok(AbandonOperationOutcome::Changed);
+        }
+        // Local synchronization owns companion Git/recovery authority. The old
+        // generic release deletes request identity and cannot implement its atomic
+        // S/R/U disposition. Task 7 supplies that route; never fall through here.
+        if transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM local_context_sync_records WHERE operation_ulid=?1)",
+                [operation_id.to_string()],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(sqlite)?
+        {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::RecoveryRequired,
+                "local synchronization requires guarded abandonment",
+            ));
         }
         let owner = mutation::release_operation_owner(&transaction, root_key, operation_id)
             .map_err(sqlite)?;

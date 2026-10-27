@@ -523,6 +523,11 @@ pub(in super::super) fn save_record(
     r: &ClosureRecord,
 ) -> Result<(), RepositoryError> {
     let old = read_record(tx, id, r.operation_id)?.ok_or_else(state::recovery_required)?;
+    if r.step != old.step
+        && super::super::local_sync::record::unfinished_context(tx, id, &r.item_id)?
+    {
+        return Err(state::recovery_required());
+    }
     if old.repository_id != r.repository_id
         || old.item_id != r.item_id
         || old.expectation != r.expectation
@@ -619,6 +624,9 @@ pub(in super::super) fn adopt_written_closure(
     let Some(closure) = r.closure_oid else {
         return Err(state::recovery_required());
     };
+    if super::super::local_sync::record::unfinished_context(tx, repository_id, &r.item_id)? {
+        return Err(state::recovery_required());
+    }
     if base.is_zero() || r.closure_kind != Some(ClosureKind::Record) {
         return Err(state::recovery_required());
     }
@@ -757,6 +765,9 @@ pub(in super::super) fn context_synchronization_unfinished(
     id: i64,
     item: &ItemId,
 ) -> Result<bool, RepositoryError> {
+    if super::super::local_sync::record::unfinished_context(db, id, item)? {
+        return Ok(true);
+    }
     db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND action='synchronize_context' AND kind='ticket' AND item_id=?2 AND phase NOT IN ('completed','interrupted','cancelled','failed'))",params![id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())
 }
 pub(in super::super) fn request_cancellation(

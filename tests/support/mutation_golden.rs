@@ -19,6 +19,11 @@ use super::{golden, schema};
 /// fixture with no entry, or an entry with no fixture, fails
 /// `tests/mutation_contract.rs`.
 pub const CASES: &[&str] = &[
+    "local_sync_noop",
+    "local_sync_partial",
+    "local_sync_refused",
+    "local_sync_identity_required",
+    "local_resolve_success",
     "document_create",
     "document_create_invalid_path",
     "document_create_occupied",

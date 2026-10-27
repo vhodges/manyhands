@@ -150,10 +150,10 @@ fn true_race() -> Result<(), FixtureError> {
         };
         if holds(&sides.local, &p.b.closed_by()) && holds(&sides.incoming, &p.a.closed_by()) {
             closures += 1;
-            // R-T8-1: today the product offers this conflict as canonical
-            // and refuses every resolution below. A move to
-            // `ExternalResolutionRequired` must change this line on purpose.
-            assert_eq!(path.eligibility, ConflictEligibility::EligibleCanonical);
+            assert_eq!(
+                path.eligibility,
+                ConflictEligibility::ExternalResolutionRequired
+            );
         }
     }
     assert_eq!(closures, 1);
@@ -182,10 +182,10 @@ fn true_race() -> Result<(), FixtureError> {
                     None,
                 ));
         p.diagnostics(&format!("{resolution:?}"))?;
-        // R-T8-1: Cycle 06 validation keeps every side's closure.
+        // Fresh classification refuses before accepting a resolution attempt.
         assert!(matches!(
             resolution,
-            Ok(ResolveSynchronizationOutcome::ValidationFailed)
+            Err(SynchronizationError::ExternalResolutionRequired { .. })
         ));
         assert_eq!(image(&p.b.root)?, main_image);
     }

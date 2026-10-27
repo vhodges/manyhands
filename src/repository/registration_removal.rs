@@ -144,6 +144,7 @@ fn require_registry_only_removal(
     root: &Path,
     operation_id: OperationId,
 ) -> Result<(), RepositoryError> {
+    super::local_sync::record::audit(db)?;
     let key = registry_root_key(root, OPERATION)?;
     let id = operation_id.to_string();
     // Let the existing begin path persist its yield request and return busy.

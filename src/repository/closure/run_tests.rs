@@ -323,6 +323,87 @@ fn synchronize_context_by_hand(f: &Fixture) -> Oid {
     merged
 }
 
+/// Task 8 acceptance uses only the production mutation/read boundary. The old
+/// manual helper remains solely for its separately approved legacy control.
+fn synchronize_closing_context(f: &Fixture, closure: &CloseTicketRequest) -> Oid {
+    use crate::repository::{
+        CancellationToken, LocalConflictResolutionInput, LocalContextResolveInput,
+        LocalContextSyncInput, Mutation, MutationCall, NoProgress, RequestId,
+    };
+    use crate::results::ResultCode;
+    let stored = f.stored(closure.operation_id);
+    let parents = [f.context_oid(), f.primary()];
+    let resolved = f.service.resolve_repository(f.root()).unwrap();
+    let observation = f
+        .service
+        .observe_local_context_sync(&resolved, AuthoringKind::Ticket, &id())
+        .unwrap();
+    let execute = |mutation| {
+        f.service.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation,
+            },
+            &mut SessionCredentials::new(NoCredentials),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    };
+    let started = execute(Mutation::LocalContextSync(LocalContextSyncInput {
+        root: f.root().into(),
+        kind: AuthoringKind::Ticket,
+        id: id(),
+        observation: observation.observation,
+    }));
+    assert_eq!(started.code, ResultCode::RecoveryRequired, "{started:?}");
+    let operation = OperationId::parse(started.operation_id.as_deref().unwrap()).unwrap();
+    let inspection = f
+        .service
+        .inspect_local_context_sync(&resolved, operation)
+        .unwrap();
+    assert!(inspection.can_start_resolution);
+    assert_eq!(inspection.paths.len(), 1);
+    let sides = f
+        .service
+        .read_local_context_conflict(&resolved, operation, &inspection.paths[0].token)
+        .unwrap();
+    assert!(sides.local.as_ref().unwrap().contains("context body"));
+    assert!(sides.incoming.as_ref().unwrap().contains("primary body"));
+    assert!(matches!(
+        f.close(&f.reopened(), closure.clone()),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    assert_eq!(f.stored(closure.operation_id), stored);
+    let result = execute(Mutation::LocalContextResolve(LocalContextResolveInput {
+        root: f.root().into(),
+        operation_id: operation,
+        observation: inspection.observation.unwrap(),
+        resolutions: vec![LocalConflictResolutionInput {
+            token: inspection.paths[0].token.clone(),
+            source: sides.local.unwrap(),
+        }],
+    }));
+    assert_eq!(result.code, ResultCode::Ok, "{result:?}");
+    let merged = f.context_oid();
+    assert_eq!(
+        f.context
+            .find_commit(merged)
+            .unwrap()
+            .parent_ids()
+            .collect::<Vec<_>>(),
+        parents
+    );
+    assert_eq!(f.primary(), parents[1]);
+    assert_eq!(
+        f.stored(closure.operation_id),
+        stored,
+        "sync must not resume closure"
+    );
+    assert!(f.context.workdir().unwrap().is_dir());
+    merged
+}
+
 // --- Happy path, replay and consent ------------------------------------
 
 #[test]
@@ -760,7 +841,7 @@ fn conflicting_advance_after_the_checkpoint_needs_a_deliberate_synchronization()
         Err(TicketClosureError::RecoveryRequired)
     ));
     assert_eq!(f.stored(req.operation_id), stopped);
-    let synchronized = synchronize_context_by_hand(&f);
+    let synchronized = synchronize_closing_context(&f, &req);
     outcome(f.close(&f.reopened(), req.clone()).unwrap());
     let merge = f.merge();
     assert_eq!(
@@ -771,6 +852,7 @@ fn conflicting_advance_after_the_checkpoint_needs_a_deliberate_synchronization()
     assert_eq!(r.adopted_context_oid, Some(synchronized));
     assert_eq!(r.closure_oid, stopped.closure_oid);
     assert_eq!(f.primary_ticket().closed_at, stopped.closed_at);
+    assert_eq!(f.primary_ticket().closed_by.as_deref(), Some(CLOSED_BY));
 }
 
 /// R-P2: once the checkpoint ref moved (a finished checkout, the checkpoint,
@@ -826,8 +908,14 @@ fn adopted_context_is_merged_reconciled_after_f4_and_retired() {
         &f.failing(FailurePoint::AfterClosureCheckpoint),
         req.clone(),
     );
-    let advanced = advance_primary(f.root(), "primary.txt");
-    let adopted = synchronize_context_by_hand(&f);
+    let checkpoint = f.stored(req.operation_id);
+    let advanced = edit_ticket(&f.repo, |s| s.replace("original body", "primary body"));
+    assert!(matches!(
+        f.close(&f.reopened(), req.clone()),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    assert_eq!(f.stored(req.operation_id), checkpoint);
+    let adopted = synchronize_closing_context(&f, &req);
     let stopped = f.close(&f.failing(FailurePoint::AfterIntegrationRef), req.clone());
     assert!(
         matches!(&stopped, Ok(r) if authoritative(r.clone()).cleanup() == PromotionCleanup::Pending { reason: PromotionCleanupPending::RecoveryRequired }),
@@ -850,6 +938,91 @@ fn adopted_context_is_merged_reconciled_after_f4_and_retired() {
         )
         .unwrap();
     assert_eq!(retired, ("ticket".into(), adopted.to_string()));
+    assert_eq!(
+        f.stored(req.operation_id).closure_oid,
+        checkpoint.closure_oid
+    );
+    assert_eq!(f.primary_ticket().closed_at, checkpoint.closed_at);
+    assert_eq!(f.primary_ticket().closed_by.as_deref(), Some(CLOSED_BY));
+}
+
+#[test]
+fn local_sync_second_primary_advance_requires_another_explicit_sync_before_closure() {
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(
+        &f.failing(FailurePoint::AfterClosureCheckpoint),
+        req.clone(),
+    );
+    let checkpoint = f.stored(req.operation_id);
+    edit_ticket(&f.repo, |s| s.replace("original body", "primary body"));
+    assert!(matches!(
+        f.close(&f.reopened(), req.clone()),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    let first = synchronize_closing_context(&f, &req);
+    let newer = edit_ticket(&f.repo, |s| s.replace("primary body", "newer primary body"));
+    assert!(matches!(
+        f.close(&f.reopened(), req.clone()),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    assert_eq!(f.context_oid(), first);
+    let second = synchronize_closing_context(&f, &req);
+    assert_eq!(f.primary(), newer);
+    outcome(f.close(&f.reopened(), req.clone()).unwrap());
+    let stored = f.stored(req.operation_id);
+    assert_eq!(stored.adopted_context_oid, Some(second));
+    assert_eq!(stored.closure_oid, checkpoint.closure_oid);
+    assert_eq!(f.primary_ticket().closed_at, checkpoint.closed_at);
+    assert_eq!(f.primary_ticket().closed_by.as_deref(), Some(CLOSED_BY));
+    f.assert_cleaned();
+}
+
+#[test]
+fn local_sync_configured_remote_closure_requires_explicit_second_sync_and_resume() {
+    // This local fixture never starts SSH. Only closure's preexisting child IO
+    // is injected; sync/read/resolve use the real production public boundary.
+    let f = Fixture::remote();
+    let req = f.request();
+    let mut io = FakeIo::default();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterClosureCheckpoint),
+        req.clone(),
+        &mut io,
+    );
+    let checkpoint = f.stored(req.operation_id);
+    let advanced = edit_ticket(&f.repo, |s| s.replace("original body", "primary body"));
+    // Model an already explicit primary synchronization. Closure's remote
+    // readiness requires local primary equal to or behind tracking (C9 D2).
+    f.tracking("main", advanced);
+    assert!(matches!(
+        f.run_io(&f.reopened(), req.clone(), &mut io),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    let first = synchronize_closing_context(&f, &req);
+    assert_eq!(
+        f.repo.refname_to_id("refs/remotes/origin/main").unwrap(),
+        advanced
+    );
+    let tracking = edit_ticket(&f.repo, |s| s.replace("primary body", "newer primary body"));
+    f.tracking("main", tracking);
+    assert!(matches!(
+        f.run_io(&f.reopened(), req.clone(), &mut io),
+        Err(TicketClosureError::RecoveryRequired)
+    ));
+    assert_eq!(f.context_oid(), first);
+    let second = synchronize_closing_context(&f, &req);
+    assert_eq!(
+        f.repo.refname_to_id("refs/remotes/origin/main").unwrap(),
+        tracking
+    );
+    outcome(f.run_io(&f.reopened(), req.clone(), &mut io).unwrap());
+    let stored = f.stored(req.operation_id);
+    assert_eq!(stored.adopted_context_oid, Some(second));
+    assert_eq!(stored.closure_oid, checkpoint.closure_oid);
+    assert_eq!(f.primary_ticket().closed_at, checkpoint.closed_at);
+    assert_eq!(f.primary_ticket().closed_by.as_deref(), Some(CLOSED_BY));
+    f.assert_cleaned();
 }
 
 // --- Process exits at every boundary ------------------------------------

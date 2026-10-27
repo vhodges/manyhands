@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Manyhands JSON v1 local conflict entry",
+  "description":"An immutable conflict capability. Display paths are escaped presentation text, never writable paths. Entries are ordered by raw repository path bytes.",
+  "type":"object","additionalProperties":false,
+  "required":["display_path","token","content_available"],
+  "properties":{
+    "display_path":{"type":"string"},
+    "token":{"type":"string"},
+    "content_available":{"type":"boolean"}
+  }
+}

@@ -148,6 +148,34 @@ fn eligibility_requires_the_entire_conflict_set_to_be_canonical_regular_utf8() {
 }
 
 #[test]
+fn incompatible_closures_make_every_mixed_set_order_external_only() {
+    let incompatible = ConflictCandidate {
+        kind: ConflictEntryKind::Ticket,
+        structure: ConflictStructure::IncompatibleClosures,
+    };
+    assert_eq!(
+        conflict_eligibility(&[incompatible]),
+        ConflictEligibility::ExternalResolutionRequired
+    );
+    for kind in [
+        ConflictEntryKind::Document,
+        ConflictEntryKind::Ticket,
+        ConflictEntryKind::Comment,
+    ] {
+        let compatible = ConflictCandidate {
+            kind,
+            structure: ConflictStructure::RegularUtf8SamePath,
+        };
+        for entries in [[compatible, incompatible], [incompatible, compatible]] {
+            assert_eq!(
+                conflict_eligibility(&entries),
+                ConflictEligibility::ExternalResolutionRequired
+            );
+        }
+    }
+}
+
+#[test]
 fn redacted_recovery_contracts_never_format_caller_bytes_or_identity() {
     let secret = b"private resolution body";
     let observation = ConflictObservation::for_testing([7; 32]);

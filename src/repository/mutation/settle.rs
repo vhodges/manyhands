@@ -83,6 +83,15 @@ impl RepositoryService {
         accepted: &Accepted,
         ran: Ran,
     ) -> Envelope<MutationDataDto> {
+        if super::local_control::effects(self, accepted.request_id)
+            .ok()
+            .flatten()
+            .is_some()
+            && let Ok(Some(record)) = self.request_record(accepted.request_id)
+            && record.state == RequestState::Finished
+        {
+            return self.replay(reply, record);
+        }
         let Ran { answer, standing } = ran;
         let settlement = Settlement::of(&standing);
         let applied = self.settle(accepted, settlement, &answer);

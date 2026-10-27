@@ -73,6 +73,7 @@
             "save_ticket",
             "submit_comment",
             "repair_item",
+            "context_sync_local",
             null
           ]
         },

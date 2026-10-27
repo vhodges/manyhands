@@ -47,6 +47,7 @@ mod dto;
 mod evidence;
 mod execute;
 mod identity;
+pub(super) mod local_control;
 mod observe;
 mod outcome;
 mod progress;
@@ -64,6 +65,7 @@ use bind::{
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
+    local_sync::LocalSyncBinding,
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repair::RepairBinding,
     repo::RepoBinding,
@@ -83,6 +85,7 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
+    local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
@@ -396,6 +399,8 @@ pub struct MutationCall {
 /// command, holding that command's typed input. The variant fixes the
 /// envelope's `command`.
 pub enum Mutation {
+    LocalContextSync(LocalContextSyncInput),
+    LocalContextResolve(LocalContextResolveInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -436,6 +441,8 @@ impl Mutation {
 
     fn kind(&self) -> Command {
         match self {
+            Self::LocalContextSync(_) => Command::LocalContextSync,
+            Self::LocalContextResolve(_) => Command::LocalContextResolve,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -474,6 +481,7 @@ impl Mutation {
     /// there is nothing to preview, and nothing is read of its input.
     fn confirmed(&self) -> Option<Box<dyn Confirmed>> {
         match self {
+            Self::LocalContextSync(_) | Self::LocalContextResolve(_) => None,
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -513,6 +521,8 @@ impl Mutation {
 
     fn into_binding(self) -> Box<dyn Binding> {
         match self {
+            Self::LocalContextSync(input) => Box::new(LocalSyncBinding::Start(input)),
+            Self::LocalContextResolve(input) => Box::new(LocalSyncBinding::Resolve(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

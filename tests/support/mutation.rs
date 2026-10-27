@@ -595,6 +595,7 @@ impl World {
 /// What a ticket request reported about its ticket.
 pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Ticket(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
@@ -610,6 +611,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
 /// What a document request reported about its document.
 pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationDto {
     match envelope.data.as_ref().expect("document data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Document(data) => data,
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
@@ -729,6 +731,7 @@ impl World {
 /// What a remote request reported about its remote.
 pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
     match envelope.data.as_ref().expect("remote data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Remote(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -744,6 +747,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
 /// What an abandon reported about the operation it closed.
 pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutationDto {
     match envelope.data.as_ref().expect("operation data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Operation(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -759,6 +763,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
 /// What a key request reported about its key.
 pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     match envelope.data.as_ref().expect("key data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Key(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -774,6 +779,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
 /// What a `repo identity-set` reported about the identity.
 pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationDto {
     match envelope.data.as_ref().expect("identity data") {
+        MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Identity(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),

@@ -424,6 +424,13 @@ impl RepositoryService {
                     Ok(false) => dto(false, false),
                     Ok(true) => {
                         let mut acknowledged = false;
+                        if let Ok(Some((issued, ack))) = self
+                            .read_session(crate::repository::RepositoryOperation::Read, |db| {
+                                super::local_control::counters(db, request_id)
+                            })
+                        {
+                            acknowledged = issued > 0 && ack == issued;
+                        }
                         for operation in &record.operations {
                             if operation.family != OperationFamily::Remote {
                                 continue;
