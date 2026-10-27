@@ -824,6 +824,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             ItemContextKind::ALL.map(ItemContextKind::as_str).to_vec(),
         ),
         (
+            "context_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
             "dependency.schema.json",
             "state",
             DependencyState::ALL.map(DependencyState::as_str).to_vec(),

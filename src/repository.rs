@@ -1003,9 +1003,12 @@ pub enum FailurePoint {
     /// past the wait would have it fail, and the row is left as the
     /// refresh left it.
     BeforeFolderRefreshClose,
-    /// `release_context`, after the context's worktree is removed and
-    /// its step recorded, and before its branch is deleted: the call
-    /// ends there with the worktree gone and the branch there.
+    /// `release_context`, once the checks before anything is touched
+    /// have passed, and before the branch is deleted. When the context
+    /// had a worktree, the worktree is removed and its step recorded, so
+    /// the call ends with the worktree gone, the branch there and the row
+    /// pending. When the context was a branch alone, nothing was removed
+    /// and no step was recorded, so the new row is discarded.
     BeforeContextBranchRelease,
     /// `release_context`, after the context's branch is deleted and its
     /// step recorded, and before the index is told: the call ends there

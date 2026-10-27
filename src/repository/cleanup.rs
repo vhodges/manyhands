@@ -144,6 +144,25 @@ impl ContextCleanup {
     pub(super) fn into_lease(self) -> RepositoryLease {
         self.lease
     }
+    /// Where the repository registers the context's worktree.
+    fn registration(&self, id: &ItemId) -> PathBuf {
+        self.repository
+            .commondir()
+            .join("worktrees")
+            .join(id.to_string())
+    }
+    /// Whether the context's worktree directory, and its registration,
+    /// are each there. `Err` for one that cannot be read.
+    fn worktree_parts(&self, kind: AuthoringKind, id: &ItemId) -> [Result<bool, ()>; 2] {
+        let context = item_context(&self.root, kind, id.clone());
+        [present(&context.worktree), present(&self.registration(id))]
+    }
+    /// Whether anything of the context's worktree is there: its
+    /// directory or its registration. `Err` when that cannot be read.
+    pub(super) fn worktree_present(&self, kind: AuthoringKind, id: &ItemId) -> Result<bool, ()> {
+        let [worktree, registration] = self.worktree_parts(kind, id);
+        Ok(worktree? || registration?)
+    }
     pub(super) fn precheck_context(&self, kind: AuthoringKind, id: &ItemId, oid: Oid) -> Precheck {
         match self.inspect(kind, id, oid, true) {
             Ok(()) => Precheck::Ok,
@@ -193,11 +212,7 @@ impl ContextCleanup {
         let Ok(linked) = sync::materialized_target(&self.root, "", &target) else {
             return Err(Finding::Mismatch);
         };
-        let expected_admin = self
-            .repository
-            .commondir()
-            .join("worktrees")
-            .join(id.to_string());
+        let expected_admin = self.registration(id);
         if !linked.is_worktree()
             || linked.path().canonicalize().ok() != expected_admin.canonicalize().ok()
             || linked.commondir().canonicalize().ok()
@@ -292,14 +307,9 @@ impl ContextCleanup {
         refusal: impl FnOnce() -> Option<WorktreeRelease>,
     ) -> WorktreeRelease {
         let context = item_context(&self.root, kind, id.clone());
-        let admin = self
-            .repository
-            .commondir()
-            .join("worktrees")
-            .join(id.to_string());
-        match (present(&context.worktree), present(&admin)) {
-            (Ok(false), Ok(false)) => return WorktreeRelease::AlreadyAbsent,
-            (Ok(true), Ok(true)) => (),
+        match self.worktree_parts(kind, id) {
+            [Ok(false), Ok(false)] => return WorktreeRelease::AlreadyAbsent,
+            [Ok(true), Ok(true)] => (),
             _ => return WorktreeRelease::RecoveryRequired,
         }
         if let Some(refused) = refusal() {
@@ -330,7 +340,7 @@ impl ContextCleanup {
         if worktree.prune(Some(&mut options)).is_err() {
             return WorktreeRelease::Incomplete;
         }
-        if present(&context.worktree) == Ok(false) && present(&admin) == Ok(false) {
+        if self.worktree_parts(kind, id) == [Ok(false), Ok(false)] {
             WorktreeRelease::Removed
         } else {
             WorktreeRelease::Incomplete

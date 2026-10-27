@@ -1321,6 +1321,32 @@ fn release_whose_refresh_fails_is_discovery_pending_and_resume_completes_it() {
     assert_ok(&made);
 }
 
+/// Not a row of the table: the request's own retry finishes the hand-off
+/// that a resume would, from the step its row recorded.
+#[test]
+fn release_whose_refresh_fails_is_finished_by_the_same_request_too() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeIndexTransactionCommit);
+    let pending = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_eq!(pending.code, ResultCode::DiscoveryPending, "{pending:?}");
+    let operation = pending.operation_id.clone();
+    world.reopen();
+
+    let finished = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&finished);
+    assert_eq!(finished.operation_id, operation);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+}
+
 #[test]
 fn release_interrupted_before_settlement_the_same_request_is_ok_or_already_applied() {
     git_home::isolated();

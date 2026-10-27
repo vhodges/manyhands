@@ -312,20 +312,33 @@ fn kind_of<T: std::fmt::Debug>(result: Result<T, RepositoryError>) -> Repository
     }
 }
 
-/// Asserts that a release of `id` is refused with `kind`, that the refusal
-/// left the context exactly as it was, and that its row was discarded.
+/// Asserts that a release of the ticket `id` is refused with `kind`, that
+/// the refusal left the context exactly as it was, and that its row was
+/// discarded.
 fn assert_refused_and_left(f: &Fixture, id: &str, kind: RepositoryErrorKind) {
-    let before = f.state(AuthoringKind::Ticket, id);
+    assert_refused_and_left_as(f, AuthoringKind::Ticket, id, kind, "");
+}
+
+/// The same, for a context of `context_kind`, with `case` naming the case
+/// in every message.
+fn assert_refused_and_left_as(
+    f: &Fixture,
+    context_kind: AuthoringKind,
+    id: &str,
+    kind: RepositoryErrorKind,
+    case: &str,
+) {
+    let before = f.state(context_kind, id);
     let references = f.references();
     let operation_id = OperationId::new();
-    let result = f.release_with(&f.service, AuthoringKind::Ticket, id, operation_id);
-    assert_eq!(kind_of(result), kind);
-    assert_eq!(f.state(AuthoringKind::Ticket, id), before);
-    assert_eq!(f.references(), references);
+    let result = f.release_with(&f.service, context_kind, id, operation_id);
+    assert_eq!(kind_of(result), kind, "{case}");
+    assert_eq!(f.state(context_kind, id), before, "{case}");
+    assert_eq!(f.references(), references, "{case}");
     assert_eq!(
         f.row(operation_id),
         ("completed".to_owned(), Some("rejected".to_owned())),
-        "the row is discarded"
+        "the row is discarded: {case}"
     );
 }
 
@@ -453,8 +466,13 @@ fn check_a_a_worktree_with_a_change_or_an_untracked_or_ignored_file_is_not_clean
         let f = Fixture::new();
         f.edit(TICKET);
         change(&f.worktree(TICKET));
-        eprintln!("{name}");
-        assert_refused_and_left(&f, TICKET, RepositoryErrorKind::DirtyWorktree);
+        assert_refused_and_left_as(
+            &f,
+            AuthoringKind::Ticket,
+            TICKET,
+            RepositoryErrorKind::DirtyWorktree,
+            name,
+        );
     }
 }
 
@@ -687,16 +705,14 @@ fn ownership_an_unfinished_closure_or_promotion_owns_the_context() {
         .map(|_| ())
     })
     .unwrap();
-    let before = f.state(AuthoringKind::Document, DOCUMENT);
-    let result = f.release_with(
-        &f.service,
+    assert_eq!(f.state(AuthoringKind::Document, DOCUMENT), present(&f));
+    assert_refused_and_left_as(
+        &f,
         AuthoringKind::Document,
         DOCUMENT,
-        OperationId::new(),
+        RepositoryErrorKind::RecoveryRequired,
+        "promotion",
     );
-    assert_eq!(kind_of(result), RepositoryErrorKind::RecoveryRequired);
-    assert_eq!(f.state(AuthoringKind::Document, DOCUMENT), before);
-    assert_eq!(before, present(&f));
 }
 
 #[test]

@@ -12,7 +12,8 @@
     },
     "kind": {
       "description": "The item's kind: ticket or document.",
-      "enum": ["ticket", "document"]
+      "type": "string",
+      "enum": ["document", "ticket"]
     },
     "branch": {
       "description": "The context's branch: manyhands/<kind>/<id>.",

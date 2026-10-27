@@ -108,13 +108,13 @@ fn git(root: &Path, error: git2::Error) -> RepositoryError {
     RepositoryError::git(OPERATION, Some(root.to_owned()), error)
 }
 
-/// Whether something is at `path`, a link included.
-fn present(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(RepositoryError::io(OPERATION, Some(root.to_owned()), error)),
-    }
+fn unreadable(root: &Path) -> RepositoryError {
+    authoring_error(
+        OPERATION,
+        root,
+        RepositoryErrorKind::Io,
+        "the context worktree cannot be read",
+    )
 }
 
 /// One release, as its call holds it.
@@ -127,17 +127,6 @@ struct Release<'a> {
 }
 
 impl Release<'_> {
-    /// Whether the context's worktree is there: its directory, or its
-    /// registration in the repository.
-    fn worktree_present(&self) -> Result<bool, RepositoryError> {
-        let admin = self
-            .repository
-            .commondir()
-            .join("worktrees")
-            .join(self.context.item_id.to_string());
-        Ok(present(self.root, &self.context.worktree)? || present(self.root, &admin)?)
-    }
-
     /// The tip of the context's branch, when it exists.
     fn branch_tip(&self) -> Result<Option<Oid>, RepositoryError> {
         let name = format!("refs/heads/{}", self.context.branch);
@@ -375,7 +364,9 @@ impl RepositoryService {
             return Ok(true);
         }
         if step != Some(LocalStep::ContextWorktreeReleased) {
-            let worktree = release.worktree_present()?;
+            let worktree = cleanup
+                .worktree_present(kind, item)
+                .map_err(|()| unreadable(root))?;
             let tip = release.branch_tip()?;
             if record.is_new && !worktree && tip.is_none() {
                 return Ok(false);
@@ -433,6 +424,8 @@ impl RepositoryService {
                     }
                 }
             }
+            // Also on a branch alone, where nothing was removed and no
+            // step recorded: a new row is then discarded.
             self.check_failure(FailurePoint::BeforeContextBranchRelease, OPERATION, root)?;
         }
         // 6. The branch as it is now: no commit was made on it, and
