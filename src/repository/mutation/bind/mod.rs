@@ -37,6 +37,7 @@ pub(crate) mod folder;
 pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
+pub(crate) mod local_sync;
 pub(crate) mod remote;
 pub(crate) mod repair;
 pub(crate) mod repo;
@@ -518,6 +519,9 @@ impl Accepted {
         &self,
         service: &RepositoryService,
     ) -> Result<JournalRow, ReadError> {
+        if let Some(row) = super::local_control::journal(service, self.request_id)? {
+            return Ok(row);
+        }
         match self.family {
             Some(family) => service.journal_row(family, &self.scope, self.operation_id),
             None => Ok(JournalRow::Absent),
@@ -897,6 +901,9 @@ impl Recorded {
 /// row that could not be read is taken to be there: the effects still
 /// have to be shown by the repository.
 pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestRecord) -> Recorded {
+    if let Ok(Some(effects)) = super::local_control::effects(service, record.request_id) {
+        return Recorded::of(effects);
+    }
     // A host approval has no operation, so no row says an attempt of it
     // ran, and it keeps its record accepted when it stored the pin and
     // then failed: the pin store is asked instead. A pin is shown by no
@@ -921,6 +928,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         return Recorded::nothing();
     }
     match Command::parse(&record.command) {
+        Some(Command::LocalContextSync | Command::LocalContextResolve) => Recorded::nothing(),
         Some(Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove) => {
             Recorded::of(document::recorded_effects(record, &accepted))
         }

@@ -43,7 +43,6 @@
 
 pub(super) mod artifacts;
 // Exclusive local-executor dependency; activate with its Task 7 callers.
-#[cfg(test)]
 pub(super) mod filtered;
 pub(super) mod prepare;
 pub(super) mod resolution;

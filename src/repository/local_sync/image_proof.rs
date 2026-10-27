@@ -286,7 +286,6 @@ pub(super) fn audit(db: &Connection) -> Result<(), super::super::RepositoryError
     Ok(())
 }
 
-#[cfg(test)]
 mod execute {
     use super::super::{recover::Disposition, run::Fault};
     use super::*;

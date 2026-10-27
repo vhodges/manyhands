@@ -1,9 +1,7 @@
 //! Same-database companion authority. Creation is indivisible with the local
 //! envelope and is serialized under the common-Git lease. No fallback journal.
-#[cfg(test)]
 use crate::results::ResultCode;
 use crate::{canonical::ItemId, repository::*};
-#[cfg(test)]
 use rusqlite::TransactionBehavior;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::PathBuf;
@@ -99,11 +97,9 @@ fn failure() -> RepositoryError {
         "local synchronization authority is unavailable",
     )
 }
-#[cfg(test)]
 fn recovery_error(_: impl std::fmt::Debug) -> ReadError {
     ReadError::new(ResultCode::RecoveryRequired)
 }
-#[cfg(test)]
 fn sql_error(error: rusqlite::Error) -> ReadError {
     ReadError::new(match error.sqlite_error_code() {
         Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked) => {
@@ -349,7 +345,7 @@ fn strict_oid(text: &str) -> rusqlite::Result<git2::Oid> {
     Ok(oid)
 }
 
-pub(super) fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
+pub(in super::super) fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSyncRecord> {
     let invalid = || rusqlite::Error::InvalidQuery;
     let operation_id =
         OperationId::parse(&r.get::<_, String>("operation_ulid")?).map_err(|_| invalid())?;
@@ -449,7 +445,7 @@ pub(super) fn decode(r: &rusqlite::Row<'_>) -> rusqlite::Result<LocalContextSync
     }
     Ok(result)
 }
-fn valid_observation(s: &str) -> bool {
+pub(super) fn valid_observation(s: &str) -> bool {
     s.strip_prefix("local-sync-v1:").is_some_and(|s| {
         s.len() == 64
             && s.bytes()
@@ -667,7 +663,11 @@ pub(super) fn store_access(read: bool) -> Result<(), ReadError> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(not(test))]
+pub(super) fn store_access(_: bool) -> Result<(), ReadError> {
+    Ok(())
+}
+
 pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, ReadError> {
     store_access(false)?;
     // Typed failures are injected at the actual registry-opening boundary,
@@ -690,18 +690,16 @@ pub(super) fn open_for_write(service: &RepositoryService) -> Result<Connection, 
         _ => ReadError::new(ResultCode::IndexUnavailable),
     })
 }
-#[cfg(test)]
 fn journal_io(_: std::io::Error) -> ReadError {
     ReadError::new(ResultCode::IndexUnavailable)
 }
 
-// Task 4 exercises the real store internally. The approved Task 5 executor
-// will make these seams production callers; no public claim/takeover API is
-// published ahead of preparation and Task 7 request-attempt authority.
-#[cfg(test)]
+// Internal store seams. Production execution supplies F2 request authority;
+// standalone claim/takeover wrappers remain fixture-only and are never public.
 impl RepositoryService {
     /// Claim a retained journal without substituting its frozen observation or
     /// parents. This only transfers domain ownership; it performs no Git work.
+    #[cfg(test)]
     pub(in super::super) fn take_over_local_context_sync(
         &self,
         repo: &ResolvedRepository,
@@ -745,6 +743,7 @@ impl RepositoryService {
     /// The domain journal boundary: bind a frozen, observed pair without Git
     /// effects. Request acceptance/linkage is a separate mutation-boundary duty.
     /// This is not a synchronization executor.
+    #[cfg(test)]
     pub(in super::super) fn begin_local_context_sync(
         &self,
         repo: &ResolvedRepository,
@@ -756,6 +755,7 @@ impl RepositoryService {
         self.begin_local_context_sync_with(repo, operation, kind, item, observation, || {})
     }
 
+    #[cfg(test)]
     pub(super) fn begin_local_context_sync_with(
         &self,
         repo: &ResolvedRepository,
@@ -775,10 +775,24 @@ impl RepositoryService {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn begin_local_context_sync_prepared(
         &self,
         repo: &ResolvedRepository,
         input: (OperationId, AuthoringKind, &ItemId, &str),
+        prepare: impl FnOnce(
+            &git2::Repository,
+            &LocalContextSyncObservationDto,
+        ) -> Result<Option<super::recover::Execution>, ReadError>,
+    ) -> Result<LocalContextSyncRecord, ReadError> {
+        self.begin_local_context_sync_with_request(repo, input, None, prepare)
+    }
+
+    pub(super) fn begin_local_context_sync_with_request(
+        &self,
+        repo: &ResolvedRepository,
+        input: (OperationId, AuthoringKind, &ItemId, &str),
+        request: Option<super::Fence<'_>>,
         prepare: impl FnOnce(
             &git2::Repository,
             &LocalContextSyncObservationDto,
@@ -837,6 +851,9 @@ impl RepositoryService {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sql_error)?;
         let facts = super::observe::facts(&tx, repo, kind, item)?;
+        if let Some(request) = request {
+            request.verify(&tx, repo.root(), operation)?;
+        }
         if super::observe::from_facts(repo, &facts, kind, item)?.observation != observation {
             return Err(ReadError::new(ResultCode::ExternalChange));
         }
@@ -859,6 +876,9 @@ impl RepositoryService {
                 decode,
             )
             .map_err(recovery_error)?;
+        if let Some(request) = request {
+            request.attach(&tx, &row)?;
+        }
         tx.commit().map_err(sql_error)?;
         Ok(row)
     }
@@ -875,7 +895,6 @@ impl RepositoryService {
     }
 }
 
-#[cfg(test)]
 fn operation_collision(db: &Connection, id: &str) -> Result<bool, ReadError> {
     Ok(foreign_id_collision(db, id, None).map_err(recovery_error)?
         || owned_identity(db, id).map_err(recovery_error)?)
@@ -968,7 +987,6 @@ pub(in super::super) fn require_foreign_id_available(
     }
 }
 
-#[cfg(test)]
 fn admit(
     db: &Connection,
     repository_id: i64,
@@ -1043,7 +1061,6 @@ fn admit(
     Ok(admitted)
 }
 
-#[cfg(test)]
 fn require_remote_released(db: &Connection, id: i64) -> Result<(), ReadError> {
     let retained:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records r WHERE r.repository_id=?1 AND (r.phase NOT IN ('completed','interrupted','cancelled','failed') OR r.index_pending!=0 OR r.reconciliation_required!=0 OR EXISTS(SELECT 1 FROM remote_integration_steps s WHERE s.operation_record_id=r.id AND s.phase!='applied') OR EXISTS(SELECT 1 FROM remote_resolution_attempts t WHERE t.operation_record_id=r.id AND (t.phase!='applied' OR NOT EXISTS(SELECT 1 FROM remote_resolution_index_artifacts a WHERE a.attempt_id=t.id AND a.phase='released'))) OR EXISTS(SELECT 1 FROM remote_integration_merge_metadata m JOIN remote_integration_steps s ON s.id=m.integration_step_id WHERE s.operation_record_id=r.id AND m.phase!='retired')))",[id],|r|r.get(0))?;
     if retained {

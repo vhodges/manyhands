@@ -243,9 +243,6 @@ pub(in super::super) fn install_conflict(
         .map_err(|_| Error::RecoveryRequired)
 }
 
-// Task 7 activation obligation: these helpers are exclusively used by the
-// temporarily test-gated local executor; remove the gates with its real callers.
-#[cfg(test)]
 pub(in super::super) fn local_checkout<E: From<Error>>(
     repository: &git2::Repository,
     candidate: git2::Oid,
@@ -275,7 +272,6 @@ pub(in super::super) fn local_checkout<E: From<Error>>(
     result.map_err(|_| Error::RecoveryRequired.into())
 }
 
-#[cfg(test)]
 pub(in super::super) fn local_reference<E: From<Error>>(
     repository: &git2::Repository,
     transition: (&str, git2::Oid, git2::Oid),

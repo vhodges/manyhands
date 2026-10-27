@@ -1,4 +1,4 @@
-//! Internal executor. Temporarily test-gated until Task 7 binds request authority.
+//! Internal executor, reached through the F2 request-fenced mutation bindings.
 use super::{
     record::{LocalContextSyncRecord, LocalSyncState},
     recover::{self, Disposition, Execution, Owner},
@@ -6,11 +6,13 @@ use super::{
 use crate::{canonical::ItemId, repository::*, results::*};
 use rusqlite::params;
 
+#[cfg(test)]
 type BoundaryHook = Box<dyn FnMut(FailurePoint)>;
+#[cfg(test)]
 thread_local! {pub(super) static BOUNDARY_HOOK: std::cell::RefCell<Option<BoundaryHook>>=const {std::cell::RefCell::new(None)};}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Reason {
+pub(in super::super) enum Reason {
     None,
     UnrelatedHistories,
     ImmutableClosureDisagreement,
@@ -25,7 +27,7 @@ pub(super) enum Reason {
     Cancelled,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Report {
+pub(in super::super) struct Report {
     pub code: ResultCode,
     pub reason: Reason,
     pub state: Option<LocalSyncState>,
@@ -34,12 +36,13 @@ pub(super) struct Report {
     pub cancel_acknowledged: bool,
 }
 impl Report {
+    #[cfg(test)]
     pub fn outcome(&self) -> Outcome {
         Outcome::of_mutation(false, self.code, &self.effects, false)
     }
 }
 #[derive(Debug)]
-pub(super) struct Fault {
+pub(in super::super) struct Fault {
     pub code: ResultCode,
     pub reason: Reason,
 }
@@ -232,6 +235,7 @@ fn prepare(
     )
 }
 
+#[cfg(test)]
 pub(super) fn execute(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -240,12 +244,24 @@ pub(super) fn execute(
     id: OperationId,
     observation: &str,
 ) -> Report {
+    execute_request(service, repo, kind, item, id, observation, None)
+}
+pub(super) fn execute_request<'a>(
+    service: &'a RepositoryService,
+    repo: &'a ResolvedRepository,
+    kind: AuthoringKind,
+    item: &ItemId,
+    id: OperationId,
+    observation: &str,
+    request: Option<super::Fence<'a>>,
+) -> Report {
     let mut preparation_reason = None;
     // This store looks for accepted intent BEFORE evaluating live observations.
     // The preparation callback runs under the common lease before acceptance.
-    let row = service.begin_local_context_sync_prepared(
+    let row = service.begin_local_context_sync_with_request(
         repo,
         (id, kind, item, observation),
+        request,
         |_, observation| {
             prepare(repo, observation).map(Some).map_err(|fault| {
                 preparation_reason = Some(fault.reason);
@@ -266,6 +282,7 @@ pub(super) fn execute(
             );
         }
     };
+    #[cfg(test)]
     BOUNDARY_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(FailurePoint::LocalSyncBeforeExecuteLease);
@@ -275,6 +292,7 @@ pub(super) fn execute(
         let git = git2::Repository::open(&row.worktree)?;
         let lease = repository_lease(&git, repo.root(), RepositoryOperation::ContextSyncLocal)?;
         Ok(Owner {
+            request,
             service,
             repo,
             git,
@@ -424,6 +442,7 @@ pub(super) fn report(
     }
 }
 pub(super) fn boundary(owner: &Owner<'_>, point: FailurePoint) -> Result<(), Fault> {
+    #[cfg(test)]
     BOUNDARY_HOOK.with(|slot| {
         if let Some(hook) = slot.borrow_mut().as_mut() {
             hook(point);
@@ -774,6 +793,7 @@ fn checkout(owner: &mut Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
             boundary(owner, FailurePoint::LocalSyncBeforeCheckoutBackend)
         },
         || {
+            #[cfg(test)]
             BOUNDARY_HOOK.with(|slot| {
                 if let Some(hook) = slot.borrow_mut().as_mut() {
                     hook(FailurePoint::LocalSyncDuringCheckout);

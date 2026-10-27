@@ -386,10 +386,13 @@ impl RepositoryService {
         let Some(root_key) = root.to_str() else {
             return Err(ReadError::new(ResultCode::InvalidPath));
         };
+        let bound_local = super::super::local_sync::bound_to_request(self, &root, operation_id)?;
         let found = self.read_session(RepositoryOperation::Read, |connection| {
             // Asked first: such an ID is not a local operation's,
             // whatever the local journal holds under it.
-            if recovery::held_by_another_journal(connection, &operation_id.to_string())? {
+            if !bound_local
+                && recovery::held_by_another_journal(connection, &operation_id.to_string())?
+            {
                 return Ok(Err(AbandonableOperation::AnotherJournal));
             }
             let Some(row) = recovery::local_row(connection, root_key, operation_id)? else {
@@ -438,6 +441,39 @@ impl RepositoryService {
         } = request;
         self.require_index_available(operation, Some(&root))?;
         let root = journal_root(&root)?;
+        let map_local = |code| {
+            RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                if code == crate::results::ResultCode::Busy {
+                    RepositoryErrorKind::RepositoryBusy
+                } else {
+                    RepositoryErrorKind::RecoveryRequired
+                },
+                "local synchronization abandonment requires current authority",
+            )
+        };
+        if super::super::local_sync::bound_to_request(self, &root, operation_id)
+            .map_err(|e| map_local(e.code()))?
+        {
+            let remains = match self
+                .abandonable_operation(&root, operation_id)
+                .map_err(|e| map_local(e.code()))?
+            {
+                AbandonableOperation::Pending(left) => left,
+                AbandonableOperation::Abandoned => {
+                    return Ok(AbandonOperationOutcome::AlreadyAbandoned);
+                }
+                AbandonableOperation::Completed => return Ok(AbandonOperationOutcome::Completed),
+                _ => return Err(map_local(crate::results::ResultCode::RecoveryRequired)),
+            };
+            let repo = self
+                .resolve_repository(&root)
+                .map_err(|e| map_local(e.code()))?;
+            super::super::local_sync::abandon_bound(self, &repo, operation_id, expected.as_ref())
+                .map_err(|e| map_local(e.code))?;
+            return Ok(AbandonOperationOutcome::Abandoned(remains));
+        }
         let root_key = super::super::registry_root_key(&root, operation)?;
         let data_directory = self
             .registry_path

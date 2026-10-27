@@ -1,0 +1,19 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "title":"Manyhands JSON v1 local synchronization inspection",
+  "description":"Read-only retained operation evidence, request identities and deliberate recovery choices. Cancellation generation counters are reflected without changing authority.",
+  "type":"object","additionalProperties":false,
+  "required":["operation_id","kind","item_id","context_ref","primary_ref","context_parent","primary_parent","context_head","state","reason","next_action","observation","eligibility","paths","can_start_resolution","starting_request_id","cancellation_request_id","active_resolution_request_id","required_request_id","result_oid","cancel_requested","cancel_acknowledged"],
+  "properties":{
+    "operation_id":{"type":"string"},"kind":{"type":"string","enum":["document","ticket"]},"item_id":{"type":"string"},
+    "context_ref":{"type":"string"},"primary_ref":{"type":"string"},"context_parent":{"type":"string"},"primary_parent":{"type":"string"},"context_head":{"type":["string","null"]},
+    "state":{"type":"string","enum":["prepared","applying","conflict_pending","resolution_prepared","commit_prepared","integrated","index_pending","complete","recovery_required","cancelled","abandoned","refused"]},
+    "reason":{"type":"string","enum":["none","canonical_conflict","unsupported_conflict","immutable_closure_disagreement","original_resolution_required","foreign_change","ambiguous_backend","unrelated_histories","index_pending","identity_required","cancelled","abandoned","authority_missing"]},
+    "next_action":{"type":"string","enum":["none","resolve","retry_resolution","resume","external_repair","set_identity"]},
+    "observation":{"type":["string","null"]},"eligibility":{"type":["string","null"],"enum":["eligible_canonical","external_resolution_required",null]},
+    "paths":{"type":"array","items":{"$ref":"local_context_conflict_entry.schema.json"}},
+    "can_start_resolution":{"type":"boolean"},"starting_request_id":{"type":"string"},"cancellation_request_id":{"type":"string"},
+    "active_resolution_request_id":{"type":["string","null"]},"required_request_id":{"type":["string","null"]},"result_oid":{"type":["string","null"]},
+    "cancel_requested":{"type":"boolean"},"cancel_acknowledged":{"type":"boolean"}
+  }
+}

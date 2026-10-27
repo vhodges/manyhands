@@ -1,5 +1,5 @@
 //! Canonical complete-set resolution, with source-free durable path intents.
-//! Internal only until Task 7 supplies F2 association/attempt fencing.
+//! Internal execution carries F2 association/attempt fencing through its owner.
 use super::{
     conflict,
     record::LocalSyncState,
@@ -27,15 +27,20 @@ pub(super) enum Point {
     Ref,
     Retired(usize),
 }
+#[cfg(test)]
 type Hook = Box<dyn FnMut(Point) -> Result<(), std::io::Error>>;
+#[cfg(test)]
 thread_local! { pub(super) static HOOK: std::cell::RefCell<Option<Hook>> = const { std::cell::RefCell::new(None) }; }
+#[cfg(test)]
 thread_local! {
     pub(super) static WRITE_FAULT: std::cell::Cell<Option<std::io::ErrorKind>>=const {std::cell::Cell::new(None)};
     pub(super) static WRITE_ATTEMPTS: std::cell::Cell<usize>=const {std::cell::Cell::new(0)};
 }
 fn write_path(owner: &Owner<'_>, path: &Path, bytes: &[u8], before: [u8; 32]) -> Result<(), Fault> {
     // Typed fault at the actual owned-file I/O seam, after authority validation.
+    #[cfg(test)]
     WRITE_ATTEMPTS.with(|n| n.set(n.get() + 1));
+    #[cfg(test)]
     if let Some(kind) = WRITE_FAULT.with(|f| f.take()) {
         let error = std::io::Error::from(kind);
         return Err(Fault {
@@ -58,6 +63,12 @@ fn write_path(owner: &Owner<'_>, path: &Path, bytes: &[u8], before: [u8; 32]) ->
     .map_err(Fault::from)
 }
 pub(super) fn boundary(point: Point) -> Result<(), Fault> {
+    #[cfg(not(test))]
+    {
+        let _ = point;
+        Ok(())
+    }
+    #[cfg(test)]
     HOOK.with(|h| h.borrow_mut().as_mut().map_or(Ok(()), |h| h(point)))
         .map_err(|e| Fault {
             code: if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -102,15 +113,25 @@ fn digest(
     }
     Ok(*hash.finalize().as_bytes())
 }
+#[cfg(test)]
 pub(super) fn owner<'a>(
     service: &'a RepositoryService,
     repo: &'a ResolvedRepository,
     id: OperationId,
 ) -> Result<Owner<'a>, Fault> {
+    owner_request(service, repo, id, None)
+}
+pub(super) fn owner_request<'a>(
+    service: &'a RepositoryService,
+    repo: &'a ResolvedRepository,
+    id: OperationId,
+    request: Option<super::Fence<'a>>,
+) -> Result<Owner<'a>, Fault> {
     let row = run::read_evidence(service, repo, id)?.0;
     let git = git2::Repository::open(&row.worktree)?;
     let lease = repository_lease(&git, repo.root(), RepositoryOperation::ContextSyncLocal)?;
     let mut owner = Owner {
+        request,
         service,
         repo,
         git,
@@ -122,6 +143,7 @@ pub(super) fn owner<'a>(
     owner.authorize()?;
     Ok(owner)
 }
+#[cfg(test)]
 pub(super) fn execute(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -130,11 +152,22 @@ pub(super) fn execute(
     observation: &str,
     sources: &[Source],
 ) -> Report {
+    execute_request(service, repo, id, request, observation, sources, None)
+}
+pub(super) fn execute_request<'a>(
+    service: &'a RepositoryService,
+    repo: &'a ResolvedRepository,
+    id: OperationId,
+    request: OperationId,
+    observation: &str,
+    sources: &[Source],
+    fence: Option<super::Fence<'a>>,
+) -> Report {
     let digest = match digest(repo, id, observation, sources) {
         Ok(digest) => digest,
         Err(fault) => return reply(service, repo, id, Err(fault)),
     };
-    let mut owner = match owner(service, repo, id) {
+    let mut owner = match owner_request(service, repo, id, fence) {
         Ok(owner) => owner,
         Err(fault) => return reply(service, repo, id, Err(fault)),
     };
@@ -149,6 +182,14 @@ fn owned_reply(owner: &Owner<'_>, result: Result<ResultCode, Fault>) -> Report {
             report.reason,
             owner.known_execution.as_ref().map(|e| (&owner.row, e)),
         );
+    }
+    if let Some(request) = owner.request {
+        let written=owner.service.read_session(RepositoryOperation::Read,|db|Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_resolutions a JOIN local_context_sync_steps p ON p.operation_ulid=a.operation_ulid WHERE a.request_ulid=?1 AND p.kind='path' AND p.phase='observed')",[request.id.to_string()],|r|r.get::<_,bool>(0))?)).unwrap_or(false);
+        report.effects.write = if written || owner.performed.wrote {
+            WriteEffect::Written
+        } else {
+            WriteEffect::Unchanged
+        };
     }
     run::with_performed(report, owner)
 }
@@ -178,6 +219,7 @@ pub(super) fn required_request(
             OperationId::parse(&text).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))
         }).ok()
 }
+#[cfg(test)]
 pub(super) fn resume(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -202,6 +244,31 @@ pub(super) fn continue_without_source(owner: &mut Owner<'_>) -> Result<ResultCod
     }
     if owner.row.state == LocalSyncState::Complete {
         return Ok(ResultCode::Ok);
+    }
+    if owner.row.active_resolution.is_some()
+        && !owner.row.integration_proven
+        && owner
+            .row
+            .candidate
+            .is_none_or(|id| owner.git.find_commit(id).is_err())
+    {
+        return Err(Fault {
+            code: ResultCode::OriginalRequestRequired,
+            reason: Reason::OriginalResolutionRequired,
+        });
+    }
+    if owner.request.is_some() {
+        if owner.row.integration_proven && owner.row.artifacts_released {
+            recover::verify_released_integration(owner)?;
+        } else {
+            verify_backend(owner)?;
+        }
+        owner.transaction(|db,row|{
+        let epoch=row.owner_epoch.checked_add(1).ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
+        if db.execute("UPDATE local_context_sync_records SET owner_epoch=?2 WHERE operation_ulid=?1 AND owner_epoch=?3",params![row.operation_id.to_string(),epoch,row.owner_epoch])?!=1{return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        if let Some(attempt)=row.active_resolution && db.execute("UPDATE local_context_sync_resolutions SET owner_epoch=?2 WHERE attempt_ulid=?1",params![attempt.to_string(),epoch])?!=1{return Err(ReadError::new(ResultCode::RecoveryRequired));}
+        Ok(())
+        })?;
     }
     super::control::safe_point(owner)?;
     if owner.row.integration_proven {
@@ -337,12 +404,15 @@ fn apply(
                 owner.authorize()?;
                 verify_backend(owner)?;
                 write_path(owner, path, source.source.as_bytes(), before)?;
+                owner.performed.wrote = true;
             }
             owner.transaction(|db,row| {db.execute("UPDATE local_context_sync_steps SET phase='observed',owner_epoch=?3 WHERE operation_ulid=?1 AND ordinal=?2",params![row.operation_id.to_string(),100+i as i64,row.owner_epoch])?;Ok(())})?;
+            run::boundary(owner, FailurePoint::LocalSyncAfterResolutionPath)?;
             super::control::safe_point(owner)?;
         }
         make_candidate(owner, &ordered)?;
         boundary(Point::Candidate)?;
+        run::boundary(owner, FailurePoint::LocalSyncAfterCandidate)?;
     }
     complete_candidate(owner)
 }
@@ -478,6 +548,7 @@ fn make_candidate(
     boundary(Point::CandidateIntent)?;
     owner.authorize()?;
     verify_backend(owner)?;
+    run::boundary(owner, FailurePoint::LocalSyncBeforeObjectImport)?;
     let target = owner.git.odb()?;
     let mut objects = vec![tree];
     while let Some(oid) = objects.pop() {

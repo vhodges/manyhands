@@ -704,7 +704,7 @@ const LOCAL_ACTIONS: [OperationAction; 14] = [
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
-    vec![
+    let mut enumerations = vec![
         (
             "local_context_sync_observation.schema.json",
             "kind",
@@ -1005,7 +1005,35 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "state",
             RequestState::ALL.map(RequestState::as_str).to_vec(),
         ),
-    ]
+    ];
+    use manyhands::repository::{
+        LocalContextSyncEligibility as E, LocalContextSyncNextAction as A,
+        LocalContextSyncReason as R, LocalContextSyncState as S,
+    };
+    for file in [
+        "local_context_sync_mutation.schema.json",
+        "local_context_sync_inspection.schema.json",
+    ] {
+        enumerations.extend([
+            (
+                file,
+                "kind",
+                ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+            ),
+            (file, "state", S::ALL.map(S::as_str).to_vec()),
+            (file, "reason", R::ALL.map(R::as_str).to_vec()),
+            (file, "next_action", A::ALL.map(A::as_str).to_vec()),
+            (file, "eligibility", E::ALL.map(E::as_str).to_vec()),
+        ]);
+    }
+    enumerations.push((
+        "local_context_sync_mutation.schema.json",
+        "type",
+        manyhands::repository::LocalContextSyncDataType::ALL
+            .map(manyhands::repository::LocalContextSyncDataType::as_str)
+            .to_vec(),
+    ));
+    enumerations
 }
 
 /// Counts the `enum` keywords in a schema, wherever they are.

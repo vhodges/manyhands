@@ -1,0 +1,48 @@
+{
+  "code": "identity_required",
+  "command": "context sync-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "set_identity",
+    "operation_id": null,
+    "reason": "identity_required",
+    "required_request_id": null,
+    "resolution_request_id": null,
+    "result_oid": null,
+    "state": "refused",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "A name and an email are required.",
+  "operation_id": "<operation>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.identity_set",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

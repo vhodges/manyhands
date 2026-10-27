@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | Started from `41bce3e`; initial F2 control acceptance/handover implementation checkpointed as **WIP `ee9e485`**. Owner answered **“yes”** to the scoped migration-fixture question; approval `01M5X3KKAFXVGD84SYBH3TBGFB`. Implementation resumed from `0b75184`. Nine new request-store tests pass; prior full mutation_replay had 316 passes and one existing migration-fixture failure. Public bindings/reads, production executor activation and complete request protocol remain in progress. No independent Task 7 review has occurred. |
+| Task 7 | **Implementation delivered for controller SPEC then QUALITY review**, full range from `41bce3e` through the feature commit containing checkpoint `01M5X9EC8F4RPJQYTX7Z45JXPZ`. Includes WIP `ee9e485`, waiting record `0b75184`, and owner approval `16e8780`. Production execution/read/control paths are active. Final selected evidence: **28 mutation + 6 read + 116 contract + 159 domain + 10 command + 4 conformance + 1 migration + 4 compile-fail = 328 passing tests/cases**; four new actual no-Drop exits. Whole-tree fmt/check/clippy pass. No independent Task 7 review or approval has occurred. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -2995,3 +2995,216 @@ Entry clean at `0b751846ff4fdb78a3e6b0f0c3d046d152bc05d2`; fetch/merge found mai
 procedure. The WIP and nine-test evidence are retained; the already reproduced
 fixture RED will be followed by its approved correction and GREEN. The remainder
 of full Task 7, including mandatory production activation, is still required.
+
+## Task 7: shared boundaries, authoritative request recovery and production activation
+
+Recorded **2026-10-26T23:57:48Z**, comment **`01M5X9EC8F4RPJQYTX7Z45JXPZ`**
+(ID issued earlier by the main checkout's existing CLI). Full review base:
+**`41bce3eb23ae4e95316f287cd832d38be00164aa`**. Review through the commit containing
+this checkpoint, titled
+`feat: expose local synchronization and recovery through library boundaries`.
+Do not review only the last commit: the range also contains the initial WIP,
+waiting evidence and owner-approved migration-fixture addendum.
+
+### Resumption and ownership
+
+The usage-limit interruption occurred after substantial implementation and local
+verification, before this durable final checkpoint and publication. The controller
+reported no intervening edits and only a no-op fetch/merge. On resumption, HEAD was
+still **`16e8780c246fa0f4e9b1e84be2e651703ef63463`**. Status, recent log, the complete
+tracked-file inventory and untracked read-test directory matched this implementer's
+prior work: **37 modified tracked source/test files**, three new production modules,
+four schemas, five mutation goldens, two read goldens and the new read-test module.
+No unfamiliar/unexplained edit was found or overwritten. Existing WIP work and
+observed RED/GREEN evidence were retained rather than restarted.
+
+Start, pre-handoff and post-interruption fetch/merge found `origin/main` at
+`0464c42dae19a6dde000c7e7660e82762a41fada`, already incorporated. Merge-tree passed
+at approval HEAD with tree `2f41d8d895d6fd6852fc499ddc20ab299ea5cc3e`. Work remained
+inline in this ticket worktree/branch, with no subagents. Ticket stays implementing
+while the controller reviews this task; Task 8 has not started.
+
+### Actual production activation and public surface
+
+- `mutation/bind/local_sync.rs` implements the exact three approved input structs
+  and two unconfirmed variants/command names. Inputs have no Debug, Display or
+  Serialize implementation. Start uses Local family; resolution has its own F2
+  request/attempt association and no new parent-operation family. Its digest
+  includes the unchanged top-level observation and every token/source pair in
+  canonical token order; duplicate/malformed inputs refuse.
+- `read/local_sync.rs` publishes the closed typed DTO/enumeration surface and
+  inspection/content methods. The existing exact observation method remains the
+  third read. Existing repository re-exports expose these boundaries. Immutable
+  side source is explicitly serialized only by the content-read DTO, which has no
+  Debug implementation. Mutation data stays content-free.
+- Removed the executor-only module gates in `local_sync/mod.rs` for conflict,
+  control, file image, resolve, recover and run. Activated `image_proof` execution,
+  `observe::from_facts`, the required record/admission/store helpers,
+  `integration::filtered` and `artifacts::{local_checkout,local_reference}`.
+  `local_sync/request.rs` bridges F2 authority into the real leased executor.
+  Production bindings call `run::execute_request` / `resolve::execute_request`;
+  the old standalone execution/claim wrappers remain fixture-only. Actual Git,
+  conflict, filtering and control logic is no longer hidden behind cfg(test).
+- Fixture-only thread-local hooks remain test-gated. The two existing domain test
+  Owner initializers gained only `request: None`; their assertions are unchanged.
+  No public journal/executor bypass or broad unused/dead-code allowance was added.
+  Four compile-fail tests still prove the journal/claim/takeover surface is private.
+
+### Request authority, cancellation, disposition and read consistency
+
+- Acceptance stores immutable intended scoped parent identity before nullable
+  linkage. Domain creation or resolution-attempt acceptance links it in the same
+  domain transaction under the repository lease. Resolution is not linked merely
+  by reading the parent before input validation.
+- Exact F2 entry advances the request/control attempt fence atomically, preserving
+  stable-ID association, resolution attempt, effects and issued/acknowledged
+  counters. Missing/stale control, including local-target U, refuses rather than
+  recreating authority or advancing only one fence. Stable-ID journal/effect lookup
+  precedes the family-None/absent-row shortcuts.
+- Owner transactions verify current F2 attempt plus scoped domain epoch before
+  effects; local settlement also verifies its control epoch. Resume has an exact
+  local route. Partial R and an unimported candidate require the original R before
+  U takeover or acceptance. A real U continuation transfers domain ownership; an
+  unlinked contender sees completed-parent external_change/release or terminal
+  cancellation without its own Git effects.
+- Production S/R cancellation uses authoritative request-control generations;
+  U checks S/active-R and routes its synchronous token to S. Safe points acknowledge
+  the observed vector, not an unconditionally reread newer generation. Recoverable
+  stops keep Accepted records and the underlying phase; request reads reflect
+  pending counters. Old commands retain their boolean cancellation behavior.
+  Local progress uses existing non-network stages. Cancellation keeps the needed
+  canonical/original-input/external-only recovery choice.
+- Artifact-free abandonment proves the current domain image under the lease, then
+  abandons parent/attempt and finishes every Accepted intended-parent S/R/U in one
+  transaction, including unlinked contenders. It stores each control's proven
+  historical effects, preserves Finished rows, and reserves all terminal IDs.
+  Settlement returns an already-terminalized local request's stored result.
+- Finished local replay is immutable. The special handling is scoped to the two
+  local commands/local resume data, so a forged local type tag on a legacy ticket
+  result cannot bypass the legacy reachability check.
+- Read views compare fresh SQL authority sessions and recheck Git. Registration
+  and semantic-revision changes are detected with unchanged Git; owner-only epoch
+  changes preserve tokens. Explicit historical sides remain readable under their
+  original tokens after a real path write and reopening. Typed PermissionDenied
+  at the recorded-blob read seam returns repository_inaccessible with no side bytes
+  or Git/worktree changes. This injection is not native Windows ACL evidence.
+
+The request control retains the specified request FK and nullable parent FK. Its
+resolution identity is **audited against parent/request/attempt**, rather than a
+SQL FK to the child table: the latter broke the existing legacy child-table
+reconstruction protocol. The unshipped WIP v1 definition was corrected before
+feature delivery; malformed/mismatched shapes still refuse. This follows the
+existing Task 6 cancellation-companion association pattern, not a new migration
+or transaction engine.
+
+### Mandatory public tests and additional coverage
+
+All names below are executable tests in `tests/mutation_replay/local_sync.rs`,
+except the two marked Read, in the explicit-path `tests/read_items/local_sync.rs`.
+
+| Required case | Observed proof |
+| --- | --- |
+| `identity_missing_then_set_retries_the_same_local_intent` | Pre-domain identity refusal releases S; accepted pre-candidate S survives identity removal and resumes after the public identity-set binding; journaled candidate retains its original identity. |
+| `accepted_resolution_observation_is_part_of_request_identity` | Changing only top-level observation after a path write mismatches with historical written effects, unchanged file and unchanged F2 attempt. Exact R completes. |
+| `cancelled_partial_resolution_remains_accepted_and_resendable` | Partial path cancellation/reopen retains Accepted S/R; U identifies R and leaves no request record; exact R finishes. |
+| `new_cancellation_survives_acknowledgement_and_resume` | Coordinated second issuance during U acknowledgement leaves issued 2 / acknowledged 1. Next U honors the second generation; subsequent explicit continuation completes. |
+| `artifact_free_abandon_settles_all_associated_requests_atomically` | Released/index-pending R plus unlinked R/U: public confirmed abandonment finishes all associated Accepted records cancelled/abandoned; exact R replay and changed-input mismatch retain spent IDs. |
+| `unlinked_accepted_resolution_cannot_write_after_attempt_loss` | Handover between acceptance and domain entry fences the old invocation without writing; exact retry links and finishes. |
+| `request_attempt_handover_preserves_resolution_and_cancellation` | Partial R handover interrupted before domain takeover preserves attempt association/counters/effects; a stale finish cannot settle, and later retry completes one resolution attempt. |
+| `unlinked_contender_observes_parent_completion_or_abandonment` | Accepted R0/U before R1 completion get no-effect external_change and release; the abandonment composition terminalizes intended-parent contenders. |
+| Read: `authority_only_change_is_seen_by_fresh_read_session` | Actual registration and semantic-revision changes between sessions refuse; owner-only change preserves observation and original side token. |
+| Read: `side_read_permission_failure_is_read_only` | Typed denial at the actual blob-read seam gives repository_inaccessible, no returned side data and unchanged Git/worktree snapshot. |
+
+Additional public cases cover no-op replay, independent S/R lost-settlement
+receipts, unimported-candidate original-input requirements and fixed identity,
+missing U control, source exclusion from every local companion plus request stores,
+explicit read privacy, historical sides, external-only cancellation guidance, and
+legacy replay isolation. Four actual subprocess exits without Drop cover R accepted
+before link, after an owned path, F2 re-entry before domain takeover, and after
+durable cancellation acknowledgement before response. Each asserts
+`FAILURE_POINT_EXIT_STATUS`; the child-entry test itself is not another exit proof.
+The prior **21** actual domain no-Drop assertions also remain green.
+
+### RED/GREEN, corrections and approved old-test edits
+
+The initial missing-public-API compile RED and five WIP control REDs are recorded
+above. Further observed behavioral REDs were: guarded abandonment preview refused
+the new parent; missing U control advanced F2 without its control; cancellation of
+an unsupported conflict incorrectly advertised resolve; and a forged local data
+tag let an unreachable legacy ticket result replay successfully. Each received a
+production correction and a passing regression. Other new protocol tests are
+supplementary composition proofs; no separate pre-fix RED is claimed for every row.
+
+The first expanded domain run had **156 pass / 3 fail**. Two failures traced to the
+new child FK and the legacy reconstruction fixture; one to premature epoch change
+on lost external-log authority. Fixed production association/takeover wiring, not
+the old assertions. All three exact selectors passed, followed by a fresh complete
+**159/159** domain run. Fixture/debug corrections included using the ticket helper's
+third argument as YAML extras rather than body text, relative internal visibility
+for SSH targets that embed production modules, the schema checker's supported
+single-value enum instead of `const`, and operation.resume's existing empty argument
+set. No global enum or schema-checker behavior was expanded.
+
+The owner-approved migration fixture now removes the new control table and marker,
+asserts that exactly one marker returns, and excludes only that marker from its
+unchanged-data comparison. Every old-column, unrelated-schema/data and privacy
+assertion remains. Other old-test edits are E5's two command inventories, E6/E7's
+homes/roots/enums, E9's seven explicit DTO refusal arms and golden/conformance
+registrations, plus the two mechanical Owner fixture initializers above.
+
+Published four new schema files (three roots and the referenced conflict entry),
+five mutation goldens and two read goldens. The existing observation root remains.
+Only selected local tests ran with `MANYHANDS_UPDATE_GOLDEN=1`; all seven generated
+files were inspected. No pre-existing golden or unrelated fixture collection
+changed. Explicit content data is rejected by the stored mutation schema.
+
+### Final local gates and exact counts
+
+Every Rust command ran through `devenv shell -- cargo ...` in this ticket checkout.
+An earlier parallel Devenv startup reported a transient load-exports cleanup race;
+the affected read-contract command was rerun sequentially with clean startup and
+72 passes. No failed startup or earlier failing selection is counted as a final pass.
+
+| Command after the Devenv prefix | Passing selection |
+| --- | ---: |
+| `fmt --check` | Exit 0 |
+| `check --all-features --locked` | Exit 0 (latest 2.79s) |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0 (latest 14.41s), no warnings |
+| `test --all-features --locked --test mutation_replay local_sync` | **28**, 308 filtered, latest 55.33s |
+| `test --all-features --locked --test read_items local_sync` | **6**, 76 filtered, latest 4.45s |
+| `test --all-features --locked --test mutation_contract` | **44**, zero failures |
+| `test --all-features --locked --test read_contract` | **72**, zero failures |
+| `test --all-features --locked --lib local_sync::` | **159**, zero failures, 641.28s |
+| `test --all-features --locked --lib repository::mutation::command::tests` | **10** |
+| `test --all-features --locked --test mutation_replay the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else -- --exact` | **1** |
+| `test --all-features --locked --doc local_sync` | **4** compile-fail privacy/boundary proofs |
+
+Ran **four separate commands**, each with the single positional selector
+`every_command_of_this_target_keeps_the_rules_of_the_boundary`, under the same
+`test --all-features --locked` prefix:
+
+| Target | Actual selected output / homes |
+| --- | --- |
+| `--test mutation_replay` | **1 passed**; 18 command homes including both new bindings, no exemptions. |
+| `--test mutation_confirmation` | **1 passed**; 6 homes. |
+| `--test mutation_remote` | Exact SSH harness selector above; **1 SSH cases passed**; 4 homes. |
+| `--test mutation_bridges` | **1 passed**; 4 homes. |
+
+Together the home inventory accounts for **all 32 commands**. Selected unique
+total is **328 tests/cases** across the listed groups, without adding repeated
+RED/GREEN runs, the repeated identity-golden check or helper invocations. These
+are local Linux results, not package-wide or native-platform CI evidence.
+
+### Review handoff and remaining Task 8/9 outcomes
+
+Task 7 implementation is ready for the controller's **independent SPEC, then
+QUALITY** review over the full base range. No independent review or approval of
+Task 7 is claimed. Preserve the ticket's implementing status until the remaining
+Cycle work and review gates are satisfied.
+
+Task 8 still owns the complete closure-refusal → public local resolution → explicit
+closure-adoption acceptance cases, broader adversarial/lost-journal/platform
+compositions and its approved E3 fixture changes. Task 9 owns the remaining document
+amendments and whole-branch delivery/review. No closure is automatically resumed.
+No frontend, Cargo/dependency/target, global ResultCode/RecoveryActionKind or native
+workflow was changed; no PR, closure, merge into main or cleanup was performed.

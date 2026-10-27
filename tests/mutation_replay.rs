@@ -344,8 +344,9 @@ fn already_applied() -> RequestResult {
     }
 }
 
-const REQUEST_TABLES: [&str; 3] = [
+const REQUEST_TABLES: [&str; 4] = [
     "confirmation_records",
+    "local_context_sync_request_control",
     "request_operations",
     "request_records",
 ];
@@ -413,6 +414,7 @@ fn the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothin
     // What a build from before the request tables left behind.
     let connection = items::index(data.path());
     for table in [
+        "local_context_sync_request_control",
         "request_operations",
         "request_records",
         "confirmation_records",
@@ -421,6 +423,16 @@ fn the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothin
             .execute_batch(&format!("DROP TABLE {table}"))
             .unwrap();
     }
+    const LOCAL_CONTROL_MIGRATION: &str = "local_context_sync_request_control_v1";
+    assert_eq!(
+        connection
+            .execute(
+                "DELETE FROM registry_migrations WHERE name=?1",
+                [LOCAL_CONTROL_MIGRATION]
+            )
+            .unwrap(),
+        1
+    );
     let before = dump(&connection);
     assert!(
         before
@@ -433,7 +445,17 @@ fn the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothin
     RepositoryService::open_at(data.path()).unwrap();
 
     let connection = items::index(data.path());
-    let after = dump(&connection);
+    let mut after = dump(&connection);
+    // The one new marker is an explicit migration effect. Strip only that
+    // exact row from the comparison; all old migration rows remain protected.
+    let migrations = &mut after
+        .iter_mut()
+        .find(|(name, _, _)| name == "registry_migrations")
+        .unwrap()
+        .2;
+    let marker = vec![SqlValue::Text(LOCAL_CONTROL_MIGRATION.to_owned())];
+    assert_eq!(migrations.iter().filter(|row| **row == marker).count(), 1);
+    migrations.retain(|row| *row != marker);
     let added: Vec<&str> = after
         .iter()
         .filter(|object| !before.contains(object))

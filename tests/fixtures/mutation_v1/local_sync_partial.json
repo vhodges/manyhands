@@ -1,0 +1,48 @@
+{
+  "code": "recovery_required",
+  "command": "context sync-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": "eligible_canonical",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "resolve",
+    "operation_id": "<operation>",
+    "reason": "canonical_conflict",
+    "required_request_id": null,
+    "resolution_request_id": null,
+    "result_oid": null,
+    "state": "conflict_pending",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "pending",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "pending",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "Recovery is required before this can continue.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

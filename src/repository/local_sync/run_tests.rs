@@ -2353,6 +2353,7 @@ fn spec_coarse_versions_are_separate_and_valid_legacy_bytes_are_not_reinterprete
     let git = f.context();
     {
         let owner = super::recover::Owner {
+            request: None,
             service: &f.service,
             repo: &f.repo,
             lease: repository_lease(&git, f.root.path(), RepositoryOperation::ContextSyncLocal)

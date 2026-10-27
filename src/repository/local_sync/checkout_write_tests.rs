@@ -236,6 +236,7 @@ fn spec_mode_only_no_drop_is_partial_and_requires_complete_image_proof() {
                 .unwrap();
             let evidence = super::super::recover::Execution::read(&f.db(), id).unwrap();
             let owner = super::super::recover::Owner {
+                request: None,
                 service: &f.service,
                 repo: &f.repo,
                 git: f.context(),

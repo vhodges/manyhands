@@ -53,6 +53,8 @@ pub const CASES: &[&str] = &[
     "key_public",
     "key_show",
     "local_context_sync_observation",
+    "local_context_sync_inspection",
+    "local_context_conflict_content",
     "mutation_partial",
     "operation_list",
     "operation_show",

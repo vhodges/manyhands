@@ -265,7 +265,6 @@ pub(super) fn observe_with(
     })
 }
 
-#[cfg(test)]
 pub(super) fn from_facts(
     repo: &ResolvedRepository,
     facts: &Facts,
@@ -364,6 +363,6 @@ impl RepositoryService {
         kind: AuthoringKind,
         id: &ItemId,
     ) -> Result<LocalContextSyncObservationDto, ReadError> {
-        observe_with(self, repo, kind, id, || {})
+        observe_with(self, repo, kind, id, || super::observation_checkpoint(self))
     }
 }

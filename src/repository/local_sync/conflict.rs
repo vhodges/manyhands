@@ -1,4 +1,4 @@
-//! Internal conflict domain. Task 7 activates this with public request fencing.
+//! Internal conflict domain used by request-fenced execution and read-only views.
 use super::{
     conflict_record::Image,
     recover::{self, Owner},
@@ -9,6 +9,7 @@ use rusqlite::{OptionalExtension, params};
 use std::{collections::BTreeSet, path::Path};
 
 pub(super) const MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
+#[cfg(test)]
 thread_local! {pub(super) static INSPECT_HOOK:std::cell::RefCell<Option<Box<dyn FnMut()>>>=const {std::cell::RefCell::new(None)};}
 pub(super) fn backend_unlocked(owner: &Owner<'_>) -> Result<(), Fault> {
     let metadata = integration::artifacts::MergeMetadataDirectory::open(&owner.git)?;
@@ -153,6 +154,7 @@ pub(super) fn inspect(
     let installed: Image = serde_json::from_slice(&stored.ok_or_else(Fault::authority)?)
         .map_err(|_| Fault::authority())?;
     validate_snapshot(&git, &row, &installed)?;
+    #[cfg(test)]
     INSPECT_HOOK.with(|h| {
         if let Some(h) = h.borrow_mut().as_mut() {
             h()
@@ -237,13 +239,35 @@ pub(super) fn read(
     for oid in entry.sides {
         sides.push(
             oid.map(|oid| {
+                let access: std::io::Result<()> = if service
+                    .should_inject(
+                        FailurePoint::LocalSyncBeforeSideRead,
+                        RepositoryOperation::Read,
+                        repo.root(),
+                    )
+                    .unwrap_or(false)
+                {
+                    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                } else {
+                    Ok(())
+                };
+                access.map_err(|error| Fault {
+                    code: if error.kind() == std::io::ErrorKind::PermissionDenied {
+                        ResultCode::RepositoryInaccessible
+                    } else {
+                        ResultCode::RecoveryRequired
+                    },
+                    reason: Reason::AuthorityMissing,
+                })?;
                 let blob = git.find_blob(oid)?;
                 String::from_utf8(blob.content().to_vec()).map_err(|_| Fault::foreign())
             })
             .transpose()?,
         );
     }
-    if row != super::run::read_evidence(service, repo, id)?.0 {
+    let mut again = super::run::read_evidence(service, repo, id)?.0;
+    again.owner_epoch = row.owner_epoch;
+    if row != again {
         return Err(Fault::foreign());
     }
     let mut sides = sides.into_iter();

@@ -279,6 +279,7 @@ pub(super) fn frozen_filters(owner: &Owner<'_>, candidate: git2::Oid) -> Result<
 }
 
 pub(super) struct Owner<'a> {
+    pub request: Option<super::Fence<'a>>,
     pub service: &'a RepositoryService,
     pub repo: &'a ResolvedRepository,
     pub git: git2::Repository,
@@ -327,6 +328,10 @@ impl Owner<'_> {
         if current != expected {
             return Err(Fault::foreign());
         }
+        if let Some(request) = self.request {
+            request.verify(&tx, self.repo.root(), current.operation_id)?;
+            request.attach(&tx, &current)?;
+        }
         let prior = Execution::read(&tx, current.operation_id)?;
         prior.validate_graph(&self.git, &current)?;
         self.known_execution = Some(prior);
@@ -341,6 +346,10 @@ impl Owner<'_> {
         record::audit(&tx).map_err(|_| Fault::authority())?;
         let evidence = Execution::read(&tx, current.operation_id)?;
         evidence.validate_graph(&self.git, &row)?;
+        if let Some(request) = self.request {
+            request.attach(&tx, &row)?;
+            request.record(&tx, &row, &evidence)?;
+        }
         tx.commit().map_err(ReadError::from)?;
         self.row = row;
         self.known_execution = Some(evidence);
