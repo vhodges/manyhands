@@ -636,3 +636,147 @@ fn spec_external_index_handoff_requires_recorded_release_proof() {
         LocalContextSyncNextAction::Resume
     );
 }
+
+fn fresh_conflict_dirty_policy(kind: AuthoringKind) {
+    let world = mutation::World::new();
+    let (id, path, incoming) = match kind {
+        AuthoringKind::Ticket => (
+            items::TICKET_A,
+            items::ticket_path(items::TICKET_A),
+            items::ticket_source(items::TICKET_A, "Incoming ticket", ""),
+        ),
+        AuthoringKind::Document => (
+            mutation::DOCUMENT,
+            mutation::DOCUMENT_PATH.into(),
+            items::document_source(mutation::DOCUMENT, "Incoming document", ""),
+        ),
+    };
+    let local = match kind {
+        AuthoringKind::Ticket => world.save(id, &world.token(id)),
+        AuthoringKind::Document => world.document_save(id, &world.token(id)),
+    };
+    assert_eq!(
+        world.execute(mutation::REQUEST_1, local).code,
+        ResultCode::Ok
+    );
+    items::write(&world.root, &path, &incoming);
+    items::commit(&world.fixture, &[&path], items::COMMITTED_AT);
+    let observed = world
+        .service
+        .observe_local_context_sync(&world.resolved(), kind, &items::item_id(id))
+        .unwrap();
+    let started = world.execute(
+        mutation::REQUEST_2,
+        Mutation::LocalContextSync(LocalContextSyncInput {
+            root: world.root.clone(),
+            kind,
+            id: items::item_id(id),
+            observation: observed.observation.clone(),
+        }),
+    );
+    assert_eq!(started.code, ResultCode::RecoveryRequired);
+    let operation = OperationId::parse(started.operation_id.as_deref().unwrap()).unwrap();
+    let f = ConflictWorld {
+        world,
+        operation,
+        start_observation: observed.observation,
+    };
+    let baseline = inspect_unchanged(&f).unwrap();
+    assert_eq!(baseline.next_action, LocalContextSyncNextAction::Resolve);
+    assert!(baseline.can_start_resolution);
+
+    let context = f.world.worktree(id);
+    let git = git2::Repository::open(&context).unwrap();
+    // Keep the executor's deliberate exception for unrelated ignored files.
+    let ignored = "foreign-ignored-scratch.txt";
+    let exclude = git.commondir().join("info/exclude");
+    let mut rules = std::fs::read(&exclude).unwrap_or_default();
+    rules.extend_from_slice(format!("\n{ignored}\n").as_bytes());
+    std::fs::write(exclude, rules).unwrap();
+    std::fs::write(context.join(ignored), b"ignored fixture bytes").unwrap();
+    assert!(
+        git.status_should_ignore(std::path::Path::new(ignored))
+            .unwrap()
+    );
+    assert!(
+        git.status_file(std::path::Path::new(ignored))
+            .unwrap()
+            .contains(git2::Status::IGNORED)
+    );
+    let permitted = inspect_unchanged(&f).unwrap();
+    assert_eq!(permitted.next_action, LocalContextSyncNextAction::Resolve);
+    assert!(permitted.can_start_resolution);
+
+    let foreign = "foreign-scratch.txt";
+    std::fs::write(context.join(foreign), b"unrelated fixture bytes").unwrap();
+    assert!(
+        !git.status_should_ignore(std::path::Path::new(foreign))
+            .unwrap()
+    );
+    let status = git.status_file(std::path::Path::new(foreign)).unwrap();
+    assert!(status.contains(git2::Status::WT_NEW));
+    assert!(!status.contains(git2::Status::IGNORED));
+    // inspect_unchanged holds the common repository lease and compares Git
+    // administrative bytes, worktree files, SQL and image proofs on both sides.
+    let refused = inspect_unchanged(&f).unwrap();
+    assert_eq!(
+        refused.next_action,
+        LocalContextSyncNextAction::ExternalRepair
+    );
+    assert!(!refused.can_start_resolution);
+    assert!(refused.active_resolution_request_id.is_none());
+    assert_eq!(
+        items::index(f.world.data.path())
+            .query_row(
+                "SELECT count(*) FROM local_context_sync_resolutions",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+
+    std::fs::remove_file(context.join(foreign)).unwrap();
+    let restored = inspect_unchanged(&f).unwrap();
+    assert_eq!(restored.next_action, LocalContextSyncNextAction::Resolve);
+    assert!(restored.can_start_resolution);
+    assert_eq!(restored.observation, baseline.observation);
+    let resolutions = restored
+        .paths
+        .into_iter()
+        .map(|entry| {
+            let content = f
+                .world
+                .service
+                .read_local_context_conflict(&f.world.resolved(), f.operation, &entry.token)
+                .unwrap();
+            LocalConflictResolutionInput {
+                token: entry.token,
+                source: content.local.unwrap(),
+            }
+        })
+        .collect();
+    let result = f.world.execute(
+        mutation::REQUEST_3,
+        Mutation::LocalContextResolve(LocalContextResolveInput {
+            root: f.world.root.clone(),
+            operation_id: f.operation,
+            observation: restored.observation.unwrap(),
+            resolutions,
+        }),
+    );
+    assert_eq!(result.code, ResultCode::Ok);
+    assert_eq!(
+        std::fs::read(context.join(ignored)).unwrap(),
+        b"ignored fixture bytes"
+    );
+}
+
+#[test]
+fn spec_fresh_conflict_untracked_policy_ticket() {
+    fresh_conflict_dirty_policy(AuthoringKind::Ticket);
+}
+#[test]
+fn spec_fresh_conflict_untracked_policy_document() {
+    fresh_conflict_dirty_policy(AuthoringKind::Document);
+}

@@ -356,6 +356,7 @@ pub(in super::super) fn inspection(
         resolve::read_backend_proof(service, &git, &row, &e).map_err(|f| (f.code, f.reason));
     let mut report = run::report(ResultCode::Ok, run::Reason::None, Some((&row, &e)));
     let mut paths = Vec::new();
+    let mut conflict_paths = std::collections::BTreeSet::new();
     let mut observation = None;
     let mut eligibility = None;
     let mut can_start_resolution = false;
@@ -367,6 +368,11 @@ pub(in super::super) fn inspection(
     ) && e.conflict_observed
     {
         let inspected = conflict::inspect(service, repo, id).map_err(|e| ReadError::new(e.code))?;
+        conflict_paths = inspected
+            .paths
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
         can_start_resolution = inspected.can_start_resolution;
         observation = Some(inspected.observation);
         let eligible =
@@ -438,9 +444,23 @@ pub(in super::super) fn inspection(
                     resolve::read_resolution_image(service, repo, &git, &row, &image, ready)
                         .map_err(|f| (f.code, f.reason))
                 } else if backend != Ok(true)
-                    && !(row.state == record::LocalSyncState::ConflictPending
-                        && e.conflict_observed)
+                    && row.state == record::LocalSyncState::ConflictPending
+                    && e.conflict_observed
                 {
+                    // The immutable conflict image covers indexed paths only.
+                    // Apply the executor's policy to the full worktree status,
+                    // including nonignored untracked paths, on both read passes.
+                    if integration::resolution::only_paths_are_dirty(&git, &conflict_paths)
+                        .map_err(|error| {
+                            let fault = run::Fault::from(error);
+                            (fault.code, fault.reason)
+                        })?
+                    {
+                        Ok(())
+                    } else {
+                        Err((ResultCode::ExternalChange, run::Reason::ForeignChange))
+                    }
+                } else if backend != Ok(true) {
                     recover::read_ordinary_image(&git, &row, &e).map_err(|f| (f.code, f.reason))
                 } else {
                     Ok(())

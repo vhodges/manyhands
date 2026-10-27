@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | Controller reports **six of seven SPEC findings closed at `3836310`**, with two Important inspection gaps remaining under finding #3. Checkpoint `01M5XPDY946AP10ZTA617CNMBV` records their source-verified corrections, 10 new public tests and **344 passing selected tests/cases** for this delta. Whole-tree fmt/check/clippy pass; production activation remains intact. Await **SPEC re-review, then QUALITY**. No approval of this corrected tree or Task 8 advance is claimed. |
+| Task 7 | Controller reports the two preceding inspection gaps **closed at `8e7d6da`**, with a fresh-conflict untracked-path gap still requiring correction. Checkpoint `01M5XRX8YK4GFJNZ6YEXD99GGV` records its source-verified fix and document/ticket RED/GREEN regressions. **175 selected tests pass**, including 52 local mutation cases; whole-tree fmt/check/clippy pass. Await **SPEC re-review, then QUALITY**. Task 8 remains unstarted. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -3550,3 +3550,81 @@ approved**. Await controller SPEC re-review of this delta, then QUALITY. Task 8 
 not started, and the ticket remains implementing. No PR, closure, merge into main,
 native workflow or cleanup was performed. Native runtime/filter/ACL evidence remains
 outside these local Linux checks.
+
+## Task 7 SPEC: fresh-conflict dirty-path policy
+
+Checkpoint **`01M5XRX8YK4GFJNZ6YEXD99GGV`**, recorded **2026-10-27T04:11:48Z**.
+Fix base: **`8e7d6dad0de081883a757293f47d68682f4e6069`**. The controller reports
+the two preceding inspection observations closed, but identifies a new gap:
+fresh observed ConflictPending with no R still advertised resolve after an unrelated
+nonignored untracked file appeared. This is a local correction pending SPEC
+re-review, not approval of the changed tree.
+
+### Source verification and minimal correction
+
+Verified that `request::inspection` exempted the fresh observed conflict from the
+ordinary image proof, while `conflict::image` described indexed paths and merge
+metadata, not unrelated untracked paths. The executor's `verify_paths` separately
+calls `integration::resolution::only_paths_are_dirty`; that predicate includes
+WT_NEW and deliberately permits unrelated ignored files.
+
+The production change is confined to **`local_sync/request.rs`**. Inspection retains
+the immutable conflict entries' raw paths as its allowlist and calls that **same
+existing predicate** in the fresh-conflict proof branch. It does not decode display
+paths, duplicate a weaker status check, acquire an executor/write lease or create R
+authority. Nonignored unrelated dirtiness selects external_repair and clears
+can_start_resolution. The existing proof closure also reruns the check after
+session B. The predicate and execution behavior themselves are unchanged.
+
+### Public RED/GREEN proof
+
+Added two tests to the existing `local_sync_inspection_spec.rs` module:
+
+- `spec_fresh_conflict_untracked_policy_ticket`
+- `spec_fresh_conflict_untracked_policy_document`
+
+Both ran RED before the fix: inspection returned **Resolve** where ExternalRepair
+was required. Each fixture positively asserts that `foreign-scratch.txt` is
+**WT_NEW**, not IGNORED, and that `status_should_ignore` is false. Each also creates
+an unrelated ignored scratch file, asserts its IGNORED status, and verifies that
+the original conflict remains resolvable with that file present.
+
+Every inspection uses the existing held-repository-lease helper, comparing Git
+administrative files (including objects/reflogs), worktree state, relevant SQL and
+image proofs before/after. With the nonignored file present, the read gives
+external_repair/can_start_resolution=false, no active R, and zero resolution rows.
+After the fixture removes only that foreign file, the original conflict again
+gives resolve/can_start_resolution=true with its original observation. A real public
+resolution then succeeds while the ignored scratch file remains byte-identical.
+Both tests passed after the correction. No old assertion was edited or weakened.
+
+### Verification and scope
+
+All Rust commands ran from this ticket checkout through `devenv shell -- cargo`:
+
+| Command after the Devenv prefix | Result |
+| --- | --- |
+| `fmt --check` | Exit 0. |
+| `check --all-features --locked` | Exit 0, 3.00s. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, 15.73s. |
+| `test --all-features --locked --test mutation_replay spec_fresh_conflict_untracked_policy` | RED: **2 failed**; GREEN: **2 passed**. |
+| `test --all-features --locked --test mutation_replay local_sync` | **52 passed**, 308 filtered, 200.38s. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**. |
+| `test --all-features --locked --test mutation_contract` | **44 passed**. |
+| `test --all-features --locked --test read_contract` | **72 passed**. |
+| `test --all-features --locked --test mutation_replay every_command_of_this_target_keeps_the_rules_of_the_boundary` | **1 passed**, including both local command homes. |
+
+Unique selected total for this narrow delta: **175 tests**, not adding the two
+focused cases again. No executor/predicate/schema implementation changed,
+so the prior domain/shared and other conformance selections were not redundantly
+rerun. No full suite, native workflow, golden regeneration or new target was used.
+
+Entry was clean at the fix base. Fetch/merge at entry and checkpoint found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated; merge-tree passed at
+base with tree `2d0fa5addded6664238ef7883dc96f62ae7bc77d`. Work stayed inline in this
+ticket checkout, without subagents. Production activation is retained, with no
+public journal bypass, frontend/dependency change or lifecycle action.
+
+Next: controller SPEC re-review, then QUALITY. No approval is claimed. Ticket stays
+implementing and Task 8 has not started. No PR, closure, merge into main, native CI
+or cleanup was performed.
