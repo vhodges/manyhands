@@ -1,6 +1,6 @@
 //! The Markdown editor: how one is made, its style, its keys, the
-//! read-only guard every read editor sits in, the edit editor's host, and
-//! the caret reveal every editor on the page uses.
+//! read-only guard every read editor sits in, the edit editor's host and
+//! its toolbar, and the caret reveal every editor on the page uses.
 //!
 //! Every editor loads `editor_text::crlf_to_lf(body)`; the editor applies
 //! its own math-fence rewrite, so `text()` is `editor_text::load(body)`.
@@ -11,6 +11,7 @@ pub(crate) mod host;
 pub(crate) mod keys;
 pub(crate) mod read_only;
 pub(crate) mod style;
+pub(crate) mod toolbar;
 
 use std::ops::Range;
 

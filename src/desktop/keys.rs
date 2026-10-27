@@ -65,12 +65,24 @@ gpui_kit::actions!(
         /// Escape in the edit editor: close an editor menu the user just
         /// opened, or else focus the header's Done (R-59).
         EditorEscape,
-        /// Make the edit editor's selection a link.
-        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
+        /// Make the edit editor's selection a link: the toolbar asks for
+        /// the address.
         InsertLink,
         /// New document or New ticket, the shown list's.
         #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
         NewItem,
+        /// Focus the edit toolbar's next control, or a menu's next item.
+        ToolbarNext,
+        /// Focus the edit toolbar's previous control, or a menu's previous
+        /// item.
+        ToolbarPrevious,
+        /// Focus the edit toolbar's first control, or a menu's first item.
+        ToolbarFirst,
+        /// Focus the edit toolbar's last control, or a menu's last item.
+        ToolbarLast,
+        /// Close the edit toolbar's open menu or link popover, and give
+        /// focus back to where it was.
+        ClosePopover,
     ]
 );
 
@@ -98,6 +110,19 @@ pub(crate) const EDIT_HOST_CONTEXT: &str = "EditHost";
 /// The edit editor itself, inside its host: Escape and the link key are
 /// bound here, so read and comment editors never see them (R-59).
 const EDIT_HOST_EDITOR: &str = "EditHost > Editor";
+
+/// The key context of the edit toolbar's row (`view::editor::toolbar`):
+/// Left, Right, Home and End move along it (fact 67), and the mode key
+/// reaches the host from a toolbar control. It sits inside the content
+/// region, so its Home and End come before the region's.
+pub(crate) const TOOLBAR_CONTEXT: &str = "EditToolbar";
+
+/// The key context of the toolbar's Style menu: Up and Down move through
+/// it, and Escape closes it.
+pub(crate) const TOOLBAR_MENU_CONTEXT: &str = "EditToolbarMenu";
+
+/// The key context of the toolbar's link popover: Escape closes it.
+pub(crate) const TOOLBAR_LINK_CONTEXT: &str = "EditToolbarLink";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -134,6 +159,17 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("escape", EditorEscape, Some(EDIT_HOST_EDITOR)),
         KeyBinding::new("secondary-k", InsertLink, Some(EDIT_HOST_EDITOR)),
         KeyBinding::new("secondary-shift-m", ToggleRich, Some(EDIT_HOST_CONTEXT)),
+        // The edit toolbar: its controls, its Style menu and its link
+        // popover. The mode key is the host's, forwarded from a control.
+        KeyBinding::new("left", ToolbarPrevious, Some(TOOLBAR_CONTEXT)),
+        KeyBinding::new("right", ToolbarNext, Some(TOOLBAR_CONTEXT)),
+        KeyBinding::new("home", ToolbarFirst, Some(TOOLBAR_CONTEXT)),
+        KeyBinding::new("end", ToolbarLast, Some(TOOLBAR_CONTEXT)),
+        KeyBinding::new("secondary-shift-m", ToggleRich, Some(TOOLBAR_CONTEXT)),
+        KeyBinding::new("up", ToolbarPrevious, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("down", ToolbarNext, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_LINK_CONTEXT)),
     ]);
 }
 

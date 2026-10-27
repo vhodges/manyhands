@@ -25,13 +25,10 @@ pub(crate) struct ItemColors {
     pub page_border: Hsla,
     pub page_border_soft: Hsla,
     pub page_border_strong: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
     pub page_fill: Hsla,
     pub code_inline: Hsla,
     pub discussion: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
     pub toolbar_hover: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
     pub segmented: Hsla,
     pub selection: Hsla,
     pub page_teal: Hsla,

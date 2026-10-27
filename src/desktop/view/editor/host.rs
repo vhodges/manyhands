@@ -23,7 +23,8 @@
 //! - **Keys.** Tab and Shift-Tab indent and outdent; F6, Shift-F6 and the
 //!   region keys leave. The host is the tab stop that hands focus to the
 //!   editor, whose own focus Tab passes by. Escape closes an editor menu
-//!   the user just opened, or else focuses the header's Done (R-59).
+//!   the user just opened, or else focuses the header's Done (R-59). The
+//!   link key asks the toolbar for an address (`LinkRequested`).
 //! - **Caret** (R-67). Kept in view in the region `place` names.
 //!
 //! The host holds the user's text, so it derives nothing.
@@ -43,7 +44,7 @@ use super::{
     CaretInView, entered_by_pointer, open_editor, set_exact, step_over_blocks, style::page_style,
 };
 use crate::desktop::{
-    keys::{EDIT_HOST_CONTEXT, EditorEscape, ToggleRich},
+    keys::{EDIT_HOST_CONTEXT, EditorEscape, InsertLink, ToggleRich},
     model::editor_text::{crlf_to_lf, load},
     view::{item::tokens::item_colors, scroll::ContentScroll},
 };
@@ -63,6 +64,9 @@ pub(crate) enum EditorHostEvent {
     Edited,
     /// The caret or the selection moved.
     SelectionChanged,
+    /// The link key was pressed in the editor: the toolbar asks for the
+    /// address.
+    LinkRequested,
 }
 
 /// The edit editor and what it is compared with.
@@ -342,7 +346,10 @@ impl Render for EditorHost {
             .capture_action(moved::<WordLeft>(cx))
             .capture_action(moved::<WordRight>(cx))
             .on_action(cx.listener(|this, _: &EditorEscape, window, cx| this.escape(window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleRich, _, cx| this.set_rich(!this.rich, cx)));
+            .on_action(cx.listener(|this, _: &ToggleRich, _, cx| this.set_rich(!this.rich, cx)))
+            .on_action(
+                cx.listener(|_, _: &InsertLink, _, cx| cx.emit(EditorHostEvent::LinkRequested)),
+            );
         if !self.rich {
             host = host
                 .font_family(cx.theme().mono_font_family.clone())
