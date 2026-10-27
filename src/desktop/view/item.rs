@@ -15,6 +15,7 @@ mod draft_actions;
 mod reads;
 mod source;
 mod status;
+pub(crate) mod tokens;
 
 use std::collections::HashMap;
 
@@ -104,6 +105,11 @@ impl ItemPane {
         match self.model.target() {
             OpenTarget::Item { repo, .. } | OpenTarget::Inspect { repo, .. } => repo,
         }
+    }
+
+    /// The window's draft registry, for the tab strip.
+    pub(super) fn drafts(&self) -> &Entity<crate::desktop::services::drafts::DraftRegistry> {
+        self.services.drafts()
     }
 
     /// Keep the last successful title after a failed refresh (ruling R-B5).

@@ -4,14 +4,23 @@
 //! Tabs are keyed by repository and item, with reads under their own TabId.
 //! Reloads retain titles and source state until results land; a failed load
 //! keeps the last title (ruling R-B5). Closing drops only that tab's state.
+//!
+//! The strip is the app's own (R-50): the Kit's `Tab` overrides the active
+//! style. The shown tab is marked by the `tab-active-line` shape, never by
+//! colour alone.
 
 use super::{
-    item::{DraftDiscarded, ItemPane, ReviewInDrafts},
+    item::text,
+    item::{
+        DraftDiscarded, ItemPane, ReviewInDrafts,
+        tokens::{ItemColors, item_colors},
+    },
     relationships::OpenRelated,
     scroll::ContentScroll,
     workspace::Workspace,
 };
 use crate::desktop::{
+    assets::icon_path,
     model::{
         navigation::OpenTarget,
         stamp::{RepoKey, TabId, ViewScope},
@@ -20,24 +29,162 @@ use crate::desktop::{
     services::Services,
 };
 use gpui_kit::{
-    AnyElement, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled, Subscription,
-    TestSupportExt, Window,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
+    Subscription, TestSupportExt, Window,
     component::{
-        ActiveTheme,
+        ActiveTheme, Icon,
         button::{Button, ButtonVariants},
         h_flex,
+        tooltip::Tooltip,
     },
-    div,
+    div, px,
 };
-use std::collections::{BTreeSet, HashMap};
+use manyhands::repository::{ItemContextKind, ItemDtoKind};
+use std::{
+    collections::{BTreeSet, HashMap},
+    path::Path,
+};
 
 pub(crate) const SHOWN: &str = "Shown";
 pub(crate) const CLOSE_TAB: &str = "Close";
 pub(crate) const OPEN_TABS: &str = "Open tabs";
+pub(crate) const UNSAVED_TOOLTIP: &str = "Unsaved changes";
+
+const STRIP_HEIGHT: f32 = 34.;
+const MAX_TAB_WIDTH: f32 = 260.;
+const TAB_GAP: f32 = 7.;
+const ICON_SIZE: f32 = 13.;
+const DOT_SIZE: f32 = 7.;
+const CODE_SIZE: f32 = 11.;
+const TITLE_SIZE: f32 = 13.;
+const ACTIVE_LINE: f32 = 2.;
 
 pub(crate) fn close_label(title: &str) -> String {
     format!("{CLOSE_TAB} {title}")
+}
+
+/// What a tab's item is, for its icon.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum TabKind {
+    #[default]
+    Ticket,
+    Document,
+}
+
+impl TabKind {
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Ticket => "ticket",
+            Self::Document => "file-text",
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ticket => "Ticket",
+            Self::Document => "Document",
+        }
+    }
+}
+
+/// What the strip draws for one tab. It holds a title, so it has no
+/// `Debug`.
+#[derive(Clone, Default)]
+pub(super) struct TabInfo {
+    pub kind: TabKind,
+    /// A ticket's short code, when it has one.
+    pub code: Option<String>,
+    pub title: String,
+    /// Unsaved work, or a kept or stored draft (E-29).
+    pub unsaved: bool,
+    pub tooltip: String,
+}
+
+impl TabInfo {
+    /// The accessible name: the title, plus ", unsaved" (E-29).
+    fn name(&self) -> String {
+        if self.unsaved {
+            format!("{}, unsaved", self.title)
+        } else {
+            self.title.clone()
+        }
+    }
+}
+
+/// "Title · repository", and for an item with a work context also its
+/// branch (when it has one) and worktree.
+pub(super) fn tooltip_text(
+    title: &str,
+    repository: &str,
+    context: Option<(Option<&str>, &str)>,
+) -> String {
+    let mut text = format!("{title} · {repository}");
+    if let Some((branch, worktree)) = context {
+        if let Some(branch) = branch {
+            text.push_str(&format!(" · branch {branch}"));
+        }
+        text.push_str(&format!(" · worktree {worktree}"));
+    }
+    text
+}
+
+/// The active tab's top line: amber while the content region has focus,
+/// `faint` otherwise.
+pub(super) fn active_line_color(content_focused: bool, colors: &ItemColors) -> Hsla {
+    if content_focused {
+        colors.accent
+    } else {
+        colors.faint
+    }
+}
+
+/// The facts of `pane`'s tab.
+pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
+    let title = pane.tab_title();
+    let (repo, kind) = match pane.model.target() {
+        OpenTarget::Item { repo, kind, .. } => (repo.as_str(), *kind),
+        OpenTarget::Inspect { repo, .. } => (repo.as_str(), ItemDtoKind::Document),
+    };
+    let item = pane.model.item().rows();
+    let code = match kind {
+        ItemDtoKind::Ticket => item.and_then(|item| item.slug.clone()),
+        _ => None,
+    };
+    let registry = pane.drafts().read(cx);
+    let unsaved = match pane.tab_key() {
+        TabKey::Item { repo, kind, id } => {
+            let key = TabKey::Item {
+                repo: repo.clone(),
+                kind,
+                id: id.clone(),
+            };
+            registry.attached(&key).is_some() || registry.stored_for(&repo, kind, &id).is_some()
+        }
+        TabKey::Inspect { .. } => false,
+    };
+    let repository = Path::new(repo)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| repo.to_owned());
+    let context = item
+        .filter(|item| item.context.kind == ItemContextKind::Active)
+        .map(|item| {
+            (
+                item.context.branch.as_deref(),
+                item.context.worktree.as_str(),
+            )
+        });
+    let tooltip = tooltip_text(&title, &repository, context);
+    TabInfo {
+        kind: match kind {
+            ItemDtoKind::Ticket => TabKind::Ticket,
+            _ => TabKind::Document,
+        },
+        code,
+        title,
+        unsaved,
+        tooltip,
+    }
 }
 
 #[derive(Default)]
@@ -161,9 +308,19 @@ impl TabContent {
         }
     }
 
-    pub(super) fn render(&self, window: &Window, cx: &mut Context<Workspace>) -> Vec<AnyElement> {
+    pub(super) fn render(
+        &self,
+        window: &Window,
+        content_focused: bool,
+        cx: &mut Context<Workspace>,
+    ) -> Vec<AnyElement> {
         let theme = cx.theme();
-        let (ring, border) = (theme.ring, theme.border);
+        let (ring, border, chrome, page) =
+            (theme.ring, theme.border, theme.tab_bar, theme.background);
+        let (foreground, muted) = (theme.foreground, theme.muted_foreground);
+        let secondary = theme.secondary_foreground;
+        let mono = theme.mono_font_family.clone();
+        let colors = item_colors(cx);
         let shown = self.tabs.active();
         let count = self.tabs.tabs().len();
         let mut strip = h_flex()
@@ -171,43 +328,86 @@ impl TabContent {
             .test_support()
             .role(Role::TabList)
             .aria_label(OPEN_TABS)
-            .gap_1()
-            .flex_wrap();
+            .flex_nowrap()
+            .h(px(STRIP_HEIGHT))
+            .flex_none()
+            .overflow_x_scroll()
+            .bg(chrome)
+            .border_b_1()
+            .border_color(border);
         for (ix, (id, _)) in self.tabs.tabs().iter().enumerate() {
             let id = *id;
             let active = shown == Some(id);
-            let title = self
+            let info = self
                 .panes
                 .get(&id)
-                .map(|pane| pane.read(cx).tab_title())
+                .map(|pane| tab_info(pane.read(cx), cx))
                 .unwrap_or_default();
+            let name = info.name();
             let focus = self.focus.get(&id).cloned();
             let focused = focus.as_ref().is_some_and(|focus| focus.is_focused(window));
+            let icon_color = if active { colors.accent } else { muted };
+            let icon = div()
+                .id(("tab-icon", ix))
+                .test_support()
+                .aria_label(info.kind.label())
+                .flex_none()
+                .child(
+                    Icon::default()
+                        .path(icon_path(info.kind.icon()))
+                        .w(px(ICON_SIZE))
+                        .h(px(ICON_SIZE))
+                        .text_color(icon_color),
+                );
+            let code = info.code.clone().map(|code| {
+                text(("tab-code", ix), code)
+                    .flex_none()
+                    .font_family(mono.clone())
+                    .text_size(px(CODE_SIZE))
+                    .whitespace_nowrap()
+                    .text_color(secondary)
+            });
+            let dot = info.unsaved.then(|| {
+                div()
+                    .id(("tab-unsaved", ix))
+                    .test_support()
+                    .aria_label(UNSAVED_TOOLTIP)
+                    .flex_none()
+                    .w(px(DOT_SIZE))
+                    .h(px(DOT_SIZE))
+                    .rounded_full()
+                    .bg(colors.accent)
+                    .tooltip(|window, cx| Tooltip::new(UNSAVED_TOOLTIP).build(window, cx))
+            });
+            let tooltip = info.tooltip.clone();
             let mut tab = div()
                 .id(("tab", ix))
                 .test_support()
                 .role(Role::Tab)
-                .aria_label(title.clone())
+                .aria_label(name)
                 .aria_selected(active)
-                .px_2()
-                .py_1()
-                .rounded_sm()
-                .border_1()
-                .border_color(border)
+                .flex_1()
+                .min_w(px(0.))
+                .h_full()
+                .pl(px(12.))
+                .pr(px(2.))
                 .when_some_focus(focus.as_ref())
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.show_tab(id, cx)))
+                .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
                 .child(
                     h_flex()
-                        .gap_1()
-                        .child(div().text_sm().child(title.clone()))
-                        .children(active.then(|| {
-                            div()
-                                .id(("tab-shown", ix))
-                                .test_support()
-                                .aria_label(SHOWN)
-                                .text_xs()
-                                .child(SHOWN)
-                        })),
+                        .h_full()
+                        .gap(px(TAB_GAP))
+                        .items_center()
+                        .child(icon)
+                        .children(code)
+                        .child(
+                            text(("tab-title", ix), info.title.clone())
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(px(TITLE_SIZE)),
+                        )
+                        .children(dot),
                 );
             if focused {
                 tab = tab.border_2().border_color(ring);
@@ -215,18 +415,45 @@ impl TabContent {
             if let Some(focus) = &focus {
                 tab = tab.relative().child(self.scroll.marker(focus));
             }
+            let mut cell = h_flex()
+                .relative()
+                .flex_none()
+                .max_w(px(MAX_TAB_WIDTH))
+                .h_full()
+                .items_center()
+                .pr(px(6.))
+                .border_r_1()
+                .border_color(border)
+                .text_color(if active { foreground } else { muted });
+            if active {
+                cell = cell.bg(page);
+            }
+            if active {
+                cell = cell.child(
+                    div()
+                        .id(("tab-active-line", ix))
+                        .test_support()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(ACTIVE_LINE))
+                        .bg(active_line_color(content_focused, &colors)),
+                );
+            }
             strip = strip.child(
-                h_flex().gap_0p5().child(tab).child(
+                cell.child(tab).child(
                     div()
                         .id(("tab-close", ix))
                         .test_support()
-                        .aria_label(close_label(&title))
+                        .aria_label(close_label(&info.title))
+                        .flex_none()
                         .when_some_focus(self.close_focus.get(&id))
                         .child(
                             Button::new(("tab-close-button", ix))
                                 .ghost()
                                 .label("×")
-                                .accessibility_label(close_label(&title))
+                                .accessibility_label(close_label(&info.title))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     this.close_tab(id, window, cx);
                                 })),

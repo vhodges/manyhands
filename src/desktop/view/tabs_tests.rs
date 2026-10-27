@@ -11,7 +11,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::SHOWN;
+use super::{TabInfo, active_line_color, tab_info, tooltip_text};
 use crate::desktop::{
     model::{navigation::OpenTarget, tabs::TabKey},
     services::{
@@ -27,7 +27,7 @@ use crate::desktop::{
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
         harness::{Shell, key},
-        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED},
+        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED, tokens::colors as item_colors},
         workspace::{REGIONS, Region},
     },
 };
@@ -92,9 +92,9 @@ fn shown(shell: &Shell, cx: &mut TestAppContext) -> Option<usize> {
         .filter(|ix| shell.selected(("tab", *ix), cx))
         .collect();
     let marked: Vec<usize> = (0..count)
-        .filter(|ix| shell.label(("tab-shown", *ix), cx).as_deref() == Some(SHOWN))
+        .filter(|ix| shell.present(("tab-active-line", *ix), cx))
         .collect();
-    assert_eq!(selected, marked, "the shown tab says so in text too");
+    assert_eq!(selected, marked, "the shown tab carries the active line");
     assert!(selected.len() <= 1);
     selected.first().copied()
 }
@@ -803,21 +803,25 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
         shell.label("close-draft-save-note", cx).as_deref(),
         Some(EDITOR_LATER)
     );
-    assert_eq!(strip(&shell, cx), ["One", "Two"], "nothing closed yet");
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two"],
+        "nothing closed yet"
+    );
 
     assert!(shell.inert_button("close-draft-save-button", cx));
     shell.click("close-draft-save-button", cx);
     assert!(close_dialog_shown(&shell, cx), "Save does nothing");
     shell.click("close-draft-cancel-button", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
 
     shell.keys("secondary-3", cx);
     shell.keys("secondary-w", cx);
     assert!(close_dialog_shown(&shell, cx));
     shell.keys("escape", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
     assert!(tab_focused(&shell, 0, cx), "focus goes back to the tab");
     let tab = TabKey::for_target(&ticket(&a, ONE));
     assert_eq!(
@@ -828,11 +832,11 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
     // Two has no draft: it closes at once, by click and by key.
     shell.click(("tab-close", 1usize), cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved"]);
     open(&shell, ticket(&a, TWO), cx);
     shell.keys("secondary-3 secondary-w", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved"]);
 }
 
 /// Keep draft, the default, flushes and releases the claim: the tab
@@ -882,7 +886,7 @@ fn discard_deletes_only_that_draft(cx: &mut TestAppContext) {
     shell.click("close-draft-discard-button", cx);
     shell.run(cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["Two"]);
+    assert_eq!(strip(&shell, cx), ["Two, unsaved"]);
     assert!(
         tab_focused(&shell, 0, cx),
         "focus goes to the tab shown now"
@@ -919,7 +923,11 @@ fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut T
     shell.run(cx);
     fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"], "the tab stays open");
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two"],
+        "the tab stays open"
+    );
     let recovery = shell.label("draft-recovery", cx).unwrap();
     assert!(recovery.starts_with(NOT_SAVED), "{recovery}");
     assert!(shell.present("draft-recovery-retry", cx));
@@ -936,4 +944,193 @@ fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut T
         held(&shell.fixture.draft_store(), draft),
         Some(Held::Here)
     ));
+}
+
+const DOC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";
+const CODE: &str = "mh-vh-k9x2b";
+
+/// The shown tab's facts, as the strip draws them.
+fn info(shell: &Shell, cx: &mut TestAppContext) -> TabInfo {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        tab_info(workspace.item_pane().unwrap().read(cx), cx)
+    })
+}
+
+/// A ticket tab shows its type icon, its short code in mono and its
+/// title, each in its own element.
+#[gpui_kit::test]
+fn each_tab_shows_its_type_short_code_and_title(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ONE, "One", &format!("slug: {CODE}\n"));
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+
+    assert_eq!(
+        shell.label(("tab-icon", 0usize), cx).as_deref(),
+        Some("Ticket")
+    );
+    assert_eq!(shell.label(("tab-code", 0usize), cx).as_deref(), Some(CODE));
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("One")
+    );
+    assert_eq!(
+        shell.label(("tab-icon", 1usize), cx).as_deref(),
+        Some("Ticket")
+    );
+    assert!(
+        !shell.present(("tab-code", 1usize), cx),
+        "a ticket without a short code shows none"
+    );
+    assert_eq!(
+        shell.label(("tab-title", 1usize), cx).as_deref(),
+        Some("Two")
+    );
+    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+}
+
+/// A document tab has the document icon and no short code.
+#[gpui_kit::test]
+fn a_document_tab_has_no_short_code(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.create_document(&a, DOC, "docs/note.md", "A note");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    let target = OpenTarget::Item {
+        repo: key(&a),
+        kind: ItemDtoKind::Document,
+        id: item_id(DOC),
+    };
+    open(&shell, target, cx);
+    assert_eq!(
+        shell.label(("tab-icon", 0usize), cx).as_deref(),
+        Some("Document")
+    );
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("A note")
+    );
+    assert!(!shell.present(("tab-code", 0usize), cx));
+}
+
+/// A tab with a restored or stored draft shows the amber dot and says
+/// "unsaved" in its accessible name, not by colour alone.
+#[gpui_kit::test]
+fn a_tab_with_a_stored_draft_shows_its_dot_and_is_named_unsaved(cx: &mut TestAppContext) {
+    let Restored { shell, .. } = restored(cx);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
+    assert_eq!(
+        shell.label(("tab-unsaved", 0usize), cx).as_deref(),
+        Some("Unsaved changes")
+    );
+    assert!(!shell.present(("tab-unsaved", 1usize), cx));
+    // The title element keeps the bare title.
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("One")
+    );
+}
+
+/// The tooltip is "Title · repository"; an item with a work context also
+/// names its branch and worktree.
+#[gpui_kit::test]
+fn the_tooltip_names_the_repository_and_the_context_when_there_is_one(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ONE, "One", "");
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    fixture.save_ticket(&a, TWO, "Two saved");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    assert_eq!(info(&shell, cx).tooltip, "One · a");
+
+    open(&shell, ticket(&a, TWO), cx);
+    let tooltip = info(&shell, cx).tooltip;
+    assert!(tooltip.starts_with("Two saved · a · branch "), "{tooltip}");
+    assert!(tooltip.contains(" · worktree "), "{tooltip}");
+    assert_eq!(
+        tooltip_text("T", "r", Some((Some("b"), "/w"))),
+        "T · r · branch b · worktree /w"
+    );
+    assert_eq!(
+        tooltip_text("T", "r", Some((None, "/w"))),
+        "T · r · worktree /w"
+    );
+    assert_eq!(tooltip_text("T", "r", None), "T · r");
+}
+
+/// The strip does not wrap: tabs with long titles stay on one row of the
+/// strip's height, and the strip scrolls.
+#[gpui_kit::test]
+fn the_strip_does_not_wrap(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let long = "A very long title that would need more than one line in a narrow strip";
+    for id in [ONE, TWO, THREE] {
+        fixture.commit_ticket(&a, id, long, "");
+    }
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    for id in [ONE, TWO, THREE] {
+        open(&shell, ticket(&a, id), cx);
+    }
+    let rows: Vec<_> = (0..3usize)
+        .map(|ix| {
+            shell.frame(cx, |window, _| {
+                let bounds = window.find(("tab", ix)).bounds();
+                (bounds.origin.y, bounds.size.height)
+            })
+        })
+        .collect();
+    assert!(rows.iter().all(|row| row.0 == rows[0].0), "{rows:?}");
+    assert!(
+        rows.iter().all(|row| row.1 <= gpui_kit::px(34.)),
+        "{rows:?}"
+    );
+    let strip = shell.frame(cx, |window, _| window.find("tab-strip").bounds());
+    assert_eq!(strip.size.height, gpui_kit::px(34.));
+}
+
+/// Exactly the shown tab carries the active line, whichever tab that is.
+#[gpui_kit::test]
+fn only_the_shown_tab_carries_the_active_line(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    open(&t.shell, ticket(&t.a, TWO), cx);
+    let lines = |cx: &mut TestAppContext| -> Vec<bool> {
+        (0..2usize)
+            .map(|ix| t.shell.present(("tab-active-line", ix), cx))
+            .collect()
+    };
+    assert_eq!(lines(cx), [false, true]);
+    t.shell.click(("tab", 0usize), cx);
+    assert_eq!(lines(cx), [true, false]);
+    assert_eq!(shown(&t.shell, cx), Some(0));
+}
+
+/// The line is amber while the content region has focus and `faint`
+/// otherwise; it is drawn either way.
+#[gpui_kit::test]
+fn the_focused_strip_marks_the_active_tab(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    t.shell.keys("secondary-3", cx);
+    assert_eq!(ring(&t.shell, cx), [Region::Content]);
+    assert!(t.shell.present(("tab-active-line", 0usize), cx));
+    let colors = item_colors(true);
+    assert_eq!(active_line_color(true, &colors), colors.accent);
+    assert_eq!(active_line_color(false, &colors), colors.faint);
+    t.shell.keys("secondary-1", cx);
+    assert_ne!(ring(&t.shell, cx), [Region::Content]);
+    assert!(
+        t.shell.present(("tab-active-line", 0usize), cx),
+        "the line stays when focus leaves"
+    );
 }

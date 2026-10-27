@@ -380,7 +380,11 @@ impl Workspace {
                 self.content
                     .settings
                     .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
-                let mut body = self.content.tabs.render(window, cx);
+                let mut body = self.content.tabs.render(
+                    window,
+                    self.focused_region(window, cx) == Some(Region::Content),
+                    cx,
+                );
                 body.push(selection);
                 body
             }
