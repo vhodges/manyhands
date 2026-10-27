@@ -1,6 +1,9 @@
 //! The recorded load normalization (decision 1) over the design's golden
 //! fixtures in `tests/fixtures/editor/`, and `normalized` (R-11, R-72).
 //!
+//! The pinned rewrite is not idempotent (fact 81, R-79): `load` is one
+//! pass, and two fixtures record the shapes a second pass changes.
+//!
 //! `ItemDto` derives `Debug`, which would print a body, so items are
 //! compared with `assert!`.
 
@@ -28,6 +31,11 @@ const REWRITES: [&str; 9] = [
 
 /// The rewrites of N-1, the host's own part.
 const LINE_ENDINGS: [&str; 2] = ["n1_crlf", "n1_lone_cr"];
+
+/// Fact 81's two shapes, which a second pass changes again, each with its
+/// one-pass `.expected` file: a pair on an N-3 inner line, and an N-3
+/// inner line that opens a backtick fence.
+pub(crate) const SECOND_PASS: [&str; 2] = ["f81_inner_pair", "f81_inner_fence"];
 
 /// What loads unchanged, each with an `.expected` file of its own bytes.
 const EXEMPTIONS: [&str; 5] = [
@@ -66,7 +74,16 @@ fn read(file: &str) -> String {
 
 /// Every fixture's name.
 pub(crate) fn every_fixture() -> impl Iterator<Item = &'static str> {
-    REWRITES.into_iter().chain(EXEMPTIONS).chain(ROUND_TRIPS)
+    REWRITES
+        .into_iter()
+        .chain(SECOND_PASS)
+        .chain(EXEMPTIONS)
+        .chain(ROUND_TRIPS)
+}
+
+/// The fixtures with an `.expected` file.
+fn with_expected() -> impl Iterator<Item = &'static str> {
+    REWRITES.into_iter().chain(SECOND_PASS).chain(EXEMPTIONS)
 }
 
 /// The fixture `name`, as stored.
@@ -79,8 +96,9 @@ fn expected(name: &str) -> String {
 }
 
 /// The directory holds exactly the listed fixtures, so none goes
-/// untested; each rewrite really rewrites, and each loads to its
-/// `.expected` file. The host's own part is N-1 alone.
+/// untested; each rewrite really rewrites, each loads to its `.expected`
+/// file, and each round trip loads unchanged. The host's own part is N-1
+/// alone.
 #[test]
 fn each_fixture_loads_to_its_expected_file() {
     let mut found: Vec<String> = fs::read_dir(directory())
@@ -91,21 +109,20 @@ fn each_fixture_loads_to_its_expected_file() {
     found.sort();
     let mut listed: Vec<String> = every_fixture()
         .map(|name| format!("{name}.md"))
-        .chain(
-            REWRITES
-                .into_iter()
-                .chain(EXEMPTIONS)
-                .map(|name| format!("{name}.expected")),
-        )
+        .chain(with_expected().map(|name| format!("{name}.expected")))
         .collect();
     listed.sort();
     assert_eq!(found, listed);
 
-    for name in REWRITES {
+    for name in REWRITES.into_iter().chain(SECOND_PASS) {
         assert!(fixture(name) != expected(name), "{name} rewrites nothing");
     }
-    for name in REWRITES.into_iter().chain(EXEMPTIONS) {
+    for name in with_expected() {
         assert!(load(&fixture(name)) == expected(name), "{name}");
+    }
+    for name in ROUND_TRIPS {
+        let body = fixture(name);
+        assert!(load(&body) == body, "{name} does not round-trip");
     }
     for name in every_fixture() {
         let host = if LINE_ENDINGS.contains(&name) {
@@ -126,11 +143,24 @@ fn each_exemption_loads_unchanged() {
     }
 }
 
+/// Over the fixtures only: the pin's rewrite is not idempotent in general
+/// (fact 81), so fact 81's two fixtures are left out.
 #[test]
-fn load_is_idempotent() {
-    for name in every_fixture() {
+fn load_is_idempotent_over_the_fixtures() {
+    for name in every_fixture().filter(|name| !SECOND_PASS.contains(name)) {
         let once = load(&fixture(name));
         assert!(load(&once) == once, "{name}");
+    }
+}
+
+/// Pins fact 81: a second load changes both shapes again. A new pin that
+/// fixes it fails here, and records its set again before adoption.
+#[test]
+fn a_second_load_changes_both_shapes_of_fact_81() {
+    for name in SECOND_PASS {
+        let once = load(&fixture(name));
+        assert!(once == expected(name), "{name}");
+        assert!(load(&once) != once, "{name} loads the same twice");
     }
 }
 

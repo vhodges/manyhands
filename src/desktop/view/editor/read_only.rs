@@ -9,7 +9,8 @@
 //!   editor's menus never open and a middle-click paste never lands.
 //! - **Backstop.** Any text change that still lands — a checkbox click, an
 //!   input-method commit or composition, a table drag, an image resize — is
-//!   reverted in the same update, before anything is painted (fact 76).
+//!   reverted exactly (R-79) in the same update, before anything is
+//!   painted (fact 76).
 //!
 //! Moving, selecting, Select All, Copy and link clicks work. The wrapper
 //! emits nothing: a writer subscribes to it, never to the inner editor's
@@ -113,15 +114,22 @@ impl ReadOnly {
     /// where it was; while the text is `shown`, its caret is remembered.
     /// Subscriptions run before the next frame, so a revert is never
     /// painted.
+    ///
+    /// The revert is exact (R-79): a whole-text `replace_range`, which does
+    /// not normalize. `set_text` would load `shown` again, and the pinned
+    /// rewrite is not idempotent (fact 81), so on some bodies the text
+    /// would never equal `shown` and the revert would never stop. The step
+    /// `replace_range` records is unreachable, because undo is stopped.
     fn hold(&mut self, cx: &mut Context<Self>) {
         let editor = self.editor.read(cx);
         if editor.text() == self.shown {
             self.cursor = editor.cursor();
             return;
         }
+        let whole = 0..editor.text().len();
         let (shown, cursor) = (self.shown.clone(), self.cursor);
         self.editor.update(cx, |editor, cx| {
-            editor.set_text(shown, cx);
+            editor.replace_range(whole, &shown, cx);
             editor.set_cursor(cursor, cx);
         });
     }

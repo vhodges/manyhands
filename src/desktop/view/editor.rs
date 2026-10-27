@@ -64,13 +64,40 @@ pub(crate) fn step_over_blocks(
     true
 }
 
+/// R-79: puts `text`, which an editor already loaded once (a restored
+/// draft, the review's result), into `editor` exactly. `set_text` loads
+/// its argument again, and the pinned rewrite is not idempotent (fact 81),
+/// so when that changes `text`, a whole-text `replace_range`, which does
+/// not normalize, puts `text` back.
+///
+/// Undo restarts, except after that replace: then one undo step leads to
+/// the editor's own second pass of `text` (the design's Known Limits).
+/// The caret is at the start after `set_text` alone, and at the end after
+/// the replace; a caller that cares sets it.
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
+pub(crate) fn set_exact(editor: &Entity<EditorState>, text: &str, cx: &mut App) {
+    editor.update(cx, |editor, cx| {
+        editor.set_text(text, cx);
+        if editor.text() != text {
+            let whole = 0..editor.text().len();
+            editor.replace_range(whole, text, cx);
+        }
+    });
+}
+
 /// Where the caret lands past `range` (see `step_over_blocks`). A block's
-/// range runs from the start of its first line to the end of its last.
+/// range runs from the start of its first line to the end of its last. A
+/// range that no longer fits `text`, from an event older than the last
+/// edit, lands nowhere.
 fn beyond(text: &str, range: Range<usize>, inline: bool, forward: bool) -> Option<usize> {
+    text.get(range.clone())?;
     match (inline, forward) {
         (true, true) => Some(range.end),
         (true, false) => Some(range.start),
-        (false, true) => text[range.end..].starts_with('\n').then_some(range.end + 1),
+        (false, true) => text
+            .get(range.end..)
+            .is_some_and(|rest| rest.starts_with('\n'))
+            .then_some(range.end + 1),
         (false, false) => range.start.checked_sub(1),
     }
 }

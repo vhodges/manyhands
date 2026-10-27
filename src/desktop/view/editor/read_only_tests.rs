@@ -4,15 +4,16 @@
 //! unchanged and that the `ReadOnly` wrapper emitted nothing; the
 //! keystroke tests also assert that no edit reached the editor at all.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use gpui_kit::{
     ClipboardItem, Entity, EntityInputHandler, FocusHandle, Focusable, Modifiers, MouseButton,
-    Pixels, Point, TestAppContext, point, px,
+    Pixels, Point, RenderImage, TestAppContext, point, px,
 };
 use zorite_editor::{EditorEvent, EditorState};
 
 use super::ReadOnly;
+use crate::desktop::model::editor_text::load;
 use crate::desktop::view::{
     editor::tests::{Host, events, focus_and_draw, show},
     harness::Shell,
@@ -57,13 +58,20 @@ struct Reader {
     emitted: Rc<RefCell<Vec<EditorEvent>>>,
     /// What the editor inside it emitted.
     inner: Rc<RefCell<Vec<EditorEvent>>>,
+    /// What it must show: `load` of its body.
+    shown: String,
 }
 
 impl Reader {
     /// A read editor over `BODY`, its caret at `cursor`, focused and
     /// painted, with nothing recorded yet.
     fn open(cursor: usize, cx: &mut TestAppContext) -> Self {
-        let (shell, host) = show(cx, |window, cx| ReadOnly::new(BODY, window, cx));
+        Self::over(BODY, cursor, cx)
+    }
+
+    /// A read editor over `body`, as `open` makes one over `BODY`.
+    fn over(body: &str, cursor: usize, cx: &mut TestAppContext) -> Self {
+        let (shell, host) = show(cx, |window, cx| ReadOnly::new(body, window, cx));
         let read_only = host.read_with(cx, |host, _| host.view.clone());
         let editor = read_only.read_with(cx, |read_only, _| read_only.editor().clone());
         let emitted = events(&read_only, cx);
@@ -74,6 +82,7 @@ impl Reader {
             editor,
             emitted,
             inner,
+            shown: load(body),
         };
         reader.place(cursor, cx);
         reader
@@ -158,9 +167,13 @@ impl Reader {
         cx.read_from_clipboard().and_then(|item| item.text())
     }
 
-    /// The text is still `BODY`, and the wrapper emitted nothing.
+    /// The text is still what the reader loaded, and the wrapper emitted
+    /// nothing.
     fn assert_unchanged(&self, cx: &mut TestAppContext) {
-        assert!(self.text(cx) == BODY, "the read editor's text changed");
+        assert!(
+            self.text(cx) == self.shown,
+            "the read editor's text changed"
+        );
         assert!(
             self.emitted.borrow().is_empty(),
             "the ReadOnly wrapper emitted an event"
@@ -196,6 +209,11 @@ fn paste_and_cut_change_nothing_and_copy_still_copies(cx: &mut TestAppContext) {
     assert_eq!(reader.edits(), 0, "an edit reached the editor");
 }
 
+/// The undo keys find nothing to undo here: this read editor has taken no
+/// edit. After an edit lands, its exact revert is one undo step (R-79), and
+/// an undo of it would land like any edit, for the backstop to put back.
+/// So the undo half proves that undo changes nothing, not that the `Undo`
+/// and `Redo` stops fire.
 #[gpui_kit::test]
 fn the_formatting_keys_and_undo_change_nothing(cx: &mut TestAppContext) {
     let reader = Reader::open(at("paragraph"), cx);
@@ -412,4 +430,79 @@ fn a_reload_shows_the_new_body_and_keeps_the_cursor(cx: &mut TestAppContext) {
     assert_eq!(reader.text(cx), "abc");
     assert_eq!(reader.cursor(cx), 3);
     assert!(reader.emitted.borrow().is_empty());
+}
+
+/// Fact 81's first shape, then a checkbox. The pin loads its loaded text
+/// differently again, so a revert that loaded the shown text again would
+/// never settle.
+const LOADS_TWICE: &str = "wer $$\na $$b$$ c\n$$ wer\n\n- [ ] task\n";
+
+/// R-79: the revert puts back exactly `load(body)`, and the update settles.
+#[gpui_kit::test]
+fn a_change_on_a_body_the_pin_loads_differently_twice_is_reverted_exactly(cx: &mut TestAppContext) {
+    let reader = Reader::over(LOADS_TWICE, 0, cx);
+    assert!(
+        load(&reader.shown) != reader.shown,
+        "the body no longer has fact 81's shape"
+    );
+    let task = reader.point(reader.shown.find("task").unwrap(), cx);
+    reader.press(point(task.x - px(10.), task.y), MouseButton::Left, cx);
+    assert_eq!(reader.edits(), 1, "the press did not toggle the box");
+    reader.shell.run(cx);
+    reader.assert_unchanged(cx);
+}
+
+/// A paragraph with inline math. The test gives the editor a math
+/// renderer, so the formula is drawn and can be clicked; D3 installs
+/// none, and without one a click there only places the caret.
+const INLINE: &str = "Inline $a+b$ math here.\n\nThe end.\n";
+
+/// R-66 for inline math: the caret lands after the formula on a forward
+/// move or a click, and before it on a backward move.
+#[gpui_kit::test]
+fn the_caret_steps_over_inline_math(cx: &mut TestAppContext) {
+    let reader = Reader::over(INLINE, 0, cx);
+    reader.editor.update(cx, |editor, _| {
+        let raster = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(8, 8),
+        )]));
+        editor.set_block_math_provider(move |_| Some((raster.clone(), 8., 8.)));
+        editor.set_block_math_em(16.);
+    });
+    let (start, end) = (INLINE.find("$a").unwrap(), INLINE.find(" math").unwrap());
+
+    reader.place(start, cx);
+    reader.keys("right", cx);
+    assert_eq!(reader.cursor(cx), end, "right over the formula");
+    reader.keys("left", cx);
+    assert_eq!(reader.cursor(cx), start, "left over the formula");
+
+    reader.place(INLINE.find("The end.").unwrap(), cx);
+    let formula = reader.point(start, cx);
+    reader.press(point(formula.x + px(4.), formula.y), MouseButton::Left, cx);
+    assert_eq!(reader.cursor(cx), end, "a click on the formula");
+    reader.assert_unchanged(cx);
+}
+
+/// R-66 for word moves (Alt-Left and Alt-Right): they step over blocks
+/// too. A backward one right after a click still lands before the block,
+/// because the move clears the press.
+#[gpui_kit::test]
+fn word_moves_step_over_blocks(cx: &mut TestAppContext) {
+    let reader = Reader::open(at("Before the math."), cx);
+    for (before, after) in [
+        ("Before the math.", "After the math."),
+        ("Before the properties.", "After the properties."),
+    ] {
+        reader.place(end_of(before), cx);
+        reader.keys("alt-right", cx);
+        assert_eq!(reader.cursor(cx), at(after), "alt-right after {before}");
+
+        let line = reader.point(at(after), cx);
+        reader.press(line, MouseButton::Left, cx);
+        assert_eq!(reader.cursor(cx), at(after), "the click on {after}");
+        reader.keys("alt-left", cx);
+        assert_eq!(reader.cursor(cx), end_of(before), "alt-left from {after}");
+    }
+    reader.assert_unchanged(cx);
 }

@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use zorite_editor::{EditorEvent, EditorState};
 
-use super::open_editor;
+use super::{open_editor, set_exact, step_over_blocks};
 use crate::desktop::{
     model::editor_text::{load, tests as editor_text_tests},
     test_support::fixtures::Fixture,
@@ -193,6 +193,7 @@ fn underline_has_no_key_and_escape_reaches_the_bindings_around_the_editor(cx: &m
     });
     let around = host.read_with(cx, |host, _| host.view.clone());
     let editor = around.read_with(cx, |around, _| around.editor.clone());
+    editor.update(cx, |editor, cx| editor.set_cursor(3, cx));
     focus_and_draw(&shell, &editor, cx);
 
     shell.visual(cx).simulate_keystrokes("ctrl-a");
@@ -208,4 +209,73 @@ fn underline_has_no_key_and_escape_reaches_the_bindings_around_the_editor(cx: &m
 
     shell.visual(cx).simulate_keystrokes("escape");
     assert_eq!(around.read_with(cx, |around, _| around.escapes), 1);
+}
+
+/// R-79: `set_exact` puts a text the editor already loaded back in byte
+/// for byte, though the pin would load fact 81's shapes differently a
+/// second time.
+#[gpui_kit::test]
+fn set_exact_puts_a_loaded_text_in_exactly(cx: &mut TestAppContext) {
+    let (shell, host) = show(cx, |window, cx| {
+        EditorState::new(window, cx).with_text("abc")
+    });
+    let editor = host.read_with(cx, |host, _| host.view.clone());
+    editor.update(cx, |editor, cx| editor.set_cursor(3, cx));
+    focus_and_draw(&shell, &editor, cx);
+    let text = |cx: &mut TestAppContext| editor.read_with(cx, |editor, _| editor.text().to_owned());
+
+    // A text a second pass leaves alone goes in through `set_text` alone,
+    // which restarts undo: the "d" typed before is not undone.
+    shell.visual(cx).simulate_input("d");
+    let plain = load(&editor_text_tests::fixture("n2_mixed_pair"));
+    assert!(load(&plain) == plain);
+    cx.update(|cx| set_exact(&editor, &plain, cx));
+    assert!(text(cx) == plain);
+    shell.frame(cx, |_, _| ());
+    shell.visual(cx).simulate_keystrokes("ctrl-z");
+    assert!(text(cx) == plain, "undo reached past set_exact");
+
+    // Fact 81's shapes, loaded once, go in exactly. One Ctrl-Z then leads
+    // to the editor's own second pass of them (Known Limits).
+    for name in editor_text_tests::SECOND_PASS {
+        let once = load(&editor_text_tests::fixture(name));
+        cx.update(|cx| set_exact(&editor, &once, cx));
+        assert!(text(cx) == once, "{name}");
+        shell.frame(cx, |_, _| ());
+        shell.visual(cx).simulate_keystrokes("ctrl-z");
+        let second = load(&once);
+        assert!(second != once, "{name}");
+        assert!(text(cx) == second, "{name}: one undo");
+    }
+}
+
+/// A block event whose range no longer fits the text, as an editable
+/// host can see after an edit, moves nothing and does not panic.
+#[gpui_kit::test]
+fn a_stale_block_range_moves_nothing(cx: &mut TestAppContext) {
+    let (_shell, host) = show(cx, |window, cx| {
+        EditorState::new(window, cx).with_text("abc")
+    });
+    let editor = host.read_with(cx, |host, _| host.view.clone());
+    editor.update(cx, |editor, cx| editor.set_cursor(1, cx));
+    for (inline, at_end) in [(false, false), (false, true), (true, false), (true, true)] {
+        let events = [
+            EditorEvent::EditMath {
+                range: 10..20,
+                source: "x".into(),
+                at_end,
+                inline,
+            },
+            EditorEvent::EditProperties {
+                range: 10..20,
+                source: "k:: v".into(),
+                at_end,
+                row: None,
+            },
+        ];
+        for event in events {
+            assert!(cx.update(|cx| step_over_blocks(&editor, &event, cx)));
+            assert_eq!(editor.read_with(cx, |editor, _| editor.cursor()), 1);
+        }
+    }
 }
