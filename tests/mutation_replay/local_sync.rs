@@ -1610,6 +1610,24 @@ fn local_sync_process_owner_child() {
         return;
     };
     let json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    if let Some(fault) = json["harness_fault"].as_str() {
+        println!("TASK8-FAULT-STDOUT");
+        eprintln!("TASK8-FAULT-STDERR");
+        std::io::stdout().flush().unwrap();
+        if fault == "early_exit" {
+            std::process::exit(23);
+        }
+        if fault == "completion" {
+            println!("TASK8-ACCEPTED");
+            std::io::stdout().flush().unwrap();
+            std::io::stdin().read_exact(&mut [0]).unwrap();
+        }
+        // Deliberately never progress. Only this fixture's supervisor may end
+        // this child; no sleep is used to guess whether a boundary was reached.
+        let (_hold, blocked) = std::sync::mpsc::channel::<()>();
+        blocked.recv().unwrap();
+        unreachable!();
+    }
     if json["mode"] == "lease" {
         let git = git2::Repository::open(json["root"].as_str().unwrap()).unwrap();
         let lock = std::fs::OpenOptions::new()
@@ -1650,36 +1668,322 @@ fn local_sync_process_owner_child() {
     assert_eq!(result.code, ResultCode::Ok);
 }
 
+enum LocalChildCommand {
+    Release,
+    Abort,
+}
+
+struct LocalChildReport {
+    status: std::process::ExitStatus,
+    termination: &'static str,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl LocalChildReport {
+    fn diagnostics(&self) -> String {
+        format!(
+            "{} ({})\nstdout:\n{}\nstderr:\n{}",
+            self.status,
+            self.termination,
+            String::from_utf8_lossy(&self.stdout),
+            String::from_utf8_lossy(&self.stderr)
+        )
+    }
+}
+
+// Only the supervisor owns Child: a blocked main-thread library call cannot
+// prevent the watchdog from killing/reaping this particular fixture process.
+struct LocalChildProcess {
+    child: std::process::Child,
+    reaped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for LocalChildProcess {
+    fn drop(&mut self) {
+        if !self.reaped.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = self.child.kill();
+            if self.child.wait().is_ok() {
+                self.reaped.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+struct GuardedLocalChild {
+    commands: std::sync::mpsc::Sender<LocalChildCommand>,
+    ready: std::sync::mpsc::Receiver<()>,
+    worker: Option<std::thread::JoinHandle<LocalChildReport>>,
+    report: Option<LocalChildReport>,
+    reaped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    deadline: std::time::Instant,
+}
+
+impl GuardedLocalChild {
+    fn spawn(payload: serde_json::Value, timeout: std::time::Duration) -> Self {
+        use std::io::{BufRead, Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        };
+        let reaped = Arc::new(AtomicBool::new(false));
+        let mut process = LocalChildProcess {
+            child: std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "local_sync::local_sync_process_owner_child",
+                    "--nocapture",
+                ])
+                .env("MANYHANDS_TASK8_OWNER_CHILD", payload.to_string())
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+            reaped: reaped.clone(),
+        };
+        let deadline = std::time::Instant::now() + timeout;
+        let (ready_tx, ready) = mpsc::channel();
+        let stdout = process.child.stdout.take().unwrap();
+        let stderr = process.child.stderr.take().unwrap();
+        let (commands, receive) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            // Drain both pipes concurrently so diagnostics cannot fill a pipe
+            // and prevent either the explicit barrier or process completion.
+            let out = std::thread::spawn(move || {
+                let mut reader = std::io::BufReader::new(stdout);
+                let mut bytes = Vec::new();
+                loop {
+                    let mut line = Vec::new();
+                    match reader.read_until(b'\n', &mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            if line == b"TASK8-ACCEPTED\n" || line == b"TASK8-ACCEPTED\r\n" {
+                                let _ = ready_tx.send(());
+                            }
+                            bytes.extend(line);
+                        }
+                        Err(error) => {
+                            bytes.extend(format!("stdout capture failed: {error}").as_bytes());
+                            break;
+                        }
+                    }
+                }
+                bytes
+            });
+            let err = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Err(error) = std::io::BufReader::new(stderr).read_to_end(&mut bytes) {
+                    bytes.extend(format!("stderr capture failed: {error}").as_bytes());
+                }
+                bytes
+            });
+            let (status, termination) = loop {
+                if let Some(status) = process.child.try_wait().unwrap() {
+                    break (status, "exited");
+                }
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                let termination = if remaining.is_zero() {
+                    "deadline"
+                } else {
+                    // This timeout only polls liveness/deadline; ordering proof
+                    // is the child's flushed pipe barrier, never a guessed delay.
+                    match receive.recv_timeout(remaining.min(std::time::Duration::from_millis(10)))
+                    {
+                        Ok(LocalChildCommand::Release) => {
+                            if let Some(mut stdin) = process.child.stdin.take() {
+                                let _ = stdin.write_all(b"x");
+                            }
+                            continue;
+                        }
+                        Ok(LocalChildCommand::Abort)
+                        | Err(mpsc::RecvTimeoutError::Disconnected) => "aborted",
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    }
+                };
+                let _ = process.child.kill();
+                break (process.child.wait().unwrap(), termination);
+            };
+            process.reaped.store(true, Ordering::SeqCst);
+            LocalChildReport {
+                status,
+                termination,
+                stdout: out.join().unwrap(),
+                stderr: err.join().unwrap(),
+            }
+        });
+        Self {
+            commands,
+            ready,
+            worker: Some(worker),
+            report: None,
+            reaped,
+            deadline,
+        }
+    }
+
+    fn collect(&mut self) -> &LocalChildReport {
+        if self.report.is_none() {
+            self.report = Some(
+                self.worker
+                    .take()
+                    .unwrap()
+                    .join()
+                    .expect("child supervisor panicked"),
+            );
+        }
+        self.report.as_ref().unwrap()
+    }
+
+    fn wait_ready(&mut self) -> Result<(), String> {
+        match self.ready.recv_timeout(
+            self.deadline
+                .saturating_duration_since(std::time::Instant::now()),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = self.commands.send(LocalChildCommand::Abort);
+                Err(format!(
+                    "child readiness failed: {error}\n{}",
+                    self.collect().diagnostics()
+                ))
+            }
+        }
+    }
+
+    fn finish(&mut self) -> &LocalChildReport {
+        let _ = self.commands.send(LocalChildCommand::Release);
+        self.collect()
+    }
+}
+
+impl Drop for GuardedLocalChild {
+    fn drop(&mut self) {
+        let _ = self.commands.send(LocalChildCommand::Abort);
+        if let Some(worker) = self.worker.take() {
+            // Join before the surrounding repository/data fixture can be removed.
+            // Do not cause a second panic while unwinding a failed assertion.
+            let _ = worker.join();
+        }
+    }
+}
+
+#[test]
+fn local_sync_child_harness_bounds_readiness_and_captures_early_exit() {
+    for fault in ["readiness", "early_exit"] {
+        let mut child = GuardedLocalChild::spawn(
+            serde_json::json!({"harness_fault": fault}),
+            std::time::Duration::from_secs(2),
+        );
+        let error = child.wait_ready().unwrap_err();
+        assert!(error.contains("TASK8-FAULT-STDOUT"), "{error}");
+        assert!(error.contains("TASK8-FAULT-STDERR"), "{error}");
+        let report = child.report.as_ref().unwrap();
+        if fault == "early_exit" {
+            assert_eq!(report.status.code(), Some(23));
+        } else {
+            assert!(!report.status.success());
+        }
+        assert!(child.reaped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn local_sync_child_harness_bounds_completion_after_release() {
+    let mut child = GuardedLocalChild::spawn(
+        serde_json::json!({"harness_fault": "completion"}),
+        std::time::Duration::from_secs(2),
+    );
+    child.wait_ready().unwrap();
+    let report = child.finish();
+    assert_eq!(report.termination, "deadline", "{}", report.diagnostics());
+    assert!(!report.status.success());
+    assert!(report.diagnostics().contains("TASK8-FAULT-STDERR"));
+    assert!(child.reaped.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+#[test]
+fn local_sync_child_harness_reaps_on_unwind_before_fixture_cleanup() {
+    let f = ConflictWorld::new();
+    let before = super::support::repository_git_file_bytes(&f.world.fixture);
+    let mut child = GuardedLocalChild::spawn(
+        serde_json::json!({"mode":"lease", "root": f.world.root}),
+        std::time::Duration::from_secs(30),
+    );
+    child.wait_ready().unwrap();
+    let reaped = child.reaped.clone();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = child;
+            panic!("fixture assertion before release");
+        }))
+        .is_err()
+    );
+    assert!(reaped.load(std::sync::atomic::Ordering::SeqCst));
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            f.world
+                .fixture
+                .repository
+                .commondir()
+                .join("manyhands-operation.lock"),
+        )
+        .unwrap();
+    assert!(fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap());
+    fs4::fs_std::FileExt::unlock(&lock).unwrap();
+    assert_eq!(
+        before,
+        super::support::repository_git_file_bytes(&f.world.fixture)
+    );
+}
+
+#[test]
+fn local_sync_child_harness_watchdog_releases_lease_while_caller_is_blocked() {
+    let f = ConflictWorld::new();
+    let before = super::support::repository_git_file_bytes(&f.world.fixture);
+    let mut child = GuardedLocalChild::spawn(
+        serde_json::json!({"mode":"lease", "root": f.world.root}),
+        std::time::Duration::from_secs(2),
+    );
+    child.wait_ready().unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            f.world
+                .fixture
+                .repository
+                .commondir()
+                .join("manyhands-operation.lock"),
+        )
+        .unwrap();
+    // A real blocking caller, with no release command. The independently owned
+    // watchdog must terminate/reap the child and thereby release its OS lease.
+    assert!(
+        !fs4::fs_std::FileExt::try_lock_exclusive(&lock).unwrap(),
+        "child still holds the lease before the blocking call"
+    );
+    fs4::fs_std::FileExt::lock_exclusive(&lock).unwrap();
+    fs4::fs_std::FileExt::unlock(&lock).unwrap();
+    let report = child.finish();
+    assert_eq!(report.termination, "deadline", "{}", report.diagnostics());
+    assert!(child.reaped.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(
+        before,
+        super::support::repository_git_file_bytes(&f.world.fixture)
+    );
+}
+
 #[test]
 fn local_sync_cross_process_attempt_loss_cannot_write_or_settle_after_winner() {
-    use std::io::{BufRead, Write};
     let f = ConflictWorld::new();
     let input = f.input();
     let payload = serde_json::json!({"data":f.world.data.path(),"root":f.world.root,"operation":f.operation.to_string(),"observation":input.observation,"token":input.resolutions[0].token,"source":input.resolutions[0].source});
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "local_sync::local_sync_process_owner_child",
-            "--nocapture",
-        ])
-        .env("MANYHANDS_TASK8_OWNER_CHILD", payload.to_string())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
-    loop {
-        let mut line = String::new();
-        assert_ne!(
-            output.read_line(&mut line).unwrap(),
-            0,
-            "child never reached acceptance barrier"
-        );
-        if line.trim() == "TASK8-ACCEPTED" {
-            break;
-        }
-    }
+    let mut child = GuardedLocalChild::spawn(payload, std::time::Duration::from_secs(60));
+    child.wait_ready().unwrap();
     assert_eq!(f.world.record(mutation::REQUEST_3).unwrap().attempt, 1);
     assert_eq!(
         f.world
@@ -1693,13 +1997,9 @@ fn local_sync_cross_process_attempt_loss_cannot_write_or_settle_after_winner() {
     let rows = task8_authority_image(&f.world);
     let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
     let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
-    child.stdin.take().unwrap().write_all(b"x").unwrap();
-    let result = child.wait_with_output().unwrap();
-    assert!(
-        result.status.success(),
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    let result = child.finish();
+    assert_eq!(result.termination, "exited", "{}", result.diagnostics());
+    assert!(result.status.success(), "{}", result.diagnostics());
     assert_eq!(rows, task8_authority_image(&f.world));
     assert_eq!(
         before,
@@ -1713,40 +2013,28 @@ fn local_sync_cross_process_attempt_loss_cannot_write_or_settle_after_winner() {
 
 #[test]
 fn local_sync_cross_process_lease_refuses_resolution_without_second_authority() {
-    use std::io::{BufRead, Write};
     let f = ConflictWorld::new();
     let input = f.input();
     let payload = serde_json::json!({"mode":"lease","root":f.world.root});
-    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "local_sync::local_sync_process_owner_child",
-            "--nocapture",
-        ])
-        .env("MANYHANDS_TASK8_OWNER_CHILD", payload.to_string())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
-    loop {
-        let mut line = String::new();
-        assert_ne!(output.read_line(&mut line).unwrap(), 0);
-        if line.trim() == "TASK8-ACCEPTED" {
-            break;
-        }
-    }
+    // Includes the exact lease-file bytes. Windows mandatory locks forbid
+    // reading them while the child owns the lease, so snapshot before spawn.
     let rows = task8_authority_image(&f.world);
     let before = super::support::repository_and_worktree_snapshot(&f.world.fixture);
     let artifacts = super::support::repository_git_file_bytes(&f.world.fixture);
+    let mut child = GuardedLocalChild::spawn(payload, std::time::Duration::from_secs(60));
+    child.wait_ready().unwrap();
     let result = f.world.execute(
         mutation::REQUEST_3,
         Mutation::LocalContextResolve(copy_input(&input)),
     );
-    // Release/join before asserting so even a regression does not strand a child.
-    child.stdin.take().unwrap().write_all(b"x").unwrap();
-    assert!(child.wait_with_output().unwrap().status.success());
+    let completed = child.finish();
+    assert_eq!(
+        completed.termination,
+        "exited",
+        "{}",
+        completed.diagnostics()
+    );
+    assert!(completed.status.success(), "{}", completed.diagnostics());
     assert_eq!(result.code, ResultCode::Busy);
     assert_eq!(rows, task8_authority_image(&f.world));
     assert_eq!(

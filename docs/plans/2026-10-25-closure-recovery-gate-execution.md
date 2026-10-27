@@ -71,7 +71,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
 | Task 7 | **Complete and approved at `0d1b8d006980bf0da116828db54b16728bf55cbd`**, full range `41bce3e..0d1b8d0`. Task 8 controller handoff reports SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` and QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` both approved with zero findings. Prior 182 selected checks remain recorded evidence. |
-| Task 8 | Implemented from `0d1b8d006980bf0da116828db54b16728bf55cbd`; checkpoint `01M5XX9Y76ZM2D6FJQKBJS2D13`. Public closure acceptance, 25-row/18-case audit, adversarial evidence and one RED/GREEN missing-authority correction. **243 distinct selected tests/cases pass**. Await controller SPEC then QUALITY review of the full Task 8 delta. |
+| Task 8 | Controller SPEC `ses_e84247053ffeQkt4obeGjIa5Xy` **approved, zero findings at `65541cc`**, full range from `0d1b8d0`. QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX` raised two P2 harness findings. Checkpoint `01M5YEBSNAVTE45DEJF9QFP5MF` records verified bounded-child/Windows-lock fixes and six passing affected tests; whole-tree gates green. Await **SPEC delta verification then QUALITY re-review**. Earlier 243-test evidence remains historical and is not claimed as rerun for this test-only delta. |
 | Task 9 | Not started; Task 8 independent reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -3952,3 +3952,97 @@ Task 8's promised Linux domain/public outcomes now have assertion-level evidence
 Task 9.** This is implementer verification, not an independent approval. No material
 contract contradiction or additional owner scope decision is pending. Ticket remains
 implementing. PR, lifecycle closure, merge, cleanup and native dispatch were not run.
+
+## Task 8 QUALITY: bounded child ownership and lock-safe snapshots
+
+Recorded **2026-10-27T10:26:43Z**, checkpoint `01M5YEBSNAVTE45DEJF9QFP5MF`.
+Fix/re-review base: **`65541cc48ed00d8f1f6463249924bc70c645dbc6`**.
+
+### Review authority and verified findings
+
+Controller reports Task 8 SPEC **APPROVED, zero findings** at that base, session
+`ses_e84247053ffeQkt4obeGjIa5Xy`. QUALITY session
+`ses_e84216efcffeqZ4Q0rR0960XJX` then identified two P2 test-harness findings:
+
+1. Both new process tests blocked in `read_line` and `wait_with_output`, with no
+   deadline or child-cleanup guard. An assertion before release could leave an
+   unreaped child while its repository/data fixture was removed. A deadline checked
+   only by the main thread would not help if its lease-contending library call blocked.
+2. The lease test recursively read all Git artifacts while the child held the
+   exclusive `manyhands-operation.lock`. Windows mandatory locking can reject that
+   read before the intended Busy assertion. Source inspection of the test and the
+   existing coordination metadata strategy confirmed the issue; Linux success was
+   not evidence that the held-file read was portable.
+
+Both findings were verified in the actual base source before edits. SPEC approval
+applies to the base, not automatically to this correction. No independent review
+of the correction is claimed here.
+
+### Corrections and exact scope
+
+All Rust edits are inside **`tests/mutation_replay/local_sync.rs`**, confined to
+Task 8's new child entry/two process tests and their adjacent shared harness/fault
+controls. No production, old support helper, dependency or platform configuration
+changed.
+
+- `GuardedLocalChild` launches only the isolated current-test executable. One
+  supervisor thread exclusively owns that `Child`, accepts explicit Release/Abort
+  messages, and enforces an absolute lifetime deadline independently of the caller.
+  It polls child exit/deadline with timed channel receives, kills/reaps on expiry
+  or abort, and never searches for or kills a developer process.
+- Readiness still requires the child's exact flushed stdout pipe marker; release
+  is still a byte on stdin. The readiness receive is bounded by the same deadline.
+  No sleep guesses establish ordering. Ordinary process tests have a 60-second
+  watchdog; deliberately stalled fault controls use short deadlines.
+- Concurrent stdout/stderr drainers retain diagnostics without pipe-fill deadlock.
+  Readiness failures report both streams and termination status. Completion reports
+  distinguish natural exit, deadline and abort. Main guard Drop sends Abort and joins
+  cleanup before outer fixtures can be removed. A second process-owner guard also
+  kills/reaps if the supervisor unwinds; cleanup avoids a second panic during unwind.
+- The watchdog owns the handle and can terminate/reap the child even while the main
+  thread is blocked in a lease-acquiring call; it does not depend on borrowing a
+  main-thread mutex or running code after that call returns.
+- The lease test captures rows, files/index/refs and the **complete** Git artifact
+  map before spawning the lease holder. It compares them only after release and
+  reaping. The exact lease-file entry and every other artifact remain in the
+  comparison: no blanket lock/Git exclusion was introduced.
+
+### Fault controls and verification
+
+Four new tests were written to exercise harness failures, then run together with
+the two affected acceptance tests. No production behavioral RED/GREEN claim is
+made for this test-infrastructure change. A preliminary compilation caught a fault
+branch placed at the earlier child's similar JSON parse; it was moved into Task 8's
+owned child entry, leaving the old child unchanged. No runtime failure was waived.
+
+| New control | Actual assertion evidence |
+| --- | --- |
+| `local_sync_child_harness_bounds_readiness_and_captures_early_exit` | Two isolated children: one emits diagnostics but never signals readiness, one exits with code 23. Both are reaped and both stdout/stderr markers are present in the failure report. |
+| `local_sync_child_harness_bounds_completion_after_release` | Child signals readiness and consumes release but deliberately never completes. Supervisor terminates it at the deadline, reports failure and retained stderr, and reaps it. |
+| `local_sync_child_harness_reaps_on_unwind_before_fixture_cleanup` | Child owns the real repository lease; a caught parent assertion unwinds the guard before release. Reaped flag is set, the lease is immediately reacquirable, and the full Git artifact map including the lease file is unchanged. |
+| `local_sync_child_harness_watchdog_releases_lease_while_caller_is_blocked` | After the exact readiness barrier, a nonblocking probe proves the child still holds the OS lease. Main then performs a real blocking acquisition without sending release. Watchdog expiry kills/reaps the child, the blocked acquisition returns, and the full artifact map remains identical. |
+
+Commands used the ticket worktree and Devenv:
+
+| Command after `devenv shell -- cargo` | Observed result |
+| --- | --- |
+| `test --all-features --locked --test mutation_replay local_sync_child_harness -- --test-threads=2` | **4 passed**, 374 filtered; 5.00s. Five isolated child failure scenarios. |
+| `test --all-features --locked --test mutation_replay local_sync_cross_process -- --test-threads=2` | **2 passed**, 376 filtered; 2.98s. Original same-ID winner and Busy/lease assertions preserved; two isolated children. |
+| `test --all-features --locked --test mutation_replay local_sync::local_sync_child_harness_reaps_on_unwind_before_fixture_cleanup -- --exact` | **1 passed**, after strengthening the post-unwind lease-reacquisition assertion. |
+| `test --all-features --locked --test mutation_replay local_sync::local_sync_child_harness_watchdog_releases_lease_while_caller_is_blocked -- --exact` | **1 passed**, after adding the positive still-held lease probe before blocking. |
+| `fmt --check` | Exit 0 on final Rust tree. |
+| `check --all-features --locked` | Exit 0. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, no warnings. |
+
+Distinct selection: **six tests, seven child scenarios**; the two focused reruns
+are not added to that count. Existing domain/closure/SSH evidence was not redundantly
+rerun for this test-only correction. No full suite or native workflow was run.
+
+Entry was clean at the fix base. Fetch/merge found main `0464c42` already incorporated.
+The Windows fix is a source-level ordering correction; the fault/containment and
+preservation tests ran locally on Linux, not Windows ACLs or a native Windows runner.
+The explicit barrier and complete artifact comparisons are retained on all platforms.
+
+Both P2 findings are locally addressed, pending **controller SPEC delta verification,
+then QUALITY re-review**. Task 9 remains unstarted; ticket remains implementing.
+No PR, lifecycle closure, merge into main, cleanup or native dispatch was performed.
