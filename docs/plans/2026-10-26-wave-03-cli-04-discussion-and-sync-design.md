@@ -12,7 +12,7 @@ id: "01M5X4YWQMNJJT3VXP0BY9JGG9"
 
 ## Execution Status
 
-**Draft, 2026-10-26, revised after the first review round.** Written for
+**Draft, 2026-10-26, revised after the second review round.** Written for
 product-owner review. Nothing is built. Implementation waits for the gate
 ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` to merge (Cycle decision 2).
 
@@ -25,10 +25,10 @@ this design, and this design governs the
 
 Approval of this design covers:
 
-- the library part of Cycle decisions 1, 3, 4, 7, 8, 9, 11, 12 and 13;
+- the library part of Cycle decisions 1, 3, 4, 7, 8, 9, 11, 12, 13 and 17;
 - the per-verb grammar and input fields;
 - the five required-outcome tables and the resume table;
-- rulings R-1 to R-33;
+- rulings R-1 to R-36;
 - named edits E-1 to E-11;
 - the document amendments listed below.
 
@@ -43,9 +43,11 @@ C4 changes the library, as an approved exception to track rule 5 (decision
 - one new read, the conflict inspection;
 - the merging settings of the two synchronization bindings;
 - resume's routing;
-- the comment checkpoint's author and parent check;
+- the comment checkpoint's author and parent check, and the release of a
+  binding that wrote nothing (R-34);
 - the durable state that lets the same request finish an interrupted
-  resolution (decision 13);
+  resolution (decision 13, R-35);
+- a push-only republish path (decision 11, R-18);
 - the new data and preview DTOs and their schemas;
 - the crate-private parameters these need.
 
@@ -60,9 +62,10 @@ stops there for a controller ruling.
 
 Facts 1–53 were read for the first draft. The first review round confirmed
 facts 1–27, 29–35, 37–41 and 44–52 against the source, and corrected facts
-28, 36, 43 and 53, as written below. Facts 54–66 were added after it. Facts
-marked **(confirm)** rest on a reading that Task 0 must prove, and name the
-check.
+28, 36, 43 and 53, as written below. Facts 54–66 were added after it, and the
+second round confirmed them. Facts 67–74 were added after the second round.
+Facts marked **(confirm)** rest on a reading that Task 0 must prove, and name
+the check.
 
 **The mutation boundary.**
 
@@ -469,6 +472,38 @@ check.
     `recovery_required` whose first action is `request.retry`, up to three
     more times, under the same request.
 
+**Added after the second review round.**
+
+67. Settlement (`settle.rs:40-72`) keeps a record for `Owed`, `Unconfirmed`
+    and an unread journal. It finishes one whose journal row was cancelled or
+    retained, and deletes a stopped record whose row is completed and not in
+    flight. A command with no operation reads its row as `Absent`
+    (`bind/mod.rs:517-525`), so any stop deletes its record.
+68. `bind_comment_publication` refuses a new binding whose comment ID is
+    already bound in the repository (`recovery.rs:292-297`, unique
+    `(root_digest, comment_ulid)` at `:60`). A comment request whose record
+    was deleted, and that comes back under a new operation ID, is refused.
+    The local row is completed on `IdentityRequired` (`src/repository.rs:3164-3167`).
+69. For a context target, the clean plan makes the final commit descend
+    cleanly from both the remote context and remote primary
+    (`refs.rs:247-286`, `clean_descendant` `:289-302`). So item sync's path
+    always integrates primary, and fast-forwards to it when the context is an
+    ancestor.
+70. `remote_resolution_paths` stores a `path_digest`, not the path
+    (`state.rs:838-851`). `reconcile_resolution_candidate` hashes each
+    token's path into its input digest (`sync.rs:5185-5202`).
+71. `prepare_resolution_attempt_in_window` accepts a second attempt while a
+    step is `ResolutionPrepared` (`state.rs:4520-4529`, insert at `:4587`).
+72. `validate_child_id` (`state.rs:4446-4461`) refuses a child ULID equal to
+    any operation or confirmation ULID.
+73. `checkpoint_comment_locally` is called directly by existing tests:
+    `src/repository/ticket_guard_tests.rs:331`,
+    `src/repository/remote/sync_tests.rs:2404`, `:2484`, `:2491`, `:2547`
+    and `:6868`, and `tests/remote_merge_recovery.rs:955`.
+74. A cancellation while a push is unsettled answers `not_confirmed`:
+    `recovery_required` with `Standing::Final`, not `cancelled`
+    (`bind/sync.rs:811-819`).
+
 ## Module Layout
 
 **Library:**
@@ -489,13 +524,17 @@ check.
   - `command.rs`, `mod.rs`, `dto.rs`, `outcome.rs` and `bind/mod.rs`
     (inventories);
   - `comment_publication.rs` (the synchronizer-driven submission);
-  - `src/repository.rs`, in `checkpoint_comment_locally` only (author,
-    parent check before the binding row);
+  - `src/repository.rs`: a crate-private `checkpoint_comment_locally_with`
+    (author, the parent check before the binding row, the binding released
+    on `IdentityRequired`), which the unchanged `checkpoint_comment_locally`
+    delegates to, so fact 73's callers are untouched;
+  - `mutation/progress.rs`: a crate-private `Session::republish` method
+    beside `synchronize` (R-18);
   - `remote/mod.rs` (module registration);
   - `remote/sync.rs`, `remote/refs.rs`, `remote/reservation.rs`,
     `remote/state.rs` and `remote/merge.rs`, or their `integration/`
-    successors after the gate (republish consent and resolution
-    resumption).
+    successors after the gate (the push-only republish path, and resolution
+    association and resumption).
 - New schemas under `schemas/v1/`:
   - `comment_mutation`;
   - `conflict` and `conflict_path`;
@@ -539,14 +578,19 @@ No new `[[test]]` target (R-29).
 | `was_accepted_without_operation` | false | false | false |
 | `restores_index` | false | false | false |
 | `creates_its_repository` | false | false | false |
-| `stops_at_safe_points` | true | true | true |
-| `finishes_as_a_synchronization` | true | true | true |
+| `stops_at_safe_points` | true | false, as `OperationResume` (R-35) | true |
+| `finishes_as_a_synchronization` | true | false | true |
 | `stage` | `Writing` | `Writing` | `Connecting` |
 | `hands_off_to_any_refresh` | false | false | false |
 | `needs_confirmation` | false | false | true |
 
-`finishes_as_a_synchronization` equals "stops at safe points, or resume",
-as `command.rs:546`'s test asserts.
+- `finishes_as_a_synchronization` equals "stops at safe points, or resume",
+  as `command.rs:546`'s test asserts.
+- `ConflictResolve` holds no operation and no reservation of its own, so
+  `request cancel` asks nothing of it (fact 11). The Ctrl-C window still
+  covers it (R-21).
+- `CommentAdd` is the first stopping command whose stage is not
+  `Connecting`. E-6 covers the test that assumes it is.
 
 ## Comment Submission (`comment add`)
 
@@ -572,22 +616,33 @@ every field, the body by digest.
   (fact 19).
 - **Author (decision 9, R-7).** A given `created_by` replaces the Git
   identity's text in the comment's front matter, in
-  `checkpoint_comment_locally`. It is written once. Without it, fact 20's
-  identity applies. A commit identity is still needed for the checkpoint
-  either way.
-- **Parent check.** `checkpoint_comment_locally` checks the parent before it
-  inserts the binding row, so a refused parent leaves no row (fact 19).
+  `checkpoint_comment_locally_with`. It is written once. Without it, fact
+  20's identity applies. A commit identity is still needed for the
+  checkpoint either way.
+- **Parent check.** `checkpoint_comment_locally_with` checks the parent
+  before it inserts the binding row, so a refused parent leaves no row
+  (fact 19).
 - **Publication (R-3).** The binding passes the submission a crate-private
   synchronizer. That is a closure over
-  `call.session.synchronize(service, request, MERGING, &mut watch)`, with
-  `Watch` built from an `Accepted` that carries the child
-  `synchronization_id` (fact 54). Publication therefore merges, reports
-  progress and stops at safe points. `submit_comment` and its public request
-  types are unchanged (R-4).
+  `call.session.synchronize(service, request, MERGING, &mut watch)`.
+  - `watch` comes from a new `pub(super)` constructor of `Watch`, given an
+    `Accepted` that carries the child `synchronization_id` (fact 54).
+  - Its owner is the `comment add` request, whose record lists the child
+    synchronization, so `request cancel` on that request reaches it.
+  - Publication therefore merges, reports progress and stops at safe
+    points. `submit_comment` and its public request types are unchanged
+    (R-4).
+- **Standing (R-34).**
+  - On `IdentityRequired`, nothing was written, so the binding row is
+    released and the record is released. A retry under the same request ID
+    then runs as a new request and binds afresh. A checkpoint that landed in
+    the context meanwhile changes nothing (fact 68).
+  - A `Saved` result with publication pending returns `Standing::Owed`, so
+    the record stays accepted.
+  - `ended_without_checkpoint` answers `SaysNothing`.
 - **Re-entry.** A re-entered request calls the same submission with its full
-  input and a crate-private `restart: true` (fact 65). With a checkpoint, it
-  proves the receipt and publishes without writing again. Without one, after
-  `identity_required`, it writes once.
+  input and a crate-private `restart: true` (fact 65). It proves the receipt
+  and publishes without writing again.
 - **Data.** A `CommentMutationDto`, tagged `type: "comment"`, holding:
   - `item_id`, `comment_id`, `parent_id` and `created_by`;
   - `synchronization_id`;
@@ -601,7 +656,7 @@ every field, the body by digest.
 
 ### Required outcomes: comment submission
 
-Written as a test first (Task 2). A row that answers otherwise stops for a
+Written as a test first (Task 2b). A row that answers otherwise stops for a
 ruling.
 
 | Case | Code | Outcome, exit | Effects | Data, recovery |
@@ -612,14 +667,17 @@ ruling.
 | The same request retried after the refusal, the server now accepting | `ok` | success, 0 | publication published | one comment file, one comment checkpoint, `created_at` unchanged |
 | Publication meets a canonical conflict | `recovery_required` | partial, 4, after C2's retry re-runs it offline (facts 26, 66) | checkpoint committed, integration pending, publication pending | `conflict: {operation_id: <synchronization_id>, next_action: resolve}` |
 | Another item's conflict is pending | `busy` | partial, 4, after C2's bounded retry | checkpoint committed, publication pending | `pending_reason: synchronization` |
-| This item's context has a pending conflict | `recovery_required` | blocked, 3 | nothing | none |
+| This item's context has a pending conflict | `recovery_required` | blocked, 3 | nothing | `[repo.inspect]` |
 | Lifecycle-closed ticket | `ticket_closed` | blocked, 3 | nothing; no context or binding left | none |
-| No identity and no `created_by` | `identity_required` | blocked, 3 | nothing written | `[repo.identity_set]`; after `repo identity-set`, the same request succeeds and writes once |
-| `created_by` given, no Git identity | `identity_required` | blocked, 3 | nothing written | `[repo.identity_set]` |
+| No identity and no `created_by` | `identity_required` | blocked, 3 | nothing written; binding and record released (R-34) | `[repo.identity_set]`; after `repo identity-set`, the same request ID succeeds and writes once |
+| `created_by` given, no Git identity | `identity_required` | blocked, 3 | nothing written; binding and record released | `[repo.identity_set]` |
+| A checkpoint lands in the context between `identity_required` and the retry | `ok` | success, 0 | the comment is written once on the new tip | as the first row |
 | `created_by` malformed | `invalid_input` | input, 2 | nothing | none |
 | `parent_id` names no comment of this item, or the comment itself | `item_not_found` | input, 2 | nothing; no binding row | none |
 | `comment_id` already used by another file | `occupied_path` | input, 2 | nothing | none |
-| Ctrl-C during publication | `cancelled` | cancelled, 130 | checkpoint committed, publication pending | The operation is final (fact 56): a new `item sync` publishes the comment |
+| Ctrl-C during publication, before a push | `cancelled` | cancelled, 130 | checkpoint committed, publication pending | The operation is final (fact 56): a new `item sync` publishes the comment |
+| Ctrl-C after a push was sent, before it is verified | `recovery_required` | partial, 4 | checkpoint committed, publication pending: not confirmed (fact 74) | a new `item sync` verifies and completes it |
+| No publication remote at submission, one added later | — | — | — | `operation resume` is not the route: no child synchronization ran. A new `item sync` publishes the comment |
 | Lost stdout after success | — | exit 1 | as success | `request show` returns `ok`; a replay writes and pushes nothing |
 
 ## Merging Synchronization (decision 3)
@@ -652,6 +710,7 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 | Local behind | `already_applied` | success, 0 | the local branch fast-forwards; nothing pushed (fact 63) |
 | Clean divergence | `ok` | success, 0 | One merge commit with parents `[local, incoming]` and the fact 25 subject, published. No rebase; the remote keeps its earlier tip as an ancestor |
 | Canonical conflict | `recovery_required` | blocked, 3 | integration pending; `conflict: {operation_id, next_action: resolve}`; the reservation is released |
+| `item sync`: the remote context merged (stage 0), then primary conflicts (stage 1) | `recovery_required` | partial, 4: the stage-0 merge commit is durable | integration pending; the stage-0 commit kept; `next_action` from the stage-1 conflict |
 | Conflict in a noncanonical path | `recovery_required` | blocked, 3 | integration pending; `next_action: external_repair` |
 | The same request again, conflict still pending | `recovery_required` | blocked, 3 | the same conflict data; no transport (fact 26) |
 | A new sync while another operation's conflict is pending | `busy` | transient, 5, after C2's bounded retry | nothing |
@@ -667,7 +726,8 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 | Remote context deleted | `remote_branch_deleted` | blocked, 3 | nothing recreated; human output names `item republish` |
 | No publication remote | `publication_remote_required` | blocked, 3 | nothing |
 | Ctrl-C at a safe point | `cancelled` | cancelled, 130 | Effects name what completed. The operation is final (fact 56): a new request completes it |
-| Ctrl-C during a blocked network call | `cancelled`, exit 130, at the next safe point; or `transport_unavailable`, exit 5, with effects intact (decision 14) | — | Task 7's spike records which. Anything that misreports effects stops |
+| Ctrl-C after a push was sent, before it is verified | `recovery_required` | blocked, 3, or partial, 4, after a merge commit | publication not confirmed (fact 74); a new request verifies it |
+| Ctrl-C during a blocked network call | `cancelled`, exit 130, at the next safe point; or `transport_unavailable`, exit 5, or 4 after a merge commit, with effects intact (decision 14) | — | Task 7's spike records which. Anything that misreports effects stops |
 
 ## Republish (`item republish`, decisions 4, 7 and 11)
 
@@ -675,9 +735,15 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 `"item republish"`. It is confirmed and stops at safe points. The input
 derives `Clone`.
 
-- **Preview.** Prepare cannot contact the remote (fact 55), so it reads the
-  stored observation. A republish needs a prior fetch, such as an
-  `item sync`, that recorded the context as `remotely_deleted` (fact 36).
+- **Closed tickets (decision 17).** A lifecycle-closed ticket is refused with
+  `ticket_closed` at prepare and at execution.
+- **Preview.** Prepare cannot contact the remote (fact 55), so it reads
+  stored evidence: the same evidence the refusal points use.
+  - That is `remote_context_states` marked `remotely_deleted` by a prior
+    fetch (fact 36), or the push-absence evidence of earlier operations
+    (`sync.rs:7450-7505`).
+  - With neither, the no-op preview says to run `item sync` first.
+
   `ItemRepublishPreviewDto` holds:
   - `root`, `kind`, `item_id`, `branch` and `remote`;
   - `last_published_oid`, which can be null;
@@ -686,16 +752,21 @@ derives `Clone`.
   Its effect is the new `PreviewEffect::BranchRepublished`
   (`branch_republished`). The observation digest binds every field and the
   stored deletion state.
-- **Execution (decision 11, R-18).** The binding fetches, then refuses any
-  change since the preview:
-  - the context advertised again is `external_change`, before any push;
-  - a local tip other than `local_oid` is `external_change`.
+- **Execution (decision 11, R-18).** A push-only domain path, not item
+  sync's clean plan, because that plan always integrates primary (fact 69).
+  The binding calls it through a new crate-private `Session::republish`.
+  1. It fetches.
+  2. It refuses any change since the preview, before any push:
+     - the context advertised again is `external_change`;
+     - a local tip other than `local_oid` is `external_change`.
+  3. It pushes exactly `local_oid`, creating the branch.
+  4. It records the publication, so the context is published again.
 
-  Otherwise it pushes exactly `local_oid` to the branch, recreating it,
-  through each of fact 36's refusal points with a crate-private consent
-  that must equal the live observation. It integrates nothing. The next
-  `item sync` integrates primary as usual. Ordinary `item sync` passes no
-  consent and still refuses.
+  It integrates nothing, and the next `item sync` integrates primary as
+  usual. Ordinary `item sync` still refuses at fact 36's points.
+- **Records.** An `external_change` finishes the record, so its recovery is
+  `[request.prepare]`: a new preview. A transport stop leaves it accepted,
+  and the same request continues.
 - **Data.** None: `data` is null, and the effects report the publication.
 - **Desktop.** One `PreviewDetailsDto::Republish` arm in
   `src/desktop/view/confirm.rs` shows "Branch", "Last published" and "Local
@@ -707,12 +778,17 @@ Written as a test first (Task 5).
 
 | Case | Answer |
 | --- | --- |
-| `--prepare`, deletion recorded | Preview with `branch_republished`, the branch, the remote, `last_published_oid` and `local_oid`, exit 0 |
-| `--prepare` with no recorded deletion: the branch exists, was never published, or the deletion is not yet observed | A no-op preview, `already_applied`, exit 0, with no confirmation |
+| `--prepare`, deletion recorded by a fetch | Preview with `branch_republished`, the branch, the remote, `last_published_oid` and `local_oid`, exit 0 |
+| `--prepare`, deletion shown only by push-absence evidence | The same preview, exit 0 |
+| `--prepare` with no deletion evidence: the branch exists, was never published, or the deletion is not yet observed | A no-op preview, `already_applied`, exit 0, with no confirmation, saying to run `item sync` first |
+| `--prepare` on a lifecycle-closed ticket | `ticket_closed`, exit 3 (decision 17) |
 | `--confirm`, nothing changed | `ok`, exit 0: the branch created once at `local_oid`, no merge, publication published |
-| `--confirm` after the local branch moved | `external_change`, exit 3; nothing pushed |
-| `--confirm` after the branch reappeared on the remote | `external_change`, exit 3; nothing pushed |
-| `--confirm` meeting a transport, unlock or host stop | the code `item sync` gives it, such as `transport_unavailable` (5), `unlock_required` (3) or `host_approval_required` (3); nothing pushed |
+| `--confirm` after remote primary moved since the context's last integration | `ok`, exit 0: exactly `local_oid` pushed, no merge |
+| `--confirm` where the context is an ancestor of primary | `ok`, exit 0: exactly `local_oid` pushed, not primary's tip |
+| `--confirm` after the local branch moved | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
+| `--confirm` after the branch reappeared on the remote | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
+| `--confirm` while the refused `item sync` request still holds its reservation (`01M4R19PC0T6ZPKM39X9DF26HX`) | `busy`, exit 5, after C2's bounded retry; human output names `request cancel` for that request first |
+| `--confirm` meeting a transport, unlock or host stop | the code `item sync` gives it, such as `transport_unavailable` (5), `unlock_required` (3) or `host_approval_required` (3); nothing pushed; the same request continues |
 | Replay of a confirmed request | Its stored result; no second push |
 | `item sync` after a republish, primary unchanged | `already_applied` |
 | Ctrl-C during execution | `cancelled`, exit 130. The operation is final (fact 56); a new prepare is needed |
@@ -733,8 +809,9 @@ operation_id: OperationId) -> Result<ConflictDto, ReadError>`. It is a read
 | `target` | `primary`, `document` or `ticket` |
 | `item_id` | string or null |
 | `stage` | `context` or `primary` |
-| `state` | `conflict_pending`, `resolution_prepared`, `resolved`, `repaired`, `repair_refused` or `complete` |
-| `next_action` | `resolve`, `retry_resolution`, `external_repair`, `resume` or `none` |
+| `state` | `conflict_pending`, `resolution_prepared`, `resolved`, `repaired`, `repair_refused`, `cancelled` or `complete` |
+| `next_action` | `resolve`, `retry_resolution`, `external_repair`, `resume`, `synchronize` or `none` |
+| `request_id` | string or null: the request whose resolution attempt is unfinished, which alone may continue it (R-35) |
 | `eligibility` | `eligible_canonical`, `external_resolution_required` or null |
 | `local_parent`, `incoming_parent` | strings |
 | `observation` | string or null (R-9) |
@@ -764,10 +841,13 @@ Written as a test first (Task 3).
 | Conflict pending, every path canonical | `conflict_pending` | `resolve` | every path with kind and sides; observation present |
 | Conflict pending, any path noncanonical or structural | `conflict_pending` | `external_repair` | every path with kind; sides only where readable; observation present |
 | Markers removed in the worktree, stages intact | `conflict_pending` | as the two rows above | as above (fact 31) |
-| A resolution stopped after writing paths | `resolution_prepared` | `retry_resolution` | as the conflict; observation present |
+| A resolution stopped after writing paths | `resolution_prepared` | `retry_resolution`, with `request_id` | as the conflict; observation null, so no new request can start a second attempt (fact 71) |
 | Resolved and checkpointed, not yet published | `resolved` | `resume` | empty; observation null |
+| Resolved, then a local save in the context before publication | `resolved` | `resume`, which publishes the branch tip, containing the resolution | empty; observation null |
 | Repaired outside with an accepted two-parent commit | `repaired` | `resume` | empty; observation null |
 | Staged without a commit, or committed with wrong parents | `repair_refused` | `external_repair` | empty; observation null |
+| The merge aborted outside: HEAD at the local parent, no `MERGE_HEAD`, no stages | `repair_refused` | `external_repair` | empty; observation null. The operation cannot be abandoned (decision 6, `01M4H33R34Z7C7EEKTY1ZCT950`) |
+| Resolved, then the continuation's publication cancelled | `cancelled` | `synchronize`: a new `item sync` or `repo sync` publishes the resolution commit (fact 56) | empty; observation null |
 | Published | `complete` | `none` | empty; observation null |
 | The repository lease is held | `busy`, exit 5 | — | — |
 | An unknown operation ID | `operation_not_found`, exit 2 | — | — |
@@ -792,44 +872,58 @@ pub struct ConflictResolutionInput {
 ```
 
 These follow the gate's local-resolution shape. They derive no `Debug`,
-`Display` or `Serialize`. The command is not confirmed and stops at safe
-points. The digest covers the operation, the observation and every
+`Display` or `Serialize`. The command is not confirmed. Like `operation
+resume`, it holds no operation of its own and does not stop at safe points
+in the library's sense (R-32, R-35). The Ctrl-C window covers it. The digest
+covers the resolved synchronization's ID, the observation and every
 token/source pair in token order.
 
-The binding works in six steps.
+The binding works in seven steps.
 
-0. **Replay first (decision 13).** The resolution attempt is derived from
-   the request (R-14). If that attempt is recorded, the binding reconciles
-   it with the presented input before it checks any live token, as the gate
-   orders it.
-   - A matching input finishes the attempt with its recorded candidate.
-   - A different input under the same request ID is `request_mismatch`.
-1. **Validate.** Otherwise it re-derives the live conflict's observation and
-   tokens (R-9), and compares them with the input:
+1. **Syntax.** A malformed observation or token, an empty set or a
+   duplicate token is `invalid_input`, before anything is read.
+2. **Replay first (decision 13, R-35).** The attempt is derived from the
+   request ID. If an attempt of this request is recorded, the binding
+   reconciles it with the presented input before it checks any live token,
+   as the gate orders it:
+   - a matching input finishes the attempt with its recorded candidate, and
+     skips straight to the continuation if the candidate is already applied;
+   - a different input under the same request ID is `request_mismatch`.
+3. **Association.** If another request's attempt is unfinished, the answer
+   is `original_request_required`, naming that request. A new request never
+   starts a second attempt (fact 71).
+4. **Validate.** It re-derives the live conflict's observation and tokens
+   (R-9), and compares them with the input:
    - a different observation is `external_change`;
    - a well-formed token that is not in this conflict is `external_change`,
      as the gate has it (R-33);
-   - a malformed token, a missing path or a duplicate token is
-     `invalid_input`.
+   - a missing path is `invalid_input`;
+   - an operation whose conflict is already resolved is
+     `recovery_required`, with `[repo.inspect]` (fact 34).
 
    Nothing is written in any of these cases.
-2. **Resolve.** It calls `resolve_synchronization` under the derived
+5. **Resolve.** It calls `resolve_synchronization` under the derived
    attempt.
-3. **Continue.** On `LocalCheckpointComplete`, it continues the operation's
-   publication under the same request (R-15):
+6. **Continue.** On `LocalCheckpointComplete`, it checks the token, then
+   continues the operation's publication under the same request (R-15):
    - a comment's synchronization through the comment's synchronizer-driven
      retry, with `restart: true`;
    - any other synchronization through a restart with the merging settings.
-4. **Map the other outcomes:**
+
+   The continuation's `Watch` owner is this request, whose flag nothing sets
+   (fact 11), so only the Ctrl-C token stops it. A Ctrl-C seen before the
+   continuation starts stops after the checkpoint, with the synchronization
+   left `resolved` and resumable.
+7. **Map the other outcomes, and give the data:**
    - `StaleObservation` is `external_change`;
    - `ValidationFailed` is `invalid_input`, and nothing is written;
    - `IdentityRequired` is `identity_required` with `repo.identity_set`;
    - `ExternalResolutionRequired` is `recovery_required` with
-     `next_action: external_repair`.
-5. **Data.** `ConflictResolutionMutationDto`, tagged
-   `type: "conflict_resolution"`. It holds `operation_id`, `commit_oid`,
-   `publication` and `conflict`. `conflict` is set when publication met a
-   new conflict.
+     `next_action: external_repair`;
+   - the data is `ConflictResolutionMutationDto`, tagged
+     `type: "conflict_resolution"`. It holds `operation_id`, `commit_oid`,
+     `publication` and `conflict`, and `conflict` is set when publication
+     met a new conflict.
 
 ### Required outcomes: interrupted resolution
 
@@ -847,11 +941,14 @@ stops at a design checkpoint (decision 13).
 | After the commit is prepared, before the ref moves | `ok`, exit 0 | the same commit OID; no second commit; published |
 | After the ref moves, before publication | `ok`, exit 0 | the same commit OID; published |
 | During publication | `ok`, exit 0 | published once |
-| Any of the above, then a different `source` under the same request ID | `request_mismatch`, exit 2: the command records no operation of its own (R-32), so the refusal carries no effects (`replay.rs:140-150`) | nothing changes |
-| After success, a new request with any resolution | `external_change`, exit 3; `next_action: resume` if unpublished, `none` if published | nothing written |
+| Any of the above, then a different `source` under the same request ID | `request_mismatch`, exit 2: the command records no operation of its own (R-32), so the refusal carries no effects | nothing changes |
+| Any of the first four, then a new request ID with any input | `original_request_required`, exit 3, naming the first request (R-35) | nothing written |
+| Published by another request (`operation resume` or a sync), then the same request | `already_applied`, exit 0, with the same commit | nothing written or pushed |
+| After success, a new request with any resolution | `recovery_required`, exit 3, `[repo.inspect]` (fact 34) | nothing written |
 | After success and before publication, `operation resume` | `ok`, exit 0 | published |
 | After publication, `operation resume` | `already_applied`, exit 0 | nothing |
-| Ctrl-C during publication | `cancelled`, exit 130 | The checkpoint is committed. The operation is final (fact 56): a new `item sync` or `repo sync` publishes the resolution commit |
+| Ctrl-C during the local resolution, before publication | `cancelled`, exit 130 | the checkpoint is committed; the synchronization stays `resolved`, and `operation resume` publishes it |
+| Ctrl-C during publication | `cancelled`, exit 130 | The checkpoint is committed. The synchronization is final (fact 56): a new `item sync` or `repo sync` publishes the resolution commit |
 
 ## Resume (R-20)
 
@@ -861,7 +958,7 @@ routing stays as the gate delivers it.
 | Operation | Resume does | Data |
 | --- | --- | --- |
 | A comment's synchronization, or the comment's own operation, with its checkpoint present and publication pending, not cancelled | The synchronizer-driven retry with `restart: true`: publishes the comment, never writes it | `CommentMutationDto` |
-| A comment whose binding has no checkpoint, after `identity_required` | `original_request_required`, naming the request (fact 9); the same `comment add` request writes it | none |
+| A comment request that stopped at `identity_required` | Nothing to take up: its binding was released (R-34). Resume answers its completed local row as F2 does, `already_applied`; the same `comment add` request ID writes the comment | none |
 | A synchronization with a resolution checkpointed or an accepted outside repair | A restart with the merging settings: publishes it | null |
 | A synchronization whose conflict is still pending | `recovery_required`, exit 3, with no transport | `SynchronizationConflictMutationDto` |
 | A cancelled operation | As F2: `recovery_required`, left to inspect (fact 9). A new request completes the work (fact 56) | none |
@@ -873,7 +970,9 @@ Ctrl-C does (fact 41, R-21).
 ## The Next Step (decision 8)
 
 `ConflictNextDto { operation_id: String, next_action: ConflictNextAction }`,
-where `next_action` is `resolve` or `external_repair` in mutation data. It
+where `next_action` is `resolve` or `external_repair` in mutation data. The
+read's own `next_action` enum (`ConflictReadNextAction`) is wider, because a
+read also sees resolved, repaired, cancelled and published states. It
 can be present in three DTOs:
 
 - `CommentMutationDto`;
@@ -954,19 +1053,25 @@ Schemas: `schemas/input/v1/comment_add.schema.json` and
 ## Cancellation (decision 14, R-21, R-22)
 
 - **The window.** The `Boundary` impl in `mutate.rs` installs a process-wide
-  Ctrl-C handler around `RepositoryService::execute` when the call's command
-  stops at safe points, or is `operation resume`. It passes that window's
-  token in place of fact 40's fresh token, and removes the handler on
-  return.
-  - The stoppable verbs are `item sync`, `repo sync`, `item republish`,
-    `comment add`, `conflict resolve` and `operation resume`.
-  - Neither `Boundary`'s signature nor `Plan` changes (fact 61).
+  Ctrl-C handler around `RepositoryService::execute` when the call's
+  mutation is one of the six stoppable verbs, matched on the `Mutation`
+  variant: `item sync`, `repo sync`, `item republish`, `comment add`,
+  `conflict resolve` and `operation resume`. It passes that window's token
+  in place of fact 40's fresh token, and removes the handler on return.
+  Neither `Boundary`'s signature nor `Plan` changes (fact 61).
+- **One latch per run (R-36).**
+  - The press count and the cancellation persist across the execute calls
+    of C2's bounded retry within one CLI run.
+  - The retry loop stops once a press is latched, so no retry follows a
+    Ctrl-C that landed after the last safe point.
 - **Unix.** `sigaction(SIGINT)` with `SA_RESTART`. The token is held in an
-  `AtomicPtr` slot, set for each window.
+  `AtomicPtr` slot.
   - The first signal calls `cancel()`, an atomic store, which is
     async-signal-safe.
   - The second restores the default disposition and re-raises, so the
     process dies by SIGINT.
+  - Teardown restores the disposition, clears the slot, then drops the
+    token. The handler checks for null, and a drop guard covers an unwind.
 - **Windows.** `SetConsoleCtrlHandler` with a routine that cancels on the
   first `CTRL_C_EVENT` and returns `TRUE`. On the second it returns `FALSE`,
   so the default handler ends the process. The system runs this routine on
@@ -1000,7 +1105,9 @@ Schemas: `schemas/input/v1/comment_add.schema.json` and
 - `comment add` adds this note:
   `note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.`
 - A result with conflict data prints `conflict:` and `next:` lines.
-- `remote_branch_deleted` prints
+- `remote_branch_deleted` prints two `next:` lines, because the refused
+  request still holds its reservation (`01M4R19PC0T6ZPKM39X9DF26HX`):
+  `next: manyhands-cli request cancel --request-id <id>`, then
   `next: manyhands-cli item republish --repo '<root>' --id <id> --prepare`.
 - Roots in `next:` lines are quoted and escaped as C3's `path observe`
   escapes paths.
@@ -1019,7 +1126,7 @@ outcome 4 and any cancelled one 130:
 | --- | --- | --- |
 | 0 | success or no-op | `ok`, `already_applied`, including a comment with publication pending and no remote |
 | 2 | input | `invalid_input`, `usage_error`, `operation_not_found`, `occupied_path`, `item_not_found`, `request_mismatch` |
-| 3 | blocked | `recovery_required`, `external_change`, `identity_required`, `remote_branch_deleted`, `publication_remote_required`, `push_rejected`, `ticket_closed`, `worktree_not_clean`, `worktree_conflicted`, `confirmation_not_found`, the host and unlock codes |
+| 3 | blocked | `recovery_required`, `external_change`, `identity_required`, `original_request_required`, `remote_branch_deleted`, `publication_remote_required`, `push_rejected`, `ticket_closed`, `worktree_not_clean`, `worktree_conflicted`, `confirmation_not_found`, the host and unlock codes |
 | 4 | incomplete | `discovery_pending`, and any code after a durable effect, such as a comment checkpointed with publication failing |
 | 5 | transient | `busy`, `transport_unavailable` |
 | 130 | cancelled | `cancelled` |
@@ -1038,7 +1145,13 @@ In the final task, and only with the owner's go-ahead at that step:
    - the ticket's context is registered in the main checkout's index, so the
      comment does not provision a second one;
    - the selected key can be used. A protected key makes non-interactive
-     mode answer `unlock_required`, so the owner runs the step at a terminal.
+     mode answer `unlock_required`, so the owner runs the step at a terminal;
+   - C4 adds no migration of the shared application database, or main's CLI
+     still opens it after the branch-built CLI has. Another session uses
+     main's CLI against the same registry;
+   - every edit in the C4 worktree is committed. That worktree is the
+     ticket's context, and `comment add` checkpoints into it, as AGENTS.md
+     requires before `ticket save`.
 
    Record whether a publication remote is configured.
 2. **A verification comment through the CLI.** The branch-built CLI adds a
@@ -1105,11 +1218,11 @@ In the final task, and only with the owner's go-ahead at that step:
 
 | Verb | Progress | Consent | Ctrl-C | `request cancel` | Redaction | Stale write | Replay | `request_mismatch` | Completion of a stopped request |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `comment add` | 8, 12a | N/A: unconfirmed | 13 | 13 | 12a | N/A: a new comment has no observation; `occupied_path` in 8 | 8 | 2 | 2: identity |
-| `item sync` | 12a | N/A: unconfirmed | 13 | 13 | 12a | 1: `external_change` | 13 | 7 | 1: identity |
-| `repo sync` | 12a | N/A: unconfirmed | 13 | 13 | 12a | 1: `external_change` | 13 | 7 | 1: identity |
-| `item republish` | 12b | 12b: prepare, confirm, interactive | 13 | 13 | 12b | 5, 12b | 12b | 10 | N/A: a cancelled republish is final (fact 56) |
-| `conflict resolve` | 12b | N/A: unconfirmed | 13 | 13 | 12b | 4a, 9 | 4a | 4a | 4a |
+| `comment add` | 8, 12a | N/A: unconfirmed | 13 | 13 | 12a | N/A: a new comment has no observation; `occupied_path` in 8 | 8 | 2b | 2b: a refused push, then the same request |
+| `item sync` | 12a | N/A: unconfirmed | 13 | 13 | 12a | 1: `external_change` | 13 | 12a | 1: identity |
+| `repo sync` | 12a | N/A: unconfirmed | 13 | 13 | 12a | 1: `external_change` | 13 | 12a | 1: identity |
+| `item republish` | 12b | 12b: prepare, confirm, interactive | 13 | 13 | 12b | 5, 12b | 12b | 12b | 12b: a transport stop, then the same request. A cancelled republish is final (fact 56) |
+| `conflict resolve` | 12b | N/A: unconfirmed | 13 | N/A: no operation of its own (R-35) | 12b | 4a, 12b | 4a | 4a | 4a |
 | `operation resume` | 12a | N/A: unconfirmed | 13 | N/A: fact 11 | 12a | N/A: no observation | 7 | 7 | N/A: resume is itself the completion |
 | `operation abandon` | 7 | 7 | N/A: no safe point; Ctrl-C at its prompt in 7 | N/A: no safe point | 7 | 7: `external_change` | 7 | 7 | N/A: no safe point |
 | `conflict show` | N/A: a read | N/A | N/A | N/A | 9 | N/A | N/A | N/A | N/A |
@@ -1119,15 +1232,15 @@ In the final task, and only with the owner's go-ahead at that step:
 | Edit | Task | File and change |
 | --- | --- | --- |
 | E-1 | 7–10 | `tests/fixtures/cli_v1/help_root.json` and `help_root_text.txt` are regenerated as each C4 verb becomes available, and for `item republish`'s new row. The diff may change only the verb's availability, repository rule and options, plus the one added row. |
-| E-2 | 10 | `src/bin/manyhands-cli/catalog_tests.rs`: `DESIGN`'s C4 row (`:81-92`) gains `("item", "republish")`. |
-| E-3 | 1 | `tests/mutation_remote.rs`: the binding-level tests that assert a refusal to merge are rewritten to the divergent-synchronization table's outcomes. Candidates: `a_divergent_remote_is_merge_required_and_holds_its_reservation` (`:1324`), `a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge` (`:2697`), `merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased` (`:2754`), `a_resume_never_merges_and_leaves_nothing_of_a_merge` (`:3614`) and `a_resume_does_not_continue_a_merge_made_some_other_way` (`:3654`). Tests that call the domain with their own `REFUSING` settings (`:365`), such as `the_sibling_refuses_divergence_and_the_existing_function_merges_the_same_fixture` (`:493`) and `the_sibling_does_not_continue_a_merge_it_is_set_to_refuse` (`:590`), test the domain setting and stay unchanged. Task 0 classifies each. |
+| E-2 | 10 | `src/bin/manyhands-cli/catalog_tests.rs`: `DESIGN`'s C4 row (`:81-92`) gains the string `"item republish"`. |
+| E-3 | 1 | `tests/mutation_remote.rs`: the binding-level tests that assert a refusal to merge are rewritten. The synchronization tests go to the divergent-synchronization table's outcomes: `a_divergent_remote_is_merge_required_and_holds_its_reservation` (`:1324`), `a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge` (`:2697`) and `merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased` (`:2754`). The resume tests go to the resume table's, because `resumed` shares the binding's settings (`bind/sync.rs:516-519`): `a_resume_never_merges_and_leaves_nothing_of_a_merge` (`:3614`) and `a_resume_does_not_continue_a_merge_made_some_other_way` (`:3654`). Tests that call the domain with their own `REFUSING` settings (`:365`), such as `the_sibling_refuses_divergence_and_the_existing_function_merges_the_same_fixture` (`:493`) and `the_sibling_does_not_continue_a_merge_it_is_set_to_refuse` (`:590`), test the domain setting and stay unchanged. Task 0 classifies each. |
 | E-4 | 1 | `tests/fixtures/mutation_v1/repo_sync_merge_required.json` is replaced by `repo_sync_recovery_required.json`, the conflict-pending golden, and its registration in `tests/support/mutation_golden.rs` is renamed. |
-| E-5 | 1, 5 | `src/repository/mutation/outcome_tests.rs`: `every_synchronization_error_has_its_code` (`:705`, table `:646-673`) for the conflict rows; `a_synchronization_that_stopped_with_its_reservation_held_is_offered_the_same_request` (`:1565`) and `a_blocked_synchronization_with_no_way_forward_is_offered_its_cancellation` (`:1633`) for `merge_required`; and `an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection` (`:1536`), because `item republish` is the first confirmed command that stops at safe points, so `request.retry` is put first. The loops over `Command::ALL` take the new commands unchanged. |
-| E-6 | 2, 4a, 5 | `src/repository/mutation/command.rs`'s tests (`:491-651`) gain the three commands, as the Command Predicates table gives them. `only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation` (`:525`) becomes "the commands that stop at safe points, of which only `item republish` needs confirmation". |
+| E-5 | 1, 5 | `src/repository/mutation/outcome_tests.rs`: `every_synchronization_error_has_its_code` (`:705`, table `:646-673`) for the conflict rows; and `an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection` (`:1536`), because `item republish` is the first confirmed command that stops at safe points. The tests at `:1565` and `:1633` stay unchanged: `never_finished_by_the_same_request` does not change. The loops over `Command::ALL` take the new commands unchanged. |
+| E-6 | 2b, 4a, 5 | `src/repository/mutation/command.rs`'s tests (`:491-651`) gain the three commands, as the Command Predicates table gives them. `only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation` (`:525`) becomes "the commands that stop at safe points all have an operation; the synchronizations and `item republish` report `Connecting` and `comment add` reports `Writing`; only `item republish` needs confirmation". |
 | E-7 | 1–5 | `tests/mutation_contract.rs`: `DATA_ROOTS` (`:1510`), `CODES_NO_MUTATION_GOLDEN_HAS` (`:1713`) and `CODES_NO_FIXTURE_CAN_PRODUCE` (`:1674`) gain the new entries, with `merge_required`'s reason. `UNBOUND_COMMANDS` is unchanged (fact 49). |
 | E-8 | 1–5 | `tests/read_contract.rs`: `contract_enumerations` (`:703`) gains the new enums, so `published_enumerations_list_exactly_the_registered_values` (`:1018`) counts them. |
-| E-9 | 2, 4a, 5 | `tests/support/conformance.rs`'s `HOMES` (`:59`) and each home's table gain rows for the three commands. `tests/support/confirmation.rs`'s `preview_schema` (`:49-62`) gains `item republish`. |
-| E-10 | 1, 2, 4a | `tests/support/mutation.rs`'s data accessors (`:596-775`) and `tests/support/repair.rs:333` gain arms for the new `MutationDataDto` variants. |
+| E-9 | 2b, 4a, 5 | `tests/support/conformance.rs`'s `HOMES` (`:59`) and each home's table gain rows for the three commands. `tests/support/confirmation.rs`'s `preview_schema` (`:49-62`) gains `item republish`. |
+| E-10 | 1, 2b, 4a | `tests/support/mutation.rs`'s data accessors (`:596-775`) and `tests/support/repair.rs:333` gain arms for the new `MutationDataDto` variants. |
 | E-11 | 4b | The resume tests that assert a comment's synchronization is left to inspect, in `tests/mutation_replay/resume.rs` and `src/repository/mutation/bind/` unit tests, change to publication (R-20). Task 0 finds them with the plan's grep. |
 
 No other pre-existing test changes. `tests/support/pty.rs` gains an additive
@@ -1153,7 +1266,8 @@ Task 14 makes these, except where noted.
   continues, in place of "`operation show` re-observes";
 - the `comment add` example, using real codes in place of
   `publication_pending`, and `created_by`;
-- republish through `item republish` (decisions 7 and 11);
+- republish through `item republish` (decisions 7 and 11), refused for a
+  lifecycle-closed ticket (decision 17);
 - conflict data in place of a recovery action (decision 8);
 - Ctrl-C's window, a cancellation's finality and lost stdout (decision 14,
   R-21, R-22);
@@ -1174,7 +1288,7 @@ Comment Author rule "A caller cannot supply it" is replaced by decision 9.
 
 **Wave 03:**
 
-- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–16, the
+- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–17, the
   delivery and the known limits;
 - the track-rule-5 exception (decision 1);
 - the D4 section records that D4 waits for C4 (decision 5). The D5 section
@@ -1187,9 +1301,13 @@ Comment Author rule "A caller cannot supply it" is replaced by decision 9.
 - the entry-gate item 3 departure (decision 16);
 - the Windows Ctrl-C manual check, owed after merge.
 
-**The gate's shapes:** the departures in R-12 (lease) and The Next Step
-(`set_identity`) are recorded in the design's Rulings. The gate's documents
-are not edited.
+**The gate's shapes:** three departures are recorded in the design's
+Rulings:
+- R-9: the token inputs;
+- R-12: the lease;
+- The Next Step: `set_identity`.
+
+The gate's documents are not edited.
 
 **API audit:** the C4 refresh section (Task 0), and the C4 rows updated in
 place.
@@ -1217,14 +1335,19 @@ Each ruling is listed with its cost if wrong.
   - A crate-private submission and retry take a synchronizer closure built
     from `call.session.synchronize` with the merging settings and a
     `Watch`.
-  - `Watch` becomes `pub(super)`, with an `Accepted` carrying the child
-    `synchronization_id` (fact 54).
+  - `Watch` gains a `pub(super)` constructor that takes an `Accepted`
+    carrying the child `synchronization_id` (fact 54). Its owner is the
+    `comment add` request.
+  - The checkpoint goes through a crate-private
+    `checkpoint_comment_locally_with`. The existing
+    `checkpoint_comment_locally` delegates to it unchanged, so fact 73's
+    callers need no edit.
   - Re-entry calls the submission with its full input and `restart: true`
     (fact 65).
   - The public functions keep their behavior, and call it with the
     unobserved synchronizer.
 
-  *Cost:* one internal entry point shared by two callers.
+  *Cost:* internal entry points shared by two callers.
 - **R-4 No new fields on literal-built public structs.**
   `SubmitCommentRequest`, `PublishCommentRequest`,
   `RetryCommentPublicationRequest`, `SynchronizeRemoteRequest` and
@@ -1260,6 +1383,10 @@ Each ruling is listed with its cost if wrong.
   - **Their life:** both are re-derived from the live conflict on every
     call and never stored. They are valid only while that conflict is
     unchanged.
+  - **The departure from the gate:** the gate's token hashes the parent
+    operation and a snapshot generation. This one hashes the observation
+    digest and the path's position, which bind the same operation, window
+    and conflict.
 
   *Cost:* a token from before any change is refused, which is the intended
   staleness rule.
@@ -1281,12 +1408,18 @@ Each ruling is listed with its cost if wrong.
 - **R-13 States.** As the conflict-states table. *Cost:* a new state later
   is a new enum value.
 - **R-14 The attempt and its durable state (decision 13).**
-  - The resolution attempt is derived from the request ID.
-  - The library keeps what it needs to finish an attempt at
-    `ResolutionPrepared`, `CommitPrepared` or `Applied` from its durable
-    rows (fact 34) plus the presented input, without storing a body.
-  - The interrupted-resolution table is the contract, and the binding
-    replays first.
+  - **The attempt ID.** It is a ULID made from a domain-separated BLAKE3
+    digest of the request ID, so it never equals an operation or
+    confirmation ULID (fact 72).
+  - **What the library keeps.** It finishes an attempt at
+    `ResolutionPrepared`, `CommitPrepared` or `Applied` from its durable rows
+    (fact 34) plus the presented input, without storing a body.
+  - **Rebuilt tokens.** Their path bytes come from the candidate tree, diffed
+    against the local parent and matched by `path_digest` (fact 70). The
+    observation is rebuilt from the step's `conflict_digest` and the
+    intent's local parent.
+  - **The contract.** The interrupted-resolution table is the contract, and
+    the binding replays first.
 
   *Cost:* the largest library change in C4. If a row cannot be met, Task 4a
   stops.
@@ -1299,21 +1432,29 @@ Each ruling is listed with its cost if wrong.
 - **R-17 Identity during a merge.** No workaround. `repo identity-set` is
   not refused by the stopped merge (fact 28), and the same request restarts
   and merges. *Cost:* none.
-- **R-18 Republish consent (decision 11).** A crate-private consent value
-  checked against the live observation at each of fact 36's refusal points.
-  An advertised context or a moved local tip is `external_change` before any
-  push. *Cost:* five refusal points must agree. The table's tests cover
-  each.
+- **R-18 Republish (decisions 11 and 17).**
+  - A push-only domain path, reached through a new crate-private
+    `Session::republish(service, request, consent, observer)`. It fetches,
+    proves the absence, refuses an advertised context or a moved local tip
+    as `external_change`, then pushes exactly `local_oid` as a create.
+  - It does not use the clean plan (fact 69), so fact 36's refusal points
+    are not on its path.
+  - The preview reads the same evidence the refusal points read.
+  - A lifecycle-closed ticket is `ticket_closed`.
+
+  *Cost:* a second push path to keep consistent with item sync's evidence.
+  The table's tests cover each case.
 - **R-19 Republish preview.** `ItemRepublishPreviewDto`, the effect
   `branch_republished` and one desktop arm. *Cost:* a small cross-track
   merge with D3 (decision 10).
 - **R-20 Resume routes.** As the resume table. *Cost:* resume can now publish
   a comment. That is what the RFC's example shows.
 - **R-21 The Ctrl-C window.** Installed by the `Boundary` impl around
-  `execute` of the six stoppable verbs, with `SA_RESTART`. The first Ctrl-C
-  cancels, and a second ends the process. *Cost:* a Ctrl-C between execute
-  calls of C2's bounded retry ends the process at once, which is
-  interruption, as before C4.
+  `execute` of the six stoppable verbs, matched on the `Mutation` variant,
+  with `SA_RESTART`. The first Ctrl-C cancels, and a second ends the
+  process. *Cost:* a Ctrl-C between execute calls of C2's bounded retry,
+  outside a window, ends the process at once. That is interruption, as
+  before C4.
 - **R-22 Cancellation's exit.** 130 even after a checkpoint, as the RFC's
   order puts cancellation first. *Cost:* a script must read effects after
   130.
@@ -1323,7 +1464,9 @@ Each ruling is listed with its cost if wrong.
   - A re-run is the same request, so it duplicates nothing. It is not new
     lifecycle intent, which the Wave's exclusion is about (C5's promotion
     and closure).
-  - It never follows `cancelled` or a blocked result.
+  - It never follows `cancelled`, a blocked result, or a latched Ctrl-C
+    (R-36).
+  - The sync, republish and comment verbs run with `Plan { retry: true }`.
 
   *Cost:* up to three extra push attempts on a refused push.
 - **R-24 Two-clone support.** `tests/support/cli_pair.rs`, new, built on
@@ -1339,11 +1482,13 @@ Each ruling is listed with its cost if wrong.
   the binary, and the unreachable codes listed with reasons. Set equality
   with Task 0's audit union. *Cost:* none.
 - **R-28 Golden names.**
-  - `<resource>_<verb>_ok`, at least one `<resource>_<verb>_<code>` and
-    `<resource>_<verb>_text`;
-  - `item_republish_preview`, `item_republish_preview_noop` and
+  - **CLI goldens:** `<resource>_<verb>_ok`, at least one
+    `<resource>_<verb>_<code>`, and `<resource>_<verb>_text`;
+  - **mutation goldens:** `<resource>_<verb>` for success, as the existing
+    set has it (`operation_resume`), and `<resource>_<verb>_<code>`;
+  - **previews:** `item_republish_preview`, `item_republish_preview_noop` and
     `operation_abandon_preview`;
-  - read goldens `conflict_show_<state>`.
+  - **read goldens:** `conflict_show_<state>`.
 
   *Cost:* none.
 - **R-29 No new test target.** New tests are modules of existing targets,
@@ -1360,6 +1505,30 @@ Each ruling is listed with its cost if wrong.
 - **R-33 Fixture premise and gate alignment.** `CliPair` seeds the item on
   primary before the clones are made. A well-formed foreign token is
   `external_change`, as the gate has it. *Cost:* none.
+- **R-34 Comment standing.**
+  - On `IdentityRequired`, nothing was written. The binding row and the
+    record are both released, so the same request ID later binds afresh
+    (fact 68).
+  - A `Saved` result with publication pending is `Standing::Owed`, and its
+    record stays accepted for the body-free retry.
+  - `ended_without_checkpoint` answers `SaysNothing`.
+
+  *Cost:* releasing a binding is a new library path. The comment table's
+  identity rows test it.
+- **R-35 Resolution association.**
+  - `conflict resolve` holds no operation of its own, so settlement deletes
+    its record on any stop (fact 67). The durable state is the resolution
+    attempt, recorded with the request ID that made it.
+  - A retry under that request ID finds and continues it.
+  - Any other request meets `original_request_required` while it is
+    unfinished.
+  - `ConflictDto.request_id` names the request for `retry_resolution`.
+  - The continuation's `Watch` owner is the resolve request itself.
+
+  *Cost:* a request-ID column on the attempt rows. An ID is not a body.
+- **R-36 One Ctrl-C latch per run.** The window's press count and
+  cancellation persist across C2's bounded retry within one CLI run, and the
+  retry loop stops once a press is latched. *Cost:* none.
 
 ## Known Limits
 
@@ -1373,6 +1542,15 @@ Each ruling is listed with its cost if wrong.
 - A Ctrl-C during a blocked network call may answer `transport_unavailable`
   instead of `cancelled`, with effects intact (decision 14), as Task 7's
   spike records.
+- A Ctrl-C after a push was sent and before it is verified answers
+  `recovery_required`: the publication is not confirmed, and a new request
+  verifies it (fact 74).
+- A merge aborted outside leaves the synchronization unresolvable in-app.
+  The merge must be redone and repaired outside, and it cannot be abandoned
+  (`01M4H33R34Z7C7EEKTY1ZCT950`).
+- A refused `item sync` holds its reservation until that request is
+  cancelled, so `item republish` first needs `request cancel`
+  (`01M4R19PC0T6ZPKM39X9DF26HX`).
 - `request cancel` does not reach a resume. Ctrl-C does.
 - A wrong passphrase reports `transport_unavailable`
   (`01M5E6DYJ6GN7DMW4424TH3V78`).
@@ -1422,4 +1600,5 @@ Each ruling is listed with its cost if wrong.
 | The Windows handler is not compiled before merge | Recorded as an owed native check; native CI runs after merge |
 | Two-clone CLI journeys exceed the watchdog | Cases are split (R-24) |
 | The dogfooding comment publishes local main into the ticket branch | The preflight stops unless local main equals `origin/main`, and the go-ahead is at that step |
+| The branch-built CLI migrates the shared registry that main's CLI uses | The preflight stops unless main's CLI still opens it |
 | D3 and C4 both edit `src/desktop/view/confirm.rs` | One arm; whichever merges second resolves it (decision 10) |

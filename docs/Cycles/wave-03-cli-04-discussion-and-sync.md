@@ -12,7 +12,7 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 
 ## Status
 
-**Draft, 2026-10-26, revised after the first review round.** Written for
+**Draft, 2026-10-26, revised after the second review round.** Written for
 product-owner review. Nothing is built, and no build or test was run for
 planning.
 
@@ -250,6 +250,8 @@ Authority, in order:
      (decision 11). The next `item sync` integrates primary as usual.
    - Any change in between, the local branch moving or the remote branch
      reappearing, is `external_change`, and nothing is pushed.
+   - A lifecycle-closed ticket is refused with `ticket_closed` (decision
+     17).
 6. **Conflicts.**
    - `conflict show` reports the operation, the conflict's state, its
      observation, each path's token, kind, structure and sides, and the next
@@ -299,7 +301,7 @@ Authority, in order:
 | Comment publish success and failure | Real two-clone SSH: `comment add` on clone A publishes. Clone B's `item sync` then shows it in `comment list`. With the server refusing the push, `comment add` is partial, exit 4, with the checkpoint committed and publication pending. With no publication remote, it succeeds with publication pending, exit 0. |
 | Ordered replies | Two clones each add replies to one root. After both synchronize, `comment list` on each lists the root, then its replies by `created_at` and ID, with parent IDs and depth, the same on both. |
 | One saved comment after retry | After a failed publication, a retry of the same request publishes. The context branch holds exactly one comment file, one comment checkpoint and the original `created_at`, and the retry's input digest matches. |
-| Clean and divergent sync | Two clones: an already-current sync is `already_applied`; a fast-forward publishes; a clean divergence publishes one merge commit with ordered parents; for both `item sync` and `repo sync`. No rebase and no forced push: the remote's history keeps every earlier tip. |
+| Clean and divergent sync | Two clones: an already-current sync is `already_applied`; a local branch ahead of the remote publishes; a local branch behind it fast-forwards and is `already_applied`; a clean divergence publishes one merge commit with ordered parents; for both `item sync` and `repo sync`. No rebase and no forced push: the remote's history keeps every earlier tip. |
 | Stale resolutions | `conflict resolve` with an observation taken before a change is `external_change`, and nothing is written. An incomplete set and an unknown token are refused before any write. A second, different resolution after a completed one is refused. |
 | Outside repair of a noncanonical conflict | A conflict in a code file is reported with outside-repair guidance, and `conflict resolve` writes nothing. After the user commits a two-parent merge in the worktree, `conflict show` reports the repair and `operation resume` publishes it. Removing markers alone, staging without a commit, or wrong parents is not accepted. |
 | No secret or raw-server output | Every C4 journey's stdout and stderr pass the output scan: no private key, passphrase, sentinel, server text or remote URL credential. Bodies and sources never reach a diagnostic or the request stores. |
@@ -426,6 +428,12 @@ Answered after the first review round:
     Facts serve as the planning audit for entry-gate item 3, and Task 0
     updates the audit's rows in place.
 
+Answered after the second review round:
+
+17. **`item republish` refuses a lifecycle-closed ticket** with
+    `ticket_closed`, exit 3, as saves and comments do. That is consistent
+    with the Wave's rule never to recreate a closed ticket's context.
+
 The following were stated to the owner on 2026-10-26 with the outline, and
 the owner approved the outline:
 
@@ -437,7 +445,7 @@ the owner approved the outline:
 - the known defects being known limits;
 - Ctrl-C through `libc` and `windows-sys`, with no new crate.
 
-The design proposes engineering rulings R-1 to R-33. These narrow or
+The design proposes engineering rulings R-1 to R-36. These narrow or
 condition the contract or its evidence:
 
 - R-5: the operation ID `conflict show` accepts;
@@ -455,7 +463,11 @@ condition the contract or its evidence:
 - R-26: the dogfooding procedure;
 - R-32: the new commands' predicates;
 - R-33: the two-clone fixture's premise, and a foreign token being
-  `external_change`.
+  `external_change`;
+- R-34: a comment that wrote nothing releasing its binding;
+- R-35: a resolution attempt belonging to the request that made it, so
+  any other request meets `original_request_required`;
+- R-36: one Ctrl-C latch per run, stopping C2's bounded retry.
 
 Named edits E-1 to E-11 change pre-existing tests and goldens. All of these
 are submitted for approval with these documents.
@@ -483,7 +495,10 @@ are submitted for approval with these documents.
 | Independent review, contract lens (2026-10-26, `03f3059`) | 40 findings: 2 blocking, 23 important, 15 minor. Blocking: republish published a commit its preview never showed, and `conflict show` had no per-path kind. Important findings included: `conflict resolve` checked live tokens before replay; dogfooding posted the review-ready comment too early; AGENTS.md's exception was misstated; malformed IDs inside input are `invalid_input`; the library file list blocked needed edits; the per-verb evidence was unplanned; `not_confirmable` was miscounted; the second Ctrl-C and the unlock prompt were untested; amendments to F2, the Wave capability rows, D5 and C5 were missing; the mixed-conflict limit, cancellation recovery, republish's observation, data DTOs and missing outcome rows (dirty worktree, push race, discovery pending) were unstated; and Tasks 2, 4 and 12 were too large. | Decision, ruling, settled | Decisions 11, 12, 13, 14, 15 and 16. Rulings R-31 to R-33 added. The fixes are applied to all three documents: Tasks 4 and 12 split, the evidence matrix and command-predicate table added, outcome rows corrected and added, and amendments listed. Finding 14 (R-17 as a workaround) was resolved by the source correction above. |
 | Independent review, source lens (2026-10-26, `03f3059`) | 32 findings: 4 blocking, 14 important, 14 minor. Blocking: a cancelled publication is final, so "`operation resume` publishes after Ctrl-C" was false; writing `created_by` needs `src/repository.rs`; a binding reaches credentials only through `Session::synchronize`, so the observed submission needs a synchronizer; and a preview cannot contact the remote. Important findings included: re-entry after `identity_required`; unspecified predicates; an unlisted confirmed-and-stoppable recovery test; `Plan` and `Boundary` literals in `mutate_tests.rs`; E-7's `UNBOUND_COMMANDS`; `tests/support/mod.rs` mounting; SSH filters matching case names only; the markers-removed row; the gate's `integration/` moves; Ctrl-C and `EINTR`; R-23; two-clone prerequisites; `mutation_bridges` not run; and golden support not mounted in two targets. | Ruling, settled | Design facts 54–66 added, and facts 25, 28, 30, 31, 33, 35, 36, 43 and 53 corrected or marked. The library tables move into `tests/mutation_remote/` as `c4_` cases. The Ctrl-C window sits in the `Boundary` impl with no signature change. The fixes are applied to all three documents. |
 
-The first round's revisions have not yet had their scoped re-review.
+| Scoped re-review (2026-10-26, `03f3059..580d4ad`) | 18 findings: 0 blocking, 6 important, 12 minor. Every earlier blocking finding was confirmed resolved, and no stale text remained. Important findings were:<br>- `ConflictResolve` was set to stop at safe points with no operation;<br>- a data enum lacked the `resume`/`none` values a row used;<br>- changing `checkpoint_comment_locally`'s signature would edit seven call sites in tests;<br>- Task 6's scope check counted main's changes;<br>- recovery cells disagreed with the records' standing;<br>- `request_mismatch` cases could not run without a remote. | Ruling, settled | `ConflictResolve` is resume-like (R-32, R-35). A crate-private `checkpoint_comment_locally_with` sibling is added (fact 73). Task 6 diffs from the merge base. The rows and recovery cells are corrected, the mismatch cases move to Tasks 12a and 12b, and the minors are applied: the predicates' E-6 assertions, golden names, Task 2's split into 2a and 2b, the gate token departure, and the dogfooding preflight's commit and registry checks. |
+| Adversarial round (2026-10-26, `580d4ad`) | 18 findings: 2 blocking, 8 important, 8 minor. Blocking:<br>- a `comment add` stopped at `identity_required`, `push_rejected` or `busy` could never complete under its own request, because its record is deleted and its comment ID stays bound;<br>- `item republish` could not push exactly the previewed commit through item sync's clean plan, which integrates primary.<br>Important findings included:<br>- the resolve request's standing and association;<br>- a second attempt at `resolution_prepared`;<br>- rebuilding tokens from path digests;<br>- replay after the continuation started;<br>- a Ctrl-C lost across C2's retry;<br>- republish while `item sync` holds its reservation;<br>- republish's preview missing push-side evidence;<br>- a cancelled-after-resolution state. | Decision, ruling | Decision 17. Rulings R-34 (comment standing and binding release), R-35 (resolution association) and R-36 (one Ctrl-C latch) added. R-14 and R-18 rewritten: republish is a push-only path. Design facts 67–74 added. The rows, states and minors are applied. |
+
+The second round's revisions have not yet had their scoped re-review.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing
