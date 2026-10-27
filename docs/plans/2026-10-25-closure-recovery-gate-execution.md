@@ -71,8 +71,8 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
 | Task 7 | **Complete and approved at `0d1b8d006980bf0da116828db54b16728bf55cbd`**, full range `41bce3e..0d1b8d0`. Task 8 controller handoff reports SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` and QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` both approved with zero findings. Prior 182 selected checks remain recorded evidence. |
-| Task 8 | Controller SPEC `ses_e84247053ffeQkt4obeGjIa5Xy` **approved, zero findings at `65541cc`**, full range from `0d1b8d0`. QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX` raised two P2 harness findings. Checkpoint `01M5YEBSNAVTE45DEJF9QFP5MF` records verified bounded-child/Windows-lock fixes and six passing affected tests; whole-tree gates green. Await **SPEC delta verification then QUALITY re-review**. Earlier 243-test evidence remains historical and is not claimed as rerun for this test-only delta. |
-| Task 9 | Not started; Task 8 independent reviews remain prerequisites. |
+| Task 8 | **Complete and approved at `03a27cbb7252062429aabfed31ae6c35e2f143fb`**, full range `0d1b8d0..03a27cb`. Task 9 controller handoff reports SPEC `ses_e84247053ffeQkt4obeGjIa5Xy` and QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX` both approved with zero findings. This includes the bounded-child/Windows-lock correction; historical 243-test and six-test delta evidence remain separately scoped below. |
+| Task 9 | **In progress; final controller gates and independent whole-branch review pending.** Documentation/source audit checkpoint `01M5YF4JK2VQ94PE52V7T91TJJ`, base `03a27cb`. This worker runs no Rust gates. Ticket remains implementing, not review-ready or closed. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -4046,3 +4046,157 @@ The explicit barrier and complete artifact comparisons are retained on all platf
 Both P2 findings are locally addressed, pending **controller SPEC delta verification,
 then QUALITY re-review**. Task 9 remains unstarted; ticket remains implementing.
 No PR, lifecycle closure, merge into main, cleanup or native dispatch was performed.
+
+## Task 9: Documentation And Source Audit
+
+Checkpoint **`01M5YF4JK2VQ94PE52V7T91TJJ`**, UTC **2026-10-27T10:40:15Z**.
+The ID came from the main checkout's existing
+`target/debug/manyhands-cli --json id new`, invoked from this ticket worktree;
+no Cargo command or main-checkout edit was made. Docs-only base:
+**`03a27cbb7252062429aabfed31ae6c35e2f143fb`**. Work is inline without subagents.
+
+### Superseding review state and preflight
+
+The controller reports **Task 8 SPEC and QUALITY APPROVED, zero findings at
+`03a27cb`**, over the full Task 8 range
+`0d1b8d006980bf0da116828db54b16728bf55cbd..03a27cb`:
+
+- SPEC `ses_e84247053ffeQkt4obeGjIa5Xy`.
+- QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX`.
+
+This supersedes the preceding historical pending-review text, including its two
+P2 harness findings. It is a controller-supplied approval, not a review performed
+by this implementer. Tasks 0–8's accepted work and verified tests were trusted;
+none was redispatched or rerun for this documentation checkpoint. Runtime
+activation is already present in Task 7 production callers and remains intact.
+
+Entry status was clean at the exact supplied HEAD, tracking the same remote tip.
+Inspected full branch status/diff inventory and log, fetched `origin main`, and
+verified it remains **`0464c42dae19a6dde000c7e7660e82762a41fada`**, already an ancestor
+of HEAD. No branch/tree move was needed while the controller runs final Rust gates.
+`git merge-tree --write-tree HEAD origin/main` passed with tree
+`0f6cc810d355e8950f87e8a755ac0a5e3d14c77b` at the committed audit base.
+The **final review comparison is `0464c42..branch HEAD`** (equivalently the
+merge-base diff here), not merely Task 8 or `HEAD~1`. Historical implementation
+planning base **`0cbeab084d252e3823d317a468eee1f29c92c8ce`** remains recorded; the
+full-main diff also includes the earlier ticket creation and Wave prerequisite.
+
+### Documentation amendments and actual boundary validation
+
+Updated the exact document families named by the design: Cycle 06 design/protocol,
+Cycle 10 design's post-checkpoint instructions, Git workflow synchronization and
+recovery sections, CLI conflict/recovery qualification, Wave prerequisite/ownership
+row, and API audit. Current gate contract/design/plan/task table now distinguish
+implemented Tasks 0–8 from Task 9's pending final controller gates/reviews. Original
+Cycle execution ledgers and this ledger's dated results remain historical.
+
+The API audit now records the complete three input structs, two Mutation variants,
+three service read signatures, five DTO/schema field inventories (including nulls),
+five public local enums, action/step additions, eight companion tables, command
+homes and goldens. Source tracing followed exports and production dispatch,
+read A/B and Git rechecks, intent hashing, DTO builders, recovery choice/effect
+mapping, request controls, resume and guarded abandonment—not just symbol names.
+No new global result code or recovery-action kind was found. `src/bin/`,
+`src/desktop/`, Cargo/dependencies and workflow/test-target declarations have no
+gate diff. New doc-hidden failure points remain test seams, not public recovery
+commands. Internal module/table subdivisions implement the approved evidence
+categories; they are not an additional operation family or a new product feature.
+
+One documentation precision correction: `LocalContextConflictContentDto.historical`
+is **true once R is accepted**, including before its first write, because
+`conflict.rs::read` tests `active_resolution.is_some()`. The former design phrase
+"after an accepted resolution changed live stages" was too narrow. The design and
+audit now describe the actual accepted-attempt meaning; no field, code or policy
+changed. The original source remains readable only through the explicit immutable
+side DTO and never grants a fresh request write authority.
+
+### Full-branch acceptance self-review
+
+This is a documentation/source-and-evidence self-review over the **full branch
+inventory and changed pre-existing test hunks**, with targeted implementation
+traces and the accepted Task 0–8 proof. It is not the controller's independent
+whole-branch code review or a fresh execution of the tests.
+
+| Acceptance | Source/evidence cross-check and disposition |
+| --- | --- |
+| A1 | Shared `integration/validate.rs` classification is used by remote and local paths; E1/E2 plus new timestamp/author/ancestor/open/same-pair controls retain no-write assertions. Task 1/8 recorded real two-clone SSH race proof. Accounted for. |
+| A2 | All five `ChildExecution` refusal sites pass the recorded parent kind; added context/primary × closure/promotion controls cover inner wording and privacy wrappers. Accounted for. |
+| A3 | Production start calls local run/recover and neutral mechanics, not transport. Task 5 both-kind graph cases and Task 8 public frozen-pair/no-remote/unreachable-remote spy evidence distinguish configured remote from network use. Accounted for. |
+| A4 | Observation binds registered branch/parents/routing/image, with lease recheck and effective identity at commit. Task 4/5/7 stale, dirty, wrong-context/branch, identity and unrelated-history cases plus public identity retry retain pre-effect refusals. Accounted for. |
+| A5 | Conflict/token enumeration and resolve preflight enforce whole-set source/immutable/prospective validity before writes; explicit content DTO is scoped and historical. Task 6/7 invalid-set, mode/token and public read cases cover it. Accounted for. |
+| A6 | Request-attempt and domain-epoch fences, owned image/candidate checks, safe-point controls and independent settlement are production-connected. Task 5–8 fault/no-Drop/process/replay evidence is separately labeled; returned errors are not counted as process death. Accounted for. |
+| A7 | Task 8's **25 required outcomes** table has actual assertion owners, and its **18 mandatory cases** table names actual selected tests. Retained executed evidence is trusted, not recreated or converted from domain to wire proof. Accounted for. |
+| A8 | Both authorized E3 tests call the production start/read/resolve helper then explicit `close_ticket`, asserting the original closure OID/time/author, adoption/F4/retirement. Separate newer-primary and configured-remote controls preserve explicit extra work. Accounted for. |
+| A9 | `record.rs` admission, closure observe/save/adopt guards, reciprocal remote reacquisition and global identity guards preserve the matching-Closing-only exception and written-closure publication fence. Both acquisition-order proofs are in Task 4/8. Accounted for. |
+| A10 | Inputs have no revealing formatting/serialization; content read alone exposes sides. Request digests and eight companions store metadata, not source. Task 8 positive privacy controls scan owned partial/result sentinels, actual progress and persisted rows. Accounted for. |
+| A11 | Shape/version audits, refresh proof and artifact-free abandon prevent generic release/rebuild shortcuts. Task 8 four lost-DB cases distinguish conflict-marked discovery ItemNotFound, dirty checkout, lock evidence and clean completion; old operation reads require authority. Accounted for without a universal error-code claim. |
+| A12 | Exact schema fields/nullability/enums, command/action/step/family inventories, 32 command homes, 50 data roots, three read/five mutation golden additions and local progress/effects agree. `original_request_required` names R; U has no fake resolution ID. Accounted for. |
+| A13 | **Pending.** Earlier task-specific Devenv/review evidence is retained. Controller independently runs final Rust gates and obtains whole-branch SPEC/QUALITY review. Native limitations are explicit. The downstream gate remains in force until approval/closure/merge. |
+| A14 | Local prepare detects incompatible closures before retained owner/Git effects; public test proves subsequent unrelated refresh. Coarse backend ambiguity preserves and blocks until exact operator proof, while proven per-member retirement automatically reconciles. Accounted for. |
+
+### Approved-ruling self-review
+
+| Ruling | Actual implementation/documentation scope |
+| --- | --- |
+| R-1 | Parsed all-side nonempty closure-pair comparison and whole-set external-only eligibility; no winner policy or weakened legacy/external validation. |
+| R-2 | Existing Local envelope plus typed shape-audited companions; no fake remote row, fourth family or unjournaled durable local execution. |
+| R-3 | Exact matching written Closing admission; integrating/cleanup/promotion and retained remote debt refuse; closure resumes separately. |
+| R-4 | BLAKE3 scoped opaque observations/tokens, no persistent read issuance, raw-byte path ordering and presentation-only escaped paths; dual-session/Git consistency checks. |
+| R-5 | Effective Git identity at commit, explicit identity-set/retry when missing, candidate identity frozen; no inline confirmation/config mutation. |
+| R-6 | S owns parent, R owns attempt; intended scoped parent survives unlinked acceptance, re-entry advances the attempt fence atomically, missing source names original R. |
+| R-7 | Issued/acknowledged counters preserve newer cancellation; recoverable requests stay Accepted. Artifact-free abandon atomically finishes associated S/R/U and preserves immutable finished receipts. |
+| R-8 | Written versus committed versus adopted/external effects remain distinct, including partial checkout and discovery debt; Partial/Incomplete precedence retained. |
+| R-9 | Exact library command identities/read DTOs exist; no CLI catalog/dispatch or desktop adaptation, human conflict artifact workflow or in-app editor is delivered. |
+| R-10 | Neutral extraction retains remote orchestration/transport policy and old assertion bodies, with the explicitly approved reciprocal admission guard. Cooperative-writer and ambiguous-backend boundaries remain. |
+
+### E1–E9 and owner extras: exact old-test/scope diff audit
+
+Checked `origin/main...03a27cb` name-status/numstat and changed existing test hunks,
+including test modules embedded in production files. New local tests and later
+review fixes to those newly added tests are additions relative to main, not hidden
+rewrites of the old suite.
+
+| Edit | Actual full-branch change |
+| --- | --- |
+| E1 | `tests/ticket_closure/races.rs::true_race` changes eligibility and fresh-resolution result to external-only, retaining image/no-write comparisons. Exact SSH selector remains `true_race_distinct_identities_needs_external_recovery`. |
+| E2 | `remote/sync_tests.rs::all_recorded_ticket_sides_constrain_retained_closure_before_writes` adds an incompatible-row flag and fresh inspection; only that row becomes ExternalResolutionRequired. Other validation/success rows and preservation checks remain. |
+| E3 | Only `conflicting_advance_after_the_checkpoint_needs_a_deliberate_synchronization` and `adopted_context_is_merged_reconciled_after_f4_and_retired` replace hand synchronization with the public helper. The second now creates a real canonical conflict before F4; original adoption/retirement assertions remain, with closure-authority assertions strengthened. The manual helper and its other old consumer are unchanged. |
+| E4 | `read/status_tests.rs` action inventory and companion partition grow 13 → 14; recovery step inventory adds `local_sync_prepared`. Companion edit is approved in `01M5V0RYTAKJE3F155FH4QTP53`. |
+| E5 | Exactly the two command inventory tests account for local safe points, Observing progress and R's parentless durable association; all old command cases remain. |
+| E6 | HOMES grows 30 → 32 with both local commands; mutation-contract data roots grow 46 → 50; new golden registrations satisfy the unchanged every-command checks. |
+| E7 | Read-contract adds local action and all new DTO enum/root coverage; three existing operation schemas each add only `context_sync_local`. No existing value or global action is removed. |
+| E8 | Module/re-export/test registrations and private extraction rewiring; the old comment-invariant test changes only its call target from `RepositoryService::preserves_item_invariants` to `validate::preserves_item_invariants`. New merge/reservation/shared tests are additions. |
+| E9 | Three read/five mutation golden registrations, replay conformance chain, and exactly seven explicit new-variant refusal arms in `ticket_data`, `document_data`, `remote_data`, `operation_data`, `key_data`, `identity_data`, `repair_data`. Repair helper approved in `01M5V0RYTAKJE3F155FH4QTP53`; no old golden bytes changed. |
+| Owner key-file addendum | `keys/{generation,deletion,registry}.rs` only add local-owned-ID refusal before insertion/effects; deletion wraps insertion/check in an immediate transaction. Approval `01M5VWDPG57KWRAJ55Y2EMXRQR`; no old key-test assertion rewrite. |
+| Owner migration-fixture addendum | `tests/mutation_replay.rs::the_migration_adds_the_request_tables_to_an_older_database_and_changes_nothing_else`, private REQUEST_TABLES/removal list and one exact marker accounting, approved in `01M5X3KKAFXVGD84SYBH3TBGFB`. Old-column, unrelated-data and privacy assertions remain. |
+
+No unexpected old-test semantic edit, old golden rewrite, frontend/dependency/test
+target change or additional owner scope decision was found in this audit. No new
+application behavior or code fix was made. Historical staging comments in source
+(for example `bridges/abandon.rs` saying Task 7 supplies the route) are not current
+availability claims: the actual route above that guard is production-linked and
+the current docs now say so.
+
+### Checkpoint verification and outstanding gates
+
+`git diff --check` passed (exit 0). Current diff/status/log and linked document
+targets/headings were reviewed, alongside the explicit source/schema comparisons
+above. `git diff --quiet 03a27cb -- src tests schemas Cargo.toml Cargo.lock
+.github/workflows/build.yml` passed (exit 0), confirming no Task 9 Rust/test/schema/
+Cargo/workflow delta. This worker executes **no Rust gate**, preserving the controller's concurrent final
+verification tree. Earlier Task 8 evidence remains **243 selected tests/cases**
+for its implementation, then **six affected tests/seven child scenarios** for its
+test-only harness correction, not a freshly combined or rerun total.
+
+All executed platform evidence retained here is **Linux x86_64**. Non-root Unix
+permissions, typed seams and real bounded child processes do not establish native
+Windows ACL/macOS results. The lock-snapshot ordering correction is source-level
+portability work, not a native pass. Native CI remains separately authorized after
+merge, on main. No native dispatch occurs at this checkpoint.
+
+**Task 9 remains in progress.** Await controller final Devenv results and independent
+whole-branch SPEC/QUALITY reviews (including adversarial ownership/partial-R/
+cancellation/cache-loss review). Only then may the controller establish review-ready
+status. The ticket remains implementing and its three original scope items are
+preserved; no PR, closure, main merge or cleanup is performed. The docs checkpoint
+is committed/pushed under existing authorization with the required co-author trailer.

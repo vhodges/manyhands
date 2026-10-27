@@ -18,8 +18,14 @@ additional front-end Cycle. The owner approved all three detailed documents,
 detailed rulings, E1–E9 test edits, implementation and ticket-branch commits/pushes:
 “Every is approved. Proceed using subagent driven development”. Approval is
 recorded in start comment `01M5TZ0E62RMQPKBGRPX3CX92E` at 2026-10-26T02:00:39Z.
-PR, closure, merge, cleanup and native CI remain separately gated. Task 0 starts
-with source verification and baseline evidence before implementation.
+PR, closure, merge, cleanup and native CI remain separately gated.
+
+**2026-10-27 implementation status:** Tasks 0–8 are implemented and independently
+approved through `03a27cb`; the runtime is production-linked since Task 7. Task 9
+documentation/audit is in progress. Final controller Devenv gates and independent
+whole-branch review are pending; the ticket remains `implementing`, not
+review-ready or closed. The [execution ledger](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit)
+separates source audit, retained executed evidence and outstanding final gates.
 
 - Worktree: `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M57SKVF6TQ3QM6AXJ35JGGSY`.
 - Branch: `manyhands/ticket/01M57SKVF6TQ3QM6AXJ35JGGSY`.
@@ -49,7 +55,7 @@ Land the three library gaps before C4, C5 or D5 starts:
 The new operation changes an existing context, not primary. It uses committed
 local primary even when a remote is configured, performs no network operation,
 and creates no editing context as a side effect of observation. Its name at the
-shared mutation boundary is proposed as `context sync-local`; canonical resolution
+shared mutation boundary is `context sync-local`; canonical resolution
 is `context resolve-local`. These are library command identities, not available
 CLI catalog entries in this ticket.
 
@@ -160,7 +166,11 @@ from outer messages which intentionally mask it.
 
 ## Acceptance And Exit Evidence
 
-| ID | Required proof, planned rather than executed |
+The table remains the acceptance contract. Tasks 0–8's executed evidence is in the
+ledger; Task 9's A1–A14 source/evidence checklist is a self-review, not final approval.
+A13 remains pending until the controller supplies final gates and whole-branch review.
+
+| ID | Required proof |
 | --- | --- |
 | A1 | True two-clone closure race becomes external-only in inspection and fresh resolution, without writes; differing timestamp, author and ancestor-only cases; same-closure/open-side controls. |
 | A2 | Every child fence mismatch names closure for closure parents; promotion/ordinary synchronization controls retain their behavior. |
@@ -191,7 +201,7 @@ approval, task evidence and review-ready status. Commit/push only when authorize
 PR, merge, closure, other-branch publication, native CI and cleanup require their
 applicable separate authorization. Do not infer those from plan approval.
 
-## Review Record
+## Planning Review Record (Historical)
 
 | Source | Concern | Classification | Resolution | Evidence/follow-up |
 | --- | --- | --- | --- | --- |

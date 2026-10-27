@@ -19,21 +19,31 @@ approved. Proceed using subagent driven development”. Start comment
 `01M5TZ0E62RMQPKBGRPX3CX92E` records the approval and separate lifecycle gates.
 Source was inspected at `189bb36` (main `189284e` merged), then
 reconciled with documentation-only main `0464c42`, merged as `0cbeab0`. No
-Cargo command or test was run for planning. New names below are **proposed new
-interfaces**, not claims that these symbols already exist.
+Cargo command or test was run for planning.
+
+**Implementation amendment, 2026-10-27:** Tasks 0–8 are implemented and independently
+approved through `03a27cbb7252062429aabfed31ae6c35e2f143fb`. Task 9 documentation/audit
+is in progress; final controller gates and independent whole-branch review remain
+pending. The shared interfaces below now exist in production library code. The
+[execution ledger](2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit)
+and [API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27)
+record the actual exports, wire fields, recovery meanings and scope audit. This is
+ticket-branch availability, not merged-main or front-end delivery. C4/C5/D5 remain
+gated. The numbered baseline facts and planning reviews below are historical.
 
 Approval covers the public inputs, effect/cancellation and ownership tables,
 schema additions, R-1–R-10, and named edits E1–E9. Review may uncover further
 owner decisions. The [plan](2026-10-25-closure-recovery-gate-implementation.md)
 must not invent a different recovery protocol during implementation.
 
-## Baseline Facts
+## Historical Planning Baseline Facts
 
 References use `src/repository/` as the prefix for `remote/`, `mutation/`,
 `promotion/`, `closure/`, `read/`, `recovery.rs` and `coordination.rs`;
 `repository.rs`, `results.rs` and `canonical.rs` are under `src/`. Other paths
-are repository-relative. Task 0 rechecks behavior and symbols rather than
-trusting line numbers.
+are repository-relative. Task 0 rechecked behavior and symbols rather than
+trusting line numbers; its results are retained in the execution ledger. These
+facts describe the pre-implementation tree, not missing work at the current head.
 
 1. `remote/merge.rs:47–69` has pure `classify_integration(local, incoming,
    is_ancestor, merge_base_exists)`, returning equal, contained, fast-forward,
@@ -153,7 +163,7 @@ valid. This closes the scope question, not the five Task 4 SPEC findings; fixes
 still require SPEC then QUALITY re-review before Task 5. No additional files,
 front-end work, PR/merge/closure or native CI permission is granted here.
 
-## New Shared Interfaces (Proposed)
+## Shared Interfaces (Implemented On The Ticket Branch)
 
 New input structs, exported through `manyhands::repository`, contain no Debug,
 Display or Serialize implementation that could disclose submitted source:
@@ -188,7 +198,7 @@ pub struct LocalContextResolveInput {
 - Existing `Mutation::OperationResume` gains explicit local-sync routing. It never
   substitutes a new primary snapshot or automatically resumes ticket closure.
 
-New read methods (names/signatures to implement, not existing symbols):
+Public read methods (source-checked at `03a27cb`):
 
 ```rust
 pub fn observe_local_context_sync(&self, repo: &ResolvedRepository,
@@ -219,7 +229,7 @@ inspection/next-action DTO is the front-end contract for conflict handling;
 existing `operation.resume`, `request.retry`, `repo.identity_set`, and guarded
 `operation.abandon` where actually applicable.
 Do not offer a misleading resume or abandon as a cure for an incompatible closure.
-No new global result code or recovery-action kind is proposed: typed local DTO
+No new global result code or recovery-action kind is introduced: typed local DTO
 state/reason/next-action distinguishes recoveries. This avoids unrelated UI
 changes while still delivering all local read/resolve/resume entry points.
 
@@ -239,7 +249,7 @@ Enum values are closed and registered in contract tests.
 | `LocalContextSyncObservationDto` | `kind` (`document`/`ticket`), `item_id`, `context_worktree`, `context_ref`, `primary_ref`, `context_head`, `primary_head`, `observation`: strings. |
 | `LocalContextSyncInspectionDto` | `operation_id`, `kind`, `item_id`, `context_ref`, `primary_ref`, `context_parent`, `primary_parent`: strings; `context_head`: string?; `state`, `reason`, `next_action`: enums below; `observation`: string?; `eligibility`: `eligible_canonical`/`external_resolution_required`/null; `paths`: array of entry DTOs; `can_start_resolution`: bool; `starting_request_id`, `cancellation_request_id`: strings; `active_resolution_request_id`, `required_request_id`, `result_oid`: string?; `cancel_requested`, `cancel_acknowledged`: bool. |
 | Entry DTO | `display_path`, `token`: strings; `content_available`: bool. Ordered by raw repository path bytes; display escapes control/non-UTF-8 bytes and is never decoded as a writable path. |
-| `LocalContextConflictContentDto` | `operation_id`, `token`: strings; `base`, `local`, `incoming`: string?; `historical`: bool, true after an accepted resolution changed live stages. No `current`. Source fields have no revealing Debug implementation. |
+| `LocalContextConflictContentDto` | `operation_id`, `token`: strings; `base`, `local`, `incoming`: string?; `historical`: bool, true once a resolution attempt is accepted, including before its first path write; sides remain the immutable recorded blobs even after live stages change. No `current`. Source fields have no revealing Debug implementation. |
 | `LocalContextSyncMutationDto` | `type`: constant `local_context_sync`; `item_id`, `kind`: strings; `operation_id`, `resolution_request_id`, `required_request_id`, `result_oid`: string?; `state`, `reason`, `next_action`: enums; `eligibility`: enum?; `cancel_acknowledged`: bool. It contains no side/source content. |
 
 State enum: `prepared`, `applying`, `conflict_pending`, `resolution_prepared`,
@@ -717,7 +727,8 @@ owner's detailed approval. Decisions 1–6 remain settled.
 
 Only these scoped expectation/inventory changes are approved. New tests and new
 module/golden registrations are additions. Any other semantic test edit stops for
-owner review; Task 0 proves the inventory before implementation.
+owner review. Task 0 proved the inventory before implementation; Task 9 records
+the full-branch named-edit audit, including the two owner addenda below.
 
 | Edit | Existing location | Authorized change |
 | --- | --- | --- |
@@ -744,10 +755,11 @@ it grants no wider old-test rewrite or Task 7 review approval.
 
 E1's exact SSH harness selector is
 `true_race_distinct_identities_needs_external_recovery`; `true_race` is its Rust
-function. Task 0 rechecks this exact inventory for drift; it does not grant an
-open-ended test-edit exemption. No old output fixture is expected to change solely
-from adding a local command; any additional old golden diff needs owner review.
-Tests marked NEW in the plan do not exist yet.
+function. Task 0 checked this exact inventory for drift; it did not grant an
+open-ended test-edit exemption. No old output fixture changed solely from adding
+a local command; any additional old golden diff needs owner review. Tests marked
+NEW in the approved plan were added during execution; Task 8 maps all 25 required
+outcomes and 18 mandatory names to their actual assertion owners.
 
 ## Document Amendments And Known Limits
 
@@ -756,7 +768,7 @@ Tests marked NEW in the plan do not exist yet.
   execution ledgers historical; do not rewrite their observed old results.
 - Update Wave 03 gate/API audit with the local boundary, unavailable front-end
   adapters, and remaining C4/D5 remote-conflict and C5/D5 lifecycle obligations.
-- Amend the CLI conflict/recovery RFC only to distinguish proposed local capability
+- Amend the CLI conflict/recovery RFC only to distinguish the local library capability
   and future adapters; never mark a CLI verb available before its Cycle delivers it.
 - Amend `docs/RFC/git-workflow-and-conflict-recovery.md` synchronization/recovery
   sections for dedicated local-primary input, fixed-parent retry, cooperative

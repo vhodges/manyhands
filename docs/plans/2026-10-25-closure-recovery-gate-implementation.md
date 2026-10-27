@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Implementation Plan"
 date: 2026-10-25
-status: "approved"
+status: "implementing"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -37,6 +37,13 @@ start comment `01M5TZ0E62RMQPKBGRPX3CX92E` records it. PR, closure, merge, clean
 and native CI remain separately gated.
 
 ## Global Constraints
+
+**Current checkpoint (2026-10-27):** Tasks 0–8 are implemented and independently
+approved at `03a27cb`. Task 9 is in progress: its documentation/source audit is
+checkpointed separately from final verification. The controller owns the final
+Devenv runs and independent whole-branch SPEC/QUALITY reviews. This docs-only
+implementer runs no concurrent Rust commands. No review-ready or lifecycle
+completion is asserted. See the [execution ledger](2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit).
 
 - Work only in ticket `01M57SKVF6TQ3QM6AXJ35JGGSY`'s existing worktree/branch.
   Fetch and **merge** `origin/main`; never rebase. Before checkpoints run
@@ -315,7 +322,7 @@ only for required typed fields, `bind/mod.rs`, `outcome.rs`, `replay.rs`,
 required for local-control lookup, counters and atomic dispositions; read
 module/DTO registration; E5–E7/E9 test inventories and the existing target modules.
 
-1. Add public-API tests for the proposed input structs and read signatures from the
+1. Add public-API tests for the approved input structs and read signatures from the
    design. Prove missing/wrong kind/context refusal, read-only observation/inspection,
    explicit side-content output and private diagnostics/storage. Register new
    modules in existing targets; no Cargo target addition.
@@ -475,10 +482,14 @@ supplement them, without claiming native Windows ACL evidence.
 
 ## Verification Limitations And Open Review Work
 
-No builds/tests have run during planning. Public local names and schema shapes
-are proposed new interfaces. Exact extraction helper signatures, SQL column
-types/audit manifests and custom-harness selectors require Task 0 source
-verification; it may resolve internal wiring, not change approved recovery policy.
+No builds/tests ran during planning. Task 0 subsequently verified source,
+extraction seams and exact selectors; Tasks 1–8 implemented the production library
+boundary and its recovery evidence. The API audit records the actual public names,
+schema shapes and recovery semantics. Task 8's 25-outcome and 18-case tables retain
+the executed Linux proof. Task 9 final gates and independent whole-branch reviews
+remain pending; no unresolved Task 0 policy placeholder is current work.
+
+The following is the historical planning review record:
 Round 1 found 3 Blocking/3 Important/1 Minor source findings and
 1 Blocking/6 Important/1 Minor contract findings. The revised explicit protocols,
 owner decisions 5–6 and targeted cases address them. Round 2 found 0 Blocking,

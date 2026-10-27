@@ -22,6 +22,173 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 
 ## Authority, revision and limits
 
+### Closure Recovery Library Amendment (2026-10-27)
+
+Source-audited at **`03a27cbb7252062429aabfed31ae6c35e2f143fb`** on ticket
+`01M57SKVF6TQ3QM6AXJ35JGGSY`. Tasks 0–8 have controller-reported SPEC/QUALITY
+approval; Task 9 documentation/audit is in progress, final controller Devenv gates
+and independent whole-branch review pending. Final review base is fetched
+`origin/main` **`0464c42dae19a6dde000c7e7660e82762a41fada`**; `0cbeab0` is the
+historical planning merge, not the final main comparison base. The
+[contract](../Cycles/wave-03-closure-recovery-gate.md),
+[design](../plans/2026-10-25-closure-recovery-gate-design.md) and
+[execution ledger](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit)
+govern this amendment. It supersedes missing-local-boundary claims in older audit
+sections, without changing their historical results or claiming merged delivery.
+
+#### Actual public boundary and ownership
+
+All names below are exported through `manyhands::repository`. Unprefixed implementation
+paths are relative to `src/repository/`; `src/`, `tests/` and `schemas/` paths are
+repository-relative. `src/repository.rs` re-exports `mutation::*`,
+`read::*` and `local_sync::LocalContextSyncObservationDto`; production
+`local_sync::{run,request,resolve,recover}` are not test-gated. There is no public
+domain journal-bypass writer. These are `RepositoryService` signatures:
+
+```rust
+observe_local_context_sync(&self, repo: &ResolvedRepository,
+    kind: AuthoringKind, id: &ItemId)
+    -> Result<LocalContextSyncObservationDto, ReadError>
+inspect_local_context_sync(&self, repo: &ResolvedRepository,
+    operation_id: OperationId)
+    -> Result<LocalContextSyncInspectionDto, ReadError>
+read_local_context_conflict(&self, repo: &ResolvedRepository,
+    operation_id: OperationId, token: &str)
+    -> Result<LocalContextConflictContentDto, ReadError>
+```
+
+Evidence: `local_sync/observe.rs` and `read/local_sync.rs`, delegating to
+`local_sync/request.rs::{inspection,content}` and `conflict.rs`. Reads use closed
+read-only SQLite snapshots around Git rechecks, including live routing, semantic
+revision, attempt/cancellation and image authority. They do not take the write
+lease, issue persistent tokens or create a context. Missing authority is an error,
+not a fabricated inspection. Owner-epoch takeover alone does not invalidate tokens.
+
+The existing F2 `RepositoryService::execute(MutationCall, credentials, progress,
+cancel) -> Envelope<MutationDataDto>` consumes these **unconfirmed** inputs from
+`mutation/bind/local_sync.rs`:
+
+| Variant / library command identity | Complete input fields and behavior |
+| --- | --- |
+| `Mutation::LocalContextSync` / `context sync-local` | `LocalContextSyncInput { root: PathBuf, kind: AuthoringKind, id: ItemId, observation: String }`. F2 supplies S and a Local operation ID. Existing registered context only; committed local-primary input; no network, primary mutation or implicit context creation. |
+| `Mutation::LocalContextResolve` / `context resolve-local` | `LocalContextResolveInput { root: PathBuf, operation_id: OperationId, observation: String, resolutions: Vec<LocalConflictResolutionInput> }`; each entry is `{ token: String, source: String }`. R has its own request/attempt and the existing parent operation, not a new parent row. Full-set validation precedes writes. |
+| Existing `Mutation::OperationResume` | Routes a scoped local parent through the same fenced executor. U can continue deterministic work, a complete candidate, external-result proof or indexing; it cannot supply missing R source or resume closure automatically. |
+
+The three new inputs implement no revealing Debug/Display/Serialize. Intent
+hashing includes resolved repository/target, top-level observation, and token/source
+pairs in token order; duplicates refuse. Source is hashed, not persisted in request
+data. `MutationDataDto::LocalContextSync` carries only the content-free result below.
+`Command::ALL`/conformance homes grow from 30 to 32; the command stage is Observing,
+both stop at safe points and neither needs confirmation. Local progress uses
+existing Accepted/Observing/Writing/UpdatingLocal/Indexing/Stopping values, never
+Connecting. Operation families remain Local/Remote/KeyMaterial.
+
+#### DTO / schema field audit
+
+Compared actual struct fields, serde names, builder meanings and all five schemas
+with the design's exact wire table. Every schema property is required and
+`additionalProperties` is false. `?` means nullable, not omitted; IDs/OIDs/tokens are
+strings. `kind` values are `document` and `ticket`.
+
+| Public DTO / `schemas/v1/` file | Actual complete serialized fields |
+| --- | --- |
+| `LocalContextSyncObservationDto` / `local_context_sync_observation.schema.json` | Strings: `kind`, `item_id`, `context_worktree`, `context_ref`, `primary_ref`, `context_head`, `primary_head`, `observation`. |
+| `LocalContextSyncInspectionDto` / `local_context_sync_inspection.schema.json` | Strings: `operation_id`, `kind`, `item_id`, `context_ref`, `primary_ref`, `context_parent`, `primary_parent`, `starting_request_id`, `cancellation_request_id`; strings?: `context_head`, `observation`, `active_resolution_request_id`, `required_request_id`, `result_oid`; enums: `state`, `reason`, `next_action`; enum?: `eligibility`; entry array: `paths`; bools: `can_start_resolution`, `cancel_requested`, `cancel_acknowledged`. |
+| `LocalContextConflictEntryDto` / `local_context_conflict_entry.schema.json` | Strings: `display_path`, `token`; bool: `content_available`. Raw-byte path ordering, escaped display only; callers never decode it into a write path. |
+| `LocalContextConflictContentDto` / `local_context_conflict_content.schema.json` | Strings: `operation_id`, `token`; strings?: `base`, `local`, `incoming`; bool: `historical`. No Debug or `current` field. Ephemeral explicit immutable-blob read only. |
+| `LocalContextSyncMutationDto` / `local_context_sync_mutation.schema.json` | `type` (Rust `data_type`) = `local_context_sync`; strings: `item_id`, `kind`; strings?: `operation_id`, `resolution_request_id`, `required_request_id`, `result_oid`; enums: `state`, `reason`, `next_action`; enum?: `eligibility`; bool: `cancel_acknowledged`. No source/side/path content. |
+
+The public enum types, their `ALL`/`as_str` inventories and schema values agree:
+
+- `LocalContextSyncState`: `prepared`, `applying`, `conflict_pending`,
+  `resolution_prepared`, `commit_prepared`, `integrated`, `index_pending`, `complete`,
+  `recovery_required`, `cancelled`, `abandoned`, `refused`.
+- `LocalContextSyncReason`: `none`, `canonical_conflict`, `unsupported_conflict`,
+  `immutable_closure_disagreement`, `original_resolution_required`, `foreign_change`,
+  `ambiguous_backend`, `unrelated_histories`, `index_pending`, `identity_required`,
+  `cancelled`, `abandoned`, `authority_missing`.
+- `LocalContextSyncNextAction`: `none`, `resolve`, `retry_resolution`, `resume`,
+  `external_repair`, `set_identity`.
+- `LocalContextSyncEligibility`: `eligible_canonical`, `external_resolution_required`.
+- `LocalContextSyncDataType`: `local_context_sync`.
+
+`historical` is computed from **accepted active-resolution association**, not from
+whether the first write already happened (`conflict.rs::read`). It marks immutable
+recorded sides that cannot authorize a fresh resolution; after completion,
+abandonment, terminal cancellation or authority loss, side reads refuse. This
+clarifies the design's formerly narrower wording, without changing code or recovery
+policy.
+
+#### Recovery choices and effects checked against execution
+
+Source trace: `local_sync/{run,resolve,recover,control,request}.rs`,
+`mutation/{local_control,records,replay,settle}.rs`,
+`mutation/bind/{local_sync,resume}.rs` and `bridges/abandon.rs`.
+
+| Evidence / result | Actual caller obligation and effect meaning |
+| --- | --- |
+| New eligible conflict | `conflict_pending` / `canonical_conflict`, `resolve`, fresh complete observation/tokens. Conflict installation is Written, checkpoint/integration Pending. Typed inspection is the contract; generic recovery offers `repo.inspect`, not a new global resolve action. |
+| Accepted partial R without ready candidate | `retry_resolution`, `required_request_id=R`; U returns `original_request_required` before takeover and releases its no-effect request. Resend exact R including source/observation. Historical sides do not grant fresh-request write authority. |
+| Prepared deterministic work, fully prepared candidate or index-only debt | `resume`, required S; U uses current request-attempt/owner-epoch fences. Frozen parents are never replaced. Missing/unimported candidate alone is not sufficient proof. |
+| Unsupported/foreign/ambiguous state | `external_repair`, no fresh resolution. Preserve all unproven files/index/locks/logs; external result needs exact ordered parents, clean image and all-side canonical invariants. Exact owned retirement is separately resumable. |
+| Known incompatible closure / unrelated histories before effects | `recovery_required`, state `refused`, reason `immutable_closure_disagreement` / `unrelated_histories`, next `none`, no retained owner. Incompatible closure eligibility is external-only, not a promised external cure. |
+| Missing identity | `identity_required`, `set_identity`, accepted S/R when present; explicit identity-set then original retry. No implicit config write; an already journaled candidate retains identity. |
+| Equal/contained / fast-forward | `already_applied` no-op with no commit OID / `ok` with incoming OID, Written and integration Complete but checkpoint Unchanged. Discovery still settles. |
+| Made merge / external merge / indexing failure | Made merge has checkpoint Committed; external merge checkpoint Unchanged. Both retain result OID/integration Complete. Failed discovery is `discovery_pending`/Partial, not a repeated merge. |
+| Recoverable cancellation | S/linked R/U remain Accepted; acknowledge only observed generations and preserve true effects. `cancellation_request_id` is S; `request cancel U` remains unsupported. A newer counter survives acknowledgement. Explicit continuation uses a fresh caller token. |
+| Terminal pre-effect cancellation / guarded abandon | Cancelled receipts are immutable. Artifact-free abandon atomically finishes every associated still-Accepted S/R/U, including intended-but-unlinked requests, as Cancelled with state Abandoned and individual historical effects. It neither resets Git nor reuses IDs. |
+| Unlinked R/U encounters a terminal parent | Completed parent: no-effect `external_change`, release unlinked request. Cancelled/abandoned parent: immutable cancelled receipt with the matching reason/state; only R is a `resolution_request_id`. Missing authority is neither case. |
+| Storage/access loss | Journal permission/unavailability before effects: `index_unavailable`; path/blob permission: `repository_inaccessible`; contention: `busy`. Lost scoped operation reads: `recovery_required`; no invented parents. After rebuild, fresh observation can instead be `item_not_found` for unindexable conflict-marked canonical data, `worktree_not_clean` for partial checkout, or `recovery_required` for orphan lock evidence. Only clean completed state permits fresh observation without resurrecting the old request. |
+
+Publication/cleanup are always NotRequested. Partial outcome precedence remains
+authoritative (exit class Incomplete/4 even for a normally blocked mismatch).
+Global result-code/recovery-action-kind registries are unchanged. Existing
+`operation.resume`, `request.retry`, `repo.identity_set` and confirmed guarded
+`operation.abandon` remain the applicable generic operations; typed local choices
+do not imply new CLI availability.
+
+#### Persistence and contract evidence inventory
+
+`RepositoryOperation::ContextSyncLocal`, `OperationAction::ContextSyncLocal`
+(`context_sync_local`) and `LocalStep::LocalSyncPrepared` (`local_sync_prepared`)
+are the action/step additions. The three existing operation/abandon-preview/mutation
+schemas add only that action. `LocalStep` remains on the hidden recovery-store
+surface, not a new wire recovery-action kind. Eighteen `FailurePoint::LocalSync*`
+variants are doc-hidden test seams, not application recovery APIs. Existing remote
+`ConflictEligibility` is re-exported from the shared validator with its old values.
+
+Eight local companion tables implement the design's typed evidence categories:
+`local_context_sync_records`, `_steps`, `_resolutions`, `_execution`, `_images`,
+`_conflicts`, `_resolution_cancellation`, `_request_control` (all with the
+`local_context_sync` prefix). `record.rs`, `image_proof.rs`, `conflict_record.rs`
+and `mutation/local_control.rs` own additive version markers, exact shape/FK audits,
+request-attempt/epoch control and metadata-only recovery evidence. No Markdown
+source is stored in those tables. Refresh handoff requires proven integration and
+owned-artifact release; registration removal audits companions; healthy rebuild
+does not discard pending authority. A missing marked table is loss, not permission
+to create replacement authority. The approved migration fixture accounts only for
+the new request-control table/marker and preserves old-column/data/privacy checks.
+
+`tests/read_contract.rs` enumerates all new enum/schema values;
+`tests/mutation_contract.rs` registers four new data roots (46 → 50), with the entry
+schema referenced by inspection. Three read and five mutation goldens are additions;
+no old golden is rewritten. `tests/support/conformance.rs` and replay conformance
+register both commands without exempting any old home. Task 8's ledger maps all
+**25 required outcomes and 18 mandatory cases** to actual assertions, distinguishing
+domain from public-boundary proof. Task 9 trusts the recorded verified executions;
+it does not count source inspection as another test run.
+
+**Consumer/platform limit:** `src/bin/` and `src/desktop/` have no gate diff.
+The CLI catalog has no local verbs; general remote conflict grammar, human-readable
+resolution artifacts and in-app conflict editing still need their owning adapters.
+The library's explicit side-content DTO is an API, not an exported editable file
+or delivered UI. C4/D5 still owe remote-conflict wire bindings and C5/D5 lifecycle
+prepare/execute/expiry/schema/resume/made-ready reporting. C4/C5/D5 remain gated
+until this prerequisite is approved, closed and merged. Recorded execution is Linux
+x86_64; typed permission injections and a Windows lock-safe harness ordering fix
+are not native Windows ACL/macOS evidence. Native CI remains separately authorized
+post-merge work.
+
 ### Wave 03 CLI Cycle C3 refresh (2026-10-24)
 
 Task 0 source-inspected this refresh on **2026-10-25 UTC**, at

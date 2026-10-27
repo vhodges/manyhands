@@ -192,6 +192,18 @@ work around its gaps in their front ends:
 The other Cycle 10 cleanup ticket ("2.10 follow up",
 `01M57SBA7MKR9BZR7PYECSJ05G`) does not gate any Wave 03 Cycle.
 
+**Gate checkpoint, 2026-10-27:** the prerequisite's Tasks 0–8 are implemented and
+independently approved on its ticket branch at `03a27cb`, including production
+local-primary synchronization/read/resolve/resume bindings and parent-specific
+wording. Task 9 documentation/audit is in progress; final controller gates and
+whole-branch review remain pending. **The merge prerequisite above remains in
+force.** This branch does not deliver CLI verbs, human-mode conflict artifacts or
+desktop conflict editing. C4/D5 must adapt the local boundary and still provide
+the separate remote-conflict wire boundary; C5/D5 still owe lifecycle
+prepare/execute, expiry/schema/resume and made-ready reporting. See the
+[gate contract](../Cycles/wave-03-closure-recovery-gate.md) and
+[current API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
+
 Items 3–6 are readiness activities with the deadlines above, not a hidden Cycle 00
 or an instruction to implement a prototype during this planning request.
 Any executable feasibility probe needs its own bounded scope and authorization.
@@ -870,7 +882,7 @@ a claim those public APIs exist.
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
 | Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. |
-| Conflict inspection read | First of C4 or D5, as a shared-library change | Read-only over the Wave 02 Cycle 06 conflict record; same DTO and redaction rules as F1. |
+| Conflict inspection read | Local boundary: closure-recovery gate; remote boundary: first of C4 or D5, as a shared-library change | Local observation/inspection/immutable-side DTOs are implemented on the gate branch, awaiting final review and merge. Remote Cycle 06 wire reads remain downstream; front ends consume the shared boundaries and F1 redaction rules. |
 | One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
 | Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |
