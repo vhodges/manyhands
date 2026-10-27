@@ -376,3 +376,10 @@ Notes for later tasks: Task 22 leaves `targets()` in
   `MathMenu` must not open a math menu from a read editor) are carried to
   Task 7. — Each is small and in Task 3's own files. — If wrong: a few
   more lines in Task 3.
+- Owner decision, 2026-10-27 (from Task 5a): D1's repository selection
+  panel stays drawn below an item tab, as Task 5a built it. The item-view
+  handoff has the white page fill the pane to its bottom. The panel takes
+  that height, so this is recorded as a Design Deviations row. — Workspace
+  rework is excluded, and D1's `opening_a_tab_does_not_change_the_selection`
+  reads `selection-name` with a tab open. The other way, hiding the panel
+  under a tab, needed a new named edit.

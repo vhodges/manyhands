@@ -1260,6 +1260,7 @@ reports it.
 | Arrow keys along the toolbar | Built by the app. | Fact 67. |
 | A view-mode renderer | The read editor. | Decision 17. |
 | IBM Plex fonts | The Kit's fonts. | Not bundled; not decided. |
+| The item tab filling the content area, the white page reaching its bottom | D1's repository selection panel (name, configuration, index, Retry, Remove) stays drawn below an item tab in the content column. The page fills the item tab's scroll region, above the panel. | No workspace rework (Cycle exclusions); D1's `opening_a_tab_does_not_change_the_selection` reads the panel with a tab open. Product owner, 2026-10-27, from Task 5a. |
 
 ### Not Built In D3
 
