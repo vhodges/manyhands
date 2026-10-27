@@ -954,6 +954,45 @@ fn a_clean_reload_shows_the_new_body_and_keeps_the_cursor(cx: &mut TestAppContex
     assert_eq!(editing.cursor(cx), 3, "the cursor, clamped");
 }
 
+/// R-79 with R-19 and R-69: after a save, the re-read body is the text
+/// the editor holds, byte for byte. For fact 81's shapes a second load
+/// would change it, so the editor is left alone: its text, its undo
+/// history back to the edit before the save, and clean.
+#[gpui_kit::test]
+fn a_clean_reload_of_the_text_the_editor_holds_leaves_it_alone(cx: &mut TestAppContext) {
+    let editing = Editing::open(PLAIN, None, cx);
+    for name in editor_text_tests::SECOND_PASS {
+        let saved = load(&editor_text_tests::fixture(name));
+        assert!(load(&saved) != saved, "{name}: a second load changes it");
+        editing.reopen(PLAIN, None, cx);
+        // The edit: Markdown pastes plain text as it is, with no rewrite.
+        editing.set_rich(false, cx);
+        cx.write_to_clipboard(ClipboardItem::new_string(saved.clone()));
+        editing.place(0, cx);
+        editing.keys("ctrl-a ctrl-v", cx);
+        editing.set_rich(true, cx);
+        assert!(editing.text(cx) == saved, "{name}: the edit landed exactly");
+
+        let host = editing.host(cx);
+        host.update(cx, |host, cx| host.mark_saved(&saved, cx));
+        let editor = editing.editor(cx);
+        let notified = Rc::new(Cell::new(0usize));
+        cx.update(|cx| {
+            let notified = notified.clone();
+            cx.observe(&editor, move |_, _| notified.set(notified.get() + 1))
+                .detach()
+        });
+        host.update(cx, |host, cx| host.reload_clean(&saved, cx));
+        editing.shell.frame(cx, |_, _| ());
+        assert!(editing.text(cx) == saved, "{name}: the text is unchanged");
+        assert_eq!(notified.get(), 0, "{name}: the editor was left alone");
+        assert!(!editing.dirty(cx), "{name}: clean");
+
+        editing.keys("ctrl-z", cx);
+        assert!(editing.text(cx) == PLAIN, "{name}: undo reaches the edit");
+    }
+}
+
 /// The keys the edit host binds (R-59; Keyboard map additions): Escape
 /// and the link key act in the edit editor alone, never in a read or
 /// comment editor, and the mode key in the host. Each is the only binding

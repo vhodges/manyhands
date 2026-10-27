@@ -55,10 +55,10 @@ gpui_kit::actions!(
         /// heading.
         JumpToDiscussion,
         /// Edit the shown item.
-        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 14.
+        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
         Edit,
         /// Save the item being edited.
-        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 15.
+        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
         Save,
         /// Switch the edit editor between Rich text and Markdown.
         ToggleRich,
@@ -66,10 +66,10 @@ gpui_kit::actions!(
         /// opened, or else focus the header's Done (R-59).
         EditorEscape,
         /// Make the edit editor's selection a link.
-        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 10b.
+        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
         InsertLink,
         /// New document or New ticket, the shown list's.
-        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 23.
+        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
         NewItem,
     ]
 );

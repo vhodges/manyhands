@@ -195,10 +195,12 @@ impl EditorHost {
 
     /// R-19: a clean editor shows `body`, a newer read, loaded as the
     /// editor loads a body read (R-79), with the cursor kept, clamped. The
-    /// same body leaves the editor alone, and so does a dirty editor,
-    /// whose text is the user's.
+    /// same body leaves the editor alone, with its undo history: one that
+    /// is the text last saved or loaded, or the body first loaded. A
+    /// second load of a text the editor holds could change it (fact 81).
+    /// A dirty editor is left alone too: its text is the user's.
     pub(crate) fn reload_clean(&mut self, body: &str, cx: &mut Context<Self>) {
-        if self.dirty || load(body) == self.baseline {
+        if self.dirty || crlf_to_lf(body) == self.baseline || load(body) == self.baseline {
             return;
         }
         let cursor = self.editor.read(cx).cursor();
@@ -326,9 +328,12 @@ impl Render for EditorHost {
             .key_context(EDIT_HOST_CONTEXT)
             .track_focus(&self.focus)
             .w_full()
-            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, _| {
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| {
                 this.pressed = true;
                 this.settling = true;
+                // A frame follows every press, so `settling` ends with it,
+                // even after a press the editor draws nothing for.
+                cx.notify();
             }))
             .capture_action(moved::<Left>(cx))
             .capture_action(moved::<Right>(cx))
