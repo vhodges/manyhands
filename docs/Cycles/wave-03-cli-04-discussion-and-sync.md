@@ -97,7 +97,8 @@ Authority, in order:
   (decision 19).
 - **Main is red on one test** after the gate:
   `registry_creates_repository_and_discovery_metadata_schema` lacks the
-  gate's tables (design fact 81). The fix belongs on main, outside C4.
+  gate's eight tables (design fact 81). C4's named edit E-12 adds them
+  (decision 21).
 - **Track rule 5 (decision 1).** C4's branch carries the library additions
   its verbs need. Nothing else under `src/repository*` changes.
 - **Track rule 2 (decision 5).** D4 waits until all of C4 is merged. D4's
@@ -501,6 +502,12 @@ Answered after re-grounding on the merged gate (2026-10-27):
     and Git RFC sentences to the local operation, recording the difference.
     Resume on a remote attempt with only written paths answers
     `original_request_required` and names the request, as the gate's does.
+21. **C4 fixes main's red registry test.** Named edit E-12 adds the gate's
+    eight `local_context_sync_*` tables, as well as C4's
+    `remote_resolution_owners`, to
+    `registry_creates_repository_and_discovery_metadata_schema`'s list. No
+    separate fix on main is made. Task 0 records the one failure as
+    expected, and Task 4a proves it fixed.
 
 The following were stated to the owner on 2026-10-26 with the outline, and
 the owner approved the outline:
@@ -580,7 +587,7 @@ are submitted for approval with these documents.
 | Planning, gate merged (2026-10-27) | The gate merged at `a372edb` with 11 commits after the `0b75184` read point. It also amended C4's authorities: the CLI RFC, the Git RFC, the Wave and the API audit. | Settled | Main merged as `e920043`; the facts and citations re-checked (rows below). |
 | Planning, gate authority text | The gate's Wave and CLI RFC text says "C4/D5 must adapt the local boundary", against the approved outline's assignment of the local verbs to C5. | Decision | Decision 19. |
 | Planning, gate authority text | The gate's local resolution has no supersede, and its RFC sentences on resending the same request are worded generally, against decision 18. | Decision | Decision 20. |
-| Planning, source run | `registry_creates_repository_and_discovery_metadata_schema` fails on `a372edb`, because its exact table list lacks the gate's tables. It was confirmed by running that one test. | Settled | Design fact 81 and the Risks row: the fix belongs on main, outside C4. E-12 adds only C4's own table. Task 0 and Task 4a stop on it if it is still red. |
+| Planning, source run | `registry_creates_repository_and_discovery_metadata_schema` fails on `a372edb`, because its exact table list lacks the gate's tables. It was confirmed by running that one test. | Decision | Decision 21: E-12 adds the gate's eight tables and C4's own. |
 | Re-grounding, gate-boundary lens (2026-10-27, `e920043`) | 12 findings: 1 blocking, 6 important, 5 minor. Blocking: E-6's rewrite asserted that every stopping command has an operation, which the gate's `LocalContextResolve` breaks. Important:<br>- `incompatible_closures` missing;<br>- sides without `historical`, and the claim "follows the gate's shape";<br>- the supersede against the gate's RFC sentences;<br>- no resume row for a remote attempt with only written paths;<br>- the gate's "C4/D5 must adapt" text and its capability row;<br>- departures needing RFC entries. | Decision, ruling, settled | Decisions 19 and 20. Rulings R-37, R-39 and R-40 added, and R-10, R-11, R-12 and R-20 revised. E-6 rewritten. The resume row and the validation order added. The Document Amendments now amend the gate's sentences. `request_id` keeps its name rather than the gate's `required_request_id`, because under decision 18 that request is not always required. |
 | Re-grounding, remote-library lens (2026-10-27, `e920043`) | 8 findings: 1 blocking, 3 important, 4 minor, and 6 stale citations. Blocking: a new conflict structure, `incompatible_closures`, had no value in Task 3's mapping. Important:<br>- kind and structure must come from `classify_conflict_entry`;<br>- an unfinished local sync now refuses remote resolution, reservations and comment begins;<br>- the tasks editing `remote/` must also run the local executor's tests. | Ruling, settled | Facts 30, 33, 64, 72, 75, 76 and 80 rewritten. Ruling R-38 added, and R-14 revised. Rows for the unfinished local sync added to four tables. `--lib remote`, `--lib local_sync` and `--lib integration` added to the tasks that edit `remote/`. The gate moved only helpers, so the library file list is narrowed: C4 edits nothing in `integration/` or `local_sync/`. |
 | Re-grounding, boundary, CLI and test lens (2026-10-27, `e920043`) | 6 findings: 1 blocking, 2 important, 3 minor, and 13 stale citations. Blocking: the planned table `remote_resolution_requests` would fail `tests/mutation_replay.rs:400`, which forbids a surviving object named with `request`. Important:<br>- the registry's exact table list needs a named edit, and it already fails on main;<br>- E-6 was wrong on `a372edb`. | Ruling, settled | R-41: the table is renamed `remote_resolution_owners`, with no foreign key. E-12 added. Fact 49 refreshed, with `authority()`, the read golden `CASES` and the `type`-guarded `from_stored` arm. Task 0's grep classification gains a fourth class. Task 1 updates the two "never merge" comments. All citations corrected. |

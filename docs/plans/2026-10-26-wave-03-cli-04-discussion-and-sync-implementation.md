@@ -181,7 +181,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - any change since `a372edb` to the files Part A touches, or to the gate's `local_sync/`, `integration/`, `local_control.rs` and `bind/local_sync.rs` (facts 25, 53 and 80);
   - fact 28: `set_local_identity` is still not refused by a pending operation;
   - what `operation abandon` answers for a comment operation whose publication is pending (fact 10). If it would close the comment's binding while its checkpoint stays unpublished, stop for a ruling;
-  - fact 81: whether `registry_creates_repository_and_discovery_metadata_schema` still fails on main for the gate's tables. Run `devenv shell -- cargo test --all-features --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema`. If it still fails, record it, and stop for the owner before Task 4a (E-12).
+  - fact 81: whether `registry_creates_repository_and_discovery_metadata_schema` still fails on main for the gate's eight tables alone. Run `devenv shell -- cargo test --all-features --locked --test repository_enablement registry_creates_repository_and_discovery_metadata_schema`, and record the result. E-12 in Task 4a fixes it (decision 21). A failure for any other table stops for the owner.
 
   A changed fact that alters a task stops here for a controller ruling.
 - [ ] **Step 3: Prove E-1 to E-12 are the only named edits.**
@@ -217,7 +217,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   devenv shell -- cargo test --all-features --locked
   ```
 
-  Record per-target counts. A failure outside C4's files stops for the owner. It is not fixed here. Fact 81's test is expected to fail unless main has fixed it, and its failure is recorded with that reference.
+  Record per-target counts. A failure outside C4's files stops for the owner. It is not fixed here. Fact 81's test is expected to fail, unless main has fixed it, and that one failure is recorded with that reference rather than stopping. E-12 fixes it in Task 4a (decision 21).
 - [ ] **Step 5: Refresh the API audit.**
   - Add a section, "Wave 03 CLI Cycle C4 refresh", dated, citing decision 16.
   - Update the C4 rows in place: `comment add`, `item sync`, `repo sync`, `conflict show`, `conflict resolve`, `operation resume` and `operation abandon`. Add `item republish`. For each, record the planned binding and signature, whether it is confirmed, its input type, and every result code it can return as designed. Read the existing codes from `outcome.rs`, `execute.rs`, `confirm.rs` and the binding.
@@ -227,7 +227,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   - baseline;
   - confirmed facts;
   - audit refresh;
-  - Cycle decisions 1–20, rulings R-1 to R-41 and named edits E-1 to E-12;
+  - Cycle decisions 1–21, rulings R-1 to R-41 and named edits E-1 to E-12;
   - owed native checks, starting with the Windows Ctrl-C check;
   - the planning review record;
   - an empty task log.
@@ -454,7 +454,7 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
   ```
 
-  `--test mutation_replay` proves that `tests/mutation_replay.rs:400` still passes, and `--lib remote` proves `state_tests.rs`' drop tests still pass (R-41). If `repository_enablement` fails only for the gate's tables (fact 81), stop for the owner.
+  `--test mutation_replay` proves that `tests/mutation_replay.rs:400` still passes, and `--lib remote` proves `state_tests.rs`' drop tests still pass (R-41). `--test repository_enablement` must pass with E-12 applied (decision 21).
 
 - [ ] **Step 6: Commit** `feat: bind conflict resolution that the same request can finish`. Add a ticket comment and push.
 
@@ -848,10 +848,10 @@ Tasks run in order. Part A's tasks extend the same closed inventories (fact 49),
 **Named edits:** E-1 in 7–10; E-2 in 10; E-3 and E-4 in 1; E-5 in 1 and 5; E-6 in 2b, 4a and 5; E-7 and E-8 in 1, 2b, 3, 4a and 5; E-9 in 2b, 4a and 5; E-10 in 1, 2b and 4a; E-11 in 4b; E-12 in 4a.
 
 **Stops built in:**
-- Task 0: the gate not closed; a changed fact; an unlisted test hit; abandon closing a pending comment; fact 81's test still red on main.
+- Task 0: the gate not closed; a changed fact; an unlisted test hit; abandon closing a pending comment; fact 81's test failing for any table other than the gate's eight.
 - Tasks 1, 2a, 2b, 3, 4a, 4b, 5: each outcome-table row.
 - Task 3: no observation at `ResolutionPrepared` (fact 86).
-- Task 4a: decision 13's mechanism; `repository_enablement` red only for the gate's tables.
+- Task 4a: decision 13's mechanism.
 - Task 7: the spike misreporting effects.
 - Task 15: dogfooding.
 

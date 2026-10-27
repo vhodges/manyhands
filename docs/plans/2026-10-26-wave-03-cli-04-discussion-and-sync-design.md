@@ -28,7 +28,7 @@ this design, and this design governs the
 Approval of this design covers:
 
 - the library part of Cycle decisions 1, 3, 4, 7, 8, 9, 11, 12, 13, 17,
-  18, 19 and 20;
+  18, 19 and 20, and decision 21's test edit;
 - the per-verb grammar and input fields;
 - the five required-outcome tables and the resume table;
 - rulings R-1 to R-41;
@@ -684,8 +684,12 @@ the check.
     - `registry_creates_repository_and_discovery_metadata_schema`
       (`tests/repository_enablement.rs:475`) asserts the exact table list
       (`:581-624`). **It fails on `a372edb`**, because the list lacks the
-      gate's `local_context_sync_*` tables. This was run on 2026-10-27, as the
-      one test of its target; it was the only Cargo run in planning.
+      gate's eight tables (fact 75): `local_context_sync_conflicts`,
+      `_execution`, `_images`, `_records`, `_request_control`,
+      `_resolution_cancellation`, `_resolutions` and `_steps`. Nothing else
+      differs. This was run on 2026-10-27, as the one test of its target; it
+      was the only Cargo run in planning. C4's E-12 adds them (Cycle decision
+      21).
 82. The remote state tests drop and re-create the resolution tables
     (`src/repository/remote/state_tests.rs:1898`, `:2008`, `:2071`, `:2114`,
     `:2203`, `:2470`).
@@ -1592,7 +1596,7 @@ In the final task, and only with the owner's go-ahead at that step:
 | E-9 | 2b, 4a, 5 | `tests/support/conformance.rs`'s `HOMES` (`:59`) and each home's table gain rows for the three commands. `tests/support/confirmation.rs`'s `preview_schema` (`:48-61`) gains `item republish`. |
 | E-10 | 1, 2b, 4a | `tests/support/mutation.rs`'s data accessors (`:596-794`) and `tests/support/repair.rs:333` gain arms for the new `MutationDataDto` variants. |
 | E-11 | 4b | The resume tests that assert a comment's synchronization is left to inspect, in `tests/mutation_replay/resume.rs` (`a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered`, `:1090`) and `src/repository/mutation/bind/` unit tests, change to publication (R-20). Task 0 finds them with the plan's grep. |
-| E-12 | 4a | `tests/repository_enablement.rs`: `registry_creates_repository_and_discovery_metadata_schema`'s exact table list (`:581-624`) gains `remote_resolution_owners` (R-41). The test already fails on `a372edb`, because it lacks the gate's tables (fact 81). C4 does not add those; that fix belongs on main (see Risks). Task 4a runs the test, and if it still fails for the gate's tables, Task 4a stops for the owner. |
+| E-12 | 4a | `tests/repository_enablement.rs`: `registry_creates_repository_and_discovery_metadata_schema`'s exact table list (`:581-624`) gains the gate's eight `local_context_sync_*` tables, which it lacks on `a372edb` (fact 81, Cycle decision 21), and `remote_resolution_owners` (R-41), each in sorted order. The test then passes. If main has fixed the gate's part before Task 4a, E-12 adds only `remote_resolution_owners`. |
 
 No other pre-existing test changes. `tests/support/pty.rs` gains an additive
 helper and changes no existing function. The new table's name avoids
@@ -1673,7 +1677,7 @@ Comment Author rule "A caller cannot supply it" is replaced by decision 9.
 
 **Wave 03:**
 
-- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–20, the
+- the C4 section, "Amended 2026-10-26 by C4", records decisions 1–21, the
   delivery and the known limits;
 - the track-rule-5 exception (decision 1);
 - the D4 section records that D4 waits for C4 (decision 5). The D5 section
@@ -2098,7 +2102,7 @@ Each ruling is listed with its cost if wrong.
 | Risk | Control |
 | --- | --- |
 | The gate changed the inventories and records C4 extends | Done: the gate merged at `a372edb`, and the 2026-10-27 re-grounding re-read every fact and named edit there. Task 0 re-greps E-1 to E-12 if main moves again |
-| Main is red: `registry_creates_repository_and_discovery_metadata_schema` lacks the gate's tables (fact 81) | A fix on main, outside C4, before Task 0. If it has not landed, Task 0's full suite and Task 4a stop on it for the owner |
+| Main is red: `registry_creates_repository_and_discovery_metadata_schema` lacks the gate's tables (fact 81) | C4's E-12 adds them (Cycle decision 21). Task 0's full suite records that one failure as expected, and Task 4a's run proves it fixed |
 | C4's `remote/` edits break the gate's local executor, which shares those modules | Tasks that edit `remote/` also run `--lib local_sync` and `--lib integration` (Testing) |
 | Finishing an interrupted resolution needs more library change than planned | Decision 13's table, written first, with a stop |
 | Merging changes the premise of many F2 tests at once | E-3 to E-5 list them; Task 0 classifies each before code |
