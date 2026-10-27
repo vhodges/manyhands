@@ -19,6 +19,41 @@ id: "01M5X2F5H329J2Z8P1481XFK2J"
 - `git diff --stat 6f1463c HEAD` over the library, desktop, test-support,
   schema, Cargo and CI paths is empty: no Baseline Fact changed since the
   design's refresh.
+- **Merge 1, after Task 5b:** `origin/main` moved to `a372edb`, which merged
+  ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` (closure recovery gaps, local context
+  synchronization). Merged as `da60fcf`.
+  - Main changed no desktop file and closed none of the known-defect
+    tickets.
+  - Four registries conflicted: `command.rs`, `mutation_contract.rs`,
+    `support/conformance.rs` and `support/mutation_golden.rs`. Each was
+    resolved as the union of both sides.
+  - Two merged counts were wrong and are now corrected:
+    `OperationAction::ALL[..15]` in `read/status_tests.rs`, and
+    `LOCAL_ACTIONS` (15) in `read_contract.rs`. The `read/dto.rs` comment
+    now says fifteen.
+  - **Interplay with main's local sync.** Main's local sync keeps its
+    journal row pending until it ends, so `context prepare` and
+    `context release` answer `recovery_required` at `begin_lifecycle`
+    (`recovery.rs:791`). Local sync refuses to start while any row on the
+    root is pending (`local_sync/record.rs:999`), a half-done release
+    included. No outcome-table answer changed.
+  - **Tests after the merge** (the owner's trimmed list):
+    - clippy across all targets and all features: clean;
+    - `mutation_contract`: 44;
+    - `read_contract`: 72;
+    - `mutation_bridges` `context`: 46;
+    - `keeps_the_rules_of_the_boundary`: 1 each in bridges, replay and
+      confirmation;
+    - `--lib`: `context_release` 26, `recovery` 59, `mutation::` 108,
+      `repository::read::status` 10;
+    - the desktop binary: 574;
+    - desktop clippy, fmt and the CLI isolation script: clean.
+
+    Before the trim, these also passed: the full `--lib`, which caught the
+    two counts above, plus `mutation_bridges` 166, `mutation_replay` 383,
+    `mutation_confirmation` 183, `read_items` 82 and `local_authoring`
+    140.
+  - `merge-tree` against `a372edb` is clean.
 
 ## Baseline checks
 
@@ -454,3 +489,23 @@ Notes for later tasks: Task 22 leaves `targets()` in
   the test drops "Approve and merge…" as well as "Comment". — Within
   E-7's text. — If wrong: one line in `header_later` and one in the
   test's filter.
+- Owner decision, 2026-10-27: CLI and desktop Cycles run no library
+  tests, SSH and remote targets included, unless they change library
+  code. A task that changes library code runs only enough to verify its
+  own change. For D3 this means:
+  - desktop tasks run no library tests;
+  - Task 22 (`src/drafts/`) runs only the filters that cover its change;
+  - merges of main do not retest main's library code;
+  - Part checkpoints and Task 27's final gate run the front-end targets,
+    plus targeted filters for D3's own library changes. This replaces
+    the handoff's whole-suite run in Task 27. Part 0's library work was
+    verified in full at its checkpoint.
+- Ruling (merge 1): no library change for local sync in release's check
+  4(d). That check sees only remote merges, but every local sync keeps a
+  pending journal row until it ends, so `begin_lifecycle` refuses both
+  context commands first. Main's audit enforces that. The
+  `context_release.rs` module doc says 4(d) covers "no synchronization
+  of the item", which is loose wording, carried to the whole-branch
+  review. — Part 0 is closed, and the guard holds. — If wrong: a local
+  sync that left no pending row could be released under, which main's
+  audit forbids.
