@@ -536,3 +536,11 @@ Notes for later tasks: Task 22 leaves `targets()` in
   need a named edit. Paint-order note for a later Cycle: the sheet now
   paints above Root's notification layer. A Cycle that adds toasts
   should defer that layer at priority 1.
+- Ruling (Task 6 review, Minors 1–3, parked): the sheet paints above
+  Root's notification layer, and a Cycle that adds toasts should defer
+  that layer above 0. Inside the sheet, Content-context bindings match
+  and focus counts as the content region's, so Task 21 must not assume
+  the old dispatch path. A loading or unreadable Inspect tab shows no
+  kind line until its read lands, since "Nonconforming file" is now keyed
+  on the file. — No user-visible defect today. — If wrong: a toast hidden
+  under the sheet, or a brief blank line on an Inspect tab.
