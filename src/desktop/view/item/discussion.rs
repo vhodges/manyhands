@@ -32,15 +32,14 @@ mod rows;
 use std::collections::{HashMap, HashSet};
 
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
-    Subscription, TestSupportExt, Window,
+    TestSupportExt, Window,
     component::{ActiveTheme, Icon, h_flex, v_flex},
     div, px,
 };
 use manyhands::repository::CommentListDto;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
-use zorite_editor::EditorState;
 
 use super::{
     BACK_TO_TOP, ItemPane,
@@ -57,8 +56,7 @@ use crate::desktop::{
     },
     view::{
         confirm::local_offset,
-        editor::{read_only::ReadOnly, reveal_caret},
-        scroll::ContentScroll,
+        editor::{CaretInView, read_only::ReadOnly},
     },
 };
 
@@ -135,11 +133,8 @@ struct Body {
     read: Entity<ReadOnly>,
     /// The body as the library read it, last loaded into `read`.
     text: String,
-    /// The caret and the text's length last seen, so only a move reveals.
-    caret: (usize, usize),
-    /// Whether the editor had focus in the last frame.
-    focused: bool,
-    _caret: Subscription,
+    /// The read editor's caret reveal (R-67).
+    reveal: CaretInView,
 }
 
 impl Discussion {
@@ -156,33 +151,6 @@ impl Discussion {
     pub(super) fn body(&self, id: &str) -> Option<&Entity<ReadOnly>> {
         self.bodies.get(id).map(|body| &body.read)
     }
-}
-
-impl Body {
-    /// R-67: a move of the caret, or a change of text, while the editor
-    /// has focus brings the caret into view.
-    fn caret_moved(
-        &mut self,
-        editor: &Entity<EditorState>,
-        scroll: &ContentScroll,
-        window: &Window,
-        cx: &mut App,
-    ) {
-        let now = caret(editor.read(cx));
-        if now == self.caret {
-            return;
-        }
-        self.caret = now;
-        if editor.read(cx).focus_handle(cx).is_focused(window) {
-            reveal_caret(editor, scroll, cx);
-        }
-    }
-}
-
-/// The caret and the text's length, which change when the caret moves or
-/// the text changes.
-fn caret(editor: &EditorState) -> (usize, usize) {
-    (editor.cursor(), editor.text().len())
 }
 
 impl ItemPane {
@@ -218,40 +186,18 @@ impl ItemPane {
             }
             let read = cx.new(|cx| ReadOnly::new(text, window, cx));
             let editor = read.read(cx).editor().clone();
-            let key = id.clone();
-            let observed = cx.observe_in(&editor, window, move |pane, editor, window, cx| {
-                if let Some(body) = pane.discussion.bodies.get_mut(&key) {
-                    body.caret_moved(&editor, &pane.scroll, window, cx);
-                }
-            });
-            let caret = caret(editor.read(cx));
+            let reveal = CaretInView::new(&editor, &self.scroll, window, cx);
             bodies.insert(
                 id.clone(),
                 Body {
                     read,
                     text: text.clone(),
-                    caret,
-                    focused: false,
-                    _caret: observed,
+                    reveal,
                 },
             );
         }
-        for (id, body) in bodies.iter_mut() {
-            let focused = {
-                let editor = body.read.read(cx).editor();
-                editor.read(cx).focus_handle(cx).is_focused(window)
-            };
-            if focused && !body.focused {
-                let id = id.clone();
-                cx.defer_in(window, move |pane, _, cx| {
-                    if let Some(body) = pane.discussion.bodies.get(&id) {
-                        let editor = body.read.read(cx).editor().clone();
-                        reveal_caret(&editor, &pane.scroll, cx);
-                        cx.notify();
-                    }
-                });
-            }
-            body.focused = focused;
+        for body in bodies.values_mut() {
+            body.reveal.note_focus(window, cx);
         }
     }
 

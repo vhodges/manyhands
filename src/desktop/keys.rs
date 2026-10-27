@@ -54,6 +54,23 @@ gpui_kit::actions!(
         /// Bring the shown item tab's discussion into view and focus its
         /// heading.
         JumpToDiscussion,
+        /// Edit the shown item.
+        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 14.
+        Edit,
+        /// Save the item being edited.
+        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 15.
+        Save,
+        /// Switch the edit editor between Rich text and Markdown.
+        ToggleRich,
+        /// Escape in the edit editor: close an editor menu the user just
+        /// opened, or else focus the header's Done (R-59).
+        EditorEscape,
+        /// Make the edit editor's selection a link.
+        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 10b.
+        InsertLink,
+        /// New document or New ticket, the shown list's.
+        #[cfg_attr(not(test), allow(dead_code))] // Handled from Task 23.
+        NewItem,
     ]
 );
 
@@ -73,6 +90,14 @@ pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
 /// The key context of the Drafts page's Inspect panel, where Escape
 /// closes it.
 pub(crate) const DRAFT_INSPECT_CONTEXT: &str = "DraftInspect";
+
+/// The key context of the edit editor's host (`view::editor::host`), where
+/// the mode key switches Rich text and Markdown.
+pub(crate) const EDIT_HOST_CONTEXT: &str = "EditHost";
+
+/// The edit editor itself, inside its host: Escape and the link key are
+/// bound here, so read and comment editors never see them (R-59).
+const EDIT_HOST_EDITOR: &str = "EditHost > Editor";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -105,6 +130,10 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("escape", CloseInspect, Some(DRAFT_INSPECT_CONTEXT)),
         // In the content region, the item tab's strip included.
         KeyBinding::new("secondary-shift-c", JumpToDiscussion, Some(CONTENT_CONTEXT)),
+        // While editing, in the edit editor's host only.
+        KeyBinding::new("escape", EditorEscape, Some(EDIT_HOST_EDITOR)),
+        KeyBinding::new("secondary-k", InsertLink, Some(EDIT_HOST_EDITOR)),
+        KeyBinding::new("secondary-shift-m", ToggleRich, Some(EDIT_HOST_CONTEXT)),
     ]);
 }
 

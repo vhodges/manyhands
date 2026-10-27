@@ -1,18 +1,23 @@
 //! The Markdown editor: how one is made, its style, its keys, the
-//! read-only guard every read editor sits in, and the caret reveal.
+//! read-only guard every read editor sits in, the edit editor's host, and
+//! the caret reveal every editor on the page uses.
 //!
 //! Every editor loads `editor_text::crlf_to_lf(body)`; the editor applies
 //! its own math-fence rewrite, so `text()` is `editor_text::load(body)`.
 //! An editor is styled as rich text from the start, from the page tokens
 //! (`style`).
 
+pub(crate) mod host;
 pub(crate) mod keys;
 pub(crate) mod read_only;
 pub(crate) mod style;
 
 use std::ops::Range;
 
-use gpui_kit::{App, AppContext, Entity, Pixels, Window, point, px};
+use gpui_kit::{
+    App, AppContext, Context, Entity, Focusable, Pixels, Subscription, WeakEntity, Window, point,
+    px,
+};
 use zorite_editor::{EditorEvent, EditorState};
 
 use crate::desktop::{model::editor_text::crlf_to_lf, view::scroll::ContentScroll};
@@ -60,6 +65,78 @@ pub(crate) fn reveal_caret(editor: &Entity<EditorState>, scroll: &ContentScroll,
     if y != offset.y {
         handle.set_offset(point(offset.x, y));
     }
+}
+
+/// R-67 for one editor in a scroll region: its caret is brought into view
+/// after each caret move or change of text while it has focus, and when
+/// it takes focus. Other notifications, such as the pointer passing over
+/// it, move nothing, and nothing moves while it is unfocused.
+///
+/// The owner makes one beside its editor and calls `note_focus` as each
+/// of its frames is drawn: GPUI sends focus events only to an active
+/// window, which a test window never is, so a frame notes the focus
+/// instead, and the reveal runs once that frame is drawn, from its
+/// positions.
+pub(crate) struct CaretInView {
+    editor: WeakEntity<EditorState>,
+    scroll: ContentScroll,
+    /// Whether the editor had focus in the last frame.
+    focused: bool,
+    _moved: Subscription,
+}
+
+impl CaretInView {
+    pub(crate) fn new<T: 'static>(
+        editor: &Entity<EditorState>,
+        scroll: &ContentScroll,
+        window: &mut Window,
+        cx: &mut Context<T>,
+    ) -> Self {
+        let mut seen = caret(editor.read(cx));
+        let region = scroll.clone();
+        let moved = cx.observe_in(editor, window, move |_, editor, window, cx| {
+            let now = caret(editor.read(cx));
+            if now == seen {
+                return;
+            }
+            seen = now;
+            if editor.read(cx).focus_handle(cx).is_focused(window) {
+                reveal_caret(&editor, &region, cx);
+            }
+        });
+        Self {
+            editor: editor.downgrade(),
+            scroll: scroll.clone(),
+            focused: false,
+            _moved: moved,
+        }
+    }
+
+    /// As the owner's frame is drawn: when the editor has taken focus
+    /// since the last frame, its caret is revealed once this frame is
+    /// drawn, and the owner is notified for the frame that shows it.
+    pub(crate) fn note_focus<T: 'static>(&mut self, window: &Window, cx: &mut Context<T>) {
+        let focused = self
+            .editor
+            .upgrade()
+            .is_some_and(|editor| editor.read(cx).focus_handle(cx).is_focused(window));
+        if focused && !self.focused {
+            let (editor, scroll) = (self.editor.clone(), self.scroll.clone());
+            cx.defer_in(window, move |_, _, cx| {
+                if let Some(editor) = editor.upgrade() {
+                    reveal_caret(&editor, &scroll, cx);
+                    cx.notify();
+                }
+            });
+        }
+        self.focused = focused;
+    }
+}
+
+/// The caret and the text's length, which change when the caret moves or
+/// the text changes.
+fn caret(editor: &EditorState) -> (usize, usize) {
+    (editor.cursor(), editor.text().len())
 }
 
 /// The window-space top and bottom of the caret's line, from the last
@@ -115,6 +192,35 @@ pub(crate) fn step_over_blocks(
         }
     });
     true
+}
+
+/// The block event a pointer press caused, read as a forward entry: the
+/// editor's own `at_end` cannot tell a click from a backward move (R-66).
+/// A host that tracks its last input passes this to `step_over_blocks`
+/// after a press.
+fn entered_by_pointer(event: &EditorEvent) -> EditorEvent {
+    match event.clone() {
+        EditorEvent::EditMath {
+            range,
+            source,
+            inline,
+            ..
+        } => EditorEvent::EditMath {
+            range,
+            source,
+            at_end: false,
+            inline,
+        },
+        EditorEvent::EditProperties {
+            range, source, row, ..
+        } => EditorEvent::EditProperties {
+            range,
+            source,
+            at_end: false,
+            row,
+        },
+        other => other,
+    }
 }
 
 /// R-79: puts `text`, which an editor already loaded once (a restored

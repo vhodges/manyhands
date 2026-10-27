@@ -32,7 +32,7 @@ use zorite_editor::{
     WordLeft, WordRight,
 };
 
-use super::{open_editor, step_over_blocks};
+use super::{entered_by_pointer, open_editor, step_over_blocks};
 use crate::desktop::model::editor_text::crlf_to_lf;
 
 /// A read editor and its guard.
@@ -221,33 +221,6 @@ fn moved<A: Action>(cx: &mut Context<ReadOnly>) -> impl Fn(&A, &mut Window, &mut
 fn inserts_text(keystroke: &Keystroke) -> bool {
     let modifiers = &keystroke.modifiers;
     keystroke.key_char.is_some() && !modifiers.control && !modifiers.platform && !modifiers.function
-}
-
-/// The block event a pointer press caused, read as a forward entry: the
-/// editor's own `at_end` cannot tell a click from a backward move (R-66).
-fn entered_by_pointer(event: &EditorEvent) -> EditorEvent {
-    match event.clone() {
-        EditorEvent::EditMath {
-            range,
-            source,
-            inline,
-            ..
-        } => EditorEvent::EditMath {
-            range,
-            source,
-            at_end: false,
-            inline,
-        },
-        EditorEvent::EditProperties {
-            range, source, row, ..
-        } => EditorEvent::EditProperties {
-            range,
-            source,
-            at_end: false,
-            row,
-        },
-        other => other,
-    }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

@@ -25,17 +25,16 @@
 use std::{cell::Cell, rc::Rc};
 
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, StatefulInteractiveElement,
-    Styled, Subscription, TestSupportExt, Window, canvas,
+    AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, StatefulInteractiveElement, Styled,
+    TestSupportExt, Window, canvas,
     component::{ActiveTheme, scroll::Scrollbar, v_flex},
     div, px,
 };
-use zorite_editor::EditorState;
 
 use super::{ItemPane, tokens::item_colors};
 use crate::desktop::view::{
-    editor::{read_only::ReadOnly, reveal_caret},
+    editor::{CaretInView, read_only::ReadOnly},
     scroll::ContentScroll,
 };
 
@@ -58,14 +57,10 @@ pub(crate) struct Page {
     read: Option<Entity<ReadOnly>>,
     /// The body `read` last loaded, as the library read it.
     body: String,
-    /// The caret and the text's length `read` last showed, so that only a
-    /// move reveals the caret.
-    caret: (usize, usize),
-    /// Whether the read editor had focus in the last frame.
-    focused: bool,
+    /// The read editor's caret reveal (R-67).
+    reveal: Option<CaretInView>,
     /// The bottom of the read view in the last frame, in the window.
     read_bottom: Rc<Cell<Pixels>>,
-    _read: Vec<Subscription>,
 }
 
 impl Page {
@@ -75,10 +70,8 @@ impl Page {
             ring: false,
             read: None,
             body: String::new(),
-            caret: (0, 0),
-            focused: false,
+            reveal: None,
             read_bottom: Rc::default(),
-            _read: Vec::new(),
         }
     }
 
@@ -97,10 +90,17 @@ impl Page {
     /// first body makes it; a changed body is loaded into it in place,
     /// keeping its cursor, clamped (R-19); the same body leaves it
     /// untouched. A read with no body, a file that is not UTF-8, drops it.
-    fn show(&mut self, body: Option<&str>, window: &mut Window, cx: &mut Context<ItemPane>) {
+    /// The read editor keeps its caret in view in `scroll`'s region.
+    fn show(
+        &mut self,
+        body: Option<&str>,
+        scroll: &ContentScroll,
+        window: &mut Window,
+        cx: &mut Context<ItemPane>,
+    ) {
         let Some(body) = body else {
             self.read = None;
-            self._read.clear();
+            self.reveal = None;
             self.body.clear();
             return;
         };
@@ -113,52 +113,16 @@ impl Page {
         }
         let read = cx.new(|cx| ReadOnly::new(body, window, cx));
         let editor = read.read(cx).editor().clone();
-        self._read = vec![cx.observe_in(&editor, window, |pane, editor, window, cx| {
-            pane.page.caret_moved(&editor, &pane.scroll, window, cx)
-        })];
-        self.caret = caret(editor.read(cx));
+        self.reveal = Some(CaretInView::new(&editor, scroll, window, cx));
         self.read = Some(read);
         self.body = body.to_owned();
     }
 
     /// R-67: when the read editor has taken focus since the last frame,
-    /// its caret is brought into view once this frame is drawn, from this
-    /// frame's positions. A frame notes the focus, since GPUI sends focus
-    /// events only to an active window.
+    /// its caret is brought into view once this frame is drawn.
     fn note_focus(&mut self, window: &Window, cx: &mut Context<ItemPane>) {
-        let focused = self.read.as_ref().is_some_and(|read| {
-            let editor = read.read(cx).editor();
-            editor.read(cx).focus_handle(cx).is_focused(window)
-        });
-        if focused && !self.focused {
-            cx.defer_in(window, |pane, _, cx| {
-                if let Some(read) = &pane.page.read {
-                    let editor = read.read(cx).editor().clone();
-                    reveal_caret(&editor, &pane.scroll, cx);
-                    cx.notify();
-                }
-            });
-        }
-        self.focused = focused;
-    }
-
-    /// R-67: a move of the caret, or a change of text, while the read
-    /// editor has focus brings the caret into view. Other notifications,
-    /// such as the pointer passing over it, move nothing.
-    fn caret_moved(
-        &mut self,
-        editor: &Entity<EditorState>,
-        scroll: &ContentScroll,
-        window: &Window,
-        cx: &mut App,
-    ) {
-        let now = caret(editor.read(cx));
-        if now == self.caret {
-            return;
-        }
-        self.caret = now;
-        if editor.read(cx).focus_handle(cx).is_focused(window) {
-            reveal_caret(editor, scroll, cx);
+        if let Some(reveal) = &mut self.reveal {
+            reveal.note_focus(window, cx);
         }
     }
 
@@ -284,15 +248,10 @@ impl ItemPane {
         let Some(item) = self.model.item().rows() else {
             return;
         };
-        self.page.show(item.body.as_deref(), window, cx);
+        self.page
+            .show(item.body.as_deref(), &self.scroll, window, cx);
         self.page.note_focus(window, cx);
     }
-}
-
-/// The caret and the text's length, which change when the caret moves or
-/// the text changes.
-fn caret(editor: &EditorState) -> (usize, usize) {
-    (editor.cursor(), editor.text().len())
 }
 
 /// The discussion's place among the scrolled children `region` lays out,
