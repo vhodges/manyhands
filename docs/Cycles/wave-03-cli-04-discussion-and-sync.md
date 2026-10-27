@@ -12,7 +12,7 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 
 ## Status
 
-**Draft, 2026-10-26, revised after the second review round.** Written for
+**Draft, 2026-10-26, revised after the third review round.** Written for
 product-owner review. Nothing is built, and no build or test was run for
 planning.
 
@@ -243,8 +243,9 @@ Authority, in order:
 5. **Republish (decision 7).**
    - Ordinary synchronization never recreates a remotely deleted branch. It
      answers `remote_branch_deleted`, exit 3.
-   - `item republish` is confirmed. Its preview is built from the deletion a
-     prior fetch recorded. It names the branch, the remote, the last
+   - `item republish` is confirmed. Its preview is built from stored
+     evidence of the deletion: one a prior fetch recorded, or the push
+     evidence of earlier operations. It names the branch, the remote, the last
      published commit and the local commit to publish.
    - Confirming pushes exactly that local commit and integrates nothing
      (decision 11). The next `item sync` integrates primary as usual.
@@ -266,6 +267,10 @@ Authority, in order:
      (decision 12).
    - A retry of the same request finishes an interrupted resolution with the
      same commit, and makes no second one (decision 13).
+   - A resolution whose request is lost has a way out (decision 18).
+     `operation resume` finishes one whose commit is prepared, from durable
+     state. A new request supersedes one that has only written paths, if
+     those paths still hold exactly what it wrote.
    - After an outside repair, `conflict show` reports it and
      `operation resume` continues.
 7. **Operations.**
@@ -371,7 +376,7 @@ Answered before drafting:
 
 1. **The library part is in C4.** The `comment add`, `conflict show` and
    `conflict resolve` bindings land in C4's branch, as an approved exception
-   to track rule 5. Decisions 3, 4, 7, 9, 11 and 13 extend it to the
+   to track rule 5. Decisions 3, 4, 7, 9, 11, 13 and 18 extend it to the
    synchronization, republish, authorship and resolution-state changes those
    verbs need.
 2. **The gate lands first.** C4's implementation starts after
@@ -433,6 +438,17 @@ Answered after the second review round:
 17. **`item republish` refuses a lifecycle-closed ticket** with
     `ticket_closed`, exit 3, as saves and comments do. That is consistent
     with the Wave's rule never to recreate a closed ticket's context.
+
+Answered after the third review round:
+
+18. **A way out of a stuck resolution attempt.** These are two
+    required-outcome rows, test-first with a stop:
+    - `operation resume` finishes an attempt whose candidate commit is
+      prepared, from durable state alone;
+    - a new `conflict resolve` request may supersede an attempt that has only
+      written paths, if those paths still hold exactly what it wrote.
+
+    Outside repair is accepted again once no attempt is unfinished.
 
 The following were stated to the owner on 2026-10-26 with the outline, and
 the owner approved the outline:
@@ -498,7 +514,10 @@ are submitted for approval with these documents.
 | Scoped re-review (2026-10-26, `03f3059..580d4ad`) | 18 findings: 0 blocking, 6 important, 12 minor. Every earlier blocking finding was confirmed resolved, and no stale text remained. Important findings were:<br>- `ConflictResolve` was set to stop at safe points with no operation;<br>- a data enum lacked the `resume`/`none` values a row used;<br>- changing `checkpoint_comment_locally`'s signature would edit seven call sites in tests;<br>- Task 6's scope check counted main's changes;<br>- recovery cells disagreed with the records' standing;<br>- `request_mismatch` cases could not run without a remote. | Ruling, settled | `ConflictResolve` is resume-like (R-32, R-35). A crate-private `checkpoint_comment_locally_with` sibling is added (fact 73). Task 6 diffs from the merge base. The rows and recovery cells are corrected, the mismatch cases move to Tasks 12a and 12b, and the minors are applied: the predicates' E-6 assertions, golden names, Task 2's split into 2a and 2b, the gate token departure, and the dogfooding preflight's commit and registry checks. |
 | Adversarial round (2026-10-26, `580d4ad`) | 18 findings: 2 blocking, 8 important, 8 minor. Blocking:<br>- a `comment add` stopped at `identity_required`, `push_rejected` or `busy` could never complete under its own request, because its record is deleted and its comment ID stays bound;<br>- `item republish` could not push exactly the previewed commit through item sync's clean plan, which integrates primary.<br>Important findings included:<br>- the resolve request's standing and association;<br>- a second attempt at `resolution_prepared`;<br>- rebuilding tokens from path digests;<br>- replay after the continuation started;<br>- a Ctrl-C lost across C2's retry;<br>- republish while `item sync` holds its reservation;<br>- republish's preview missing push-side evidence;<br>- a cancelled-after-resolution state. | Decision, ruling | Decision 17. Rulings R-34 (comment standing and binding release), R-35 (resolution association) and R-36 (one Ctrl-C latch) added. R-14 and R-18 rewritten: republish is a push-only path. Design facts 67–74 added. The rows, states and minors are applied. |
 
-The second round's revisions have not yet had their scoped re-review.
+| Third round, scoped and adversarial (2026-10-26, `580d4ad..bea46e4`) | 17 findings: 1 blocking, 10 important, 6 minor. Blocking: an unfinished resolution attempt whose request could not be resent locked the context for good, because outside repair is refused while an attempt exists and abandonment is excluded. Important findings were:<br>- a new column on `remote_resolution_attempts` would make main's binaries refuse a migrated registry (fact 75);<br>- the observation cannot be rebuilt, because the configuration digest is not stored;<br>- the path rebuild missed local-side resolutions;<br>- republish's push still met the push-absence boundary, and its preview needed a reservation;<br>- resume could push a merge under a republish's operation;<br>- fact 74 was misapplied within one call;<br>- three cases of R-34: a written file, two-step release, a final child;<br>- Task 6's allowlist missed `human_admin.rs`. | Decision, ruling, settled | Decision 18. The association moves to a new table, with the input digest. The attempt ID adds the synchronization, window and ordinal. Republish gets a reservation-free evidence read, a push that leaves out the refusal points, and a resume guard. R-34 is refined, facts 68, 71, 72 and 74 are corrected, and facts 75–79 are added. The minors are applied. This is the third round in the resolution mechanism, so it is not rewritten again: its table rows and Task 4a's stop are the contract. |
+
+**The third round's edits had no independent review.** They are listed in
+the row above, and the owner reviews them with the documents.
 
 Record planning, per-task progress, decisions, baseline and final
 verification, review and review-ready status as ticket comments. Publishing
