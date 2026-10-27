@@ -21,7 +21,9 @@
 //!
 //! **Keys** (fact 67). Each control is focusable, named, and has a tooltip
 //! naming its key. Left and Right move along the toolbar, Home and End go
-//! to its ends, and Tab enters it at its first control, its one tab stop.
+//! to its ends. The toolbar is one tab stop that roves: the focused
+//! control, or else the first, so Tab enters at the first control and Tab
+//! or Shift-Tab from any control leaves in one press.
 //! A click leaves focus where it was, in the editor. The mode key works
 //! from a control too: the toolbar forwards it to the host.
 //!
@@ -89,7 +91,8 @@ impl Step {
 pub(crate) struct Toolbar {
     host: Entity<EditorHost>,
     editor: Entity<EditorState>,
-    /// One per control; the first control's is the toolbar's tab stop.
+    /// One per control. Which is the tab stop is set as each frame is
+    /// drawn (`is_tab_stop`).
     handles: Vec<FocusHandle>,
     active: Active,
     popover: Option<Popover>,
@@ -118,9 +121,7 @@ impl Toolbar {
         let mut toolbar = Self {
             host,
             editor,
-            handles: (0..COUNT)
-                .map(|ix| cx.focus_handle().tab_stop(ix == 0))
-                .collect(),
+            handles: (0..COUNT).map(|_| cx.focus_handle()).collect(),
             active: Active {
                 style: BlockStyle::Paragraph,
                 marks: Vec::new(),
@@ -184,6 +185,16 @@ impl Toolbar {
 
     fn handle(&self, control: Control) -> FocusHandle {
         self.handles[control.index()].clone()
+    }
+
+    /// Whether `control` is the toolbar's one tab stop: the drawn control
+    /// that has focus, or else the first.
+    fn is_tab_stop(&self, control: Control, window: &Window) -> bool {
+        let focused = self
+            .visible()
+            .into_iter()
+            .find(|drawn| self.handles[drawn.index()].is_focused(window));
+        focused.unwrap_or(Control::Rich) == control
     }
 
     /// The controls drawn now, in order.

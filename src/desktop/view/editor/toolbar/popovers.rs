@@ -5,9 +5,11 @@
 //! Each takes focus when it opens, by pointer or by key, and gives it back
 //! to where it was when it closes: on a choice, on Escape, or on the
 //! control again. Focus moving out of it closes it too, found as each
-//! frame is drawn (GPUI sends focus events only to an active window). The
-//! address is the user's text: it stays in its field, which the popover
-//! lets go of when it closes, and goes nowhere else.
+//! frame is drawn (GPUI sends focus events only to an active window). In
+//! the menu, Up, Down, Home and End move through its items; Left and Right
+//! do nothing, since the menu is vertical and stays open. The address is
+//! the user's text: it stays in its field, which the popover lets go of
+//! when it closes, and goes nowhere else.
 
 use gpui_kit::{
     AnyElement, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
@@ -28,8 +30,8 @@ use super::{
 };
 use crate::desktop::{
     keys::{
-        ClosePopover, TOOLBAR_LINK_CONTEXT, TOOLBAR_MENU_CONTEXT, ToolbarFirst, ToolbarLast,
-        ToolbarNext, ToolbarPrevious,
+        ClosePopover, MenuFirst, MenuLast, MenuNext, MenuPrevious, TOOLBAR_LINK_CONTEXT,
+        TOOLBAR_MENU_CONTEXT,
     },
     model::markdown_edit::{BlockStyle, insert_link, set_block_style},
 };
@@ -256,18 +258,22 @@ impl Toolbar {
             .py(px(4.))
             .flex()
             .flex_col()
-            .on_action(cx.listener(|this, _: &ToolbarNext, window, cx| {
-                this.menu_step(Step::Next, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &ToolbarPrevious, window, cx| {
+            .on_action(
+                cx.listener(|this, _: &MenuNext, window, cx| {
+                    this.menu_step(Step::Next, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &MenuPrevious, window, cx| {
                 this.menu_step(Step::Previous, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ToolbarFirst, window, cx| {
+            .on_action(cx.listener(|this, _: &MenuFirst, window, cx| {
                 this.menu_step(Step::First, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ToolbarLast, window, cx| {
-                this.menu_step(Step::Last, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &MenuLast, window, cx| {
+                    this.menu_step(Step::Last, window, cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &ClosePopover, window, cx| this.close_popover(window, cx)),
             )

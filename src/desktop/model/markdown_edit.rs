@@ -6,12 +6,19 @@
 //! Offsets are byte offsets into the text. The editor reports its selection
 //! in UTF-16; [`selection_from_utf16`] converts once.
 //!
+//! Pipe tables are read in `table`: whether the caret is on a row of one,
+//! and the alignment edit Markdown mode needs.
+//!
 //! No type here derives `Debug` over body text: `HostEdit` holds the
 //! replacement text and so has no `Debug`.
 
 #![cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 
+mod table;
+
 use std::ops::Range;
+
+pub(crate) use self::table::{ColumnAlign, align_column, table_at};
 
 /// A selection as byte offsets, `start <= end`, on char boundaries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,42 +244,6 @@ pub(crate) fn block_style_at(text: &str, cursor: usize) -> BlockStyle {
     BlockStyle::Heading(u8::try_from(level).unwrap_or(6))
 }
 
-/// Whether the caret sits on a row of a pipe table: a run of `|` lines with
-/// a `| --- |` separator row. Like the editor's own check, the separator
-/// row itself does not count.
-pub(crate) fn table_at(text: &str, cursor: usize) -> bool {
-    let cursor = floor(text, cursor);
-    let ls = line_start(text, cursor);
-    let le = line_end(text, cursor);
-    let line = &text[ls..le];
-    if !is_pipe_row(line) || is_separator_row(line) || in_code_fence(text, ls) {
-        return false;
-    }
-    let mut begin = ls;
-    while begin > 0 {
-        let prev = line_start(text, begin - 1);
-        if !is_pipe_row(&text[prev..begin - 1]) {
-            break;
-        }
-        begin = prev;
-    }
-    let mut pos = begin;
-    loop {
-        let end = line_end(text, pos);
-        let row = &text[pos..end];
-        if !is_pipe_row(row) {
-            return false;
-        }
-        if is_separator_row(row) {
-            return true;
-        }
-        if end >= text.len() || end > le {
-            return false;
-        }
-        pos = end + 1;
-    }
-}
-
 /// Marks the editor's toggle would unwrap for this selection. This follows
 /// zorite-editor 0.10.0's `toggle_wrap_pair` (`src/lib.rs:2393-2420`): an
 /// empty selection is no-op; the selection is marked when it starts and
@@ -302,42 +273,6 @@ pub(crate) fn active_marks(text: &str, sel: Selection) -> Vec<Mark> {
     .filter(|(_, marker)| unwraps(marker))
     .map(|(mark, _)| mark)
     .collect()
-}
-
-/// Whether the line starting at `line_pos` lies in (or is a line of) a fenced
-/// code block: backticks or tildes, three or more. An unclosed fence runs on.
-fn in_code_fence(text: &str, line_pos: usize) -> bool {
-    let mut open: Option<(char, usize)> = None;
-    let mut pos = 0;
-    while pos <= line_pos {
-        let end = line_end(text, pos);
-        let trimmed = text[pos..end].trim_start();
-        let run = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'));
-        let len = run.map_or(0, |c| trimmed.chars().take_while(|x| *x == c).count());
-        let is_fence = len >= 3;
-        match (open, run) {
-            (None, Some(c)) if is_fence => {
-                open = Some((c, len));
-                if pos == line_pos {
-                    return true;
-                }
-            }
-            (Some((oc, ol)), Some(c))
-                if is_fence && c == oc && len >= ol && trimmed[len..].trim().is_empty() =>
-            {
-                open = None;
-                if pos == line_pos {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        if pos == line_pos {
-            return open.is_some();
-        }
-        pos = end + 1;
-    }
-    false
 }
 
 /// The address as a link destination. One with a space, parenthesis or angle
@@ -451,15 +386,6 @@ fn other_list(rest: &str) -> Option<LinePrefix> {
     [LinePrefix::Task, LinePrefix::Bullet, LinePrefix::Numbered]
         .into_iter()
         .find(|p| has_prefix(rest, *p))
-}
-
-fn is_pipe_row(line: &str) -> bool {
-    line.trim_start().starts_with('|')
-}
-
-fn is_separator_row(line: &str) -> bool {
-    let t = line.trim();
-    t.starts_with('|') && t.contains('-') && t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
 }
 
 /// Puts `block` on its own lines at the caret. A blank caret line is

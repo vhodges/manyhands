@@ -71,15 +71,22 @@ gpui_kit::actions!(
         /// New document or New ticket, the shown list's.
         #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
         NewItem,
-        /// Focus the edit toolbar's next control, or a menu's next item.
+        /// Focus the edit toolbar's next control.
         ToolbarNext,
-        /// Focus the edit toolbar's previous control, or a menu's previous
-        /// item.
+        /// Focus the edit toolbar's previous control.
         ToolbarPrevious,
-        /// Focus the edit toolbar's first control, or a menu's first item.
+        /// Focus the edit toolbar's first control.
         ToolbarFirst,
-        /// Focus the edit toolbar's last control, or a menu's last item.
+        /// Focus the edit toolbar's last control.
         ToolbarLast,
+        /// Focus the toolbar menu's next item.
+        MenuNext,
+        /// Focus the toolbar menu's previous item.
+        MenuPrevious,
+        /// Focus the toolbar menu's first item.
+        MenuFirst,
+        /// Focus the toolbar menu's last item.
+        MenuLast,
         /// Close the edit toolbar's open menu or link popover, and give
         /// focus back to where it was.
         ClosePopover,
@@ -117,8 +124,9 @@ const EDIT_HOST_EDITOR: &str = "EditHost > Editor";
 /// region, so its Home and End come before the region's.
 pub(crate) const TOOLBAR_CONTEXT: &str = "EditToolbar";
 
-/// The key context of the toolbar's Style menu: Up and Down move through
-/// it, and Escape closes it.
+/// The key context of the toolbar's Style menu: Up, Down, Home and End
+/// move through it, and Escape closes it. Left and Right, the toolbar's,
+/// do nothing there.
 pub(crate) const TOOLBAR_MENU_CONTEXT: &str = "EditToolbarMenu";
 
 /// The key context of the toolbar's link popover: Escape closes it.
@@ -166,8 +174,10 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("home", ToolbarFirst, Some(TOOLBAR_CONTEXT)),
         KeyBinding::new("end", ToolbarLast, Some(TOOLBAR_CONTEXT)),
         KeyBinding::new("secondary-shift-m", ToggleRich, Some(TOOLBAR_CONTEXT)),
-        KeyBinding::new("up", ToolbarPrevious, Some(TOOLBAR_MENU_CONTEXT)),
-        KeyBinding::new("down", ToolbarNext, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("up", MenuPrevious, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("down", MenuNext, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("home", MenuFirst, Some(TOOLBAR_MENU_CONTEXT)),
+        KeyBinding::new("end", MenuLast, Some(TOOLBAR_MENU_CONTEXT)),
         KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_MENU_CONTEXT)),
         KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_LINK_CONTEXT)),
     ]);

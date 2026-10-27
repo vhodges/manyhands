@@ -80,7 +80,9 @@ impl Toolbar {
         cx: &mut Context<Self>,
     ) -> Observed {
         let colors = item_colors(cx);
-        let handle = self.handle(control);
+        let handle = self
+            .handle(control)
+            .tab_stop(self.is_tab_stop(control, window));
         let opacity = if control.formatting() && !rich {
             DIM
         } else {

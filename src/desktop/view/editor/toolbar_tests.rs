@@ -442,8 +442,18 @@ impl Bar {
         op: impl FnOnce(&mut EditorState, &mut Context<EditorState>),
         cx: &mut TestAppContext,
     ) -> String {
+        self.table_oracle_at(at(TABLE_BODY, "1"), op, cx)
+    }
+
+    /// The same, with the caret at `cursor`.
+    fn table_oracle_at(
+        &self,
+        cursor: usize,
+        op: impl FnOnce(&mut EditorState, &mut Context<EditorState>),
+        cx: &mut TestAppContext,
+    ) -> String {
         self.reset(TABLE_BODY, true, cx);
-        self.place(at(TABLE_BODY, "1"), cx);
+        self.place(cursor, cx);
         let editor = self.editor(cx);
         editor.update(cx, op);
         self.shell.frame(cx, |_, _| ());
@@ -756,6 +766,18 @@ fn left_right_home_and_end_move_along_the_toolbar(cx: &mut TestAppContext) {
     assert_eq!(cursor, TWO.0, "the arrows never reached the editor");
     assert_eq!(bar.text(cx), BODY);
 
+    // The tab stop roves: Shift-Tab from a control leaves in one press, and
+    // Tab from outside still enters at the first control.
+    bar.keys("shift-tab", cx);
+    assert!(bar.is_focused(&done, cx), "Shift-Tab leaves the toolbar");
+    bar.keys("tab", cx);
+    assert!(
+        bar.focused(Control::Rich, cx),
+        "Tab enters at the first again"
+    );
+    bar.keys("end left", cx);
+    assert!(bar.focused(Control::CodeBlock, cx));
+
     bar.keys("tab", cx);
     assert!(
         bar.editor_focused(cx),
@@ -780,6 +802,11 @@ fn left_right_home_and_end_move_along_the_toolbar(cx: &mut TestAppContext) {
     assert!(on(&bar, 0, cx), "Up stops at the first");
     bar.keys("down down down down", cx);
     assert!(on(&bar, 3, cx), "Down stops at the last");
+    bar.keys("left", cx);
+    assert!(on(&bar, 3, cx), "Left does nothing in the menu");
+    bar.keys("right right", cx);
+    assert!(on(&bar, 3, cx), "nor does Right");
+    assert!(bar.present("toolbar-style-menu", cx), "the menu stays open");
     bar.keys("home", cx);
     assert!(on(&bar, 0, cx), "Home in the menu");
     bar.keys("end", cx);
@@ -955,6 +982,19 @@ fn secondary_k_opens_the_link_popover_only_in_the_edit_host(cx: &mut TestAppCont
     assert!(bar.present("toolbar-link-popover", cx), "the key opened it");
     assert!(bar.link_field_focused(cx), "on its address field");
     bar.input(ADDRESS, cx);
+    // Home and End move in the field: they never reach the toolbar or the
+    // content region.
+    bar.keys("home end home end", cx);
+    assert!(
+        bar.link_field_focused(cx),
+        "Home and End stayed in the field"
+    );
+    assert!(bar.present("toolbar-link-popover", cx));
+    assert_eq!(
+        bar.scrolled(cx),
+        0,
+        "Home and End never scrolled the region"
+    );
     bar.press("enter", cx);
     assert_eq!(bar.text(cx), formatted(Control::Link));
     assert!(!bar.present("toolbar-link-popover", cx), "Enter closed it");
@@ -1065,6 +1105,38 @@ fn markdown_mode_dims_the_formatting_controls_and_keeps_them_working(cx: &mut Te
         "a dimmed alignment"
     );
 
+    // Past a row's last cell, before its closing pipe or at its end, the
+    // caret aligns the last column, as the editor's own lookup clamps: on
+    // a body row and on the header row, against the editor's rich-text
+    // result with the caret in that row's last cell.
+    let aligns = [
+        (Control::AlignLeft, CellAlign::Left),
+        (Control::AlignCentre, CellAlign::Center),
+        (Control::AlignRight, CellAlign::Right),
+    ];
+    for (row, last) in [("| A | B |", "B"), ("| 1 | 2 |", "2")] {
+        let end = at(TABLE_BODY, row) + row.len();
+        for (control, align) in aligns {
+            let expected = bar.table_oracle_at(
+                at(TABLE_BODY, last),
+                move |editor, cx| editor.set_caret_table_align(align, cx),
+                cx,
+            );
+            for cursor in [end - 1, end] {
+                bar.reset(TABLE_BODY, false, cx);
+                bar.place(cursor, cx);
+                bar.click(control.id(), cx);
+                assert_eq!(
+                    bar.text(cx),
+                    expected,
+                    "{control:?} at {cursor}, past the last cell of {row:?}"
+                );
+            }
+        }
+    }
+
+    bar.reset(TABLE_BODY, false, cx);
+    bar.place(at(TABLE_BODY, "1"), cx);
     bar.click(Control::Rich.id(), cx);
     for control in MAIN.into_iter().chain(TABLE) {
         assert_eq!(bar.drawn(control, cx), Some(1.), "rich again: {control:?}");
