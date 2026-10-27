@@ -13,8 +13,7 @@ Part A, the item frame (Tasks 3 to 8), passed its checkpoint.
 
 - **Merge.** Main had not moved (a372edb), and `git merge-tree` was
   clean, so there was nothing to merge.
-- **Runs.** The first run was at 12ed527; HEAD then only differed in
-  docs.
+- **Runs.** The first run was at 12ed527, the branch tip after Task 8.
   - The desktop binary: 624 passed, 0 failed.
   - Desktop-only clippy, all-features clippy and fmt were clean.
   - The CLI isolation check exited 0, also when re-run through Devenv.
