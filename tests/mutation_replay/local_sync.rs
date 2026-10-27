@@ -1,6 +1,8 @@
 //! Acceptance-to-link request authority, through the existing request store API.
 #[path = "local_sync_inspection_spec.rs"]
 mod inspection_spec;
+#[path = "local_sync_live_prerequisites.rs"]
+mod live_prerequisites;
 #[path = "local_sync_quality.rs"]
 mod quality;
 #[path = "local_sync_spec.rs"]

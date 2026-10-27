@@ -72,7 +72,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
 | Task 7 | **Complete and approved at `0d1b8d006980bf0da116828db54b16728bf55cbd`**, full range `41bce3e..0d1b8d0`. Task 8 controller handoff reports SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` and QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` both approved with zero findings. Prior 182 selected checks remain recorded evidence. |
 | Task 8 | **Complete and approved at `03a27cbb7252062429aabfed31ae6c35e2f143fb`**, full range `0d1b8d0..03a27cb`. Task 9 controller handoff reports SPEC `ses_e84247053ffeQkt4obeGjIa5Xy` and QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX` both approved with zero findings. This includes the bounded-child/Windows-lock correction; historical 243-test and six-test delta evidence remain separately scoped below. |
-| Task 9 | **In progress; final controller gates and independent whole-branch review pending.** Documentation/source audit checkpoint `01M5YF4JK2VQ94PE52V7T91TJJ`, base `03a27cb`. This worker runs no Rust gates. Ticket remains implementing, not review-ready or closed. |
+| Task 9 | Documentation/source audit complete at `4e3a67a`. Controller reports whole-branch SPEC `ses_e82f720d8ffeemZ2AjKZEc1g5O` approved with zero findings, and QUALITY `ses_e82f18183ffeE5AmprBoMrJCnk` with one Important live-executor-prerequisite finding. Pre-fix controller verification: **388 distinct tests passed plus fmt/check/clippy and CLI help** on Rust tree `03a27cb`. Correction `01M5YN2QN7XVM5FJDAAZ2HEQY1` is locally verified with **200 post-fix selected tests** and whole-tree gates. Await final SPEC delta and QUALITY re-review; ticket is not review-ready. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -4200,3 +4200,145 @@ cancellation/cache-loss review). Only then may the controller establish review-r
 status. The ticket remains implementing and its three original scope items are
 preserved; no PR, closure, main merge or cleanup is performed. The docs checkpoint
 is committed/pushed under existing authorization with the required co-author trailer.
+
+## Final whole-branch review: pre-fix evidence and bounded correction
+
+Recorded **2026-10-27T11:19:26Z**, comment `01M5YHCAFVXKVFGR0ZVHTHK66S`, before
+changing production or test code for the final finding. Entry/fix base is
+**`4e3a67acdc450aaf7be49d070935ccd5aacde9d9`**, clean ticket checkout. Fetch/merge
+found `origin/main` already incorporated. Source comparison confirms the Rust/test/
+Cargo tree is unchanged from **`03a27cbb7252062429aabfed31ae6c35e2f143fb`**; the
+`4e3a67a` checkpoint contains documentation changes only.
+
+The controller reports final whole-branch **SPEC APPROVED, zero findings** in
+`ses_e82f720d8ffeemZ2AjKZEc1g5O` at this base. QUALITY
+`ses_e82f18183ffeE5AmprBoMrJCnk` found **one Important** issue: retained pending
+inspection omits live executor prerequisites, notably reflog enablement, and can
+advertise resume when `Owner::authorize` refuses. The requested correction shares
+read-only applicable logging/HEAD/common-directory/registered-worktree checks with
+execution, checks again after session B, and preserves terminal/no-op/integrated
+controls. Independent approval of the correction remains outstanding.
+
+### Controller verification BEFORE this fix
+
+These are controller-observed outputs, not commands executed by this implementer
+after the correction. All ran through Devenv and passed on the pre-fix Rust tree:
+
+- Whole-tree `cargo fmt --check`, `cargo check --all-features --locked`, and
+  `cargo clippy --all-targets --all-features --locked -- -D warnings`.
+- **388 distinct passing tests/cases, zero failures:** 159 local domain; 70 local
+  mutation replay; 6 local reads; 44 mutation-contract; 72 read-contract;
+  8 child-fence; 8 singles (all-side closure, two E3 closure cases, four shared
+  anchors, retained candidate); 1 closure SSH; 4 conformance (3 Rust + 1 SSH);
+  4 local compile-fail docs; 6 closure-classification; 3 neutral-integration;
+  2 new closure-advance; and 1 mixed-code-conflict case.
+- `devenv shell -- cargo run --locked --bin manyhands-cli -- --help` passed.
+
+This evidence is explicitly **pre-fix**, and will not be represented as rerun after
+the change. Post-change verification will use affected targeted regressions and
+the required whole-tree fmt/check/clippy gates. No status transition to review-ready,
+PR, merge, closure or native dispatch is authorized by this checkpoint.
+
+## Final QUALITY correction: shared live executor prerequisites
+
+Post-fix checkpoint **`01M5YN2QN7XVM5FJDAAZ2HEQY1`**, recorded
+**2026-10-27T12:24:07Z**. Fix base:
+**`4e3a67acdc450aaf7be49d070935ccd5aacde9d9`**. The preceding section/comment
+`01M5YHCAFVXKVFGR0ZVHTHK66S` records the controller's review and **pre-fix** 388-test
+verification before code changes. That approval/evidence is not presented as proof
+of this corrected tree. No unrelated feature or lifecycle work was undertaken.
+
+### Source verification and bounded fix
+
+Verified the reported gap: `Owner::authorize` checked current context identity,
+registered Git worktree, routing and applicable reflog configuration; inspection's
+pending proof checked stored images/backend/ref/log bytes but omitted those live
+prerequisites. Turning `core.logallrefupdates` off changes none of the already
+recorded ref/log bytes, so the old read advertised Resume while execution refused
+RecoveryRequired/AuthorityMissing. The original domain logging tests were retained.
+
+- Extracted shared **read-only** context-identity and effect-prerequisite helpers in
+  `local_sync/recover.rs`; the executor uses those helpers in its existing authority
+  path. They validate registration facts, current HEAD attachment, worktree path,
+  common directory, registered Git worktree and the retained routing digest.
+- The identity check reopens the recorded worktree and compares its current Git
+  administration/common-directory identity with the caller's handle and registered
+  root, so an old handle cannot mask an observed gitfile/namespace replacement.
+- Reflog enablement retains the existing condition and accepted values: required
+  only for work not yet integrated and not classified Noop; explicit enabled,
+  default non-bare logging and `always` keep their existing semantics. The helper
+  never changes configuration or obtains a write lease.
+- Pending inspection evaluates the shared live prerequisites before offering
+  executable advice and compares them again after session B. Stable disablement
+  gives external_repair/authority_missing; in-call changes give ExternalChange
+  rather than a stale DTO. External-result advice cannot override a failed live
+  prerequisite proof.
+- Terminal inspection does not gain irrelevant execution prerequisites. No-op and
+  already-integrated pending work retain the checks they actually need, but do not
+  require logging to be re-enabled. No read refreshes journal authority or advances
+  a request/owner epoch.
+
+### RED/GREEN and preservation controls
+
+Five new public tests live in
+**`tests/mutation_replay/local_sync_live_prerequisites.rs`**, registered in the
+existing target/module. The existing terminal fixture helper gains only parent-module
+visibility; no old assertion was changed or weakened.
+
+| Test | Observed before correction | Passing proof |
+| --- | --- | --- |
+| `final_quality_pending_inspection_checks_live_logging` | Resume after disabling logging on retained FF work. | FF/merge × Prepared/CommitPrepared: stable false logging gives non-executable advice and actual execution agrees; restoring config and `always` are valid. Other Git evidence is positively unchanged by the logging toggle. |
+| `final_quality_inspection_rechecks_logging_after_session_b` | Returned a resumable DTO after in-call disablement. | Four disposition/phase cases return ExternalChange, with authority and Git bytes unchanged after restoring only the fixture's deliberate config edit. |
+| `final_quality_pending_inspection_checks_live_head_identity` | Resume with detached HEAD while the frozen branch/ref/log evidence remained. | Stable and in-call detached-HEAD cases refuse; original HEAD restoration restores valid advice. |
+| `final_quality_pending_inspection_checks_common_directory_and_registration` | Resume after a readable context lost its Git worktree registration. | Four Unix namespace cases: readable metadata relocated out of registration, or copied Git metadata with a different common directory, each stable and between A/B. HEAD OID/worktree image remain valid; identity mismatch refuses, SQL and administrative/worktree bytes are preserved, and restoration is valid. |
+| `final_quality_logging_is_not_required_for_noop_integrated_or_terminal_work` | Passed as a preservation control before the fix. | Six pending no-op/integrated/index-only controls still execute with logging disabled; cancelled/abandoned/complete records retain non-executable terminal views, also with detached HEAD. No implicit logging/config repair occurs. |
+
+The first selection had **four intended failures and one passing preservation
+control**. After correction all five passed. The foreign-common-directory fixture
+initially copied an absolute `commondir` link still pointing to the original store;
+its positive identity assertion caught that setup error. The fixture now explicitly
+points at the copied common directory. This was a fixture correction, not a change
+to an old semantic assertion or a claimed extra production RED.
+
+Inspection tests use the existing already-held repository lease and read-only
+snapshot controls. Namespace tests additionally compare relocated/copied Git admin
+trees and worktree bytes, positively verify the same HEAD OID and readable worktree,
+and restore only their deliberate fixture edits. The common-directory/registration
+filesystem substitutions execute on Unix; they are not native Windows evidence.
+
+### Post-fix verification actually executed by this implementer
+
+Every command used `devenv shell -- cargo` in the ticket checkout:
+
+| Command after the Devenv prefix | Result |
+| --- | --- |
+| `fmt --check` | Exit 0. |
+| `check --all-features --locked` | Exit 0, 3.79s. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, 13.21s. |
+| `test --all-features --locked --test mutation_replay local_sync` | **75 passed**, 308 filtered, 235.13s; includes all five new tests and the existing Task 7/8 public local-recovery cases. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**. |
+| `test --all-features --locked --test mutation_contract` | **44 passed**. |
+| `test --all-features --locked --test read_contract` | **72 passed**. |
+| `test --all-features --locked --test mutation_replay every_command_of_this_target_keeps_the_rules_of_the_boundary` | **1 passed**, including both local bindings. |
+| `test --all-features --locked --lib quality_disabled_reflogs_refuse_before_effects_and_recheck_accepted_work` | **1 passed**, unchanged existing assertion. |
+| `test --all-features --locked --lib quality_logging_default_always_and_in_call_disable_are_observed` | **1 passed**, unchanged existing assertion. |
+
+Unique **post-fix** total: **200 selected tests**, with no zero-selected result.
+The focused five-test RED/GREEN runs are included in 75, not added again. The
+controller's **388 pre-fix** tests and CLI help pass remain separately recorded;
+neither the full 388 selection nor CLI help is claimed to have run after this fix.
+No full package suite or native workflow was run, and no goldens/schemas changed.
+
+### Review handoff
+
+Entry was clean at `4e3a67a`; source comparison confirmed its docs-only difference
+from the controller-verified Rust tree `03a27cb`. Fetch/merge remained current with
+main `0464c42dae19a6dde000c7e7660e82762a41fada`; merge-tree passed at the fix base
+with tree `4d378930b21fc99cd7384c2f81587f07a010476c`. Work remained inline in the
+existing ticket worktree. New shared helpers stay internal and production-active;
+no public journal bypass, new target, dependency, frontend or general transaction
+engine was added.
+
+The one final QUALITY finding is **locally addressed**, pending final SPEC delta
+verification and QUALITY re-review. The ticket remains implementing, not
+review-ready. No PR, merge, close, native dispatch or cleanup was performed.

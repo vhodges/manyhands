@@ -350,6 +350,21 @@ pub(in super::super) fn inspection(
     })?;
     let git = git2::Repository::open(&row.worktree)
         .map_err(|_| ReadError::new(ResultCode::RepositoryInaccessible))?;
+    let terminal = matches!(
+        row.state,
+        record::LocalSyncState::Complete
+            | record::LocalSyncState::Cancelled
+            | record::LocalSyncState::Abandoned
+    );
+    let live_prerequisites = || {
+        if terminal {
+            Ok(())
+        } else {
+            recover::live_prerequisites(repo, &git, &row, &e, &facts)
+                .map_err(|f| (f.code, f.reason))
+        }
+    };
+    let prerequisites = live_prerequisites();
     let head = git.refname_to_id(&row.context_ref).ok();
     let image = conflict::image(&git).map_err(|e| ReadError::new(e.code))?;
     let candidate = if row.active_resolution.is_some() {
@@ -443,33 +458,35 @@ pub(in super::super) fn inspection(
         ) {
             return Ok(());
         }
-        candidate.and_then(|ready| {
-            backend.and_then(|_| {
-                if row.active_resolution.is_some() {
-                    resolve::read_resolution_image(service, repo, &git, &row, &image, ready)
-                        .map_err(|f| (f.code, f.reason))
-                } else if backend != Ok(true)
-                    && row.state == record::LocalSyncState::ConflictPending
-                    && e.conflict_observed
-                {
-                    // The immutable conflict image covers indexed paths only.
-                    // Apply the executor's policy to the full worktree status,
-                    // including nonignored untracked paths, on both read passes.
-                    if integration::resolution::only_paths_are_dirty(&git, &conflict_paths)
-                        .map_err(|error| {
-                            let fault = run::Fault::from(error);
-                            (fault.code, fault.reason)
-                        })?
+        prerequisites.and_then(|()| {
+            candidate.and_then(|ready| {
+                backend.and_then(|_| {
+                    if row.active_resolution.is_some() {
+                        resolve::read_resolution_image(service, repo, &git, &row, &image, ready)
+                            .map_err(|f| (f.code, f.reason))
+                    } else if backend != Ok(true)
+                        && row.state == record::LocalSyncState::ConflictPending
+                        && e.conflict_observed
                     {
-                        Ok(())
+                        // The immutable conflict image covers indexed paths only.
+                        // Apply the executor's policy to the full worktree status,
+                        // including nonignored untracked paths, on both read passes.
+                        if integration::resolution::only_paths_are_dirty(&git, &conflict_paths)
+                            .map_err(|error| {
+                                let fault = run::Fault::from(error);
+                                (fault.code, fault.reason)
+                            })?
+                        {
+                            Ok(())
+                        } else {
+                            Err((ResultCode::ExternalChange, run::Reason::ForeignChange))
+                        }
+                    } else if backend != Ok(true) {
+                        recover::read_ordinary_image(&git, &row, &e).map_err(|f| (f.code, f.reason))
                     } else {
-                        Err((ResultCode::ExternalChange, run::Reason::ForeignChange))
+                        Ok(())
                     }
-                } else if backend != Ok(true) {
-                    recover::read_ordinary_image(&git, &row, &e).map_err(|f| (f.code, f.reason))
-                } else {
-                    Ok(())
-                }
+                })
             })
         })
     };
@@ -493,6 +510,7 @@ pub(in super::super) fn inspection(
             != service.read_session(RepositoryOperation::Read, |db| {
                 super::observe::facts(db, repo, row.kind, &row.item_id)
             })?
+        || live_prerequisites() != prerequisites
         || head != git.refname_to_id(&row.context_ref).ok()
         || image != conflict::image(&git).map_err(|e| ReadError::new(e.code))?
         || (if row.active_resolution.is_some() {
@@ -521,6 +539,7 @@ pub(in super::super) fn inspection(
         RequestId::parse(&before.start).ok(),
     );
     if backend == Ok(true)
+        && proof.is_ok()
         && !matches!(
             row.state,
             record::LocalSyncState::Complete

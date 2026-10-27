@@ -144,6 +144,71 @@ pub(super) fn require_logging(git: &git2::Repository) -> Result<(), Fault> {
         Err(Fault::authority())
     }
 }
+
+/// Live prerequisites shared by pending inspection and the leased executor.
+/// These only observe identity/configuration; neither acquires a lease nor writes
+/// authority. Reopen the worktree so a stale handle cannot hide a namespace swap.
+pub(super) fn live_prerequisites(
+    repo: &ResolvedRepository,
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    e: &Execution,
+    facts: &super::observe::Facts,
+) -> Result<(), Fault> {
+    require_context_identity(repo, git, row, facts)?;
+    require_effect_prerequisites(repo, git, row, e)
+}
+fn require_context_identity(
+    repo: &ResolvedRepository,
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    facts: &super::observe::Facts,
+) -> Result<(), Fault> {
+    if facts.worktree != row.worktree
+        || facts.branch != row.context_ref
+        || format!("refs/heads/{}", facts.primary) != row.primary_ref
+    {
+        return Err(Fault::foreign());
+    }
+    let root = git2::Repository::open(repo.root())?;
+    let current = git2::Repository::open(&row.worktree)?;
+    let canonical = |path: &Path| fs::canonicalize(path).map_err(|_| Fault::foreign());
+    if canonical(root.commondir())? != canonical(current.commondir())?
+        || canonical(git.commondir())? != canonical(current.commondir())?
+        || canonical(git.path())? != canonical(current.path())?
+        || git.workdir() != Some(row.worktree.as_path())
+        || current.workdir() != Some(row.worktree.as_path())
+        || current.head()?.name() != Some(row.context_ref.as_str())
+    {
+        return Err(Fault::foreign());
+    }
+    let registered = root.worktrees()?.iter().flatten().any(|name| {
+        root.find_worktree(name)
+            .ok()
+            .is_some_and(|w| w.path() == row.worktree)
+    });
+    if !registered {
+        return Err(Fault::foreign());
+    }
+    Ok(())
+}
+fn require_effect_prerequisites(
+    repo: &ResolvedRepository,
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    e: &Execution,
+) -> Result<(), Fault> {
+    if e.images.is_none() {
+        return Err(Fault::authority());
+    }
+    if routing(repo)? != e.routing {
+        return Err(Fault::foreign());
+    }
+    if !row.integration_proven && e.disposition != Disposition::Noop {
+        require_logging(git)?;
+    }
+    Ok(())
+}
 fn bytes(root: &Path, path: &Path) -> Result<Vec<u8>, ReadError> {
     owned_resolution_file_bytes(root, path, RepositoryOperation::ContextSyncLocal, root)
         .map(|b| b.unwrap_or_default())
@@ -458,36 +523,9 @@ impl Owner<'_> {
     pub fn authorize(&mut self) -> Result<(), Fault> {
         let facts = self
             .transaction(|tx, row| super::observe::facts(tx, self.repo, row.kind, &row.item_id))?;
-        if facts.worktree != self.row.worktree
-            || facts.branch != self.row.context_ref
-            || format!("refs/heads/{}", facts.primary) != self.row.primary_ref
-        {
-            return Err(Fault::foreign());
-        }
-        let root = git2::Repository::open(self.repo.root())?;
-        if fs::canonicalize(root.commondir()).map_err(|_| Fault::foreign())?
-            != fs::canonicalize(self.git.commondir()).map_err(|_| Fault::foreign())?
-            || self.git.workdir() != Some(self.row.worktree.as_path())
-            || self.git.head()?.name() != Some(self.row.context_ref.as_str())
-        {
-            return Err(Fault::foreign());
-        }
-        let registered = root.worktrees()?.iter().flatten().any(|name| {
-            root.find_worktree(name)
-                .ok()
-                .is_some_and(|w| w.path() == self.row.worktree)
-        });
+        require_context_identity(self.repo, &self.git, &self.row, &facts)?;
         let evidence = self.evidence()?;
-        if evidence.images.is_none() {
-            return Err(Fault::authority());
-        }
-        if !registered || routing(self.repo)? != evidence.routing {
-            return Err(Fault::foreign());
-        }
-        if !self.row.integration_proven && evidence.disposition != Disposition::Noop {
-            require_logging(&self.git)?;
-        }
-        Ok(())
+        require_effect_prerequisites(self.repo, &self.git, &self.row, &evidence)
     }
     pub fn step(
         &mut self,

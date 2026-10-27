@@ -98,7 +98,7 @@ fn quality_ordinary_inspection_rechecks_live_routing_after_session_b() {
     }
 }
 
-fn terminal_parent(state: &str) -> (ConflictWorld, LocalContextResolveInput) {
+pub(super) fn terminal_parent(state: &str) -> (ConflictWorld, LocalContextResolveInput) {
     if state == "cancelled" {
         let f = ordinary("merge", "prepared", false);
         f.world
