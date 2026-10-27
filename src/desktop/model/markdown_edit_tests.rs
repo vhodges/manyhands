@@ -178,7 +178,7 @@ fn utf16_selections_convert_at_non_bmp_and_combining_text() {
     assert_eq!(selection_from_utf16(t, 3..5), sel(5, 8));
     assert_eq!(selection_from_utf16(t, 4..5), sel(6, 8));
     // Inside the surrogate pair: start rounds down, end rounds up.
-    assert_eq!(selection_from_utf16(t, 2..2), sel(1, 5));
+    assert_eq!(selection_from_utf16(t, 2..2), sel(1, 1));
     assert_eq!(selection_from_utf16(t, 2..3), sel(1, 5));
     assert_eq!(selection_from_utf16(t, 1..2), sel(1, 5));
     // Past the end clamps to the text length; reversed ranges are ordered.
@@ -245,4 +245,35 @@ fn active_marks_follow_the_editors_unwrap_rule() {
         vec![Mark::Strike, Mark::Code]
     );
     assert_eq!(active_marks("é", sel(1, 1)), vec![]);
+}
+
+#[test]
+fn table_at_ignores_pipe_lines_inside_a_code_fence() {
+    let table = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+    for fence in ["```", "~~~", "````"] {
+        let t = format!("{fence}\n{table}\n{fence}\nafter");
+        assert!(!table_at(&t, fence.len() + 1 + 2), "{fence}");
+        assert!(!table_at(&t, fence.len() + 1 + table.len() - 2), "{fence}");
+    }
+    let t = format!("```\ncode\n```\n{table}");
+    assert!(table_at(&t, 13));
+    // An unclosed fence runs to the end of the text.
+    let t = format!("```\n{table}");
+    assert!(!table_at(&t, 6));
+}
+
+#[test]
+fn a_link_address_that_would_break_the_link_is_angle_bracketed() {
+    let t = "see docs";
+    let e = insert_link(t, sel(4, 8), "https://x.test/a b");
+    assert_eq!(apply(t, &e), "see [docs](<https://x.test/a b>)");
+    assert_eq!(e.cursor, 4 + "[docs](<https://x.test/a b>)".len());
+    let e = insert_link(t, caret(4), "a(b)");
+    assert_eq!(apply(t, &e), "see [a(b)](<a(b)>)docs");
+    let e = insert_link(t, sel(4, 8), "a<b>c");
+    assert_eq!(apply(t, &e), "see [docs](<a%3Cb%3Ec>)");
+    let e = insert_link(t, caret(0), "x y");
+    assert_eq!(apply(t, &e), "[x y](<x y>)see docs");
+    let e = insert_link(t, sel(4, 8), "https://x.test/plain");
+    assert_eq!(apply(t, &e), "see [docs](https://x.test/plain)");
 }

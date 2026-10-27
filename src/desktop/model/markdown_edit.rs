@@ -54,7 +54,8 @@ const TABLE_TEMPLATE: &str = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
 
 /// Converts a UTF-16 range to byte offsets. An offset inside a surrogate
 /// pair or past the end is clamped to a char boundary: the start rounds
-/// down and the end rounds up, so a split char stays selected. A reversed
+/// down and the end rounds up, so a split char stays selected. An empty range
+/// stays empty, at the boundary rounded down. A reversed
 /// range is put in order.
 pub(crate) fn selection_from_utf16(text: &str, utf16: Range<usize>) -> Selection {
     let (lo, hi) = if utf16.start <= utf16.end {
@@ -76,6 +77,9 @@ pub(crate) fn selection_from_utf16(text: &str, utf16: Range<usize>) -> Selection
             break;
         }
         units += ch.len_utf16();
+    }
+    if lo == hi {
+        return Selection { start, end: start };
     }
     Selection {
         start: start.min(end),
@@ -212,7 +216,7 @@ pub(crate) fn insert_link(text: &str, sel: Selection, address: &str) -> HostEdit
     } else {
         address
     };
-    let replacement = format!("[{label}]({address})");
+    let replacement = format!("[{label}]({})", link_destination(address));
     HostEdit {
         range: start..end,
         cursor: start + replacement.len(),
@@ -241,7 +245,7 @@ pub(crate) fn table_at(text: &str, cursor: usize) -> bool {
     let ls = line_start(text, cursor);
     let le = line_end(text, cursor);
     let line = &text[ls..le];
-    if !is_pipe_row(line) || is_separator_row(line) {
+    if !is_pipe_row(line) || is_separator_row(line) || in_code_fence(text, ls) {
         return false;
     }
     let mut begin = ls;
@@ -298,6 +302,54 @@ pub(crate) fn active_marks(text: &str, sel: Selection) -> Vec<Mark> {
     .filter(|(_, marker)| unwraps(marker))
     .map(|(mark, _)| mark)
     .collect()
+}
+
+/// Whether the line starting at `line_pos` lies in (or is a line of) a fenced
+/// code block: backticks or tildes, three or more. An unclosed fence runs on.
+fn in_code_fence(text: &str, line_pos: usize) -> bool {
+    let mut open: Option<(char, usize)> = None;
+    let mut pos = 0;
+    while pos <= line_pos {
+        let end = line_end(text, pos);
+        let trimmed = text[pos..end].trim_start();
+        let run = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'));
+        let len = run.map_or(0, |c| trimmed.chars().take_while(|x| *x == c).count());
+        let is_fence = len >= 3;
+        match (open, run) {
+            (None, Some(c)) if is_fence => {
+                open = Some((c, len));
+                if pos == line_pos {
+                    return true;
+                }
+            }
+            (Some((oc, ol)), Some(c))
+                if is_fence && c == oc && len >= ol && trimmed[len..].trim().is_empty() =>
+            {
+                open = None;
+                if pos == line_pos {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        if pos == line_pos {
+            return open.is_some();
+        }
+        pos = end + 1;
+    }
+    false
+}
+
+/// The address as a link destination. One with a space, parenthesis or angle
+/// bracket takes the CommonMark angle-bracket form, its own `<` and `>`
+/// percent-encoded.
+fn link_destination(address: &str) -> String {
+    if address.contains([' ', '(', ')', '<', '>']) {
+        let encoded = address.replace('<', "%3C").replace('>', "%3E");
+        format!("<{encoded}>")
+    } else {
+        address.to_owned()
+    }
 }
 
 fn floor(text: &str, mut pos: usize) -> usize {
