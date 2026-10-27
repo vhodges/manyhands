@@ -9,6 +9,12 @@
 //! D1's reason (each problem and its guidance), with Repair not available
 //! yet. The other rows of the design's table are named here for the tasks
 //! that raise them.
+//!
+//! A link clicked in one of the tab's editors that the editor did not open
+//! is followed here (decision 10; `services::links`). The link banner says
+//! when it was not found or is a kind that is not opened, or names the
+//! path the nearest match opened, the repository's own; it never names the
+//! link's text. The next link clears it.
 
 use gpui_kit::{
     AnyElement, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
@@ -30,12 +36,20 @@ use crate::desktop::{
     assets::icon_path,
     model::{
         item::{CONTEXT_PROBLEMS, REPAIR, context_problems},
+        links::LinkTarget,
         list_state::ListState,
     },
+    services::links::{self, LinkResolution},
+    view::relationships::OpenRelated,
 };
 
 /// The "Needs fixing" banner's heading (`06-language-and-states.md`).
 pub(crate) const NEEDS_FIXING: &str = "Needs fixing";
+/// D3's link messages (design, Banners and Links).
+pub(crate) const LINK_NOT_FOUND: &str = "Link not found";
+pub(crate) const LINK_NOT_OPENED: &str = "This kind of link is not opened";
+/// Followed by the path the nearest name opened.
+pub(crate) const NEAREST_MATCH: &str = "Opened nearest match:";
 const ICON_SIZE: f32 = 15.;
 const TEXT_SIZE: f32 = 12.5;
 
@@ -87,7 +101,6 @@ pub(crate) enum Banner {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     Unmanaged,
     /// A link not found, or opened as the nearest match.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11.
     Link,
 }
 
@@ -108,6 +121,13 @@ impl Banner {
             | Self::Unmanaged => Tone::Amber,
         }
     }
+}
+
+/// What the link banner says.
+pub(super) enum LinkNote {
+    NotFound,
+    NotOpened,
+    Nearest(String),
 }
 
 /// Which banner D1's status line of `state` is, if it shows one: none for
@@ -169,6 +189,9 @@ impl ItemPane {
         if let Some(item) = item.filter(|item| nonconforming(item)) {
             banners.push((Banner::NeedsFixing, self.needs_fixing(item, later_from, cx)));
             used += 1;
+        }
+        if let Some(note) = &self.link_note {
+            banners.push((Banner::Link, link_banner(note, cx)));
         }
         let framed = most_severe_first(banners)
             .into_iter()
@@ -257,6 +280,79 @@ impl ItemPane {
                 cx,
             ))
             .into_any_element()
+    }
+}
+
+impl ItemPane {
+    /// Decision 10: a link clicked in one of this tab's editors, the read
+    /// view, a comment's or the edit editor, that the editor did not open
+    /// itself. It is the tab's next navigation, so the last link's banner
+    /// goes, and so does a resolution still running. A scheme that is not
+    /// opened says so; a path or a title is resolved from the item's
+    /// folder, a comment's too, and opens its item's tab, or says it was
+    /// not found. The banner never names the target.
+    pub(crate) fn follow_link(&mut self, target: &LinkTarget, cx: &mut Context<Self>) {
+        self.link_note = None;
+        self.link_read = None;
+        cx.notify();
+        match target {
+            LinkTarget::Path { .. } | LinkTarget::Title(_) => {}
+            LinkTarget::Unsafe => {
+                self.link_note = Some(LinkNote::NotOpened);
+                return;
+            }
+            LinkTarget::External(_) | LinkTarget::Ignored => return,
+        }
+        let Some(item) = self.model.item().rows() else {
+            self.link_note = Some(LinkNote::NotFound);
+            return;
+        };
+        let resolution = links::resolve(target.clone(), item, self.repo(), &self.services, cx);
+        self.link_read = Some(cx.spawn(async move |pane, cx| {
+            let resolution = resolution.await;
+            // The tab may be gone; then nobody follows the link.
+            let _ = pane.update(cx, |pane, cx| pane.link_resolved(resolution, cx));
+        }));
+    }
+
+    /// A resolved item opens its tab in this repository; the nearest match
+    /// says, in this tab, which path opened; anything else is not found.
+    fn link_resolved(&mut self, resolution: LinkResolution, cx: &mut Context<Self>) {
+        self.link_read = None;
+        let repo = self.repo().to_owned();
+        match resolution {
+            LinkResolution::Item(locator) => cx.emit(OpenRelated(locator.in_repository(&repo))),
+            LinkResolution::Nearest { locator, path } => {
+                self.link_note = Some(LinkNote::Nearest(path));
+                cx.emit(OpenRelated(locator.in_repository(&repo)));
+            }
+            LinkResolution::NotManaged | LinkResolution::NotFound => {
+                self.link_note = Some(LinkNote::NotFound);
+            }
+        }
+        cx.notify();
+    }
+}
+
+/// The link banner's words: "not found", "not opened", or the nearest
+/// match's path, the repository's own, in the monospace font.
+fn link_banner(note: &LinkNote, cx: &gpui_kit::App) -> AnyElement {
+    match note {
+        LinkNote::NotFound => text("item-link", LINK_NOT_FOUND).into_any_element(),
+        LinkNote::NotOpened => text("item-link", LINK_NOT_OPENED).into_any_element(),
+        LinkNote::Nearest(path) => h_flex()
+            .id("item-link")
+            .test_support()
+            .aria_label(format!("{NEAREST_MATCH} {path}"))
+            .flex_wrap()
+            .gap_1()
+            .child(NEAREST_MATCH)
+            .child(
+                div()
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .child(path.clone()),
+            )
+            .into_any_element(),
     }
 }
 

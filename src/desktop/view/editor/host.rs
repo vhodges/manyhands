@@ -26,6 +26,10 @@
 //!   the user just opened, or else focuses the header's Done (R-59). The
 //!   link key asks the toolbar for an address (`LinkRequested`).
 //! - **Caret** (R-67). Kept in view in the region `place` names.
+//! - **Links** (decision 10). A clicked link for the browser opens from
+//!   here; any other the host passes to its tab as a `LinkTarget`
+//!   (`clicked_link`). Markdown mode shows links as text, and the editor
+//!   reports no click on them there.
 //!
 //! The host holds the user's text, so it derives nothing.
 
@@ -41,11 +45,15 @@ use zorite_editor::{
 };
 
 use super::{
-    CaretInView, entered_by_pointer, open_editor, set_exact, step_over_blocks, style::page_style,
+    CaretInView, clicked_link, entered_by_pointer, open_editor, set_exact, step_over_blocks,
+    style::page_style,
 };
 use crate::desktop::{
     keys::{EDIT_HOST_CONTEXT, EditorEscape, InsertLink, ToggleRich},
-    model::editor_text::{crlf_to_lf, load},
+    model::{
+        editor_text::{crlf_to_lf, load},
+        links::LinkTarget,
+    },
     view::{item::tokens::item_colors, scroll::ContentScroll},
 };
 
@@ -248,6 +256,11 @@ impl EditorHost {
                 };
                 step_over_blocks(&self.editor, &event, cx);
             }
+            EditorEvent::OpenLink(_) | EditorEvent::OpenWikiLink(_) => {
+                if let Some(target) = clicked_link(event, cx) {
+                    cx.emit(target);
+                }
+            }
             _ => {}
         }
     }
@@ -310,6 +323,10 @@ impl EditorHost {
 }
 
 impl EventEmitter<EditorHostEvent> for EditorHost {}
+
+/// A clicked link the host did not open itself, for its tab. It is body
+/// text, so it is not an `EditorHostEvent`, which derives `Debug`.
+impl EventEmitter<LinkTarget> for EditorHost {}
 
 impl Render for EditorHost {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

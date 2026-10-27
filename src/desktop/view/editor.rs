@@ -5,7 +5,7 @@
 //! Every editor loads `editor_text::crlf_to_lf(body)`; the editor applies
 //! its own math-fence rewrite, so `text()` is `editor_text::load(body)`.
 //! An editor is styled as rich text from the start, from the page tokens
-//! (`style`).
+//! (`style`). A link clicked in any of them goes through `clicked_link`.
 
 pub(crate) mod host;
 pub(crate) mod keys;
@@ -21,7 +21,13 @@ use gpui_kit::{
 };
 use zorite_editor::{EditorEvent, EditorState};
 
-use crate::desktop::{model::editor_text::crlf_to_lf, view::scroll::ContentScroll};
+use crate::desktop::{
+    model::{
+        editor_text::crlf_to_lf,
+        links::{LinkTarget, parse_link, parse_wiki_link},
+    },
+    view::scroll::ContentScroll,
+};
 
 /// A new editor holding `body` as rich text, its caret at the start.
 pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState> {
@@ -193,6 +199,29 @@ pub(crate) fn step_over_blocks(
         }
     });
     true
+}
+
+/// Decision 10, in every editor: a click on a link (`OpenLink`, parsed as
+/// a link's text, or `OpenWikiLink`, as a title) is opened here when it is
+/// for the browser, `http`, `https` or `mailto`, and dropped when it names
+/// nothing to open. Any other target, a path, a title or a scheme that is
+/// not opened, is the editor's owner's, which resolves it or says why
+/// nothing opened. Any other event gives none. Links open by pointer
+/// only: the editor emits these on a left click alone (fact 35).
+pub(crate) fn clicked_link(event: &EditorEvent, cx: &mut App) -> Option<LinkTarget> {
+    let target = match event {
+        EditorEvent::OpenLink(raw) => parse_link(raw),
+        EditorEvent::OpenWikiLink(raw) => parse_wiki_link(raw),
+        _ => return None,
+    };
+    match target {
+        LinkTarget::External(url) => {
+            cx.open_url(&url);
+            None
+        }
+        LinkTarget::Ignored => None,
+        target => Some(target),
+    }
 }
 
 /// The block event a pointer press caused, read as a forward entry: the

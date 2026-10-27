@@ -18,7 +18,9 @@
 //! the comment's ID across reloads: a changed body is loaded into it in
 //! place, an unchanged one is left alone (R-79). Each keeps its caret in
 //! view (R-67), as the page's read editor does: after a caret move while
-//! it has focus, and when it takes focus, which each frame checks.
+//! it has focus, and when it takes focus, which each frame checks. Its
+//! links go to the pane, which reads them from the item's folder, not the
+//! comment's (decision 10).
 //!
 //! **The jump** (`jump`). The header's Comments {n} and `secondary-shift-c`
 //! bring the discussion to the region's top and focus its heading, which
@@ -34,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
-    TestSupportExt, Window,
+    Subscription, TestSupportExt, Window,
     component::{ActiveTheme, Icon, h_flex, v_flex},
     div, px,
 };
@@ -52,6 +54,7 @@ use crate::desktop::{
     model::{
         discussion::{comment_time, threads},
         item::COMMENT,
+        links::LinkTarget,
         list_state::ListState,
     },
     view::{
@@ -135,6 +138,8 @@ struct Body {
     text: String,
     /// The read editor's caret reveal (R-67).
     reveal: CaretInView,
+    /// Its links go to the pane, read from the item's folder (decision 10).
+    _links: Subscription,
 }
 
 impl Discussion {
@@ -187,12 +192,16 @@ impl ItemPane {
             let read = cx.new(|cx| ReadOnly::new(text, window, cx));
             let editor = read.read(cx).editor().clone();
             let reveal = CaretInView::new(&editor, &self.scroll, window, cx);
+            let links = cx.subscribe(&read, |pane, _, target: &LinkTarget, cx| {
+                pane.follow_link(target, cx)
+            });
             bodies.insert(
                 id.clone(),
                 Body {
                     read,
                     text: text.clone(),
                     reveal,
+                    _links: links,
                 },
             );
         }

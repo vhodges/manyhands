@@ -12,9 +12,10 @@
 //! (decision 17): a `ReadOnly` made at the first read with a body, kept
 //! across reloads, and reloaded in place when the body changes (R-19). It
 //! keeps its own caret in view (R-67): after each caret move while it has
-//! focus, and when it takes focus. A press on the page that no control
-//! takes focuses the read editor, its caret at the end when the press is
-//! below the text; with no read view, focus goes into the content region.
+//! focus, and when it takes focus. Its links go to the pane (decision 10;
+//! `banners`). A press on the page that no control takes focuses the read
+//! editor, its caret at the end when the press is below the text; with no
+//! read view, focus goes into the content region.
 //! The page's ring shows only after Back to top, never after a press.
 //!
 //! The region shows the Kit's vertical scrollbar on its own handle, thumb
@@ -27,15 +28,18 @@ use std::{cell::Cell, rc::Rc};
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, ParentElement, Pixels, StatefulInteractiveElement, Styled,
-    TestSupportExt, Window, canvas,
+    Subscription, TestSupportExt, Window, canvas,
     component::{ActiveTheme, scroll::Scrollbar, v_flex},
     div, px,
 };
 
 use super::{ItemPane, tokens::item_colors};
-use crate::desktop::view::{
-    editor::{CaretInView, read_only::ReadOnly},
-    scroll::ContentScroll,
+use crate::desktop::{
+    model::links::LinkTarget,
+    view::{
+        editor::{CaretInView, read_only::ReadOnly},
+        scroll::ContentScroll,
+    },
 };
 
 /// The page's column at its widest.
@@ -59,6 +63,8 @@ pub(crate) struct Page {
     body: String,
     /// The read editor's caret reveal (R-67).
     reveal: Option<CaretInView>,
+    /// The links clicked in the read editor go to the pane (decision 10).
+    links: Option<Subscription>,
     /// The bottom of the read view in the last frame, in the window.
     read_bottom: Rc<Cell<Pixels>>,
 }
@@ -71,6 +77,7 @@ impl Page {
             read: None,
             body: String::new(),
             reveal: None,
+            links: None,
             read_bottom: Rc::default(),
         }
     }
@@ -101,6 +108,7 @@ impl Page {
         let Some(body) = body else {
             self.read = None;
             self.reveal = None;
+            self.links = None;
             self.body.clear();
             return;
         };
@@ -114,6 +122,9 @@ impl Page {
         let read = cx.new(|cx| ReadOnly::new(body, window, cx));
         let editor = read.read(cx).editor().clone();
         self.reveal = Some(CaretInView::new(&editor, scroll, window, cx));
+        self.links = Some(cx.subscribe(&read, |pane, _, target: &LinkTarget, cx| {
+            pane.follow_link(target, cx)
+        }));
         self.read = Some(read);
         self.body = body.to_owned();
     }

@@ -9,9 +9,10 @@
 //!
 //! The header holds the breadcrumb, the title, the `chips`, the actions
 //! with the state `pill`, and the `banners`, where D1's status lines now
-//! show. A chip opens the details `sheet`, which holds D1's identity
-//! details, provenance, fields, metadata, problems and, from the sibling
-//! view, relationships; a file read by its path has no sheet, so its page
+//! show, and where a link clicked in the tab's editors is followed. A chip
+//! opens the details `sheet`, which holds D1's identity details,
+//! provenance, fields, metadata, problems and, from the sibling view,
+//! relationships; a file read by its path has no sheet, so its page
 //! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
 //! job, `status` D1's loading and recovery controls, `source` the
 //! read-only textarea of a file read by its path (an Inspect tab, which
@@ -50,6 +51,8 @@ use crate::desktop::{
     model::{item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope},
     services::{Services, requests::DesktopRequestId},
 };
+#[cfg(test)]
+pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
 pub(crate) use chips::{ChipField, OpenDetails};
 pub(super) use details::text;
 #[cfg(test)]
@@ -111,6 +114,11 @@ pub(crate) struct ItemPane {
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
+    /// What the last link clicked here came to, when it opened nothing
+    /// or opened the nearest match; the next link clears it.
+    link_note: Option<banners::LinkNote>,
+    /// The last link's resolution; a later link drops it.
+    link_read: Option<Task<()>>,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
@@ -146,6 +154,8 @@ impl ItemPane {
             discussion: discussion::Discussion::new(cx),
             region_end: None,
             draft: draft::TabDraft::default(),
+            link_note: None,
+            link_read: None,
             _operations: operations,
             _drafts: drafts,
         };

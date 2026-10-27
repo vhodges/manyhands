@@ -13,8 +13,10 @@
 //!   painted (fact 76).
 //!
 //! Moving, selecting, Select All, Copy and link clicks work. The wrapper
-//! emits nothing: a writer subscribes to it, never to the inner editor's
-//! own `Changed`.
+//! emits no editor event: a writer subscribes to it, never to the inner
+//! editor's own `Changed`. A clicked link opens in the browser from here
+//! when it is for the browser; any other the wrapper passes to its owner
+//! as a `LinkTarget` (`clicked_link`, decision 10).
 //!
 //! The wrapper is the read view's tab stop. The editor makes its own
 //! focus with GPUI's default, which Tab passes by, so Tab lands on the
@@ -32,8 +34,8 @@ use zorite_editor::{
     WordLeft, WordRight,
 };
 
-use super::{entered_by_pointer, open_editor, step_over_blocks};
-use crate::desktop::model::editor_text::crlf_to_lf;
+use super::{clicked_link, entered_by_pointer, open_editor, step_over_blocks};
+use crate::desktop::model::{editor_text::crlf_to_lf, links::LinkTarget};
 
 /// A read editor and its guard.
 pub(crate) struct ReadOnly {
@@ -113,6 +115,11 @@ impl ReadOnly {
                 };
                 step_over_blocks(&self.editor, &event, cx);
             }
+            EditorEvent::OpenLink(_) | EditorEvent::OpenWikiLink(_) => {
+                if let Some(target) = clicked_link(event, cx) {
+                    cx.emit(target);
+                }
+            }
             _ => {}
         }
     }
@@ -143,6 +150,9 @@ impl ReadOnly {
 }
 
 impl EventEmitter<EditorEvent> for ReadOnly {}
+
+/// A clicked link the editor did not open itself, for the owner.
+impl EventEmitter<LinkTarget> for ReadOnly {}
 
 impl Render for ReadOnly {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

@@ -7,6 +7,7 @@
 //! own failure points and hooks.
 
 pub(crate) mod drafts;
+pub(crate) mod links;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod requests;
@@ -71,6 +72,8 @@ pub(crate) enum ReadKind {
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
     DraftItem,
+    /// `observe_path`, of the path a clicked link names.
+    Observe,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.
