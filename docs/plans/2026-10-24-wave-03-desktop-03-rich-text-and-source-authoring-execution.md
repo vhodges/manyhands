@@ -635,3 +635,13 @@ Notes for later tasks: Task 22 leaves `targets()` in
 
   — Both are staged, not defects. — If wrong: a key that works only
   inside the editor.
+- Ruling (Task 10a): the implementer wrote the tests together with the
+  code, not first. RED rests on one mutation, plus the review's reading
+  of each test's strength: none passes for a plainly wrong
+  implementation. The fix round recorded a RED for each fix. — The
+  module is pure and well covered. — If wrong: a weak test, which a
+  later edit would find.
+- Ruling (Task 10a): the commits and the comment carry "Claude Sonnet
+  5.5" as co-author, not common.md's Opus line. The implementer was
+  Sonnet, so the line is accurate. `markdown_edit.rs` is 513 lines, at
+  the guideline. — If wrong: a split into three files.
