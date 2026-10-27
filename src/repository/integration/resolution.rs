@@ -173,24 +173,31 @@ pub(in super::super) fn conflict_worktree_digest(
     root: &Path,
     relative: &Path,
 ) -> Result<[u8; 32], Error> {
-    let mut digest = blake3::Hasher::new();
-    digest.update(b"manyhands-resolution-prewrite-v1\0");
-    match owned_resolution_file_bytes(
+    let bytes = owned_resolution_file_bytes(
         root,
         relative,
         RepositoryOperation::RepositorySnapshot,
         root,
-    ) {
-        Ok(Some(bytes)) => {
+    )
+    .map_err(|_| Error::ExternalChange)?;
+    Ok(prewrite_image_digest(bytes.as_deref()))
+}
+
+/// The immutable preimage wire format: domain, presence, length and bytes.
+/// Kept separate from the raw content digest used for an intended output.
+fn prewrite_image_digest(bytes: Option<&[u8]>) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(b"manyhands-resolution-prewrite-v1\0");
+    match bytes {
+        Some(bytes) => {
             digest.update(&[1]);
-            preflight_bytes(&mut digest, &bytes);
+            preflight_bytes(&mut digest, bytes);
         }
-        Ok(None) => {
+        None => {
             digest.update(&[0]);
         }
-        Err(_) => return Err(Error::ExternalChange),
     }
-    Ok(*digest.finalize().as_bytes())
+    *digest.finalize().as_bytes()
 }
 
 /// The adapter has matched path/ordinal to its immutable capability and durable
@@ -213,28 +220,22 @@ pub(in super::super) fn path_needs_write(
         root,
     )
     .map_err(|_| Error::ExternalChange)?;
-    if bytes
-        .as_deref()
-        .map(|bytes| *blake3::hash(bytes).as_bytes())
-        == Some(result_digest)
-    {
+    path_image_needs_write(bytes.as_deref(), result_digest, prewrite_digest, applied)
+}
+
+/// Classifies an already-read no-follow image against the executor's intent.
+/// A prepared path can still be at its preimage; an observed path cannot.
+pub(in super::super) fn path_image_needs_write(
+    bytes: Option<&[u8]>,
+    result_digest: [u8; 32],
+    prewrite_digest: [u8; 32],
+    applied: bool,
+) -> Result<bool, Error> {
+    if bytes.map(|bytes| *blake3::hash(bytes).as_bytes()) == Some(result_digest) {
         return Ok(false);
     }
-    if !applied {
-        let mut prewrite = blake3::Hasher::new();
-        prewrite.update(b"manyhands-resolution-prewrite-v1\0");
-        match bytes {
-            Some(bytes) => {
-                prewrite.update(&[1]);
-                preflight_bytes(&mut prewrite, &bytes);
-            }
-            None => {
-                prewrite.update(&[0]);
-            }
-        }
-        if *prewrite.finalize().as_bytes() == prewrite_digest {
-            return Ok(true);
-        }
+    if !applied && prewrite_image_digest(bytes) == prewrite_digest {
+        return Ok(true);
     }
     Err(Error::ExternalChange)
 }

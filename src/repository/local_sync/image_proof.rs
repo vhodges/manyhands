@@ -26,14 +26,29 @@ pub(super) struct Proof {
     tree: String,
     paths: Vec<PathProof>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+impl PartialEq for Proof {
+    fn eq(&self, other: &Self) -> bool {
+        // The lazy tree-binding cache is not authority and need not have been
+        // populated by both readers. Compare every retained proof field.
+        self.baseline_v2 == other.baseline_v2
+            && self.version == other.version
+            && self.coarse_version == other.coarse_version
+            && self.context == other.context
+            && self.primary == other.primary
+            && self.tree == other.tree
+            && self.paths == other.paths
+    }
+}
+impl Eq for Proof {}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PathProof {
     path: String,
     before: Option<EntryProof>,
     after: Option<EntryProof>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EntryProof {
     oid: String,
@@ -338,6 +353,44 @@ mod execute {
             })
             .collect()
     }
+    // The caller supplies a memory-backed ODB. This only recomputes the frozen
+    // prospective tree for comparison; it never captures live baseline authority.
+    fn preview_candidate(
+        worker: &git2::Repository,
+        local: git2::Oid,
+        primary: git2::Oid,
+        disposition: Disposition,
+    ) -> Result<Option<git2::Oid>, Fault> {
+        Ok(Some(match disposition {
+            Disposition::Noop => local,
+            Disposition::FastForward => primary,
+            Disposition::Merge => {
+                let merge = integration::prepare::prepare_clean_merge_in(
+                    worker,
+                    worker.path(),
+                    local,
+                    primary,
+                )?;
+                let integration::prepare::MergePreparation::Clean(merge) = merge else {
+                    return Ok(None);
+                };
+                let tree = integration::prepare::import_prepared_tree(worker, &merge)?;
+                let sig = git2::Signature::new(
+                    "Manyhands",
+                    "preview@manyhands.invalid",
+                    &git2::Time::new(0, 0),
+                )?;
+                worker.commit(
+                    None,
+                    &sig,
+                    &sig,
+                    "Image preview",
+                    &worker.find_tree(tree)?,
+                    &[&worker.find_commit(local)?, &worker.find_commit(primary)?],
+                )?
+            }
+        }))
+    }
     impl Proof {
         // Previews deliberately have no worktree attribute files. Only a
         // tracked, frozen-pair source may therefore exist at an applicable real
@@ -412,39 +465,12 @@ mod execute {
             let worker = git2::Repository::open(git.path())?;
             let odb = worker.odb()?;
             let _memory = odb.add_new_mempack_backend(1000)?;
-            let candidate = match disposition {
-                Disposition::Noop => local,
-                Disposition::FastForward => primary,
-                Disposition::Merge => {
-                    let merge = integration::prepare::prepare_clean_merge_in(
-                        &worker,
-                        git.path(),
-                        local,
-                        primary,
-                    )?;
-                    let integration::prepare::MergePreparation::Clean(merge) = merge else {
-                        // Conflict installation has its own complete image evidence.
-                        // Keep this proof as the frozen baseline, never pretend the
-                        // unresolved merge is a clean candidate image.
-                        let baseline = Self::build(git, local, primary, Disposition::Noop)?;
-                        baseline.require_worktree_attributes(git)?;
-                        return Ok(baseline);
-                    };
-                    let tree = integration::prepare::import_prepared_tree(&worker, &merge)?;
-                    let sig = git2::Signature::new(
-                        "Manyhands",
-                        "preview@manyhands.invalid",
-                        &git2::Time::new(0, 0),
-                    )?;
-                    worker.commit(
-                        None,
-                        &sig,
-                        &sig,
-                        "Image preview",
-                        &worker.find_tree(tree)?,
-                        &[&worker.find_commit(local)?, &worker.find_commit(primary)?],
-                    )?
-                }
+            let Some(candidate) = preview_candidate(&worker, local, primary, disposition)? else {
+                // Conflict installation has its own complete image evidence.
+                // Keep only the frozen baseline until that image is recorded.
+                let baseline = Self::build(git, local, primary, Disposition::Noop)?;
+                baseline.require_worktree_attributes(git)?;
+                return Ok(baseline);
             };
             let mut after = expected(&worker, candidate, candidate)?;
             // Libgit2 may have cached baseline attributes during its safe-checkout
@@ -623,6 +649,26 @@ mod execute {
                     .get(path)
                     .is_some_and(|actual| actual.digests == e.digests)
             }))
+        }
+
+        pub(in super::super) fn prepared_filters_match(
+            &self,
+            git: &git2::Repository,
+            disposition: Disposition,
+        ) -> Result<bool, Fault> {
+            self.validate_bindings(git)?;
+            self.require_worktree_attributes(git)?;
+            let worker = git2::Repository::open(git.path())?;
+            let odb = worker.odb()?;
+            let _memory = odb.add_new_mempack_backend(1000)?;
+            let candidate = preview_candidate(
+                &worker,
+                git2::Oid::from_str(&self.context)?,
+                git2::Oid::from_str(&self.primary)?,
+                disposition,
+            )?
+            .ok_or_else(Fault::authority)?;
+            self.filters_match(&worker, candidate)
         }
     }
 }

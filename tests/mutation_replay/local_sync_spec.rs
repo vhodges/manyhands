@@ -2,7 +2,7 @@
 use super::*;
 use manyhands::results::{Effects, Outcome};
 
-fn authority_image(world: &mutation::World) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
+pub(super) fn authority_image(world: &mutation::World) -> Vec<Vec<Vec<rusqlite::types::Value>>> {
     let db = items::index(world.data.path());
     [
         "request_records",

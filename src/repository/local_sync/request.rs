@@ -334,6 +334,11 @@ pub(in super::super) fn inspection(
     id: OperationId,
 ) -> Result<LocalContextSyncInspectionDto, ReadError> {
     let (row, e) = run::read_evidence(service, repo, id)?;
+    // Execution reporting may retain historical flags after image-authority
+    // loss. Inspection must not turn those flags into a resumable read view.
+    if e.images.is_none() {
+        return Err(ReadError::new(ResultCode::RecoveryRequired));
+    }
     let before = controls(service, repo, &row)?;
     let facts = service.read_session(RepositoryOperation::Read, |db| {
         super::observe::facts(db, repo, row.kind, &row.item_id)
@@ -418,35 +423,45 @@ pub(in super::super) fn inspection(
         report.reason = run::Reason::IdentityRequired;
         can_start_resolution = false;
     }
-    if !matches!(
-        row.state,
-        record::LocalSyncState::Complete
-            | record::LocalSyncState::Cancelled
-            | record::LocalSyncState::Abandoned
-    ) {
-        let proof = candidate.and_then(|ready| {
+    let image_proof = || {
+        if matches!(
+            row.state,
+            record::LocalSyncState::Complete
+                | record::LocalSyncState::Cancelled
+                | record::LocalSyncState::Abandoned
+        ) {
+            return Ok(());
+        }
+        candidate.and_then(|ready| {
             backend.and_then(|_| {
                 if row.active_resolution.is_some() {
                     resolve::read_resolution_image(service, repo, &git, &row, &image, ready)
                         .map_err(|f| (f.code, f.reason))
+                } else if backend != Ok(true)
+                    && !(row.state == record::LocalSyncState::ConflictPending
+                        && e.conflict_observed)
+                {
+                    recover::read_ordinary_image(&git, &row, &e).map_err(|f| (f.code, f.reason))
                 } else {
                     Ok(())
                 }
             })
-        });
-        if let Err((code, reason)) = proof {
-            if code == ResultCode::RepositoryInaccessible {
-                return Err(ReadError::new(code));
-            }
-            report.reason = reason;
-            report.required_request = None;
-            can_start_resolution = false;
+        })
+    };
+    let proof = image_proof();
+    if let Err((code, reason)) = proof {
+        if code == ResultCode::RepositoryInaccessible {
+            return Err(ReadError::new(code));
         }
+        report.reason = reason;
+        report.required_request = None;
+        can_start_resolution = false;
     }
     super::observation_checkpoint(service);
-    let (mut again, _) = run::read_evidence(service, repo, id)?;
+    let (mut again, evidence_again) = run::read_evidence(service, repo, id)?;
     again.owner_epoch = row.owner_epoch;
     if row != again
+        || e != evidence_again
         || before != controls(service, repo, &again)?
         || facts
             != service.read_session(RepositoryOperation::Read, |db| {
@@ -461,6 +476,7 @@ pub(in super::super) fn inspection(
         }) != candidate
         || resolve::read_backend_proof(service, &git, &row, &e).map_err(|f| (f.code, f.reason))
             != backend
+        || image_proof() != proof
     {
         return Err(ReadError::new(ResultCode::ExternalChange));
     }

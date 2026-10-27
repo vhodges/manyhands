@@ -768,7 +768,7 @@ pub(super) fn read_resolution_image(
 ) -> Result<(), Fault> {
     let (stored,intents)=service.read_session(RepositoryOperation::Read,|db|{
         let stored:Vec<u8>=db.query_row("SELECT manifest FROM local_context_sync_conflicts WHERE operation_ulid=?1",[row.operation_id.to_string()],|r|r.get(0))?;
-        let intents=db.prepare("SELECT ordinal,baseline_metadata_digest,expected_metadata_digest FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='path' ORDER BY ordinal")?.query_map([row.operation_id.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Vec<u8>>(2)?)))?.collect::<Result<Vec<_>,_>>()?;
+        let intents=db.prepare("SELECT ordinal,baseline_metadata_digest,expected_metadata_digest,phase FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='path' ORDER BY ordinal")?.query_map([row.operation_id.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Vec<u8>>(2)?,r.get::<_,String>(3)?)))?.collect::<Result<Vec<_>,_>>()?;
         Ok((stored,intents))
     })?;
     let stored: super::conflict_record::Image =
@@ -783,14 +783,38 @@ pub(super) fn read_resolution_image(
     }
     for path in &current.paths {
         if let Some(i) = paths.iter().position(|e| e.path == path.0) {
-            let (ordinal, before, after) = &intents[i];
+            let (ordinal, before, after, phase) = &intents[i];
             if *ordinal != 100 + i as i64 || before.len() != 32 || after.len() != 32 {
                 return Err(Fault::authority());
             }
-            let actual = path.1.ok_or_else(Fault::foreign)?;
-            if path.2.is_some_and(|mode| mode != 0o100644)
-                || (actual.as_slice() != after && (ready || actual.as_slice() != before))
+            let applied = match phase.as_str() {
+                "prepared" => false,
+                "observed" => true,
+                _ => return Err(Fault::authority()),
+            };
+            let relative = Path::new(std::str::from_utf8(&path.0).map_err(|_| Fault::foreign())?);
+            let actual = super::file_image::read(&row.worktree, relative).map_err(Fault::from)?;
+            let bytes = actual.as_ref().map(|image| image.bytes.as_slice());
+            if bytes.map(|bytes| *blake3::hash(bytes).as_bytes()) != path.1
+                || actual.as_ref().and_then(|image| image.mode) != path.2
+                || path.2.is_some_and(|mode| mode != 0o100644)
             {
+                return Err(Fault::foreign());
+            }
+            let needs_write = integration::resolution::path_image_needs_write(
+                bytes,
+                after
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Fault::authority())?,
+                before
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| Fault::authority())?,
+                applied,
+            )
+            .map_err(|_| Fault::foreign())?;
+            if ready && needs_write {
                 return Err(Fault::foreign());
             }
         } else if !stored.paths.contains(path) {
@@ -992,6 +1016,9 @@ pub(super) fn read_backend_proof(
     {
         external_proof_in(git, row, head)?;
         if row.integration_proven {
+            if !row.artifacts_released {
+                return Err(Fault::authority());
+            }
             if row.result != Some(head) {
                 return Err(Fault::foreign());
             }

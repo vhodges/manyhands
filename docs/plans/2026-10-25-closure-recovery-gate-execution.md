@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` **REQUEST CHANGES: seven Important findings at `44e3969`**. All seven have source-verified corrections and local regression evidence in checkpoint `01M5XFVS1XWNMG79KS7DYXZ7GH`, awaiting **SPEC re-review, then QUALITY**. This fix series selects **369 passing tests/cases**, including 12 new SPEC tests and one additional actual no-Drop exit. Production execution/read/control paths remain active; whole-tree fmt/check/clippy pass. No approval of the corrected Task 7 tree is claimed. |
+| Task 7 | Controller reports **six of seven SPEC findings closed at `3836310`**, with two Important inspection gaps remaining under finding #3. Checkpoint `01M5XPDY946AP10ZTA617CNMBV` records their source-verified corrections, 10 new public tests and **344 passing selected tests/cases** for this delta. Whole-tree fmt/check/clippy pass; production activation remains intact. Await **SPEC re-review, then QUALITY**. No approval of this corrected tree or Task 8 advance is claimed. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -3402,3 +3402,151 @@ There is no approval of these fixes yet. Ticket remains implementing; Task 8 has
 not started. No PR, lifecycle closure, merge into main, native CI or cleanup was
 performed. Remaining unknowns are independent review and native runtime/ACL behavior,
 not a claimed successful result for those unrun gates.
+
+## Task 7 SPEC #3 re-review: preimage phases and ordinary image authority
+
+Checkpoint **`01M5XPDY946AP10ZTA617CNMBV`**, recorded **2026-10-27T03:41:41Z**
+(ID issued earlier by the main checkout's existing CLI). Fix base:
+**`3836310a8471795187311fa4e730bfc2c17b53c7`**. The controller reports that six of
+the original seven findings are closed; finding #3 still had **two Important
+inspection gaps**. This checkpoint addresses those two, pending SPEC verification.
+The full Task 7 review base remains `41bce3eb23ae4e95316f287cd832d38be00164aa`.
+
+### 1. Exact preimage encoding and per-path phase — locally addressed
+
+Source verification confirmed `read_resolution_image` compared raw BLAKE3 file
+digests with `baseline_metadata_digest`, whose stored format includes the domain
+separator, presence byte, length and content. It also did not load the path phase.
+The new public fixture creates **two actual canonical conflicts** (ticket and
+document), rather than relying on the previous one-path fixture.
+
+- Extracted the existing preimage encoding and path-image classification from
+  `integration/resolution.rs` into shared pure helpers. The executor still validates
+  the submitted source digest and performs its no-follow read, then uses the same
+  classifier that inspection now uses. The pre-existing digest format, presence
+  distinction and execution behavior are preserved; no new journal format exists.
+- Inspection reads actual bytes/mode through the no-follow image reader, verifies
+  that they match its sampled Git image, and uses the stored phase explicitly.
+  Prepared paths may match their exact framed preimage or their intended raw output;
+  observed paths must match only output. A complete candidate still requires every
+  path's output image, not an untouched preimage.
+- Public regressions show accepted R cancelled before its first write and R stopped
+  after one of two paths both produce `retry_resolution`, required R and no fresh
+  resolution capability. The partial test covers both the observed-path failure
+  boundary and an actual no-Drop write-before-observation exit; the second path is
+  positively checked to be untouched. Exact R then completes.
+- Restoring an already-observed first path's original baseline produces
+  `external_repair`. This control was already refused at the base and remains so;
+  the correction does not broadly permit baseline bytes after observation.
+
+### 2. Ordinary S baseline/result proof — locally addressed
+
+Source verification confirmed that the non-R branch returned success from the read
+proof without consulting `owned_image`, so a stable foreign tracked file was advised
+as resumable. A clean-merge S stopped after intent reproduced exactly that error.
+
+- `recover::read_ordinary_image` now checks the retained full baseline/result proof
+  used by `owned_image`, including index entries, bytes, modes and the recorded
+  disposition. No-op/contained work uses its frozen baseline. Integrated/index-only
+  work needs the recorded candidate/result, integration/release evidence and full
+  intended image. Coarse work accepts a full result behind the baseline ref only
+  with the recorded checkout intent; partial progress is not resume authority.
+- Before a future checkout, frozen filter expectations are compared with the same
+  filter pipeline. A clean prospective candidate can be recomputed from the frozen
+  pair in a memory-only ODB for comparison. This never calls `Proof::build` to adopt
+  a fresh baseline, persists an object, or replaces stored proof. Existing complete
+  result images remain usable when no further checkout is needed.
+- Missing/malformed image authority refuses. The snapshot recheck now compares the
+  retained execution/image evidence, excluding only the lazy derived binding cache,
+  and reevaluates the image proof after session B. Losing proof or changing filters
+  between read sessions therefore refuses rather than using stale read-cache data.
+  The existing owner-epoch-only observation control still passes.
+- Unobserved conflict-install progress cannot bypass the ordinary proof by setting
+  the reporting-only `conflict_observed` inference. Observed conflict-pending state
+  continues through its dedicated immutable conflict-image proof. Lost recorded
+  artifact release also refuses for ordinary and external-result index handoffs.
+
+### Public test matrix and actual RED/GREEN evidence
+
+New module: **`tests/mutation_replay/local_sync_inspection_spec.rs`**, registered
+under the existing local_sync module/target. The earlier SQL snapshot helper gains
+only parent-module visibility for reuse. No old assertion was edited or weakened.
+
+Every `inspect_unchanged` call holds the **already-acquired repository lease** and
+compares repository/worktree state, **all Git administrative file bytes including
+objects/reflogs**, relevant SQL rows and stored image proofs before/after. These
+are executable no-write/no-lease-acquisition controls, not merely source claims.
+
+| Test | RED / control at the prior implementation | Final proof |
+| --- | --- | --- |
+| `spec_accepted_two_path_resolution_cancelled_before_first_write_is_retryable` | ExternalRepair instead of RetryResolution. | Two untouched prepared paths, Accepted R, required R, unchanged Git/SQL. |
+| `spec_partial_two_path_resolution_keeps_untouched_preimages_retryable` | ExternalRepair after the first observed write. | First output + second untouched baseline; observed and no-Drop/unobserved modes both retry R and complete. |
+| `spec_observed_resolution_path_cannot_return_to_its_preimage` | Passed as an unchanged-policy negative control. | Restored baseline on an observed path stays external-only. |
+| `spec_non_resolution_foreign_file_or_index_requires_external_repair` | Resume for stable foreign file; reproduced for both contained and clean-merge prepared examples before correction. | **36 cases:** contained/FF/merge × prepared/integrated/index-pending × plain/CRLF × file/index mutation. Original/restored images resume S; foreign images are external-only. |
+| `spec_non_resolution_images_require_coarse_intent_and_retained_authority` | Resume for a full result installed without this operation's checkout intent. A later test also exposed missing proof returning a view rather than the required fail-closed read error. | Four valid checkout/ref-window controls, two unowned-result refusals, and missing/corrupt proof refusals, all read-only. |
+| `spec_non_resolution_filter_change_never_rebaselines_the_retained_image` | Prepared work still advertised Resume after filter change. | Future-checkout phases refuse changed filter expectations; already-proven checkout/index results can continue without reinterpretation. |
+| `spec_non_resolution_read_rechecks_filter_and_image_authority_after_session_b` | Returned a resumable view after read-time filter change. | Filter change and proof disappearance between sessions both return ExternalChange; no proof is recreated. |
+| `spec_unobserved_conflict_progress_is_not_resume_authority` | Resume after loss of the install observation while Git effects remained. | Retained intent/progress is external-only, not fabricated observed authority. |
+| `spec_non_resolution_integrated_state_requires_recorded_release_proof` | Resume with recorded release removed. | Contained and clean-merge index handoffs refuse missing release evidence. |
+| `spec_external_index_handoff_requires_recorded_release_proof` | Resume with external-result release evidence removed. | External handoff refuses until the fixture restores its original recorded proof. |
+
+The first five-test selection produced four intended failures and the observed-path
+negative control passed. Subsequent filter/coarse/snapshot/release counterexamples
+were separately reproduced before their corrections. No separate RED is claimed for
+every matrix row. The two-path unobserved mode adds **one actual no-Drop exit**; the
+unobserved-conflict observation-loss control is a corruption fixture, not another
+process-death claim.
+
+A filtered fixture initially set autocrlf before the legacy save and then manually
+wrote CRLF, which correctly encountered that save's exact observation/cleanliness
+rules. The fixture was corrected to create its context first and use libgit2's real
+forced checkout for its CRLF baseline, matching the established domain fixture.
+Production authoring expectations were not changed. Clippy's by-value ReadError
+warning on the new read-test helper uses the existing narrow `result_large_err`
+convention; no unused/dead-code suppression was added.
+
+### Targeted verification
+
+All Rust commands used `devenv shell -- cargo` from this ticket worktree. There was
+no package-wide test run or native CI. The following passed for this correction:
+
+| Command after the Devenv prefix | Result |
+| --- | --- |
+| `fmt --check` | Exit 0. |
+| `check --all-features --locked` | Exit 0; latest 3.16s. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; latest 16.51s. |
+| `test --all-features --locked --test mutation_replay local_sync` | **50 passed**, 308 filtered; latest 177.85s. Includes all mandatory Task 7 cases and 10 new inspection tests. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**, including owner-only epoch and historical-side controls. |
+| `test --all-features --locked --test mutation_contract` | **44 passed**. |
+| `test --all-features --locked --test read_contract` | **72 passed**. |
+| `test --all-features --locked --lib local_sync::` | **159 passed**, 707.95s. Relevant domain regression group for shared image/hash helpers. |
+| `test --all-features --locked --lib public_resolution_checkpoints_document_ticket_comment_and_multi_path_conflicts_locally` | **1 passed**; shared remote resolution behavior. |
+| `test --all-features --locked --lib external_repair_exact_ordered_parent_clean_only` | **1 passed**. |
+| `test --all-features --locked --lib repository::integration::tests` | **3 passed**. |
+| `test --all-features --locked --doc local_sync` | **4 passed**, private-boundary compile-fail controls. |
+
+Also ran `every_command_of_this_target_keeps_the_rules_of_the_boundary` as the single
+positional selector in four separate `test --all-features --locked` commands:
+mutation_replay **1 passed**, mutation_confirmation **1 passed**, mutation_remote
+**1 SSH cases passed** using that exact harness selector, mutation_bridges **1 passed**.
+All 32 command homes remain accounted for. Unique selected total: **344 tests/cases**,
+not counting repeated RED/GREEN invocations or individual matrix rows again.
+
+After the final narrow release-proof guard, reran whole-tree gates and the complete
+50-test mutation/6-test read selections. The shared executor/hash implementation was
+unchanged after its 159 domain plus five shared-anchor passes. No schema or golden
+updates, Cargo/dependency changes, frontend work or new target was needed.
+
+### Scope and next gate
+
+Entry was clean at the fix base. Fetch/merge at entry and handoff found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated; merge-tree passed at
+base with tree `bc959085025a3495ed8818f16df685ec09bc5633`. Work stayed in the ticket
+worktree, inline without subagents. All production activation remains in place;
+new helpers are internal and read-only. No journal/executor bypass was published.
+
+Both remaining inspection observations are locally addressed, **not independently
+approved**. Await controller SPEC re-review of this delta, then QUALITY. Task 8 has
+not started, and the ticket remains implementing. No PR, closure, merge into main,
+native workflow or cleanup was performed. Native runtime/filter/ACL evidence remains
+outside these local Linux checks.

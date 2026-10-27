@@ -24,7 +24,7 @@ impl Disposition {
 }
 
 /// Only hashes, OIDs and effect flags are durable. No source or candidate bytes.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct Execution {
     pub images: Option<super::image_proof::Proof>,
     pub disposition: Disposition,
@@ -257,12 +257,108 @@ pub(super) fn exact_image(git: &git2::Repository, oid: git2::Oid) -> Result<bool
 }
 
 pub(super) fn owned_image(owner: &Owner<'_>, oid: git2::Oid) -> Result<bool, Fault> {
-    owner
-        .known_execution
+    owned_image_in(
+        &owner.git,
+        owner
+            .known_execution
+            .as_ref()
+            .ok_or_else(Fault::authority)?,
+        oid,
+    )
+}
+fn owned_image_in(git: &git2::Repository, e: &Execution, oid: git2::Oid) -> Result<bool, Fault> {
+    e.images
         .as_ref()
-        .and_then(|e| e.images.as_ref())
         .ok_or_else(Fault::authority)?
-        .matches(&owner.git, oid)
+        .matches(git, oid)
+}
+
+/// Read-only counterpart of ordinary integration's baseline/result admission.
+/// Uses retained full image proofs (including filtered bytes/modes), never the
+/// coarser progress digest that is sufficient only to report partial effects.
+pub(super) fn read_ordinary_image(
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    e: &Execution,
+) -> Result<(), Fault> {
+    if row.active_resolution.is_some()
+        || e.conflict_observed
+        || (row.integration_proven && !row.artifacts_released)
+    {
+        return Err(Fault::authority());
+    }
+    let proof = e.images.as_ref().ok_or_else(Fault::authority)?;
+    clean_metadata(git, &row.context_ref)?;
+    let head = git.refname_to_id(&row.context_ref)?;
+    if e.disposition == Disposition::Noop {
+        if row.candidate.is_some() || row.result.is_some() || e.ref_started || e.checkout_started {
+            return Err(Fault::authority());
+        }
+        return if head == row.context_parent && owned_image_in(git, e, head)? {
+            Ok(())
+        } else {
+            Err(Fault::foreign())
+        };
+    }
+    if row.integration_proven {
+        let result = row.result.ok_or_else(Fault::authority)?;
+        if Some(result) != row.candidate
+            || !e.ref_started
+            || !e.ref_observed
+            || (e.disposition == Disposition::Merge && !e.commit_observed)
+        {
+            return Err(Fault::authority());
+        }
+        super::run::validate_candidate_in(git, row, e)?;
+        return if head == result && owned_image_in(git, e, result)? {
+            Ok(())
+        } else {
+            Err(Fault::foreign())
+        };
+    }
+    if row.candidate.is_none() || (e.disposition == Disposition::Merge && !e.commit_observed) {
+        if head != row.context_parent || !owned_image_in(git, e, row.context_parent)? {
+            return Err(mismatch_reason(e));
+        }
+        // A conflict that has not yet been installed retains only its clean
+        // baseline image. Match the executor's attribute-source guard there.
+        if e.disposition == Disposition::Merge
+            && integration::prepare::prepare_recorded_merge_index(
+                git,
+                row.context_parent,
+                row.primary_parent,
+            )?
+            .has_conflicts()
+        {
+            return proof.require_worktree_attributes(git);
+        }
+        return if proof.prepared_filters_match(git, e.disposition)? {
+            Ok(())
+        } else {
+            Err(Fault::foreign())
+        };
+    }
+    let candidate = row.candidate.ok_or_else(Fault::authority)?;
+    super::run::validate_candidate_in(git, row, e)?;
+    let result = owned_image_in(git, e, candidate)?;
+    if head == candidate {
+        return if e.ref_started && result {
+            Ok(())
+        } else {
+            Err(mismatch_reason(e))
+        };
+    }
+    if head != row.context_parent {
+        return Err(mismatch_reason(e));
+    }
+    let baseline = owned_image_in(git, e, row.context_parent)?;
+    if !baseline && !(e.checkout_started && result) {
+        return Err(mismatch_reason(e));
+    }
+    if !result && !proof.filters_match(git, candidate)? {
+        return Err(Fault::foreign());
+    }
+    Ok(())
 }
 pub(super) fn frozen_filters(owner: &Owner<'_>, candidate: git2::Oid) -> Result<(), Fault> {
     if owner
