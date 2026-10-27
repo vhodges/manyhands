@@ -29,7 +29,7 @@
 mod jump;
 mod rows;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight,
@@ -50,7 +50,11 @@ use super::{
 };
 use crate::desktop::{
     assets::icon_path,
-    model::{discussion::threads, item::COMMENT, list_state::ListState},
+    model::{
+        discussion::{comment_time, threads},
+        item::COMMENT,
+        list_state::ListState,
+    },
     view::{
         confirm::local_offset,
         editor::{read_only::ReadOnly, reveal_caret},
@@ -97,12 +101,22 @@ fn count(list: &CommentListDto) -> usize {
 }
 
 /// The local offset at `at`, an RFC 3339 time, found as `confirm.rs` finds
-/// it (fact 80); UTC where none is read.
-pub(super) fn offset_at(at: &str) -> UtcOffset {
+/// it (fact 80); none where it is not read, as on non-Unix targets.
+pub(super) fn offset_at(at: &str) -> Option<UtcOffset> {
     OffsetDateTime::parse(at, &Rfc3339)
         .ok()
         .and_then(|at| local_offset(at.unix_timestamp()))
-        .unwrap_or(UtcOffset::UTC)
+}
+
+/// A comment's time `at`, as its row shows it: at `offset`; with none, in
+/// UTC and said so, as `confirm.rs` says it. A time that cannot be read is
+/// shown as written.
+pub(super) fn shown_time(at: &str, now: OffsetDateTime, offset: Option<UtcOffset>) -> String {
+    let shown = comment_time(at, now, offset.unwrap_or(UtcOffset::UTC));
+    match offset {
+        None if OffsetDateTime::parse(at, &Rfc3339).is_ok() => format!("{shown} UTC"),
+        _ => shown,
+    }
 }
 
 /// The discussion's own state in an item pane.
@@ -183,12 +197,14 @@ impl ItemPane {
         let Some(list) = self.model.comments().and_then(ListState::rows) else {
             return;
         };
+        let listed: HashSet<&str> = list
+            .items
+            .iter()
+            .filter(|comment| comment.body.is_some())
+            .filter_map(|comment| comment.id.as_deref())
+            .collect();
         let bodies = &mut self.discussion.bodies;
-        bodies.retain(|id, _| {
-            list.items
-                .iter()
-                .any(|comment| comment.id.as_ref() == Some(id) && comment.body.is_some())
-        });
+        bodies.retain(|id, _| listed.contains(id.as_str()));
         for comment in &list.items {
             let (Some(id), Some(text)) = (&comment.id, &comment.body) else {
                 continue;
@@ -248,7 +264,7 @@ impl ItemPane {
     ) -> Option<impl IntoElement + use<>> {
         let comments = self.model.comments()?;
         let colors = item_colors(cx);
-        let status = self.status("comments", comments, cx);
+        let status = self.status_in("comments", comments, colors.page_muted, cx);
         let list = comments.rows();
         let header = self.discussion_header(list.map(count), window, cx);
         let now = OffsetDateTime::now_utc();

@@ -11,11 +11,13 @@ use gpui_kit::{
 use manyhands::repository::{CommentDto, CommentListDto, ProblemDto};
 use time::OffsetDateTime;
 
-use super::{BODY_SIZE, ICON_SIZE, LINK_SIZE, REPLY_INDENT, REPLY_TO, SMALL_SIZE, offset_at};
+use super::{
+    BODY_SIZE, ICON_SIZE, LINK_SIZE, REPLY_INDENT, REPLY_TO, SMALL_SIZE, offset_at, shown_time,
+};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        discussion::{Reply, Thread, avatar_color, comment_time, display_name, initials},
+        discussion::{Reply, Thread, avatar_color, avatar_initials, display_name},
         item::comment_author,
     },
     view::item::{ItemPane, text, tokens::item_colors},
@@ -90,7 +92,7 @@ impl ItemPane {
     /// whom it answers, above its body's read editor. The avatar's colour
     /// comes from the whole `created_by` value (R-56), so two people who
     /// share a name, but not an address, differ; its initials are the
-    /// name's, or "?" with no author.
+    /// name's, or "?" with no author or a blank one.
     fn comment(
         &self,
         ix: usize,
@@ -102,10 +104,7 @@ impl ItemPane {
     ) -> AnyElement {
         let colors = item_colors(cx);
         let name = display_name(comment.author.as_deref());
-        let letters = match comment.author {
-            Some(_) => initials(&name),
-            None => "?".to_owned(),
-        };
+        let letters = avatar_initials(comment.author.as_deref());
         let avatar = div()
             .flex()
             .flex_none()
@@ -126,7 +125,7 @@ impl ItemPane {
         let time = comment
             .created_at
             .as_deref()
-            .map(|at| small(("comment-time", ix), comment_time(at, now, offset_at(at))));
+            .map(|at| small(("comment-time", ix), shown_time(at, now, offset_at(at))));
         let answers = reply
             .and_then(|reply| reply.replying_to.as_deref())
             .map(|to| small(("comment-reply-to", ix), format!("{REPLY_TO} {to}")));

@@ -876,7 +876,7 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
         ChipField::All,
     ];
     let mut presses = 0;
-    while !focused(&shell, chips[0].id(), cx) {
+    while !focused(&shell, "item-comments", cx) {
         presses += 1;
         assert!(presses < 4, "Tab never left the strip for the header");
         assert!(
@@ -885,6 +885,11 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
         );
         shell.keys("tab", cx);
     }
+    shell.keys("tab", cx);
+    assert!(
+        focused(&shell, chips[0].id(), cx),
+        "the chips after Comments"
+    );
     for later in 0..3usize {
         assert!(!focused(&shell, ("later-action", later), cx));
     }
@@ -906,6 +911,11 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
         shell.keys("shift-tab", cx);
     }
     assert!(focused(&shell, chips[0].id(), cx));
+    shell.keys("shift-tab", cx);
+    assert!(
+        focused(&shell, "item-comments", cx),
+        "Comments before the chips"
+    );
     shell.keys("shift-tab", cx);
     assert!(on_the_strip(&shell, cx), "back in the strip");
 }

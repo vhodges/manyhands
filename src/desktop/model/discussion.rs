@@ -123,6 +123,16 @@ pub(crate) fn initials(name: &str) -> String {
         .collect()
 }
 
+/// The avatar's letters for `author`, a `created_by` value: its name's
+/// initials, or "?" when there is no author or only a blank one, whose
+/// name is "unknown author" alike.
+pub(crate) fn avatar_initials(author: Option<&str>) -> String {
+    match author.map(str::trim).filter(|author| !author.is_empty()) {
+        Some(author) => initials(&display_name(Some(author))),
+        None => "?".to_owned(),
+    }
+}
+
 /// The avatar's colour for `name` (R-56): the same for the same name, a
 /// hue from its FNV-1a hash, darkened until white keeps 4.5:1 on it.
 pub(crate) fn avatar_color(name: &str) -> Hsla {

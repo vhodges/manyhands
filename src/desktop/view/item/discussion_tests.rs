@@ -18,11 +18,12 @@ use gpui_kit::{
     test::TestWindowExt,
 };
 use manyhands::{repository::ItemDtoKind, results::ProblemCode};
+use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 use zorite_editor::{EditorEvent, EditorState};
 
 use super::{
     ItemPane,
-    discussion::{NO_COMMENTS, comments_phrase},
+    discussion::{NO_COMMENTS, comments_phrase, shown_time},
 };
 use crate::desktop::{
     model::{
@@ -425,9 +426,23 @@ fn the_comments_button_and_its_key_jump_and_focus_the_heading(cx: &mut TestAppCo
     };
     shell.click("item-comments", cx);
     jumped(&shell, "Comments", cx);
+    // The heading is no tab stop: one Tab from it reaches Back to top.
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "back-to-top", cx),
+        "Tab from the heading"
+    );
 
     shell.keys("home", cx);
     assert_eq!(offset(&shell, cx), px(0.));
+    // Behind the open details sheet the key does nothing (R-60).
+    shell.click("chip-all", cx);
+    assert!(shell.present("item-id", cx), "the sheet is open");
+    shell.keys("secondary-shift-c", cx);
+    assert_eq!(offset(&shell, cx), px(0.), "no jump behind the sheet");
+    assert!(!holds_focus(&shell, "discussion-heading", cx));
+    shell.keys("escape", cx);
+    assert!(!shell.present("item-id", cx), "the sheet is closed");
     let editor = page_editor(&shell, cx);
     focus_editor(&shell, &editor, 0, cx);
     shell.keys("secondary-shift-c", cx);
@@ -560,4 +575,18 @@ fn tab_runs_through_each_comment_and_reveals_its_caret(cx: &mut TestAppContext) 
     let b = comment_editor(&shell, B, cx);
     assert!(focused(&shell, &b, cx), "Shift-Tab went back to B");
     assert!(caret_in_view(&shell, &b, cx));
+}
+
+/// A comment's time is shown at the local offset passed in. Where no local
+/// offset is read, as on non-Unix targets, it is in UTC and says so, as
+/// `confirm.rs` does; a time that cannot be read is shown as written.
+#[test]
+fn a_time_with_no_local_offset_is_marked_utc() {
+    let now = OffsetDateTime::parse("2026-10-22T20:00:00Z", &Rfc3339).unwrap();
+    let at = "2026-10-20T10:14:00Z";
+    let two = UtcOffset::from_hms(2, 0, 0).unwrap();
+    assert_eq!(shown_time(at, now, Some(two)), "Oct 20, 12:14");
+    assert_eq!(shown_time(at, now, Some(UtcOffset::UTC)), "Oct 20, 10:14");
+    assert_eq!(shown_time(at, now, None), "Oct 20, 10:14 UTC");
+    assert_eq!(shown_time("not a time", now, None), "not a time");
 }

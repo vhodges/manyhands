@@ -14,11 +14,10 @@ use time::OffsetDateTime;
 
 use super::{
     NONCONFORMING_FILE, SOURCE_NOT_UTF8,
-    discussion::{REPLY_INDENT, offset_at},
+    discussion::{REPLY_INDENT, offset_at, shown_time},
 };
 use crate::desktop::{
     model::{
-        discussion::comment_time,
         item::{
             KIND_ACTIVE, KIND_PRIMARY, LATER, LATER_NOTE, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
             provenance_label,
@@ -391,7 +390,7 @@ fn comments_keep_list_order_and_replies_share_one_indent(cx: &mut TestAppContext
     let now = OffsetDateTime::now_utc();
     let shown: Vec<String> = times
         .iter()
-        .map(|at| comment_time(at, now, offset_at(at)))
+        .map(|at| shown_time(at, now, offset_at(at)))
         .collect();
     assert_eq!(shell.rows("comment-time", cx), shown);
 

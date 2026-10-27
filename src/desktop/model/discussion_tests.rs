@@ -8,7 +8,9 @@ use std::path::Path;
 use manyhands::repository::CommentListDto;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use super::{Reply, Thread, avatar_color, comment_time, display_name, initials, threads};
+use super::{
+    Reply, Thread, avatar_color, avatar_initials, comment_time, display_name, initials, threads,
+};
 use crate::desktop::{
     model::item::UNKNOWN_AUTHOR,
     test_support::fixtures::{Fixture, item_id},
@@ -146,6 +148,17 @@ fn initials_take_the_first_and_last_words() {
     assert_eq!(initials("Cy"), "C");
     assert_eq!(initials("élodie roux"), "ÉR");
     assert_eq!(initials(""), "");
+}
+
+/// An avatar shows the name's initials; with no author, or a blank one,
+/// whose name is "unknown author", it shows "?".
+#[test]
+fn a_blank_or_missing_author_has_no_initials() {
+    assert_eq!(avatar_initials(Some(ADA)), "AL");
+    assert_eq!(avatar_initials(Some("<ada@x.invalid>")), "A");
+    assert_eq!(avatar_initials(None), "?");
+    assert_eq!(avatar_initials(Some("")), "?");
+    assert_eq!(avatar_initials(Some("   ")), "?");
 }
 
 /// WCAG's contrast of `color` against white.

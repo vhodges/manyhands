@@ -14,7 +14,7 @@ use super::{COMMENTS, ICON_SIZE, LINK_SIZE, SMALL_SIZE, comments_phrase, count, 
 use crate::desktop::{
     assets::icon_path,
     keys::{CONTENT_CONTEXT, JumpToDiscussion},
-    view::item::{ItemPane, page::DISCUSSION as DISCUSSION_CHILD, tokens::item_colors},
+    view::item::{ItemPane, page::DISCUSSION_CHILD, tokens::item_colors},
 };
 
 /// The floating button's place: in from the region's right and bottom.

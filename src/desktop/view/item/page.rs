@@ -298,7 +298,7 @@ fn caret(editor: &EditorState) -> (usize, usize) {
 /// The discussion's place among the scrolled children `region` lays out,
 /// after the page, for `ScrollHandle::bounds_for_item` and
 /// `scroll_to_top_of_item` (fact 80).
-pub(super) const DISCUSSION: usize = 1;
+pub(super) const DISCUSSION_CHILD: usize = 1;
 
 /// The item's scroll region, holding `page`, then `discussion`, then
 /// `end`, the selected repository's details, with the Kit's scrollbar

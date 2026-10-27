@@ -258,7 +258,7 @@ fn the_region_shows_a_scrollbar(cx: &mut TestAppContext) {
 fn back_to_top_returns_and_focuses_the_page(cx: &mut TestAppContext) {
     let shell = shell(SHORT_WINDOW, LONG, cx);
     assert_eq!(shell.label("back-to-top", cx).as_deref(), Some(BACK_TO_TOP));
-    shell.keys("end", cx);
+    shell.keys("secondary-shift-c", cx);
     assert!(offset(&shell, cx) < px(0.));
     shell.click("back-to-top", cx);
     assert_eq!(offset(&shell, cx), px(0.), "back at the top");
