@@ -1065,7 +1065,8 @@ impl MutationDataDto {
             | Command::RepoCreate
             | Command::RepoEnable
             | Command::RepoRemove
-            | Command::FolderCreate => None,
+            | Command::FolderCreate
+            | Command::ContextRelease => None,
         }
     }
 }

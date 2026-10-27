@@ -77,11 +77,11 @@ fn a_local_state_is_passed_on_only_when_it_has_the_form_of_a_name() {
 
 #[test]
 fn a_local_action_is_one_the_recovery_store_writes() {
-    let local = &OperationAction::ALL[..13];
+    let local = &OperationAction::ALL[..14];
     for action in local {
         assert_eq!(local_action(action.as_str()), Some(*action));
     }
-    for action in &OperationAction::ALL[13..] {
+    for action in &OperationAction::ALL[14..] {
         assert_eq!(local_action(action.as_str()), None, "{action:?}");
     }
     // What the recovery store writes for an operation it has no name for.
@@ -242,6 +242,7 @@ fn repository_operations() -> Vec<RepositoryOperation> {
         RemoveRemote,
         SetPublicationRemote,
         PrepareContext,
+        ReleaseContext,
         SaveDocument,
         SaveTicket,
         SubmitComment,
@@ -272,6 +273,7 @@ fn repository_operations() -> Vec<RepositoryOperation> {
             | RemoveRemote
             | SetPublicationRemote
             | PrepareContext
+            | ReleaseContext
             | SaveDocument
             | SaveTicket
             | SubmitComment
@@ -302,7 +304,7 @@ fn every_action_the_recovery_store_writes_is_one_the_read_knows() {
         assert!(action.is_some(), "{operation:?} is stored as {stored:?}");
         written.insert(action.unwrap().as_str());
     }
-    let known: std::collections::BTreeSet<_> = OperationAction::ALL[..13]
+    let known: std::collections::BTreeSet<_> = OperationAction::ALL[..14]
         .iter()
         .map(|action| action.as_str())
         .collect();

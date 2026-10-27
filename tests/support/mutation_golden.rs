@@ -21,6 +21,7 @@ use super::{golden, schema};
 pub const CASES: &[&str] = &[
     "context_prepare",
     "context_prepare_discovery_pending",
+    "context_release",
     "document_create",
     "document_create_invalid_path",
     "document_create_occupied",

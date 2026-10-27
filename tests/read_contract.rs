@@ -684,7 +684,7 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 13] = [
+const LOCAL_ACTIONS: [OperationAction; 14] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
@@ -694,6 +694,7 @@ const LOCAL_ACTIONS: [OperationAction; 13] = [
     OperationAction::Refresh,
     OperationAction::Rebuild,
     OperationAction::PrepareContext,
+    OperationAction::ReleaseContext,
     OperationAction::SaveDocument,
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,

@@ -76,6 +76,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "refresh" => Some(OperationAction::Refresh),
         "rebuild" => Some(OperationAction::Rebuild),
         "prepare_context" => Some(OperationAction::PrepareContext),
+        "release_context" => Some(OperationAction::ReleaseContext),
         "save_document" => Some(OperationAction::SaveDocument),
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),

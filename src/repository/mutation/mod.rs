@@ -59,7 +59,7 @@ mod settle;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
-    context::ContextPrepareBinding,
+    context::{ContextPrepareBinding, ContextReleaseBinding},
     document::DocumentBinding,
     folder::FolderCreateBinding,
     host::HostBinding,
@@ -76,7 +76,7 @@ use bind::{
 };
 pub use bind::{
     abandon::OperationAbandonInput,
-    context::{ContextPrepareInput, ContextPrepareIntent},
+    context::{ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput},
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
@@ -430,6 +430,7 @@ pub enum Mutation {
     DocumentRepair(DocumentRepairInput),
     TicketRepair(TicketRepairInput),
     ContextPrepare(ContextPrepareInput),
+    ContextRelease(ContextReleaseInput),
 }
 
 impl Mutation {
@@ -471,6 +472,7 @@ impl Mutation {
             Self::DocumentRepair(_) => Command::DocumentRepair,
             Self::TicketRepair(_) => Command::TicketRepair,
             Self::ContextPrepare(_) => Command::ContextPrepare,
+            Self::ContextRelease(_) => Command::ContextRelease,
         }
     }
 
@@ -513,7 +515,8 @@ impl Mutation {
             | Self::RepoSync(_)
             | Self::OperationResume(_)
             | Self::FolderCreate(_)
-            | Self::ContextPrepare(_) => None,
+            | Self::ContextPrepare(_)
+            | Self::ContextRelease(_) => None,
         }
     }
 
@@ -550,6 +553,7 @@ impl Mutation {
             Self::DocumentRepair(input) => Box::new(RepairBinding::from(input)),
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
             Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
+            Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
         }
     }
 }

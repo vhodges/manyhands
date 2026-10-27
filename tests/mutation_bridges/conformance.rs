@@ -13,27 +13,31 @@
 //!
 //! `context prepare` needs none, and is refused an edit of an item nothing holds.
 //!
+//! `context release` needs none either. The request that is refused is one
+//! the domain refuses, for a context whose worktree holds a file nobody
+//! committed: it was accepted first, and its row is discarded.
+//!
 //! `folder create` needs none. The request that is refused is one the
 //! domain refuses, for a file at its path: it was accepted first, and
 //! the rule is that nothing of it is left.
 
 use manyhands::repository::{
-    AuthoringKind, ContextPrepareInput, ContextPrepareIntent, FolderCreateInput, InitialsChange,
-    Mutation, RepoIdentitySetInput, TicketRepairInput,
+    AuthoringKind, ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput,
+    FolderCreateInput, InitialsChange, Mutation, RepoIdentitySetInput, TicketRepairInput,
 };
 
 use super::support::{
     confirmation::{Desk, Plain},
     conformance::{Ask, Home as Target, Row, run},
     git_home, items,
-    mutation::{TICKET_NEW, World, drive_confirmed, drive_plain},
+    mutation::{REQUEST_1, REQUEST_2, TICKET_NEW, World, drive_confirmed, drive_plain},
     repair::{self, Shelf},
 };
 
 /// What someone commits on primary over the file a preview was of.
 const EDITED: &str = "---\nmanyhands_managed: true\n---\nEdited since the preview.\n";
 
-const ROWS: [Row; 5] = [
+const ROWS: [Row; 6] = [
     Row::new("document repair", true, "confirmation_not_found", |rule| {
         git_home::isolated();
         let shelf = Shelf::new();
@@ -108,6 +112,50 @@ const ROWS: [Row; 5] = [
                 Ask::Changed => prepare(items::TICKET_A, ContextPrepareIntent::Create),
                 // A ticket no repository holds.
                 Ask::Refused => prepare(TICKET_NEW, ContextPrepareIntent::Edit),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("context release", false, "worktree_not_clean", |rule| {
+        git_home::isolated();
+        let world = World::new();
+        // Two contexts: the request's, and one holding a file nobody
+        // committed, made by requests the rules do not use.
+        for (request, id, intent) in [
+            (REQUEST_1, items::TICKET_A, ContextPrepareIntent::Edit),
+            (REQUEST_2, TICKET_NEW, ContextPrepareIntent::Create),
+        ] {
+            let made = world.execute(
+                request,
+                Mutation::ContextPrepare(ContextPrepareInput {
+                    root: world.root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: items::item_id(id),
+                    intent,
+                }),
+            );
+            if made.code != manyhands::results::ResultCode::Ok {
+                return Err(format!("the context of {id} was not made: {made:?}"));
+            }
+        }
+        items::write(&world.worktree(TICKET_NEW), "notes.txt", "not committed\n");
+        let release = |kind, id: &str| {
+            Mutation::ContextRelease(ContextReleaseInput {
+                root: world.root.clone(),
+                kind,
+                id: items::item_id(id),
+            })
+        };
+        drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => release(AuthoringKind::Ticket, items::TICKET_A),
+                // The same ID, as a document's.
+                Ask::Changed => release(AuthoringKind::Document, items::TICKET_A),
+                // The context with the file in it.
+                Ask::Refused => release(AuthoringKind::Ticket, TICKET_NEW),
             },
             rule,
         );

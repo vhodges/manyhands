@@ -990,6 +990,13 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
             effects: Effects::not_requested(),
             local_change: context::changed_and_unfinished(journal.as_ref()),
         },
+        // A context that was removed is shown by no effect either. The
+        // row says whether part of it was removed with the release not
+        // yet ended.
+        Some(Command::ContextRelease) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: context::released_and_unfinished(journal.as_ref()),
+        },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
         }

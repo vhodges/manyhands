@@ -1,18 +1,24 @@
-//! `context prepare` through the boundary: the work context (a branch and
-//! a worktree) an item is edited in, provisioned for an existing item or
-//! a new one. Every row of the design's outcome table is a test here,
-//! written before the command was.
+//! `context prepare` and `context release` through the boundary: the work
+//! context (a branch and a worktree) an item is edited in, provisioned for
+//! an existing item or a new one, and removed again when it holds no work.
+//! Every row of the design's two outcome tables is a test here, written
+//! before the command was: the `prepare_` tests are the first table's and
+//! the `release_` tests the second's.
 //!
-//! The last row of that table ends in `context release`, which is a later
-//! task's: `prepare_abandoning_the_interrupted_row_and_moving_primary_leaves_a_branch_edit_refuses`
-//! covers the part of the row that can be driven until then.
+//! The last row of the first table ends in `context release`:
+//! `prepare_abandoning_the_interrupted_row_and_moving_primary_leaves_a_branch_edit_refuses`
+//! drives the whole row, the release of the stranded branch included.
 
 use std::fs;
 
 use manyhands::{
     repository::{
-        AuthoringKind, ContextPrepareInput, ContextPrepareIntent, FailurePoint, Mutation,
-        MutationDataDto, OperationAbandonInput, OperationId, OperationResumeInput, RequestState,
+        AddRemoteRequest, AuthoringKind, CloseTicketRequest, ContextPrepareInput,
+        ContextPrepareIntent, ContextReleaseInput, FailurePoint, Mutation, MutationDataDto,
+        OperationAbandonInput, OperationId, OperationResumeInput, PreviewTicketClosureRequest,
+        RemoteOperationAction, RemoteOperationTarget, RemotePublicationEvidence, RemoteRefPlan,
+        RemoteReservationOutcome, RequestState, SetPublicationRemoteRequest,
+        TicketClosurePreflight, keys::SessionCredentials,
     },
     results::{DiscoveryEffect, Effects, Envelope, Outcome, ResultCode},
 };
@@ -23,12 +29,16 @@ use super::support::{
     golden::ContractCase,
     items,
     mutation::{
-        self, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_CLOSED, TICKET_NEW, World,
-        recovery_actions,
+        self, NoPassphrase, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TICKET_CLOSED, TICKET_NEW,
+        World, recovery_actions,
     },
 };
 
 const CONTEXT_SCHEMA: &str = "context_mutation.schema.json";
+
+/// More request IDs than the support module has. No fixture uses them.
+const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX4";
+const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
 
 fn prepare(world: &World, kind: AuthoringKind, id: &str, intent: ContextPrepareIntent) -> Mutation {
     Mutation::ContextPrepare(ContextPrepareInput {
@@ -709,8 +719,16 @@ fn prepare_abandoning_the_interrupted_row_and_moving_primary_leaves_a_branch_edi
         contexts(&world),
         (vec![World::branch(items::TICKET_A)], vec![])
     );
-    // `context release` removes the stranded branch, after which an Edit
-    // answers ok; that part of the row is Task 2's.
+
+    // `context release` removes the stranded branch, which holds no commit
+    // of its own, and an Edit then makes the context afresh.
+    let released = world.execute(REQUEST_4, release_ticket(&world, items::TICKET_A));
+    assert_released(&released);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    let edit = world.execute(REQUEST_5, edit_ticket(&world, items::TICKET_A));
+    assert_ok(&edit);
+    assert!(created(&edit), "{edit:?}");
+    assert_one_context(&world, items::TICKET_A);
 }
 
 #[test]
@@ -743,4 +761,634 @@ fn prepare_interrupted_before_the_worktree_then_a_committed_closure_is_recovery_
         contexts(&world),
         (vec![World::branch(items::TICKET_A)], vec![])
     );
+}
+
+// `context release`: the helpers, then the rows of the design's table in
+// its order.
+
+fn release(world: &World, kind: AuthoringKind, id: &str) -> Mutation {
+    Mutation::ContextRelease(ContextReleaseInput {
+        root: world.root.clone(),
+        kind,
+        id: items::item_id(id),
+    })
+}
+
+fn release_ticket(world: &World, id: &str) -> Mutation {
+    release(world, AuthoringKind::Ticket, id)
+}
+
+fn assert_released(envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        (envelope.outcome, envelope.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{envelope:?}"
+    );
+    assert_eq!(envelope.effects, discovery(DiscoveryEffect::Current));
+    assert_eq!(envelope.data, None);
+}
+
+/// Asserts that the request was refused with `code`, carrying nothing,
+/// and that nothing is left of it: no record and no pending row.
+fn assert_refused(
+    world: &World,
+    request_id: &str,
+    envelope: &Envelope<MutationDataDto>,
+    code: ResultCode,
+) {
+    assert_eq!(envelope.code, code, "{envelope:?}");
+    assert_eq!(envelope.data, None);
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert!(world.record(request_id).is_none(), "a request record");
+    assert_eq!(world.pending_journal_rows(), 0, "a pending journal row");
+}
+
+/// Whether the index lists the context of the branch `branch`.
+fn indexed(world: &World, branch: &str) -> bool {
+    items::index(world.data.path())
+        .query_row(
+            "SELECT COUNT(*) FROM contexts WHERE kind = 'active' AND branch = ?1",
+            [branch],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap()
+        == 1
+}
+
+/// The repository's references, by name.
+fn references(world: &World) -> References {
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let mut references: Vec<_> = repository
+        .references()
+        .unwrap()
+        .map(|reference| {
+            let reference = reference.unwrap();
+            (reference.name().unwrap().to_owned(), reference.target())
+        })
+        .collect();
+    references.sort();
+    references
+}
+
+/// The branches and the worktree directories of the contexts.
+type Contexts = (Vec<String>, Vec<String>);
+
+/// Every reference of the repository and where it points.
+type References = Vec<(String, Option<git2::Oid>)>;
+
+/// What a refusal must leave as it found it: the contexts, every
+/// reference, and the index's row of the ticket's context.
+fn image(world: &World, id: &str) -> (Contexts, References, bool) {
+    (
+        contexts(world),
+        references(world),
+        indexed(world, &World::branch(id)),
+    )
+}
+
+/// Makes the ticket's context through the boundary, at primary's head.
+fn make(world: &World, request_id: &str, id: &str) {
+    let made = world.execute(request_id, edit_ticket(world, id));
+    assert_ok(&made);
+    assert!(created(&made), "{made:?}");
+    assert!(indexed(world, &World::branch(id)));
+}
+
+/// The world's service, from now on, fails once at `point`.
+fn fail_once_at(world: &mut World, point: FailurePoint) {
+    world.service = FailOnce::at(point).open_service(world.data.path());
+}
+
+fn assert_release_golden(name: &str, world: &World, envelope: &Envelope<MutationDataDto>) {
+    let root = world.root.to_str().unwrap().to_owned();
+    let operation = envelope.operation_id.clone().unwrap();
+    mutation::assert_contract(
+        &ContractCase {
+            name,
+            data_schema: None,
+            placeholders: &[
+                (root.as_str(), "<root>"),
+                (operation.as_str(), "<operation>"),
+            ],
+            sentinels: &[world.data.path().to_str().unwrap()],
+        },
+        envelope,
+    );
+}
+
+/// Adds the remote `origin`, which no test reaches, and selects it for
+/// publication. Both are local: nothing is fetched.
+fn select_origin(world: &World) {
+    world
+        .service
+        .add_remote(AddRemoteRequest {
+            root: world.root.clone(),
+            name: "origin".to_owned(),
+            url: "ssh://fixture@localhost/repository".to_owned(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    select(world, Some("origin"));
+}
+
+fn select(world: &World, name: Option<&str>) {
+    world
+        .service
+        .set_publication_remote(SetPublicationRemoteRequest {
+            root: world.root.clone(),
+            name: name.map(str::to_owned),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+}
+
+fn evidence(world: &World, id: &str) -> RemotePublicationEvidence {
+    world
+        .service
+        .remote_snapshot(&world.root)
+        .unwrap()
+        .publication_evidence_for(AuthoringKind::Ticket, &items::item_id(id))
+}
+
+#[test]
+fn release_with_no_saved_work_removes_the_context_and_its_index_row_and_nothing_else() {
+    git_home::isolated();
+    let world = World::new();
+    let head = world.primary_head();
+    // A remote ref that is no context's.
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .reference("refs/remotes/origin/main", head, false, "fixture")
+        .unwrap();
+    make(&world, REQUEST_1, items::TICKET_A);
+    // Another context, which stays.
+    let other = world.execute(
+        REQUEST_2,
+        prepare(
+            &world,
+            AuthoringKind::Document,
+            mutation::DOCUMENT,
+            ContextPrepareIntent::Edit,
+        ),
+    );
+    assert_ok(&other);
+    let other_branch = World::document_branch(mutation::DOCUMENT);
+    let mut kept = references(&world);
+    kept.retain(|(name, _)| *name != format!("refs/heads/{}", World::branch(items::TICKET_A)));
+
+    let released = world.execute(REQUEST_3, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&released);
+    assert_eq!(
+        released.scope.branch.as_deref(),
+        Some(World::branch(items::TICKET_A).as_str())
+    );
+    assert_release_golden("context_release", &world, &released);
+    assert_eq!(
+        contexts(&world),
+        (
+            vec![other_branch.clone()],
+            vec![mutation::DOCUMENT.to_owned()]
+        )
+    );
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert!(indexed(&world, &other_branch));
+    assert_eq!(world.primary_head(), head);
+    assert_eq!(references(&world), kept);
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(
+        world.record(REQUEST_3).unwrap().state,
+        RequestState::Finished
+    );
+}
+
+#[test]
+fn release_of_a_never_created_items_context_is_ok() {
+    git_home::isolated();
+    let world = World::new();
+    let made = world.execute(REQUEST_1, create_ticket(&world, TICKET_NEW));
+    assert_ok(&made);
+
+    let released = world.execute(REQUEST_2, release_ticket(&world, TICKET_NEW));
+
+    assert_released(&released);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(!indexed(&world, &World::branch(TICKET_NEW)));
+}
+
+#[test]
+fn release_with_neither_the_worktree_nor_the_branch_is_already_applied() {
+    git_home::isolated();
+    let world = World::new();
+    let before = image(&world, items::TICKET_A);
+
+    let absent = world.execute(REQUEST_1, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(
+        (absent.outcome, absent.code),
+        (Outcome::Noop, ResultCode::AlreadyApplied),
+        "{absent:?}"
+    );
+    assert_eq!(absent.effects, Effects::not_requested());
+    assert_eq!(absent.data, None);
+    assert_eq!(image(&world, items::TICKET_A), before);
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn release_of_a_branch_with_a_commit_is_external_change_and_removes_nothing() {
+    git_home::isolated();
+    let world = World::new();
+    // A save: the context's branch holds the commit of it.
+    let token = world.token(items::TICKET_A);
+    let saved = world.execute(REQUEST_1, world.save(items::TICKET_A, &token));
+    assert_eq!(saved.code, ResultCode::Ok, "{saved:?}");
+    assert_eq!(world.branch_commits(items::TICKET_A), 1);
+    let before = image(&world, items::TICKET_A);
+
+    let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_refused(&world, REQUEST_2, &refused, ResultCode::ExternalChange);
+    assert_eq!(image(&world, items::TICKET_A), before);
+}
+
+#[test]
+fn release_after_a_proven_publication_is_external_change() {
+    git_home::isolated();
+    // A tracking ref of the context, under any remote.
+    let world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    git2::Repository::open(&world.root)
+        .unwrap()
+        .reference(
+            &format!("refs/remotes/upstream/manyhands/ticket/{}", items::TICKET_A),
+            world.primary_head(),
+            false,
+            "fixture",
+        )
+        .unwrap();
+    let before = image(&world, items::TICKET_A);
+    let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_refused(&world, REQUEST_2, &refused, ResultCode::ExternalChange);
+    assert_eq!(image(&world, items::TICKET_A), before);
+
+    // The push journal of a synchronization that published the context,
+    // with no tracking ref.
+    let world = World::new();
+    select_origin(&world);
+    make(&world, REQUEST_1, items::TICKET_A);
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let target = RemoteOperationTarget::for_context(
+        &plan,
+        RemoteOperationAction::SynchronizeContext,
+        AuthoringKind::Ticket,
+        items::item_id(items::TICKET_A),
+    )
+    .unwrap();
+    let synchronization = OperationId::new();
+    assert!(matches!(
+        world
+            .service
+            .reserve_remote_operation(&world.root, synchronization, &target)
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    items::index(world.data.path())
+        .execute(
+            "UPDATE remote_operation_records SET phase='completed',outcome='completed',
+                    sync_checkpoint='discovery_pending',completed_step='before_discovery',
+                    expected_oid=?2,local_oid=?2,primary_tracking_oid=?2,push_oid=?2,
+                    push_advertised_oid=?2,authoritative_kind='published',authoritative_oid=?2,
+                    index_pending=1
+              WHERE operation_ulid=?1",
+            rusqlite::params![
+                synchronization.to_string(),
+                world.primary_head().to_string()
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        evidence(&world, items::TICKET_A),
+        RemotePublicationEvidence::ObservedPublished
+    );
+    let before = image(&world, items::TICKET_A);
+    let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_refused(&world, REQUEST_2, &refused, ResultCode::ExternalChange);
+    assert_eq!(image(&world, items::TICKET_A), before);
+}
+
+/// R-43: every re-selection of the remote leaves the publication history
+/// unknown for good.
+#[test]
+fn release_with_an_unknown_publication_history_and_no_tracking_ref_is_ok() {
+    git_home::isolated();
+    let world = World::new();
+    select_origin(&world);
+    select(&world, None);
+    make(&world, REQUEST_1, items::TICKET_A);
+    assert_eq!(
+        evidence(&world, items::TICKET_A),
+        RemotePublicationEvidence::HistoryUnknown
+    );
+
+    let released = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&released);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+}
+
+#[test]
+fn release_of_an_untracked_modified_or_ignored_file_is_worktree_not_clean_and_discards_the_row() {
+    git_home::isolated();
+    let changes: [(&str, &str); 3] = [
+        ("notes.txt", "untracked\n"),
+        (".gitignore", "scratch.log\nmodified\n"),
+        ("scratch.log", "ignored\n"),
+    ];
+    for (path, text) in changes {
+        let world = World::new();
+        items::write(&world.root, ".gitignore", "scratch.log\n");
+        items::commit(&world.fixture, &[".gitignore"], items::COMMITTED_AT + 1);
+        make(&world, REQUEST_1, items::TICKET_A);
+        items::write(&world.worktree(items::TICKET_A), path, text);
+        let before = image(&world, items::TICKET_A);
+        let rows = journal(&world).len();
+
+        let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+        assert_refused(&world, REQUEST_2, &refused, ResultCode::WorktreeNotClean);
+        assert_eq!(image(&world, items::TICKET_A), before, "{path}");
+        // The row was begun and discarded.
+        let journal = journal(&world);
+        assert_eq!(journal.len(), rows + 1, "{path}");
+        let (_, action, state, step) = journal.last().unwrap();
+        assert_eq!(
+            (action.as_str(), state.as_str(), step.as_deref()),
+            ("release_context", "completed", Some("rejected")),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn release_with_primary_not_checked_out_is_recovery_required_and_discards_the_row() {
+    git_home::isolated();
+    let world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let head = repository.find_commit(world.primary_head()).unwrap();
+    repository.branch("elsewhere", &head, false).unwrap();
+    repository.set_head("refs/heads/elsewhere").unwrap();
+    let before = image(&world, items::TICKET_A);
+
+    let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_refused(&world, REQUEST_2, &refused, ResultCode::RecoveryRequired);
+    assert_eq!(image(&world, items::TICKET_A), before);
+    let journal = journal(&world);
+    let (_, action, state, step) = journal.last().unwrap();
+    assert_eq!(
+        (action.as_str(), state.as_str(), step.as_deref()),
+        ("release_context", "completed", Some("rejected"))
+    );
+}
+
+#[test]
+fn release_during_an_unfinished_closure_of_the_item_is_recovery_required() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    let preview = world
+        .service
+        .preview_ticket_closure(PreviewTicketClosureRequest {
+            root: world.root.clone(),
+            item_id: items::item_id(items::TICKET_A),
+            confirmed_identity: None,
+        })
+        .unwrap();
+    let TicketClosurePreflight::Ready(preview) = preview else {
+        panic!("the closure is not ready: {preview:?}");
+    };
+    // The closure stops once it is recorded, before it has done anything.
+    fail_once_at(&mut world, FailurePoint::AfterConfirmed);
+    let stopped = world.service.close_ticket(
+        CloseTicketRequest {
+            root: world.root.clone(),
+            operation_id: OperationId::new(),
+            item_id: items::item_id(items::TICKET_A),
+            expected: preview.expectation(),
+            approval: None,
+            confirmed_identity: None,
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+    );
+    assert!(stopped.is_err(), "the closure was not stopped");
+    world.reopen();
+    let before = image(&world, items::TICKET_A);
+
+    let refused = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_refused(&world, REQUEST_2, &refused, ResultCode::RecoveryRequired);
+    assert_eq!(image(&world, items::TICKET_A), before);
+}
+
+#[test]
+fn release_with_another_pending_row_on_the_root_is_recovery_required() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeWorktreeCreation);
+    let stopped = world.execute(REQUEST_2, create_ticket(&world, TICKET_NEW));
+    assert_eq!(stopped.code, ResultCode::InternalError, "{stopped:?}");
+    world.reopen();
+    let before = image(&world, items::TICKET_A);
+
+    let refused = world.execute(REQUEST_3, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(refused.code, ResultCode::RecoveryRequired, "{refused:?}");
+    assert!(world.record(REQUEST_3).is_none(), "a request record");
+    assert_eq!(world.pending_journal_rows(), 1, "the other row alone");
+    assert_eq!(image(&world, items::TICKET_A), before);
+}
+
+#[test]
+fn release_interrupted_before_the_branch_release_other_requests_need_recovery_and_the_same_one_finishes()
+ {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeContextBranchRelease);
+
+    let lost = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+    // The worktree is gone and the branch is not.
+    assert_eq!(
+        contexts(&world),
+        (vec![World::branch(items::TICKET_A)], vec![])
+    );
+    assert_eq!(world.pending_journal_rows(), 1);
+    world.reopen();
+    for (request, mutation) in [
+        (REQUEST_3, create_ticket(&world, TICKET_NEW)),
+        (
+            REQUEST_4,
+            release(&world, AuthoringKind::Document, mutation::DOCUMENT),
+        ),
+    ] {
+        let other = world.execute(request, mutation);
+        assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
+    }
+
+    let retry = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&retry);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn release_interrupted_after_the_branch_release_the_same_request_finishes_the_refresh() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::AfterContextBranchRelease);
+
+    let lost = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    // The index has not been told.
+    assert!(indexed(&world, &World::branch(items::TICKET_A)));
+    world.reopen();
+
+    let retry = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&retry);
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+#[test]
+fn release_whose_refresh_fails_is_discovery_pending_and_resume_completes_it() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeIndexTransactionCommit);
+
+    let pending = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(
+        (pending.outcome, pending.code),
+        (Outcome::Partial, ResultCode::DiscoveryPending),
+        "{pending:?}"
+    );
+    assert_eq!(pending.effects, discovery(DiscoveryEffect::Pending));
+    assert_eq!(pending.data, None);
+    // The row's step is the branch's, which owes only its hand-off: a
+    // resume takes it up, and the result offers one.
+    assert_eq!(
+        recovery_actions(&pending),
+        ["operation.resume", "repo.inspect", "operation.abandon"],
+        "{pending:?}"
+    );
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(indexed(&world, &World::branch(items::TICKET_A)));
+    world.reopen();
+    // Other requests wait for the row.
+    let other = world.execute(REQUEST_3, create_ticket(&world, TICKET_NEW));
+    assert_eq!(other.code, ResultCode::RecoveryRequired, "{other:?}");
+
+    let resumed = world.execute(
+        REQUEST_4,
+        Mutation::OperationResume(OperationResumeInput {
+            root: world.root.clone(),
+            operation_id: operation_of(&world, REQUEST_2),
+        }),
+    );
+
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{resumed:?}"
+    );
+    assert_eq!(resumed.effects, discovery(DiscoveryEffect::Current));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    // And the root is free again.
+    let made = world.execute(REQUEST_5, create_ticket(&world, TICKET_NEW));
+    assert_ok(&made);
+}
+
+#[test]
+fn release_interrupted_before_settlement_the_same_request_is_ok_or_already_applied() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeRequestSettlement);
+
+    let lost = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Accepted
+    );
+    world.reopen();
+
+    let retry = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert!(
+        matches!(
+            (retry.outcome, retry.code),
+            (Outcome::Success, ResultCode::Ok) | (Outcome::Noop, ResultCode::AlreadyApplied)
+        ),
+        "{retry:?}"
+    );
+    assert_eq!(retry.data, None);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+    assert_eq!(
+        world.record(REQUEST_2).unwrap().state,
+        RequestState::Finished
+    );
+}
+
+#[test]
+fn release_of_a_branch_left_without_its_worktree_is_ok() {
+    git_home::isolated();
+    let world = World::new();
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let head = repository.find_commit(world.primary_head()).unwrap();
+    repository
+        .branch(&World::branch(items::TICKET_A), &head, false)
+        .unwrap();
+    assert_eq!(
+        contexts(&world),
+        (vec![World::branch(items::TICKET_A)], vec![])
+    );
+
+    let released = world.execute(REQUEST_1, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&released);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+}
+
+#[test]
+fn release_then_an_edit_of_the_item_makes_its_context_again() {
+    git_home::isolated();
+    let world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    let released = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_released(&released);
+
+    let edit = world.execute(REQUEST_3, edit_ticket(&world, items::TICKET_A));
+
+    assert_ok(&edit);
+    assert!(created(&edit), "{edit:?}");
+    assert_one_context(&world, items::TICKET_A);
+    assert_eq!(world.pending_journal_rows(), 0);
 }

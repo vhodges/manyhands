@@ -225,6 +225,7 @@ Notes for later tasks: Task 22 leaves `targets()` in
 | --- | --- | --- | --- | --- |
 | 0 | this ledger's first commit | baseline above: 4,529 passed, 0 failed, 1 ignored | complete | E-30 added by the owner; see Rulings |
 | 1 | `feat: add context prepare` (this commit) | mutation_bridges `prepare_` → 17, `keeps_the_rules_of_the_boundary` → 1; mutation_replay / mutation_confirmation `keeps_the_rules_of_the_boundary` → 1 each; mutation_remote same filter → 2 SSH cases; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; lib `mutation::` → 107; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | complete, with one concern | `discovery_pending` of `context prepare` offers `request.retry`, not `operation.resume`: the row keeps step `worktree_observed`, which `operation resume` leaves to the original request; see the Task 1 report |
+| 2 | `feat: add context release` (this commit) | lib `context_release` → 24, `cleanup` → 47, `recovery` → 54, `read::status` → 10, `mutation::` → 108; mutation_bridges `release_` → 16, `keeps_the_rules_of_the_boundary` → 1, `prepare_` → 17; read_contract `every_published_` → 2, `published_enumerations_list_exactly_the_registered_values` → 0 passed, 1 failed; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | blocked on one Verify line | Every row of the release table passes. `published_enumerations_list_exactly_the_registered_values` fails at HEAD already: Task 1's `context_mutation.schema.json` holds a `kind` enum that `contract_enumerations()` ties to no Rust list (55 `enum` keywords, 53 + 1 tied). Task 2 adds no enum keyword. The fix is a pre-existing test's or Task 1's schema, outside Task 2's files; see the Task 2 report |
 
 ## Rulings during implementation
 
@@ -289,3 +290,16 @@ Notes for later tasks: Task 22 leaves `targets()` in
   removals" requires `operation resume` to complete the hand-off. The
   release row's step must be one that resume takes up (`is_authoritative`
   in `recovery.rs`, Task 2's file), or the row fails the way fact 20 did.
+- Ruling P-9 (controller, Task 2): Task 2 may change the File Map's Task 2
+  row (`src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`,
+  `bridges/abandon.rs`, `read/{dto,status,status_tests}.rs`, the three
+  operation schemas, `tests/read_contract.rs`), plus what the release
+  binding needs from Task 1's row (`src/repository/mutation/{command,mod,dto}.rs`,
+  `bind/{mod,context}.rs`, `tests/mutation_bridges/{context,conformance}.rs`,
+  `tests/support/{conformance,mutation_golden}.rs`,
+  `tests/fixtures/mutation_v1/context_release.json`), plus the new
+  `src/repository/context_release_tests.rs`. Task 2 also completes the tail
+  of Task 1's last `prepare_` test (the release of the stranded branch).
+  Pre-existing tests change only as E-15, E-16, E-20, E-21 and E-22. — The
+  release binding sits beside Task 1's prepare binding, in the files Task 1
+  made for it. — If wrong: a file is named in the wrong Part 0 task.
