@@ -339,6 +339,11 @@ pub(in super::super) fn inspection(
     if e.images.is_none() {
         return Err(ReadError::new(ResultCode::RecoveryRequired));
     }
+    // Registration/config observations can lag the live local routing file.
+    // Use the same retained digest as execution, never a fresh replacement.
+    if recover::routing(repo)? != e.routing {
+        return Err(ReadError::new(ResultCode::ExternalChange));
+    }
     let before = controls(service, repo, &row)?;
     let facts = service.read_session(RepositoryOperation::Read, |db| {
         super::observe::facts(db, repo, row.kind, &row.item_id)
@@ -482,6 +487,7 @@ pub(in super::super) fn inspection(
     again.owner_epoch = row.owner_epoch;
     if row != again
         || e != evidence_again
+        || recover::routing(repo)? != e.routing
         || before != controls(service, repo, &again)?
         || facts
             != service.read_session(RepositoryOperation::Read, |db| {

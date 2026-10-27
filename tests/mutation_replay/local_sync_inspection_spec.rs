@@ -130,7 +130,9 @@ fn images(world: &mutation::World) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
         .unwrap()
 }
 #[allow(clippy::result_large_err)] // Preserve the public read's by-value error contract.
-fn inspect_unchanged(f: &ConflictWorld) -> Result<LocalContextSyncInspectionDto, ReadError> {
+pub(super) fn inspect_unchanged(
+    f: &ConflictWorld,
+) -> Result<LocalContextSyncInspectionDto, ReadError> {
     let _lease = RepositoryService::hold_lease_for_testing(
         &f.world.root,
         f.world.data.path(),
@@ -270,7 +272,7 @@ fn spec_observed_resolution_path_cannot_return_to_its_preimage() {
     assert!(!view.can_start_resolution);
 }
 
-fn ordinary(disposition: &str, phase: &str, filtered: bool) -> ConflictWorld {
+pub(super) fn ordinary(disposition: &str, phase: &str, filtered: bool) -> ConflictWorld {
     let mut world = mutation::World::new();
     let id = items::TICKET_A;
     assert_eq!(

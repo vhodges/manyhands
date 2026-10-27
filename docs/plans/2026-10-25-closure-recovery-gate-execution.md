@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | Controller reports the two preceding inspection gaps **closed at `8e7d6da`**, with a fresh-conflict untracked-path gap still requiring correction. Checkpoint `01M5XRX8YK4GFJNZ6YEXD99GGV` records its source-verified fix and document/ticket RED/GREEN regressions. **175 selected tests pass**, including 52 local mutation cases; whole-tree fmt/check/clippy pass. Await **SPEC re-review, then QUALITY**. Task 8 remains unstarted. |
+| Task 7 | Controller reports **full SPEC approval at `077f421`**, session `ses_e8554c7d2ffe8o3xfJnBqcRrQO`. QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` raised **two P2 findings**. Checkpoint `01M5XTX949G7GTX75FGCSB1SXZ` records their verified corrections and **182 passing selected tests/cases**, with whole-tree fmt/check/clippy green. Await **SPEC delta verification and QUALITY re-review**; the base approval is not extended to this delta. Task 8 remains unstarted. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -3628,3 +3628,106 @@ public journal bypass, frontend/dependency change or lifecycle action.
 Next: controller SPEC re-review, then QUALITY. No approval is claimed. Ticket stays
 implementing and Task 8 has not started. No PR, closure, merge into main, native CI
 or cleanup was performed.
+
+## Task 7 QUALITY: live routing and terminal request DTOs
+
+Checkpoint **`01M5XTX949G7GTX75FGCSB1SXZ`**, recorded **2026-10-27T04:46:45Z**.
+Fix base: **`077f421f6cec3ee9fdc255c89ea3b2da2483a951`**. The controller reports
+**full Task 7 SPEC approval at that base**, session
+**`ses_e8554c7d2ffe8o3xfJnBqcRrQO`**, followed by QUALITY session
+**`ses_e846d6706ffeMZlWpMYjwDMnGU`** with **two P2 findings**. These are controller
+review reports, not reviews performed by this implementer. Approval applies to the
+base; SPEC delta verification and QUALITY re-review remain required for this commit.
+
+### 1. Live routing in ordinary inspection — locally addressed
+
+Verified that ordinary inspection compared stored registration/configuration facts
+but not `recover::routing(repo)` against the retained execution routing digest.
+The executor and conflict inspection already make that live-file comparison. The
+new tests reproduced both failures: a stable change to primary's
+`.manyhands/config.toml` still gave Resume, and a change between the first read and
+session B still returned a stale resumable DTO.
+
+Inspection now requires the same retained/live routing digest before building its
+view and rechecks it after session B. It neither adopts the changed routing nor
+refreshes the stored configuration. A stable mismatch gives the existing
+ExternalChange ReadError; an in-call change also gives ExternalChange.
+
+Public tests cover **contained, fast-forward and clean merge**, each in **Prepared
+and IndexPending**, for both stable and in-call changes: twelve routing cases.
+Stable reads run through the existing already-held-repository-lease snapshot helper.
+In-call tests hold the same lease, restore only the fixture's deliberate config
+change, then compare Git administration/worktree state and SQL. Restoring the
+original routing makes the same original S inspect as resumable again.
+
+### 2. Truthful unlinked terminal R/U data — locally addressed
+
+Verified that `terminal_unlinked` served both R and U but always used the executing
+request ID as `resolution_request_id`, and mapped both Cancelled and Abandoned
+parents to reason Abandoned. The new U test reproduced a fake R identity; the new
+R test reproduced Abandoned where the terminal parent was Cancelled.
+
+The helper now reads the actual scoped control role, checked against its request
+command/target, and sets `resolution_request_id` only for an actual resolve request.
+It selects the exact existing state/reason pair: Cancelled/Cancelled,
+Abandoned/Abandoned, or Complete/ForeignChange. No schema or global enum was added.
+
+The new tests exercise **R and U independently under cancelled, abandoned and
+complete parents**. Cancelled/abandoned requests finish without own effects, retain
+their IDs, and replay immutable receipts; changed input mismatches. Complete-parent
+unlinked requests retain the approved no-effect ExternalChange/release behavior.
+Resolution-attempt counts and Git/worktree state remain unchanged in all six cases.
+The existing atomic-abandonment and unlinked-contender tests also pass. No existing
+Finished result is rewritten, and no settlement/retention policy was changed.
+
+### RED/GREEN and verification
+
+New module **`tests/mutation_replay/local_sync_quality.rs`**, registered in the
+existing local_sync mutation test module. Two earlier fixture helpers gain only
+parent-module visibility for reuse; no old assertion was changed or weakened.
+
+The first command
+`devenv shell -- cargo test --all-features --locked --test mutation_replay local_sync::quality`
+selected **four tests, all failing at the intended assertions**. After correction,
+all four passed:
+
+- `quality_ordinary_inspection_refuses_stable_live_routing_change`
+- `quality_ordinary_inspection_rechecks_live_routing_after_session_b`
+- `quality_terminal_unlinked_resolve_identity_and_reason`
+- `quality_terminal_unlinked_resume_identity_and_reason`
+
+All Rust commands used Devenv in the ticket checkout:
+
+| Command after `devenv shell -- cargo` | Result |
+| --- | --- |
+| `fmt --check` | Exit 0. |
+| `check --all-features --locked` | Exit 0, 2.97s. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0, 11.68s. |
+| `test --all-features --locked --test mutation_replay local_sync` | **56 passed**, 308 filtered, 207.99s. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**. |
+| `test --all-features --locked --test mutation_contract` | **44 passed**. |
+| `test --all-features --locked --test read_contract` | **72 passed**. |
+
+Ran the single positional selector
+`every_command_of_this_target_keeps_the_rules_of_the_boundary` separately in each
+existing conformance target: mutation_replay **1 passed**, mutation_confirmation
+**1 passed**, mutation_remote **1 SSH cases passed**, mutation_bridges **1 passed**.
+The exact SSH harness selector is the same string above. All 32 command homes remain
+accounted for. Unique selected total for this delta: **182 tests/cases**; the four
+focused tests are included in 56 and are not counted twice.
+
+The production changes are limited to the inspection routing check and terminal
+binding DTO construction. No executor/journal disposition implementation changed,
+so its prior domain selections were not redundantly repeated. No full suite,
+schema/golden rewrite, new target, dependency or frontend change was introduced.
+Production activation remains intact and no public journal bypass was added.
+
+### Handoff
+
+Entry was clean at the fix base. Fetch/merge at entry and checkpoint found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated. Merge-tree passed at
+base with tree `aa87a5efc08509c7e414dd99c7f5e7d68b77cd69`. Work stayed inline in the
+ticket worktree without subagents. Both P2 findings are locally addressed, pending
+**SPEC delta verification and QUALITY re-review**. No approval of this delta is
+claimed. Ticket remains implementing; Task 8 has not started. No PR, closure, merge
+into main, native workflow or cleanup was performed.

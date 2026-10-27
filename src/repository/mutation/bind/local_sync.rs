@@ -160,32 +160,38 @@ fn terminal_unlinked(
     repo: &ResolvedRepository,
     row: &domain::record::LocalContextSyncRecord,
 ) -> Option<Ran> {
-    let linked = local_control::linked(call.service, accepted.request_id).ok()?;
+    let (linked,role)=call.service.read_session(RepositoryOperation::Read,|db|{
+        Ok(db.query_row("SELECT c.parent_operation IS NOT NULL,c.role FROM local_context_sync_request_control c JOIN request_records r USING(request_ulid) WHERE c.request_ulid=?1 AND c.scope_key=?2 AND r.scope_key=c.scope_key AND c.intended_parent=?3 AND r.target=c.intended_parent AND ((c.role='resolve' AND r.command='context resolve-local') OR (c.role='resume' AND r.command='operation resume'))",rusqlite::params![accepted.request_id.to_string(),repo.root().to_str(),row.operation_id.to_string()],|r|Ok((r.get::<_,bool>(0)?,r.get::<_,String>(1)?)))?)
+    }).ok()?;
     if linked {
         return None;
     }
-    let state = match row.state {
-        domain::record::LocalSyncState::Complete => LocalContextSyncState::Complete,
-        domain::record::LocalSyncState::Abandoned => LocalContextSyncState::Abandoned,
-        domain::record::LocalSyncState::Cancelled => LocalContextSyncState::Cancelled,
+    let (state, reason) = match row.state {
+        domain::record::LocalSyncState::Complete => (
+            LocalContextSyncState::Complete,
+            LocalContextSyncReason::ForeignChange,
+        ),
+        domain::record::LocalSyncState::Abandoned => (
+            LocalContextSyncState::Abandoned,
+            LocalContextSyncReason::Abandoned,
+        ),
+        domain::record::LocalSyncState::Cancelled => (
+            LocalContextSyncState::Cancelled,
+            LocalContextSyncReason::Cancelled,
+        ),
         _ => return None,
     };
-    let _ = repo;
     let cancelled = state != LocalContextSyncState::Complete;
     let data = LocalContextSyncMutationDto {
         data_type: LocalContextSyncDataType::LocalContextSync,
         item_id: row.item_id.to_string(),
         kind: authoring_kind_segment(&row.kind).into(),
         operation_id: Some(row.operation_id.to_string()),
-        resolution_request_id: Some(accepted.request_id.to_string()),
+        resolution_request_id: (role == "resolve").then(|| accepted.request_id.to_string()),
         required_request_id: None,
         result_oid: None,
         state,
-        reason: if cancelled {
-            LocalContextSyncReason::Abandoned
-        } else {
-            LocalContextSyncReason::ForeignChange
-        },
+        reason,
         next_action: LocalContextSyncNextAction::None,
         eligibility: None,
         cancel_acknowledged: cancelled,

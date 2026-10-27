@@ -1,6 +1,8 @@
 //! Acceptance-to-link request authority, through the existing request store API.
 #[path = "local_sync_inspection_spec.rs"]
 mod inspection_spec;
+#[path = "local_sync_quality.rs"]
+mod quality;
 #[path = "local_sync_spec.rs"]
 mod spec;
 use super::support::conformance::{Ask, Row};
