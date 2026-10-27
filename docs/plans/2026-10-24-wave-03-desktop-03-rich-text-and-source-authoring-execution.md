@@ -559,3 +559,28 @@ Notes for later tasks: Task 22 leaves `targets()` in
   change draws a frame, so the app behaves the same. — The review
   confirmed there is no loop and no focus stealing. — If wrong: the caret
   reveal lags one frame.
+- Ruling (Task 8): two of D3's own tests follow the discussion. The
+  owner's Task 6 decision settled that tests like these change by a
+  ruling, not a named edit.
+  - `header_tests::tab_order_runs_strip_header_chips_page` passes
+    Comments {n} between the strip and the first chip. That is the
+    handoff's Tab order: tab strip, header actions, chips
+    (`item_view/01-item-frame.md:57`).
+  - In `frame_tests::back_to_top_returns_and_focuses_the_page`, the
+    first End becomes `secondary-shift-c`. At 700 px the discussion is
+    taller than the region, so End leaves Back to top above the fold.
+
+  — Both reviews confirmed the diagnosis. — If wrong: two test lines.
+- Ruling (Task 8): the avatar's colour comes from the whole `created_by`.
+  The handoff says "color per person" and R-56 says "the author's name";
+  `created_by` is the author's identity, so two people who share a name
+  differ. — If wrong: one word.
+- Ruling (Task 8 review, Minor 1): E-24's consequential lines are part
+  of E-24, as E-23's `details()` helper was. They are the imports its
+  named assertions need, and the renamed test's own doc comment. — No
+  change to behaviour.
+- Ruling (Task 8 review, Minors 4 and 8, parked): a comment's time shows
+  no year. That is a Known Limit, since the handoff gives two forms
+  only. The shared caret-reveal helper is carried to Task 9, where the
+  edit editor needs the same reveal. — If wrong: one formatter form, or
+  one helper extracted now.

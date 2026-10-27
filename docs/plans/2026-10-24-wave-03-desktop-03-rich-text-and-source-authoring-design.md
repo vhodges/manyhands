@@ -2542,6 +2542,10 @@ R-45 by decision 18.
   by its tab (R-75, R-77).
 - Other front-matter keys show in the library's key order, as JSON
   (fact 78).
+- A comment's time shows no year, because the handoff gives only "Oct 22,
+  10:14" and "Today, 15:36". A comment from an earlier year reads like
+  this year's. Where no local offset is read, as on non-Unix targets, the
+  time is in UTC and says so (Task 8).
 - A kept session holds a second editor, each with up to 256 whole-text undo
   steps; every comment body is its own editor (R-63).
 - A remote image shows as its source text.
