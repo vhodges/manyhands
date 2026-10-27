@@ -11,7 +11,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{TabInfo, active_line_color, tab_info, tooltip_text};
+use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
     model::{navigation::OpenTarget, tabs::TabKey},
     services::{
@@ -27,7 +27,7 @@ use crate::desktop::{
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
         harness::{Shell, key},
-        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED, tokens::colors as item_colors},
+        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED, tokens::colors},
         workspace::{REGIONS, Region},
     },
 };
@@ -1096,6 +1096,31 @@ fn the_strip_does_not_wrap(cx: &mut TestAppContext) {
     );
     let strip = shell.frame(cx, |window, _| window.find("tab-strip").bounds());
     assert_eq!(strip.size.height, gpui_kit::px(34.));
+    // Widths: a tab with a long title is cut at 260 px, not collapsed and
+    // not wrapped: the title keeps one line.
+    for ix in 0..3usize {
+        let (tab, close, title, icon) = shell.frame(cx, |window, _| {
+            (
+                window.find(("tab", ix)).bounds(),
+                window.find(("tab-close", ix)).bounds(),
+                window.find(("tab-title", ix)).bounds(),
+                window.find(("tab-icon", ix)).bounds(),
+            )
+        });
+        let whole = tab.size.width + close.size.width + gpui_kit::px(6.);
+        assert!(whole <= gpui_kit::px(260.), "tab {ix} is {whole:?} wide");
+        assert!(
+            tab.size.width > icon.size.width + close.size.width,
+            "tab {ix} collapsed to {:?}",
+            tab.size.width
+        );
+        assert!(title.size.width > gpui_kit::px(40.), "title {ix} collapsed");
+        assert!(
+            title.size.height < gpui_kit::px(24.),
+            "title {ix} wrapped to {:?}",
+            title.size.height
+        );
+    }
 }
 
 /// Exactly the shown tab carries the active line, whichever tab that is.
@@ -1116,21 +1141,50 @@ fn only_the_shown_tab_carries_the_active_line(cx: &mut TestAppContext) {
 }
 
 /// The line is amber while the content region has focus and `faint`
-/// otherwise; it is drawn either way.
+/// otherwise; it is drawn either way. The rendered line says which it
+/// is drawn in, from the real focus.
 #[gpui_kit::test]
 fn the_focused_strip_marks_the_active_tab(cx: &mut TestAppContext) {
     let t = two(cx);
     open(&t.shell, ticket(&t.a, ONE), cx);
+    let line = |cx: &mut TestAppContext| {
+        t.shell.frame(cx, |window, _| {
+            window
+                .try_find(("tab-active-line", 0usize))
+                .map(|line| line.value().map(str::to_owned))
+        })
+    };
     t.shell.keys("secondary-3", cx);
     assert_eq!(ring(&t.shell, cx), [Region::Content]);
-    assert!(t.shell.present(("tab-active-line", 0usize), cx));
-    let colors = item_colors(true);
-    assert_eq!(active_line_color(true, &colors), colors.accent);
-    assert_eq!(active_line_color(false, &colors), colors.faint);
+    assert_eq!(line(cx), Some(Some("amber".to_owned())));
     t.shell.keys("secondary-1", cx);
     assert_ne!(ring(&t.shell, cx), [Region::Content]);
-    assert!(
-        t.shell.present(("tab-active-line", 0usize), cx),
-        "the line stays when focus leaves"
+    assert_eq!(
+        line(cx),
+        Some(Some("faint".to_owned())),
+        "the line stays when focus leaves, in faint"
+    );
+    let colors = colors(true);
+    assert_eq!(active_line(true, &colors), ("amber", colors.accent));
+    assert_eq!(active_line(false, &colors), ("faint", colors.faint));
+}
+
+/// The close control is the design's 20 x 20, with the Kit's `close` icon.
+#[gpui_kit::test]
+fn the_close_button_is_twenty_by_twenty(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    let (wrapper, button) = t.shell.frame(cx, |window, _| {
+        (
+            window.find(("tab-close", 0usize)).bounds().size,
+            window.find(("tab-close-button", 0usize)).bounds().size,
+        )
+    });
+    let twenty = gpui_kit::size(gpui_kit::px(20.), gpui_kit::px(20.));
+    assert_eq!(button, twenty);
+    assert_eq!(wrapper, twenty);
+    assert_eq!(
+        t.shell.label(("tab-close", 0usize), cx).as_deref(),
+        Some("Close One")
     );
 }

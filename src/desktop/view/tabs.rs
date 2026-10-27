@@ -59,6 +59,8 @@ const DOT_SIZE: f32 = 7.;
 const CODE_SIZE: f32 = 11.;
 const TITLE_SIZE: f32 = 13.;
 const ACTIVE_LINE: f32 = 2.;
+const CLOSE_SIZE: f32 = 20.;
+const CLOSE_ICON: f32 = 12.;
 
 pub(crate) fn close_label(title: &str) -> String {
     format!("{CLOSE_TAB} {title}")
@@ -129,12 +131,12 @@ pub(super) fn tooltip_text(
 }
 
 /// The active tab's top line: amber while the content region has focus,
-/// `faint` otherwise.
-pub(super) fn active_line_color(content_focused: bool, colors: &ItemColors) -> Hsla {
+/// `faint` otherwise, with the name the line states in its accessible value.
+pub(super) fn active_line(content_focused: bool, colors: &ItemColors) -> (&'static str, Hsla) {
     if content_focused {
-        colors.accent
+        ("amber", colors.accent)
     } else {
-        colors.faint
+        ("faint", colors.faint)
     }
 }
 
@@ -151,14 +153,10 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
         _ => None,
     };
     let registry = pane.drafts().read(cx);
-    let unsaved = match pane.tab_key() {
+    let key = pane.tab_key();
+    let unsaved = match &key {
         TabKey::Item { repo, kind, id } => {
-            let key = TabKey::Item {
-                repo: repo.clone(),
-                kind,
-                id: id.clone(),
-            };
-            registry.attached(&key).is_some() || registry.stored_for(&repo, kind, &id).is_some()
+            registry.attached(&key).is_some() || registry.stored_for(repo, *kind, id).is_some()
         }
         TabKey::Inspect { .. } => false,
     };
@@ -426,10 +424,8 @@ impl TabContent {
                 .border_color(border)
                 .text_color(if active { foreground } else { muted });
             if active {
-                cell = cell.bg(page);
-            }
-            if active {
-                cell = cell.child(
+                let (line_name, line_color) = active_line(content_focused, &colors);
+                cell = cell.bg(page).child(
                     div()
                         .id(("tab-active-line", ix))
                         .test_support()
@@ -438,7 +434,8 @@ impl TabContent {
                         .left_0()
                         .right_0()
                         .h(px(ACTIVE_LINE))
-                        .bg(active_line_color(content_focused, &colors)),
+                        .aria_value(line_name)
+                        .bg(line_color),
                 );
             }
             strip = strip.child(
@@ -448,11 +445,21 @@ impl TabContent {
                         .test_support()
                         .aria_label(close_label(&info.title))
                         .flex_none()
+                        .w(px(CLOSE_SIZE))
+                        .h(px(CLOSE_SIZE))
                         .when_some_focus(self.close_focus.get(&id))
                         .child(
                             Button::new(("tab-close-button", ix))
                                 .ghost()
-                                .label("×")
+                                .w(px(CLOSE_SIZE))
+                                .h(px(CLOSE_SIZE))
+                                .p_0()
+                                .child(
+                                    Icon::default()
+                                        .path(icon_path("close"))
+                                        .w(px(CLOSE_ICON))
+                                        .h(px(CLOSE_ICON)),
+                                )
                                 .accessibility_label(close_label(&info.title))
                                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                     this.close_tab(id, window, cx);

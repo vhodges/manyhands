@@ -10,32 +10,52 @@ use gpui_kit::{App, Hsla, component::ActiveTheme, rgb};
 
 /// The item view's colours for one mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(not(test), allow(dead_code))] // Fields are read from Tasks 5a to 8.
 pub(crate) struct ItemColors {
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_block: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_border: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_title: Hsla,
     /// Brand amber: the tab strip's active icon and focused line.
     pub accent: Hsla,
     /// The unfocused tab line.
     pub faint: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_text: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_text_secondary: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_muted: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border_soft: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border_strong: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_fill: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub code_inline: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub discussion: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
     pub toolbar_hover: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
     pub segmented: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub selection: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_teal: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_teal_hover: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_amber: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_amber_text: Hsla,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     pub page_green: Hsla,
 }
 
