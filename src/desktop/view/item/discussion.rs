@@ -10,16 +10,18 @@ use gpui_kit::{
 };
 use manyhands::repository::CommentListDto;
 
-use super::{BACK_TO_TOP, COMMENT_INDENT, ItemPane, header::later_action, text};
+use super::{
+    BACK_TO_TOP, COMMENT_INDENT, ItemPane,
+    header::{NoteAt, Weight, later_action},
+    text,
+};
 use crate::desktop::{
     assets::icon_path,
-    model::item::{LATER, comment_author},
+    model::item::{COMMENT, comment_author},
 };
 
 /// Back to top's `arrow-up`.
 const ARROW_SIZE: f32 = 14.;
-/// The discussion's Comment, by its place in `LATER`.
-const COMMENT: &str = LATER[1];
 
 impl ItemPane {
     /// The discussion, ending with Comment, the `later`th later action.
@@ -89,7 +91,14 @@ impl ItemPane {
                 )
                 .child(status)
                 .children(rows)
-                .child(later_action(later, COMMENT, None, false, true, cx)),
+                .child(later_action(
+                    later,
+                    COMMENT,
+                    None,
+                    Weight::Plain,
+                    NoteAt::Below,
+                    cx,
+                )),
         )
     }
 

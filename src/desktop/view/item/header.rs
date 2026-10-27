@@ -8,12 +8,12 @@
 //! pane, and still come first in the tab order (strip, header actions,
 //! chips, page). Edit, Share and the primary action are not available yet
 //! (decision 16): each is disabled, with "Available in a later release"
-//! as its tooltip and its note.
+//! as its tooltip and its accessible description.
 
 use std::path::Path;
 
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, Icon, Sizable,
@@ -29,17 +29,12 @@ use super::{ItemPane, chips::chips, pill, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{LATER, LATER_NOTE},
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET, EDIT, LATER, LATER_NOTE, SHARE},
         navigation::OpenTarget,
         tabs::TabKey,
     },
 };
 
-/// The header's later actions, by their place in `LATER`.
-const EDIT: &str = LATER[0];
-const SHARE: &str = LATER[2];
-const APPROVE: &str = LATER[3];
-const CLOSE: &str = LATER[4];
 /// The block's padding, vertical and horizontal.
 const PADDING: (f32, f32) = (14., 28.);
 /// The gap between the breadcrumb, the title row and the banners.
@@ -95,17 +90,39 @@ pub(crate) fn crumbs(target: &OpenTarget, item: Option<&ItemDto>) -> (Option<Str
     }
 }
 
-/// A later action: `label`, disabled, `ix`th of the tab's later actions,
-/// with "Available in a later release" as its note. In the header the
-/// note is its tooltip; elsewhere (`text_note`) it is written below it.
+/// How a later action's button is drawn: the header's primary action is
+/// the warning (amber) button.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Weight {
+    Plain,
+    Primary,
+}
+
+/// Where a later action shows its note, "Available in a later release",
+/// besides its accessible description: as the button's tooltip in the
+/// header, or written below it in a banner or the discussion.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum NoteAt {
+    Tooltip,
+    Below,
+}
+
+/// A later action: `label`, one of `LATER`, disabled, the `ix`th of the
+/// tab's later actions.
+///
+/// Its `("later-action", ix)` group carries the role, so assistive tech
+/// reaches the label and the note as its description; the Kit's button
+/// takes no description of its own. The `("later-note", ix)` element holds
+/// the note for the tab's rows of notes.
 pub(super) fn later_action(
     ix: usize,
     label: &'static str,
     icon: Option<&'static str>,
-    primary: bool,
-    text_note: bool,
+    weight: Weight,
+    note: NoteAt,
     cx: &App,
 ) -> AnyElement {
+    debug_assert!(LATER.contains(&label), "{label} is not a later action");
     let mut button = Button::new(("later-button", ix))
         .label(label)
         .small()
@@ -113,31 +130,29 @@ pub(super) fn later_action(
     if let Some(icon) = icon {
         button = button.icon(Icon::default().path(icon_path(icon)));
     }
-    if primary {
+    if weight == Weight::Primary {
         button = button.warning();
     }
-    if text_note {
-        let muted = cx.theme().muted_foreground;
-        v_flex()
-            .gap_1()
-            .child(
-                div()
-                    .id(("later-action", ix))
-                    .test_support()
-                    .aria_label(label)
-                    .child(button),
-            )
-            .child(
-                text(("later-note", ix), LATER_NOTE)
-                    .text_xs()
-                    .text_color(muted),
-            )
-            .into_any_element()
-    } else {
-        div()
-            .id(("later-action", ix))
-            .test_support()
-            .aria_label(label)
+    let action = div()
+        .id(("later-action", ix))
+        .test_support()
+        .role(Role::Group)
+        .aria_label(label)
+        .aria_description(LATER_NOTE);
+    match note {
+        NoteAt::Below => {
+            let muted = cx.theme().muted_foreground;
+            v_flex()
+                .gap_1()
+                .child(action.child(button))
+                .child(
+                    text(("later-note", ix), LATER_NOTE)
+                        .text_xs()
+                        .text_color(muted),
+                )
+                .into_any_element()
+        }
+        NoteAt::Tooltip => action
             .flex_none()
             .child(
                 div()
@@ -146,7 +161,7 @@ pub(super) fn later_action(
                     .aria_label(LATER_NOTE)
                     .child(button.tooltip(LATER_NOTE)),
             )
-            .into_any_element()
+            .into_any_element(),
     }
 }
 
@@ -155,8 +170,8 @@ pub(super) fn later_action(
 pub(crate) fn header_later(kind: Option<ItemDtoKind>) -> Vec<&'static str> {
     let mut actions = vec![EDIT, SHARE];
     match kind {
-        Some(ItemDtoKind::Ticket) => actions.push(CLOSE),
-        Some(ItemDtoKind::Document) => actions.push(APPROVE),
+        Some(ItemDtoKind::Ticket) => actions.push(CLOSE_TICKET),
+        Some(ItemDtoKind::Document) => actions.push(APPROVE_AND_MERGE),
         None => {}
     }
     actions
@@ -201,8 +216,11 @@ impl ItemPane {
                             SHARE => Some("cloud-upload"),
                             _ => None,
                         };
-                        let primary = matches!(*label, CLOSE | APPROVE);
-                        later_action(ix, label, icon, primary, false, cx)
+                        let weight = match *label {
+                            CLOSE_TICKET | APPROVE_AND_MERGE => Weight::Primary,
+                            _ => Weight::Plain,
+                        };
+                        later_action(ix, label, icon, weight, NoteAt::Tooltip, cx)
                     })
                     .collect::<Vec<_>>(),
             );

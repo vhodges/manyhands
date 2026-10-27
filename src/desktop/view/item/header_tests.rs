@@ -5,7 +5,7 @@
 
 use std::{cell::RefCell, path::Path, rc::Rc, time::Duration};
 
-use gpui_kit::{ElementId, Entity, TestAppContext, test::TestWindowExt};
+use gpui_kit::{ElementId, Entity, Role, TestAppContext, test::TestWindowExt};
 use manyhands::{
     repository::{
         ItemDto, ItemDtoKind, LeaseHolderForTesting, LeaseKind, ProblemDto, RepositoryService,
@@ -24,7 +24,9 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        item::{ItemReads, LATER, LATER_NOTE},
+        item::{
+            APPROVE_AND_MERGE, CLOSE_TICKET, COMMENT, EDIT, ItemReads, LATER_NOTE, REPAIR, SHARE,
+        },
         list_state::LABEL_BUSY,
         navigation::OpenTarget,
     },
@@ -137,6 +139,14 @@ fn inside(
 
 fn in_header(shell: &Shell, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
     inside(shell, id, "item-header", cx)
+}
+
+/// The role the element `id` reports to assistive tech.
+fn role(shell: &Shell, id: impl Into<ElementId>, cx: &mut TestAppContext) -> Option<Role> {
+    let id = id.into();
+    shell.frame(cx, |window, _| {
+        window.try_find(id).and_then(|element| element.role())
+    })
 }
 
 fn focused(shell: &Shell, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
@@ -553,15 +563,14 @@ fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppCon
         fixture.commit_ticket(root, CODED, "Ticket", "");
         fixture.create_document(root, DOCUMENT, "docs/first.md", "First");
     });
-    let (edit, comment, share, approve, close) = (LATER[0], LATER[1], LATER[2], LATER[3], LATER[4]);
     for (target, primary) in [
-        (ticket(&root, CODED), close),
-        (document(&root, DOCUMENT), approve),
+        (ticket(&root, CODED), CLOSE_TICKET),
+        (document(&root, DOCUMENT), APPROVE_AND_MERGE),
     ] {
         open(&shell, target, cx);
         let before = RepositorySnapshot::take(&root);
         let pill = shell.label("item-pill", cx);
-        for (ix, label) in [edit, share, primary].into_iter().enumerate() {
+        for (ix, label) in [EDIT, SHARE, primary].into_iter().enumerate() {
             assert_eq!(
                 shell.label(("later-action", ix), cx).as_deref(),
                 Some(label)
@@ -573,12 +582,15 @@ fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppCon
                 "{label}"
             );
             assert!(shell.inert_button(("later-button", ix), cx), "{label}");
+            // The group carries the role, so assistive tech reaches it, with
+            // the note as its description (which the snapshot cannot read).
+            assert_eq!(role(&shell, ("later-action", ix), cx), Some(Role::Group));
             shell.click(("later-button", ix), cx);
             assert_eq!(shell.label("item-pill", cx), pill, "{label} did nothing");
         }
         assert_eq!(
             shell.label(("later-action", 3usize), cx).as_deref(),
-            Some(comment)
+            Some(COMMENT)
         );
         assert!(inside(&shell, ("later-action", 3usize), "discussion", cx));
         assert!(!shell.present(("later-action", 4usize), cx));
@@ -607,9 +619,9 @@ fn past_the_retries(shell: &Shell, cx: &mut TestAppContext) {
 /// which claims no copy; and an item not found with Refresh.
 #[gpui_kit::test]
 fn the_status_lines_are_banners_with_their_actions(cx: &mut TestAppContext) {
-    // The design's Banners table, row by row, with its tone; the slot
-    // shows the most severe first and keeps the table's order within a
-    // tone.
+    // The design's Banners table, row by row, with its tone. The slot shows
+    // the most severe first, and the table's order within a tone, whatever
+    // order the banners were raised in.
     let table = [
         (Banner::Status { amber: false }, Tone::Info),
         (Banner::Status { amber: true }, Tone::Amber),
@@ -630,6 +642,10 @@ fn the_status_lines_are_banners_with_their_actions(cx: &mut TestAppContext) {
     for (banner, tone) in table {
         assert_eq!(banner.tone(), tone, "{banner:?}");
     }
+    assert!(
+        table.windows(2).all(|rows| rows[0].0 < rows[1].0),
+        "the rows are ordered as the table lists them"
+    );
     let order = |banners: &[Banner]| -> Vec<Banner> {
         let banners = banners.iter().map(|banner| (*banner, ())).collect();
         most_severe_first(banners)
@@ -646,9 +662,31 @@ fn the_status_lines_are_banners_with_their_actions(cx: &mut TestAppContext) {
         ]),
         [
             Banner::Recovery,
-            Banner::NeedsFixing,
             Banner::Status { amber: true },
+            Banner::NeedsFixing,
             Banner::Status { amber: false },
+        ]
+    );
+    assert_eq!(
+        order(&[Banner::Refused, Banner::CheckpointFailed, Banner::Recovery]),
+        [Banner::Recovery, Banner::CheckpointFailed, Banner::Refused]
+    );
+    assert_eq!(
+        order(&[
+            Banner::Link,
+            Banner::Unmanaged,
+            Banner::NeedsFixing,
+            Banner::KeptAfterDone,
+            Banner::StoredDraft,
+            Banner::DraftDiscarded,
+        ]),
+        [
+            Banner::StoredDraft,
+            Banner::KeptAfterDone,
+            Banner::NeedsFixing,
+            Banner::Unmanaged,
+            Banner::DraftDiscarded,
+            Banner::Link,
         ]
     );
 
@@ -761,7 +799,7 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
     let repair = 3usize;
     assert_eq!(
         shell.label(("later-action", repair), cx).as_deref(),
-        Some(LATER[5])
+        Some(REPAIR)
     );
     assert!(inside(&shell, ("later-action", repair), "item-banners", cx));
     assert_eq!(
@@ -782,14 +820,37 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
     assert!(!shell.present(ChipField::All.id(), cx));
     assert_eq!(
         shell.label(("later-action", 2usize), cx).as_deref(),
-        Some(LATER[4])
+        Some(CLOSE_TICKET)
     );
 
     open(&shell, inspect(&root, MARKER), cx);
     assert!(shell.present("item-needs-fixing", cx));
     assert_eq!(
         shell.label(("later-action", 2usize), cx).as_deref(),
-        Some(LATER[3])
+        Some(APPROVE_AND_MERGE)
+    );
+}
+
+/// A conforming item read by its path, as the details sheet's Inspect link
+/// will open one (R-64), needs no fixing: no "Needs fixing" banner and no
+/// Repair. Only a nonconforming file, which has no ID, shows them.
+#[gpui_kit::test]
+fn an_inspect_tab_of_a_conforming_item_needs_no_fixing(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, CODED, "Readable", "");
+    });
+    open(&shell, inspect(&root, &ticket_path(CODED)), cx);
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Readable"));
+    assert!(shell.present("item-source", cx), "the file is read");
+    assert!(!shell.present("item-needs-fixing", cx));
+    assert!(
+        !shell.present(("item-banner", 0usize), cx),
+        "no banner applies"
+    );
+    assert_eq!(
+        shell.rows("later-action", cx),
+        [EDIT, SHARE, CLOSE_TICKET],
+        "the header's actions only, with no Repair"
     );
 }
 

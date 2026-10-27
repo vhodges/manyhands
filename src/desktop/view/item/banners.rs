@@ -5,9 +5,10 @@
 //! D1's status lines are banners here, with D1's words, IDs and actions:
 //! loading, a failed or busy read with Retry, a read that kept what was
 //! shown, a context that needs recovery, and an item not found with
-//! Refresh. An item read by path is a nonconforming file, which "Needs
-//! fixing": its problems, with Repair not available yet. The other rows
-//! of the design's table are named here for the tasks that raise them.
+//! Refresh. A nonconforming file, an entry with no ID, "Needs fixing":
+//! D1's reason (each problem and its guidance), with Repair not available
+//! yet. The other rows of the design's table are named here for the tasks
+//! that raise them.
 
 use gpui_kit::{
     AnyElement, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
@@ -20,20 +21,21 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{ItemPane, RECOVERY, header::later_action, text};
+use super::{
+    ItemPane, RECOVERY,
+    header::{NoteAt, Weight, later_action},
+    text,
+};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{CONTEXT_PROBLEMS, LATER, context_problems},
+        item::{CONTEXT_PROBLEMS, REPAIR, context_problems},
         list_state::ListState,
-        navigation::OpenTarget,
     },
 };
 
 /// The "Needs fixing" banner's heading (`06-language-and-states.md`).
 pub(crate) const NEEDS_FIXING: &str = "Needs fixing";
-/// Repair, which Part E offers (Task 25).
-const REPAIR: &str = LATER[5];
 const ICON_SIZE: f32 = 15.;
 const TEXT_SIZE: f32 = 12.5;
 
@@ -45,8 +47,9 @@ pub(crate) enum Tone {
     Info,
 }
 
-/// One row of the design's Banners table.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One row of the design's Banners table. The rows are declared in the
+/// table's order, which their `Ord` follows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Banner {
     /// Loading, refreshing, or not refreshed: info while a read runs,
     /// amber when the read failed or kept what was shown.
@@ -70,14 +73,15 @@ pub(crate) enum Banner {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     DiscoveryPending,
     /// The item changed under a dirty or kept draft (R-68).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
     Changed,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     ReviewBeforeSaving,
     /// Another refusal, in the library's message.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     Refused,
-    /// A ticket with no type, or another nonconforming file.
+    /// A nonconforming file, a ticket with no type included (owner,
+    /// 2026-10-27): D1's reason, since the library names no missing field.
     NeedsFixing,
     /// An unmanaged document, with Adopt….
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
@@ -127,9 +131,16 @@ pub(crate) fn status_banner<T>(state: &ListState<T>) -> Option<Banner> {
     }
 }
 
-/// The banners, most severe first; the table's order within a tone.
+/// Whether `item` is a nonconforming file: the library gives such an entry
+/// no ID. A conforming item read by its path is not one.
+pub(super) fn nonconforming(item: &ItemDto) -> bool {
+    item.id.is_none()
+}
+
+/// The banners, most severe first, and in the table's order within a tone,
+/// whatever order they were raised in.
 pub(crate) fn most_severe_first<E>(mut banners: Vec<(Banner, E)>) -> Vec<(Banner, E)> {
-    banners.sort_by_key(|(banner, _)| banner.tone());
+    banners.sort_by_key(|(banner, _)| (banner.tone(), *banner));
     banners
 }
 
@@ -155,8 +166,7 @@ impl ItemPane {
             banners.push((Banner::Recovery, recovery));
         }
         let mut used = 0;
-        let nonconforming = matches!(self.model.target(), OpenTarget::Inspect { .. });
-        if let Some(item) = item.filter(|_| nonconforming) {
+        if let Some(item) = item.filter(|item| nonconforming(item)) {
             banners.push((Banner::NeedsFixing, self.needs_fixing(item, later_from, cx)));
             used += 1;
         }
@@ -238,7 +248,14 @@ impl ItemPane {
                     )
                     .children(problems),
             )
-            .child(later_action(later, REPAIR, None, false, true, cx))
+            .child(later_action(
+                later,
+                REPAIR,
+                None,
+                Weight::Plain,
+                NoteAt::Below,
+                cx,
+            ))
             .into_any_element()
     }
 }

@@ -202,15 +202,14 @@ impl Render for ItemPane {
         if relationships.is_none() {
             self.row_focus.clear();
         }
-        // A file read by path shows its problems in "Needs fixing".
-        let by_path = matches!(self.model.target(), OpenTarget::Inspect { .. });
+        // A nonconforming file shows its problems in "Needs fixing".
         let body = item.as_ref().map(|item| {
             v_flex()
                 .gap_3()
                 .child(self.provenance(item, cx))
                 .child(self.fields(item, cx))
                 .children(relationships)
-                .children((!by_path).then(|| self.problems(item, cx)))
+                .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
                 .child(self.metadata(item, cx))
                 .child(self.source(item, cx))
         });
