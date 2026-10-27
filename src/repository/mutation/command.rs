@@ -675,8 +675,10 @@ mod tests {
         assert!(!command.creates_its_repository());
         assert!(!command.stops_at_safe_points());
         assert!(!command.finishes_as_a_synchronization());
-        // Its hand-off is its operation's to owe, and a resume finishes
-        // it: no refresh does it in its place.
+        // Its hand-off is its operation's to owe. The row stays at
+        // `worktree_observed`, so a resume answers
+        // `original_request_required` and the request's own retry
+        // finishes it (R-77); no refresh does it in its place.
         assert!(!command.hands_off_to_any_refresh());
         assert_eq!(command.stage(), ProgressStage::Writing);
     }

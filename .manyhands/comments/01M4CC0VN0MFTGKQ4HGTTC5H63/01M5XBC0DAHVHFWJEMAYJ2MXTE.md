@@ -12,7 +12,7 @@ created_by: "Claude Opus 5.5 <noreply@anthropic.com>"
 Added the `context prepare` command (binding, DTO, schema, two goldens,
 conformance row, E-15 to E-18). Every row of the design's outcome table is a
 test and passes; the last row's `context release` part waits for Task 2.
-Tests: mutation_bridges `prepare_` 16; the four `keeps_the_rules_of_the_boundary`
+Tests: mutation_bridges `prepare_` 17 (fix round 1) and `keeps_the_rules_of_the_boundary` 1; the four `keeps_the_rules_of_the_boundary`
 targets pass (remote: 2 SSH cases); mutation_contract `every_` 5 and the fixture
 directory test 1; lib `mutation::` 107; clippy and fmt clean. CLI `help` and
 `--help` match the Task 0 copies. Concern: a `discovery_pending` answer offers

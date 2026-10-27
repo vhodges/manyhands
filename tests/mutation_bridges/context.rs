@@ -323,6 +323,12 @@ fn prepare_create_of_an_existing_id_is_occupied_path() {
             create_document(&world, mutation::DOCUMENT),
             mutation::DOCUMENT,
         ),
+        // The other kind: a document is no more free for an ID a ticket holds.
+        (
+            REQUEST_3,
+            create_document(&world, items::TICKET_A),
+            items::TICKET_A,
+        ),
     ] {
         let refused = world.execute(request, mutation);
         assert_eq!(refused.code, ResultCode::OccupiedPath, "{refused:?}");
@@ -373,6 +379,26 @@ fn prepare_records_hold_no_body() {
     }
     mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
     let record = format!("{:?}", world.record(REQUEST_2).unwrap());
+    for sentinel in SENTINELS {
+        assert!(!record.contains(sentinel), "the record holds {sentinel}");
+    }
+
+    // And the path that makes the context, over a primary file whose body is
+    // the sentinel.
+    let world = World::new();
+    let path = items::ticket_path(items::TICKET_A);
+    let source = items::ticket_source(items::TICKET_A, mutation::TITLE, "");
+    items::write(&world.root, &path, &format!("{source}{}", mutation::BODY));
+    items::commit(&world.fixture, &[&path], items::COMMITTED_AT + 1);
+    let made = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+    assert_ok(&made);
+    assert!(created(&made));
+    let text = serde_json::to_string(&made).unwrap();
+    for sentinel in SENTINELS {
+        assert!(!text.contains(sentinel), "the envelope holds {sentinel}");
+    }
+    mutation::assert_request_stores_exclude(world.data.path(), &SENTINELS);
+    let record = format!("{:?}", world.record(REQUEST_1).unwrap());
     for sentinel in SENTINELS {
         assert!(!record.contains(sentinel), "the record holds {sentinel}");
     }
@@ -488,7 +514,7 @@ fn prepare_interrupted_before_the_worktree_other_requests_need_recovery_and_the_
 
     let lost = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
 
-    assert_ne!(lost.code, ResultCode::Ok, "{lost:?}");
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
     // The branch is there and the worktree is not.
     assert_eq!(
         contexts(&world),
@@ -521,6 +547,10 @@ fn prepare_interrupted_before_the_worktree_other_requests_need_recovery_and_the_
 #[test]
 fn prepare_after_an_uncommitted_edit_or_a_closure_the_same_request_still_continues_to_the_domain() {
     git_home::isolated();
+    // Both edits are uncommitted: the conditions the prechecks test change
+    // without moving primary's head. A closure that is committed moves the
+    // head, and then the branch left behind is stale: see
+    // `prepare_interrupted_before_the_worktree_then_a_committed_closure_is_recovery_required`.
     for edit in [
         items::ticket_source(items::TICKET_A, "Edited, not committed", ""),
         items::ticket_source_with(
@@ -533,7 +563,7 @@ fn prepare_after_an_uncommitted_edit_or_a_closure_the_same_request_still_continu
     ] {
         let world = failing_at(FailurePoint::BeforeWorktreeCreation);
         let lost = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
-        assert_ne!(lost.code, ResultCode::Ok, "{lost:?}");
+        assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
         items::write(&world.root, &items::ticket_path(items::TICKET_A), &edit);
 
         let retry = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
@@ -563,6 +593,22 @@ fn prepare_interrupted_before_settlement_the_same_request_is_ok_with_one_context
     assert_ok(&retry);
     assert_one_context(&world, items::TICKET_A);
     assert_eq!(world.pending_journal_rows(), 0);
+    // The row records no checkpoint step (the journal keeps its first step),
+    // so the boundary runs the request as new and finds the context: the
+    // answer names what a direct Created names, but did not make it.
+    let direct = World::new();
+    let direct_made = direct.execute(REQUEST_1, edit_ticket(&direct, items::TICKET_A));
+    let named = |world: &World, envelope: &Envelope<MutationDataDto>| {
+        let (id, kind, branch, worktree, _) = context(envelope);
+        let worktree = worktree
+            .strip_prefix(world.root.to_str().unwrap())
+            .unwrap()
+            .to_owned();
+        (id, kind, branch, worktree)
+    };
+    assert_eq!(named(&world, &retry), named(&direct, &direct_made));
+    assert!(created(&direct_made));
+    assert!(!created(&retry), "{retry:?}");
     assert_eq!(
         world.record(REQUEST_1).unwrap().state,
         RequestState::Finished
@@ -599,7 +645,24 @@ fn prepare_the_same_request_with_another_intent_or_item_is_a_mismatch() {
     let world = failing_at(FailurePoint::BeforeWorktreeCreation);
     world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
     let mismatch = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_C));
-    assert_eq!(mismatch.code, ResultCode::RequestMismatch, "{mismatch:?}");
+    // An attempt of the request made the branch, so the mismatch is partial
+    // (as `mutation_replay/execute.rs` has it for a commit).
+    assert_eq!(
+        (mismatch.outcome, mismatch.code),
+        (Outcome::Partial, ResultCode::RequestMismatch),
+        "{mismatch:?}"
+    );
+
+    // And after the context was made and the answer was lost. The completed row says
+    // nothing of what the attempt made, so nothing is reported.
+    let world = failing_at(FailurePoint::BeforeRequestSettlement);
+    world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+    let mismatch = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_C));
+    assert_eq!(
+        (mismatch.outcome, mismatch.code),
+        (Outcome::Error, ResultCode::RequestMismatch),
+        "{mismatch:?}"
+    );
 }
 
 #[test]
@@ -607,7 +670,7 @@ fn prepare_abandoning_the_interrupted_row_and_moving_primary_leaves_a_branch_edi
     git_home::isolated();
     let world = failing_at(FailurePoint::BeforeWorktreeCreation);
     let lost = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
-    assert_ne!(lost.code, ResultCode::Ok, "{lost:?}");
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
     let operation = operation_of(&world, REQUEST_1);
 
     // The row is abandoned: the branch is left behind, and the worktree
@@ -648,4 +711,36 @@ fn prepare_abandoning_the_interrupted_row_and_moving_primary_leaves_a_branch_edi
     );
     // `context release` removes the stranded branch, after which an Edit
     // answers ok; that part of the row is Task 2's.
+}
+
+#[test]
+fn prepare_interrupted_before_the_worktree_then_a_committed_closure_is_recovery_required() {
+    git_home::isolated();
+    let world = failing_at(FailurePoint::BeforeWorktreeCreation);
+    let lost = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+
+    // The closure is committed on primary: its head moves past the branch
+    // the interrupted call cut.
+    let path = items::ticket_path(items::TICKET_A);
+    items::write(
+        &world.root,
+        &path,
+        &items::ticket_source_with(
+            items::TICKET_A,
+            "Open ticket",
+            "bug",
+            "done",
+            items::CLOSURE,
+        ),
+    );
+    items::commit(&world.fixture, &[&path], items::COMMITTED_AT + 1);
+
+    let retry = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+
+    assert_eq!(retry.code, ResultCode::RecoveryRequired, "{retry:?}");
+    assert_eq!(
+        contexts(&world),
+        (vec![World::branch(items::TICKET_A)], vec![])
+    );
 }

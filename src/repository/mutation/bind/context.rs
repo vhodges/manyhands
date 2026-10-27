@@ -18,16 +18,17 @@
 //! **What the domain's answer comes to.** A context that was made, or a
 //! pending row of this request that is finished, is `created`. One that
 //! was there already is not. A failed hand-off to the index leaves the
-//! row pending for `operation resume`, and the request is
-//! `discovery_pending`. Neither a write nor a checkpoint is requested.
+//! row pending at `worktree_observed`: a resume answers
+//! `original_request_required`, so the request's own retry finishes the
+//! hand-off, and the answer is `discovery_pending` offering that retry
+//! (R-77). Neither a write nor a checkpoint is requested.
 //!
 //! **Re-entry.** A row that is absent or pending is continued by the
 //! domain under the same operation ID, which finishes what an earlier
-//! call left. A row that completed with its checkpoint step recorded is
-//! the context this request made, and is answered as such without a
-//! domain call; the request's answer was lost. A row that completed with
-//! none found the context there already, did nothing, and is run as a
-//! new request by the boundary.
+//! call left. A row that completed records no checkpoint step (the journal
+//! keeps the first step it recorded, which is the branch or worktree
+//! one), so the boundary runs the request as new: the context is found
+//! there, and the answer is `ok` with `created` false.
 
 use std::path::PathBuf;
 
@@ -116,8 +117,9 @@ impl From<ContextPrepareInput> for ContextPrepareBinding {
 }
 
 /// Whether a request that is unfinished may have made part of its
-/// context: its row is pending with a step of the context recorded, or
-/// completed with the checkpoint step. A context is shown by no effect.
+/// context: its row is pending with a step of the context recorded. A
+/// context is shown by no effect. A completed row has no step to say
+/// whether it made the context or found it, and reads as none.
 pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
     match journal {
         Some(JournalRow::Pending(PendingOperation::Local { state: _, step })) => {
@@ -127,11 +129,6 @@ pub(crate) fn changed_and_unfinished(journal: Option<&JournalRow>) -> bool {
                     || step.is(LocalStep::AuthoritativeObserved)
             })
         }
-        Some(JournalRow::Final {
-            kind: FinalKind::Completed,
-            owes_work: _,
-            checkpointed: true,
-        }) => true,
         Some(
             JournalRow::Absent
             | JournalRow::Pending(
@@ -166,19 +163,6 @@ impl ContextPrepareBinding {
         let worktree = absolute_path_string(&context.worktree)
             .unwrap_or_else(|| context.worktree.to_string_lossy().into_owned());
         self.dto(&context.branch, worktree, created)
-    }
-
-    /// The context this request made, named as the domain names it. For
-    /// a request answered from its row, which holds no context.
-    fn made(&self, accepted: &Accepted) -> MutationDataDto {
-        let names = context_names(&accepted.root(), &self.kind, &self.id_text());
-        let branch = names
-            .branch_ref
-            .strip_prefix("refs/heads/")
-            .unwrap_or(&names.branch_ref);
-        let worktree = absolute_path_string(&names.worktree)
-            .unwrap_or_else(|| names.worktree.to_string_lossy().into_owned());
-        self.dto(branch, worktree, true)
     }
 
     fn ok(data: MutationDataDto) -> Answer {
@@ -242,7 +226,16 @@ impl ContextPrepareBinding {
     fn left(service: &RepositoryService, accepted: &Accepted) -> Standing {
         match accepted.journal_row(service) {
             Some(JournalRow::Absent) if accepted.attempt > 1 => Standing::Unconfirmed,
-            journal => Standing::Stopped { journal },
+            journal @ (Some(
+                JournalRow::Absent
+                | JournalRow::Pending(_)
+                | JournalRow::Final {
+                    kind: _,
+                    owes_work: _,
+                    checkpointed: _,
+                },
+            )
+            | None) => Standing::Stopped { journal },
         }
     }
 
@@ -351,20 +344,11 @@ impl Binding for ContextPrepareBinding {
     fn reenter(
         &mut self,
         _call: &CallContext<'_>,
-        accepted: &Accepted,
+        _accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
         match journal {
             JournalRow::Absent | JournalRow::Pending(_) => Ok(Entered::Unfinished),
-            // The context this request made, whose answer was lost.
-            JournalRow::Final {
-                kind: FinalKind::Completed,
-                owes_work: false,
-                checkpointed: true,
-            } => Err(Ran {
-                answer: Self::ok(self.made(accepted)),
-                standing: Standing::Final,
-            }),
             // A completed row with no checkpoint is run as new before it
             // gets here, and no other local operation ends in another
             // way or owes work once it has completed. Nothing is run or
