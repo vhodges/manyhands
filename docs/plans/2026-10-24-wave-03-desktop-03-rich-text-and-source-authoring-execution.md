@@ -224,7 +224,7 @@ Notes for later tasks: Task 22 leaves `targets()` in
 | Task | Commits | Tests run | Result | Notes |
 | --- | --- | --- | --- | --- |
 | 0 | this ledger's first commit | baseline above: 4,529 passed, 0 failed, 1 ignored | complete | E-30 added by the owner; see Rulings |
-| 1 | `feat: add context prepare` (this commit) | mutation_bridges `prepare_` → 17, `keeps_the_rules_of_the_boundary` → 1; mutation_replay / mutation_confirmation `keeps_the_rules_of_the_boundary` → 1 each; mutation_remote same filter → 2 SSH cases; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; lib `mutation::` → 107; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | complete, with one concern | `discovery_pending` of `context prepare` offers `request.retry`, not `operation.resume`: the row keeps step `worktree_observed`, which `operation resume` leaves to the original request; see the Task 1 report |
+| 1 | `feat: add context prepare` (this commit) | mutation_bridges `prepare_` → 17, `keeps_the_rules_of_the_boundary` → 1; mutation_replay / mutation_confirmation `keeps_the_rules_of_the_boundary` → 1 each; mutation_remote same filter → 2 SSH cases; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; lib `mutation::` → 107; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | complete (review fixes in `e94d5c2`) | `discovery_pending` of `context prepare` offers `request.retry`, not `operation.resume`: the row keeps step `worktree_observed`, which `operation resume` leaves to the original request. The owner kept the library as it is (R-77). Its schema's `kind` enum broke `read_contract published_enumerations_list_exactly_the_registered_values`, which its Verify lines did not run; fixed in Task 2 by E-31 |
 | 2 | `feat: add context release` (this commit) | lib `context_release` → 24, `cleanup` → 47, `recovery` → 54, `read::status` → 10, `mutation::` → 108; mutation_bridges `release_` → 16, `keeps_the_rules_of_the_boundary` → 1, `prepare_` → 17; read_contract `every_published_` → 2, `published_enumerations_list_exactly_the_registered_values` → 0 passed, 1 failed; mutation_contract `every_` → 5, `the_fixture_directories_are_exactly_the_registered_cases` → 1; clippy all-targets/all-features clean; fmt clean; CLI `help` (exit 2) and `--help` (exit 0) equal the Task 0 copies | blocked on one Verify line | Every row of the release table passes. `published_enumerations_list_exactly_the_registered_values` fails at HEAD already: Task 1's `context_mutation.schema.json` holds a `kind` enum that `contract_enumerations()` ties to no Rust list (55 `enum` keywords, 53 + 1 tied). Task 2 adds no enum keyword. The fix is a pre-existing test's or Task 1's schema, outside Task 2's files; see the Task 2 report |
 
 ## Rulings during implementation
@@ -303,3 +303,29 @@ Notes for later tasks: Task 22 leaves `targets()` in
   Pre-existing tests change only as E-15, E-16, E-20, E-21 and E-22. — The
   release binding sits beside Task 1's prepare binding, in the files Task 1
   made for it. — If wrong: a file is named in the wrong Part 0 task.
+  (Controller's ruling; the Task 2 implementer entered it.)
+- Owner decision, 2026-10-26 (from Task 2): new named edit **E-31**.
+  Task 1's `context_mutation.schema.json` added a `kind` enum that
+  `contract_enumerations()` tied to no Rust list, so
+  `read_contract published_enumerations_list_exactly_the_registered_values`
+  has failed since `eb6e51f` (54 `enum` keywords at `4d3cb3b`, 55 after).
+  Task 1's Verify lines did not include that test. E-31 adds the row
+  tying `kind` to `ItemDtoKind::ALL` and reorders the schema's enum to
+  `["document", "ticket"]`, the order `item.schema.json` uses. Applied in
+  Task 2. The design's Named Edits and the plan list it.
+- Ruling (Task 2 review, concerns 3 and 4): design steps 4 and 5 discard
+  only a new row. A re-entered row with no step that refuses at step 4,
+  and a row whose prune began and failed (`WorktreeRelease::Incomplete`,
+  answering `recovery_required`), stay pending. — The design discards
+  "because nothing was touched", and the journal cannot prove that of a
+  re-entered row or a started prune; keeping such a row pending is the
+  repository's discard rule (`CallEffects`). Every table row that says
+  "discarded" is a first call, so no table answer changes. — If wrong: a
+  user whose release was interrupted before step 5, and then refused,
+  abandons the row before the next Edit.
+- Ruling (Task 2 review, parked): `require_cleanup_clean` reports I/O
+  failures (an unreadable index, a failed status read) as
+  `worktree_not_clean` (`cleanup.rs:167`). It is the promotion runner's
+  shared helper, and changing its mapping is beyond Task 2. Carried to the
+  whole-branch review. — If wrong: a rare I/O failure tells the user to
+  clean files they do not have.

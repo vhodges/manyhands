@@ -69,7 +69,7 @@ Edits.
   - `src/repository/cleanup.rs`, `recovery.rs` and `bridges/abandon.rs`;
   - `src/repository/read/{dto,status}.rs`;
   - the three operation schemas;
-  - `tests/read_contract.rs` (E-20);
+  - `tests/read_contract.rs` (E-20, E-31) and `schemas/v1/context_mutation.schema.json` (E-31);
   - `src/repository/read/status_tests.rs` (E-21);
   - the test module inside `src/repository/recovery.rs` (E-22).
 - **No other task** changes `src/repository.rs`, `src/repository/`,
@@ -139,7 +139,7 @@ allowance. This is the repository's convention (`services/requests.rs:337`).
 
 **Test-first.** Write each behavior's test before its code.
 
-**Existing tests.** They change only as named edits E-1 to E-29, and E-30 (added by the owner on 2026-10-26). Any other
+**Existing tests.** They change only as named edits E-1 to E-29, E-30 and E-31 (added by the owner on 2026-10-26). Any other
 change to a pre-existing test, even a new lint, stops for the owner.
 
 **Commits.** Commit per task with a conventional message ending
@@ -215,7 +215,7 @@ Crafted link and image paths (`..`, a symbolic link out of the repository,
 | --- | --- | --- |
 | `docs/plans/…-execution.md` | 0 | Execution ledger. |
 | `src/repository/mutation/{command,mod,dto}.rs`, `bind/{mod,context}.rs`, `schemas/v1/context_mutation.schema.json`, `tests/mutation_bridges{.rs,/context.rs}`, `tests/fixtures/mutation_v1/context_*.json`, `tests/support/{conformance,mutation_golden,mutation,repair}.rs`, `tests/mutation_contract.rs` | 1 | `context prepare`; E-15 to E-18. |
-| `src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`, `bridges/abandon.rs`, `read/{dto,status,status_tests}.rs`, three operation schemas, `tests/read_contract.rs` | 2 | `context release`; E-20 to E-22. |
+| `src/repository.rs`, `src/repository/{context_release,cleanup,recovery}.rs`, `bridges/abandon.rs`, `read/{dto,status,status_tests}.rs`, three operation schemas, `schemas/v1/context_mutation.schema.json` (E-31), `tests/read_contract.rs` | 2 | `context release`; E-20 to E-22, E-31. |
 | `Cargo.toml`, `Cargo.lock`, `src/desktop/model/editor_text.rs`, `src/desktop/view/editor.rs`, `view/editor/{read_only,keys}.rs`, `desktop/mod.rs`, `view/harness.rs`, `scripts/check-cli-no-gpui.sh`, `tests/fixtures/editor/*` | 3 | Dependencies, editor bindings, feasibility, the read-only guard, load normalization. |
 | `src/desktop/assets.rs`, `desktop/mod.rs`, `view/item/tokens.rs`, `view/tabs.rs`, `view/tabs_tests.rs`, `view/settings/mod_tests.rs` | 4 | Icons, item colours, the tab strip; E-27, E-28, E-29. |
 | `view/item.rs`, `view/item/page.rs`, `view/scroll.rs`, `view/scroll_tests.rs`, `view/workspace/{render,content}.rs` | 5a | The layout, the item's scroll region and Back to top; E-25. |
@@ -432,7 +432,7 @@ devenv shell -- cargo run --locked --bin manyhands-cli -- help
   - The lease-held removal uses the item-free precheck.
   - The hand-off is owed to `operation resume`, and
     `hands_off_to_any_refresh` is false (R-32).
-  - Apply E-20, E-21 and E-22.
+  - Apply E-20, E-21, E-22 and E-31.
   - Add the second `HOMES` and `ROWS` rows (E-15) and the golden
     `context_release.json` (E-16).
 
@@ -465,7 +465,7 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - The library unit tests: `--lib`.
 - [ ] **Step 3: Review.** A fresh reviewer reviews Part 0 as a library
   change of its own: scope, both outcome tables, R-1 to R-5, R-32, R-43
-  and E-15 to E-22. Use the adversarial brief on release and replay.
+  and E-15 to E-22 and E-31. Use the adversarial brief on release and replay.
 - [ ] **Step 4: Ticket comment.** Desktop tasks start only after this
   review passes (decision 2).
 
@@ -1679,7 +1679,7 @@ git merge-tree --write-tree HEAD origin/main
 | --- | --- |
 | Context prepare; R-1 to R-5 | 1 |
 | Context release; R-32, R-43 | 2 |
-| E-21, E-22 | 2 |
+| E-21, E-22, E-31 | 2 |
 | Read-only guard; R-8, R-59 (bindings), R-61, R-66 | 3, 7 |
 | Load normalization | 3 |
 | Tab strip; R-50, R-51, R-52 | 4 |
