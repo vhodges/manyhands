@@ -207,9 +207,17 @@ Implementation constraints from the ruling: Inspect tabs keep `item-path`,
 keeps `item-title`; the pane root keeps `item-view`; `comment_author` and
 `UNKNOWN_AUTHOR` stay. If any cannot hold, the task stops for the owner.
 
-Notes for later tasks: Task 22 appends `NotCreated` to `targets()` in
-`model/drafts/rows_tests.rs` (E-22) and adds its `target_label` arm. Tasks 1
-and 2 keep the `Command::ALL` invariants in `command.rs`.
+From the Task 0 review, the same rule keeps D1's banner and state IDs that
+`tabs_tests.rs`, `item_tests.rs` and `draft_tests.rs` read: `item-failure`,
+`item-failure-code`, `item-retry`, `item-retry-button`,
+`item-not-refreshed*` and `item-recovery`. No D3 element, the state pill
+included, uses the ID `item-state`, which `tabs_tests.rs:628` asserts is
+absent.
+
+Notes for later tasks: Task 22 leaves `targets()` in
+`model/drafts/rows_tests.rs` as it is. No named edit covers it, and
+`NotCreated` breaks nothing there (see Rulings). Tasks 1 and 2 keep the
+`Command::ALL` invariants in `command.rs`.
 
 ## Task log
 
@@ -260,3 +268,24 @@ and 2 keep the `Command::ALL` invariants in `command.rs`.
 - Note P-8: `view/item/edit.rs` grows across Tasks 14 to 17. An implementer
   that would pass about 500 lines reports a proposed split along the
   design's Phases.
+- Ruling (Task 0 review): Task 22 does not append `NotCreated` to
+  `targets()` in `model/drafts/rows_tests.rs`. — No named edit covers it,
+  and the list stays a valid, if incomplete, set of cases. — If wrong: one
+  test's case list stays incomplete.
+- Owner decision, 2026-10-26 (from Task 1): fact 20 was wrong. A
+  `context prepare` that answers `discovery_pending` leaves its row at
+  `WorktreeObserved`, which `operation resume` does not take up, so the
+  library offers the same request again (`request.retry`). D3 keeps the
+  library as it is: the desktop's Resume during Loading sends the same
+  request again, whose `ok, created: true` enters `CreatedContexts`. The
+  design records it as R-77 and amends fact 20, the `context prepare`
+  answer, Phase 3 (Loading), R-13, R-75 and Known Limits. The plan's
+  Task 14 test notes it.
+- Owner decision, 2026-10-26 (from Task 1): accept Task 1's one-word
+  change in `src/repository/mutation/bind/ticket.rs` (`refuse_closed` made
+  `pub(super)`), although that file is not in Task 1's list. It changes no
+  behavior, and reusing the check is better than copying it.
+- Note for Task 2: the `context release` row "Refresh fails after both
+  removals" requires `operation resume` to complete the hand-off. The
+  release row's step must be one that resume takes up (`is_authoritative`
+  in `recovery.rs`, Task 2's file), or the row fails the way fact 20 did.

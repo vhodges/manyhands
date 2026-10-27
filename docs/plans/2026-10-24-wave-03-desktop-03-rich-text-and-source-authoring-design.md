@@ -175,8 +175,13 @@ command was run. Line numbers are at that revision.
 20. Each outcome leaves its journal row differently:
     - `Created` records `AuthoritativeObserved` and hands off
       (`:3670-3725`);
-    - `IndexPending` leaves the row pending as a hand-off for `operation
-      resume`;
+    - `IndexPending` leaves the row pending at `WorktreeObserved` (`:1961`).
+      Recording `AuthoritativeObserved` keeps that first step
+      (`recovery.rs:1820`), and it is not authoritative (`:975`), so
+      `operation resume` answers `original_request_required`. The request's
+      own result offers the same request in its place
+      (`outcome.rs:1240-1248`), and that retry finishes the hand-off.
+      Corrected in Task 1 (R-77);
     - `Reused` completes the row with no step (`checkpointed: false`);
     - re-running a pending row answers `Created` (`:1757-1758`).
 21. After `prepare_context(Create)`, a create of the same ID reuses the
@@ -744,7 +749,9 @@ pub struct ContextMutationDto { pub id: String, pub kind: String, pub branch: St
 - **Answer:**
   - `Created` and `Reused` answer `ok` with the DTO. Write and checkpoint
     are `not_requested` and discovery is `current` (R-3).
-  - `IndexPending` answers `discovery_pending` with `operation.resume`.
+  - `IndexPending` answers `discovery_pending`. Its recovery offers the
+    same request again (`request.retry`), not `operation.resume`, which
+    cannot take the row up (fact 20, R-77).
   - The hand-off is owed: `hands_off_to_any_refresh` is false.
 - **Settlement:**
   - `ended_without_checkpoint` is `DidNothing`;
@@ -1517,7 +1524,8 @@ create succeeds (R-73).
       appears, and focus moves into the editor.
 
    If the tab closes during Loading, release on leave applies as for a
-   clean tab. On `discovery_pending`, editing waits for Resume (R-13). Any
+   clean tab. On `discovery_pending`, editing waits for Resume (R-13),
+   which sends the same `context prepare` request again (R-77). Any
    refusal is shown in a banner with its recovery, and the tab stays in
    Viewing.
 4. **Editing.**
@@ -2189,7 +2197,8 @@ Each ruling reads: decision — why — cost if wrong.
   event. The cost is a whole-text compare per notify, which checklist
   step 10 measures; if it lags, a generation counter replaces it.
 - **R-13** Editing waits for a pending hand-off — the read may still show
-  the primary copy — a Resume press.
+  the primary copy — a Resume press. For a `context prepare`, Resume
+  sends the same request again (R-77).
 - **R-14** The Save states table, in the design's plain language; remotes
   are read after a save — fact 41 — a label.
 - **R-15** Closing a tab while dirty always asks; Done asks only when the
@@ -2397,12 +2406,21 @@ Each ruling reads: decision — why — cost if wrong.
 - **R-75** `CreatedContexts` is one process-wide set of the contexts this
   process saw created and has not saved into; every discard and leave path
   consults it — a per-session flag is lost when a tab closes with Keep draft
-  and the Drafts page later discards the draft — a context created by a
-  prepare that answered `discovery_pending` and was finished by `operation
-  resume` is not in the set, and is kept (Known Limits).
+  and the Drafts page later discards the draft — a context whose prepare
+  answered `discovery_pending` and was never retried by its tab is not in
+  the set, and is kept (Known Limits). A retry answers `created: true`
+  and enters it (R-77).
 - **R-76** The edit session's lifecycle is stated as a required-outcome
   table, written test-first in Tasks 15–19 with a stop — two review rounds
   found blockers in it — stop and ask.
+- **R-77** (product owner, 2026-10-26, from Task 1) A `context prepare`
+  that answers `discovery_pending` is finished by sending the same request
+  again, not by `operation resume`. The library offers that retry, and the
+  desktop's Resume during Loading sends it — `prepare_context` leaves the
+  row at a step that resume does not take up (fact 20), and changing that
+  would change journal behavior every local operation shares — the
+  operation area's own Resume of that row answers
+  `original_request_required`.
 
 R-6, R-7, R-10, R-28 to R-31 and R-45 are retired: R-6 by R-64; R-7 and
 R-31 by decision 17, since no viewer parse, rewrite or warm-up remains;
@@ -2435,8 +2453,8 @@ R-45 by decision 18.
   kept when its draft is discarded (decision 18), a never-created item's
   context restored after a relaunch included. So is a context whose
   release a crash interrupted between the discard and the release, and one
-  whose `context prepare` answered `discovery_pending` and was finished by
-  `operation resume` (R-75).
+  whose `context prepare` answered `discovery_pending` and was never retried
+  by its tab (R-75, R-77).
 - Other front-matter keys show in the library's key order, as JSON
   (fact 78).
 - A kept session holds a second editor, each with up to 256 whole-text undo

@@ -1146,7 +1146,9 @@ pub(crate) enum DraftIndicator { Kept { age_secs: u64 }, NotKept, RecoveryOff } 
   - `edit_reads_continue_editing_while_a_draft_is_stored` (R-35)
   - `edit_of_an_uncommitted_primary_file_is_refused_and_nothing_is_made`
     (Review Focus 3, with a snapshot)
-  - `a_discovery_pending_context_waits_for_resume`
+  - `a_discovery_pending_context_waits_for_resume`: Resume sends the same
+    `context prepare` request again, and its `ok, created: true` enters
+    `CreatedContexts` (R-77, owner, 2026-10-26)
   - `closing_the_tab_while_preparing_opens_no_editor`
   - `a_created_answer_enters_created_contexts_and_a_reused_one_does_not`
     (R-75)
@@ -1713,7 +1715,7 @@ git merge-tree --write-tree HEAD origin/main
 | E-15 to E-18 | 1, 2 |
 | E-19 | 19 |
 | E-20 | 2 |
-| E-23, E-26 | 6 |
+| E-23, E-26, E-30 | 6 |
 | E-24 | 8 |
 | E-25 | 5a |
 | E-27, E-28, E-29 | 4 |
