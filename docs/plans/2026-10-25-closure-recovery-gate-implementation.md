@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Implementation Plan"
 date: 2026-10-25
-status: "implementing"
+status: "review_ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -38,12 +38,13 @@ and native CI remain separately gated.
 
 ## Global Constraints
 
-**Current checkpoint (2026-10-27):** Tasks 0–8 are implemented and independently
-approved at `03a27cb`. Task 9 is in progress: its documentation/source audit is
-checkpointed separately from final verification. The controller owns the final
-Devenv runs and independent whole-branch SPEC/QUALITY reviews. This docs-only
-implementer runs no concurrent Rust commands. No review-ready or lifecycle
-completion is asserted. See the [execution ledger](2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit).
+**Final checkpoint (2026-10-27):** Tasks 0–9 are complete; the open ticket is
+`review_ready`. The controller reports whole-branch SPEC/QUALITY approval over
+`0464c42..f92bc00`, each with zero findings. Required local gates are met, with
+pre-fix 388-test/CLI-help evidence, post-fix 200-test evidence and the controller's
+five-test rerun kept distinct. This docs-only finalization runs no extra Rust gates
+and claims no owner final acceptance, closure or merge. See the
+[final execution checkpoint](2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint).
 
 - Work only in ticket `01M57SKVF6TQ3QM6AXJ35JGGSY`'s existing worktree/branch.
   Fetch and **merge** `origin/main`; never rebase. Before checkpoints run
@@ -486,8 +487,10 @@ No builds/tests ran during planning. Task 0 subsequently verified source,
 extraction seams and exact selectors; Tasks 1–8 implemented the production library
 boundary and its recovery evidence. The API audit records the actual public names,
 schema shapes and recovery semantics. Task 8's 25-outcome and 18-case tables retain
-the executed Linux proof. Task 9 final gates and independent whole-branch reviews
-remain pending; no unresolved Task 0 policy placeholder is current work.
+the executed Linux proof. Task 9's local gates and independent whole-branch reviews
+are complete through `f92bc00`; no unresolved review finding or Task 0 policy
+placeholder remains. Native execution, PR, lifecycle closure/merge and cleanup
+remain outside this checkpoint's authorization.
 
 The following is the historical planning review record:
 Round 1 found 3 Blocking/3 Important/1 Minor source findings and

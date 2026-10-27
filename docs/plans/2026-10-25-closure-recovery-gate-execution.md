@@ -1,7 +1,7 @@
 ---
 title: "Closure Recovery Gate Execution Ledger"
 date: 2026-10-25
-status: "implementing"
+status: "review_ready"
 author: "GPT-6 Astra"
 manyhands_managed: true
 manyhands_kind: document
@@ -24,6 +24,16 @@ implementation and ticket-branch commits/pushes. Start comment
 `01M5TZ0E62RMQPKBGRPX3CX92E` records it at `2026-10-26T02:00:39Z` (UTC clock).
 The historical planning comment `01M5TM3G781C6TXKA5BY50QPBC` is unchanged.
 PR, closure, merge, cleanup and native CI require separate authorization.
+
+**Current state, 2026-10-27:** Tasks 0–9 are complete and the ticket is
+`review_ready`, still open. Controller-reported whole-branch SPEC and QUALITY
+both approve `0464c42..f92bc00` with **0 Blocking / 0 Important / 0 Minor** findings,
+including the final live-executor-prerequisite correction. A13's local verification
+and independent-review requirements are met. See the
+[final checkpoint](#task-9-final-review-ready-checkpoint) for exact ranges and
+separate pre-fix, post-fix and controller-rerun evidence. No owner final acceptance
+or merge is claimed; downstream merge gates remain. The following task-by-task
+narrative and dated checkpoints preserve their historical review states.
 
 Task 0 completed with no production/test/schema edits. Controller owns independent
 review. The owner answered both earlier named-edit questions with “yes”, explicitly
@@ -72,7 +82,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
 | Task 7 | **Complete and approved at `0d1b8d006980bf0da116828db54b16728bf55cbd`**, full range `41bce3e..0d1b8d0`. Task 8 controller handoff reports SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` and QUALITY `ses_e846d6706ffeMZlWpMYjwDMnGU` both approved with zero findings. Prior 182 selected checks remain recorded evidence. |
 | Task 8 | **Complete and approved at `03a27cbb7252062429aabfed31ae6c35e2f143fb`**, full range `0d1b8d0..03a27cb`. Task 9 controller handoff reports SPEC `ses_e84247053ffeQkt4obeGjIa5Xy` and QUALITY `ses_e84216efcffeqZ4Q0rR0960XJX` both approved with zero findings. This includes the bounded-child/Windows-lock correction; historical 243-test and six-test delta evidence remain separately scoped below. |
-| Task 9 | Documentation/source audit complete at `4e3a67a`. Controller reports whole-branch SPEC `ses_e82f720d8ffeemZ2AjKZEc1g5O` approved with zero findings, and QUALITY `ses_e82f18183ffeE5AmprBoMrJCnk` with one Important live-executor-prerequisite finding. Pre-fix controller verification: **388 distinct tests passed plus fmt/check/clippy and CLI help** on Rust tree `03a27cb`. Correction `01M5YN2QN7XVM5FJDAAZ2HEQY1` is locally verified with **200 post-fix selected tests** and whole-tree gates. Await final SPEC delta and QUALITY re-review; ticket is not review-ready. |
+| Task 9 | **Complete; review-ready at code head `f92bc00912444cdd2774a00f521248f9be8ece1d`.** Controller reports full-branch SPEC `ses_e82f720d8ffeemZ2AjKZEc1g5O` and QUALITY `ses_e82f18183ffeE5AmprBoMrJCnk` approved with zero findings over `0464c42..f92bc00`. Pre-fix: **388 distinct tests**, fmt/check/clippy and CLI help. Post-fix: **200 affected selected tests**, fmt/check/clippy. Controller independently reran **five focused tests** at `f92bc00`; those are already included in 200, not an additional unique count. Final bookkeeping comment `01M5YNNZ8WFJKNNP990QKEQ9EC`; ticket remains open. |
 
 All new commits use the requested trailer
 `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -4342,3 +4352,78 @@ engine was added.
 The one final QUALITY finding is **locally addressed**, pending final SPEC delta
 verification and QUALITY re-review. The ticket remains implementing, not
 review-ready. No PR, merge, close, native dispatch or cleanup was performed.
+
+## Task 9 Final Review-Ready Checkpoint
+
+Canonical comment **`01M5YNNZ8WFJKNNP990QKEQ9EC`**, UTC
+**2026-10-27T12:34:37Z**. ID generated with the main checkout's existing
+`target/debug/manyhands-cli --json id new`, invoked from this ticket worktree.
+Bookkeeping base: **`f92bc00912444cdd2774a00f521248f9be8ece1d`**. This checkpoint
+changes documentation/ticket metadata only and executes no extra Rust gates.
+
+### Final independent reviews — all findings resolved
+
+The controller supplies both final approvals below. These are independent reviews
+obtained by the controller, not reviews performed by this bookkeeping worker:
+
+| Review | Session | Approved scope and result |
+| --- | --- | --- |
+| SPEC | `ses_e82f720d8ffeemZ2AjKZEc1g5O` | Full `0464c42..f92bc00`; original approval at `4e3a67a` carried through the final correction. **0 Blocking / 0 Important / 0 Minor.** |
+| QUALITY | `ses_e82f18183ffeE5AmprBoMrJCnk` | Full `0464c42dae19a6dde000c7e7660e82762a41fada..f92bc00912444cdd2774a00f521248f9be8ece1d`, last delta `4e3a67a..f92bc00`. **0 Blocking / 0 Important / 0 Minor.** |
+
+The earlier one Important live-prerequisite finding is resolved and approved.
+Historical pending-review entries above remain as records of their checkpoints;
+this section and the current task table supersede them. The last correction adds
+five public tests in the existing mutation-replay target, reuses a fixture through
+parent-module visibility, and shares internal read-only prerequisite checks.
+Its reviewed scope changes no old assertion, public schema, dependency, frontend
+or test target, and does not broaden the E1–E9/owner-addendum contract.
+
+### Verification evidence — keep the trees and counts separate
+
+| Tree / executor | Exact scope and observed result |
+| --- | --- |
+| Pre-fix Rust tree `03a27cb`, identical in Rust/tests/Cargo to docs head `4e3a67a`; controller directly executed | Devenv whole-tree `fmt --check`, `check --all-features --locked`, `clippy --all-targets --all-features --locked -- -D warnings`: passed. **388 distinct selected tests/cases passed, 0 failed**, with the component counts retained in “Controller verification BEFORE this fix”. `devenv shell -- cargo run --locked --bin manyhands-cli -- --help` passed on this tree. |
+| Post-fix tree `f92bc00`; correction implementer executed, exact command table retained above | Devenv whole-tree fmt/check/clippy passed. **200 affected selected tests passed**: 75 local mutation replay, 6 local reads, 44 mutation-contract, 72 read-contract, 1 replay conformance, 2 unchanged logging-domain controls. No full-suite/native run. |
+| Post-fix tree `f92bc00`; controller independently reran | `devenv shell -- cargo test --all-features --locked --test mutation_replay local_sync::live_prerequisites`: **5 passed, 0 failed, 378 filtered, 19.00s**. These five are already in the post-fix 75/200 selection. |
+
+Do **not** add the five-test rerun to 200, or combine 388 pre-fix and 200 post-fix
+into a unique final-tree total. Neither the entire 388 selection nor CLI help is
+claimed rerun after the fix. The controller confirms no Rust change after those
+checks; this final documentation commit preserves that tree. Finalization does
+not start a recursive review/test cycle for bookkeeping.
+
+**A13 is met for the local gate:** required whole-tree gates, relevant affected
+verification and independent whole-branch reviews are complete, with native
+limitations stated. A1–A12/A14, R-1–R-10, the 25-outcome/18-case maps and the named
+old-test audit retain their prior evidence; the reviewed final fix additionally
+aligns pending inspection advice with current executor prerequisites.
+
+### Status, limitations and lifecycle boundary
+
+Set the ticket to **`review_ready`** using the explicitly authorized
+`working-on-a-ticket` status-edit exception, and mark its three verified scope
+items complete: incompatible-closure classification, production local-context
+synchronization/recovery, and actual-parent child mismatch wording. The ticket
+remains **open**, with no `closed_at`/`closed_by` fields. This is code-review-ready
+delivery, not a claim of owner final acceptance or merged-main availability.
+
+CLI verbs, human-mode conflict artifacts and desktop in-app editing are not
+delivered by this library gate. Remote-conflict wire and lifecycle adapters remain
+downstream, and C4/C5/D5 still require this prerequisite's approval/closure/merge.
+Accepted limits remain: Linux-only runtime evidence, cooperative Manyhands writers,
+operator proof for ambiguous checkout/ref/log/lock effects, exact original R source
+where a partial resolution lacks a complete candidate, no automatic rollback or
+reconstructed authority after journal loss. No full package suite or native CI is
+claimed. Native CI requires separate approval and runs post-merge on main.
+
+Fresh fetch still found main **`0464c42dae19a6dde000c7e7660e82762a41fada`**, already
+an ancestor; no tree movement was necessary. Entry merge-tree passed with
+`ef3e663da5bed9f926d534064c624f21b934c431`, matching the controller's supplied result.
+Final review base is that main commit; **`0cbeab0` remains the historical planning
+merge only**. The controller also reports full-branch `git diff --check` passed.
+This worker verifies its docs-only diff, final merge-tree, clean status and live
+upstream branch match when committing/pushing the authorized checkpoint.
+
+Next actions require separate permission: PR creation, lifecycle closure/merge,
+native dispatch and cleanup. None is authorized or performed by this checkpoint.

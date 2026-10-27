@@ -25,9 +25,14 @@ id: "01M48VZ76MZ72AQY9C7R4ZAWQV"
 ### Closure Recovery Library Amendment (2026-10-27)
 
 Source-audited at **`03a27cbb7252062429aabfed31ae6c35e2f143fb`** on ticket
-`01M57SKVF6TQ3QM6AXJ35JGGSY`. Tasks 0–8 have controller-reported SPEC/QUALITY
-approval; Task 9 documentation/audit is in progress, final controller Devenv gates
-and independent whole-branch review pending. Final review base is fetched
+`01M57SKVF6TQ3QM6AXJ35JGGSY`. **Final status, 2026-10-27:** Tasks 0–9 are complete;
+the open ticket is `review_ready`. Controller-reported whole-branch SPEC/QUALITY
+approve `0464c42..f92bc00` with zero findings, including the final live-prerequisite
+inspection correction. It shares current logging/HEAD/common-directory/registered
+worktree checks with execution and rechecks after session B, without changing the
+public fields below. The [final ledger checkpoint](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint)
+records complete local gates and distinct pre/post-fix evidence. No owner final
+acceptance, lifecycle closure or merge is claimed. Final review base is fetched
 `origin/main` **`0464c42dae19a6dde000c7e7660e82762a41fada`**; `0cbeab0` is the
 historical planning merge, not the final main comparison base. The
 [contract](../Cycles/wave-03-closure-recovery-gate.md),

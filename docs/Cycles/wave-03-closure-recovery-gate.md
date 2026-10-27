@@ -20,12 +20,14 @@ detailed rulings, E1–E9 test edits, implementation and ticket-branch commits/p
 recorded in start comment `01M5TZ0E62RMQPKBGRPX3CX92E` at 2026-10-26T02:00:39Z.
 PR, closure, merge, cleanup and native CI remain separately gated.
 
-**2026-10-27 implementation status:** Tasks 0–8 are implemented and independently
-approved through `03a27cb`; the runtime is production-linked since Task 7. Task 9
-documentation/audit is in progress. Final controller Devenv gates and independent
-whole-branch review are pending; the ticket remains `implementing`, not
-review-ready or closed. The [execution ledger](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit)
-separates source audit, retained executed evidence and outstanding final gates.
+**2026-10-27 final implementation status:** Tasks 0–9 are complete; the ticket is
+`review_ready` and remains open. Controller-reported whole-branch SPEC and QUALITY
+approve `0464c42..f92bc00`, each with 0 Blocking / 0 Important / 0 Minor findings.
+Local A13 verification/review requirements are met, including the final inspection
+prerequisite correction. The [final execution checkpoint](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint)
+keeps pre-fix 388-test/controller CLI-help evidence separate from post-fix 200-test
+verification and the controller's five-test rerun. No owner final acceptance,
+closure or merge is claimed; C4/C5/D5 remain gated on this prerequisite's merge.
 
 - Worktree: `/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M57SKVF6TQ3QM6AXJ35JGGSY`.
 - Branch: `manyhands/ticket/01M57SKVF6TQ3QM6AXJ35JGGSY`.
@@ -166,9 +168,11 @@ from outer messages which intentionally mask it.
 
 ## Acceptance And Exit Evidence
 
-The table remains the acceptance contract. Tasks 0–8's executed evidence is in the
-ledger; Task 9's A1–A14 source/evidence checklist is a self-review, not final approval.
-A13 remains pending until the controller supplies final gates and whole-branch review.
+The table remains the acceptance contract. The ledger retains Tasks 0–8's executed
+evidence and Task 9's source/evidence self-review. The final controller checkpoint
+now supplies the independent whole-branch approvals and scoped final verification;
+A13's local gates are met. Native execution and downstream merge availability are
+not implied by review-ready status.
 
 | ID | Required proof |
 | --- | --- |

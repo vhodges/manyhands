@@ -21,10 +21,13 @@ Source was inspected at `189bb36` (main `189284e` merged), then
 reconciled with documentation-only main `0464c42`, merged as `0cbeab0`. No
 Cargo command or test was run for planning.
 
-**Implementation amendment, 2026-10-27:** Tasks 0–8 are implemented and independently
-approved through `03a27cbb7252062429aabfed31ae6c35e2f143fb`. Task 9 documentation/audit
-is in progress; final controller gates and independent whole-branch review remain
-pending. The shared interfaces below now exist in production library code. The
+**Final implementation amendment, 2026-10-27:** Tasks 0–9 are complete and the open
+ticket is `review_ready`. Controller-reported SPEC and QUALITY approve the full
+`0464c42..f92bc00` range with zero findings, including the final shared live-executor
+prerequisite correction. A13's local verification/review requirements are met; the
+[final checkpoint](2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint)
+separates pre-fix and post-fix evidence. No owner final acceptance or merge is
+claimed. The shared interfaces below exist in production library code. The
 [execution ledger](2026-10-25-closure-recovery-gate-execution.md#task-9-documentation-and-source-audit)
 and [API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27)
 record the actual exports, wire fields, recovery meanings and scope audit. This is

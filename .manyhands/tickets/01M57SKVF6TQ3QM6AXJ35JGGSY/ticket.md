@@ -4,7 +4,7 @@ manyhands_kind: ticket
 id: "01M57SKVF6TQ3QM6AXJ35JGGSY"
 title: "2.10 follow up: closure recovery gaps before C4, C5 and D5"
 type: "task"
-status: "implementing"
+status: "review_ready"
 project: "manyhands"
 team: "core"
 wave: "02"
@@ -36,19 +36,20 @@ or alongside it.
 
 ## Items
 
-- [ ] **Differing closures in a true race (R-T8-1 alternative).** When two
-  sides close the same ticket with different closures, merge/sync classifies
-  the conflict `EligibleCanonical`, and every in-product resolution fails
-  `ValidationFailed`. Classify it `ExternalResolutionRequired`, so front ends
-  show outside-repair guidance. This touches Cycle 06 merge/sync code.
-- [ ] **Local context synchronization.** Add a local (no-remote)
-  "synchronize context with primary" operation, so a user has an in-product
-  way out of every checkpoint-merge refusal. Today the documented way out is
-  a manual local merge of primary into the ticket context. Resume already
-  adopts a merged context (R-T4-1).
-- [ ] **Closure wording in child execution (R-T6B-3).** `ChildExecution`
-  mismatch errors use promotion wording when the parent is a ticket closure.
-  Word them for the actual parent; C5 and D5 users would see this text.
+- [x] **Differing closures in a true race (R-T8-1 alternative).** Fresh
+  incompatible all-side closure pairs now make the whole conflict set
+  `ExternalResolutionRequired`, with no write or false in-product resolution
+  offer. Immutable provenance validation remains; no winning-closure policy is added.
+- [x] **Local context synchronization.** Production library observation,
+  start, inspection, explicit canonical resolution and resume synchronize committed
+  local primary into an existing document/ticket context without network work or
+  primary mutation. The approved supported checkpoint-conflict workflow completes
+  through local synchronization and explicit original closure resume, preserving
+  closure authority (R-T4-1). Unsupported/immutable conflicts and ambiguous backend
+  states retain their documented limits; frontend adapters remain downstream.
+- [x] **Closure wording in child execution (R-T6B-3).** `ChildExecution`
+  mismatch paths now name their actual lifecycle parent, retaining promotion
+  wording for promotion and closure wording for closure.
 
 ## Exit Evidence
 
@@ -57,3 +58,22 @@ A race in which two clones close the same ticket differently classifies as
 closure refused for a checkpoint-merge conflict completes after the new local
 synchronization, with no manual Git step. A closure child mismatch error
 names ticket closure, not promotion.
+
+## Review-Ready Checkpoint (2026-10-27)
+
+Tasks 0–9 are complete. The controller reports whole-branch SPEC and QUALITY
+approval with **0 Blocking / 0 Important / 0 Minor** findings over
+`0464c42dae19a6dde000c7e7660e82762a41fada..f92bc00912444cdd2774a00f521248f9be8ece1d`.
+The final live-prerequisite inspection correction is included. Local A13 gates
+and independent review are met; full evidence and separately scoped pre/post-fix
+counts are in the
+[execution ledger](../../../docs/plans/2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint).
+
+This status edit follows the authorized `working-on-a-ticket` metadata exception.
+The ticket remains **open**. No owner final acceptance, lifecycle closure or merge
+is claimed. C4/C5/D5's merge prerequisite remains in force. CLI verbs, human-mode
+conflict artifacts, desktop in-app editing and the remaining remote/lifecycle
+adapters are downstream. Runtime evidence is Linux-only, with cooperative writers,
+operator proof for ambiguous backend effects and exact original R source when
+required. Full-suite/native verification was not run. PR, lifecycle close/merge,
+native dispatch and cleanup require separate authorization.
