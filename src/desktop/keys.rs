@@ -51,6 +51,9 @@ gpui_kit::actions!(
         ScrollToBottom,
         /// Close the Drafts page's Inspect panel.
         CloseInspect,
+        /// Bring the shown item tab's discussion into view and focus its
+        /// heading.
+        JumpToDiscussion,
     ]
 );
 
@@ -100,6 +103,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("home", ScrollToTop, Some(WHY_BLOCKED_CONTEXT)),
         KeyBinding::new("end", ScrollToBottom, Some(WHY_BLOCKED_CONTEXT)),
         KeyBinding::new("escape", CloseInspect, Some(DRAFT_INSPECT_CONTEXT)),
+        // In the content region, the item tab's strip included.
+        KeyBinding::new("secondary-shift-c", JumpToDiscussion, Some(CONTENT_CONTEXT)),
     ]);
 }
 

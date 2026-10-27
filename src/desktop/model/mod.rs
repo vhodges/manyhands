@@ -1,5 +1,7 @@
-//! GPUI-free view state.
+//! View state, free of GPUI but for the discussion's avatar colour, a
+//! GPUI `Hsla` (`discussion`).
 
+pub(crate) mod discussion;
 pub(crate) mod documents;
 pub(crate) mod drafts;
 pub(crate) mod editor_text;

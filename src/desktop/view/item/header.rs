@@ -6,9 +6,10 @@
 //! The actions are drawn before the title and chips, in a row laid out in
 //! reverse, so they sit on the right, wrap below the title on a narrow
 //! pane, and still come first in the tab order (strip, header actions,
-//! chips, page). Edit, Share and the primary action are not available yet
-//! (decision 16): each is disabled, with "Available in a later release"
-//! as its tooltip and its accessible description.
+//! chips, page). After the pill, Comments {n} jumps to the discussion
+//! (`discussion`). Edit, Share and the primary action are not available
+//! yet (decision 16): each is disabled, with "Available in a later
+//! release" as its tooltip and its accessible description.
 
 use std::path::Path;
 
@@ -100,11 +101,13 @@ pub(super) enum Weight {
 
 /// Where a later action shows its note, "Available in a later release",
 /// besides its accessible description: as the button's tooltip in the
-/// header, or written below it in a banner or the discussion.
+/// header, or written below it, in the chrome's muted colour in a banner,
+/// or in `page-muted` on the discussion's light ground.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum NoteAt {
     Tooltip,
     Below,
+    BelowOnPage,
 }
 
 /// A later action: `label`, one of `LATER`, disabled, the `ix`th of the
@@ -140,8 +143,11 @@ pub(super) fn later_action(
         .aria_label(label)
         .aria_description(LATER_NOTE);
     match note {
-        NoteAt::Below => {
-            let muted = cx.theme().muted_foreground;
+        NoteAt::Below | NoteAt::BelowOnPage => {
+            let muted = match note {
+                NoteAt::BelowOnPage => item_colors(cx).page_muted,
+                _ => cx.theme().muted_foreground,
+            };
             v_flex()
                 .gap_1()
                 .child(action.child(button))
@@ -206,6 +212,7 @@ impl ItemPane {
             .items_center()
             .gap(px(8.))
             .children(pill)
+            .children(self.comments_button(window, cx))
             .children(
                 later
                     .iter()

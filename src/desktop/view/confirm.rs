@@ -454,7 +454,7 @@ pub(crate) fn local_time(at: &str) -> String {
 
 /// This system's offset from UTC at `timestamp`.
 #[cfg(unix)]
-fn local_offset(timestamp: i64) -> Option<UtcOffset> {
+pub(in crate::desktop::view) fn local_offset(timestamp: i64) -> Option<UtcOffset> {
     #[allow(clippy::useless_conversion)] // `time_t` is narrower on some targets.
     let time: libc::time_t = timestamp.try_into().ok()?;
     let mut local = std::mem::MaybeUninit::<libc::tm>::zeroed();
@@ -472,7 +472,7 @@ fn local_offset(timestamp: i64) -> Option<UtcOffset> {
 
 /// Shown in UTC, and said so, where no local offset is read.
 #[cfg(not(unix))]
-fn local_offset(_timestamp: i64) -> Option<UtcOffset> {
+pub(in crate::desktop::view) fn local_offset(_timestamp: i64) -> Option<UtcOffset> {
     None
 }
 

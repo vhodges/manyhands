@@ -19,7 +19,8 @@
 //!
 //! The region shows the Kit's vertical scrollbar on its own handle, thumb
 //! in `page-border-strong` at rest, hovered and dragged, laid over the
-//! region as the Kit's own scrollables lay it.
+//! region as the Kit's own scrollables lay it. The discussion's floating
+//! button lies over the region too (`discussion`).
 
 use std::{cell::Cell, rc::Rc};
 
@@ -294,14 +295,20 @@ fn caret(editor: &EditorState) -> (usize, usize) {
     (editor.cursor(), editor.text().len())
 }
 
+/// The discussion's place among the scrolled children `region` lays out,
+/// after the page, for `ScrollHandle::bounds_for_item` and
+/// `scroll_to_top_of_item` (fact 80).
+pub(super) const DISCUSSION: usize = 1;
+
 /// The item's scroll region, holding `page`, then `discussion`, then
 /// `end`, the selected repository's details, with the Kit's scrollbar
-/// over it.
+/// over it, and then `over`, laid over the region after it.
 pub(super) fn region<P: IntoElement, D: IntoElement>(
     scroll: &ContentScroll,
     page: P,
     discussion: Option<D>,
     end: Option<AnyElement>,
+    over: Vec<AnyElement>,
     cx: &App,
 ) -> impl IntoElement + use<P, D> {
     // One light thumb at rest, under the pointer and while dragged, so it
@@ -351,4 +358,5 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                         }),
                 ),
         )
+        .children(over)
 }

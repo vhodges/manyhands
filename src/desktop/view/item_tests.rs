@@ -5,15 +5,20 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, px};
 use manyhands::{
     repository::{ItemDto, ItemDtoKind, TicketFilter},
     results::{ProblemCode, ResultCode},
 };
+use time::OffsetDateTime;
 
-use super::{NONCONFORMING_FILE, SOURCE_NOT_UTF8};
+use super::{
+    NONCONFORMING_FILE, SOURCE_NOT_UTF8,
+    discussion::{REPLY_INDENT, offset_at},
+};
 use crate::desktop::{
     model::{
+        discussion::comment_time,
         item::{
             KIND_ACTIVE, KIND_PRIMARY, LATER, LATER_NOTE, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
             provenance_label,
@@ -315,10 +320,13 @@ fn the_source_rejects_every_edit(cx: &mut TestAppContext) {
     );
 }
 
-/// Comments are in the library's order, each indented by its depth, with
-/// its author, or "unknown author" when it has none.
+/// Comments are in the library's order. Roots are not indented, every
+/// reply sits at the one reply indent, and only a reply deeper than one
+/// level says whom it answers (R-53). Each shows its author without the
+/// email, or "unknown author" when it has none, its time at the offset
+/// passed, and its body in its read editor.
 #[gpui_kit::test]
-fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
+fn comments_keep_list_order_and_replies_share_one_indent(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, PRIMARY, "Discussed", "");
         let by_ada = format!("created_by: {ADA}\n");
@@ -357,14 +365,35 @@ fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
     assert_eq!(depths, [0, 1, 0]);
 
     let bodies: Vec<String> = list.items.iter().map(|c| c.body.clone().unwrap()).collect();
-    assert_eq!(shell.rows("comment-body", cx), bodies);
-    assert_eq!(shell.rows("comment-author", cx), [ADA, UNKNOWN_AUTHOR, ADA]);
+    shell.frame(cx, |_, _| ());
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .unwrap();
+    let read: Vec<String> = list
+        .items
+        .iter()
+        .map(|c| {
+            let view = pane
+                .read_with(cx, |pane, _| pane.comment_view(c.id.as_deref().unwrap()))
+                .unwrap();
+            view.read_with(cx, |view, cx| view.editor().read(cx).text().to_owned())
+        })
+        .collect();
+    assert_eq!(read, bodies);
+    let ada = "Ada Lovelace";
+    assert_eq!(shell.rows("comment-author", cx), [ada, UNKNOWN_AUTHOR, ada]);
     let times: Vec<String> = list
         .items
         .iter()
         .map(|c| c.created_at.clone().unwrap())
         .collect();
-    assert_eq!(shell.rows("comment-time", cx), times);
+    let now = OffsetDateTime::now_utc();
+    let shown: Vec<String> = times
+        .iter()
+        .map(|at| comment_time(at, now, offset_at(at)))
+        .collect();
+    assert_eq!(shell.rows("comment-time", cx), shown);
 
     let x = |index: usize, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
@@ -374,9 +403,16 @@ fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
                 .x
         })
     };
-    let (a, b, c) = (x(0, cx), x(1, cx), x(2, cx));
-    assert!(b > a, "the reply is indented: {a:?} {b:?}");
-    assert_eq!(a, c);
+    let root = x(0, cx);
+    for (ix, comment) in list.items.iter().enumerate() {
+        let indent = if comment.depth == 0 { 0. } else { REPLY_INDENT };
+        assert_eq!(x(ix, cx) - root, px(indent), "{ix}: its indent");
+        assert_eq!(
+            present(&shell, ("comment-reply-to", ix), cx),
+            comment.depth > 1,
+            "{ix}: only a reply deeper than one says whom it answers"
+        );
+    }
 }
 
 /// A nonconforming entry opens by its path: it says so, shows its

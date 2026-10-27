@@ -15,11 +15,12 @@
 //! keeps D1's `details`. `reads` owns the ordered per-tab read and refresh
 //! job, `status` D1's loading and recovery controls, `source` the
 //! read-only textarea of a file read by its path (an Inspect tab, which
-//! the sheet's Inspect link opens: R-64), `discussion` the comment thread,
-//! and `draft` the banner of a stored draft and the section of one
-//! restored here, with `draft_actions` its Export… and Discard…. All
-//! children use the same entity, stamped model and subscriptions; none
-//! writes the item.
+//! the sheet's Inspect link opens: R-64), `discussion` the threads, with a
+//! read editor per comment body, the jump to them and the floating button
+//! over the region, and `draft` the banner of a stored draft and the
+//! section of one restored here, with `draft_actions` its Export… and
+//! Discard…. All children use the same entity, stamped model and
+//! subscriptions; none writes the item.
 
 mod banners;
 mod chips;
@@ -69,7 +70,6 @@ pub(crate) const COPY_SLUG: &str = "Copy short code";
 pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
 /// The discussion header's way back to the page (`item_view/04-comments.md`).
 pub(crate) const BACK_TO_TOP: &str = "Back to top";
-const COMMENT_INDENT: f32 = 16.;
 
 /// Builds what ends the item's scroll region, after the discussion: the
 /// workspace's details of the selected repository, revealed by the region
@@ -105,6 +105,9 @@ pub(crate) struct ItemPane {
     page: page::Page,
     /// The discussion's Back to top, a tab stop.
     back_to_top: FocusHandle,
+    /// The comments' read editors, the discussion's heading and the
+    /// header's Comments {n}.
+    discussion: discussion::Discussion,
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
@@ -140,6 +143,7 @@ impl ItemPane {
             scroll: scroll.region(),
             page: page::Page::new(cx),
             back_to_top: cx.focus_handle().tab_stop(true),
+            discussion: discussion::Discussion::new(cx),
             region_end: None,
             draft: draft::TabDraft::default(),
             _operations: operations,
@@ -165,6 +169,15 @@ impl ItemPane {
     #[cfg(test)]
     pub(crate) fn read_editor(&self, cx: &App) -> Option<Entity<zorite_editor::EditorState>> {
         Some(self.page.read()?.read(cx).editor().clone())
+    }
+
+    /// The read view of the comment `id`'s body.
+    #[cfg(test)]
+    pub(crate) fn comment_view(
+        &self,
+        id: &str,
+    ) -> Option<Entity<super::editor::read_only::ReadOnly>> {
+        self.discussion.body(id).cloned()
     }
 
     /// The vertical offset of the item's scroll region.
@@ -221,6 +234,7 @@ impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
         self.sync_read(window, cx);
+        self.sync_discussion(window, cx);
         let item = self.model.item().rows().cloned();
         let (header, later) = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
@@ -256,11 +270,12 @@ impl Render for ItemPane {
             .children(section)
             .children(body);
         let page = self.page.render(content, &self.scroll, window, cx);
-        let discussion = self.discussion(later, window, cx);
+        let discussion = self.discussion_section(later, window, cx);
         let end = self
             .region_end
             .clone()
             .and_then(|end| end(&self.scroll, window, cx));
+        let over = self.over_region(cx);
         // No zero minimum: the pane is never shorter than its header, so a
         // window too short for the header scrolls the content column.
         v_flex()
@@ -269,7 +284,7 @@ impl Render for ItemPane {
             .flex_1()
             .w_full()
             .child(header)
-            .child(page::region(&self.scroll, page, discussion, end, cx))
+            .child(page::region(&self.scroll, page, discussion, end, over, cx))
     }
 }
 
@@ -292,3 +307,7 @@ mod sheet_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/page_tests.rs"]
 mod page_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/discussion_tests.rs"]
+mod discussion_tests;

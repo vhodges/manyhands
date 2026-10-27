@@ -4,9 +4,9 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, NextRegion, NextTab, OpenDrafts, OpenSelected, OpenSettings,
-        PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp,
-        ScrollToBottom, ScrollToTop,
+        FocusRepositories, JumpToDiscussion, NextRegion, NextTab, OpenDrafts, OpenSelected,
+        OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown,
+        ScrollPageUp, ScrollToBottom, ScrollToTop,
     },
     model::stamp::SettingsPage,
     view::{
@@ -206,6 +206,14 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, _: &ScrollToBottom, _, cx| {
                 this.scroll_content(ContentScroll::to_bottom, cx)
             }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &JumpToDiscussion, window, cx| {
+                    if let Some(pane) = this.shown_item(cx) {
+                        pane.update(cx, |pane, cx| pane.jump_to_discussion(window, cx));
+                    }
+                },
+            ))
             .relative()
             .size_full()
             .bg(cx.theme().background)
