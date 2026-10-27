@@ -8,6 +8,7 @@ pub(crate) mod editor_text;
 pub(crate) mod find;
 pub(crate) mod item;
 pub(crate) mod list_state;
+pub(crate) mod markdown_edit;
 pub(crate) mod names;
 pub(crate) mod navigation;
 pub(crate) mod read_state;
