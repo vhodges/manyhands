@@ -89,7 +89,7 @@ pub(super) fn schema_current(db: &Connection) -> Result<bool, RepositoryError> {
     Ok(marked)
 }
 
-pub(super) fn audit(db: &Connection) -> Result<(), ReadError> {
+pub(in super::super) fn audit(db: &Connection) -> Result<(), ReadError> {
     let sql: String = db
         .query_row(
             "SELECT sql FROM sqlite_master WHERE name=?1",
@@ -222,10 +222,17 @@ pub(super) fn effects(
     id: RequestId,
 ) -> Result<Option<crate::results::Effects>, ReadError> {
     use crate::results::*;
-    service.read_session(RepositoryOperation::Read,|db|{
+    let mut found=service.read_session(RepositoryOperation::Read,|db|{
         let row:Option<(String,String,String,String,Option<String>)>=db.query_row("SELECT effect_write,effect_checkpoint,effect_discovery,effect_integration,commit_oid FROM local_context_sync_request_control WHERE request_ulid=?1",[id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
         row.map(|(w,c,d,i,oid)|Ok(Effects{write:WriteEffect::ALL.into_iter().find(|v|v.as_str()==w).ok_or_else(unavailable)?,checkpoint:CheckpointEffect::ALL.into_iter().find(|v|v.as_str()==c).ok_or_else(unavailable)?,discovery:DiscoveryEffect::ALL.into_iter().find(|v|v.as_str()==d).ok_or_else(unavailable)?,integration:IntegrationEffect::ALL.into_iter().find(|v|v.as_str()==i).ok_or_else(unavailable)?,commit_oid:oid,..Effects::not_requested()})).transpose()
-    })
+    })?;
+    if let Some(effects) = found.as_mut()
+        && effects.write != WriteEffect::Written
+        && crate::repository::local_sync::resolution_written(service, id).unwrap_or(false)
+    {
+        effects.write = WriteEffect::Written;
+    }
+    Ok(found)
 }
 pub(super) fn may_settle(
     db: &Connection,
@@ -272,6 +279,7 @@ pub(in super::super) fn abandon_requests(
 ) -> Result<(), ReadError> {
     use crate::{repository::*, results::*};
     audit(db)?;
+    local_sync::authority_controls(db, repo.root(), row.operation_id)?;
     let requests:Vec<(String,String,String,String,String,Option<String>)>=db.prepare("SELECT c.request_ulid,c.effect_write,c.effect_checkpoint,c.effect_discovery,c.effect_integration,c.commit_oid FROM local_context_sync_request_control c JOIN request_records r USING(request_ulid) WHERE c.intended_parent=?1 AND c.scope_key=?2 AND r.state='accepted' ORDER BY c.request_ulid")?.query_map(params![row.operation_id.to_string(),repo.root().to_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?.collect::<Result<_,_>>()?;
     for (id, w, c, d, i, oid) in requests {
         let effects = Effects {

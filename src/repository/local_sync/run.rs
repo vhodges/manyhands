@@ -72,6 +72,7 @@ impl From<ReadError> for Fault {
             code: e.code(),
             reason: match e.code() {
                 ResultCode::IdentityRequired => Reason::IdentityRequired,
+                ResultCode::OriginalRequestRequired => Reason::OriginalResolutionRequired,
                 ResultCode::ExternalChange | ResultCode::RequestMismatch => Reason::ForeignChange,
                 _ => Reason::AuthorityMissing,
             },
@@ -96,6 +97,18 @@ impl From<RepositoryError> for Fault {
 impl From<git2::Error> for Fault {
     fn from(_: git2::Error) -> Self {
         Self::ambiguous()
+    }
+}
+impl From<std::io::Error> for Fault {
+    fn from(error: std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Self {
+                code: ResultCode::RepositoryInaccessible,
+                reason: Reason::AuthorityMissing,
+            }
+        } else {
+            Self::foreign()
+        }
     }
 }
 impl From<integration::Error> for Fault {
@@ -750,10 +763,17 @@ fn candidate(owner: &mut Owner<'_>) -> Result<git2::Oid, Fault> {
     Ok(oid)
 }
 pub(super) fn validate_candidate(owner: &Owner<'_>, e: &Execution) -> Result<(), Fault> {
-    let oid = owner.row.candidate.ok_or_else(Fault::authority)?;
-    let commit = owner.git.find_commit(oid)?;
+    validate_candidate_in(&owner.git, &owner.row, e)
+}
+pub(super) fn validate_candidate_in(
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    e: &Execution,
+) -> Result<(), Fault> {
+    let oid = row.candidate.ok_or_else(Fault::authority)?;
+    let commit = git.find_commit(oid)?;
     match e.disposition {
-        Disposition::FastForward if oid == owner.row.primary_parent => Ok(()),
+        Disposition::FastForward if oid == row.primary_parent => Ok(()),
         Disposition::Merge => {
             let (name, email, seconds, offset) =
                 e.commit_identity.as_ref().ok_or_else(Fault::authority)?;
@@ -763,14 +783,13 @@ pub(super) fn validate_candidate(owner: &Owner<'_>, e: &Execution) -> Result<(),
                     && s.when().seconds() == *seconds
                     && s.when().offset_minutes() == *offset
             };
-            if commit.parent_ids().collect::<Vec<_>>()
-                != [owner.row.context_parent, owner.row.primary_parent]
+            if commit.parent_ids().collect::<Vec<_>>() != [row.context_parent, row.primary_parent]
                 || !signature_matches(commit.author())
                 || !signature_matches(commit.committer())
                 || !integration::validate::validates_external_integration(
-                    &owner.git,
-                    owner.row.context_parent,
-                    owner.row.primary_parent,
+                    git,
+                    row.context_parent,
+                    row.primary_parent,
                     oid,
                 )?
             {
@@ -875,8 +894,9 @@ pub(super) fn index(owner: &mut Owner<'_>) -> Result<(), Fault> {
     // disposition/release proof after all index boundaries, before terminal SQL.
     recover::verify_released_integration(owner)?;
     let root = owner.repo.root();
+    let authoritative = owner.request.is_some();
     let cancelled=owner.transaction(|tx,row| {
-        if super::control::acknowledge_pending(tx,row)? {return Ok(true);}
+        if super::control::acknowledge_pending(tx,row,authoritative)? {return Ok(true);}
         persist_observation(tx,row.repository_id,&before,root)?;
         tx.execute("UPDATE repositories SET accessibility='accessible',refresh_required=0,refreshed_at=?2 WHERE id=?1",params![row.repository_id,observed_from])?;
         tx.execute("UPDATE local_context_sync_records SET state='complete',index_complete=1,semantic_revision=semantic_revision+1 WHERE operation_ulid=?1",[row.operation_id.to_string()])?;

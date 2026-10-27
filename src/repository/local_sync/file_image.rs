@@ -87,5 +87,12 @@ pub(super) fn read(root: &Path, relative: &Path) -> io::Result<Option<Image>> {
         root,
     )
     .map(|value| value.map(|bytes| Image { bytes, mode: None }))
-    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid owned file image"))
+    .map_err(|error| {
+        let kind = error
+            .source
+            .as_deref()
+            .and_then(|source| source.downcast_ref::<io::Error>())
+            .map_or(io::ErrorKind::InvalidInput, io::Error::kind);
+        io::Error::new(kind, "owned file image is inaccessible")
+    })
 }

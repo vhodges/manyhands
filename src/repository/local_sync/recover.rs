@@ -349,6 +349,7 @@ impl Owner<'_> {
         if let Some(request) = self.request {
             request.attach(&tx, &row)?;
             request.record(&tx, &row, &evidence)?;
+            request.verify(&tx, self.repo.root(), row.operation_id)?;
         }
         tx.commit().map_err(ReadError::from)?;
         self.row = row;
@@ -438,18 +439,24 @@ impl Owner<'_> {
 
 /// A fully proven result requires the one expected log append, not just the ref.
 pub(super) fn ref_proof(owner: &Owner<'_>, e: &Execution, result: bool) -> Result<bool, Fault> {
-    let bytes = log_bytes(&owner.git, &owner.row.context_ref)?;
+    ref_proof_in(&owner.git, &owner.row, e, result)
+}
+pub(super) fn ref_proof_in(
+    git: &git2::Repository,
+    row: &LocalContextSyncRecord,
+    e: &Execution,
+    result: bool,
+) -> Result<bool, Fault> {
+    let bytes = log_bytes(git, &row.context_ref)?;
     if !result {
-        return Ok(
-            *blake3::hash(&bytes).as_bytes() == e.log && head_log_digest(&owner.git)? == e.head_log
-        );
+        return Ok(*blake3::hash(&bytes).as_bytes() == e.log && head_log_digest(git)? == e.head_log);
     }
-    let new = owner.row.candidate.ok_or_else(Fault::authority)?;
+    let new = row.candidate.ok_or_else(Fault::authority)?;
     let expected = format!(
         "{} {} Manyhands <local-sync@manyhands.invalid> {} +0000\tmanyhands local sync {}\n",
-        owner.row.context_parent, new, e.ref_time, owner.row.operation_id
+        row.context_parent, new, e.ref_time, row.operation_id
     );
-    let head = bytes_for_head(owner)?;
+    let head = bytes_for_head(git)?;
     Ok(bytes
         .strip_suffix(expected.as_bytes())
         .is_some_and(|prefix| *blake3::hash(prefix).as_bytes() == e.log)
@@ -457,8 +464,8 @@ pub(super) fn ref_proof(owner: &Owner<'_>, e: &Execution, result: bool) -> Resul
             .strip_suffix(expected.as_bytes())
             .is_some_and(|prefix| *blake3::hash(prefix).as_bytes() == e.head_log))
 }
-fn bytes_for_head(owner: &Owner<'_>) -> Result<Vec<u8>, ReadError> {
-    bytes(owner.git.path(), Path::new("logs/HEAD"))
+fn bytes_for_head(git: &git2::Repository) -> Result<Vec<u8>, ReadError> {
+    bytes(git.path(), Path::new("logs/HEAD"))
 }
 
 pub(super) fn mismatch_reason(e: &Execution) -> Fault {

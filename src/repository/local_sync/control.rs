@@ -93,9 +93,10 @@ pub(super) fn safe_point(owner: &mut Owner<'_>) -> Result<(), Fault> {
 pub(super) fn acknowledge_pending(
     db: &rusqlite::Transaction<'_>,
     row: &record::LocalContextSyncRecord,
+    authoritative: bool,
 ) -> Result<bool, ReadError> {
-    let controls = request_vector(db, row)?;
-    if !controls.is_empty() {
+    if authoritative {
+        let controls = request_vector(db, row)?;
         return acknowledge_vector(db, &controls);
     }
     let (issued, acknowledged) = if let Some(attempt) = row.active_resolution {
@@ -121,7 +122,12 @@ fn request_vector(
     db: &rusqlite::Connection,
     row: &record::LocalContextSyncRecord,
 ) -> Result<RequestCounters, ReadError> {
-    Ok(db.prepare("SELECT c.request_ulid,c.cancel_issued,c.cancel_acknowledged FROM local_context_sync_request_control c WHERE c.parent_operation=?1 AND (c.role='start' OR (c.role='resolve' AND c.resolution_attempt=?2)) ORDER BY c.request_ulid")?.query_map(params![row.operation_id.to_string(),row.active_resolution.map(|id|id.to_string())],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?.collect::<Result<_,_>>()?)
+    let root: String = db.query_row(
+        "SELECT root_path FROM repositories WHERE id=?1",
+        [row.repository_id],
+        |r| r.get(0),
+    )?;
+    super::request::authority_controls(db, std::path::Path::new(&root), row.operation_id)
 }
 fn acknowledge_vector(
     db: &rusqlite::Connection,

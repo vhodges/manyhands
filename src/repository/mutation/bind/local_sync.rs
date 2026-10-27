@@ -96,6 +96,12 @@ impl LocalSyncBinding {
                 )
             }
         };
+        if matches!(self, Self::Resolve(_))
+            && let Ok(current) = call.service.read_local_context_sync_record(&repo, id)
+            && let Some(ran) = terminal_unlinked(call, accepted, &repo, &current)
+        {
+            return ran;
+        }
         let unlinked_resolution = matches!(self, Self::Resolve(_))
             && matches!(
                 local_control::linked(call.service, accepted.request_id),
@@ -321,8 +327,14 @@ pub(crate) fn local_target(
     id: OperationId,
 ) -> Result<Option<domain::record::LocalContextSyncRecord>, Answer> {
     use rusqlite::{OptionalExtension, params};
+    // Other resume families also support missing/unregistered roots. Preserve
+    // their routing; a registered local target is always queried by its resolved
+    // canonical scope, never by the caller's path spelling.
+    let Ok(repo) = resolve_root(service, root) else {
+        return Ok(None);
+    };
     service.read_session(RepositoryOperation::Read,|db|{
-        Ok(db.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.root_path=?2",params![id.to_string(),root.to_str()],domain::record::decode).optional()?)
+        Ok(db.query_row("SELECT s.* FROM local_context_sync_records s JOIN repositories r ON r.id=s.repository_id WHERE s.operation_ulid=?1 AND r.root_path=?2",params![id.to_string(),repo.root().to_str()],domain::record::decode).optional()?)
     }).map_err(|e|Answer::of_read(&e))
 }
 pub(crate) fn prepare_resume(
@@ -365,7 +377,7 @@ pub(crate) fn prepare_resume(
     }
     Ok(Some(Prepared {
         family: None,
-        position: Position::of(root, &row.context_ref)
+        position: Position::of(repo.root(), &row.context_ref)
             .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?,
         expected: None,
         observation: None,
@@ -391,6 +403,19 @@ pub(crate) fn resume(call: &CallContext<'_>, accepted: &Accepted, id: OperationI
             });
         }
     };
+    // The scoped read is complete; linkage/takeover has not begun and no lease
+    // or SQL transaction is held. Report this public observation boundary.
+    call.session.report(&ProgressEvent {
+        request_id: accepted.request_id.to_string(),
+        operation_id: None,
+        command: Command::OperationResume.name().into(),
+        scope: Scope {
+            repository: Some(accepted.scope.as_str().into()),
+            ..Scope::default()
+        },
+        stage: ProgressStage::Observing,
+        effects: Effects::not_requested(),
+    });
     if let Some(ran) = terminal_unlinked(call, accepted, &repo, &row) {
         return Some(ran);
     }
@@ -432,6 +457,11 @@ pub(crate) fn resume(call: &CallContext<'_>, accepted: &Accepted, id: OperationI
             progress: &progress,
         },
     );
+    if let Ok(current) = call.service.read_local_context_sync_record(&repo, id)
+        && let Some(ran) = terminal_unlinked(call, accepted, &repo, &current)
+    {
+        return Some(ran);
+    }
     let start = local_control::starting_request(call.service, &accepted.scope, id)
         .ok()
         .flatten();
@@ -443,7 +473,16 @@ pub(crate) fn resume(call: &CallContext<'_>, accepted: &Accepted, id: OperationI
         .and_then(|r| RequestId::parse(&r).ok());
     let mut dto = domain::data(&report, row.kind, &row.item_id, Some(id), resolution, start);
     cancellation_view(call, &repo, id, report.code, &mut dto);
-    let standing = if matches!(
+    let unlinked_original = report.code == ResultCode::OriginalRequestRequired
+        && matches!(
+            local_control::linked(call.service, accepted.request_id),
+            Ok(false)
+        );
+    let standing = if unlinked_original {
+        Standing::Stopped {
+            journal: Some(JournalRow::Absent),
+        }
+    } else if matches!(
         dto.state,
         LocalContextSyncState::Complete
             | LocalContextSyncState::Cancelled
@@ -454,7 +493,11 @@ pub(crate) fn resume(call: &CallContext<'_>, accepted: &Accepted, id: OperationI
         Standing::Owed
     };
     let mut answer = Answer {
-        effects: report.effects,
+        effects: if unlinked_original {
+            Effects::not_requested()
+        } else {
+            report.effects
+        },
         ..Answer::stopped(report.code)
     };
     answer.recovery = local_actions(&dto, repo.root());

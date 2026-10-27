@@ -1,4 +1,6 @@
 //! Acceptance-to-link request authority, through the existing request store API.
+#[path = "local_sync_spec.rs"]
+mod spec;
 use super::support::conformance::{Ask, Row};
 use super::support::{items, mutation};
 use super::support::{operations, records};
@@ -65,6 +67,7 @@ fn local_sync_request_child() {
     let data = std::path::Path::new(json["data"].as_str().unwrap());
     let point = match json["point"].as_str().unwrap() {
         "path" => Some(FailurePoint::LocalSyncAfterResolutionPath),
+        "write" => Some(FailurePoint::LocalSyncAfterResolutionWriteBeforeObservation),
         "ack" => Some(FailurePoint::LocalSyncAfterCancellationAcknowledgement),
         "accepted" => None,
         _ => panic!("unknown child boundary"),

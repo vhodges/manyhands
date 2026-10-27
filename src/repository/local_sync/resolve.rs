@@ -245,12 +245,10 @@ pub(super) fn continue_without_source(owner: &mut Owner<'_>) -> Result<ResultCod
     if owner.row.state == LocalSyncState::Complete {
         return Ok(ResultCode::Ok);
     }
+    let evidence = owner.evidence()?;
     if owner.row.active_resolution.is_some()
         && !owner.row.integration_proven
-        && owner
-            .row
-            .candidate
-            .is_none_or(|id| owner.git.find_commit(id).is_err())
+        && !candidate_ready(&owner.git, &owner.row, &evidence)?
     {
         return Err(Fault {
             code: ResultCode::OriginalRequestRequired,
@@ -260,6 +258,12 @@ pub(super) fn continue_without_source(owner: &mut Owner<'_>) -> Result<ResultCod
     if owner.request.is_some() {
         if owner.row.integration_proven && owner.row.artifacts_released {
             recover::verify_released_integration(owner)?;
+        } else if owner.row.active_resolution.is_none()
+            && owner.row.candidate.is_none()
+            && owner.git.refname_to_id(&owner.row.context_ref)? != owner.row.context_parent
+        {
+            let head = owner.git.refname_to_id(&owner.row.context_ref)?;
+            external_proof(owner, head)?;
         } else {
             verify_backend(owner)?;
         }
@@ -284,11 +288,8 @@ pub(super) fn continue_without_source(owner: &mut Owner<'_>) -> Result<ResultCod
         }
         return conflict::install(owner);
     }
-    if owner
-        .row
-        .candidate
-        .is_some_and(|id| owner.git.find_commit(id).is_ok())
-    {
+    let evidence = owner.evidence()?;
+    if candidate_ready(&owner.git, &owner.row, &evidence)? {
         return complete_candidate(owner);
     }
     Err(Fault {
@@ -405,6 +406,10 @@ fn apply(
                 verify_backend(owner)?;
                 write_path(owner, path, source.source.as_bytes(), before)?;
                 owner.performed.wrote = true;
+                run::boundary(
+                    owner,
+                    FailurePoint::LocalSyncAfterResolutionWriteBeforeObservation,
+                )?;
             }
             owner.transaction(|db,row| {db.execute("UPDATE local_context_sync_steps SET phase='observed',owner_epoch=?3 WHERE operation_ulid=?1 AND ordinal=?2",params![row.operation_id.to_string(),100+i as i64,row.owner_epoch])?;Ok(())})?;
             run::boundary(owner, FailurePoint::LocalSyncAfterResolutionPath)?;
@@ -711,14 +716,120 @@ pub(super) fn complete_candidate(owner: &mut Owner<'_>) -> Result<ResultCode, Fa
 /// Called outside owned backend primitives (which hold their own transient locks)
 /// before acceptance and before each next persistent Git/path effect.
 fn verify_backend(owner: &mut Owner<'_>) -> Result<(), Fault> {
-    conflict::backend_unlocked(owner)?;
     let evidence = owner.evidence()?;
-    let head = owner.git.refname_to_id(&owner.row.context_ref)?;
-    let after = head != owner.row.context_parent;
-    if after && (Some(head) != owner.row.candidate || !evidence.ref_started) {
+    verify_backend_in(&owner.git, &owner.row, &evidence)
+}
+pub(super) fn verify_backend_in(
+    git: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    evidence: &recover::Execution,
+) -> Result<(), Fault> {
+    conflict::backend_unlocked_in(git, &row.context_ref)?;
+    let head = git.refname_to_id(&row.context_ref)?;
+    let after = head != row.context_parent;
+    if after && (Some(head) != row.candidate || !evidence.ref_started) {
         return Err(Fault::foreign());
     }
-    if !recover::ref_proof(owner, &evidence, after)? {
+    if !recover::ref_proof_in(git, row, evidence, after)? {
+        return Err(Fault::foreign());
+    }
+    Ok(())
+}
+
+/// Read-only candidate capability shared by inspection and source-free execution.
+pub(super) fn candidate_ready(
+    git: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    e: &recover::Execution,
+) -> Result<bool, Fault> {
+    let Some(oid) = row.candidate else {
+        return Ok(false);
+    };
+    match git.find_commit(oid) {
+        Ok(_) => {
+            run::validate_candidate_in(git, row, e)?;
+            Ok(true)
+        }
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// Observe accepted resolution paths without an executor, lease or journal write.
+/// The same immutable path intents used by apply/verify_result_files constrain
+/// both partial images and the fully imported candidate image.
+pub(super) fn read_resolution_image(
+    service: &RepositoryService,
+    repo: &ResolvedRepository,
+    git: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    current: &super::conflict_record::Image,
+    ready: bool,
+) -> Result<(), Fault> {
+    let (stored,intents)=service.read_session(RepositoryOperation::Read,|db|{
+        let stored:Vec<u8>=db.query_row("SELECT manifest FROM local_context_sync_conflicts WHERE operation_ulid=?1",[row.operation_id.to_string()],|r|r.get(0))?;
+        let intents=db.prepare("SELECT ordinal,baseline_metadata_digest,expected_metadata_digest FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='path' ORDER BY ordinal")?.query_map([row.operation_id.to_string()],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,Vec<u8>>(1)?,r.get::<_,Vec<u8>>(2)?)))?.collect::<Result<Vec<_>,_>>()?;
+        Ok((stored,intents))
+    })?;
+    let stored: super::conflict_record::Image =
+        serde_json::from_slice(&stored).map_err(|_| Fault::authority())?;
+    let (paths, _) = conflict::enumerate(repo, git, row)?;
+    if paths.len() != intents.len() {
+        return Err(Fault::authority());
+    }
+    let allowed = paths.iter().map(|e| e.path.clone()).collect();
+    if !integration::resolution::only_paths_are_dirty(git, &allowed)? {
+        return Err(Fault::foreign());
+    }
+    for path in &current.paths {
+        if let Some(i) = paths.iter().position(|e| e.path == path.0) {
+            let (ordinal, before, after) = &intents[i];
+            if *ordinal != 100 + i as i64 || before.len() != 32 || after.len() != 32 {
+                return Err(Fault::authority());
+            }
+            let actual = path.1.ok_or_else(Fault::foreign)?;
+            if path.2.is_some_and(|mode| mode != 0o100644)
+                || (actual.as_slice() != after && (ready || actual.as_slice() != before))
+            {
+                return Err(Fault::foreign());
+            }
+        } else if !stored.paths.contains(path) {
+            return Err(Fault::foreign());
+        }
+    }
+    if current.paths.len() != stored.paths.len() {
+        return Err(Fault::foreign());
+    }
+    if ready {
+        let mut expected = git2::Index::new()?;
+        expected.read_tree(
+            &git.find_commit(row.candidate.ok_or_else(Fault::authority)?)?
+                .tree()?,
+        )?;
+        if !integration::validate::prepared_merge_index_matches_index(
+            &conflict::prepared(git, row)?,
+            &expected,
+        )? {
+            return Err(Fault::foreign());
+        }
+        if current.index != conflict::entries(&expected)
+            && (row.integration_proven || current.index != stored.index)
+        {
+            return Err(Fault::foreign());
+        }
+    } else if current.index != stored.index {
+        return Err(Fault::foreign());
+    }
+    if row.integration_proven {
+        if current
+            .metadata
+            .iter()
+            .zip(stored.metadata)
+            .any(|(a, b)| a.is_some() && *a != b)
+        {
+            return Err(Fault::foreign());
+        }
+    } else if current.metadata != stored.metadata {
         return Err(Fault::foreign());
     }
     Ok(())
@@ -839,17 +950,24 @@ pub(super) fn verify_integrated(owner: &mut Owner<'_>) -> Result<(), Fault> {
 }
 fn external_proof(owner: &mut Owner<'_>, oid: git2::Oid) -> Result<(), Fault> {
     owner.authorize()?;
-    if owner.git.find_commit(oid)?.parent_ids().collect::<Vec<_>>()
-        != [owner.row.context_parent, owner.row.primary_parent]
+    external_proof_in(&owner.git, &owner.row, oid)
+}
+fn external_proof_in(
+    git: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    oid: git2::Oid,
+) -> Result<(), Fault> {
+    if git.find_commit(oid)?.parent_ids().collect::<Vec<_>>()
+        != [row.context_parent, row.primary_parent]
     {
         return Err(Fault::foreign());
     }
-    if owner.git.refname_to_id(&owner.row.context_ref)? != oid
-        || !recover::exact_image(&owner.git, oid)?
+    if git.refname_to_id(&row.context_ref)? != oid
+        || !recover::exact_image(git, oid)?
         || !integration::validate::validates_external_integration(
-            &owner.git,
-            owner.row.context_parent,
-            owner.row.primary_parent,
+            git,
+            row.context_parent,
+            row.primary_parent,
             oid,
         )?
     {
@@ -857,7 +975,51 @@ fn external_proof(owner: &mut Owner<'_>, oid: git2::Oid) -> Result<(), Fault> {
     }
     // External Git resolves its own backend artifacts. Do not reinterpret an
     // index lock or incomplete metadata cleanup as successful external repair.
-    recover::clean_metadata(&owner.git, &owner.row.context_ref)
+    recover::clean_metadata(git, &row.context_ref)
+}
+
+pub(super) fn read_backend_proof(
+    service: &RepositoryService,
+    git: &git2::Repository,
+    row: &super::record::LocalContextSyncRecord,
+    e: &recover::Execution,
+) -> Result<bool, Fault> {
+    let head = git.refname_to_id(&row.context_ref)?;
+    if row.active_resolution.is_none()
+        && row.candidate.is_none()
+        && e.disposition == recover::Disposition::Merge
+        && head != row.context_parent
+    {
+        external_proof_in(git, row, head)?;
+        if row.integration_proven {
+            if row.result != Some(head) {
+                return Err(Fault::foreign());
+            }
+            let logs = recover::current_log_digests(git, &row.context_ref)?;
+            service.read_session(RepositoryOperation::Read, |db| {
+                external_reference_proof(db, row, &logs)
+            })?;
+        }
+        Ok(true)
+    } else {
+        verify_backend_in(git, row, e)?;
+        Ok(false)
+    }
+}
+
+fn external_reference_proof(
+    db: &rusqlite::Connection,
+    row: &super::record::LocalContextSyncRecord,
+    logs: &[[u8; 32]; 2],
+) -> Result<(), ReadError> {
+    let binding:Option<(Vec<u8>,Option<Vec<u8>>)>=db.query_row("SELECT baseline_metadata_digest,expected_metadata_digest FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13 AND kind='reference' AND phase='observed' AND generation=?2 AND expected_old_oid=?3 AND expected_new_oid=?4",params![row.operation_id.to_string(),row.generation,row.context_parent.to_string(),row.result.map(|id|id.to_string())],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    let (branch, head) = binding.ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))?;
+    let head = head.ok_or_else(|| ReadError::new(ResultCode::RecoveryRequired))?;
+    if branch != logs[0] || head != logs[1] {
+        Err(ReadError::new(ResultCode::ExternalChange))
+    } else {
+        Ok(())
+    }
 }
 pub(super) fn adopt_external(owner: &mut Owner<'_>) -> Result<ResultCode, Fault> {
     let oid = owner.git.refname_to_id(&owner.row.context_ref)?;
@@ -889,12 +1051,7 @@ pub(super) fn verify_external_integrated(owner: &mut Owner<'_>) -> Result<(), Fa
     }
     external_proof(owner, result)?;
     let logs = recover::current_log_digests(&owner.git, &owner.row.context_ref)?;
-    owner.transaction(|db,row| {
-        let (branch,head):(Vec<u8>,Option<Vec<u8>>)=db.query_row("SELECT baseline_metadata_digest,expected_metadata_digest FROM local_context_sync_steps WHERE operation_ulid=?1 AND ordinal=13",[row.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let head=head.ok_or_else(||ReadError::new(ResultCode::RecoveryRequired))?;
-        if branch!=logs[0] || head!=logs[1] {return Err(ReadError::new(ResultCode::ExternalChange));}
-        Ok(())
-    })
+    owner.transaction(|db, row| external_reference_proof(db, row, &logs))
 }
 /// External adoption has no library-made reflog append. Its reference step stores
 /// the validated post-adoption branch/HEAD log digests in the two metadata digest

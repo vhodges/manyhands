@@ -886,6 +886,7 @@ pub enum FailurePoint {
     LocalSyncAfterCheckoutBackend,
     LocalSyncInsideRefWindow,
     LocalSyncAfterResolutionPath,
+    LocalSyncAfterResolutionWriteBeforeObservation,
     LocalSyncBeforeCancellationAcknowledgement,
     LocalSyncAfterCancellationAcknowledgement,
     LocalSyncBeforeSideRead,

@@ -70,7 +70,7 @@ E4/E9 code. The ticket remains implementing; no lifecycle status edit was needed
 | Task 4 | **Complete and approved**, full range `37bd2c36ace84e56920d4cf15f55539d63c7d1c7..4377944cffa6dc9c00e43d97053d00f8a7fbdc19`. Controller reports SPEC `ses_e898c0189ffebSYYicNzmsZaXQ` and QUALITY `ses_e881a2165ffeEIJWyTo9j3HVR3` approved at that head, each with zero findings. |
 | Task 5 | **Complete and approved at `7283ad210abbb0e9f6fd108362c48d488ee7fad4`**, full range from `4377944` (code base `7856c619`), both controller reviews above, zero outstanding. 124 selected tests and 14 actual no-Drop exits; Task 7 activation obligation retained. |
 | Task 6 | **Complete and approved at `41bce3eb23ae4e95316f287cd832d38be00164aa`**, full range `7283ad2..41bce3e`. Task 7 controller handoff reports SPEC `ses_e864b2dfbffemfrKBcgnvISO55` and QUALITY `ses_e8613a466ffe3Dlw50236N05X9` both approved with zero findings. Latest recorded verification: **159 local + 4 shared = 163 passing tests**, including **21 actual no-Drop exit assertions**. This supersedes the historical pending-review entries below. |
-| Task 7 | **Implementation delivered for controller SPEC then QUALITY review**, full range from `41bce3e` through the feature commit containing checkpoint `01M5X9EC8F4RPJQYTX7Z45JXPZ`. Includes WIP `ee9e485`, waiting record `0b75184`, and owner approval `16e8780`. Production execution/read/control paths are active. Final selected evidence: **28 mutation + 6 read + 116 contract + 159 domain + 10 command + 4 conformance + 1 migration + 4 compile-fail = 328 passing tests/cases**; four new actual no-Drop exits. Whole-tree fmt/check/clippy pass. No independent Task 7 review or approval has occurred. |
+| Task 7 | SPEC `ses_e8554c7d2ffe8o3xfJnBqcRrQO` **REQUEST CHANGES: seven Important findings at `44e3969`**. All seven have source-verified corrections and local regression evidence in checkpoint `01M5XFVS1XWNMG79KS7DYXZ7GH`, awaiting **SPEC re-review, then QUALITY**. This fix series selects **369 passing tests/cases**, including 12 new SPEC tests and one additional actual no-Drop exit. Production execution/read/control paths remain active; whole-tree fmt/check/clippy pass. No approval of the corrected Task 7 tree is claimed. |
 | Tasks 8–9 | Not started. Task 7 completion and independent SPEC then QUALITY controller reviews remain prerequisites. |
 
 All new commits use the requested trailer
@@ -3208,3 +3208,197 @@ compositions and its approved E3 fixture changes. Task 9 owns the remaining docu
 amendments and whole-branch delivery/review. No closure is automatically resumed.
 No frontend, Cargo/dependency/target, global ResultCode/RecoveryActionKind or native
 workflow was changed; no PR, closure, merge into main or cleanup was performed.
+
+## Task 7 SPEC corrections: seven Important findings, awaiting re-review
+
+Checkpoint **`01M5XFVS1XWNMG79KS7DYXZ7GH`**, timestamp **2026-10-27T01:33:41Z**.
+Fix base: **`44e3969f80907b34ab85a6c8bc3bb96f32783863`**. The controller supplied
+SPEC session **`ses_e8554c7d2ffe8o3xfJnBqcRrQO`**, **REQUEST CHANGES**, with seven
+Important findings. Each was verified against the base source before correction.
+The original Task 7 delivery evidence above is historical, not approval of these
+missing compositions. Review this fix delta and the full Task 7 range from
+`41bce3eb23ae4e95316f287cd832d38be00164aa` through the commit containing this
+checkpoint. QUALITY follows successful SPEC re-review; Task 8 remains unstarted.
+
+### Verified findings and dispositions
+
+1. **Complete production S/active-R authority — addressed locally.**
+   `Fence::verify` checked only the executing request, `Owner::transaction` audited
+   only the domain tables, and cancellation accepted any nonempty surviving
+   control subset. The initial public R barrier reproduced continued execution
+   after deleting S's control. Production owner checks now also run the F2 control
+   audit and require exactly the scoped S association plus the exact active R,
+   when present, with matching request/operation/attempt identities. Final indexing
+   explicitly distinguishes authoritative F2 controls from fixture-only domain
+   counters; an empty/incomplete F2 vector cannot fall back to those counters.
+   Inspection and bound abandonment reuse the complete association proof. Public
+   barriers delete S during R and active R during U: both stop before further Git
+   effects, retain requests and domain evidence, leave the post-deletion authority
+   snapshot unchanged and never recreate the missing control.
+
+2. **Atomic unlinked-parent disposition — addressed locally.**
+   The base checked a previously read parent before `attach`; a parent that
+   completed between that read and linkage let U attach, inherit effects and
+   finish successfully. The regression reproduced `ok` instead of external_change.
+   `Fence::attach` now checks terminal state in the leased domain transaction and
+   refuses first linkage to complete/cancelled/abandoned parents. The binding maps
+   the resulting unlinked terminal disposition without own effects. A real public
+   progress barrier after U's initial read lets a separate thread complete R before
+   linkage: U reports external_change, leaves no request record and creates no
+   attempt. Already-linked U completion/replay stays valid.
+   The same gate now checks source-free candidate capability before first U link:
+   a concurrent partial R appearing after U's initial read yields
+   original_request_required/R, no own effects and release of unlinked U. That
+   additional composition first reproduced inherited parent write effects. Tests
+   coordinate through bounded channels, not recursive library calls from a sink.
+
+3. **Read actions from executable evidence — addressed locally.**
+   Base inspection used candidate-OID presence, so an unimported memory candidate
+   incorrectly advertised resume/S; a stable index.lock incorrectly advertised
+   fresh resolve. Both counterexamples ran RED. Read-only candidate validation now
+   shares actual commit existence, ordered parents, frozen identity and invariant
+   proof with source-free execution. Backend/ref/log checks have shared read-only
+   cores; inspection also checks accepted path intents, modes, index composition
+   and remaining metadata without acquiring a write lease or changing authority.
+   A journaled/unimported R candidate gives retry_resolution/R/false. Stable foreign
+   locks, files or candidate-identity disagreement give external_repair/false.
+   Tests hold the repository lease while reading and compare Git plus full relevant
+   SQL snapshots, including historical side reads under original tokens.
+   A related external-result control verified that a clean exact-parent external
+   repair can be inspected/resumed, including index-only continuation and missing
+   current commit identity. External provenance uses its recorded reference/log
+   proof, not an owned-candidate assumption. It first reproduced external_repair
+   instead of resume; a follow-up missing-identity check reproduced IdentityRequired
+   instead of IndexPending. Both now pass. No closure continuation is involved.
+
+4. **Cancellation reply generation — addressed locally.**
+   Base `cancel_request` set acknowledged from `ack > 0`; after `(1,1)`, issuing 2
+   incorrectly returned true. The new regression reproduced that exact false
+   acknowledgement. Local acknowledgement now requires a positive issued generation
+   equal to the current acknowledged generation. Repeated issuance remains false
+   until a safe point acknowledges it. The existing coordinated newer-cancellation/
+   U-takeover case still passes, as do all seven old progress/cancellation cases.
+
+5. **Canonical local resume routing — addressed locally.**
+   The local query used the raw caller root before resolution; the first `root/.`
+   deterministic-resume case reproduced OriginalRequestRequired instead of Ok.
+   Registered local routing now resolves canonical repository scope before querying,
+   and position reads use that same root. Missing/unregistered roots continue to
+   the pre-existing legacy routes. Tests exercise root/. plus Unix relative and
+   symlink spellings for deterministic U and partial-R input requirements, then
+   repeat the same request ID through the canonical spelling and compare envelopes.
+   All **33 existing resume tests** pass unchanged.
+
+6. **Actual typed permission failures — addressed locally.**
+   `file_image::read` already returned typed EACCES, but `conflict::image` replaced
+   every I/O error with foreign change. A real chmod-unreadable conflict file at
+   **UID 1000** reproduced external_change instead of repository_inaccessible.
+   The conflict image now preserves typed I/O classification, and the non-Unix
+   owned-file adapter retains its underlying I/O kind rather than replacing it
+   with InvalidInput. The Unix test positively verifies PermissionDenied from the
+   unreadable file, calls the explicit content API with a valid recorded token,
+   restores permissions, and verifies no returned source and unchanged Git/SQL.
+   The existing portable recorded-blob seam test also passes. No Windows ACL or
+   native macOS execution evidence is claimed.
+
+7. **Written-before-observed historical effects — addressed locally.**
+   Base path replacement preceded the SQL observation, but changed-input lookup
+   immediately returned the stale control effect cache. A new actual no-Drop exit
+   at `LocalSyncAfterResolutionWriteBeforeObservation` leaves a prepared path and
+   cached Unchanged despite the replaced file; the first mismatch test reproduced
+   Unchanged instead of Written. Stable-ID effect reads now supplement the cache
+   only from scoped accepted resolution identity, durable pre/output digests and
+   a proven no-follow regular-file output image, with fresh SQL recheck and file
+   recheck. This is reporting evidence only: no lease, phase update, attempt advance,
+   token issuance or cache write. Changing only the observation now gives
+   request_mismatch/Written/Partial while request, files, refs and every relevant
+   SQL row remain unchanged. Exact R finishes once and then replays; no fresh
+   context/attempt is adopted from the observed file.
+
+### Test-first evidence and exact test homes
+
+The 12 new tests live in **`tests/mutation_replay/local_sync_spec.rs`**, an explicit
+child of the existing local_sync module and existing mutation_replay target. The
+parent helper only gains the new child-exit boundary; no existing assertion was
+changed. All selectors below use
+`devenv shell -- cargo test --all-features --locked --test mutation_replay <selector>`.
+
+| Finding | Selector / observed RED | Final proof |
+| --- | --- | --- |
+| 1 | `spec_missing_start_or_active_resolution_control_fences_the_live_executor`: R returned Ok after S-control deletion. | Both R/S-loss and U/active-R-loss barriers preserve Git and remaining SQL authority. |
+| 2 | `spec_parent_completion_between_resume_read_and_link_releases_unlinked_u`: returned Ok instead of ExternalChange. | Completion between read/link produces no-effect release. |
+| 2 composition | `spec_partial_resolution_between_resume_read_and_link_requires_r_without_linking_u`: inherited Written/Pending parent effects. | Original R required; no U effects or retained U record. |
+| 2 control | `spec_linked_resume_keeps_its_receipt_after_another_request_completes` | Linked U finishes and replays its receipt; supplementary control, no separate RED claimed. |
+| 3 | `spec_inspection_requires_an_imported_candidate_and_refuses_foreign_locks`: Resume instead of RetryResolution for unimported R candidate. | Required R, no fresh resolution, no SQL changes, successful read while lease held. |
+| 3 | `spec_inspection_stable_foreign_locks_are_external_only`: Resolve for foreign index.lock. | index.lock and HEAD.lock give external-only recovery without writes or lease acquisition. |
+| 3 controls | `spec_inspection_foreign_images_and_candidate_identity_are_read_only` | Fresh/partial/imported foreign file images and corrupt candidate identity give external-only recovery; historical sides stay immutable. Supplementary controls. |
+| 3 composition | `spec_read_and_resume_share_external_result_proof`: ExternalRepair instead of Resume, then IdentityRequired instead of IndexPending after identity removal. | Valid external adoption and index-only retry share proof and make no library checkpoint. |
+| 4 | `spec_cancel_reply_does_not_acknowledge_a_new_generation`: second issued generation returned acknowledged=true. | Second/third issues remain pending until explicit safe acknowledgement. |
+| 5 | `spec_resume_aliases_use_canonical_local_scope`: first alias gave OriginalRequestRequired for resumable candidate. | Six alias/phase combinations, canonical same-ID replay and R selection pass on Linux. |
+| 6 | `spec_actual_conflict_path_permission_denial_is_repository_inaccessible`: actual EACCES became ExternalChange. | Typed RepositoryInaccessible, no source, restored permissions and unchanged SQL/Git; executed at UID 1000. |
+| 7 | `spec_no_drop_written_unobserved_path_has_read_only_mismatch_history`: actual exit before SQL observation gave Unchanged mismatch effects. | Written/Partial mismatch, no authority mutation, exact R completion/replay, one resolution attempt. |
+
+The initial five-test SPEC selection failed all five intended assertions. The
+terminal-race and no-Drop cases then established their own REDs before their fixes.
+Supplementary controls are not represented as additional pre-fix failures. Routine
+compile/lint corrections were limited to a borrow split and an octal permission
+literal. The read/link barrier reports a real existing Observing progress stage;
+it adds no public testing or journal-bypass method and does not consume the existing
+cancellation-observation hook. The latter's older race test stays unchanged.
+
+### Verification for this fix series
+
+All commands ran through Devenv from the ticket checkout. Each test invocation had
+one positional selector where filtered; no zero-selection result was accepted.
+
+| Command after `devenv shell -- cargo` | Result |
+| --- | --- |
+| `fmt --check` | Exit 0. |
+| `check --all-features --locked` | Exit 0; latest 4.76s. |
+| `clippy --all-targets --all-features --locked -- -D warnings` | Exit 0; latest 25.97s, no warnings. |
+| `test --all-features --locked --test mutation_replay local_sync` | **40 passed**, including all mandatory Task 7 names and all 12 new SPEC tests; 121.07s in the complete selection. |
+| `test --all-features --locked --test read_items local_sync` | **6 passed**. |
+| `test --all-features --locked --test mutation_replay resume::` | **33 passed**, old assertions unchanged. |
+| `test --all-features --locked --test mutation_replay progress::` | **7 passed**, old assertions unchanged. |
+| `test --all-features --locked --test mutation_contract` | **44 passed**. |
+| `test --all-features --locked --test read_contract` | **72 passed**. |
+| `test --all-features --locked --lib local_sync::` | **159 passed**, 838.28s; relevant domain regression group, not the full package suite. |
+| `test --all-features --locked --doc local_sync` | **4 passed**, private-boundary compile-fail proofs. |
+
+After the narrow final external-result/identity correction, reran its exact public
+composition, all whole-tree gates and the complete affected 159-test domain group.
+All passed. No unrelated baseline was rerun to replace the targeted evidence.
+
+The exact single selector **`every_command_of_this_target_keeps_the_rules_of_the_boundary`**
+also ran in four separate `test --all-features --locked` invocations:
+
+- `--test mutation_replay`: **1 passed**, all 18 homes including both local commands.
+- `--test mutation_confirmation`: **1 passed**, 6 homes.
+- `--test mutation_remote`: **1 SSH cases passed**, exact SSH harness selector above,
+  4 homes. This is not a zero-selected Rust test invocation.
+- `--test mutation_bridges`: **1 passed**, 4 homes.
+
+The home inventory remains **32 commands**. Unique selected total for this fix
+series: **369 tests/cases** (12 SPEC tests are included in 40; exact re-runs are not
+added again). The new path-window proof adds **one actual no-Drop exit** to the
+existing four public and 21 domain exit assertions. Thread barriers are not counted
+as process deaths. No golden/schema rewrite, new target, dependency or frontend edit
+was needed. The existing portable permission injection remains; native platforms
+were not run.
+
+### Scope and re-review handoff
+
+Entry was clean at the fix base. Fetch/merge at entry and checkpoint found main
+`0464c42dae19a6dde000c7e7660e82762a41fada` already incorporated. Merge-tree passed at
+base with tree `0b482a3468a29cdb038e659fe6847ec9c181b2c8`. Production module gates stay
+active and the new shared proof/history helpers remain repository-internal.
+No public journal bypass, generic transaction engine or unused-code allowance was
+introduced. Existing tests were extended only with the new SPEC module and child
+boundary; their old semantic assertions were not rewritten.
+
+All seven findings are **locally addressed**, pending independent verification.
+Next is controller SPEC re-review of the full correction delta, then QUALITY.
+There is no approval of these fixes yet. Ticket remains implementing; Task 8 has
+not started. No PR, lifecycle closure, merge into main, native CI or cleanup was
+performed. Remaining unknowns are independent review and native runtime/ACL behavior,
+not a claimed successful result for those unrun gates.

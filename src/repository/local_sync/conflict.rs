@@ -12,18 +12,21 @@ pub(super) const MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
 #[cfg(test)]
 thread_local! {pub(super) static INSPECT_HOOK:std::cell::RefCell<Option<Box<dyn FnMut()>>>=const {std::cell::RefCell::new(None)};}
 pub(super) fn backend_unlocked(owner: &Owner<'_>) -> Result<(), Fault> {
-    let metadata = integration::artifacts::MergeMetadataDirectory::open(&owner.git)?;
+    backend_unlocked_in(&owner.git, &owner.row.context_ref)
+}
+pub(super) fn backend_unlocked_in(git: &git2::Repository, context_ref: &str) -> Result<(), Fault> {
+    let metadata = integration::artifacts::MergeMetadataDirectory::open(git)?;
     for member in ["index.lock", "HEAD.lock"] {
         if metadata.digest(member)?.is_some() {
             return Err(Fault::ambiguous());
         }
     }
     for member in [
-        format!("{}.lock", owner.row.context_ref),
-        format!("logs/{}.lock", owner.row.context_ref),
+        format!("{context_ref}.lock"),
+        format!("logs/{context_ref}.lock"),
         "packed-refs.lock".into(),
     ] {
-        match std::fs::symlink_metadata(owner.git.commondir().join(member)) {
+        match std::fs::symlink_metadata(git.commondir().join(member)) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             _ => return Err(Fault::ambiguous()),
         }
@@ -314,8 +317,7 @@ pub(super) fn image(git: &git2::Repository) -> Result<Image, Fault> {
         .into_iter()
         .map(|path| {
             let text = std::str::from_utf8(&path).map_err(|_| Fault::foreign())?;
-            let image =
-                super::file_image::read(root, Path::new(text)).map_err(|_| Fault::foreign())?;
+            let image = super::file_image::read(root, Path::new(text)).map_err(Fault::from)?;
             let (digest, mode) = image
                 .map(|i| (Some(*blake3::hash(&i.bytes).as_bytes()), i.mode))
                 .unwrap_or((None, None));

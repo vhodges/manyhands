@@ -15,6 +15,8 @@ pub use observe::LocalContextSyncObservationDto;
 mod recover;
 mod request;
 mod run;
+pub(super) use request::authority_controls;
+pub(super) use request::resolution_written;
 pub(super) use request::{Fence, content, data, execute_resolution, execute_start, inspection};
 pub(super) fn valid_observation(value: &str) -> bool {
     record::valid_observation(value)

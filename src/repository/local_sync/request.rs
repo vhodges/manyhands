@@ -17,8 +17,10 @@ impl Fence<'_> {
         root: &std::path::Path,
         parent: OperationId,
     ) -> Result<(), ReadError> {
+        mutation::local_control::audit(db)?;
         let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM local_context_sync_request_control c JOIN request_records r USING(request_ulid) WHERE c.request_ulid=?1 AND c.scope_key=?2 AND c.intended_parent=?3 AND c.execution_attempt=?4 AND r.attempt=c.execution_attempt AND r.state='accepted')",params![self.id.to_string(),root.to_str(),parent.to_string(),self.attempt],|r|r.get(0))?;
         if valid {
+            authority_controls(db, root, parent)?;
             Ok(())
         } else {
             Err(ReadError::new(ResultCode::ExternalChange))
@@ -29,6 +31,29 @@ impl Fence<'_> {
         db: &Connection,
         row: &record::LocalContextSyncRecord,
     ) -> Result<(), ReadError> {
+        let (role,linked):(String,bool)=db.query_row("SELECT role,parent_operation IS NOT NULL FROM local_context_sync_request_control WHERE request_ulid=?1",[self.id.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
+        if role != "start" && !linked {
+            match row.state {
+                record::LocalSyncState::Complete => {
+                    return Err(ReadError::new(ResultCode::ExternalChange));
+                }
+                record::LocalSyncState::Cancelled | record::LocalSyncState::Abandoned => {
+                    return Err(ReadError::new(ResultCode::Cancelled));
+                }
+                _ => {}
+            }
+        }
+        if role == "resume" && !linked && row.active_resolution.is_some() && !row.integration_proven
+        {
+            let git = git2::Repository::open(&row.worktree)
+                .map_err(|_| ReadError::new(ResultCode::RepositoryInaccessible))?;
+            let evidence = recover::Execution::read(db, row.operation_id)?;
+            if !resolve::candidate_ready(&git, row, &evidence)
+                .map_err(|f| ReadError::new(f.code))?
+            {
+                return Err(ReadError::new(ResultCode::OriginalRequestRequired));
+            }
+        }
         let pending_resolution:bool=db.query_row("SELECT role='resolve' AND NOT EXISTS(SELECT 1 FROM local_context_sync_resolutions a WHERE a.request_ulid=c.request_ulid AND a.operation_ulid=?2) FROM local_context_sync_request_control c WHERE c.request_ulid=?1",params![self.id.to_string(),row.operation_id.to_string()],|r|r.get(0))?;
         if pending_resolution {
             return Ok(());
@@ -67,6 +92,50 @@ impl Fence<'_> {
         if db.execute("UPDATE local_context_sync_request_control SET resolution_attempt=?2,owner_epoch=?3,effect_write=?4,effect_checkpoint=?5,effect_discovery=?6,effect_integration=?7,commit_oid=?8 WHERE request_ulid=?1 AND execution_attempt=?9",params![self.id.to_string(),attempt,row.owner_epoch,effects.write.as_str(),effects.checkpoint.as_str(),effects.discovery.as_str(),effects.integration.as_str(),effects.commit_oid,self.attempt])?!=1 {return Err(ReadError::new(ResultCode::ExternalChange));}
         Ok(())
     }
+}
+
+/// Complete S/active-R authority, including both F2 associations and counters.
+/// It never substitutes the surviving subset when any required owner is lost.
+pub(in super::super) fn authority_controls(
+    db: &Connection,
+    root: &std::path::Path,
+    parent: OperationId,
+) -> Result<Vec<(String, i64, i64)>, ReadError> {
+    let missing = || ReadError::new(ResultCode::RecoveryRequired);
+    let state:Option<(Option<String>,String)>=db.query_row("SELECT s.active_resolution,s.state FROM local_context_sync_records s JOIN repositories p ON p.id=s.repository_id WHERE s.operation_ulid=?1 AND p.root_path=?2",params![parent.to_string(),root.to_str()],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+    let terminal = state
+        .as_ref()
+        .is_some_and(|(_, s)| matches!(s.as_str(), "complete" | "cancelled" | "abandoned"));
+    let mut start=db.prepare("SELECT c.request_ulid,c.cancel_issued,c.cancel_acknowledged FROM local_context_sync_request_control c JOIN request_records r USING(request_ulid) JOIN request_operations o ON o.request_ulid=c.request_ulid AND o.family='local' AND o.operation_ulid=c.intended_parent WHERE c.intended_parent=?1 AND c.scope_key=?2 AND r.scope_key=c.scope_key AND c.role='start' AND r.command='context sync-local' AND c.execution_attempt=r.attempt AND (r.state='accepted' OR ?3) AND ((?4 AND c.parent_operation=?1) OR (NOT ?4 AND c.parent_operation IS NULL))")?;
+    let mut vector: Vec<(String, i64, i64)> = start
+        .query_map(
+            params![parent.to_string(), root.to_str(), terminal, state.is_some()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?
+        .collect::<Result<_, _>>()?;
+    if vector.len() != 1 {
+        return Err(missing());
+    }
+    if let Some((Some(active), _)) = state {
+        let mut resolution=db.prepare("SELECT c.request_ulid,c.cancel_issued,c.cancel_acknowledged FROM local_context_sync_resolutions a JOIN local_context_sync_request_control c ON c.request_ulid=a.request_ulid JOIN request_records r ON r.request_ulid=c.request_ulid WHERE a.attempt_ulid=?1 AND a.operation_ulid=?2 AND c.resolution_attempt=a.attempt_ulid AND c.parent_operation=a.operation_ulid AND c.intended_parent=a.operation_ulid AND c.scope_key=?3 AND r.scope_key=c.scope_key AND c.role='resolve' AND r.command='context resolve-local' AND r.target=c.intended_parent AND c.execution_attempt=r.attempt AND (r.state='accepted' OR ?4)")?;
+        let controls: Vec<(String, i64, i64)> = resolution
+            .query_map(
+                params![active, parent.to_string(), root.to_str(), terminal],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?
+            .collect::<Result<_, _>>()?;
+        if controls.len() != 1 {
+            return Err(missing());
+        }
+        vector.extend(controls);
+    }
+    if vector
+        .iter()
+        .any(|(_, issued, ack)| *ack < 0 || issued < ack)
+    {
+        return Err(missing());
+    }
+    Ok(vector)
 }
 
 pub(in super::super) fn execute_start<'a>(
@@ -225,11 +294,25 @@ fn controls(
     repo: &ResolvedRepository,
     row: &record::LocalContextSyncRecord,
 ) -> Result<Controls, ReadError> {
-    service.read_session(RepositoryOperation::Read,|db| {
-        let (start,issued,ack)=db.query_row("SELECT request_ulid,cancel_issued,cancel_acknowledged FROM local_context_sync_request_control WHERE intended_parent=?1 AND scope_key=?2 AND role='start' AND parent_operation=?1",params![row.operation_id.to_string(),repo.root().to_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-        let (active,r_issued,r_ack)=if let Some(attempt)=row.active_resolution {let (id,i,a)=db.query_row("SELECT c.request_ulid,c.cancel_issued,c.cancel_acknowledged FROM local_context_sync_request_control c JOIN local_context_sync_resolutions r ON r.request_ulid=c.request_ulid WHERE r.attempt_ulid=?1 AND c.parent_operation=?2 AND c.resolution_attempt=?1",params![attempt.to_string(),row.operation_id.to_string()],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?)))?;(Some(id),i,a)}else{(None,0,0)};
-        Ok(Controls{start,active,issued,ack,r_issued,r_ack})
-    }).map_err(|_|ReadError::new(ResultCode::RecoveryRequired))
+    service.read_session(RepositoryOperation::Read, |db| {
+        mutation::local_control::audit(db)?;
+        let vector = authority_controls(db, repo.root(), row.operation_id)?;
+        if vector.len() != 1 + usize::from(row.active_resolution.is_some()) {
+            return Err(ReadError::new(ResultCode::ExternalChange));
+        }
+        let (start, issued, ack) = vector[0].clone();
+        let (active, r_issued, r_ack) = vector
+            .get(1)
+            .map_or((None, 0, 0), |(id, i, a)| (Some(id.clone()), *i, *a));
+        Ok(Controls {
+            start,
+            active,
+            issued,
+            ack,
+            r_issued,
+            r_ack,
+        })
+    })
 }
 fn display_path(path: &[u8]) -> String {
     let mut display = String::new();
@@ -259,6 +342,13 @@ pub(in super::super) fn inspection(
         .map_err(|_| ReadError::new(ResultCode::RepositoryInaccessible))?;
     let head = git.refname_to_id(&row.context_ref).ok();
     let image = conflict::image(&git).map_err(|e| ReadError::new(e.code))?;
+    let candidate = if row.active_resolution.is_some() {
+        resolve::candidate_ready(&git, &row, &e).map_err(|f| (f.code, f.reason))
+    } else {
+        Ok(false)
+    };
+    let backend =
+        resolve::read_backend_proof(service, &git, &row, &e).map_err(|f| (f.code, f.reason));
     let mut report = run::report(ResultCode::Ok, run::Reason::None, Some((&row, &e)));
     let mut paths = Vec::new();
     let mut observation = None;
@@ -281,7 +371,7 @@ pub(in super::super) fn inspection(
         } else {
             LocalContextSyncEligibility::ExternalResolutionRequired
         });
-        report.reason = if row.active_resolution.is_some() && row.candidate.is_none() {
+        report.reason = if row.active_resolution.is_some() && candidate == Ok(false) {
             report.required_request = before
                 .active
                 .as_deref()
@@ -314,6 +404,8 @@ pub(in super::super) fn inspection(
         report.reason = run::Reason::AuthorityMissing;
     }
     if row.candidate.is_none()
+        && !row.integration_proven
+        && backend != Ok(true)
         && e.disposition == recover::Disposition::Merge
         && !matches!(
             row.state,
@@ -326,6 +418,31 @@ pub(in super::super) fn inspection(
         report.reason = run::Reason::IdentityRequired;
         can_start_resolution = false;
     }
+    if !matches!(
+        row.state,
+        record::LocalSyncState::Complete
+            | record::LocalSyncState::Cancelled
+            | record::LocalSyncState::Abandoned
+    ) {
+        let proof = candidate.and_then(|ready| {
+            backend.and_then(|_| {
+                if row.active_resolution.is_some() {
+                    resolve::read_resolution_image(service, repo, &git, &row, &image, ready)
+                        .map_err(|f| (f.code, f.reason))
+                } else {
+                    Ok(())
+                }
+            })
+        });
+        if let Err((code, reason)) = proof {
+            if code == ResultCode::RepositoryInaccessible {
+                return Err(ReadError::new(code));
+            }
+            report.reason = reason;
+            report.required_request = None;
+            can_start_resolution = false;
+        }
+    }
     super::observation_checkpoint(service);
     let (mut again, _) = run::read_evidence(service, repo, id)?;
     again.owner_epoch = row.owner_epoch;
@@ -337,13 +454,20 @@ pub(in super::super) fn inspection(
             })?
         || head != git.refname_to_id(&row.context_ref).ok()
         || image != conflict::image(&git).map_err(|e| ReadError::new(e.code))?
+        || (if row.active_resolution.is_some() {
+            resolve::candidate_ready(&git, &row, &e).map_err(|f| (f.code, f.reason))
+        } else {
+            Ok(false)
+        }) != candidate
+        || resolve::read_backend_proof(service, &git, &row, &e).map_err(|f| (f.code, f.reason))
+            != backend
     {
         return Err(ReadError::new(ResultCode::ExternalChange));
     }
     report.cancel_acknowledged = (before.issued > 0 || before.r_issued > 0)
         && before.issued == before.ack
         && before.r_issued == before.r_ack;
-    let view = data(
+    let mut view = data(
         &report,
         row.kind,
         &row.item_id,
@@ -354,6 +478,21 @@ pub(in super::super) fn inspection(
             .and_then(|r| RequestId::parse(r).ok()),
         RequestId::parse(&before.start).ok(),
     );
+    if backend == Ok(true)
+        && !matches!(
+            row.state,
+            record::LocalSyncState::Complete
+                | record::LocalSyncState::Cancelled
+                | record::LocalSyncState::Abandoned
+        )
+    {
+        view.next_action = LocalContextSyncNextAction::Resume;
+        view.required_request_id = Some(before.start.clone());
+        if !row.integration_proven {
+            view.reason = LocalContextSyncReason::None;
+        }
+        can_start_resolution = false;
+    }
     Ok(LocalContextSyncInspectionDto {
         operation_id: id.to_string(),
         kind: view.kind,
@@ -398,4 +537,87 @@ pub(in super::super) fn content(
         incoming: sides.incoming,
         historical: sides.historical,
     })
+}
+
+#[derive(PartialEq, Eq)]
+struct ResolutionHistory {
+    row: record::LocalContextSyncRecord,
+    scope: String,
+    attempt: String,
+    execution_attempt: i64,
+    paths: Vec<(i64, Vec<u8>, Vec<u8>, String)>,
+}
+fn resolution_history(
+    service: &RepositoryService,
+    id: RequestId,
+) -> Result<Option<ResolutionHistory>, ReadError> {
+    service.read_session(RepositoryOperation::Read,|db|{
+        record::audit(db)?;
+        mutation::local_control::audit(db)?;
+        let control:Option<(String,String,String,i64)>=db.query_row("SELECT c.scope_key,c.parent_operation,c.resolution_attempt,c.execution_attempt FROM local_context_sync_request_control c JOIN request_records r USING(request_ulid) WHERE c.request_ulid=?1 AND c.role='resolve' AND c.parent_operation IS NOT NULL AND c.resolution_attempt IS NOT NULL AND r.scope_key=c.scope_key AND r.attempt=c.execution_attempt",[id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
+        let Some((scope,parent,attempt,execution_attempt))=control else{return Ok(None)};
+        let row=db.query_row("SELECT p.* FROM local_context_sync_records p JOIN repositories repo ON repo.id=p.repository_id JOIN local_context_sync_resolutions a ON a.operation_ulid=p.operation_ulid AND a.attempt_ulid=p.active_resolution WHERE p.operation_ulid=?1 AND repo.root_path=?2 AND a.attempt_ulid=?3 AND a.request_ulid=?4",params![parent,scope,attempt,id.to_string()],record::decode)?;
+        let paths=db.prepare("SELECT ordinal,baseline_metadata_digest,expected_metadata_digest,phase FROM local_context_sync_steps WHERE operation_ulid=?1 AND kind='path' ORDER BY ordinal")?.query_map([parent],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?.collect::<Result<_,_>>()?;
+        Ok(Some(ResolutionHistory{row,scope,attempt,execution_attempt,paths}))
+    })
+}
+
+/// Historical effect evidence only. Exact durable path intents plus a proven
+/// output image can account for a killed writer before its SQL observation.
+/// This never takes a lease, advances a request, changes a phase or writes cache.
+pub(in super::super) fn resolution_written(
+    service: &RepositoryService,
+    id: RequestId,
+) -> Result<bool, ReadError> {
+    let Some(before) = resolution_history(service, id)? else {
+        return Ok(false);
+    };
+    let missing = || ReadError::new(ResultCode::RecoveryRequired);
+    let repo = service.resolve_repository(std::path::Path::new(&before.scope))?;
+    let facts = service.read_session(RepositoryOperation::Read, |db| {
+        super::observe::facts(db, &repo, before.row.kind, &before.row.item_id)
+    })?;
+    if facts.worktree != before.row.worktree || facts.branch != before.row.context_ref {
+        return Err(missing());
+    }
+    let git = git2::Repository::open(&before.row.worktree)
+        .map_err(|_| ReadError::new(ResultCode::RepositoryInaccessible))?;
+    let (entries, _) =
+        conflict::enumerate(&repo, &git, &before.row).map_err(|f| ReadError::new(f.code))?;
+    if entries.len() != before.paths.len() {
+        return Err(missing());
+    }
+    let mut proven = Vec::new();
+    for (i, (entry, (ordinal, pre, post, _))) in entries.iter().zip(&before.paths).enumerate() {
+        if *ordinal != 100 + i as i64 || pre.len() != 32 || post.len() != 32 {
+            return Err(missing());
+        }
+        let path =
+            std::path::PathBuf::from(std::str::from_utf8(&entry.path).map_err(|_| missing())?);
+        if pre != post
+            && let Some(image) = super::file_image::read(&before.row.worktree, &path)
+                .map_err(|e| ReadError::new(run::Fault::from(e).code))?
+            && image.mode.is_none_or(|mode| mode == 0o100644)
+            && blake3::hash(&image.bytes).as_bytes().as_slice() == post
+        {
+            proven.push((path, post));
+        }
+    }
+    let Some(mut after) = resolution_history(service, id)? else {
+        return Err(missing());
+    };
+    after.row.owner_epoch = before.row.owner_epoch;
+    if after != before {
+        return Err(ReadError::new(ResultCode::ExternalChange));
+    }
+    for (path, post) in proven {
+        if let Some(image) = super::file_image::read(&before.row.worktree, &path)
+            .map_err(|e| ReadError::new(run::Fault::from(e).code))?
+            && image.mode.is_none_or(|mode| mode == 0o100644)
+            && blake3::hash(&image.bytes).as_bytes().as_slice() == post
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
