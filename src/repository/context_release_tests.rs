@@ -796,6 +796,83 @@ fn interrupted_before_the_branch_release_the_same_operation_deletes_the_branch()
     );
 }
 
+/// Step 6 on a branch alone: the branch is checked out in a linked
+/// worktree under another name, so its deletion is refused. Nothing was
+/// touched, and the row is discarded as step 4's refusals discard it.
+#[test]
+fn a_branch_checked_out_in_another_worktree_is_refused_and_the_row_is_discarded() {
+    let f = Fixture::new();
+    let repository = f.repository();
+    let head = repository.find_commit(f.primary()).unwrap();
+    let branch = repository
+        .branch(
+            &Fixture::branch(AuthoringKind::Ticket, TICKET),
+            &head,
+            false,
+        )
+        .unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(branch.get()));
+    repository
+        .worktree(
+            "elsewhere",
+            &elsewhere.path().join("checkout"),
+            Some(&options),
+        )
+        .unwrap();
+
+    assert_refused_and_left(&f, TICKET, RepositoryErrorKind::ExternalChange);
+
+    let checkout = Repository::open(elsewhere.path().join("checkout")).unwrap();
+    assert_eq!(
+        checkout.head().unwrap().name(),
+        Some(
+            format!(
+                "refs/heads/{}",
+                Fixture::branch(AuthoringKind::Ticket, TICKET)
+            )
+            .as_str()
+        )
+    );
+    // Nothing is left pending: another operation on the root goes ahead.
+    f.edit(OTHER);
+}
+
+/// Step 6 after this call removed the worktree: the branch's ref is
+/// locked, so its deletion is refused, and the row stays pending with
+/// its step. The same operation finishes once the lock is gone.
+#[test]
+fn a_refusal_at_the_branch_after_the_worktree_was_removed_keeps_the_row_pending() {
+    let f = Fixture::new();
+    f.edit(TICKET);
+    let lock = f.root.path().join(format!(
+        ".git/refs/heads/{}.lock",
+        Fixture::branch(AuthoringKind::Ticket, TICKET)
+    ));
+    fs::write(&lock, "held\n").unwrap();
+    let operation_id = OperationId::new();
+
+    let refused = f.release_with(&f.service, AuthoringKind::Ticket, TICKET, operation_id);
+
+    assert_eq!(kind_of(refused), RepositoryErrorKind::ExternalChange);
+    let (worktree, branch, _) = f.state(AuthoringKind::Ticket, TICKET);
+    assert_eq!((worktree, branch), (false, Some(f.primary())));
+    assert_eq!(
+        f.row(operation_id),
+        (
+            "context_worktree_released".to_owned(),
+            Some("context_worktree_released".to_owned())
+        ),
+        "the row stays pending"
+    );
+
+    fs::remove_file(&lock).unwrap();
+    let finished = f.release_with(&f.service, AuthoringKind::Ticket, TICKET, operation_id);
+    assert_eq!(finished.unwrap(), ContextReleaseOutcome::Released);
+    assert_eq!(f.state(AuthoringKind::Ticket, TICKET), GONE);
+}
+
 #[test]
 fn a_tip_that_moved_after_the_worktree_was_released_is_an_external_change_and_the_row_stays() {
     let f = Fixture::new();

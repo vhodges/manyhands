@@ -1418,3 +1418,94 @@ fn release_then_an_edit_of_the_item_makes_its_context_again() {
     assert_one_context(&world, items::TICKET_A);
     assert_eq!(world.pending_journal_rows(), 0);
 }
+
+/// Not a row of the table (Part 0 review): a context branch with no
+/// worktree of its own, checked out in a linked worktree under another
+/// name. Step 6 cannot delete it, and since the request touched nothing,
+/// its row is discarded and nothing is left pending.
+#[test]
+fn release_of_a_branch_checked_out_in_another_worktree_is_refused_and_discards_the_row() {
+    git_home::isolated();
+    let world = World::new();
+    let repository = git2::Repository::open(&world.root).unwrap();
+    let head = repository.find_commit(world.primary_head()).unwrap();
+    let branch = repository
+        .branch(&World::branch(items::TICKET_A), &head, false)
+        .unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let checkout = elsewhere.path().join("checkout");
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(branch.get()));
+    repository
+        .worktree("elsewhere", &checkout, Some(&options))
+        .unwrap();
+    let before = image(&world, items::TICKET_A);
+
+    let refused = world.execute(REQUEST_1, release_ticket(&world, items::TICKET_A));
+
+    assert_refused(&world, REQUEST_1, &refused, ResultCode::ExternalChange);
+    let journal = journal(&world);
+    let (_, action, state, step) = journal.last().unwrap();
+    assert_eq!(
+        (action.as_str(), state.as_str(), step.as_deref()),
+        ("release_context", "completed", Some("rejected"))
+    );
+    assert_eq!(image(&world, items::TICKET_A), before);
+    assert_eq!(world.branch_tip(items::TICKET_A), Some(head.id()));
+    let checked_out = git2::Repository::open(&checkout).unwrap();
+    assert_eq!(
+        checked_out.head().unwrap().name(),
+        Some(format!("refs/heads/{}", World::branch(items::TICKET_A)).as_str())
+    );
+    // No row of this request stands in the way of what comes next.
+    let next = world.execute(REQUEST_2, create_ticket(&world, TICKET_NEW));
+    assert_ok(&next);
+}
+
+/// R-78: a release records no checkpoint, so one whose answer was lost
+/// runs again as new when it is sent again, and releases the context a
+/// later Edit made.
+#[test]
+fn release_lost_before_settlement_then_an_edit_then_the_same_request_releases_the_new_context() {
+    git_home::isolated();
+    let mut world = World::new();
+    make(&world, REQUEST_1, items::TICKET_A);
+    fail_once_at(&mut world, FailurePoint::BeforeRequestSettlement);
+    let lost = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    world.reopen();
+    make(&world, REQUEST_3, items::TICKET_A);
+
+    let again = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+
+    assert_released(&again);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+    assert!(!indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+}
+
+/// R-78: a preparation records no checkpoint either, so one whose answer
+/// was lost runs again as new when it is sent again, and makes the context
+/// a later release removed.
+#[test]
+fn prepare_lost_before_settlement_then_a_release_then_the_same_request_makes_the_context_again() {
+    git_home::isolated();
+    let mut world = World::new();
+    fail_once_at(&mut world, FailurePoint::BeforeRequestSettlement);
+    let lost = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+    assert_eq!(lost.code, ResultCode::InternalError, "{lost:?}");
+    assert_one_context(&world, items::TICKET_A);
+    world.reopen();
+    let released = world.execute(REQUEST_2, release_ticket(&world, items::TICKET_A));
+    assert_released(&released);
+    assert_eq!(contexts(&world), (vec![], vec![]));
+
+    let again = world.execute(REQUEST_1, edit_ticket(&world, items::TICKET_A));
+
+    assert_ok(&again);
+    assert!(created(&again), "{again:?}");
+    assert_one_context(&world, items::TICKET_A);
+    assert!(indexed(&world, &World::branch(items::TICKET_A)));
+    assert_eq!(world.pending_journal_rows(), 0);
+}

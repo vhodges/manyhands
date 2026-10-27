@@ -25,7 +25,9 @@
 //! 5. The worktree is removed, and `ContextWorktreeReleased` recorded.
 //! 6. (b) and (c) are read again of the branch's tip as it is now, the
 //!    branch is deleted at that tip, and `ContextBranchReleased`
-//!    recorded. A refusal here keeps the row pending.
+//!    recorded. A refusal here keeps the row pending once the worktree is
+//!    removed. A new row on a branch alone has touched nothing, and is
+//!    discarded, as in step 4.
 //! 7. The index is told, as a save's hand-off tells it: `Released`, or
 //!    `IndexPending` with the row owed to `operation resume`.
 //!
@@ -363,7 +365,10 @@ impl RepositoryService {
         if step == Some(LocalStep::ContextBranchReleased) {
             return Ok(true);
         }
-        if step != Some(LocalStep::ContextWorktreeReleased) {
+        // Whether this row removed the context's worktree, in an earlier
+        // call or in this one.
+        let mut removed_worktree = step == Some(LocalStep::ContextWorktreeReleased);
+        if !removed_worktree {
             let worktree = cleanup
                 .worktree_present(kind, item)
                 .map_err(|()| unreadable(root))?;
@@ -400,6 +405,7 @@ impl RepositoryService {
                 effects.begin();
                 match cleanup.release_worktree(kind, item, tip) {
                     WorktreeRelease::Removed => {
+                        removed_worktree = true;
                         self.advance_lifecycle(
                             root,
                             OPERATION,
@@ -438,9 +444,16 @@ impl RepositoryService {
             match cleanup.delete_context_branch(kind, item, tip) {
                 BranchDeletion::Deleted | BranchDeletion::AlreadyAbsent => {}
                 BranchDeletion::Changed => {
+                    // A row that removed no worktree, on a branch alone,
+                    // has touched nothing: it is discarded, as step 4's
+                    // refusals discard it. One that removed the worktree
+                    // stays pending.
+                    if !removed_worktree {
+                        effects.undone();
+                    }
                     return Err(external_change(
                         root,
-                        "the context branch changed while it was released",
+                        "the context branch moved, is locked or is checked out in another worktree",
                     ));
                 }
             }
