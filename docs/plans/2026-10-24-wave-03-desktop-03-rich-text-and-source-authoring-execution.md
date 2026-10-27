@@ -647,3 +647,21 @@ Notes for later tasks: Task 22 leaves `targets()` in
   5.5" as co-author, not common.md's Opus line. The implementer was
   Sonnet, so the line is accurate. `markdown_edit.rs` is 513 lines, at
   the guideline. — If wrong: a split into three files.
+- Ruling (Task 10b): in Markdown mode, Align left, centre and right are a
+  host edit (`markdown_edit::align_column`), not the editor's method. The
+  editor's `set_caret_table_align` reads the drawn table rows, and
+  Markdown mode draws none, so the method does nothing there. The other
+  four table controls read the text, and they use the editor's methods
+  in both modes. The host edit matches the editor's rich-text result
+  byte for byte. Past a row's last cell it aligns the last column, as the
+  editor does. — R-55 (a host edit where the editor lacks the action) and
+  "Markdown mode: the formatting buttons … stay operable", which the
+  design's Table row ("Editor table methods") did not foresee. — If
+  wrong: Align is inert in Markdown mode.
+- Ruling (Task 10b): the toolbar is one roving tab stop. Tab enters at
+  its first control, and Tab or Shift-Tab leave from any control. In the
+  Style menu, Up, Down, Home and End move, and Left and Right do nothing.
+  `secondary-shift-m` also works from a toolbar control, where the
+  toolbar forwards it to the host. Widening it to the whole editing tab
+  is for Task 14 or 15. — It follows the common toolbar pattern and
+  fact 67. — If wrong: key handling in one file.
