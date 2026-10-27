@@ -746,7 +746,7 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation does. The local store records the first fourteen,
+    /// What an operation does. The local store records the first fifteen,
     /// the remote store the next five and the key-material store the last
     /// two; a local synchronization is reported under its remote name.
     /// `release_context` removes an item's work context that holds no work
@@ -768,6 +768,7 @@ contract_enum!(
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",
         RepairItem => "repair_item",
+        ContextSyncLocal => "context_sync_local",
         Poll => "poll",
         SynchronizeContext => "synchronize_context",
         SynchronizePrimary => "synchronize_primary",

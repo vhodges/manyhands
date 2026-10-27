@@ -47,6 +47,7 @@
         "save_ticket",
         "submit_comment",
         "repair_item",
+        "context_sync_local",
         "poll",
         "synchronize_context",
         "synchronize_primary",

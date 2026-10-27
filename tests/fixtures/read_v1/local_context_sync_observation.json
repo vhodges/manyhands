@@ -1,0 +1,36 @@
+{
+  "code": "ok",
+  "command": "context observe-local",
+  "data": {
+    "context_head": "1111111111111111111111111111111111111111",
+    "context_ref": "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "context_worktree": "/fixture/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "kind": "ticket",
+    "observation": "local-sync-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "primary_head": "2222222222222222222222222222222222222222",
+    "primary_ref": "refs/heads/main"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

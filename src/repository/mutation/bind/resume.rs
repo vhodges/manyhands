@@ -823,6 +823,11 @@ impl Binding for OperationResumeBinding {
     /// Reads how the operation stands, and refuses a request that has
     /// nothing to take up before anything is recorded of it.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        if let Some(prepared) =
+            super::local_sync::prepare_resume(call, &self.root, self.operation_id)?
+        {
+            return Ok(prepared);
+        }
         let (scope, found) = self.observe(call.service)?;
         if let Some(answer) = Self::refusal(&found) {
             return Err(answer);
@@ -856,6 +861,9 @@ impl Binding for OperationResumeBinding {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+        if let Some(ran) = super::local_sync::resume(call, accepted, self.operation_id) {
+            return ran;
+        }
         self.call(call, accepted)
     }
 
@@ -876,6 +884,16 @@ impl Binding for OperationResumeBinding {
         _accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
+        match super::local_sync::local_target(call.service, &self.root, self.operation_id) {
+            Ok(Some(_)) => return Ok(Entered::Unfinished),
+            Err(answer) => {
+                return Err(Ran {
+                    answer,
+                    standing: Standing::Unconfirmed,
+                });
+            }
+            Ok(None) => {}
+        }
         // No row is read for a request with no operation. Nothing is run
         // or settled on one that is.
         if journal != NO_ROW {
@@ -931,6 +949,9 @@ impl Binding for OperationResumeBinding {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
+        if let Some(ran) = super::local_sync::resume(call, accepted, self.operation_id) {
+            return ran;
+        }
         self.call(call, accepted)
     }
 }

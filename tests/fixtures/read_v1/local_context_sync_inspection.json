@@ -1,0 +1,56 @@
+{
+  "code": "ok",
+  "command": "context inspect-local",
+  "data": {
+    "active_resolution_request_id": null,
+    "can_start_resolution": true,
+    "cancel_acknowledged": false,
+    "cancel_requested": false,
+    "cancellation_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+    "context_head": "<context-parent>",
+    "context_parent": "<context-parent>",
+    "context_ref": "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "eligibility": "eligible_canonical",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "resolve",
+    "observation": "<observation>",
+    "operation_id": "<operation>",
+    "paths": [
+      {
+        "content_available": true,
+        "display_path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md",
+        "token": "<token>"
+      }
+    ],
+    "primary_parent": "<primary-parent>",
+    "primary_ref": "refs/heads/main",
+    "reason": "canonical_conflict",
+    "required_request_id": null,
+    "result_oid": null,
+    "starting_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+    "state": "conflict_pending"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

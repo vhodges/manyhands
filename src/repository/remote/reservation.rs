@@ -1904,7 +1904,7 @@ impl RepositoryService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn reacquire_synchronization_conflict_in_window(
+    pub(in super::super) fn reacquire_synchronization_conflict_in_window(
         &self,
         root: &Path,
         operation_id: OperationId,
@@ -1914,6 +1914,7 @@ impl RepositoryService {
         conflict_digest: [u8; 32],
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
+            crate::repository::local_sync::record::require_no_pending(tx, id)?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if &record.target != target

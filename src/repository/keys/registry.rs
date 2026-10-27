@@ -781,6 +781,8 @@ fn recorded_under(
     let Some(mark) = mark else {
         return Ok(None);
     };
+    super::super::local_sync::record::require_foreign_id_available(connection, mark.operation_id)
+        .map_err(|error| error.for_operation(operation, data_directory))?;
     match stored_registry_change(connection, mark.operation_id)
         .map_err(|_| shared_key_registry_unavailable(operation, data_directory))?
     {

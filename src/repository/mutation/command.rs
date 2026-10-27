@@ -65,6 +65,8 @@ commands! {
     FolderCreate => "folder create",
     DocumentRepair => "document repair",
     TicketRepair => "ticket repair",
+    LocalContextSync => "context sync-local",
+    LocalContextResolve => "context resolve-local",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
 }
@@ -86,6 +88,8 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            Self::LocalContextSync => true,
+            Self::LocalContextResolve => false,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -158,6 +162,7 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -197,6 +202,7 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -237,6 +243,7 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -281,6 +288,7 @@ impl Command {
     /// stopped it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -331,6 +339,7 @@ impl Command {
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync | Self::OperationResume => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -368,6 +377,7 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
             Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
             // An approval connects to the host to see the key it
@@ -416,6 +426,7 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -462,6 +473,7 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            Self::LocalContextSync | Self::LocalContextResolve => false,
             Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -558,7 +570,11 @@ mod tests {
     #[test]
     fn only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation() {
         for command in Command::ALL {
-            let synchronization = matches!(command, Command::ItemSync | Command::RepoSync);
+            let local = matches!(
+                command,
+                Command::LocalContextSync | Command::LocalContextResolve
+            );
+            let synchronization = local || matches!(command, Command::ItemSync | Command::RepoSync);
             assert_eq!(
                 command.stops_at_safe_points(),
                 synchronization,
@@ -566,8 +582,20 @@ mod tests {
             );
             if synchronization {
                 assert!(!command.needs_confirmation(), "{command:?}");
-                assert!(command.has_operation(), "{command:?}");
-                assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+                assert_eq!(
+                    command.has_operation(),
+                    command != Command::LocalContextResolve,
+                    "{command:?}"
+                );
+                assert_eq!(
+                    command.stage(),
+                    if local {
+                        ProgressStage::Observing
+                    } else {
+                        ProgressStage::Connecting
+                    },
+                    "{command:?}"
+                );
             }
         }
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
@@ -628,7 +656,10 @@ mod tests {
                 matches!(command, Command::KeyRemove | Command::OperationAbandon);
             // A resume takes up another request's operation, and has
             // none of its own either.
-            let names_another_s = command == Command::OperationResume;
+            let names_another_s = matches!(
+                command,
+                Command::OperationResume | Command::LocalContextResolve
+            );
             // An identity is Git configuration, written under the
             // repository lease with no row.
             // So is a host's pin, written by the pin store's own

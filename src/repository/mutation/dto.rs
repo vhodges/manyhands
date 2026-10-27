@@ -538,6 +538,7 @@ impl PrepareDataDto {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum MutationDataDto {
+    LocalContextSync(crate::repository::LocalContextSyncMutationDto),
     Document(DocumentMutationDto),
     Ticket(TicketMutationDto),
     Remote(RemoteMutationDto),
@@ -1007,6 +1008,7 @@ impl MutationDataDto {
     /// one.
     pub(crate) fn authority(&self) -> Option<String> {
         match self {
+            Self::LocalContextSync(_) => None,
             Self::Synchronization(data) => Some(data.authority()),
             Self::Document(_)
             | Self::Ticket(_)
@@ -1026,6 +1028,16 @@ impl MutationDataDto {
     /// that command's family. `None` for data that is not of that shape.
     pub(crate) fn from_stored(command: Command, stored: &serde_json::Value) -> Option<Self> {
         match command {
+            Command::LocalContextSync | Command::LocalContextResolve => {
+                crate::repository::LocalContextSyncMutationDto::from_stored(stored)
+                    .map(Self::LocalContextSync)
+            }
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str()) == Some("local_context_sync") =>
+            {
+                crate::repository::LocalContextSyncMutationDto::from_stored(stored)
+                    .map(Self::LocalContextSync)
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }

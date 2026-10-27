@@ -40,6 +40,7 @@ mod credentials;
 mod dto;
 mod graph;
 mod items;
+mod local_sync;
 mod resolve;
 mod status;
 
@@ -62,6 +63,11 @@ pub use dto::{
 };
 pub use items::{ClosureFilter, ProposedRelationships, ReadinessFilter, TicketFilter};
 pub(crate) use items::{is_plain_relative, observe_in_context};
+pub use local_sync::{
+    LocalContextConflictContentDto, LocalContextConflictEntryDto, LocalContextSyncDataType,
+    LocalContextSyncEligibility, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
+    LocalContextSyncNextAction, LocalContextSyncReason, LocalContextSyncState,
+};
 pub use resolve::ResolvedRepository;
 pub(crate) use status::local_action;
 

@@ -41,7 +41,9 @@ pub use comment_publication::*;
 #[cfg(test)]
 mod comment_publication_tests;
 mod discovery;
+mod integration;
 pub mod keys;
+mod local_sync;
 mod mutation;
 #[cfg(unix)]
 mod native_resolution;
@@ -82,6 +84,7 @@ pub use keys::{
     SharedKeyOwnership, SharedKeyRegistration, SharedKeySelectionOutcome,
     UnregisterSharedKeyOutcome,
 };
+pub use local_sync::LocalContextSyncObservationDto;
 pub use mutation::*;
 pub use promotion::*;
 pub use read::*;
@@ -871,6 +874,24 @@ pub const FAILURE_POINT_EXIT_STATUS: i32 = 86;
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailurePoint {
+    LocalSyncAfterIntent,
+    LocalSyncBeforeExecuteLease,
+    LocalSyncAfterCandidate,
+    LocalSyncBeforeObjectImport,
+    LocalSyncAfterObjectImport,
+    LocalSyncAfterCheckout,
+    LocalSyncAfterRef,
+    LocalSyncBeforeIndex,
+    LocalSyncAfterIndex,
+    LocalSyncDuringCheckout,
+    LocalSyncBeforeCheckoutBackend,
+    LocalSyncAfterCheckoutBackend,
+    LocalSyncInsideRefWindow,
+    LocalSyncAfterResolutionPath,
+    LocalSyncAfterResolutionWriteBeforeObservation,
+    LocalSyncBeforeCancellationAcknowledgement,
+    LocalSyncAfterCancellationAcknowledgement,
+    LocalSyncBeforeSideRead,
     AfterConfirmed,
     AfterContextSync,
     BeforeIntegrationRef,
@@ -1047,6 +1068,7 @@ pub enum RepositoryOperation {
     SetLocalIdentity,
     CreateFolder,
     RepairItem,
+    ContextSyncLocal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3507,7 +3529,8 @@ impl RepositoryService {
             | LocalStep::Error
             | LocalStep::Completed
             | LocalStep::Rejected
-            | LocalStep::Abandoned => false,
+            | LocalStep::Abandoned
+            | LocalStep::LocalSyncPrepared => false,
         };
         if follows_an_owned_write
             && self.should_inject(

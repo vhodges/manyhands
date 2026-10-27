@@ -158,7 +158,9 @@ fn missing_request_tables(connection: &Connection) -> Result<Vec<&'static str>, 
 /// write lock before it looks again: of two processes that open an old
 /// index at once, the second waits for the first and then adds nothing.
 pub(in super::super) fn migrate(connection: &mut Connection) -> Result<(), RepositoryError> {
-    if missing_request_tables(connection)?.is_empty() {
+    if missing_request_tables(connection)?.is_empty()
+        && super::local_control::schema_current(connection)?
+    {
         return Ok(());
     }
     let transaction = connection
@@ -169,6 +171,7 @@ pub(in super::super) fn migrate(connection: &mut Connection) -> Result<(), Repos
             .execute_batch(definition)
             .map_err(RepositoryError::sqlite)?;
     }
+    super::local_control::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)
 }
 
@@ -608,6 +611,7 @@ fn insert_request(
             ],
         )?;
     }
+    super::local_control::accept(transaction, request)?;
     Ok(InsertRequestOutcome::Inserted)
 }
 
@@ -618,6 +622,9 @@ fn finish_request(
     result: &RequestResult,
     now: i64,
 ) -> Result<bool, ReadError> {
+    if !super::local_control::may_settle(transaction, request_id, attempt, false)? {
+        return Ok(false);
+    }
     let data = result
         .data
         .as_ref()
@@ -656,6 +663,9 @@ fn delete_request(
     request_id: RequestId,
     attempt: u64,
 ) -> Result<bool, ReadError> {
+    if !super::local_control::may_settle(transaction, request_id, attempt, true)? {
+        return Ok(false);
+    }
     let id = request_id.to_string();
     let attempt = attempt_number(attempt)?;
     let current: bool = transaction.query_row(
@@ -812,7 +822,13 @@ impl RepositoryService {
         request_id: RequestId,
     ) -> Result<Option<RequestRecord>, ReadError> {
         self.read_session(RepositoryOperation::Read, |connection| {
-            read_request(connection, request_id)
+            let mut record = read_request(connection, request_id)?;
+            if let Some(record) = record.as_mut()
+                && let Some((issued, ack)) = super::local_control::counters(connection, request_id)?
+            {
+                record.cancel_requested = issued > ack;
+            }
+            Ok(record)
         })
     }
 
@@ -832,6 +848,9 @@ impl RepositoryService {
                     |row| row.get(0),
                 )
                 .optional()?;
+            if let Some(attempt) = attempt {
+                super::local_control::enter(transaction, &request_id.to_string(), attempt)?;
+            }
             attempt
                 .map(|attempt| u64::try_from(attempt).map_err(|_| invalid_stored_data()))
                 .transpose()
@@ -884,6 +903,9 @@ impl RepositoryService {
     /// nothing: the request's own call reads it at a safe point.
     pub(super) fn request_cancellation(&self, request_id: RequestId) -> Result<bool, ReadError> {
         self.write_records(|transaction| {
+            if super::local_control::counters(transaction,request_id)?.is_some(){
+                return Ok(transaction.execute("UPDATE local_context_sync_request_control SET cancel_issued=cancel_issued+1 WHERE request_ulid=?1 AND role IN ('start','resolve') AND EXISTS(SELECT 1 FROM request_records r WHERE r.request_ulid=?1 AND r.state='accepted')",[request_id.to_string()])?==1);
+            }
             let asked = transaction.execute(
                 "UPDATE request_records SET cancel_requested = 1
                   WHERE request_ulid = ?1 AND state = 'accepted'",
@@ -908,6 +930,9 @@ impl RepositoryService {
             return Err(ReadError::new(ResultCode::IndexUnavailable));
         }
         self.read_session(RepositoryOperation::Read, |connection| {
+            if let Some((issued, ack)) = super::local_control::counters(connection, request_id)? {
+                return Ok(issued > ack);
+            }
             Ok(connection
                 .query_row(
                     "SELECT cancel_requested FROM request_records WHERE request_ulid = ?1",

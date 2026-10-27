@@ -342,12 +342,16 @@ pub(in super::super) fn existing_record<R: ParentRecord>(
 where
     R::Expectation: PartialEq,
 {
+    crate::repository::local_sync::record::require_foreign_id_available(tx, op)?;
     let existing = read_record::<R>(tx, id, op)?;
     let (own, other) = (R::KIND.table(), R::KIND.other().table());
     let (action, kind) = R::KIND.stored_action();
     let collision:bool=tx.query_row(&format!("SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1) OR EXISTS(SELECT 1 FROM {own} WHERE (operation_id=?1 AND repository_id!=?2) OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM {other} WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND (repository_id!=?2 OR action!='{action}' OR kind!='{kind}' OR item_id!=?3))"),params![op.to_string(),id,item.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if collision {
         return Err(mismatch(R::KIND));
+    }
+    if existing.as_ref().is_none_or(|r| !r.step().terminal()) {
+        crate::repository::local_sync::record::require_no_pending(tx, id)?;
     }
     if let Some(r) = existing {
         if r.item_id() != item || r.expectation() != expectation {
@@ -534,10 +538,9 @@ pub(in super::super) fn child_execution<R: ParentRecord>(
         child: child.ok_or_else(|| mismatch(R::KIND))?,
     })
 }
-/// The fence's refusal reads as promotion's for either parent kind, as it
-/// did before the closure parent shared it.
-fn fence_mismatch() -> RepositoryError {
-    mismatch(LifecycleKind::DocumentPromotion)
+/// The fence's refusal names the lifecycle that issued the child attempt.
+fn fence_mismatch(kind: LifecycleKind) -> RepositoryError {
+    mismatch(kind)
 }
 impl ChildExecution {
     pub(in super::super) fn validate_request(
@@ -555,7 +558,7 @@ impl ChildExecution {
             _ => false,
         };
         if request.operation_id != self.child || !matches {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         Ok(())
     }
@@ -566,10 +569,10 @@ impl ChildExecution {
         op: OperationId,
     ) -> Result<(), RepositoryError> {
         if id != self.repository_id || op != self.child {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
-        let parent =
-            ParentFacts::read(db, self.kind, id, self.parent)?.ok_or_else(fence_mismatch)?;
+        let parent = ParentFacts::read(db, self.kind, id, self.parent)?
+            .ok_or_else(|| fence_mismatch(self.kind))?;
         let (attempt, child) = match self.role {
             ChildRole::Context => parent.context,
             ChildRole::Primary => parent.primary,
@@ -579,7 +582,7 @@ impl ChildExecution {
             || attempt != self.attempt
             || child != Some(self.child)
         {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         let record = state::read_operation(db, id, op)?;
         // Exact, current authoritative handoff remains valid after parent
@@ -588,7 +591,7 @@ impl ChildExecution {
             return Ok(());
         }
         if !child_allowed(parent.step, self.role) || (parent.cancel_requested && record.is_none()) {
-            return Err(fence_mismatch());
+            return Err(fence_mismatch(self.kind));
         }
         Ok(())
     }
@@ -671,6 +674,7 @@ fn mint_attempt<R: ParentRecord>(
         .checked_add(1)
         .ok_or_else(state::recovery_required)?;
     let child = OperationId::new();
+    crate::repository::local_sync::record::require_foreign_id_available(tx, child)?;
     let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM document_promotions WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM ticket_closures WHERE operation_id=?1 OR context_sync_id=?1 OR primary_sync_id=?1) OR EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1) OR EXISTS(SELECT 1 FROM comment_publication_bindings WHERE operation_ulid=?1 OR synchronization_ulid=?1)",[child.to_string()],|r|r.get(0)).map_err(|_|state::recovery_required())?;
     if used {
         return Err(state::recovery_required());
@@ -710,6 +714,7 @@ pub(in super::super) fn validate_remote_identity(
     target: &RemoteOperationTarget,
     priority: RemoteOperationPriority,
 ) -> Result<(), RepositoryError> {
+    crate::repository::local_sync::record::require_foreign_id_available(db, op)?;
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
 }

@@ -9921,15 +9921,16 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
         "status: \"closed\"\nclosed_at: \"2026-01-01T00:00:00Z\"\nclosed_by: \"original author\"",
     );
     let other = closed.replace("original author", "different author");
-    for (base, local, incoming, result, valid) in [
-        (open, closed.as_str(), open, open, false),
-        (open, open, closed.as_str(), open, false),
+    for (base, local, incoming, result, valid, incompatible) in [
+        (open, closed.as_str(), open, open, false, false),
+        (open, open, closed.as_str(), open, false, false),
         (
             open,
             closed.as_str(),
             other.as_str(),
             closed.as_str(),
             false,
+            true,
         ),
         (
             open,
@@ -9937,15 +9938,17 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
             closed.as_str(),
             other.as_str(),
             false,
+            false,
         ),
-        (open, closed.as_str(), open, closed.as_str(), true),
-        (open, open, closed.as_str(), closed.as_str(), true),
+        (open, closed.as_str(), open, closed.as_str(), true, false),
+        (open, open, closed.as_str(), closed.as_str(), true, false),
         (
             open,
             closed.as_str(),
             closed.as_str(),
             closed.as_str(),
             true,
+            false,
         ),
         (
             closed.as_str(),
@@ -9953,6 +9956,7 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
             closed.as_str(),
             closed.as_str(),
             true,
+            false,
         ),
     ] {
         let local = local.replace("base", "local");
@@ -9966,7 +9970,19 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
         let repository = git2::Repository::open(root.path()).unwrap();
         let index = fs::read(repository.path().join("index")).unwrap();
         let bytes = fs::read(root.path().join(path)).unwrap();
-        let outcome = resolve_fixture(
+        let inspection = service
+            .inspect_synchronization_recovery(root.path(), operation)
+            .unwrap();
+        assert_eq!(inspection.paths.len(), 1);
+        assert_eq!(
+            inspection.paths[0].eligibility,
+            if incompatible {
+                merge::ConflictEligibility::ExternalResolutionRequired
+            } else {
+                merge::ConflictEligibility::EligibleCanonical
+            }
+        );
+        let outcome = try_resolve_fixture(
             root.path(),
             &service,
             operation,
@@ -9975,11 +9991,21 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
         if valid {
             assert!(matches!(
                 outcome,
-                ResolveSynchronizationOutcome::LocalCheckpointComplete { .. }
+                Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
             ));
             assert_eq!(fs::read(root.path().join(path)).unwrap(), result.as_bytes());
         } else {
-            assert_eq!(outcome, ResolveSynchronizationOutcome::ValidationFailed);
+            if incompatible {
+                assert!(matches!(
+                    outcome,
+                    Err(SynchronizationError::ExternalResolutionRequired { .. })
+                ));
+            } else {
+                assert_eq!(
+                    outcome.unwrap(),
+                    ResolveSynchronizationOutcome::ValidationFailed
+                );
+            }
             assert_eq!(repository.head().unwrap().target(), Some(head));
             assert_eq!(fs::read(repository.path().join("index")).unwrap(), index);
             assert_eq!(fs::read(root.path().join(path)).unwrap(), bytes);
@@ -9995,6 +10021,134 @@ fn all_recorded_ticket_sides_constrain_retained_closure_before_writes() {
                 0
             );
         }
+    }
+}
+
+mod closure_conflict_classification {
+    use super::*;
+
+    const PATH: &str = ".manyhands/tickets/01BX5ZZKBKACTAV9WEVGEMMVRZ/ticket.md";
+    const OPEN: &str = "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: \"01BX5ZZKBKACTAV9WEVGEMMVRZ\"\ntitle: \"Ticket\"\ntype: \"task\"\nstatus: \"open\"\n---\n\nbase\n";
+
+    fn closed(at: &str, by: &str) -> String {
+        OPEN.replace(
+            "status: \"open\"",
+            &format!("status: \"closed\"\nclosed_at: \"{at}\"\nclosed_by: \"{by}\""),
+        )
+    }
+
+    fn candidate(sides: [&str; 3]) -> merge::ConflictCandidate {
+        let root = fixture_tempdir();
+        let repository = git2::Repository::init(root.path()).unwrap();
+        let [ancestor, our, their] = sides.map(|source| {
+            // Fail on invalid fixtures before testing classification.
+            canonical::parse_item(Path::new(PATH), source).unwrap();
+            Some(git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: source.len() as u32,
+                id: repository.blob(source.as_bytes()).unwrap(),
+                flags: 0,
+                flags_extended: 0,
+                path: PATH.as_bytes().to_vec(),
+            })
+        });
+        RepositoryService::classify_conflict_entry(
+            &repository,
+            &git2::IndexConflict {
+                ancestor,
+                our,
+                their,
+            },
+        )
+    }
+
+    fn assert_external(sides: [&str; 3]) {
+        assert_eq!(
+            merge::conflict_eligibility(&[candidate(sides)]),
+            merge::ConflictEligibility::ExternalResolutionRequired
+        );
+    }
+
+    #[test]
+    fn distinct_local_and_incoming_pairs_require_external_recovery() {
+        assert_external([
+            OPEN,
+            &closed("2026-01-01T00:00:00Z", "Alice"),
+            &closed("2026-01-02T00:00:00Z", "Bob"),
+        ]);
+    }
+
+    #[test]
+    fn timestamp_only_disagreement_requires_external_recovery() {
+        assert_external([
+            OPEN,
+            &closed("2026-01-01T00:00:00Z", "Alice"),
+            &closed("2026-01-01T00:00:01Z", "Alice"),
+        ]);
+    }
+
+    #[test]
+    fn author_only_disagreement_uses_exact_text() {
+        assert_external([
+            OPEN,
+            &closed("2026-01-01T00:00:00Z", "Alice"),
+            &closed("2026-01-01T00:00:00Z", "alice"),
+        ]);
+    }
+
+    #[test]
+    fn ancestor_disagreement_cannot_be_outvoted() {
+        let first = closed("2026-01-01T00:00:00Z", "Alice");
+        let second = closed("2026-01-01T00:00:00Z", "Bob");
+        for sides in [
+            [first.as_str(), second.as_str(), second.as_str()],
+            [first.as_str(), OPEN, second.as_str()],
+            [first.as_str(), second.as_str(), OPEN],
+        ] {
+            assert_external(sides);
+        }
+    }
+
+    #[test]
+    fn compatible_pairs_ignore_status_and_timestamp_spelling() {
+        let closed = closed("2026-01-01T00:00:00Z", "Alice");
+        let offset = closed.replace("2026-01-01T00:00:00Z", "2026-01-01T00:00:00.000+00:00");
+        let status = closed.replace("status: \"closed\"", "status: \"review_ready\"");
+        let open_status = OPEN.replace("status: \"open\"", "status: \"closed\"");
+        for sides in [
+            [OPEN, OPEN, OPEN],
+            [closed.as_str(), OPEN, OPEN],
+            [OPEN, closed.as_str(), OPEN],
+            [OPEN, OPEN, closed.as_str()],
+            [closed.as_str(), closed.as_str(), closed.as_str()],
+            [closed.as_str(), offset.as_str(), status.as_str()],
+            [OPEN, open_status.as_str(), OPEN],
+        ] {
+            assert_eq!(
+                merge::conflict_eligibility(&[candidate(sides)]),
+                merge::ConflictEligibility::EligibleCanonical
+            );
+        }
+    }
+
+    #[test]
+    fn one_incompatible_ticket_makes_a_mixed_canonical_set_external_only() {
+        let eligible = candidate([OPEN, OPEN, OPEN]);
+        let incompatible = candidate([
+            OPEN,
+            &closed("2026-01-01T00:00:00Z", "Alice"),
+            &closed("2026-01-01T00:00:00Z", "Bob"),
+        ]);
+        assert_eq!(
+            merge::conflict_eligibility(&[eligible, incompatible]),
+            merge::ConflictEligibility::ExternalResolutionRequired
+        );
     }
 }
 
@@ -10232,7 +10386,7 @@ fn comment_invariants_hold_only_when_created_by_is_unchanged_wherever_it_is_read
     for old in values {
         for new in values {
             assert_eq!(
-                RepositoryService::preserves_item_invariants(&comment(old), &comment(new)),
+                validate::preserves_item_invariants(&comment(old), &comment(new)),
                 old == new,
                 "{old:?} -> {new:?}"
             );

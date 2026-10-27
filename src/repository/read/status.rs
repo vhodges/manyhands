@@ -81,6 +81,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),
         "repair_item" => Some(OperationAction::RepairItem),
+        "context_sync_local" => Some(OperationAction::ContextSyncLocal),
         _ => None,
     }
 }
@@ -129,6 +130,8 @@ fn local_operations(
     repo: &ResolvedRepository,
     id: Option<&str>,
 ) -> Result<Vec<StoredOperation>, ReadError> {
+    crate::repository::local_sync::record::audit(connection)
+        .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
     let mut statement = connection.prepare(
         "SELECT operation_ulid, action, item_id, context_path, state, completed_step,
                 observed_at, target
