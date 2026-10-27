@@ -383,12 +383,19 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
     assert!(present(&shell, "item-source", cx));
     assert!(!present(&shell, "comments-state", cx));
 
-    // Every later action is shown, and says it is not available yet.
-    assert_eq!(shell.rows("later-action", cx), LATER);
+    // The header's later actions and Repair in the "Needs fixing" banner
+    // are shown, and each says it is not available yet. An Inspect tab has
+    // no discussion, so Comment is not among them, and the header's
+    // primary action is the ticket's, Close ticket….
+    let later: Vec<&str> = LATER
+        .into_iter()
+        .filter(|action| !["Comment", "Approve and merge…"].contains(action))
+        .collect();
+    assert_eq!(shell.rows("later-action", cx), later);
     let notes = shell.rows("later-note", cx);
-    assert_eq!(notes.len(), LATER.len());
+    assert_eq!(notes.len(), later.len());
     assert!(notes.iter().all(|note| note == LATER_NOTE));
-    let repair = LATER.iter().position(|action| *action == "Repair").unwrap();
+    let repair = later.iter().position(|action| *action == "Repair").unwrap();
     assert_eq!(
         shell.label(("later-action", repair), cx).as_deref(),
         Some("Repair")

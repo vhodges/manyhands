@@ -29,13 +29,15 @@ pub(crate) const NO_BRANCH: &str = "no branch";
 pub(crate) const NOT_REPRESENTABLE: &str = "Not representable";
 pub(crate) const UNKNOWN_AUTHOR: &str = "unknown author";
 
-/// The actions the item view shows, none of them available in D1.
+/// The actions the item view shows that are not available yet, with the
+/// design's labels: the header's Edit, Share and primary action, the
+/// discussion's Comment, and the "Needs fixing" banner's Repair.
 pub(crate) const LATER: [&str; 6] = [
     "Edit",
     "Comment",
-    "Sync",
-    "Approve and merge",
-    "Close ticket",
+    "Share",
+    "Approve and merge…",
+    "Close ticket…",
     "Repair",
 ];
 pub(crate) const LATER_NOTE: &str = "Available in a later release";

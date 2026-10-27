@@ -1,0 +1,284 @@
+//! The header's banner slot (design, Banners): as many banners as apply,
+//! most severe first. A banner has padding 10 12, radius 6, a tinted fill
+//! and border, a 15 px icon, text at 12.5 px and its action.
+//!
+//! D1's status lines are banners here, with D1's words, IDs and actions:
+//! loading, a failed or busy read with Retry, a read that kept what was
+//! shown, a context that needs recovery, and an item not found with
+//! Refresh. An item read by path is a nonconforming file, which "Needs
+//! fixing": its problems, with Repair not available yet. The other rows
+//! of the design's table are named here for the tasks that raise them.
+
+use gpui_kit::{
+    AnyElement, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, TestSupportExt,
+    component::{ActiveTheme, Icon, h_flex, v_flex},
+    div, px,
+};
+use manyhands::{
+    repository::{IndexState, ItemDto},
+    results::ResultCode,
+};
+
+use super::{ItemPane, RECOVERY, header::later_action, text};
+use crate::desktop::{
+    assets::icon_path,
+    model::{
+        item::{CONTEXT_PROBLEMS, LATER, context_problems},
+        list_state::ListState,
+        navigation::OpenTarget,
+    },
+};
+
+/// The "Needs fixing" banner's heading (`06-language-and-states.md`).
+pub(crate) const NEEDS_FIXING: &str = "Needs fixing";
+/// Repair, which Part E offers (Task 25).
+const REPAIR: &str = LATER[5];
+const ICON_SIZE: f32 = 15.;
+const TEXT_SIZE: f32 = 12.5;
+
+/// A banner's tone, which picks its tint and icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Tone {
+    Red,
+    Amber,
+    Info,
+}
+
+/// One row of the design's Banners table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Banner {
+    /// Loading, refreshing, or not refreshed: info while a read runs,
+    /// amber when the read failed or kept what was shown.
+    Status { amber: bool },
+    /// Context recovery, or the item not found.
+    Recovery,
+    /// A stored draft for this item (D2's banner, kept; E-8).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
+    StoredDraft,
+    /// Changes kept after Done.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
+    KeptAfterDone,
+    /// A draft discarded elsewhere ended this tab's session (R-71).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
+    DraftDiscarded,
+    /// Crash recovery off.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
+    RecoveryOff,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    CheckpointFailed,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    DiscoveryPending,
+    /// The item changed under a dirty or kept draft (R-68).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    Changed,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    ReviewBeforeSaving,
+    /// Another refusal, in the library's message.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    Refused,
+    /// A ticket with no type, or another nonconforming file.
+    NeedsFixing,
+    /// An unmanaged document, with Adopt….
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
+    Unmanaged,
+    /// A link not found, or opened as the nearest match.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11.
+    Link,
+}
+
+impl Banner {
+    /// The row's tone.
+    pub(crate) fn tone(self) -> Tone {
+        match self {
+            Self::Status { amber: false } | Self::DraftDiscarded | Self::Link => Tone::Info,
+            Self::Recovery | Self::CheckpointFailed | Self::Refused => Tone::Red,
+            Self::Status { amber: true }
+            | Self::StoredDraft
+            | Self::KeptAfterDone
+            | Self::RecoveryOff
+            | Self::DiscoveryPending
+            | Self::Changed
+            | Self::ReviewBeforeSaving
+            | Self::NeedsFixing
+            | Self::Unmanaged => Tone::Amber,
+        }
+    }
+}
+
+/// Which banner D1's status line of `state` is, if it shows one: none for
+/// rows from a current index, red for an item not found, amber for a busy
+/// or failed read, and info while loading or from an index that is not
+/// current.
+pub(crate) fn status_banner<T>(state: &ListState<T>) -> Option<Banner> {
+    match state {
+        ListState::Ready { index, .. }
+            if index
+                .as_ref()
+                .is_none_or(|index| index.state == IndexState::Current) =>
+        {
+            None
+        }
+        ListState::Failed(failure) if failure.code == ResultCode::ItemNotFound => {
+            Some(Banner::Recovery)
+        }
+        ListState::Busy | ListState::Failed(_) => Some(Banner::Status { amber: true }),
+        ListState::Loading | ListState::Ready { .. } => Some(Banner::Status { amber: false }),
+    }
+}
+
+/// The banners, most severe first; the table's order within a tone.
+pub(crate) fn most_severe_first<E>(mut banners: Vec<(Banner, E)>) -> Vec<(Banner, E)> {
+    banners.sort_by_key(|(banner, _)| banner.tone());
+    banners
+}
+
+impl ItemPane {
+    /// The banners that apply to `item`, framed and most severe first,
+    /// and how many later actions they drew from `later_from` on.
+    pub(super) fn banners(
+        &self,
+        item: Option<&ItemDto>,
+        later_from: usize,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, usize) {
+        let mut banners: Vec<(Banner, AnyElement)> = Vec::new();
+        let state = self.model.item();
+        if let Some(banner) = status_banner(state) {
+            let status = self.status("item", state, cx).into_any_element();
+            banners.push((banner, status));
+        }
+        if let Some(kept) = self.not_refreshed(cx) {
+            banners.push((Banner::Status { amber: true }, kept.into_any_element()));
+        }
+        if let Some(recovery) = item.and_then(|item| self.recovery(item, cx)) {
+            banners.push((Banner::Recovery, recovery));
+        }
+        let mut used = 0;
+        let nonconforming = matches!(self.model.target(), OpenTarget::Inspect { .. });
+        if let Some(item) = item.filter(|_| nonconforming) {
+            banners.push((Banner::NeedsFixing, self.needs_fixing(item, later_from, cx)));
+            used += 1;
+        }
+        let framed = most_severe_first(banners)
+            .into_iter()
+            .enumerate()
+            .map(|(ix, (banner, content))| frame(ix, banner, content, cx))
+            .collect();
+        (framed, used)
+    }
+
+    /// D1's recovery guidance, for a context or branch problem: it says
+    /// the context needs repair and lists each problem's guidance.
+    fn recovery(&self, item: &ItemDto, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let problems = context_problems(item);
+        if problems.is_empty() {
+            return None;
+        }
+        let muted = cx.theme().muted_foreground;
+        Some(
+            v_flex()
+                .id("item-recovery")
+                .test_support()
+                .aria_label(RECOVERY)
+                .gap_1()
+                .child(div().child(RECOVERY))
+                .children(problems.into_iter().enumerate().map(|(ix, problem)| {
+                    v_flex()
+                        .child(text(("recovery-problem", ix), problem.code.as_str()))
+                        .child(
+                            text(("recovery-guidance", ix), problem.guidance()).text_color(muted),
+                        )
+                        .children(
+                            problem
+                                .path
+                                .clone()
+                                .map(|path| text(("recovery-path", ix), path).text_color(muted)),
+                        )
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// "Needs fixing", D1's reason (each problem with its guidance) and
+    /// Repair, which is not available yet.
+    fn needs_fixing(&self, item: &ItemDto, later: usize, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let problems: Vec<_> = item
+            .problems
+            .iter()
+            .filter(|problem| !CONTEXT_PROBLEMS.contains(&problem.code))
+            .enumerate()
+            .map(|(ix, problem)| {
+                v_flex()
+                    .child(text(("item-problem", ix), problem.code.as_str()))
+                    .child(
+                        text(("item-problem-guidance", ix), problem.guidance()).text_color(muted),
+                    )
+                    .children(
+                        problem
+                            .path
+                            .clone()
+                            .map(|path| text(("item-problem-path", ix), path).text_color(muted)),
+                    )
+            })
+            .collect();
+        h_flex()
+            .flex_wrap()
+            .gap_3()
+            .items_start()
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(
+                        text("item-needs-fixing", NEEDS_FIXING)
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD),
+                    )
+                    .children(problems),
+            )
+            .child(later_action(later, REPAIR, None, false, true, cx))
+            .into_any_element()
+    }
+}
+
+/// The tint and icon of `tone`.
+fn look(tone: Tone, cx: &gpui_kit::App) -> (Hsla, &'static str) {
+    let theme = cx.theme();
+    match tone {
+        Tone::Info => (theme.info, "info"),
+        Tone::Amber => (theme.warning, "circle-alert"),
+        Tone::Red => (theme.danger, "circle-alert"),
+    }
+}
+
+/// `content` in `banner`'s frame, the `ix`th of the slot.
+fn frame(ix: usize, banner: Banner, content: AnyElement, cx: &gpui_kit::App) -> AnyElement {
+    let (tint, icon) = look(banner.tone(), cx);
+    let foreground = cx.theme().foreground;
+    h_flex()
+        .id(("item-banner", ix))
+        .test_support()
+        .w_full()
+        .items_start()
+        .gap(px(10.))
+        .px(px(12.))
+        .py(px(10.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(tint.opacity(0.45))
+        .bg(tint.opacity(0.13))
+        .text_size(px(TEXT_SIZE))
+        .text_color(foreground)
+        .child(
+            Icon::default()
+                .path(icon_path(icon))
+                .flex_none()
+                .w(px(ICON_SIZE))
+                .h(px(ICON_SIZE))
+                .text_color(tint),
+        )
+        .child(div().flex_1().min_w_0().child(content))
+        .into_any_element()
+}

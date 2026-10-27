@@ -1,27 +1,31 @@
-//! Read-only comments and the fixed unavailable actions of later releases.
-//! The discussion's header row ends with Back to top, which returns the
-//! item's scroll region to the page.
+//! Read-only comments. The discussion's header row ends with Back to top,
+//! which returns the item's scroll region to the page, and the discussion
+//! ends with Comment, not available yet.
 
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, Disableable, Icon, button::Button, h_flex, v_flex},
+    component::{ActiveTheme, Icon, h_flex, v_flex},
     div, px,
 };
 use manyhands::repository::CommentListDto;
 
-use super::{BACK_TO_TOP, COMMENT_INDENT, ItemPane, text};
+use super::{BACK_TO_TOP, COMMENT_INDENT, ItemPane, header::later_action, text};
 use crate::desktop::{
     assets::icon_path,
-    model::item::{LATER, LATER_NOTE, comment_author},
+    model::item::{LATER, comment_author},
 };
 
 /// Back to top's `arrow-up`.
 const ARROW_SIZE: f32 = 14.;
+/// The discussion's Comment, by its place in `LATER`.
+const COMMENT: &str = LATER[1];
 
 impl ItemPane {
+    /// The discussion, ending with Comment, the `later`th later action.
     pub(super) fn discussion(
         &self,
+        later: usize,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
@@ -84,7 +88,8 @@ impl ItemPane {
                         .child(self.back_to_top_control(window, cx)),
                 )
                 .child(status)
-                .children(rows),
+                .children(rows)
+                .child(later_action(later, COMMENT, None, false, true, cx)),
         )
     }
 
@@ -132,31 +137,5 @@ impl ItemPane {
             )
             .children(ring)
             .child(self.scroll.marker(&self.back_to_top))
-    }
-
-    pub(super) fn later(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let muted = cx.theme().muted_foreground;
-        h_flex()
-            .flex_wrap()
-            .gap_2()
-            .children(LATER.iter().enumerate().map(|(ix, action)| {
-                v_flex()
-                    .child(
-                        div()
-                            .id(("later-action", ix))
-                            .test_support()
-                            .aria_label(*action)
-                            .child(
-                                Button::new(("later-button", ix))
-                                    .label(*action)
-                                    .disabled(true),
-                            ),
-                    )
-                    .child(
-                        text(("later-note", ix), LATER_NOTE)
-                            .text_xs()
-                            .text_color(muted),
-                    )
-            }))
     }
 }

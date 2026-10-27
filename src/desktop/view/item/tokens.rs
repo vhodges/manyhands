@@ -11,11 +11,8 @@ use gpui_kit::{App, Hsla, component::ActiveTheme, rgb};
 /// The item view's colours for one mode.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ItemColors {
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_block: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_border: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 5b.
     pub header_title: Hsla,
     /// Brand amber: the tab strip's active icon and focused line.
     pub accent: Hsla,

@@ -1,4 +1,6 @@
-//! Identity, provenance, named fields, problems and unknown metadata.
+//! Identity details, provenance, named fields, problems and unknown
+//! metadata, on the page until the details sheet takes them (Task 6). The
+//! title is the header's, and a context problem the recovery banner's.
 
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, ElementId, InteractiveElement, IntoElement,
@@ -12,7 +14,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{ClosureState, ItemDto, ItemDtoKind};
 
-use super::{COPY_ID, COPY_SLUG, ItemPane, NONCONFORMING_FILE, RECOVERY};
+use super::{COPY_ID, COPY_SLUG, ItemPane, NONCONFORMING_FILE};
 use crate::desktop::{
     model::{
         item::{
@@ -88,9 +90,6 @@ impl ItemPane {
                     .text_color(muted),
             ),
         };
-        if let Some(title) = item.and_then(|item| item.title.clone()) {
-            line = line.child(text("item-title", title).text_lg());
-        }
         header = header.child(line);
         let slug = item.and_then(|item| item.slug.clone());
         let mut codes = h_flex().gap_2();
@@ -140,35 +139,12 @@ impl ItemPane {
         header
     }
 
-    /// Context problems replace provenance with the existing recovery guidance.
+    /// Context problems replace provenance: the recovery banner says what
+    /// needs repair, and no copy is claimed.
     pub(super) fn provenance(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let problems = context_problems(item);
-        if !problems.is_empty() {
-            return v_flex()
-                .id("item-recovery")
-                .test_support()
-                .aria_label(RECOVERY)
-                .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().danger)
-                .child(div().text_sm().child(RECOVERY))
-                .children(problems.into_iter().enumerate().map(|(ix, problem)| {
-                    v_flex()
-                        .child(text(("recovery-problem", ix), problem.code.as_str()).text_sm())
-                        .child(
-                            text(("recovery-guidance", ix), problem.guidance())
-                                .text_xs()
-                                .text_color(muted),
-                        )
-                        .children(problem.path.clone().map(|path| {
-                            text(("recovery-path", ix), path)
-                                .text_xs()
-                                .text_color(muted)
-                        }))
-                }))
-                .into_any_element();
+        if !context_problems(item).is_empty() {
+            return div().into_any_element();
         }
         let context = &item.context;
         v_flex()

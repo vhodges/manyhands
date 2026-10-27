@@ -1,4 +1,6 @@
-//! Loading, typed failures and retained-state refresh guidance.
+//! Loading, typed failures and retained-state refresh guidance: D1's
+//! status lines, which the header draws as banners (`banners`); the
+//! discussion keeps its own.
 
 use gpui_kit::{
     ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
@@ -97,9 +99,6 @@ impl ItemPane {
                 .test_support()
                 .aria_label(NOT_REFRESHED)
                 .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().border)
                 .child(div().text_sm().child(NOT_REFRESHED))
                 .child(text("item-not-refreshed-failure", code.message()).text_sm())
                 .child(
