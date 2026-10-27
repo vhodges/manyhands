@@ -513,16 +513,19 @@ fn the_pill_reads_each_viewing_state(cx: &mut TestAppContext) {
         assert!(!shell.present("item-state", cx), "{state:?}");
     }
 
-    // Recovery comes first: a closed ticket with a stored draft whose
-    // context needs repair needs attention.
+    // Recovery comes first, and a stored draft adds its words: a closed
+    // ticket with a stored draft whose context needs repair needs attention.
     let mut item = shown(&shell, &root, CLOSED);
-    assert_eq!(viewing_state(&item, true), PillState::Closed);
+    assert_eq!(viewing_state(&item, true), PillState::ClosedDraftKept);
     item.problems.push(ProblemDto {
         code: ProblemCode::ContextProblem,
         path: Some(format!(".manyhands/worktrees/{CLOSED}")),
         target_id: None,
     });
-    assert_eq!(viewing_state(&item, true), PillState::NeedsAttention);
+    assert_eq!(
+        viewing_state(&item, true),
+        PillState::NeedsAttentionDraftKept
+    );
     let shared = shown(&shell, &root, CODED);
     assert_eq!(viewing_state(&shared, true), PillState::ViewingDraftKept);
     assert_eq!(viewing_state(&shared, false), PillState::ViewingShared);
@@ -923,4 +926,45 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
 /// Whether the focus is on the strip's only tab or its close button.
 fn on_the_strip(shell: &Shell, cx: &mut TestAppContext) -> bool {
     focused(shell, ("tab", 0usize), cx) || focused(shell, ("tab-close", 0usize), cx)
+}
+
+/// A kept or stored draft is never hidden by the pill: a closed ticket and
+/// one whose context needs recovery add "unsaved changes kept" to their
+/// words.
+#[gpui_kit::test]
+fn the_pill_adds_a_kept_draft_to_closed_and_needs_attention(cx: &mut TestAppContext) {
+    for (state, words) in [
+        (PillState::ClosedDraftKept, "Closed · unsaved changes kept"),
+        (
+            PillState::NeedsAttentionDraftKept,
+            "Needs attention · unsaved changes kept",
+        ),
+    ] {
+        assert_eq!(pill_words(state), words, "{state:?}");
+    }
+
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_closed_ticket(&root, CLOSED, "Closed for good");
+    fixture.refresh(&root);
+    store_draft(&fixture, &root, ItemDtoKind::Ticket, CLOSED, "Draft body");
+    let shell = Shell::open(fixture, cx);
+
+    open(&shell, ticket(&root, CLOSED), cx);
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Closed · unsaved changes kept")
+    );
+
+    let mut item = shown(&shell, &root, CLOSED);
+    item.problems.push(ProblemDto {
+        code: ProblemCode::ContextProblem,
+        path: Some(format!(".manyhands/worktrees/{CLOSED}")),
+        target_id: None,
+    });
+    show_read(&shell, item, cx);
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Needs attention · unsaved changes kept")
+    );
 }

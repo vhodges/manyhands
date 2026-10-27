@@ -49,8 +49,12 @@ pub(crate) enum PillState {
     EditingSaved { not_shared: bool },
     /// A closed ticket.
     Closed,
+    /// A closed ticket, with a kept or stored draft.
+    ClosedDraftKept,
     /// The item's context needs recovery.
     NeedsAttention,
+    /// Recovery needed, with a kept or stored draft.
+    NeedsAttentionDraftKept,
 }
 
 /// The pill's words for `state`.
@@ -68,7 +72,9 @@ pub(crate) fn pill_words(state: PillState) -> &'static str {
             "Editing · saved on this computer · not shared yet"
         }
         PillState::Closed => "Closed",
+        PillState::ClosedDraftKept => "Closed · unsaved changes kept",
         PillState::NeedsAttention => "Needs attention",
+        PillState::NeedsAttentionDraftKept => "Needs attention · unsaved changes kept",
     }
 }
 
@@ -77,13 +83,21 @@ pub(crate) fn pill_words(state: PillState) -> &'static str {
 /// copy it was read from. An unverified root is the shared copy.
 pub(crate) fn viewing_state(item: &ItemDto, draft_kept: bool) -> PillState {
     if !context_problems(item).is_empty() {
-        PillState::NeedsAttention
+        if draft_kept {
+            PillState::NeedsAttentionDraftKept
+        } else {
+            PillState::NeedsAttention
+        }
     } else if item
         .closure
         .as_ref()
         .is_some_and(|closure| closure.state == ClosureState::Closed)
     {
-        PillState::Closed
+        if draft_kept {
+            PillState::ClosedDraftKept
+        } else {
+            PillState::Closed
+        }
     } else if draft_kept {
         PillState::ViewingDraftKept
     } else if item.context.kind == ItemContextKind::Active {
@@ -111,8 +125,12 @@ fn look(state: PillState, cx: &App) -> (Mark, Hsla) {
         | PillState::EditingUnsaved
         | PillState::EditingSaved { .. } => (Mark::Icon("pencil"), theme.warning),
         PillState::Preparing | PillState::Saving => (Mark::Spinner, theme.info),
-        PillState::Closed => (Mark::Icon("archive"), theme.secondary_foreground),
-        PillState::NeedsAttention => (Mark::Icon("circle-alert"), theme.danger),
+        PillState::Closed | PillState::ClosedDraftKept => {
+            (Mark::Icon("archive"), theme.secondary_foreground)
+        }
+        PillState::NeedsAttention | PillState::NeedsAttentionDraftKept => {
+            (Mark::Icon("circle-alert"), theme.danger)
+        }
     }
 }
 
