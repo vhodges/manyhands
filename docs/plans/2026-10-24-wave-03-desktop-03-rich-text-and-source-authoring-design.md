@@ -628,6 +628,21 @@ facts 76–80. Crate paths are relative to each crate's `src/`.
       `.vertical_scrollbar(&handle)` adds one, and its thumb can be
       styled (`gpui-component` `scroll/scrollable.rs:33`; `gpui-base`
       `scrollbar.rs:738-924`).
+81. **The pinned normalization is not idempotent** (found in Task 3's
+    review, 2026-10-26). `with_text` and `set_text` both run
+    `normalize_math_fences` (`zorite-editor` `lib.rs:324-333`, `1103`,
+    `1151`), and a second pass can change a text the first pass made:
+    - N-3 copies its inner lines unprocessed, so a pair on an inner line
+      is split by the next pass: `wer $$` / `a $$b$$ c` / `$$ wer` loads
+      to `wer` / `$$` / `a $$b$$ c` / `$$` / `wer`, and loads again to
+      `wer` / `$$` / `a` / `$$b$$` / `c` / `$$` / `wer`;
+    - an N-3 inner line that starts with three backticks does not toggle
+      "in code", so the next pass sees the fence parity flipped and splits
+      a pair it had kept.
+
+    `replace_range` does not normalize (`lib.rs:1125-1149`). So text the
+    editor already loaded must never go through `with_text` or `set_text`
+    again (R-79).
 
 ## API Audit Refresh (Entry-Gate Item 3)
 
@@ -673,6 +688,12 @@ the same result for baselines and comparisons. The pinned source is
 - a lone pair with nothing else rewritten.
 
 **A new pin** records its own set again before adoption.
+
+**One pass only** (fact 81, R-79). The pinned rewrite is not idempotent, so
+`load` is applied once, to a body read from the repository. Golden fixtures
+record both shapes of fact 81 with their one-pass result. A text the editor
+already holds (a revert, a restored draft, the review's result) is put back
+exactly, never loaded again.
 
 The read view loads through the editor too (decision 17), so it shows the
 normalized text. Viewing still writes nothing.
@@ -1079,7 +1100,8 @@ editable, styled as rich text.
   - **Mouse.** Capture-phase right and middle presses are stopped, so the
     editor's menus never open and a middle-click paste never lands.
   - **Backstop.** Any text change that still lands is reverted in the same
-    update with `set_text` and the previous cursor: a checkbox click, an
+    update, exactly, with a whole-text `replace_range` and the previous
+    cursor (R-79; `set_text` would load the shown text again): a checkbox click, an
     input-method commit or composition (fact 76), a table drag or an image
     resize. The revert is never painted (fact 76). Nothing is fed to a
     draft, and the `ReadOnly` wrapper emits nothing; the inner editor's own
@@ -1726,8 +1748,9 @@ strings.
   - **A Create answering `occupied_path`** (the index caught up with an
     item that exists) goes to the Edit route and the review.
 
-  The edit editor loads the draft's current text over the base's body. The
-  tab is dirty, and Save is enabled.
+  The edit editor takes the draft's current text over the base's body,
+  exactly, with `set_exact` (R-79): the draft is text the editor already
+  loaded, so it is not loaded again. The tab is dirty, and Save is enabled.
 - **Save from a restored draft** (from the section or the close dialog)
   first runs Continue editing's steps, then saves. A context is therefore
   always provisioned through `context prepare`.
@@ -1797,8 +1820,8 @@ the draft or the store until **Use these choices**.
   1. the base becomes the read, normalized, with its observation;
   2. current becomes the chosen fields, and the body's result;
   3. the draft is written, and the feed resumes;
-  4. the edit editor is set to the result with `set_text`, which restarts
-     undo (R-18), and its baseline becomes theirs.
+  4. the edit editor is set to the result exactly, with `set_exact`
+     (R-79), which restarts undo (R-18), and its baseline becomes theirs.
 - **Cancel** restores mine in the edit editor, resumes the feed, and leaves
   the draft and its file unchanged.
 - **Escape** moves focus to the header's Done, as while editing (R-59). It
@@ -2216,7 +2239,8 @@ Each ruling reads: decision — why — cost if wrong.
 - **R-17** Continue editing comes before Compare — D2's Tab order is kept —
   a keyboard test edit.
 - **R-18** Using the review's choices restarts undo — `set_text` clears
-  history — a whole-text `replace_range`.
+  history — a whole-text `replace_range`. Since R-79 the result goes in
+  through `set_exact`, which restarts undo in the same way.
 - **R-19** A clean reload restores the cursor, clamped — only the cursor is
   settable — the selection is lost.
 - **R-20** The new-item draft is written before `context prepare`, with a
@@ -2442,6 +2466,28 @@ Each ruling reads: decision — why — cost if wrong.
   was sent — recording a checkpoint would change the step rules that
   resume, abandon and replay share — a client other than the desktop that
   sends such a request again sees the exception.
+- **R-79** (product owner, 2026-10-26, from Task 3's review) Exact
+  re-entry. The pinned normalization is not idempotent (fact 81), so it is
+  applied once, as contract 2 states, to a body read from the repository.
+  Text an editor already holds never goes through `with_text` or
+  `set_text` again:
+  - the read-only guard reverts with a whole-text `replace_range` and
+    `set_cursor` (its undo is stopped, so the step it records is never
+    reachable);
+  - `view::editor::set_exact(editor, text, cx)` (Task 3) puts a loaded
+    text into an editor: `set_text(text)`, then, only when the editor's
+    text differs from `text`, a whole-text `replace_range` to `text`. Undo
+    restarts, except in that case, where one undo step leads to the
+    editor's own second pass (Known Limits). A restored draft (Task 18)
+    and the review's result (Task 19) go in through it;
+  - a reload of a new body (R-19) is a load of the body read, through N-1
+    and the editor, once.
+
+  A loop that reverts through `set_text` can never settle on such a body,
+  and a second pass would change bytes the user did not edit — load to a
+  fixed point would rewrite more than the recorded set (contract 2) — none
+  in D3; the defect is the pin's, and a new pin records its normalization
+  again. No follow-up ticket (owner).
 
 R-6, R-7, R-10, R-28 to R-31 and R-45 are retired: R-6 by R-64; R-7 and
 R-31 by decision 17, since no viewer parse, rewrite or warm-up remains;
@@ -2458,6 +2504,11 @@ R-45 by decision 18.
   was lost, sent again after a release, makes the context again. Release
   still refuses any context that holds work. The desktop never sends
   either again across the other (Task 17).
+- The pinned normalization is not idempotent (fact 81, R-79). A body saved
+  from a text of that shape, after a real edit, can be normalized again
+  when it is next opened, as any body read is. When a restored draft or the
+  review's result has that shape, its first undo step leads to the
+  editor's own second pass of it.
 - A context is kept in three more cases:
   - a tab closed while its Edit was preparing, when the answer was
     `discovery_pending`;

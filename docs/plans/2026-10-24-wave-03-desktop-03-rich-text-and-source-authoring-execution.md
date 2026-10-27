@@ -354,3 +354,23 @@ Notes for later tasks: Task 22 leaves `targets()` in
   design names that arm, and the row's target still names the item.
   Carried to the whole-branch review. — If wrong: the preview of a stuck
   release does not say whose branch is left.
+- Owner decision, 2026-10-26 (from Task 3's review): **R-79**, exact
+  re-entry. The review found that the pinned `normalize_math_fences` is
+  not idempotent (design fact 81, verified by the controller by hand). As
+  Task 3 built it, the read-only guard's `set_text` revert could loop
+  forever on such a body and freeze the app. The design also used
+  `set_text` for the review's result, and a restored draft would load
+  again. The load stays one pass (contract 2). Text an editor already
+  holds goes back exactly: the guard reverts with a whole-text
+  `replace_range`, and `set_exact` (Task 3) serves Tasks 18 and 19. The
+  design records fact 81, R-79, the one-pass note and a Known Limit. The
+  plan adds the tests to Tasks 3, 18 and 19, and renames
+  `load_is_idempotent` to `load_is_idempotent_over_the_fixtures`. No
+  follow-up ticket (owner).
+- Ruling (Task 3 review, minors): the fix round fixes Minors 1–4 and 6
+  (a round-trip assertion, the `beyond` bounds check, the R-66 inline and
+  word-move cases, the cursor before typing, the undo-stop comment).
+  Minor 5 (`open_editor`'s allowance) and Minor 7 (Control-click's
+  `MathMenu` must not open a math menu from a read editor) are carried to
+  Task 7. — Each is small and in Task 3's own files. — If wrong: a few
+  more lines in Task 3.

@@ -485,6 +485,7 @@ pub(crate) fn normalized(item: &ItemDto) -> ItemDto;      // body through load (
 // src/desktop/view/editor.rs
 pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Entity<EditorState>;
 pub(crate) fn step_over_blocks(editor: &Entity<EditorState>, event: &EditorEvent, cx: &mut App) -> bool; // R-66
+pub(crate) fn set_exact(editor: &Entity<EditorState>, text: &str, cx: &mut App); // R-79 (owner, 2026-10-26)
 // src/desktop/view/editor/keys.rs (R-8, R-59)
 pub(crate) fn bind(cx: &mut App); // zorite_editor::bind_keys; cmd-u/ctrl-u → NoAction and
                                   // Unbind("zorite_editor::Dismiss") for escape, in "Editor"
@@ -550,6 +551,9 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   - `the_caret_steps_over_math_and_property_blocks` (R-66)
   - `tab_and_shift_tab_move_focus_out`
   - `a_link_click_still_emits_open_link`
+  - `a_change_on_a_body_the_pin_loads_differently_twice_is_reverted_exactly`
+    (R-79: a body of fact 81's shape plus a checkbox; the text equals
+    `load(body)` after the click, and the update settles)
 
   If any cannot pass with the guard of design R-61, stop and ask the owner.
   The viewer comes back only by the owner's ruling.
@@ -558,9 +562,12 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   - `editor_text_tests.rs`:
     - `each_fixture_loads_to_its_expected_file`
     - `each_exemption_loads_unchanged`
-    - `load_is_idempotent`
+    - `load_is_idempotent_over_the_fixtures` (R-79: not a general property)
+    - `a_second_load_changes_both_shapes_of_fact_81` (two recorded fixtures,
+      each with its one-pass `.expected` file)
     - `normalized_changes_only_the_body`
-  - `editor_tests.rs`: `the_editor_reads_back_exactly_what_load_predicts`,
+  - `editor_tests.rs`: `set_exact_puts_a_loaded_text_in_exactly` (R-79),
+    and `the_editor_reads_back_exactly_what_load_predicts`,
     over every fixture.
 - [ ] **Step 5: Implement.** Items that only later tasks call carry the
   dead-code allowance:
@@ -1321,6 +1328,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
 
 - [ ] **Step 1: Apply E-8 and E-9, and write the new tests first.**
   - `continue_editing_from_the_banner_loads_the_drafts_text_dirty_on_its_own_base_and_saves`
+  - `continue_editing_puts_a_drafts_text_in_exactly` (R-79: a draft of fact
+    81's shape reads back byte for byte)
   - `continue_editing_a_draft_based_on_primary_takes_the_contexts_token_when_the_source_matches`
     (R-42)
   - `continue_editing_opens_the_review_when_the_source_differs`
@@ -1378,6 +1387,8 @@ devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warning
   - `done_and_save_are_disabled_during_the_review`
   - `escape_in_the_reviews_body_editor_focuses_done` (R-59)
   - `the_d2_privacy_sweep_still_holds_with_the_review_open` (R-38)
+  - `using_the_choices_puts_the_result_in_exactly` (R-79: a result of fact
+    81's shape reads back byte for byte)
 - [ ] **Step 2: Implement.**
 - [ ] **Step 3: Verify.**
 
@@ -1688,6 +1699,7 @@ git merge-tree --write-tree HEAD origin/main
 | E-21, E-22, E-31 | 2 |
 | Read-only guard; R-8, R-59 (bindings), R-61, R-66 | 3, 7 |
 | Load normalization | 3 |
+| Exact re-entry; fact 81, R-79 | 3, 18, 19 |
 | Tab strip; R-50, R-51, R-52 | 4 |
 | Item frame; R-47 | 5a, 5b |
 | Details sheet; R-48, R-54, R-60, R-64 | 6 |
