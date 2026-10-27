@@ -1147,21 +1147,15 @@ fn only_the_shown_tab_carries_the_active_line(cx: &mut TestAppContext) {
 fn the_focused_strip_marks_the_active_tab(cx: &mut TestAppContext) {
     let t = two(cx);
     open(&t.shell, ticket(&t.a, ONE), cx);
-    let line = |cx: &mut TestAppContext| {
-        t.shell.frame(cx, |window, _| {
-            window
-                .try_find(("tab-active-line", 0usize))
-                .map(|line| line.value().map(str::to_owned))
-        })
-    };
+    let line = |cx: &mut TestAppContext| t.shell.label(("tab-active-line-state", 0usize), cx);
     t.shell.keys("secondary-3", cx);
     assert_eq!(ring(&t.shell, cx), [Region::Content]);
-    assert_eq!(line(cx), Some(Some("amber".to_owned())));
+    assert_eq!(line(cx).as_deref(), Some("amber"));
     t.shell.keys("secondary-1", cx);
     assert_ne!(ring(&t.shell, cx), [Region::Content]);
     assert_eq!(
-        line(cx),
-        Some(Some("faint".to_owned())),
+        line(cx).as_deref(),
+        Some("faint"),
         "the line stays when focus leaves, in faint"
     );
     let colors = colors(true);

@@ -131,7 +131,7 @@ pub(super) fn tooltip_text(
 }
 
 /// The active tab's top line: amber while the content region has focus,
-/// `faint` otherwise, with the name the line states in its accessible value.
+/// `faint` otherwise, with the name tests read from the line's test-only state element.
 pub(super) fn active_line(content_focused: bool, colors: &ItemColors) -> (&'static str, Hsla) {
     if content_focused {
         ("amber", colors.accent)
@@ -425,18 +425,27 @@ impl TabContent {
                 .text_color(if active { foreground } else { muted });
             if active {
                 let (line_name, line_color) = active_line(content_focused, &colors);
-                cell = cell.bg(page).child(
+                let line = div()
+                    .id(("tab-active-line", ix))
+                    .test_support()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(ACTIVE_LINE))
+                    .bg(line_color);
+                // The colour's name is for tests only: a decorative line has
+                // no accessible value, so no screen reader announces a colour.
+                #[cfg(test)]
+                let line = line.child(
                     div()
-                        .id(("tab-active-line", ix))
+                        .id(("tab-active-line-state", ix))
                         .test_support()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .h(px(ACTIVE_LINE))
-                        .aria_value(line_name)
-                        .bg(line_color),
+                        .aria_label(line_name),
                 );
+                #[cfg(not(test))]
+                let _ = line_name;
+                cell = cell.bg(page).child(line);
             }
             strip = strip.child(
                 cell.child(tab).child(
