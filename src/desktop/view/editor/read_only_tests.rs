@@ -506,3 +506,33 @@ fn word_moves_step_over_blocks(cx: &mut TestAppContext) {
     }
     reader.assert_unchanged(cx);
 }
+
+/// The guard's `Undo` stop, proven (mutation: with it removed this fails): a checkbox click puts two
+/// snapshots on the inner editor's history (the toggle, and the guard's
+/// revert), so an undo that reached the editor would notify it. The undo
+/// and redo keys, pressed after the click, notify it not at all and send no
+/// `Changed`. The `Redo` stop cannot be
+/// proven here: only a leaked undo fills the redo stack, and the guard's
+/// revert then clears it, so without the stop the keys find nothing.
+#[gpui_kit::test]
+fn undo_and_redo_with_a_history_never_reach_the_editor(cx: &mut TestAppContext) {
+    let reader = Reader::open(5, cx);
+    let text = reader.point(at("a task"), cx);
+    reader.press(point(text.x - px(10.), text.y), MouseButton::Left, cx);
+    assert_eq!(reader.edits(), 1, "the press did not toggle the box");
+    reader.assert_unchanged(cx);
+
+    let notified = Rc::new(RefCell::new(0usize));
+    cx.update(|cx| {
+        let notified = notified.clone();
+        cx.observe(&reader.editor, move |_, _| *notified.borrow_mut() += 1)
+            .detach()
+    });
+    reader.inner.borrow_mut().clear();
+    for keys in ["ctrl-z", "ctrl-shift-z", "ctrl-y", "cmd-z", "cmd-shift-z"] {
+        reader.keys(keys, cx);
+        reader.assert_unchanged(cx);
+    }
+    assert_eq!(*notified.borrow(), 0, "an undo or redo reached the editor");
+    assert_eq!(reader.edits(), 0, "an edit reached the editor");
+}

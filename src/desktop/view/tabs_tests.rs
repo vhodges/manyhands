@@ -1191,3 +1191,59 @@ fn the_close_button_is_twenty_by_twenty(cx: &mut TestAppContext) {
         Some("Close One")
     );
 }
+
+/// Whether the tab at `ix` lies inside the strip's visible part, after a
+/// frame.
+fn tab_in_view(shell: &Shell, ix: usize, cx: &mut TestAppContext) -> bool {
+    let (strip, tab) = shell.frame(cx, |window, _| {
+        (
+            window.find("tab-strip").bounds(),
+            window.find(("tab", ix)).bounds(),
+        )
+    });
+    strip.intersects(&tab) && tab.left() >= strip.left() && tab.right() <= strip.right()
+}
+
+/// In a strip wider than its room, the tab keys and a newly opened tab
+/// bring the tab they show into view (Contract 13).
+#[gpui_kit::test]
+fn the_strip_scrolls_the_shown_tab_into_view(cx: &mut TestAppContext) {
+    const IDS: [&str; 6] = [
+        ONE,
+        TWO,
+        THREE,
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ5",
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ6",
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ7",
+    ];
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    for (ix, id) in IDS.iter().enumerate() {
+        let title = format!("A tab with a title of length {ix}");
+        fixture.commit_ticket(&a, id, &title, "");
+    }
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    for id in &IDS[..5] {
+        open(&shell, ticket(&a, id), cx);
+    }
+    assert_eq!(shown(&shell, cx), Some(4));
+    assert!(tab_in_view(&shell, 4, cx), "the newest tab is in view");
+
+    shell.keys(
+        "ctrl-shift-tab ctrl-shift-tab ctrl-shift-tab ctrl-shift-tab",
+        cx,
+    );
+    assert_eq!(shown(&shell, cx), Some(0));
+    assert!(tab_in_view(&shell, 0, cx), "the first tab is in view");
+
+    shell.keys("ctrl-shift-tab", cx);
+    assert_eq!(shown(&shell, cx), Some(4));
+    assert!(tab_in_view(&shell, 4, cx), "the last tab is in view");
+
+    open(&shell, ticket(&a, IDS[5]), cx);
+    assert_eq!(shown(&shell, cx), Some(5));
+    assert!(tab_in_view(&shell, 5, cx), "a sixth tab is in view");
+    shell.keys("ctrl-tab", cx);
+    assert!(tab_in_view(&shell, 0, cx), "the first tab is in view again");
+}

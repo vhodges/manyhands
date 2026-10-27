@@ -29,7 +29,7 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::{ItemDto, ItemDtoKind};
+use manyhands::repository::{ItemContextKind, ItemDto, ItemDtoKind};
 
 use super::{ChipField, ItemPane, text};
 use crate::desktop::{
@@ -40,6 +40,7 @@ use crate::desktop::{
 pub(crate) const TICKET_DETAILS: &str = "Ticket details";
 pub(crate) const DOCUMENT_DETAILS: &str = "Document details";
 pub(crate) const VIEWING: &str = "Viewing the shared copy. Choose Edit to change these.";
+pub(crate) const VIEWING_PRIVATE: &str = "Viewing your private copy. Choose Edit to change these.";
 pub(crate) const READ_ONLY: &str = "Read only while viewing";
 pub(crate) const DONE: &str = "Done";
 pub(crate) const INSPECT: &str = "Inspect the raw front matter (YAML)…";
@@ -157,6 +158,10 @@ impl ItemPane {
             (Some(item), ItemDtoKind::Document) => self.document_rows(item, window, cx),
             (None, _) => Vec::new(),
         };
+        let private = item
+            .as_ref()
+            .is_some_and(|item| item.context.kind == ItemContextKind::Active);
+        let description = if private { VIEWING_PRIVATE } else { VIEWING };
         let muted = cx.theme().muted_foreground;
         let (vertical, horizontal) = PADDING;
         let body = v_flex()
@@ -164,7 +169,7 @@ impl ItemPane {
             .py(px(vertical))
             .px(px(horizontal))
             .child(
-                text("sheet-description", VIEWING)
+                text("sheet-description", description)
                     .text_sm()
                     .text_color(muted),
             )

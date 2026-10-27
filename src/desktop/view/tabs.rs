@@ -30,8 +30,8 @@ use crate::desktop::{
 };
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
-    Subscription, TestSupportExt, Window,
+    InteractiveElement, IntoElement, ParentElement, Role, ScrollHandle, StatefulInteractiveElement,
+    Styled, Subscription, TestSupportExt, Window,
     component::{
         ActiveTheme, Icon,
         button::{Button, ButtonVariants},
@@ -42,6 +42,7 @@ use gpui_kit::{
 };
 use manyhands::repository::{ItemContextKind, ItemDtoKind};
 use std::{
+    cell::Cell,
     collections::{BTreeSet, HashMap},
     path::Path,
 };
@@ -195,6 +196,10 @@ pub(crate) struct TabContent {
     /// draft discarded, and its chips' requests for the details sheet.
     related: HashMap<TabId, [Subscription; 4]>,
     scroll: ContentScroll,
+    /// The strip's own scroll handle, and the tabs the last frame saw shown
+    /// and focused, so a change is scrolled into view once.
+    strip: ScrollHandle,
+    seen: Cell<(Option<TabId>, Option<TabId>)>,
 }
 
 impl TabContent {
@@ -310,6 +315,34 @@ impl TabContent {
         }
     }
 
+    /// Contract 13: a tab that is newly shown, or whose control takes
+    /// focus, is scrolled into view in the strip. Focus is checked as each
+    /// frame is drawn (as the item view does), since focus events reach
+    /// only an active window. The strip applies the request when it has
+    /// the tab's bounds, so a tab opened this frame is reached next frame.
+    fn reveal(&self, window: &Window) {
+        let focused = self.tabs.tabs().iter().map(|(id, _)| *id).find(|id| {
+            [&self.focus, &self.close_focus]
+                .iter()
+                .any(|map| map.get(id).is_some_and(|focus| focus.is_focused(window)))
+        });
+        let (was_shown, was_focused) = self.seen.get();
+        let shown = self.tabs.active();
+        let target = if focused.is_some() && focused != was_focused {
+            focused
+        } else if shown != was_shown {
+            shown
+        } else {
+            None
+        };
+        if let Some(ix) =
+            target.and_then(|id| self.tabs.tabs().iter().position(|(tab, _)| *tab == id))
+        {
+            self.strip.scroll_to_item(ix);
+        }
+        self.seen.set((shown, focused));
+    }
+
     pub(super) fn render(
         &self,
         window: &Window,
@@ -325,14 +358,18 @@ impl TabContent {
         let colors = item_colors(cx);
         let shown = self.tabs.active();
         let count = self.tabs.tabs().len();
+        self.reveal(window);
         let mut strip = h_flex()
             .id("tab-strip")
+            .track_scroll(&self.strip)
             .test_support()
             .role(Role::TabList)
             .aria_label(OPEN_TABS)
             .flex_nowrap()
             .h(px(STRIP_HEIGHT))
             .flex_none()
+            .w_full()
+            .min_w(px(0.))
             .overflow_x_scroll()
             .bg(chrome)
             .border_b_1()

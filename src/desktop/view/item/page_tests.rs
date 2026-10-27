@@ -791,3 +791,52 @@ fn a_control_click_on_math_opens_no_math_menu(cx: &mut TestAppContext) {
     assert_eq!(seated, None, "no math editor is seated");
     assert!(text(&editor, cx) == load(RICH));
 }
+
+/// Typing, paste and cut in the item's tab queue no request.
+#[gpui_kit::test]
+fn typing_and_paste_in_the_tab_queue_no_request(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Kept", "");
+    });
+    let requests = shell.requests(cx, |_| true).len();
+    open(&shell, ticket(&root, TICKET), cx);
+    let editor = read_editor(&shell, cx);
+    focus_read(&shell, &editor, 5, cx);
+
+    shell.visual(cx).simulate_input("typed");
+    cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
+    shell.keys(
+        "enter backspace delete secondary-v shift-right secondary-x",
+        cx,
+    );
+    shell.run(cx);
+    assert_eq!(shell.requests(cx, |_| true).len(), requests);
+}
+
+/// Viewing a ticket and a document, clicking, typing and reloading queue
+/// no request.
+#[gpui_kit::test]
+fn viewing_queues_no_request(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        let source = ticket_with_body(TICKET, "Viewed", RICH);
+        fixture.commit_file(root, &ticket_path(TICKET), source.as_bytes());
+        let source = document_source(DOCUMENT, "Reading", RICH);
+        fixture.commit_file(root, DOCUMENT_PATH, source.as_bytes());
+    });
+    let requests = shell.requests(cx, |_| true).len();
+
+    for target in [ticket(&root, TICKET), document(&root, DOCUMENT)] {
+        open(&shell, target, cx);
+        let editor = read_editor(&shell, cx);
+        let at = point_at(&shell, &editor, 5, cx);
+        press(&shell, at, Modifiers::none(), cx);
+        shell.keys("down right shift-down secondary-c", cx);
+        shell.visual(cx).simulate_input("typed");
+        shell.keys("enter backspace delete secondary-v secondary-x", cx);
+        pane(&shell, cx).update(cx, |pane, cx| {
+            pane.reload(cx);
+        });
+        shell.run(cx);
+    }
+    assert_eq!(shell.requests(cx, |_| true).len(), requests);
+}

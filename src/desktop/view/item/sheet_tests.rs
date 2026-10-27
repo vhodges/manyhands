@@ -21,7 +21,7 @@ use super::{
     chips::ChipField,
     sheet::{
         DOCUMENT_DETAILS, DONE, FACTS, INSPECT, KEPT, NOT_CLOSED, OTHER_FIELDS, READ_ONLY,
-        TICKET_DETAILS, VIEWING,
+        TICKET_DETAILS, VIEWING, VIEWING_PRIVATE,
     },
 };
 use crate::desktop::{
@@ -971,4 +971,31 @@ fn an_inspect_tab_of_a_conforming_item_is_not_called_nonconforming(cx: &mut Test
         Some(NONCONFORMING_FILE)
     );
     assert!(!shell.present("item-kind", cx));
+}
+
+/// The sheet's description takes its copy word from the item's context,
+/// as the pill does: an item read from an active context is the private
+/// copy, one read from the primary branch the shared copy.
+#[gpui_kit::test]
+fn the_sheet_names_the_private_copy_of_an_item_with_a_context(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, MAIN, "Shared", "");
+        fixture.commit_ticket(root, BLOCKER, "Private", "");
+        fixture.refresh(root);
+        fixture.save_ticket(root, BLOCKER, "Private, saved");
+    });
+    open(&shell, ticket(&root, MAIN), cx);
+    shell.click(ChipField::All.id(), cx);
+    assert_eq!(
+        shell.label("sheet-description", cx).as_deref(),
+        Some(VIEWING)
+    );
+    shell.keys("escape", cx);
+
+    open(&shell, ticket(&root, BLOCKER), cx);
+    shell.click(ChipField::All.id(), cx);
+    assert_eq!(
+        shell.label("sheet-description", cx).as_deref(),
+        Some(VIEWING_PRIVATE)
+    );
 }

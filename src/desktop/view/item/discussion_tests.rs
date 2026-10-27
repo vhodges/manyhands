@@ -590,3 +590,24 @@ fn a_time_with_no_local_offset_is_marked_utc() {
     assert_eq!(shown_time(at, now, None), "Oct 20, 10:14 UTC");
     assert_eq!(shown_time("not a time", now, None), "not a time");
 }
+
+/// Select All, Copy, typed text, Enter, Backspace and paste in a comment's
+/// read editor queue no request.
+#[gpui_kit::test]
+fn comment_bodies_queue_no_request(cx: &mut TestAppContext) {
+    let body = "A **bold** start, with `code`.\n";
+    let (shell, _root) = shell(1400., cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discussed", "");
+        commit_comment(fixture, root, A, None, 1, Some(ADA), body);
+    });
+    let requests = shell.requests(cx, |_| true).len();
+    let editor = comment_editor(&shell, A, cx);
+    focus_editor(&shell, &editor, 0, cx);
+    shell.keys("secondary-a secondary-c", cx);
+    focus_editor(&shell, &editor, 4, cx);
+    shell.visual(cx).simulate_input("typed");
+    cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
+    shell.keys("enter backspace delete secondary-v", cx);
+    shell.run(cx);
+    assert_eq!(shell.requests(cx, |_| true).len(), requests);
+}

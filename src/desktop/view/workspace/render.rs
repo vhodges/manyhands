@@ -106,6 +106,7 @@ impl Render for Workspace {
             .child(
                 self.region(Region::Content, window, cx, content)
                     .flex_1()
+                    .min_w_0()
                     .h_full(),
             );
         let session = self.session_section(window, cx);
