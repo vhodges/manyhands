@@ -387,6 +387,95 @@ fn a_click_below_the_text_puts_the_caret_at_the_end(cx: &mut TestAppContext) {
     );
 }
 
+/// A press on the page beside the text, in the column's margin and level
+/// with the first line, focuses the read editor from the list that held
+/// focus, and leaves its caret where it was. The ring Back to top draws
+/// around the page goes with the press.
+#[gpui_kit::test]
+fn a_press_beside_the_text_focuses_the_read_editor(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Beside", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let editor = read_editor(&shell, cx);
+    // Back to top, below the fold, by keyboard.
+    focus_read(&shell, &editor, 3, cx);
+    shell.keys("tab", cx);
+    assert!(holds_focus(&shell, "back-to-top", cx));
+    shell.press("enter", cx);
+    assert!(
+        shell.present("item-page-ring", cx),
+        "Back to top rings the page"
+    );
+    shell.keys("secondary-2", cx);
+    assert!(holds_focus(&shell, "region-navigation", cx));
+    assert!(!shell.present("item-page-ring", cx));
+
+    // Left of the editor by more than its gutter grip, inside the column.
+    let read = bounds(&shell, "item-read", cx);
+    let beside = point(read.left() - px(40.), read.top() + px(8.));
+    press(&shell, beside, Modifiers::none(), cx);
+
+    assert!(focused(&shell, &editor, cx), "the read editor has focus");
+    assert!(!holds_focus(&shell, "region-navigation", cx));
+    assert_eq!(cursor(&editor, cx), 3, "the caret stays where it was");
+    assert!(!shell.present("item-page-ring", cx), "no ring on a press");
+}
+
+/// A press on an Inspect tab's page, away from its controls, takes focus
+/// into the content region, as D1's did, and draws no ring around the
+/// page.
+#[gpui_kit::test]
+fn a_press_on_an_inspect_page_focuses_the_content_region(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Inspected", "");
+    });
+    open(
+        &shell,
+        OpenTarget::Inspect {
+            repo: key(&root),
+            worktree: key(&root),
+            path: ticket_path(TICKET),
+        },
+        cx,
+    );
+    assert!(shell.present("item-source", cx));
+    shell.keys("secondary-2", cx);
+    assert!(holds_focus(&shell, "region-navigation", cx));
+
+    let page = bounds(&shell, "item-page", cx);
+    press(
+        &shell,
+        point(page.center().x, page.bottom() - px(8.)),
+        Modifiers::none(),
+        cx,
+    );
+    assert!(
+        holds_focus(&shell, "region-content", cx),
+        "the content region"
+    );
+    assert!(!holds_focus(&shell, "region-navigation", cx));
+    assert!(!shell.present("item-page-ring", cx), "no ring on a press");
+}
+
+/// R-67's way back in: Shift-Tab from the discussion's Back to top lands
+/// on the read view, which hands focus to its editor.
+#[gpui_kit::test]
+fn shift_tab_from_back_to_top_enters_the_read_view(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Walked", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let editor = read_editor(&shell, cx);
+    focus_read(&shell, &editor, 5, cx);
+    shell.keys("tab", cx);
+    assert!(holds_focus(&shell, "back-to-top", cx));
+
+    shell.keys("shift-tab", cx);
+    assert!(focused(&shell, &editor, cx), "the read editor has focus");
+    assert_eq!(cursor(&editor, cx), 5, "with its caret where it was");
+}
+
 /// R-67: the editor never scrolls, so arrowing down past the fold moves
 /// the item's region to keep the caret in view.
 #[gpui_kit::test]

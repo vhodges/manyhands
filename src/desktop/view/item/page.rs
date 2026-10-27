@@ -12,9 +12,10 @@
 //! (decision 17): a `ReadOnly` made at the first read with a body, kept
 //! across reloads, and reloaded in place when the body changes (R-19). It
 //! keeps its own caret in view (R-67): after each caret move while it has
-//! focus, and when it takes focus. A press on the page below the text puts
-//! the caret at the end; no press focuses the page itself, so the page's
-//! ring shows only after Back to top.
+//! focus, and when it takes focus. A press on the page that no control
+//! takes focuses the read editor, its caret at the end when the press is
+//! below the text; with no read view, focus goes into the content region.
+//! The page's ring shows only after Back to top, never after a press.
 //!
 //! The region shows the Kit's vertical scrollbar on its own handle, thumb
 //! in `page-border-strong` at rest, hovered and dragged, laid over the
@@ -49,6 +50,9 @@ pub(crate) struct Page {
     /// Back to top focuses the page. It is no tab stop of its own: Tab
     /// goes on to what the page holds.
     focus: FocusHandle,
+    /// The page's ring shows while it holds focus from Back to top, not
+    /// from a press.
+    ring: bool,
     /// The body's read editor, once a read gave a body.
     read: Option<Entity<ReadOnly>>,
     /// The body `read` last loaded, as the library read it.
@@ -67,6 +71,7 @@ impl Page {
     pub(super) fn new(cx: &mut App) -> Self {
         Self {
             focus: cx.focus_handle(),
+            ring: false,
             read: None,
             body: String::new(),
             caret: (0, 0),
@@ -76,6 +81,7 @@ impl Page {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn focus_handle(&self) -> &FocusHandle {
         &self.focus
     }
@@ -155,23 +161,32 @@ impl Page {
         }
     }
 
-    /// A left press on the page that no control took. The page itself
-    /// never takes focus from it. Below the text, it focuses the read
-    /// editor with its caret at the end of the body.
-    fn pressed(&self, event: &MouseDownEvent, window: &mut Window, cx: &mut App) {
+    /// Back to top: the page focused, with its ring.
+    pub(super) fn focus_from_back_to_top(&mut self, window: &mut Window, cx: &mut App) {
+        self.ring = true;
+        window.focus(&self.focus, cx);
+    }
+
+    /// A left press on the page. A press never rings the page: the ring is
+    /// Back to top's. One that no control took focuses the read editor,
+    /// with its caret at the end of the body when the press is below the
+    /// text, and where it was otherwise. With no read view, the press goes
+    /// on, so focus goes into the content region, as D1's did.
+    fn pressed(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut App) {
+        self.ring = false;
         if window.default_prevented() {
             return;
         }
-        window.prevent_default();
         let Some(read) = &self.read else {
             return;
         };
-        if event.position.y < self.read_bottom.get() {
-            return;
-        }
+        window.prevent_default();
+        let below = event.position.y >= self.read_bottom.get();
         let editor = read.read(cx).editor().clone();
         editor.update(cx, |editor, cx| {
-            editor.set_cursor(editor.text().len(), cx);
+            if below {
+                editor.set_cursor(editor.text().len(), cx);
+            }
             editor.focus(window, cx);
         });
     }
@@ -210,8 +225,10 @@ impl Page {
     ) -> impl IntoElement + use<C> {
         let colors = item_colors(cx);
         let height = scroll.height();
-        let ring = self.focus.is_focused(window).then(|| {
+        let ring = (self.ring && self.focus.is_focused(window)).then(|| {
             div()
+                .id("item-page-ring")
+                .test_support()
                 .absolute()
                 .inset_0()
                 .border_2()

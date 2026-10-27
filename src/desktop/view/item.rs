@@ -187,7 +187,7 @@ impl ItemPane {
     /// Back to top: the region at its top, and the page focused.
     fn back_to_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.scroll.to_top();
-        window.focus(self.page.focus_handle(), cx);
+        self.page.focus_from_back_to_top(window, cx);
         cx.notify();
     }
 
