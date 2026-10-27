@@ -546,3 +546,14 @@ Notes for later tasks: Task 22 leaves `targets()` in
   kind line until its read lands, since "Nonconforming file" is now keyed
   on the file. — No user-visible defect today. — If wrong: a toast hidden
   under the sheet, or a brief blank line on an Inspect tab.
+- Ruling (Task 7, concern 5): a reload of a changed body loads the new
+  body read; an unchanged body leaves the editor alone. `set_exact` is
+  only for text an editor already holds (Tasks 18 and 19). — R-79's
+  third bullet says so. — If wrong: none; the reload path normalizes
+  once, as contract 2 states.
+- Ruling (Task 7): read-editor focus hooks are checked as each frame is
+  drawn (`defer_in`), not through `cx.on_focus`. GPUI sends focus events
+  only to an active window, and the test window never is. Every focus
+  change draws a frame, so the app behaves the same. — The review
+  confirmed there is no loop and no focus stealing. — If wrong: the caret
+  reveal lags one frame.
