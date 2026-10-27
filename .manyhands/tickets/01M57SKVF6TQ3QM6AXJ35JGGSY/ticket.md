@@ -4,9 +4,11 @@ manyhands_kind: ticket
 id: "01M57SKVF6TQ3QM6AXJ35JGGSY"
 title: "2.10 follow up: closure recovery gaps before C4, C5 and D5"
 type: "task"
-status: "review_ready"
+status: "closed"
 project: "manyhands"
 team: "core"
+closed_at: 2026-10-27T12:51:51Z
+closed_by: Vince Hodges <vince@imbas.ca>
 wave: "02"
 ---
 
@@ -77,3 +79,13 @@ adapters are downstream. Runtime evidence is Linux-only, with cooperative writer
 operator proof for ambiguous backend effects and exact original R source when
 required. Full-suite/native verification was not run. PR, lifecycle close/merge,
 native dispatch and cleanup require separate authorization.
+
+## Owner Acceptance And Closure (2026-10-27)
+
+The owner accepted the review-ready change in chat and instructed:
+"Mark the ticket closed, commit, merge back to main locally and push to origin".
+The canonical closure fields above record that acceptance under the
+`working-on-a-ticket` metadata exception. The closure commit changes metadata
+and records only; the independently reviewed and verified Rust tree is unchanged.
+Local main integration and publication are authorized by the same instruction.
+See comment `01M5YPNHG6HW9GJJJJMGR6AQ68` for the pre-merge checkpoint.
