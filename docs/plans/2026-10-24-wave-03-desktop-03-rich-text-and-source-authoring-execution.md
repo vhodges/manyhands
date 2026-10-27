@@ -510,3 +510,28 @@ Notes for later tasks: Task 22 leaves `targets()` in
   review. — Part 0 is closed, and the guard holds. — If wrong: a local
   sync that left no pending row could be released under, which main's
   audit forbids.
+- Owner decision, 2026-10-27 (Task 6, E-30): in
+  `view/tickets_tests.rs::arrows_move_in_the_list_and_enter_opens`, one
+  line more than E-30 names, `shell.keys("secondary-2", cx);` after the
+  Escape that closes the sheet. Closing the sheet returns focus to All
+  details (fact 80), so the test's later Down presses need focus back in
+  the ticket list. The design's E-30 row records the amendment.
+- Owner decision, 2026-10-27 (Task 6): two of Task 5b's own tests in
+  `view/item/header_tests.rs` are updated to the sheet. They are D3's
+  tests, not main's, so this is not a named edit.
+  - `every_chip_emits_open_details_for_its_field` presses Escape after
+    each chip's click, in both loops, since the first click now opens
+    the sheet and its backdrop takes the next click (fact 61).
+  - `tab_order_runs_strip_header_chips_page` asserts that `item-page`
+    holds focus after All details, instead of `copy-id`, which E-23
+    moves into the sheet.
+- Ruling (Task 6): Root's sheet layer is drawn inside the content
+  region, deferred. The sheet still renders in Root's layer, outside the
+  tab. Its focus counts as the content region's, so E-23's unchanged
+  `in_content` and `ringed(Content)` assertions hold, and its keys pass
+  the region's context, where R-60 refuses them. — It satisfies the
+  design's text and E-23's "assertions unchanged". — If wrong: the
+  layer moves back to Root's children, and E-23's region assertions
+  need a named edit. Paint-order note for a later Cycle: the sheet now
+  paints above Root's notification layer. A Cycle that adds toasts
+  should defer that layer at priority 1.
