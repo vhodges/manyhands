@@ -22,8 +22,10 @@ use gpui_kit::{
 };
 
 impl Workspace {
+    /// A page key: the shown item's scroll region moves, else the content
+    /// region's column (R-47).
     fn scroll_content(&mut self, scroll: impl Fn(&ContentScroll) -> bool, cx: &mut Context<Self>) {
-        if scroll(self.content_scroll()) {
+        if scroll(&self.scroll_target(cx)) {
             cx.notify();
         }
     }

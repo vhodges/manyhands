@@ -1,5 +1,10 @@
 //! The read-only item view: state, construction and composition.
 //!
+//! An item tab is a column (R-47): the tab strip, which the workspace draws,
+//! then a header placeholder holding D1's identity line, which stays in
+//! place, then the item's own scroll region with the page and the
+//! discussion (`page`).
+//!
 //! `reads` owns the ordered per-tab read and refresh job, `status` its loading
 //! and recovery controls, `details` the identity/provenance/metadata, `source`
 //! the retained read-only textarea, `discussion` the comment thread, and
@@ -12,6 +17,7 @@ mod details;
 mod discussion;
 mod draft;
 mod draft_actions;
+mod page;
 mod reads;
 mod source;
 mod status;
@@ -22,7 +28,8 @@ use std::collections::HashMap;
 use gpui_kit::{
     Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render, Styled,
     Subscription, Task, TestSupportExt, Window,
-    component::{input::TextareaState, v_flex},
+    component::{ActiveTheme, input::TextareaState, v_flex},
+    div, px,
 };
 
 use super::{relationships::RowKey, scroll::ContentScroll};
@@ -46,7 +53,12 @@ pub(crate) const RECOVERY: &str = "This item's context needs repair before it ca
 pub(crate) const COPY_ID: &str = "Copy ID";
 pub(crate) const COPY_SLUG: &str = "Copy short code";
 pub(crate) const NOT_REFRESHED: &str = "Could not refresh";
+/// The discussion header's way back to the page (`item_view/04-comments.md`).
+pub(crate) const BACK_TO_TOP: &str = "Back to top";
 const COMMENT_INDENT: f32 = 16.;
+/// The header block's padding, vertical and horizontal
+/// (`item_view/01-item-frame.md`).
+const HEADER_PADDING: (f32, f32) = (14., 28.);
 
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
@@ -59,7 +71,12 @@ pub(crate) struct ItemPane {
     refreshing: Option<DesktopRequestId>,
     /// Last source plus the same textarea entity, preserving selection/focus.
     source: Option<(String, Entity<TextareaState>)>,
+    /// The item's own scroll region, which the page keys move while this
+    /// tab is shown, and where its controls are revealed.
     pub(super) scroll: ContentScroll,
+    page: page::Page,
+    /// The discussion's Back to top, a tab stop.
+    back_to_top: FocusHandle,
     draft: draft::TabDraft,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
@@ -86,7 +103,9 @@ impl ItemPane {
             copy_focus: [cx.focus_handle(), cx.focus_handle()],
             refreshing: None,
             source: None,
-            scroll,
+            scroll: scroll.region(),
+            page: page::Page::new(cx),
+            back_to_top: cx.focus_handle().tab_stop(true),
             draft: draft::TabDraft::default(),
             _operations: operations,
             _drafts: drafts,
@@ -99,6 +118,25 @@ impl ItemPane {
     #[cfg(test)]
     pub(crate) fn target(&self) -> &OpenTarget {
         self.model.target()
+    }
+
+    /// The vertical offset of the item's scroll region.
+    #[cfg(test)]
+    pub(crate) fn region_offset(&self) -> gpui_kit::Pixels {
+        self.scroll.handle().offset().y
+    }
+
+    /// The item's scroll region, which the page keys move while this tab
+    /// is shown.
+    pub(super) fn region(&self) -> &ContentScroll {
+        &self.scroll
+    }
+
+    /// Back to top: the region at its top, and the page focused.
+    fn back_to_top(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.scroll.to_top();
+        window.focus(self.page.focus_handle(), cx);
+        cx.notify();
     }
 
     pub(super) fn repo(&self) -> &str {
@@ -153,22 +191,43 @@ impl Render for ItemPane {
                 .child(self.metadata(item, cx))
                 .child(self.source(item, cx))
         });
-        let discussion = self.discussion(cx);
-        v_flex()
-            .id("item-view")
-            .test_support()
+        // D1's content, on the page until Tasks 5b, 6 and 7 move it.
+        let content = v_flex()
             .gap_3()
-            .child(identity)
             .child(status)
             .children(not_refreshed)
             .children(banner)
             .children(section)
             .children(body)
-            .children(discussion)
-            .child(self.later(cx))
+            .child(self.later(cx));
+        let page = self.page.render(content, &self.scroll, window, cx);
+        let discussion = self.discussion(window, cx);
+        let (vertical, horizontal) = HEADER_PADDING;
+        let header = div()
+            .id("item-header")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .py(px(vertical))
+            .px(px(horizontal))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(identity);
+        v_flex()
+            .id("item-view")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .child(header)
+            .child(page::region(&self.scroll, page, discussion, cx))
     }
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/frame_tests.rs"]
+mod frame_tests;

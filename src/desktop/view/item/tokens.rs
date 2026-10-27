@@ -21,9 +21,7 @@ pub(crate) struct ItemColors {
     pub accent: Hsla,
     /// The unfocused tab line.
     pub faint: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_text: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_text_secondary: Hsla,
@@ -33,7 +31,6 @@ pub(crate) struct ItemColors {
     pub page_border: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border_soft: Hsla,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_border_strong: Hsla,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 7.
     pub page_fill: Hsla,

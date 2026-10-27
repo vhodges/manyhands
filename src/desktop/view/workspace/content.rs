@@ -19,7 +19,10 @@ use crate::desktop::{
         scroll::ContentScroll,
     },
 };
-use gpui_kit::{AnyElement, App, Context, IntoElement, Window, component::WindowExt};
+use gpui_kit::{
+    AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Styled, Window,
+    component::{WindowExt, v_flex},
+};
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -354,8 +357,23 @@ impl Workspace {
         window.focus(&focus, cx);
     }
 
+    /// The content region's column: Settings, the Drafts page and the
+    /// empty pane scroll it, as in D1.
     pub(super) fn content_scroll(&self) -> &ContentScroll {
         self.content.tabs.scroll()
+    }
+
+    /// What the page keys move: while an item tab is shown, its own scroll
+    /// region below the strip and the header (R-47); else the column.
+    pub(super) fn scroll_target(&self, cx: &App) -> ContentScroll {
+        let shown = match self.content.page(cx) {
+            ContentPage::Tabs => self.content.tabs.shown(),
+            ContentPage::Settings | ContentPage::Drafts => None,
+        };
+        match shown {
+            Some(pane) => pane.read(cx).region().clone(),
+            None => self.content_scroll().clone(),
+        }
     }
 
     /// Keep selection construction and secret clearing in their existing frame
@@ -380,13 +398,30 @@ impl Workspace {
                 self.content
                     .settings
                     .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
-                let mut body = self.content.tabs.render(
+                let tabs = self.content.tabs.render(
                     window,
                     self.focused_region(window, cx) == Some(Region::Content),
                     cx,
                 );
-                body.push(selection);
-                body
+                if self.content.tabs.shown().is_none() {
+                    // The empty pane keeps D1's single scrolling column.
+                    let mut body = tabs;
+                    body.push(selection);
+                    return body;
+                }
+                // An item tab fills the column: the strip, then the pane,
+                // whose header stays above its own scroll region. The
+                // selection stays drawn below it.
+                vec![
+                    v_flex()
+                        .id("item-tab")
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .children(tabs)
+                        .into_any_element(),
+                    selection,
+                ]
             }
         }
     }
@@ -427,5 +462,14 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn content_offset(&self) -> gpui_kit::Pixels {
         self.content_scroll().handle().offset().y
+    }
+    /// The shown item's scroll region's offset.
+    #[cfg(test)]
+    pub(crate) fn item_offset(&self, cx: &App) -> gpui_kit::Pixels {
+        self.content
+            .tabs
+            .shown()
+            .map(|pane| pane.read(cx).region_offset())
+            .unwrap_or_default()
     }
 }
