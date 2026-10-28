@@ -841,3 +841,15 @@ Notes for later tasks: Task 22 leaves `targets()` in
   reads Continue editing and, until Task 18, does D2's Restore. Once
   that draft is restored in the tab, Continue editing is disabled until
   Task 18. — R-35: no second draft begins. — If wrong: Task 18 routes it.
+- Ruling (Task 14, 2026-10-27): a typed `e` in the read view starts
+  Edit. `e` never acts in a text field, a dialog, the details sheet, the
+  link popover or the edit editor. Task 7's four page tests type "typing"
+  instead of "typed". — The design's keyboard map gives "E edit (when the
+  page has focus)", and fact 76 says the guard stops text, not bindings.
+  Review Focus 5 is about the read view's text, which never changes, and
+  no draft begins. — If wrong: `e` is bound outside the read editor, and
+  those four tests type "typed" again.
+- Ruling (Task 14): a clean editor that has not saved yet reads
+  "Editing · saved on this computer". That is the design's row "Editing,
+  saved and clean": the text equals the file. — The design has no row
+  for "opened, not changed". — If wrong: one pill word.
