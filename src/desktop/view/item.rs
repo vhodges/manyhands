@@ -142,6 +142,8 @@ impl ItemPane {
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let images = TabImages::new(&services);
+        // The tab's images leave the windows' atlases with it.
+        cx.on_release(|pane, cx| pane.images.close(cx)).detach();
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,

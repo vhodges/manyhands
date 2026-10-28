@@ -37,7 +37,7 @@ use gpui_kit::{
 
 use super::{ItemPane, tokens::item_colors};
 use crate::desktop::{
-    model::links::LinkTarget,
+    model::{links::LinkTarget, navigation::OpenTarget},
     services::images::{ImageSource, TabImages},
     view::{
         editor::{CaretInView, read_only::ReadOnly},
@@ -252,21 +252,28 @@ impl Page {
 }
 
 impl ItemPane {
+    /// An item tab's images, and its comments', resolve from where the
+    /// last successful read found the item. Called as each read lands, so
+    /// no frame builds a place only to compare it.
+    pub(super) fn locate_images(&self, cx: &mut App) {
+        if !matches!(self.model.target(), OpenTarget::Item { .. }) {
+            return;
+        }
+        if let Some(item) = self.model.item().rows() {
+            self.images.locate(ImageSource::of(item, self.repo()), cx);
+        }
+    }
+
     /// An item tab shows the last successful read's body in its read
-    /// editor, kept during an in-flight or failed read. Its images, and
-    /// its comments', resolve from where that read found the item. An
-    /// Inspect tab keeps D1's source view (`source`).
+    /// editor, kept during an in-flight or failed read. An Inspect tab
+    /// keeps D1's source view (`source`).
     pub(super) fn sync_read(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(
-            self.model.target(),
-            crate::desktop::model::navigation::OpenTarget::Item { .. }
-        ) {
+        if !matches!(self.model.target(), OpenTarget::Item { .. }) {
             return;
         }
         let Some(item) = self.model.item().rows() else {
             return;
         };
-        self.images.locate(ImageSource::of(item, self.repo()));
         self.page
             .show(item.body.as_deref(), &self.scroll, &self.images, window, cx);
         self.page.note_focus(window, cx);

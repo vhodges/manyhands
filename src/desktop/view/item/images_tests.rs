@@ -1,11 +1,12 @@
 //! Local images in an item tab's editors (design, Images; decision 9),
 //! over real repositories: the read editor draws an image's source while
-//! it loads and the image once it lands, and an edit host given the tab's
-//! images shares what the tab already loaded for a comment.
+//! it loads and the image once it lands, an edit host given the tab's
+//! images shares what the tab already loaded for a comment, and a reload
+//! or the tab's close gives its images back to the window's atlas.
 
-use std::{cell::RefCell, io::Cursor, path::Path, rc::Rc};
+use std::{cell::RefCell, io::Cursor, path::Path, rc::Rc, sync::Arc};
 
-use gpui_kit::{AppContext, Entity, TestAppContext, component::Root};
+use gpui_kit::{AppContext, Entity, RenderImage, TestAppContext, component::Root};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use manyhands::repository::ItemDtoKind;
 use zorite_editor::EditorState;
@@ -190,4 +191,81 @@ fn an_edit_host_and_a_comment_share_the_tabs_cache(cx: &mut TestAppContext) {
     assert_eq!(images.seen("other.png"), Some(Seen::Loaded(60., 240.)));
     assert!(drawn_as_image(&editor, 2, 4, cx), "the host's own image");
     assert!(drawn_as_image(&comment, 0, 2, cx), "the comment's is kept");
+}
+
+/// Whether every frame of `image` is in the window's sprite atlas, after
+/// a frame.
+fn in_atlas(shell: &Shell, image: &Arc<RenderImage>, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| window.has_image_atlas_entry(image))
+}
+
+/// A painted image stays in the window's atlas until it is dropped from
+/// it. A reload drops the tab's old images: the one drawn before has an
+/// entry, and after the reload only the image read again, drawn in its
+/// place, has one.
+#[gpui_kit::test]
+fn a_reload_drops_the_old_images_from_the_atlas(cx: &mut TestAppContext) {
+    let (shell, _) = opened(cx, false, |fixture, root| {
+        commit_pictured(fixture, root, PICTURED)
+    });
+    shell.frame(cx, |_, _| ());
+    let pane = pane(&shell, cx);
+    let images = pane.read_with(cx, |pane, _| pane.images().clone());
+    let old = images.image("pic.png").expect("the image loaded");
+    assert!(
+        in_atlas(&shell, &old, cx),
+        "the drawn image is in the atlas"
+    );
+
+    pane.update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    let new = images.image("pic.png").expect("the image is read again");
+    assert!(!Arc::ptr_eq(&old, &new), "a new image");
+    assert!(!in_atlas(&shell, &old, cx), "the old image's entry is gone");
+    assert!(in_atlas(&shell, &new, cx), "the new one is drawn");
+}
+
+/// Closing the tab drops its images, the body's and a comment's, from the
+/// window's atlas.
+#[gpui_kit::test]
+fn closing_the_tab_drops_its_images_from_the_atlas(cx: &mut TestAppContext) {
+    let (shell, _) = opened(cx, false, |fixture, root| {
+        commit_pictured(fixture, root, PICTURED);
+        let comment = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {COMMENT}\nitem_id: {DOCUMENT}\n\
+             created_at: 2026-09-30T12:00:00Z\n---\n![another](other.png)\n\nAfter the picture.\n"
+        );
+        fixture.commit_file(
+            root,
+            &format!(".manyhands/comments/{DOCUMENT}/{COMMENT}.md"),
+            comment.as_bytes(),
+        );
+        fixture.commit_file(root, "docs/other.png", &png(60, 240));
+    });
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    let images = pane(&shell, cx).read_with(cx, |pane, _| pane.images().clone());
+    let drawn = [
+        images.image("pic.png").expect("the body's image loaded"),
+        images
+            .image("other.png")
+            .expect("the comment's image loaded"),
+    ];
+    for image in &drawn {
+        assert!(in_atlas(&shell, image, cx), "drawn before the close");
+    }
+
+    shell.keys("secondary-w", cx);
+    let open = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane().is_some());
+    assert!(!open, "the tab closed");
+    shell.run(cx);
+    for image in &drawn {
+        assert!(!in_atlas(&shell, image, cx), "its entry is gone");
+    }
 }

@@ -24,6 +24,12 @@
 //!   per-frame provider never repeats them.
 //! - **Clear.** The tab's reload, or a new place to resolve from, clears it
 //!   all. A load from before lands on nothing.
+//! - **Atlas.** A painted image stays in each window's sprite atlas until
+//!   it is dropped from there (`App::drop_image`); dropping the `Arc`
+//!   frees nothing on the GPU. So the images the tab lets go of, at a
+//!   clear, at a new place to resolve from, and when the tab is released
+//!   (`close`), are dropped from every window once the update ends. A load
+//!   that lands on nothing was never painted.
 //!
 //! A `src` is body text: nothing here derives `Debug`, and nothing logs or
 //! reports a `src`, a path or a failure.
@@ -76,6 +82,8 @@ pub(crate) struct ImageCache {
     scheduled: bool,
     /// Moves on at each clear: a load from before lands on nothing.
     generation: u64,
+    /// The tab is released: nothing more is asked for or loaded.
+    closed: bool,
     /// The tab's editors, notified when a load lands.
     editors: Vec<WeakEntity<EditorState>>,
 }
@@ -141,21 +149,27 @@ impl TabImages {
             running: false,
             scheduled: false,
             generation: 0,
+            closed: false,
             editors: Vec::new(),
         })))
     }
 
     /// Where the tab's srcs resolve from now, as its last read found the
     /// item. A different place clears what the tab holds, which resolved
-    /// from the old one; the editors ask again as they are drawn.
-    pub(crate) fn locate(&self, source: ImageSource) {
-        let mut cache = self.0.borrow_mut();
-        if cache.source.as_ref() == Some(&source) {
-            return;
-        }
-        if cache.source.replace(source).is_some() {
-            cache.reset();
-        }
+    /// from the old one, its images dropped from the atlas; the editors
+    /// ask again as they are drawn.
+    pub(crate) fn locate(&self, source: ImageSource, cx: &mut App) {
+        let dropped = {
+            let mut cache = self.0.borrow_mut();
+            if cache.source.as_ref() == Some(&source) {
+                return;
+            }
+            match cache.source.replace(source) {
+                Some(_) => cache.reset(),
+                None => Vec::new(),
+            }
+        };
+        release(dropped, cx);
     }
 
     /// Gives `editor` the tab's images: its provider reads them, and it is
@@ -180,21 +194,38 @@ impl TabImages {
         cx.defer(move |cx| images.start(cx));
     }
 
-    /// Drops everything the tab holds, and has its editors drawn again, so
-    /// each image is read again as it is now.
+    /// Drops everything the tab holds, its images from the atlas too, and
+    /// has its editors drawn again, so each image is read again as it is
+    /// now.
     pub(crate) fn clear(&self, cx: &mut App) {
-        let editors = {
+        let (dropped, editors) = {
             let mut cache = self.0.borrow_mut();
-            cache.reset();
-            cache.editors.clone()
+            (cache.reset(), cache.editors.clone())
         };
+        release(dropped, cx);
         notify(&editors, cx);
+    }
+
+    /// The tab is released: what it holds is dropped, its images from the
+    /// atlas too, and nothing more is asked for or loaded, should an
+    /// editor of it outlive it. A load still out lands on nothing.
+    pub(crate) fn close(&self, cx: &mut App) {
+        let dropped = {
+            let mut cache = self.0.borrow_mut();
+            cache.closed = true;
+            cache.editors.clear();
+            cache.reset()
+        };
+        release(dropped, cx);
     }
 
     /// The provider: the image `src` names, once loaded. A miss is
     /// recorded for the next start.
     fn provide(&self, src: &str) -> Option<Arc<RenderImage>> {
         let mut cache = self.0.try_borrow_mut().ok()?;
+        if cache.closed {
+            return None;
+        }
         match cache.entries.get(src) {
             Some(ImageEntry::Loaded(image, ..)) => Some(image.clone()),
             Some(ImageEntry::Pending | ImageEntry::Failed) => None,
@@ -213,6 +244,9 @@ impl TabImages {
             let mut cache = self.0.borrow_mut();
             let cache = &mut *cache;
             cache.scheduled = false;
+            if cache.closed {
+                return;
+            }
             let Some(source) = &cache.source else {
                 return;
             };
@@ -291,6 +325,15 @@ impl TabImages {
             .insert(src.to_owned(), ImageEntry::Loaded(image, width, height));
     }
 
+    /// The decoded image `src` names, once loaded.
+    #[cfg(test)]
+    pub(crate) fn image(&self, src: &str) -> Option<Arc<RenderImage>> {
+        match self.0.borrow().entries.get(src)? {
+            ImageEntry::Loaded(image, ..) => Some(image.clone()),
+            ImageEntry::Pending | ImageEntry::Failed => None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn seen(&self, src: &str) -> Option<Seen> {
         self.0.borrow().entries.get(src).map(|entry| match entry {
@@ -317,14 +360,23 @@ impl ImageCache {
         DecodeBudget::holding(held)
     }
 
-    /// Everything the tab held is gone, so its budget is whole again. A
-    /// load still out keeps the next waiting until it lands.
-    fn reset(&mut self) {
-        self.entries.clear();
+    /// Everything the tab held is gone, so its budget is whole again; the
+    /// decoded images it held are given back, to be dropped from the
+    /// atlas. A load still out keeps the next waiting until it lands.
+    fn reset(&mut self) -> Vec<Arc<RenderImage>> {
+        let held = self
+            .entries
+            .drain()
+            .filter_map(|(_, entry)| match entry {
+                ImageEntry::Loaded(image, ..) => Some(image),
+                ImageEntry::Pending | ImageEntry::Failed => None,
+            })
+            .collect();
         self.asked.clear();
         self.queue.clear();
         self.walks = None;
         self.generation += 1;
+        held
     }
 }
 
@@ -333,6 +385,21 @@ fn notify(editors: &[WeakEntity<EditorState>], cx: &mut App) {
         // A closed editor needs nothing drawn.
         let _ = editor.update(cx, |_, cx| cx.notify());
     }
+}
+
+/// Drops `images` from every window's sprite atlas once the update ends.
+/// A window being drawn is out of the app's list of windows while it is,
+/// so a drop made then would miss it; deferred, `App::drop_image` reaches
+/// them all.
+fn release(images: Vec<Arc<RenderImage>>, cx: &mut App) {
+    if images.is_empty() {
+        return;
+    }
+    cx.defer(move |cx| {
+        for image in images {
+            cx.drop_image(image, None);
+        }
+    });
 }
 
 /// The repository path a local `src` names, from the item's folder `dir`.

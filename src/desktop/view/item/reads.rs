@@ -116,6 +116,7 @@ impl ItemPane {
                     // An attached draft is classified against the new read;
                     // its text and base stay as they are.
                     this.draft.reads_landed();
+                    this.locate_images(cx);
                     cx.notify();
                 }
             },

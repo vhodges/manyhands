@@ -3,7 +3,9 @@
 //! background executor after the frame that asked for it and notifies the
 //! editor; an external or refused `src` is never looked up; a missing path
 //! goes to the nearest image of the same name below `docs/`, from a walk
-//! the tab keeps; and the tab's reload clears what it holds.
+//! the tab keeps; a miss or a refusal is never looked up again; a new
+//! place to resolve from drops the old images from the atlas; and the
+//! tab's reload clears what it holds.
 
 use std::{
     cell::{Cell, RefCell},
@@ -11,9 +13,10 @@ use std::{
     io::Cursor,
     path::PathBuf,
     rc::Rc,
+    sync::Arc,
 };
 
-use gpui_kit::{AppContext, Entity, TestAppContext, component::Root};
+use gpui_kit::{AppContext, Entity, RenderImage, TestAppContext, component::Root};
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use manyhands::repository::ItemDtoKind;
 use zorite_editor::EditorState;
@@ -92,10 +95,11 @@ impl Reading {
             .workspace
             .read_with(cx, |workspace, _| workspace.services().clone());
         let images = TabImages::new(&services);
-        images.locate(ImageSource {
+        let source = ImageSource {
             trees,
             dir: dir.to_owned(),
-        });
+        };
+        cx.update(|cx| images.locate(source, cx));
         let made = Rc::new(RefCell::new(None));
         shell
             .window
@@ -376,6 +380,74 @@ fn the_tabs_images_count_against_its_budget(cx: &mut TestAppContext) {
     assert_eq!(
         reading.images.seen("small.png"),
         Some(Seen::Loaded(10., 300.))
+    );
+}
+
+/// Misses and refusals stay cached: a local `src` missing everywhere,
+/// and one whose file containment refuses, are each looked up once, and
+/// never again over later frames.
+#[gpui_kit::test]
+fn a_failed_src_is_never_looked_up_again(cx: &mut TestAppContext) {
+    let folder = Folder::new();
+    folder.write("repo", ".git/pic.png", &png(30, 300));
+    let body = "![missing](nowhere.png)\n\n![refused](/.git/pic.png)\n\nAfter.\n";
+    let (reading, first) = Reading::new(body, vec![folder.tree("repo", false)], "docs", true, cx);
+    // The two loads go on, and a third, were there one, waits: a repeat
+    // then shows as a count, and cannot loop, each landing drawing a frame
+    // that would ask again.
+    let second = reading.shell.backend.hold_read(ReadKind::Image);
+    let _third = reading.shell.backend.hold_read(ReadKind::Image);
+    drop((first, second));
+    reading.shell.run(cx);
+    for src in ["nowhere.png", "/.git/pic.png"] {
+        assert_eq!(reading.images.seen(src), Some(Seen::Failed), "{src}");
+    }
+    assert_eq!(reading.loads(), 2, "each looked up once");
+
+    for _ in 0..3 {
+        reading.shell.frame(cx, |_, _| ());
+        reading.shell.run(cx);
+    }
+    assert_eq!(reading.loads(), 2, "the later frames looked up nothing");
+    for src in ["nowhere.png", "/.git/pic.png"] {
+        assert_eq!(reading.images.seen(src), Some(Seen::Failed), "{src}");
+    }
+}
+
+/// A new place to resolve from drops the images found in the old one,
+/// from the window's atlas too, and reads them in the new place.
+#[gpui_kit::test]
+fn a_new_place_to_resolve_from_drops_the_old_images(cx: &mut TestAppContext) {
+    let folder = Folder::new();
+    folder.write("repo", "docs/pic.png", &png(30, 300));
+    folder.write("context", "docs/pic.png", &png(20, 300));
+    let (reading, _) = Reading::new(
+        "![a picture](pic.png)\n\nAfter.\n",
+        vec![folder.tree("repo", false)],
+        "docs",
+        false,
+        cx,
+    );
+    reading.shell.run(cx);
+    let old = reading.images.image("pic.png").expect("the image loaded");
+    let drawn = |image: &Arc<RenderImage>, cx: &mut TestAppContext| {
+        reading
+            .shell
+            .frame(cx, |window, _| window.has_image_atlas_entry(image))
+    };
+    assert!(drawn(&old, cx), "the drawn image is in the atlas");
+
+    let moved = ImageSource {
+        trees: vec![folder.tree("context", true), folder.tree("repo", false)],
+        dir: "docs".to_owned(),
+    };
+    cx.update(|cx| reading.images.locate(moved, cx));
+    reading.shell.run(cx);
+    assert!(!drawn(&old, cx), "the old image's entry is gone");
+    reading.shell.run(cx);
+    assert_eq!(
+        reading.images.seen("pic.png"),
+        Some(Seen::Loaded(20., 300.))
     );
 }
 

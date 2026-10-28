@@ -9,16 +9,17 @@
 //!    `.git` or `.manyhands`, ignoring ASCII case and the trailing dots,
 //!    spaces and `:stream` Windows reads as the same name;
 //! 3. every symbolic link on the way resolves inside that root;
-//! 4. `symlink_metadata` of the canonical path shows a regular file, whose
-//!    identity is kept;
+//! 4. the canonical path is a regular file, whose identity is kept: by
+//!    `symlink_metadata` on Unix, and on Windows from a handle opened for
+//!    its attributes alone, following no link;
 //! 5. it is opened without following a final symbolic link, and the
 //!    handle has the identity kept.
 //!
-//! The identity is the device and inode on Unix. On Windows, stable `std`
-//! gives no file ID (`MetadataExt::file_index` is unstable), so it is the
-//! size, the creation and last-write times and the attributes, and the
-//! handle must not be a reparse point. Elsewhere nothing is read. The
-//! read stops one byte past `IMAGE_SIZE_CAP`, and more is refused.
+//! The identity is the device and inode on Unix, and the volume serial
+//! number and file ID on Windows (`FILE_ID_INFO`, read as the library's
+//! `coordination.rs` reads it). A Windows file with no file ID, or that is
+//! a reparse point, is refused. Elsewhere nothing is read. The read stops
+//! one byte past `IMAGE_SIZE_CAP`, and more is refused.
 //!
 //! **Decode** (R-39). The format comes from the magic bytes alone, never
 //! the name, so SVG is refused. `image` decodes it under `Limits` of 4096
@@ -140,56 +141,105 @@ fn reserved(name: &OsStr) -> bool {
     name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".manyhands")
 }
 
-/// What a file is, as R-34 checks 4 and 5 compare it.
-#[cfg(unix)]
+/// What a file is, as R-34 checks 4 and 5 compare it: its device and
+/// inode on Unix, and on Windows its volume serial number and file ID, as
+/// the library's `coordination.rs::file_identity` reads them.
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Identity {
-    device: u64,
-    inode: u64,
+    volume: u64,
+    file: u128,
 }
 
 #[cfg(unix)]
-fn identity(metadata: &fs::Metadata) -> Option<Identity> {
+fn unix_identity(metadata: &fs::Metadata) -> Identity {
     use std::os::unix::fs::MetadataExt;
-    Some(Identity {
-        device: metadata.dev(),
-        inode: metadata.ino(),
-    })
+    Identity {
+        volume: metadata.dev(),
+        file: u128::from(metadata.ino()),
+    }
 }
 
-/// Stable `std` gives no Windows file ID, so the strongest it allows: the
-/// size, the creation and last-write times and the attributes, of a file
-/// that is no reparse point.
-#[cfg(windows)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Identity {
-    size: u64,
-    created: u64,
-    written: u64,
-    attributes: u32,
+/// R-34 check 4 on Unix: `symlink_metadata` shows a regular file.
+#[cfg(unix)]
+fn regular_at(path: &Path) -> Option<Identity> {
+    let metadata = fs::symlink_metadata(path).ok()?;
+    metadata
+        .file_type()
+        .is_file()
+        .then(|| unix_identity(&metadata))
 }
 
+/// R-34 check 4 on Windows. The file ID needs a handle, so the path is
+/// opened for its attributes alone: it reads no data, follows no link,
+/// and allows every share mode. The handle is closed at once.
 #[cfg(windows)]
-fn identity(metadata: &fs::Metadata) -> Option<Identity> {
-    use std::os::windows::fs::MetadataExt;
-    /// `FILE_ATTRIBUTE_REPARSE_POINT`: a symbolic link or a junction.
-    const REPARSE_POINT: u32 = 0x400;
-    let attributes = metadata.file_attributes();
-    ((attributes & REPARSE_POINT) == 0).then_some(Identity {
-        size: metadata.file_size(),
-        created: metadata.creation_time(),
-        written: metadata.last_write_time(),
-        attributes,
-    })
+fn regular_at(path: &Path) -> Option<Identity> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+        FILE_SHARE_WRITE,
+    };
+    let handle = fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .ok()?;
+    regular(&handle).map(|(identity, _)| identity)
 }
 
 /// No identity can be kept here, so nothing is read.
 #[cfg(not(any(unix, windows)))]
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Identity;
+fn regular_at(_: &Path) -> Option<Identity> {
+    None
+}
+
+/// The identity and length of the open `file`, when it is a regular file.
+#[cfg(unix)]
+fn regular(file: &fs::File) -> Option<(Identity, u64)> {
+    let metadata = file.metadata().ok()?;
+    metadata
+        .is_file()
+        .then(|| (unix_identity(&metadata), metadata.len()))
+}
+
+/// The identity and length of the open `file`, when it is a regular file
+/// and no reparse point. Its file ID is read as the library's
+/// `coordination.rs::file_identity` reads it; with none (FAT, an older
+/// system), the file is refused, with no fallback.
+#[cfg(windows)]
+fn regular(file: &fs::File) -> Option<(Identity, u64)> {
+    use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_ID_INFO, FileIdInfo, GetFileInformationByHandleEx,
+    };
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || (metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+        return None;
+    }
+    let mut id: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    // SAFETY: the live file owns the handle; the buffer is sized and aligned
+    // for FILE_ID_INFO and remains valid until the synchronous call returns.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut id as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    } == 0
+    {
+        return None;
+    }
+    let identity = Identity {
+        volume: id.VolumeSerialNumber,
+        file: u128::from_le_bytes(id.FileId.Identifier),
+    };
+    Some((identity, metadata.len()))
+}
 
 #[cfg(not(any(unix, windows)))]
-fn identity(_: &fs::Metadata) -> Option<Identity> {
+fn regular(_: &fs::File) -> Option<(Identity, u64)> {
     None
 }
 
@@ -204,14 +254,14 @@ fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
         .open(path)
 }
 
+/// Opens `path` to read; a link there is opened as itself.
 #[cfg(windows)]
 fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
-    /// `FILE_FLAG_OPEN_REPARSE_POINT`: the link itself, not its target.
-    const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
     fs::OpenOptions::new()
         .read(true)
-        .custom_flags(OPEN_REPARSE_POINT)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
 }
 
@@ -226,17 +276,13 @@ pub(crate) struct Checked {
     identity: Identity,
 }
 
-/// R-34 check 4: `path`, a canonical path, is a regular file, by
-/// `symlink_metadata`; its identity is kept. A FIFO, a device, a
-/// directory or a link is never opened.
+/// R-34 check 4: `path`, a canonical path, is a regular file; its
+/// identity is kept. A FIFO, a device, a directory or a link is never
+/// opened to be read.
 pub(crate) fn checked(path: &Path) -> Option<Checked> {
-    let metadata = fs::symlink_metadata(path).ok()?;
-    if !metadata.file_type().is_file() {
-        return None;
-    }
     Some(Checked {
         path: path.to_owned(),
-        identity: identity(&metadata)?,
+        identity: regular_at(path)?,
     })
 }
 
@@ -246,11 +292,8 @@ pub(crate) fn checked(path: &Path) -> Option<Checked> {
 /// byte past the cap, which shows a file that grew.
 pub(crate) fn read_checked(file: &Checked) -> Option<Vec<u8>> {
     let opened = open_no_follow(&file.path).ok()?;
-    let metadata = opened.metadata().ok()?;
-    if !metadata.is_file() || identity(&metadata)? != file.identity {
-        return None;
-    }
-    if metadata.len() > IMAGE_SIZE_CAP {
+    let (identity, length) = regular(&opened)?;
+    if identity != file.identity || length > IMAGE_SIZE_CAP {
         return None;
     }
     let mut bytes = Vec::new();
@@ -350,9 +393,16 @@ fn limits() -> Limits {
 
 /// R-33: the regular files below `tree`'s `docs/`, by their paths in the
 /// tree with forward slashes, breadth first and in name order. It follows
-/// no symbolic link, enters no `.git` or `.manyhands`, and stops after
-/// `WALK_BOUND` entries.
+/// no symbolic link, enters no `.git` or `.manyhands`, and reads no more
+/// than `WALK_BOUND` entries.
 pub(crate) fn walk_docs(tree: &Path) -> Vec<String> {
+    walk_docs_within(tree, WALK_BOUND)
+}
+
+/// `walk_docs`, reading no more than `bound` entries. A folder is read
+/// only up to what is left of the bound, so its name order holds among
+/// the entries read, and is approximate only in a folder over the bound.
+fn walk_docs_within(tree: &Path, bound: usize) -> Vec<String> {
     let mut files = Vec::new();
     let docs = tree.join("docs");
     let is_folder = fs::symlink_metadata(&docs).is_ok_and(|docs| docs.file_type().is_dir());
@@ -362,16 +412,17 @@ pub(crate) fn walk_docs(tree: &Path) -> Vec<String> {
     let mut seen = 0;
     let mut folders = VecDeque::from([(docs, "docs".to_owned())]);
     while let Some((folder, path)) = folders.pop_front() {
+        if seen >= bound {
+            break;
+        }
         let Ok(entries) = fs::read_dir(&folder) else {
             continue;
         };
-        let mut entries: Vec<fs::DirEntry> = entries.filter_map(Result::ok).collect();
+        let mut entries: Vec<fs::DirEntry> =
+            entries.filter_map(Result::ok).take(bound - seen).collect();
+        seen += entries.len();
         entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries {
-            seen += 1;
-            if seen > WALK_BOUND {
-                return files;
-            }
             let name = entry.file_name();
             let (Some(text), Ok(kind)) = (name.to_str(), entry.file_type()) else {
                 continue;

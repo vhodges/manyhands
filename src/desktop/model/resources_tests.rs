@@ -16,8 +16,8 @@ use image::{
 };
 
 use super::{
-    DecodeBudget, IMAGE_SIZE_CAP, ImageKind, NotDecoded, TAB_BUDGET, checked, contained, decode,
-    read_checked, read_contained, sniff, walk_docs,
+    DecodeBudget, IMAGE_SIZE_CAP, ImageKind, NotDecoded, TAB_BUDGET, WALK_BOUND, checked,
+    contained, decode, read_checked, read_contained, sniff, walk_docs, walk_docs_within,
 };
 
 /// A temporary directory holding `repo`, the tree, and `outside`, a
@@ -481,4 +481,135 @@ fn the_walk_lists_docs_without_following_links() {
     let mut listed = walk_docs(&root);
     listed.sort();
     assert_eq!(listed, ["docs/a.png", "docs/sub/b.png"]);
+}
+
+/// Bits packed for a deflate stream: data elements from their low bit,
+/// Huffman codes from their high bit.
+#[derive(Default)]
+struct Bits {
+    bytes: Vec<u8>,
+    count: u64,
+}
+
+impl Bits {
+    fn bit(&mut self, on: bool) {
+        if self.count.is_multiple_of(8) {
+            self.bytes.push(0);
+        }
+        if on {
+            *self.bytes.last_mut().unwrap() |= 1 << (self.count % 8);
+        }
+        self.count += 1;
+    }
+
+    fn value(&mut self, value: u32, width: u32) {
+        (0..width).for_each(|at| self.bit(value >> at & 1 == 1));
+    }
+
+    fn code(&mut self, code: u32, width: u32) {
+        (0..width)
+            .rev()
+            .for_each(|at| self.bit(code >> at & 1 == 1));
+    }
+}
+
+fn crc32(parts: &[&[u8]]) -> u32 {
+    let mut crc = !0u32;
+    for byte in parts.iter().flat_map(|part| part.iter()) {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
+fn chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    png.extend((data.len() as u32).to_be_bytes());
+    png.extend(kind);
+    png.extend(data);
+    png.extend(crc32(&[kind, data]).to_be_bytes());
+}
+
+/// A `width` by `height` PNG of zeros with `channels` samples of `depth`
+/// bits a pixel, of PNG colour type `colour`, written by hand: one
+/// fixed-Huffman deflate block of a literal zero and 258-byte copies of
+/// it, and the Adler-32 of zeros, which is their count. A large one takes
+/// milliseconds, where the encoder takes seconds in a debug build.
+fn zeros_png(width: u32, height: u32, depth: u8, colour: u8, channels: u32) -> Vec<u8> {
+    // Each row is its filter byte, 0 for none, then its samples.
+    let row = 1 + u64::from(width) * u64::from(channels) * u64::from(depth) / 8;
+    let raw = row * u64::from(height);
+    let mut bits = Bits::default();
+    bits.value(1, 1); // The last block.
+    bits.value(1, 2); // Fixed Huffman codes.
+    bits.code(0x30, 8); // The literal 0.
+    let mut left = raw - 1;
+    while left >= 258 {
+        bits.code(0xC5, 8); // Length 258, symbol 285.
+        bits.code(0, 5); // Distance 1.
+        left -= 258;
+    }
+    (0..left).for_each(|_| bits.code(0x30, 8));
+    bits.code(0, 7); // The end of the block, symbol 256.
+    let mut zlib = vec![0x78, 0x01];
+    zlib.extend(&bits.bytes);
+    zlib.extend((((raw % 65_521) << 16) as u32 | 1).to_be_bytes());
+
+    let mut header = Vec::new();
+    header.extend(width.to_be_bytes());
+    header.extend(height.to_be_bytes());
+    header.extend([depth, colour, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    chunk(&mut png, b"IHDR", &header);
+    chunk(&mut png, b"IDAT", &zlib);
+    chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+/// R-39's allocation limit: an image within 4096 pixels a side whose
+/// decode needs more than 96 MiB is refused. A 4096 by 4096 RGBA PNG of
+/// 16-bit samples is 128 MiB decoded. The same hand-made PNG, small,
+/// decodes, so the large one is refused for its size.
+#[test]
+fn a_decode_over_96_mib_is_refused() {
+    let mut budget = DecodeBudget::new();
+    let small = zeros_png(3, 2, 16, 6, 4);
+    let Ok(frame) = decode(&small, &mut budget) else {
+        panic!("the hand-made PNG did not decode");
+    };
+    assert_eq!(frame.buffer().dimensions(), (3, 2));
+
+    let large = zeros_png(4096, 4096, 16, 6, 4);
+    assert!(matches!(
+        decode(&large, &mut budget),
+        Err(NotDecoded::Refused)
+    ));
+    assert_eq!(budget.left(), TAB_BUDGET - 3 * 2 * 4, "nothing more spent");
+}
+
+/// R-33's bound counts every entry the walk visits. With a bound of 3 it
+/// reads the three entries of `docs/` and stops before entering its
+/// folder; with 4 it reads the folder's file too.
+#[test]
+fn the_walk_stops_at_its_bound() {
+    assert_eq!(WALK_BOUND, 10_000);
+    let Trees { _dir, root, .. } = trees();
+    for file in ["docs/a.png", "docs/b.png", "docs/sub/c.png"] {
+        write(&root.join(file), &png(1, 1));
+    }
+    let walked = |bound| {
+        let mut listed = walk_docs_within(&root, bound);
+        listed.sort();
+        listed
+    };
+    assert_eq!(walked(3), ["docs/a.png", "docs/b.png"]);
+    assert_eq!(walked(4), ["docs/a.png", "docs/b.png", "docs/sub/c.png"]);
+    let mut whole = walk_docs(&root);
+    whole.sort();
+    assert_eq!(whole, walked(WALK_BOUND), "the walk is the bounded one");
 }
