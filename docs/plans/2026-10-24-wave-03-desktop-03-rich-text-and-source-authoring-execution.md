@@ -749,3 +749,38 @@ Notes for later tasks: Task 22 leaves `targets()` in
   - The 40-link chain is asserted contained on Linux only; elsewhere the
     test checks that the walk passed it. macOS follows 32 links. — If
     wrong: a native macOS failure, fixed in the test.
+- Ruling (Part B review, Important 1): image containment decides each
+  symbolic link without following it.
+  - Each link is read with `read_link`.
+  - A relative target is walked from the link's folder, and each `..` is
+    resolved in order, as `realpath` does.
+  - Every link in a chain is decided, up to 40 hops.
+  - An absolute, rooted or prefixed target is refused, even one inside
+    the root. This is a Known Limit.
+  - `canonicalize` runs only after every link on the way has passed.
+
+  — Contract 12 says an image is never reached through a link leaving
+  the tree or through a network path. A link that is followed before
+  it is refused can look up an automounted or UNC path. — If wrong: an
+  absolute link inside the repository shows its image as source.
+- Ruling (Part B fix 1): the Task 12 test
+  `dot_dot_symlink_escape_git_and_other_worktrees_are_refused` now links
+  its alias by the relative target `inside.png`. It is D3's own test, and
+  the absolute in-root case is now refused by the ruling above.
+- Owner decision (2026-10-27, Part B review, Important 2): a muted line
+  below the edit toolbar says "Esc: Done · F6: next region". It is a
+  Design Deviation row, for contract 13.
+- Owner decision (2026-10-27, Part B review, Minor 1): every image in the
+  read view and in comments shows the editor's resize grip. It joins the
+  Design Deviations row "A view mode with no editing handles", and
+  checklist step 2.
+- Ruling (Part B review, Minor 2): on Windows, any reparse point is
+  refused as an image, which includes OneDrive placeholders. It is a
+  Known Limit, because the refusal is safe and the Windows code cannot be
+  compiled here.
+- Ruling (Part B review, Minor 3): for Task 26's privacy sweep. GPUI's
+  `open_url` logs the URL when it fails, on Windows and macOS. So the
+  desktop installs no logger that keeps GPUI's `error` records, or else
+  it filters them. Nothing is written today, since no logger is
+  installed.
+- Part B review: none of the parked minors is load-bearing.
