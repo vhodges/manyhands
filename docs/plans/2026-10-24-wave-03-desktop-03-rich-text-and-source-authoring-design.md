@@ -2481,6 +2481,11 @@ Each ruling reads: decision — why — cost if wrong.
   was sent — recording a checkpoint would change the step rules that
   resume, abandon and replay share — a client other than the desktop that
   sends such a request again sees the exception.
+  Narrowed (product owner, 2026-10-28, from the Task 17 review): a release
+  the library answered with a refusal touched nothing, so it does not
+  count as sent, and the earlier prepare's Resume may still be sent. A
+  release whose answer was lost, one still queued or running, and one that
+  answered `ok` still block it.
 - **R-79** (product owner, 2026-10-26, from Task 3's review) Exact
   re-entry. The pinned normalization is not idempotent (fact 81), so it is
   applied once, as contract 2 states, to a body read from the repository.

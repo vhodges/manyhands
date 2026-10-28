@@ -929,3 +929,23 @@ Notes for later tasks: Task 22 leaves `targets()` in
     Keep draft for a kept session says nothing. Also, the Drafts page
     lists an edit session's draft as "Restored in this window", which are
     D2's words.
+- Owner decision (2026-10-28, from the Task 17 review, M3): R-78 is
+  narrowed. A release that the library answered with a refusal does not
+  block the earlier prepare's Resume. A release whose answer was lost,
+  one still queued or running, and one that answered `ok` still block it.
+  The other half of R-78 is unchanged: a release is never retried after
+  a later prepare. — The case this fixes takes three steps:
+  1. a prepare answers `discovery_pending`;
+  2. another tab's R-40 release is refused because of the prepare's
+     pending row;
+  3. R-78 then blocks the only request that could finish that row.
+
+  Recovery needed Abandon in the operation area. The design's R-78 is
+  amended.
+- Ruling (Task 17 review, M2): a context is never released while a tab of
+  this process holds an edit session of the item, live or kept. That
+  includes Preparing, and Loading after `ok`. It is released when that
+  tab leaves. — The design's four conditions did not foresee a discard on
+  the Drafts page, of another process's draft, while a clean tab edits
+  the item. Without this rule, the release removes that tab's worktree. —
+  If wrong: a context stays until its tab leaves.
