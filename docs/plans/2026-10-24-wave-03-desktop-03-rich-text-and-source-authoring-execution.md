@@ -854,3 +854,20 @@ Notes for later tasks: Task 22 leaves `targets()` in
   "Editing · saved on this computer". That is the design's row "Editing,
   saved and clean": the text equals the file. — The design has no row
   for "opened, not changed". — If wrong: one pill word.
+- Ruling (Task 14 review, Minor 2): a `discovery_pending` answer to
+  Edit's `context prepare` keeps the tab in Loading until Resume. The
+  pill reads "Getting a private copy ready…" and Edit stays disabled.
+  The banner offers Resume, which sends the same request again. — Phases
+  step 3, R-13 and R-77. — If wrong: the phase the pill reads while
+  waiting.
+- Correction (Task 14 fix 1): the fix brief said a tab closed while
+  waiting for Resume leaves its context in `CreatedContexts`. It does
+  not, and the code is right. R-75 and the Known Limits keep a context
+  whose prepare answered `discovery_pending` and was never retried out of
+  the set. Only the retry's `ok` adds it, so Task 17 does not release
+  such a context.
+- Parked (Task 14 review):
+  - Minor 5: the toolbar's status redraws each second while a draft is
+    kept (checklist step 10);
+  - Minor 6: D2's close dialog says "restored draft" for an edit
+    session's draft. That is for Task 16 or 18.
