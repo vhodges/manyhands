@@ -13,12 +13,18 @@
 //!   links before it, as `realpath` takes it, with no lookup; a climb
 //!   above the root is refused;
 //! - a chain is decided link by link, up to `HOP_LIMIT` links, and past it
-//!   the path is refused.
+//!   the path is refused;
+//! - past anything but a folder there is no path, `..` included, as the
+//!   system finds it.
 //!
-//! Only once every link on the way has passed is the path made canonical,
-//! and checks 1 and 2 run on that. A reserved step, `.git` or
-//! `.manyhands`, is refused wherever the walk meets it, once the path is
-//! known to be there.
+//! Only once every link on the way has passed is a path made canonical,
+//! and checks 1 and 2 run on that. That path is the place the walk
+//! reached, the root and the names it found, none of them a link, never
+//! the path as written: Windows takes a relative target's `..` by name,
+//! from the link's folder, so it could resolve the written path through
+//! a link the walk never decided (Part B re-review, N1). A reserved step,
+//! `.git` or `.manyhands`, is refused wherever the walk meets it, once the
+//! path is known to be there.
 //!
 //! What the walk finds tells the exact lookup whether the tree holds
 //! anything at the path (ruling 3): a missing step of the written path is
@@ -95,10 +101,12 @@ fn locate_with(root: &Path, candidate: &Path, lookups: &impl Lookups) -> Found {
     let Some(written) = written_steps(root, candidate) else {
         return Found::Refused;
     };
-    if let Err(found) = walk(root, written, lookups) {
-        return found;
+    match walk(root, written, lookups) {
+        Ok(reached) => {
+            canonical_inside(root, &reached, lookups).map_or(Found::Refused, Found::Contained)
+        }
+        Err(found) => found,
     }
-    canonical_inside(root, candidate, lookups).map_or(Found::Refused, Found::Contained)
 }
 
 /// The steps of `candidate` below `root`, as written: none for a path not
@@ -123,8 +131,9 @@ enum Step {
 }
 
 /// Walks `written` from `root`, deciding each link on the way from its
-/// target, and looking up only paths whose folders have passed.
-fn walk(root: &Path, written: Vec<OsString>, lookups: &impl Lookups) -> Result<(), Found> {
+/// target, and looking up only paths whose folders have passed. Gives
+/// the place it reached, with no link on it.
+fn walk(root: &Path, written: Vec<OsString>, lookups: &impl Lookups) -> Result<PathBuf, Found> {
     let count = written.len();
     // Each step to take, and whether it is the written path's last.
     let mut steps: VecDeque<(Step, bool)> = written
@@ -151,16 +160,25 @@ fn walk(root: &Path, written: Vec<OsString>, lookups: &impl Lookups) -> Result<(
         };
         at.push(&name);
         depth += 1;
-        let Ok(metadata) = lookups.symlink_metadata(&at) else {
-            return Err(if there {
+        let missing = |there| {
+            if there {
                 Found::Refused
             } else {
                 Found::Nothing
-            });
+            }
+        };
+        let Ok(metadata) = lookups.symlink_metadata(&at) else {
+            return Err(missing(there));
         };
         there |= last;
         reserved_step |= reserved(&name);
-        if !metadata.file_type().is_symlink() {
+        let kind = metadata.file_type();
+        if !kind.is_symlink() {
+            // Past anything but a folder there is no path, as the system
+            // finds it, not even back up by `..`.
+            if !kind.is_dir() && !steps.is_empty() {
+                return Err(missing(there));
+            }
             continue;
         }
         hops += 1;
@@ -178,13 +196,17 @@ fn walk(root: &Path, written: Vec<OsString>, lookups: &impl Lookups) -> Result<(
     if reserved_step {
         Err(Found::Refused)
     } else {
-        Ok(())
+        Ok(at)
     }
 }
 
 /// A link's target as steps from the link's folder: none for an absolute,
-/// rooted or prefixed target.
+/// rooted or prefixed target, or an empty one, which the system does not
+/// resolve.
 fn relative_steps(target: &Path) -> Option<Vec<Step>> {
+    if target.as_os_str().is_empty() {
+        return None;
+    }
     target
         .components()
         .filter_map(|step| match step {
@@ -196,11 +218,11 @@ fn relative_steps(target: &Path) -> Option<Vec<Step>> {
         .collect()
 }
 
-/// Checks 1 and 2 on the canonical path, asked for once every link on the
-/// way has passed.
-fn canonical_inside(root: &Path, candidate: &Path, lookups: &impl Lookups) -> Option<PathBuf> {
+/// Checks 1 and 2 on the canonical path of `reached`, the place the walk
+/// reached once every link on the way had passed.
+fn canonical_inside(root: &Path, reached: &Path, lookups: &impl Lookups) -> Option<PathBuf> {
     let base = lookups.canonicalize(root).ok()?;
-    let canonical = lookups.canonicalize(candidate).ok()?;
+    let canonical = lookups.canonicalize(reached).ok()?;
     inside(&base, &canonical)?;
     Some(canonical)
 }

@@ -84,7 +84,10 @@ fn link(target: impl AsRef<Path>, at: &Path) {
 /// Looks `written` up below `root` through a recorder. Every path a
 /// `symlink_metadata` or `read_link` was given is below the root, and each
 /// folder on its way is there and a real folder, so the call followed no
-/// link and passed no folder the walk had not.
+/// link and passed no folder the walk had not. Every path given to
+/// `canonicalize`, but the root, is below the root with no link anywhere
+/// on it, so no system resolves a link the walk did not decide (Windows
+/// takes a relative target's `..` by name, not as the walk does).
 fn look(root: &Path, written: &str) -> (Seen, Recorder) {
     let recorder = Recorder::default();
     let seen = match locate_with(root, &root.join(written), &recorder) {
@@ -102,6 +105,19 @@ fn look(root: &Path, written: &str) -> (Seen, Recorder) {
             root.join(folder).canonicalize().ok(),
             Some(base.join(folder)),
             "{written}: {path:?} was looked up through a link or a missing folder"
+        );
+    }
+    for path in recorder.canonicalized.borrow().iter() {
+        if path == root {
+            continue;
+        }
+        let below = path
+            .strip_prefix(root)
+            .unwrap_or_else(|_| panic!("{written}: {path:?} was made canonical outside the tree"));
+        assert_eq!(
+            path.canonicalize().ok(),
+            Some(base.join(below)),
+            "{written}: {path:?} was made canonical through a link"
         );
     }
     (seen, recorder)
@@ -304,5 +320,72 @@ fn nothing_there_is_told_from_refused() {
         assert_eq!(look(&root, "docs/n/pic.png").0, Seen::Nothing);
         link("gone.png", &root.join("docs/dangling.png"));
         assert_eq!(look(&root, "docs/dangling.png").0, Seen::Refused);
+    }
+}
+
+/// Re-review N1: Windows takes a relative target's `..` by name, from the
+/// link's folder, so the written path is never made canonical. Here
+/// `docs/win -> m2/../L/pic.png`, with `docs/m2 -> sub/deep`, passes the
+/// walk to the real `docs/sub/L/pic.png`; by name it would be
+/// `docs/L/pic.png`, through `docs/L`, a link out (a temporary folder
+/// stands for `//host/share`). Only the place the walk reached, with no
+/// link on it, is made canonical.
+#[cfg(unix)]
+#[test]
+fn only_the_place_the_walk_reached_is_made_canonical() {
+    let Trees { _dir, outer, root } = trees();
+    write(&outer.join("outside/pic.png"), b"share");
+    let picture = root.join("docs/sub/L/pic.png");
+    write(&picture, b"image");
+    fs::create_dir_all(root.join("docs/sub/deep")).unwrap();
+    link("sub/deep", &root.join("docs/m2"));
+    link(outer.join("outside"), &root.join("docs/L"));
+    link("m2/../L/pic.png", &root.join("docs/win"));
+    let (seen, recorder) = look(&root, "docs/win");
+    assert_eq!(seen, contained_at(&picture));
+    assert_eq!(
+        recorder.canonicalized.borrow().as_slice(),
+        &[root.clone(), picture],
+        "the root, and the place the walk reached"
+    );
+}
+
+/// A `..` after a file is no path, as the system finds it: refused, not
+/// taken as a step back from the file.
+#[cfg(unix)]
+#[test]
+fn a_dot_dot_after_a_file_is_refused() {
+    let Trees { _dir, root, .. } = trees();
+    write(&root.join("docs/a.png"), b"image");
+    write(&root.join("docs/x.png"), b"image");
+    link("a.png/../x.png", &root.join("docs/n.png"));
+    refused_unfollowed(&root, "docs/n.png");
+}
+
+/// Re-review N2: a relative link into `.git` is refused, through it and
+/// as the last step. The walk notes the reserved step and goes on to the
+/// end of the path, inside the tree, so a missing file there is nothing
+/// there (ruling 3); then it refuses, before anything is made canonical.
+#[cfg(unix)]
+#[test]
+fn a_relative_link_into_git_is_refused() {
+    let Trees { _dir, root, .. } = trees();
+    write(&root.join(".git/x.png"), b"image");
+    link("../.git", &root.join("docs/g"));
+    link("../.git/x.png", &root.join("docs/gx.png"));
+    for (written, walked) in [
+        (
+            "docs/g/x.png",
+            ["docs", "docs/g", "docs/g", ".git", ".git/x.png"],
+        ),
+        (
+            "docs/gx.png",
+            ["docs", "docs/gx.png", "docs/gx.png", ".git", ".git/x.png"],
+        ),
+    ] {
+        refused_unfollowed(&root, written);
+        let (_, recorder) = look(&root, written);
+        let walked: Vec<PathBuf> = walked.iter().map(|path| root.join(path)).collect();
+        assert_eq!(*recorder.looked.borrow(), walked, "{written}");
     }
 }
