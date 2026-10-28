@@ -1047,3 +1047,47 @@ Notes for later tasks: Task 22 leaves `targets()` in
   - M4: the review opened from the close dialog sits behind the dialog.
 - Parked (Task 18), for the whole-branch review: M6,
   `view/workspace/content.rs` at 613 lines.
+- Decision accepted (Task 19, obligation 2; Task 16's N2, Task 18's M3):
+  a clean session on an unverified base takes a reloaded body as its
+  base, and that base stays unverified, on the late read and on the
+  post-save read alike. The session reads clean, and the next Save opens
+  the review. A verified base takes the read. The post-save read waits
+  until D2 has retired the draft. — An unverified base never becomes
+  verified, so no Save can overwrite another actor's change without the
+  review. Adopting the read whole would break Task 15's session row 2. —
+  If wrong: one more review than needed.
+- Decision accepted (Task 19, obligation 3; Task 18's M4): the close
+  dialog stays open over the review, and says "Cancel to review the
+  changes." whenever the review is open.
+- Ruling (controller, Task 19 review M2): an explicit Keep draft or quit
+  during the review writes mine, the text the session holds. — The
+  design's "Nothing is written to the draft or the store until Use these
+  choices" governs the review's own model and its schedule. The Cycle's
+  contract 6, "Newer text survives", governs the user's own typed text,
+  which the review never changes, and the Cycle governs the design. — If
+  wrong: the store gets mine up to a second earlier than the design's
+  letter; nothing is lost.
+- Ruling (controller, Task 19 review I1, I2): the review takes the
+  newest read that lands while it has no model, and offers Cancel while
+  it reads. The review never opens while a save run is kept; Compare…
+  and Review… are hidden then; Retry and Resume are hidden while it is
+  open; Use clears only an `external_change` answer. — Both left the tab
+  at a dead end. — If wrong: Compare… waits until a pending save settles.
+- Ruling (controller, Task 19 review M3): a clean tab never asks on close.
+  A Use that leaves no change detaches the tab from its draft
+  (`DraftRegistry::detach`) and discards the draft; the next keystroke
+  begins a new one. — Task 16's rule. — If wrong: one more draft
+  lifecycle step; the re-review checked crash safety, typing and release.
+- Ruling (controller, Task 19 review M5): the review's intro reads "This
+  item changed since your edits began." — The old words blamed another
+  actor, which is untrue in known defect `01M4PB7YZM`'s case.
+- Carried (Task 19 review M6), to the Part C checkpoint: a restored
+  draft's stored base is not normalized before the review's `compare`.
+- Parked (Task 19), for the whole-branch review:
+  - review M4's remaining gaps: the failed read's Retry, a begin in
+    flight when the review opens (a clean Use then still asks on close),
+    focus on opening, and `.disabled(!ready)`, which the harness cannot
+    observe;
+  - re-review N1: a tab closed, or Done, before a clean Use's discard
+    lands can skip that discard's release, so a context may be kept. It
+    never releases wrongly.
