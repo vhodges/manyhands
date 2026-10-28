@@ -147,8 +147,11 @@ impl ItemPane {
         ));
     }
 
-    /// The tab's read after a save landed: a clean editor reloads from it
-    /// only a body that differs from what it holds (R-19, R-79).
+    /// The tab's read after a save landed: a clean edit editor (not dirty,
+    /// no draft; design, Late results) reloads from it only a body that
+    /// differs from what it holds (R-19, R-79). Dirty is the session's,
+    /// against the saved copy: text undone back past the save, while the
+    /// read was out, stays with its undo history.
     pub(in crate::desktop::view::item) fn post_save_read_landed(
         &mut self,
         stamp: &Stamp,
@@ -162,6 +165,9 @@ impl ItemPane {
         let (Some(session), Some(body)) = (&self.edit.session, body) else {
             return;
         };
+        if session.dirty(cx) || self.live_draft(cx).is_some() {
+            return;
+        }
         session
             .host
             .update(cx, |host, cx| host.reload_clean(&body, cx));

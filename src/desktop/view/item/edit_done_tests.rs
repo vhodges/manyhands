@@ -1184,6 +1184,66 @@ async fn undoing_back_to_the_saved_copy_after_a_save_is_clean(cx: &mut TestAppCo
     assert!(stored_bodies(&shell).is_empty());
 }
 
+/// Re-review N1: the tab's read after a save leaves a dirty editor alone.
+/// "b" is typed and saved, and "c" typed while the save is in flight. The
+/// tab's reads after it are held while both edits are undone, back to the
+/// text before the save. When they land, the editor keeps that text and
+/// its undo history (redo reaches "bc" again); the draft holds it, and the
+/// tab reads dirty.
+#[gpui_kit::test]
+async fn the_read_after_a_save_leaves_a_dirty_editor_alone(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Read late", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let editor = host_editor(&host, cx);
+    let original = edit_text(&host, cx);
+    type_at_end(&shell, &host, "b", cx);
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held.wait_reached();
+    type_at_end(&shell, &host, "c", cx);
+    // The workspace's reload as the save finishes, and the tab's own read
+    // after it (R-70): each holds at its item read.
+    let reads = [
+        shell.backend.hold_read(ReadKind::Item),
+        shell.backend.hold_read(ReadKind::Item),
+    ];
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    shell.run(cx);
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    let item = shown_item(&shell, &root);
+    assert!(item.body.as_deref() == Some(format!("{original}b").as_str()));
+    let id = attached(&shell, &root, TICKET, cx).expect("the newer text is drafted");
+
+    assert!(undo_reaches(&shell, &editor, &original, cx), "undone");
+    drop(reads);
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        edit_text(&host, cx) == original,
+        "the editor keeps its text"
+    );
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_UNSAVED));
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+    assert!(
+        body(&shell, id) == Some(original.clone()),
+        "the draft holds it"
+    );
+    let end = edit_text(&host, cx).len();
+    focus_at(&shell, &editor, end, cx);
+    shell.keys("secondary-shift-z secondary-shift-z", cx);
+    assert!(
+        edit_text(&host, cx) == format!("{original}bc"),
+        "its undo history is kept"
+    );
+}
+
 /// Minor 5 (review): text typed while Done writes the draft is written too
 /// before Done keeps the session: the draft holds the newest revision.
 #[gpui_kit::test]
