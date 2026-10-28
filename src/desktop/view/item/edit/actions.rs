@@ -1,5 +1,6 @@
 //! The header's part in editing: Edit or Continue editing while viewing,
-//! Done while editing, and the banners an Edit raises.
+//! Save and Done while editing, and the banners an Edit and its saves
+//! raise.
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
@@ -20,21 +21,21 @@ use crate::desktop::{
 };
 
 impl ItemPane {
-    /// The header's action for editing: Edit, or Continue editing while a
+    /// The header's actions for editing: Edit, or Continue editing while a
     /// draft is kept or stored (R-35), where it is offered, disabled while
     /// it cannot start, with "Available in a later release" while a draft
-    /// restored in the tab waits for Task 18; Done while editing.
+    /// restored in the tab waits for Task 18; Save and Done while editing.
     pub(in crate::desktop::view::item) fn edit_action(
         &self,
         item: Option<&ItemDto>,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Vec<AnyElement> {
         if self.editing() {
-            return Some(self.done_action(window, cx));
+            return vec![self.save_action(cx), self.done_action(window, cx)];
         }
-        if !edit_offered(self.model.target(), item?) {
-            return None;
+        if !item.is_some_and(|item| edit_offered(self.model.target(), item)) {
+            return Vec::new();
         }
         let label = if self.draft_kept(cx) {
             CONTINUE_EDITING
@@ -61,9 +62,9 @@ impl ItemPane {
                 .attached(&self.tab_key())
                 .is_some();
         if !restored {
-            return Some(button.into_any_element());
+            return vec![button.into_any_element()];
         }
-        Some(
+        vec![
             div()
                 .id("item-edit-action")
                 .test_support()
@@ -79,7 +80,7 @@ impl ItemPane {
                         .child(button.tooltip(LATER_NOTE)),
                 )
                 .into_any_element(),
-        )
+        ]
     }
 
     /// The header's Done while editing: the focus Escape in the editor
@@ -112,7 +113,8 @@ impl ItemPane {
     }
 
     /// The banners an Edit raises: crash recovery off while editing, a
-    /// prepare's hand-off still owed, with Resume, and a refusal.
+    /// prepare's hand-off still owed, with Resume, and a refusal; then its
+    /// saves' (`save_view`).
     pub(in crate::desktop::view::item) fn edit_banners(
         &self,
         cx: &mut Context<Self>,
@@ -173,6 +175,7 @@ impl ItemPane {
             }
             None => {}
         }
+        banners.extend(self.save_banners(cx));
         banners
     }
 }

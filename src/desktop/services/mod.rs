@@ -206,7 +206,7 @@ pub(crate) struct Services {
     /// The drafts this session knows of, shared by every view.
     drafts: Entity<DraftRegistry>,
     /// The work contexts this process made and saved nothing into (R-75).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     created: Entity<CreatedContexts>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
@@ -329,7 +329,7 @@ impl Services {
     }
 
     /// The work contexts this process made and saved nothing into.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     pub(crate) fn created_contexts(&self) -> &Entity<CreatedContexts> {
         &self.created
     }

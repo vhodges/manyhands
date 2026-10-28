@@ -68,6 +68,23 @@ impl fmt::Display for DraftStoreUnavailable {
     }
 }
 
+/// A save of the session `draft` committed (R-69): the fields it sent, and
+/// the base it leaves, from the registry's own read after it
+/// (`model::drafts::save::base_after_save`), unverified when another actor
+/// changed the item between the commit and that read. The registry emits
+/// it on every committed save, before it retires the saved revision or
+/// rebases newer text onto `base`. It holds draft text and derives no
+/// `Debug`.
+pub(crate) struct DraftSaved {
+    /// The session's ID as the save committed: `current_id` of the ID a
+    /// tab holds.
+    pub draft: DraftId,
+    pub submitted: DraftFields,
+    pub base: DraftBase,
+}
+
+impl gpui_kit::EventEmitter<DraftSaved> for DraftRegistry {}
+
 /// The store's item kind of a desktop item.
 fn item_kind(kind: ItemDtoKind) -> ItemKind {
     match kind {

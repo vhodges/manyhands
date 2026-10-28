@@ -33,7 +33,9 @@
 //! kept · {n}s ago", "Draft not kept. Save to protect your changes" or
 //! "Crash recovery is off" (`model::edit::draft_indicator`). Its tab gives
 //! it D2's state (`set_status`); it keeps none of its own, and while a
-//! draft is kept it is drawn again each second, so its age stays true.
+//! draft is kept it is drawn again each second, so its age stays true. The
+//! tab may say something in its place until the text next changes (`note`):
+//! "No changes to save".
 
 pub(crate) mod controls;
 mod popovers;
@@ -111,6 +113,9 @@ pub(crate) struct Toolbar {
     popover: Option<Popover>,
     /// What D2 holds of the text, as the tab last said.
     status: DraftState,
+    /// What the tab said in the status item's place, such as "No changes
+    /// to save", until the text next changes.
+    note: Option<&'static str>,
     /// Draws the status again each second while a draft is kept.
     tick: Option<Task<()>>,
     /// The opacity each control was drawn at in the last frame.
@@ -146,6 +151,7 @@ impl Toolbar {
             },
             popover: None,
             status: DraftState::NotBegun,
+            note: None,
             tick: None,
             #[cfg(test)]
             drawn: HashMap::new(),
@@ -165,7 +171,11 @@ impl Toolbar {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorHostEvent::Edited | EditorHostEvent::SelectionChanged => self.refresh(window, cx),
+            EditorHostEvent::Edited => {
+                self.note = None;
+                self.refresh(window, cx);
+            }
+            EditorHostEvent::SelectionChanged => self.refresh(window, cx),
             EditorHostEvent::LinkRequested => self.toggle_link(window, cx),
             EditorHostEvent::DirtyChanged(_) => {}
         }
@@ -189,6 +199,14 @@ impl Toolbar {
                 }
             })
         });
+        cx.notify();
+    }
+
+    /// Says `words` in the status item's place until the text next
+    /// changes: "No changes to save" after a save of a clean editor
+    /// (design, Phases, step 5).
+    pub(crate) fn note(&mut self, words: &'static str, cx: &mut Context<Self>) {
+        self.note = Some(words);
         cx.notify();
     }
 

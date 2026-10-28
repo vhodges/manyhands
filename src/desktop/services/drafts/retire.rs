@@ -1,6 +1,7 @@
 //! A committed save's completion: the item read again for the new base,
-//! then the saved revision retired, only if it is still the session's
-//! newest, or the session rebased onto that base.
+//! `DraftSaved` emitted with it (R-69), then the saved revision retired,
+//! only if it is still the session's newest, or the session rebased onto
+//! that base.
 //!
 //! While the revision retires no write is taken; edits are still taken in
 //! memory. If the store kept the draft, the claim goes back and the
@@ -18,12 +19,12 @@ use std::{path::PathBuf, sync::Mutex};
 use futures::future::{FutureExt, Shared};
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftId, Retired},
+    drafts::{DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId, Retired},
     repository::ItemDto,
     results::ResultCode,
 };
 
-use super::{DraftRegistry, off_thread, save::SaveRecord};
+use super::{DraftRegistry, DraftSaved, off_thread, save::SaveRecord};
 use crate::desktop::{
     model::drafts::save::base_after_save,
     services::{ReadKind, ReadResult, Reader},
@@ -70,7 +71,7 @@ impl DraftRegistry {
             };
             loop {
                 let step = registry.update(cx, |registry, cx| {
-                    registry.settle(record.draft, record.revision, &base, cx)
+                    registry.settle(record.draft, record.revision, &record.fields, &base, cx)
                 });
                 match step {
                     Ok(Settle::Wait(write)) => write.await,
@@ -83,11 +84,14 @@ impl DraftRegistry {
 
     /// Retires revision `saved` if it is still the session's newest, in
     /// memory and in the store; otherwise rebases the session onto `base`.
-    /// Waits first for any write in flight.
+    /// Waits first for any write in flight. Either way, `DraftSaved` tells
+    /// the tab first, with `submitted`, the fields the save sent, and
+    /// `base` (R-69).
     fn settle(
         &mut self,
         id: DraftId,
         saved: u64,
+        submitted: &DraftFields,
         base: &DraftBase,
         cx: &mut Context<Self>,
     ) -> Settle {
@@ -102,6 +106,11 @@ impl DraftRegistry {
         {
             return Settle::Wait(write);
         }
+        cx.emit(DraftSaved {
+            draft: id,
+            submitted: submitted.clone(),
+            base: base.clone(),
+        });
         let session = &mut live.session;
         session.set_saving(None);
         if session.revision() != saved || session.flushed() != saved {

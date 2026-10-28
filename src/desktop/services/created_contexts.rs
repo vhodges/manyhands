@@ -7,13 +7,14 @@
 //! while preparing is in it as well (R-37). Leaving and discarding consult
 //! it; a context it does not hold is never released by them. A prepare
 //! that answered `discovery_pending` enters it only once a retry answers
-//! `ok` (R-77).
+//! `ok` (R-77). A save that commits into a context takes it out: it holds
+//! work now.
 
 use std::collections::HashSet;
 
 use manyhands::{
     repository::{AuthoringKind, ItemDtoKind, MutationDataDto},
-    results::{Envelope, ResultCode},
+    results::{CheckpointEffect, Envelope, ResultCode},
 };
 
 use super::requests::Intent;
@@ -51,9 +52,24 @@ impl CreatedContexts {
     }
 
     /// A finished request: a `context prepare` that answered `ok` with
-    /// `created: true` adds its item's context. Any other answer, and any
-    /// other request, changes nothing.
+    /// `created: true` adds its item's context, and a save whose checkpoint
+    /// committed takes its item's out (R-75), whether or not its tab is
+    /// still open. Any other answer, and any other request, changes
+    /// nothing.
     pub(crate) fn finished(&mut self, intent: &Intent, envelope: &Envelope<MutationDataDto>) {
+        let saved = match intent {
+            Intent::DocumentSave { root, id, .. } => Some((root, ItemDtoKind::Document, id)),
+            Intent::TicketSave { root, id, .. } => Some((root, ItemDtoKind::Ticket, id)),
+            _ => None,
+        };
+        if let Some((root, kind, id)) = saved {
+            if envelope.effects.checkpoint == CheckpointEffect::Committed
+                && let Some(root) = root.to_str()
+            {
+                self.remove(&ContextKey::new(root, kind, &id.to_string()));
+            }
+            return;
+        }
         let Intent::ContextPrepare { root, kind, id, .. } = intent else {
             return;
         };
@@ -74,7 +90,6 @@ impl CreatedContexts {
 
     /// A save committed into `key`'s context, or it was released: it no
     /// longer counts as made and unused.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     pub(crate) fn remove(&mut self, key: &ContextKey) -> bool {
         self.contexts.remove(key)
     }

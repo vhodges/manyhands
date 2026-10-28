@@ -112,12 +112,15 @@ impl ItemPane {
             move |reader| read_tab(reader, target),
             cx,
             |this: &mut Self, stamp, reads, cx| {
+                let landed = stamp.clone();
                 if this.model.apply_reads(stamp, reads) {
                     // An attached draft is classified against the new read;
                     // its text and base stay as they are.
                     this.draft.reads_landed();
-                    // While Loading, the edit editor opens from this read.
+                    // While Loading, the edit editor opens from this read;
+                    // after a save, a clean one reloads a body that differs.
                     this.edit.read_landed();
+                    this.post_save_read_landed(&landed, cx);
                     this.locate_images(cx);
                     cx.notify();
                 }
@@ -141,9 +144,11 @@ impl ItemPane {
 
     /// Finished requests trigger Workspace's tab reload; unsent/cancelled ones
     /// reload here. A missing request is still queued in the worker channel.
-    /// An Edit's prepare goes on as its request does (`edit`).
+    /// An Edit's prepare and its saves go on as their requests do
+    /// (`edit`).
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
         self.prepare_progressed(cx);
+        self.save_progressed(cx);
         let Some(id) = self.refreshing else {
             return;
         };

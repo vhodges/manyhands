@@ -197,7 +197,6 @@ impl EditorHost {
 
     /// R-69: `saved`, the text the editor still holds, was saved. It
     /// becomes the baseline; the text and its undo history stay.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     pub(crate) fn mark_saved(&mut self, saved: &str, cx: &mut Context<Self>) {
         self.baseline = saved.to_owned();
         self.update_dirty(cx);
@@ -224,7 +223,6 @@ impl EditorHost {
     /// is the text last saved or loaded, or the body first loaded. A
     /// second load of a text the editor holds could change it (fact 81).
     /// A dirty editor is left alone too: its text is the user's.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
     pub(crate) fn reload_clean(&mut self, body: &str, cx: &mut Context<Self>) {
         if self.dirty || crlf_to_lf(body) == self.baseline || load(body) == self.baseline {
             return;

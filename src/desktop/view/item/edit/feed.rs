@@ -1,11 +1,16 @@
 //! The session's D2 draft: begun at the first difference from the base,
 //! fed every later change (R-12), attached to the tab, and read back for
 //! the toolbar's status item, which keeps no state of its own.
+//!
+//! When a save retires the draft, D2 ends its session (fact 79): the next
+//! difference begins a draft again, on the base the save left (R-69).
+//! While a save with no D2 session settles, that base is not known yet, so
+//! the text waits in the editor and is fed once it is (`saved`).
 
-use gpui_kit::Context;
+use gpui_kit::{App, Context};
 use manyhands::drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget};
 
-use super::{DraftLink, item_kind};
+use super::{DraftLink, Phase, item_kind};
 use crate::desktop::{
     model::{
         drafts::RecoveryState,
@@ -23,39 +28,58 @@ impl ItemPane {
         let Some(session) = &self.edit.session else {
             return;
         };
+        if session.draft == DraftLink::Beginning {
+            return;
+        }
         let text = session.host.read(cx).text(cx);
         let current = fields_with_body(&session.base.fields, text);
-        match session.draft {
-            DraftLink::Live(id) => self
-                .services
+        if let Some(id) = self.live_draft(cx) {
+            self.services
                 .drafts()
-                .update(cx, |registry, cx| registry.edit(id, current, cx)),
-            DraftLink::Beginning => {}
-            DraftLink::None | DraftLink::Failed => {
-                let unavailable = self.services.drafts().read(cx).unavailable().is_some();
-                if current != session.base.fields && !unavailable {
-                    self.begin(current, cx);
-                }
-            }
+                .update(cx, |registry, cx| registry.edit(id, current, cx));
+            return;
         }
+        if self.edit.save.run.is_some() {
+            return;
+        }
+        let unavailable = self.services.drafts().read(cx).unavailable().is_some();
+        if current != session.base.fields && !unavailable {
+            self.begin(current, cx);
+        }
+    }
+
+    /// The live D2 session the tab's draft goes on as: `None` before one
+    /// begins, and once D2 has ended it.
+    pub(super) fn live_draft(&self, cx: &App) -> Option<DraftId> {
+        let DraftLink::Live(id) = self.edit.session.as_ref()?.draft else {
+            return None;
+        };
+        self.services.drafts().read(cx).current_id(id)
+    }
+
+    /// The store's target of this tab's item.
+    pub(super) fn draft_target(&self) -> Option<DraftTarget> {
+        let OpenTarget::Item { repo, kind, id } = self.model.target().clone() else {
+            return None;
+        };
+        Some(DraftTarget {
+            repository: repo,
+            item_kind: item_kind(kind),
+            item_id: id,
+            comment: None,
+        })
     }
 
     /// Begins the draft with `current` over the session's base, then
     /// attaches it to this tab.
     fn begin(&mut self, current: DraftFields, cx: &mut Context<Self>) {
-        let OpenTarget::Item { repo, kind, id } = self.model.target().clone() else {
+        let Some(target) = self.draft_target() else {
             return;
         };
         let Some(session) = &mut self.edit.session else {
             return;
         };
         session.draft = DraftLink::Beginning;
-        let target = DraftTarget {
-            repository: repo,
-            item_kind: item_kind(kind),
-            item_id: id,
-            comment: None,
-        };
         let base = Some(session.base.clone());
         let begun_with = current.clone();
         let begun = self
@@ -78,7 +102,8 @@ impl ItemPane {
 
     /// `begin` landed. The draft is attached to the tab, and text typed
     /// meanwhile is written. A failure keeps the text in the editor; the
-    /// next difference begins again.
+    /// next difference begins again. A save asked for meanwhile is sent
+    /// now, through the draft or, with none, as the fields are.
     fn draft_begun(
         &mut self,
         begun: Result<DraftId, DraftErrorKind>,
@@ -102,6 +127,16 @@ impl ItemPane {
                 });
             }
             Err(_) => session.draft = DraftLink::Failed,
+        }
+        let waiting = self.edit.phase == Phase::Saving
+            && self
+                .edit
+                .save
+                .run
+                .as_ref()
+                .is_some_and(|run| run.request.is_none() && run.direct.is_none());
+        if waiting {
+            self.send_save(cx);
         }
         self.sync_status(cx);
         cx.notify();

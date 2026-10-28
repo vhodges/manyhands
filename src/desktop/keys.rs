@@ -57,7 +57,6 @@ gpui_kit::actions!(
         /// Edit the shown item.
         Edit,
         /// Save the item being edited.
-        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
         Save,
         /// Switch the edit editor between Rich text and Markdown.
         ToggleRich,
@@ -113,8 +112,8 @@ pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
 pub(crate) const DRAFT_INSPECT_CONTEXT: &str = "DraftInspect";
 
 /// The key context of an item tab (`view::item`): `secondary-shift-e`
-/// edits while viewing, and the mode key reaches the edit editor from
-/// anywhere in the tab while editing.
+/// edits while viewing, and the mode key and `secondary-s` reach the edit
+/// editor from anywhere in the tab while editing.
 pub(crate) const ITEM_TAB_CONTEXT: &str = "ItemTab";
 
 /// The key context of an item tab's page, set only while it is viewing:
@@ -188,6 +187,9 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("e", Edit, Some(ITEM_PAGE_CONTEXT)),
         KeyBinding::new("secondary-shift-e", Edit, Some(ITEM_TAB_CONTEXT)),
         KeyBinding::new("secondary-shift-m", ToggleRich, Some(ITEM_TAB_CONTEXT)),
+        // Save, from anywhere in the tab while editing; the tab lets it go
+        // on otherwise.
+        KeyBinding::new("secondary-s", Save, Some(ITEM_TAB_CONTEXT)),
         // The edit toolbar: its controls, its Style menu and its link
         // popover. The mode key is the host's, forwarded from a control.
         KeyBinding::new("left", ToolbarPrevious, Some(TOOLBAR_CONTEXT)),

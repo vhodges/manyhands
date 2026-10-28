@@ -8,8 +8,10 @@
 //! Refresh. A nonconforming file, an entry with no ID, "Needs fixing":
 //! D1's reason (each problem and its guidance), with Repair not available
 //! yet. An Edit raises crash recovery off, a prepare still owed and a
-//! refusal (`edit`). The other rows of the design's table are named here
-//! for the tasks that raise them.
+//! refusal; its saves raise a base to review, a hand-off owed, a pending
+//! checkpoint, the change banner under the review and a refusal (`edit`).
+//! The other rows of the design's table are named here for the tasks that
+//! raise them.
 //!
 //! A link clicked in one of the tab's editors is followed here (decision
 //! 10; `services::links`). The link banner says when it was not found or
@@ -82,15 +84,15 @@ pub(crate) enum Banner {
     DraftDiscarded,
     /// Crash recovery off.
     RecoveryOff,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    /// A save's checkpoint is pending, with Retry.
     CheckpointFailed,
     /// A hand-off to the index still owed: a prepare's, whose Resume sends
     /// it again (R-77), or a save's.
     DiscoveryPending,
-    /// The item changed under a dirty or kept draft (R-68).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
+    /// The item changed under a dirty or kept draft (R-68), or a save
+    /// answered `external_change`.
     Changed,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    /// A base the save left unverified, with Review… (R-36).
     ReviewBeforeSaving,
     /// Another refusal, in the library's message.
     Refused,

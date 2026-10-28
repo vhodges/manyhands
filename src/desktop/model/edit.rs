@@ -4,7 +4,8 @@
 //! recovery copy.
 //!
 //! Nothing here holds the item's text but `fields_with_body`'s answer, a
-//! draft's fields, which derive no `Debug`.
+//! draft's fields, which derive no `Debug`. What a save comes to is
+//! `save_state`.
 
 use manyhands::{
     drafts::{DraftBase, DraftFields},
@@ -14,6 +15,8 @@ use time::OffsetDateTime;
 
 use super::{editor_text::normalized, navigation::OpenTarget};
 use crate::desktop::services::requests::DesktopRequestId;
+
+pub(crate) mod save_state;
 
 /// The header's Edit while a draft of the item is kept or stored (R-35).
 pub(crate) const CONTINUE_EDITING: &str = "Continue editing";
@@ -37,9 +40,12 @@ pub(crate) enum Phase {
     Loading,
     /// The edit editor holds the item.
     Editing,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    /// A save is in flight, or its committed answer settles; the editor
+    /// takes typing meanwhile.
     Saving,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 19.
+    /// The review is open: Save on an unverified base (R-36), or an
+    /// `external_change` answer. Save is disabled; the review itself is
+    /// Task 19's.
     Review,
 }
 

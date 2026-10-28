@@ -27,7 +27,7 @@
 //!
 //! `edit` makes the tab edit (design, Part C): Edit prepares the item's
 //! private work context, the edit editor and its toolbar replace the read
-//! view, and D2's draft follows the text.
+//! view, D2's draft follows the text, and Save, or `secondary-s`, saves it.
 
 mod banners;
 mod chips;
@@ -55,11 +55,11 @@ use gpui_kit::{
 
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
-    keys::{Edit, ITEM_TAB_CONTEXT, ToggleRich},
+    keys::{Edit, ITEM_TAB_CONTEXT, Save, ToggleRich},
     model::{
         edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
-    services::{Services, images::TabImages, requests::DesktopRequestId},
+    services::{Services, drafts::DraftSaved, images::TabImages, requests::DesktopRequestId},
 };
 #[cfg(test)]
 pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
@@ -137,6 +137,8 @@ pub(crate) struct ItemPane {
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
+    /// A save of this tab's session committed (R-69).
+    _saved: Subscription,
 }
 
 impl ItemPane {
@@ -152,11 +154,16 @@ impl ItemPane {
         });
         let drafts = cx.observe(services.drafts(), |pane, _, cx| {
             pane.sync_status(cx);
+            pane.save_settle_lost(cx);
             cx.notify()
+        });
+        let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {
+            pane.draft_saved(event, cx)
         });
         let images = TabImages::new(&services);
         // The tab's images leave the windows' atlases with it.
         cx.on_release(|pane, cx| pane.images.close(cx)).detach();
+        let edit = edit::TabEdit::new(scope.clone(), cx);
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
@@ -178,9 +185,10 @@ impl ItemPane {
             link_note: None,
             link_read: None,
             images,
-            edit: edit::TabEdit::new(cx),
+            edit,
             _operations: operations,
             _drafts: drafts,
+            _saved: saved,
         };
         let stamp = pane.model.load();
         pane.read(stamp, cx);
@@ -341,6 +349,11 @@ impl Render for ItemPane {
             }))
             .on_action(cx.listener(|pane, _: &ToggleRich, _, cx| {
                 if !pane.toggle_rich(cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &Save, window, cx| {
+                if !pane.save_requested(window, cx) {
                     cx.propagate();
                 }
             }))

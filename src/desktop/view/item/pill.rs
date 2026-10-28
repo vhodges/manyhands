@@ -18,7 +18,7 @@ use manyhands::repository::{ClosureState, ItemContextKind, ItemDto};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        edit::Phase,
+        edit::{Phase, save_state::SaveState},
         item::{context_problems, provenance_label},
     },
 };
@@ -122,6 +122,25 @@ pub(crate) fn edit_state(phase: Phase, dirty: bool) -> Option<PillState> {
         Phase::Editing => Some(PillState::EditingSaved { not_shared: false }),
         Phase::Saving => Some(PillState::Saving),
         Phase::Review => Some(PillState::Review),
+    }
+}
+
+/// The pill of a save `state` the pill says (design, Save states): unsaved,
+/// or saved on this computer, not shared yet with a selected publication
+/// remote; `None` for a state a banner says.
+pub(crate) fn save_pill(state: SaveState) -> Option<PillState> {
+    match state {
+        SaveState::Unsaved => Some(PillState::EditingUnsaved),
+        SaveState::SavedLocally {
+            publication_pending,
+        } => Some(PillState::EditingSaved {
+            not_shared: publication_pending,
+        }),
+        SaveState::DiscoveryPending
+        | SaveState::CheckpointFailed
+        | SaveState::Changed
+        | SaveState::ReviewBeforeSaving
+        | SaveState::Refused(_) => None,
     }
 }
 

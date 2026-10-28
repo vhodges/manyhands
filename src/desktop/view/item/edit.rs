@@ -1,6 +1,6 @@
-//! Edit (design, Part C, Phases, steps 1 to 4): the item's private work
-//! context made ready, the edit editor opened on a fresh read, and D2's
-//! draft begun and fed as the text changes.
+//! Edit (design, Part C, Phases, steps 1 to 6): the item's private work
+//! context made ready, the edit editor opened on a fresh read, D2's draft
+//! begun and fed as the text changes, and the text saved.
 //!
 //! - **Viewing.** Edit, `e` on the page and `secondary-shift-e` in the tab
 //!   start it, where it is offered (`model::edit::edit_offered`). While a
@@ -26,13 +26,19 @@
 //!   to go on (`recovery_off`). The toolbar's status item says what D2
 //!   holds of the text.
 //!
-//! Save is Task 15's, Done and the kept session Task 16's, and release on
-//! leave Task 17's. Draft text stays in the editor, the registry and the
-//! store; nothing here derives `Debug`.
+//! - **Saving** and the session after a save are `save` and `saved`, with
+//!   their button, pill and banners in `save_view`.
+//!
+//! Done and the kept session are Task 16's, and release on leave Task
+//! 17's. Draft text stays in the editor, the registry and the store;
+//! nothing here derives `Debug`.
 
 mod actions;
 mod feed;
 mod recovery_off;
+mod save;
+mod save_view;
+mod saved;
 
 #[cfg(test)]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
@@ -56,6 +62,7 @@ use crate::desktop::{
         edit::{Phase, base_for_edit, edit_offered},
         links::LinkTarget,
         navigation::OpenTarget,
+        stamp::ViewScope,
         tabs::TabKey,
     },
     services::requests::{DesktopRequestId, Intent, Lane, RequestState},
@@ -72,8 +79,7 @@ pub(crate) const PREPARE_REFUSED: &str =
 /// A prepare whose hand-off to the index is still owed (R-13).
 pub(crate) const PREPARE_PENDING: &str =
     "Your private copy is made, but the search index is not updated yet. Nothing is lost.";
-pub(crate) const RESUME: &str = "Resume";
-pub(crate) const RETRY: &str = "Retry";
+pub(crate) use crate::desktop::model::edit::save_state::{RESUME, RETRY};
 
 /// Where an Edit that did not reach the editor stopped.
 enum Stopped {
@@ -119,7 +125,6 @@ pub(super) struct EditSession {
 
 impl EditSession {
     /// Whether a save has committed in this session.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     pub(super) fn saved(&self) -> bool {
         self.saved
     }
@@ -128,6 +133,12 @@ impl EditSession {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
     pub(super) fn kept(&self) -> bool {
         self.kept
+    }
+
+    /// The base the session's next draft begins on.
+    #[cfg(test)]
+    pub(super) fn base(&self) -> &DraftBase {
+        &self.base
     }
 }
 
@@ -141,16 +152,19 @@ pub(super) struct TabEdit {
     session: Option<EditSession>,
     /// The header's Done, where Escape in the editor goes (R-59).
     done: FocusHandle,
+    save: save::TabSave,
 }
 
 impl TabEdit {
-    pub(super) fn new(cx: &mut App) -> Self {
+    /// The edit state of a tab whose reads are stamped under `scope`.
+    pub(super) fn new(scope: ViewScope, cx: &mut App) -> Self {
         Self {
             phase: Phase::Viewing,
             loaded: false,
             stopped: None,
             session: None,
             done: cx.focus_handle().tab_stop(true),
+            save: save::TabSave::new(scope),
         }
     }
 

@@ -211,9 +211,13 @@ impl Toolbar {
     }
 
     /// The status item: D2's state of the text in words, at this moment's
-    /// age, or nothing before the first write. Its words are its name.
+    /// age, or nothing before the first write; or what the tab said in its
+    /// place, until the text changes. Its words are its name.
     fn status_item(&self, colors: &ItemColors) -> impl IntoElement + use<> {
-        let words = draft_indicator(self.status, OffsetDateTime::now_utc()).map(indicator_words);
+        let words = match self.note {
+            Some(note) => Some(note.to_owned()),
+            None => draft_indicator(self.status, OffsetDateTime::now_utc()).map(indicator_words),
+        };
         let mut item = div()
             .id("toolbar-status")
             .test_support()

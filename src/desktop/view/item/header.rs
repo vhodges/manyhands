@@ -205,7 +205,7 @@ impl ItemPane {
     ) -> (AnyElement, usize) {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(item));
-        let state = pill::edit_state(self.edit.phase(), self.edit_dirty(cx));
+        let state = self.edit_pill(cx);
         let pill = item.map(|item| {
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
             pill::pill(state, item, cx)

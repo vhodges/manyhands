@@ -1287,3 +1287,7 @@ async fn a_new_session_is_neither_saved_nor_kept(cx: &mut TestAppContext) {
     });
     assert!(!saved && !kept);
 }
+
+/// Save, the session after a save, and the save states (Task 15).
+#[path = "edit_save_tests.rs"]
+mod save;
