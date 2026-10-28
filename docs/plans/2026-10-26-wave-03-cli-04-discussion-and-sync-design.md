@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C4 CLI Discussion, Synchronization And Conflict Recovery Design"
 date: 2026-10-26
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,11 +12,11 @@ id: "01M5X4YWQMNJJT3VXP0BY9JGG9"
 
 ## Execution Status
 
-**Draft, 2026-10-26.** Revised after the third review round, and re-grounded
-on 2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged
-(`a372edb`). Written for product-owner review. Nothing is built.
-Implementation needs the gate merged (Cycle decision 2), which it now is, and
-the owner's authorization.
+**Approved, 2026-10-28,** at `8a94e9b`, with named edits E-1 to E-12. The
+owner chose subagent-driven execution and authorized implementation. Drafted
+on 2026-10-26, revised after the third review round, and re-grounded on
+2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged
+(`a372edb`). The gate is merged (Cycle decision 2).
 
 ## Intent And Approval Boundary
 

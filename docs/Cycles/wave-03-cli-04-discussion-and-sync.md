@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery"
 date: 2026-10-26
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,10 +12,13 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 
 ## Status
 
-**Draft, 2026-10-26.** Revised after the third review round, and re-grounded
-on 2026-10-27 after the gate ticket merged. Written for product-owner review.
-Nothing is built. Planning ran one test, a single existing test on main's
-code, to confirm the main-side failure recorded as design fact 81.
+**Approved, 2026-10-28.** The owner approved the Cycle, the design and the
+implementation plan at `8a94e9b`, including named edits E-1 to E-12, and chose
+subagent-driven execution. Implementation is authorized. Drafted on
+2026-10-26, revised after the third review round, and re-grounded on
+2026-10-27 after the gate ticket merged. Planning ran one test, a single
+existing test on main's code, to confirm the main-side failure recorded as
+design fact 81.
 
 The other planning documents:
 
@@ -592,9 +595,11 @@ are submitted for approval with these documents.
 | Re-grounding, remote-library lens (2026-10-27, `e920043`) | 8 findings: 1 blocking, 3 important, 4 minor, and 6 stale citations. Blocking: a new conflict structure, `incompatible_closures`, had no value in Task 3's mapping. Important:<br>- kind and structure must come from `classify_conflict_entry`;<br>- an unfinished local sync now refuses remote resolution, reservations and comment begins;<br>- the tasks editing `remote/` must also run the local executor's tests. | Ruling, settled | Facts 30, 33, 64, 72, 75, 76 and 80 rewritten. Ruling R-38 added, and R-14 revised. Rows for the unfinished local sync added to four tables. `--lib remote`, `--lib local_sync` and `--lib integration` added to the tasks that edit `remote/`. The gate moved only helpers, so the library file list is narrowed: C4 edits nothing in `integration/` or `local_sync/`. |
 | Re-grounding, boundary, CLI and test lens (2026-10-27, `e920043`) | 6 findings: 1 blocking, 2 important, 3 minor, and 13 stale citations. Blocking: the planned table `remote_resolution_requests` would fail `tests/mutation_replay.rs:400`, which forbids a surviving object named with `request`. Important:<br>- the registry's exact table list needs a named edit, and it already fails on main;<br>- E-6 was wrong on `a372edb`. | Ruling, settled | R-41: the table is renamed `remote_resolution_owners`, with no foreign key. E-12 added. Fact 49 refreshed, with `authority()`, the read golden `CASES` and the `type`-guarded `from_stored` arm. Task 0's grep classification gains a fourth class. Task 1 updates the two "never merge" comments. All citations corrected. |
 
+| Owner approval (2026-10-28, `8a94e9b`) | The Cycle, the design and the plan, with named edits E-1 to E-12, presented for approval. | Decision | Approved. Execution is subagent-driven, and implementation is authorized. Pushing beyond the ticket branch, a PR, merging, closure, cleanup, native CI, `ticket save` and Task 15's dogfooding each still need their own go-ahead. |
+
 **Neither the third round's edits nor the re-grounding edits had an
 independent review.** They are listed in the rows above, and the owner
-reviews them with the documents. The re-grounding reviewers checked the
+reviewed them with the documents. The re-grounding reviewers checked the
 documents as they stood at `e920043`, before these edits.
 
 Record planning, per-task progress, decisions, baseline and final

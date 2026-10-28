@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C4 CLI Discussion, Synchronization And Conflict Recovery Implementation Plan"
 date: 2026-10-26
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M5X4YWRNZ1SFGXH5J8E9QD2J"
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Draft, 2026-10-26.** Revised after the third review round, and re-grounded on 2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged at `a372edb` (Cycle decision 2). Not approved, and implementation is not authorized.
+**Approved, 2026-10-28,** at `8a94e9b`, with named edits E-1 to E-12. Implementation is authorized, executed subagent-driven. Drafted on 2026-10-26, revised after the third review round, and re-grounded on 2026-10-27 after the gate ticket `01M57SKVF6TQ3QM6AXJ35JGGSY` merged at `a372edb` (Cycle decision 2).
 
 **Goal:** Add C4's library part and its eight CLI verbs, so that an agent or a person can comment, synchronize, resolve or repair conflicts, republish a deleted branch, and resume or abandon operations through `manyhands-cli`. Then switch this project's comment dogfooding to the CLI.
 
