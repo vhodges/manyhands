@@ -687,3 +687,25 @@ Notes for later tasks: Task 22 leaves `targets()` in
   - The resolution is right, but the scenario is not realistic. A
     realistic one moves the linking document itself within its context.
     This goes to the Part B review.
+- Ruling (Task 12, concern 1): on Windows, check 4 records the real file
+  ID, as the design says, and not `std`'s size, times and attributes.
+  `windows-sys` is already a Windows dependency with
+  `Win32_Storage_FileSystem`. The code follows the library's
+  `coordination.rs::file_identity` (`FILE_ID_INFO`). So nothing in Cargo
+  changes. — The design names "the Windows file ID", and stable `std`
+  gives no file ID. — If wrong: a Windows build failure after merge,
+  which is a follow-on fix in one file.
+- Ruling (Task 12, concerns 2, 4, 5 and 6): four behaviours become Known
+  Limits; none is a defect:
+  - the containment checks are path-based, as the design lists them;
+  - images under `.manyhands/` are refused by check 2;
+  - images draw as source after a reload;
+  - an image added after its `src` was looked up shows only after a
+    reload.
+
+  — Each follows the design's own rules. — If wrong: a future change to
+  containment or to the cache.
+- Ruling (Task 12, concern 3): in the exact lookup, the first tree that
+  holds anything at the path decides. A refused file there does not fall
+  through. — A refused file never leads to a different image. — If
+  wrong: one function in `services/images.rs`.
