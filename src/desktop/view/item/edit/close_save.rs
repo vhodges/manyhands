@@ -47,10 +47,10 @@ use crate::desktop::{
 
 impl ItemPane {
     /// Asks before this tab closes with its edit session's unsaved work.
-    /// A clean session whose draft is stored, or being stored, asks too, in
-    /// D2's words for a tab with a draft: it has no unsaved changes (Part C
-    /// fix 1, M2). While the draft's last write failed, the words say Keep
-    /// draft tries again.
+    /// A clean session whose draft is stored, or being stored, asks too,
+    /// under D2's title for a tab with a draft, in words that say it has no
+    /// unsaved changes and name nothing (Part C fix 1, M2; fix 2, N3). While
+    /// the draft's last write failed, the words say Keep draft tries again.
     pub(in crate::desktop::view) fn ask_to_close(
         &mut self,
         window: &mut Window,
@@ -67,7 +67,7 @@ impl ItemPane {
             });
             Ask::session(offers, note, failed)
         } else {
-            Ask::restored(&self.tab_title(), offers, note)
+            Ask::session_draft(offers, note)
         };
         close_draft::open(ask, window, cx, move |choice, _, cx| {
             let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));

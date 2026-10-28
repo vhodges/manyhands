@@ -44,7 +44,7 @@ use gpui_kit::{
 use manyhands::repository::{ItemContextKind, ItemDtoKind};
 use std::{
     cell::Cell,
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     path::Path,
 };
 
@@ -189,6 +189,17 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
     }
 }
 
+/// Which tabs of a repository stay open as it is closed, of those whose
+/// edit session holds unsaved text that no draft holds (Part C fixes 1 and
+/// 2).
+pub(super) enum Keeping<'a> {
+    /// Every one: no removal was confirmed; the repository left the list.
+    Unkept,
+    /// Those the confirmed removal did not count: they became unkept after
+    /// its Confirm.
+    Uncounted(&'a HashSet<TabKey>),
+}
+
 #[derive(Default)]
 pub(crate) struct TabContent {
     tabs: Tabs,
@@ -295,22 +306,36 @@ impl TabContent {
         }
     }
 
-    /// Closes every tab of `root`. With `keep_unkept`, a tab whose edit
-    /// session holds unsaved text that no draft holds stays open, for its
-    /// own close to ask (Part C fix 1, I1).
-    pub(super) fn close_repository(&mut self, root: &str, keep_unkept: bool, cx: &App) {
-        if !keep_unkept {
+    /// Closes every tab of `root` but those `keeping` keeps: a tab whose
+    /// edit session holds unsaved text that no draft holds may stay open,
+    /// for its own close to ask (Part C fixes 1 and 2).
+    pub(super) fn close_repository(&mut self, root: &str, keeping: Keeping<'_>, cx: &App) {
+        let kept: HashSet<TabId> = self
+            .tabs
+            .tabs()
+            .iter()
+            .filter(|(_, key)| key.repo() == root)
+            .filter(|(id, key)| {
+                let unkept = self
+                    .panes
+                    .get(id)
+                    .is_some_and(|pane| pane.read(cx).unkept_edit(cx));
+                unkept
+                    && match keeping {
+                        Keeping::Unkept => true,
+                        Keeping::Uncounted(counted) => !counted.contains(key),
+                    }
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if kept.is_empty() {
             for id in self.tabs.close_repository(root) {
                 self.forget(id);
             }
             return;
         }
         for id in self.tabs.of_repository(root) {
-            let kept = self
-                .panes
-                .get(&id)
-                .is_some_and(|pane| pane.read(cx).unkept_edit(cx));
-            if !kept && self.tabs.close(id) {
+            if !kept.contains(&id) && self.tabs.close(id) {
                 self.forget(id);
             }
         }

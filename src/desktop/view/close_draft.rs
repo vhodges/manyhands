@@ -1,8 +1,10 @@
 //! The dialog that leaving an item tab's unsaved work opens: closing a tab
 //! with a restored draft (D2's), closing a tab whose edit session has
 //! unsaved work, a kept draft or one being stored (design, Done and
-//! leaving: Closing the tab), and Done when the draft cannot be written or
-//! the item was never created (step 3 and 5).
+//! leaving: Closing the tab) or, while clean, a draft stored or being
+//! stored (under D2's title, in words of its own: Part C fix 2, N3), and
+//! Done when the draft cannot be written or the item was never created
+//! (step 3 and 5).
 //!
 //! It offers Keep draft, the default (Enter) and first Tab stop where it
 //! is offered, then Save where it can be chosen (R-16), Discard and Cancel
@@ -52,6 +54,10 @@ pub(crate) const SESSION_KEEP: &str = "Keep draft keeps your unsaved changes on 
 pub(crate) const SESSION_UNKEPT: &str = "Your unsaved changes are not kept as a draft on this \
                                          computer. Discard deletes them; Cancel goes back to the \
                                          tab.";
+/// Closing a tab whose edit session is clean, with a draft stored or being
+/// stored (Part C fix 2, N3). It names nothing.
+pub(crate) const SESSION_DRAFT: &str =
+    "This tab has a draft, and no unsaved changes. Keep it to continue later, or discard it.";
 /// Keep draft's words while the draft's last write failed: it writes
 /// again, and closes only once the newest text is stored (Part C fix 1,
 /// M2).
@@ -189,6 +195,20 @@ impl Ask {
             id: "close-draft",
             title: SESSION_TITLE,
             message: Message::Session(failed),
+            offers,
+            note,
+            stays: true,
+        }
+    }
+
+    /// Closing a tab whose edit session is clean, with a draft stored or
+    /// being stored: D2's title, and words that name nothing (Part C fix 2,
+    /// N3). It offers what the session's dialog offers.
+    pub(crate) fn session_draft(offers: Read<Offers>, note: Read<Option<SaveNote>>) -> Self {
+        Self {
+            id: "close-draft",
+            title: TITLE,
+            message: Message::Fixed(SESSION_DRAFT.to_owned()),
             offers,
             note,
             stays: true,

@@ -8,13 +8,13 @@
 
 pub(crate) mod created_contexts;
 pub(crate) mod drafts;
+pub(crate) mod edit_tabs;
 pub(crate) mod images;
 pub(crate) mod links;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
-pub(crate) mod unkept;
 pub(crate) mod worker;
 
 use std::{sync::Arc, time::Duration};
@@ -30,8 +30,8 @@ use manyhands::{
 use crate::desktop::model::operations::Operations;
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
+use edit_tabs::EditTabs;
 use release::Releases;
-use unkept::UnkeptEdits;
 use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
@@ -214,9 +214,9 @@ pub(crate) struct Services {
     created: Entity<CreatedContexts>,
     /// Release on leave (R-37), shared by every view.
     releases: Entity<Releases>,
-    /// The item tabs whose unsaved edit text no draft holds (Part C fix 1,
-    /// I1): a repository's removal says how many of its tabs close.
-    unkept: Entity<UnkeptEdits>,
+    /// What each item tab says of its edit session (Part C fixes 1 and 2):
+    /// a repository's removal and the Drafts page read it.
+    edit_tabs: Entity<EditTabs>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -332,7 +332,7 @@ impl Services {
             #[cfg(test)]
             created,
             releases,
-            unkept: cx.new(|_| UnkeptEdits::default()),
+            edit_tabs: cx.new(|_| EditTabs::default()),
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -384,9 +384,9 @@ impl Services {
         &self.releases
     }
 
-    /// The item tabs whose unsaved edit text no draft holds, by repository.
-    pub(crate) fn unkept(&self) -> &Entity<UnkeptEdits> {
-        &self.unkept
+    /// What each item tab says of its edit session.
+    pub(crate) fn edit_tabs(&self) -> &Entity<EditTabs> {
+        &self.edit_tabs
     }
 
     #[cfg(test)]

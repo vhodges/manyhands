@@ -7,8 +7,8 @@
 //! draft that could not begin), a dialog says how many, naming no item and
 //! no text, with Quit anyway and Cancel, the default, which stays and shows
 //! the first such tab (Part C fix 1, I1; the Cycle's contract 6). Quit
-//! anyway goes on as below. Next, if a draft session's newest text is not yet stored,
-//! it refuses, flushes every session and shows "Saving drafts for
+//! anyway goes on as below. Next, if a draft session's newest text is not
+//! yet stored, it refuses, flushes every session and shows "Saving drafts for
 //! recovery" with Quit now, which quits at once (the last stored revision
 //! survives). If every flush succeeds, quitting goes on as below; if any
 //! fails, a dialog says how many drafts could not be saved, with Quit

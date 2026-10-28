@@ -19,6 +19,7 @@ use crate::desktop::{
         item::{ChipField, ItemPane, Leaving, RegionEnd, open_details},
         scroll::ContentScroll,
         sidebar,
+        tabs::Keeping,
     },
 };
 use gpui_kit::{
@@ -408,27 +409,50 @@ impl Workspace {
         .detach();
     }
 
-    /// Closes every tab of `root`, as the user's confirmed removal does: the
-    /// confirmation said which tabs hold unsaved text that no draft holds
-    /// (Part C fix 1, I1). Their restored drafts are written and let go of
-    /// first, kept in Drafts, never discarded.
+    /// Closes every tab of `root`, as the user's confirmed removal does,
+    /// but a tab whose edit session holds unsaved text that no draft holds,
+    /// and that the confirmation did not count when it was confirmed: that
+    /// one stays open, and its own close asks (Part C fix 2, N1). The tabs
+    /// it counted were the user's choice. Their restored drafts are written
+    /// and let go of first, kept in Drafts, never discarded.
     pub(crate) fn close_repository(&mut self, root: &str, cx: &mut Context<Self>) {
-        self.services
-            .drafts()
-            .update(cx, |registry, cx| registry.release_repository(root, cx));
-        self.content.tabs.close_repository(root, false, cx);
-        cx.notify();
+        let counted = self
+            .services
+            .edit_tabs()
+            .update(cx, |tabs, _| tabs.counted(root));
+        self.close_tabs_of(root, Keeping::Uncounted(&counted), cx);
+    }
+
+    /// The user's confirmed removal of `root` landed: its tabs close as
+    /// `close_repository` closes them, and no context of it is released by
+    /// a tab kept open that leaves later: the library would refuse it (Part
+    /// C fix 2, N2).
+    pub(super) fn repository_removed(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.close_repository(root, cx);
+        self.forget_contexts_of(root, cx);
     }
 
     /// `root` left the list with no removal the user confirmed: its tabs
-    /// close as `close_repository`'s do, except a tab whose edit session
+    /// close as `close_repository`'s do, except every tab whose edit session
     /// holds unsaved text that no draft holds, which stays open; its own
-    /// close asks (Part C fix 1, I1).
+    /// close asks (Part C fix 1, I1). No context of it is released by such a
+    /// tab later (N2).
     pub(super) fn drop_repository(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.close_tabs_of(root, Keeping::Unkept, cx);
+        self.forget_contexts_of(root, cx);
+    }
+
+    fn forget_contexts_of(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.services
+            .releases()
+            .update(cx, |releases, _| releases.forget_root(root));
+    }
+
+    fn close_tabs_of(&mut self, root: &str, keeping: Keeping<'_>, cx: &mut Context<Self>) {
         self.services
             .drafts()
             .update(cx, |registry, cx| registry.release_repository(root, cx));
-        self.content.tabs.close_repository(root, true, cx);
+        self.content.tabs.close_repository(root, keeping, cx);
         cx.notify();
     }
 

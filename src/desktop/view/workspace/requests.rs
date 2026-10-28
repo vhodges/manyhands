@@ -60,10 +60,10 @@ impl Workspace {
             return;
         }
         for root in &changed.removed {
-            // The user's confirmation said which tabs close (Part C fix 1,
-            // I1); a removal found already done was not confirmed.
+            // The user's confirmation said which tabs close (Part C fixes 1
+            // and 2); a removal found already done was not confirmed.
             if changed.confirmed.contains(root) {
-                self.close_repository(root, cx);
+                self.repository_removed(root, cx);
             } else {
                 self.drop_repository(root, cx);
             }

@@ -84,6 +84,10 @@ pub(crate) struct Releases {
     /// The contexts whose release was sent, until a prepare of this
     /// process makes one again.
     released: HashSet<ContextKey>,
+    /// The repositories that left this window, by root: none of their
+    /// contexts is released by leaving, until a prepare of this process
+    /// makes one of the root again (Part C fix 2, N2).
+    gone: HashSet<String>,
     /// What each item tab says of its item (`watch`).
     editing: Vec<(ContextKey, Editing)>,
     _subscriptions: [Subscription; 2],
@@ -114,15 +118,29 @@ impl Releases {
             checks: HashMap::new(),
             closed: HashMap::new(),
             released: HashSet::new(),
+            gone: HashSet::new(),
             editing: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
 
     /// Condition 1: whether `key`'s context is one this process made, saved
-    /// nothing into and has not released since.
+    /// nothing into and has not released since, of a repository still in
+    /// this window.
     pub(crate) fn made_here(&self, key: &ContextKey, cx: &App) -> bool {
-        self.created.read(cx).contains(key) && !self.released.contains(key)
+        self.created.read(cx).contains(key)
+            && !self.released.contains(key)
+            && !self.gone.contains(&key.root)
+    }
+
+    /// `root` left this window: its removal landed, or it left the list
+    /// (Part C fix 2, N2). A tab of it kept open, its text no draft's,
+    /// leaves later with no release sent: the library no longer registers
+    /// the root, and would refuse it. A release waiting for the listing is
+    /// dropped.
+    pub(crate) fn forget_root(&mut self, root: &str) {
+        self.gone.insert(root.to_owned());
+        self.checks.retain(|key, _| key.root != root);
     }
 
     /// A tab of `key`'s item says, through `editing`, whether it edits the
@@ -191,6 +209,7 @@ impl Releases {
     ) {
         if made && let Some(item) = &item {
             self.released.remove(item);
+            self.gone.remove(&item.root);
         }
         let Some(key) = self.closed.remove(&request) else {
             return;

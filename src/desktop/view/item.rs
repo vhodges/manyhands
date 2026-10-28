@@ -210,7 +210,7 @@ impl ItemPane {
             _discarded: discarded,
         };
         pane.watch_editing(cx);
-        pane.watch_unkept(cx);
+        pane.watch_edit_tab(cx);
         let stamp = pane.model.load();
         pane.read(stamp, cx);
         pane

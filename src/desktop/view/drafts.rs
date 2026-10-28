@@ -60,6 +60,9 @@ pub(crate) const CANNOT_READ: &str = "This draft cannot be read";
 pub(crate) const COMMENT_LATER: &str = "The comment composer arrives in a later release.";
 pub(crate) const SAVED_AT: &str = "Saved for recovery at";
 pub(crate) const RESTORE: &str = "Restore";
+/// Why Restore is disabled for a draft whose item a tab of this window edits
+/// (Part C fix 2, D; R-35): the tab's banner gives no reason of its own.
+pub(crate) const CONTINUE_IN_TAB: &str = "Open in its tab to continue editing";
 pub(crate) const SHOW: &str = "Show";
 pub(crate) const INSPECT: &str = "Inspect";
 pub(crate) const DISCARD: &str = "Discard…";

@@ -1038,6 +1038,25 @@ fn is_save(intent: &Intent) -> bool {
     matches!(intent, Intent::TicketSave { .. })
 }
 
+/// How many of this session's requests of the kind `pick` picks have
+/// ended: finished, removed or not sent (Part C fix 2, A).
+fn ended_requests(shell: &Shell, cx: &mut TestAppContext, pick: fn(&Intent) -> bool) -> usize {
+    use crate::desktop::services::requests::RequestState;
+    shell.operations(cx).read_with(cx, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .filter(|request| pick(&request.intent))
+            .filter(|request| {
+                !matches!(
+                    request.state,
+                    RequestState::Queued | RequestState::Running { .. }
+                )
+            })
+            .count()
+    })
+}
+
 fn is_prepare(intent: &Intent) -> bool {
     matches!(intent, Intent::ContextPrepare { .. })
 }
@@ -1068,6 +1087,16 @@ async fn save_in_the_close_dialog_saves_then_closes(cx: &mut TestAppContext) {
     );
     assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
     prepare.release();
+    // Each step its own wait (Part C fix 2, A): the prepare, the save,
+    // then the close.
+    until_drawn(&shell, cx, "One's prepare ending", |shell, cx| {
+        ended_requests(shell, cx, is_prepare) == 1
+    })
+    .await;
+    until_drawn(&shell, cx, "One's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 1
+    })
+    .await;
     until_drawn(&shell, cx, "One's tab closing", |shell, cx| {
         strip(shell, cx) == ["Two"]
     })
@@ -1089,6 +1118,10 @@ async fn save_in_the_close_dialog_saves_then_closes(cx: &mut TestAppContext) {
     shell.click(("tab-close", 0usize), cx);
     assert!(close_dialog_shown(&shell, cx));
     shell.click("close-draft-save-button", cx);
+    until_drawn(&shell, cx, "Two's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 2
+    })
+    .await;
     until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
         strip(shell, cx).is_empty()
     })
@@ -1279,6 +1312,11 @@ async fn save_in_the_close_dialog_saves_a_kept_session_then_closes(cx: &mut Test
     );
     assert!(!shell.present("close-draft-save-note", cx));
     shell.click("close-draft-save-button", cx);
+    // Each step its own wait (Part C fix 2, A): the save, then the close.
+    until_drawn(&shell, cx, "Two's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 1
+    })
+    .await;
     until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
         strip(shell, cx) == ["One, unsaved"]
     })

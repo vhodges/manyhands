@@ -1518,3 +1518,49 @@ async fn a_leave_before_a_clean_uses_discard_lands_releases_the_context_once(
     shell.run(cx);
     assert_eq!(releases(&shell, TICKET, cx).len(), 1, "once");
 }
+
+/// Part C fix 2, N2: a repository that has left the list keeps a tab whose
+/// text no draft holds, here after a begin that failed. When that tab later
+/// leaves clean (Discard), no `context release` is sent for the root the
+/// library no longer registers: it would only be refused.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_tab_kept_after_its_repository_left_sends_no_release(cx: &mut TestAppContext) {
+    use crate::desktop::test_support::drafts::{Actor, FolderMode, second_actor, superuser};
+
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Left behind", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    assert!(made_here(&shell, &root, TICKET, cx), "Edit made it");
+    let read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
+    type_at_end(&shell, &host, "x", cx);
+    assert_eq!(
+        attached(&shell, &root, TICKET, cx),
+        None,
+        "the begin failed"
+    );
+
+    second_actor(&shell.fixture, Actor::Unregister(&root));
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.run(cx);
+    assert_eq!(tab_count(&shell, cx), 1, "the unkept tab stays");
+    drop(read_only);
+
+    shell.keys("secondary-w", cx);
+    shell.click("close-draft-discard-button", cx);
+    shell.run(cx);
+    assert_eq!(tab_count(&shell, cx), 0, "Discard closes it");
+    shell.run(cx);
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "nothing is released"
+    );
+}

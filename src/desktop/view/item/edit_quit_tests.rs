@@ -20,7 +20,7 @@ use crate::desktop::test_support::drafts::{FolderMode, superuser};
 use crate::desktop::{
     test_support::drafts::{Actor, second_actor},
     view::{
-        confirm::CONFIRM,
+        confirm::{CONFIRM, SUBMITTED},
         quit::{EditsNotKept, QuitPhase},
     },
 };
@@ -416,6 +416,46 @@ async fn a_removal_found_already_applied_keeps_an_unkept_tab(cx: &mut TestAppCon
         tab_keys(&shell, cx),
         [TabKey::for_target(&ticket(&root, TICKET))],
         "the unkept tab stays"
+    );
+    assert!(edit_text(&host, cx) == typed, "with its text");
+}
+
+/// Part C fix 2, N1: the tabs the confirmation counted at Confirm are the
+/// user's choice. Here it counted none. While the removal waits, its dialog
+/// shows "Submitted", and its Cancel closes the dialog; the user then types
+/// in the tab, with crash recovery off. When the removal lands, that tab,
+/// which became unkept after Confirm, stays open with its text, as for a
+/// repository that drops from the list.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_tab_unkept_after_confirm_stays_when_the_removal_lands(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, _elsewhere) = shell_without_a_store(cx);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("item-edit", cx);
+    shell.click("recovery-off-continue", cx);
+    let host = until_editing(&shell, cx).await;
+
+    ask_to_remove(&shell, &root, cx).await;
+    assert!(!shell.present("confirm-unkept-note", cx), "none to count");
+    let held = shell.backend.hold_job(JobKind::RepoRemove);
+    shell.click("confirm-ok", cx);
+    held.wait_reached();
+    assert_eq!(shell.label("confirm-state", cx).as_deref(), Some(SUBMITTED));
+    shell.click("confirm-cancel", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    type_at_end(&shell, &host, "x", cx);
+    let typed = edit_text(&host, cx);
+
+    held.release();
+    let id = removals(&shell, cx)[0];
+    shell.until_ended(id, cx).await;
+    shell.run(cx);
+    assert_eq!(code(&shell, id, cx), Some(ResultCode::Ok), "removed");
+    assert_eq!(
+        tab_keys(&shell, cx),
+        [TabKey::for_target(&ticket(&root, TICKET))],
+        "the tab unkept after Confirm stays"
     );
     assert!(edit_text(&host, cx) == typed, "with its text");
 }

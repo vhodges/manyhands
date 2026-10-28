@@ -368,6 +368,14 @@ impl ConfirmDialog {
                 }
             },
         }
+        // Part C fix 2, N1: once it lands, a removal closes only the tabs
+        // whose unkept text the line counted as it was confirmed.
+        if let Some(root) = self.removal_root() {
+            let root = root.to_owned();
+            self.services
+                .edit_tabs()
+                .update(cx, |tabs, cx| tabs.confirmed(&root, cx));
+        }
         self.phase = Phase::Submitted;
         cx.notify();
     }
@@ -641,15 +649,20 @@ impl ConfirmDialog {
     /// that no draft holds, read as the dialog is drawn (Part C fix 1, I1):
     /// the confirmation says they close.
     fn unkept_tabs(&self, cx: &mut Context<Self>) -> usize {
-        let Intent::RepoRemove { root } = &self.intent else {
-            return 0;
-        };
-        let Some(root) = root.to_str() else {
+        let Some(root) = self.removal_root() else {
             return 0;
         };
         self.services
-            .unkept()
-            .update(cx, |tabs, cx| tabs.count(root, cx))
+            .edit_tabs()
+            .update(cx, |tabs, cx| tabs.unkept(root, cx).len())
+    }
+
+    /// The repository a removal's confirmation removes.
+    fn removal_root(&self) -> Option<&str> {
+        let Intent::RepoRemove { root } = &self.intent else {
+            return None;
+        };
+        root.to_str()
     }
 
     fn preview_body(&self, unkept: usize, cx: &App) -> Option<impl IntoElement + use<>> {

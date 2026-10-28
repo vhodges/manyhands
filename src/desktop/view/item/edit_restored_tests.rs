@@ -659,3 +659,65 @@ async fn restore_is_not_offered_above_a_live_edit_session(cx: &mut TestAppContex
     assert_eq!(phase(&shell, cx), Phase::Editing);
     assert!(edit_text(&host, cx) == text, "the session goes on");
 }
+
+/// Part C fix 2, D (R-35): a draft of the item, here another process's,
+/// is listed on the Drafts page while a tab of this window edits the item,
+/// with no draft of its own. The page's Restore is disabled, says why, and
+/// pressing it claims nothing: no second session is attached to the tab,
+/// and the page stays.
+#[gpui_kit::test]
+async fn the_drafts_pages_restore_is_disabled_over_a_live_edit_session(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Edited", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let text = edit_text(&host, cx);
+    assert_eq!(
+        attached(&shell, &root, TICKET, cx),
+        None,
+        "no draft of its own"
+    );
+    let stored = store_draft(
+        &shell.fixture,
+        &root,
+        ItemDtoKind::Ticket,
+        TICKET,
+        "Elsewhere",
+    );
+    registry(&shell, cx).update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    shell.run(cx);
+
+    shell.keys("secondary-shift-d", cx);
+    shell.run(cx);
+    assert!(
+        shell.present(row_id(stored, "restore"), cx),
+        "Restore is shown"
+    );
+    shell.click(row_id(stored, "restore"), cx);
+    shell.run(cx);
+    assert!(
+        registry(&shell, cx).read_with(cx, |registry, _| registry.session(stored).is_none()),
+        "nothing is claimed"
+    );
+    assert_eq!(
+        shell.label(row_id(stored, "restore-note"), cx).as_deref(),
+        Some("Open in its tab to continue editing")
+    );
+    assert_eq!(attached(&shell, &root, TICKET, cx), None, "nor attached");
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), stored),
+        Some(Held::No)
+    ));
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.drafts_shown(cx)),
+        "the page stays"
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert!(edit_text(&host, cx) == text, "the session goes on");
+}

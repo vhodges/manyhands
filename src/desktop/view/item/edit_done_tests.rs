@@ -1463,8 +1463,9 @@ const KEEP_FAILED_WORDS: &str = "Your newest changes could not be kept as a draf
 
 /// M2: typed, written, then undone to the loaded text, the session is
 /// clean, and its draft is stored. Closing asks, as a stored draft does,
-/// in D2's words for a tab with a draft, not of unsaved changes; Keep
-/// draft keeps the draft.
+/// under D2's title for a tab with a draft, in words of its own that name
+/// nothing (Part C fix 2, N3), not of unsaved changes; Keep draft keeps
+/// the draft.
 #[gpui_kit::test]
 async fn closing_a_clean_session_with_a_stored_draft_says_it_has_a_draft(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -1489,7 +1490,9 @@ async fn closing_a_clean_session_with_a_stored_draft_says_it_has_a_draft(cx: &mu
     );
     assert_eq!(
         shell.label("close-draft-message", cx).as_deref(),
-        Some("Undone has a restored draft. Keep it to restore it later, or discard it.")
+        Some(
+            "This tab has a draft, and no unsaved changes. Keep it to continue later, or discard it."
+        )
     );
     assert_eq!(
         shell.label("close-draft-dialog", cx).as_deref(),

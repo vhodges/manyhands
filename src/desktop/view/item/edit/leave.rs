@@ -10,9 +10,11 @@
 //!   always; Keep draft and Discard waiting while a save is in flight. The
 //!   message follows what is offered, and says while the draft's last
 //!   write failed that Keep draft tries again; a clean session whose draft
-//!   is stored asks in D2's words for a tab with a draft (Part C fix 1,
-//!   M2). A clean tab with no draft closes at once. Keep draft closes the tab once the draft is written and let go
-//!   of; a failed write keeps the tab, with the failure in the toolbar.
+//!   is stored asks under D2's title for a tab with a draft, in words that
+//!   name nothing (Part C fix 1, M2; fix 2, N3). A clean tab with no draft
+//!   closes at once. Keep draft closes the tab once the draft is written
+//!   and let go of; a failed write keeps the tab, with the failure in the
+//!   toolbar.
 //!   Discard closes it once the draft is deleted; a failed discard keeps it
 //!   open and says so, the draft let go of and listed again.
 //! - **Ended elsewhere** (R-71). When D2 discards the session's draft for
@@ -37,7 +39,10 @@ use manyhands::drafts::{DraftErrorKind, DraftId};
 use super::DraftLink;
 use crate::desktop::{
     model::{edit::Phase, tabs::TabKey},
-    services::{drafts::SessionDiscarded, unkept::Unkept},
+    services::{
+        drafts::SessionDiscarded,
+        edit_tabs::{TabEditing, Watch},
+    },
     view::item::ItemPane,
 };
 
@@ -102,17 +107,27 @@ impl ItemPane {
     }
 
     /// Tells the window's services, for as long as the tab lives, whether
-    /// its edit session holds unsaved text that no draft holds: a
-    /// repository's removal counts its tabs that do.
-    pub(in crate::desktop::view::item) fn watch_unkept(&self, cx: &mut Context<Self>) {
-        let TabKey::Item { repo, .. } = self.tab_key() else {
+    /// it edits its item and whether its session holds unsaved text that no
+    /// draft holds: a repository's removal counts its tabs that do, and the
+    /// Drafts page restores no draft into a tab that edits (Part C fixes 1
+    /// and 2).
+    pub(in crate::desktop::view::item) fn watch_edit_tab(&self, cx: &mut Context<Self>) {
+        let tab = self.tab_key();
+        if !matches!(tab, TabKey::Item { .. }) {
             return;
-        };
+        }
         let pane = cx.weak_entity();
-        let unkept: Unkept =
-            Box::new(move |cx: &App| pane.upgrade().map(|pane| pane.read(cx).unkept_edit(cx)));
-        let services = self.services.unkept().clone();
-        services.update(cx, |tabs, _| tabs.watch(repo, unkept));
+        let watch: Watch = Box::new(move |cx: &App| {
+            pane.upgrade().map(|pane| {
+                let pane = pane.read(cx);
+                TabEditing {
+                    editing: pane.has_session() || pane.edit.phase != Phase::Viewing,
+                    unkept: pane.unkept_edit(cx),
+                }
+            })
+        });
+        let services = self.services.edit_tabs().clone();
+        services.update(cx, |tabs, _| tabs.watch(tab, watch));
     }
 
     /// Keep draft: offered while a draft of the session is stored, and

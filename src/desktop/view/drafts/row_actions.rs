@@ -6,7 +6,7 @@
 //! said on its row. A row Discard removes gives the focus to the next
 //! row, else the previous one, else the page's first control.
 
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{App, Context, Task, Window};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftId, DraftTarget, ItemKind, markdown},
@@ -54,9 +54,24 @@ pub(super) fn action_ix(part: &str) -> usize {
 }
 
 impl DraftsPage {
+    /// Whether a tab of this window edits the item of the draft `id`, live
+    /// or kept, or is getting a session ready: Restore waits, as a second
+    /// session would be attached over the first (Part C fix 2, D; R-35).
+    pub(super) fn edited_in_its_tab(&self, id: DraftId, cx: &App) -> bool {
+        let Some(draft) = self.slot(id).and_then(|slot| slot.draft.as_ref()) else {
+            return false;
+        };
+        let tab = TabKey::for_target(&open_target(&draft.target));
+        self.services.edit_tabs().read(cx).editing(&tab, cx)
+    }
+
     /// Restore: claims the draft and attaches it to its item's tab, which
-    /// the host then opens and focuses. A refusal is said on the row.
+    /// the host then opens and focuses. A refusal is said on the row. Not
+    /// while a tab of this window edits the item.
     pub(super) fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        if self.edited_in_its_tab(id, cx) {
+            return;
+        }
         let Some(draft) = self.slot(id).and_then(|slot| slot.draft.as_ref()) else {
             return;
         };
