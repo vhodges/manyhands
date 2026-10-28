@@ -5,7 +5,9 @@
 //! When a save retires the draft, D2 ends its session (fact 79): the next
 //! difference begins a draft again, on the base the save left (R-69).
 //! While a save with no D2 session settles, that base is not known yet, so
-//! the text waits in the editor and is fed once it is (`saved`).
+//! the text waits in the editor and is fed once it is (`saved`). While D2
+//! retires a revision or stores the text again, the tab is still saving
+//! (`store_settling`).
 
 use gpui_kit::{App, Context};
 use manyhands::drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget};
@@ -55,6 +57,15 @@ impl ItemPane {
             return None;
         };
         self.services.drafts().read(cx).current_id(id)
+    }
+
+    /// Whether D2 is still finishing a save of the tab's draft: retiring
+    /// its revision, or storing newer text again as a new draft. That is
+    /// part of saving: D2 sends no save meanwhile.
+    pub(super) fn store_settling(&self, cx: &App) -> bool {
+        self.live_draft(cx)
+            .and_then(|id| self.services.drafts().read(cx).session(id))
+            .is_some_and(|session| session.retiring())
     }
 
     /// The store's target of this tab's item.
@@ -129,12 +140,7 @@ impl ItemPane {
             Err(_) => session.draft = DraftLink::Failed,
         }
         let waiting = self.edit.phase == Phase::Saving
-            && self
-                .edit
-                .save
-                .run
-                .as_ref()
-                .is_some_and(|run| run.request.is_none() && run.direct.is_none());
+            && self.edit.save.run.as_ref().is_some_and(|run| run.waiting());
         if waiting {
             self.send_save(cx);
         }

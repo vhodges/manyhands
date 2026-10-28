@@ -22,17 +22,15 @@ use manyhands::{
 };
 
 use super::*;
+#[cfg(unix)]
+use crate::desktop::test_support::drafts::{FolderMode, superuser};
 use crate::desktop::{
     model::edit::save_state::{
-        CHANGED_OUTSIDE, CHECK_CURRENT_VERSION, CHECKPOINT_FAILED, NO_CHANGES_TO_SAVE, REVIEW,
-        REVIEW_BEFORE_SAVING, SAVE, SAVE_REFUSED, SAVED_INDEX_PENDING, SaveState, before_save,
-        save_banner, save_offer, save_state,
+        REVIEW_BEFORE_SAVING, SAVE_TOOLTIP, SaveState, before_save, save_banner, save_offer,
+        save_state,
     },
     test_support::fixtures::NoPassphrase,
-    view::item::{
-        edit::{RESUME, RETRY},
-        pill::save_pill,
-    },
+    view::item::pill::save_pill,
 };
 
 const SAVING: &str = "Saving\u{2026}";
@@ -229,6 +227,18 @@ async fn a_second_actor_between_commit_and_read_makes_the_next_save_review(
     assert_eq!(commits(&root, &branch), before + 2, "ours, then theirs");
 
     type_at_end(&shell, &host, "y", cx);
+    assert_eq!(
+        shell.label("item-save", cx).as_deref(),
+        Some("Review before saving")
+    );
+    assert_eq!(
+        shell.label("item-save-unverified", cx).as_deref(),
+        Some("Check the current version before saving. Your edits are kept.")
+    );
+    assert_eq!(
+        shell.label("item-save-review", cx).as_deref(),
+        Some("Review\u{2026}")
+    );
     let sent = saves(&shell, cx).len();
     shell.click("item-save", cx);
     assert_eq!(saves(&shell, cx).len(), sent, "nothing is sent");
@@ -401,7 +411,7 @@ fn save_state_maps_every_row_of_the_design_table_to_its_words() {
     );
     assert_eq!(save_pill(unsaved).map(pill_words), Some(EDITING_UNSAVED));
     assert_eq!(save_banner(unsaved), None);
-    assert_eq!(save_offer(unsaved), Some(SAVE));
+    assert_eq!(save_offer(unsaved), Some("Save"));
 
     // `ok` or `already_applied`, committed or unchanged.
     for (code, effects) in [
@@ -443,8 +453,11 @@ fn save_state_maps_every_row_of_the_design_table_to_its_words() {
     let pending = save_state(ResultCode::DiscoveryPending, &owed, false);
     assert_eq!(pending, SaveState::DiscoveryPending);
     assert_eq!(save_pill(pending), None);
-    assert_eq!(save_banner(pending), Some(SAVED_INDEX_PENDING));
-    assert_eq!(save_offer(pending), Some(RESUME));
+    assert_eq!(
+        save_banner(pending),
+        Some("Saved on this computer, but the search index is not updated yet. Nothing is lost.")
+    );
+    assert_eq!(save_offer(pending), Some("Resume"));
 
     // A pending checkpoint, or an error after acceptance: Retry.
     let checkpoint = effects(
@@ -456,24 +469,35 @@ fn save_state_maps_every_row_of_the_design_table_to_its_words() {
         let failed = save_state(code, &checkpoint, true);
         assert_eq!(failed, SaveState::CheckpointFailed);
         assert_eq!(save_pill(failed), None);
-        assert_eq!(save_banner(failed), Some(CHECKPOINT_FAILED));
-        assert_eq!(save_offer(failed), Some(RETRY));
+        assert_eq!(
+            save_banner(failed),
+            Some("Could not save a checkpoint on this computer. Your text is kept.")
+        );
+        assert_eq!(save_offer(failed), Some("Retry"));
     }
 
     // `external_change`: the review opens, under the change banner.
     let changed = save_state(ResultCode::ExternalChange, &Effects::not_requested(), false);
     assert_eq!(changed, SaveState::Changed);
     assert_eq!(save_pill(changed), None);
-    assert_eq!(save_banner(changed), Some(CHANGED_OUTSIDE));
+    assert_eq!(
+        save_banner(changed),
+        Some("Someone changed this file outside Manyhands. Your edits are kept.")
+    );
     assert_eq!(save_offer(changed), None);
 
     // An unverified base: a banner, and Review….
     let review = before_save(false);
     assert_eq!(review, SaveState::ReviewBeforeSaving);
     assert_eq!(save_pill(review), None);
-    assert_eq!(save_banner(review), Some(CHECK_CURRENT_VERSION));
-    assert_eq!(save_offer(review), Some(REVIEW));
+    assert_eq!(
+        save_banner(review),
+        Some("Check the current version before saving. Your edits are kept.")
+    );
+    assert_eq!(save_offer(review), Some("Review\u{2026}"));
+    // Save, on that base, and its tooltip.
     assert_eq!(REVIEW_BEFORE_SAVING, "Review before saving");
+    assert_eq!(SAVE_TOOLTIP, "Save a checkpoint on this computer (Ctrl S)");
 
     // Any other refusal: the library's message and code, after these
     // words, with its own recovery actions.
@@ -485,7 +509,10 @@ fn save_state_maps_every_row_of_the_design_table_to_its_words() {
         let refused = save_state(code, &Effects::not_requested(), false);
         assert_eq!(refused, SaveState::Refused(code));
         assert_eq!(save_pill(refused), None);
-        assert_eq!(save_banner(refused), Some(SAVE_REFUSED));
+        assert_eq!(
+            save_banner(refused),
+            Some("Could not save on this computer. Your edits are kept.")
+        );
         assert_eq!(save_offer(refused), None);
     }
 }
@@ -501,7 +528,7 @@ async fn save_is_offered_only_when_dirty_and_not_while_saving(cx: &mut TestAppCo
     open(&shell, ticket(&root, TICKET), cx);
     assert!(!shell.present("item-save", cx), "not while viewing");
     let host = edit(&shell, cx).await;
-    assert_eq!(shell.label("item-save", cx).as_deref(), Some(SAVE));
+    assert_eq!(shell.label("item-save", cx).as_deref(), Some("Save"));
     shell.click("item-save", cx);
     assert!(saves(&shell, cx).is_empty(), "clean: nothing to save");
 
@@ -684,6 +711,12 @@ async fn the_saved_file_keeps_every_untouched_body_byte(cx: &mut TestAppContext)
     let host = edit(&shell, cx).await;
     let editor = host_editor(&host, cx);
     let loaded = load(UNTOUCHED);
+    // The N set, from the raw text: this body has no `$$` pair (`$$5 and
+    // $$10` is exempt), so the load changes the line endings only (N-1).
+    assert!(
+        loaded == UNTOUCHED.replace("\r\n", "\n"),
+        "only the line endings"
+    );
     assert!(edit_text(&host, cx) == loaded);
 
     // Bold over "word", from the toolbar.
@@ -829,7 +862,7 @@ async fn an_edit_undone_to_the_baseline_offers_no_save_anywhere(cx: &mut TestApp
     assert!(saves(&shell, cx).is_empty(), "secondary-s sends nothing");
     assert_eq!(
         shell.label("toolbar-status", cx).as_deref(),
-        Some(NO_CHANGES_TO_SAVE)
+        Some("No changes to save")
     );
 }
 
@@ -862,9 +895,9 @@ async fn a_pending_checkpoint_offers_retry_and_one_commit_follows(cx: &mut TestA
     assert_eq!(effects.checkpoint, CheckpointEffect::Pending);
     assert_eq!(
         shell.label("item-save-failed", cx).as_deref(),
-        Some(CHECKPOINT_FAILED)
+        Some("Could not save a checkpoint on this computer. Your text is kept.")
     );
-    assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some(RETRY));
+    assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some("Retry"));
     assert_eq!(commits(&root, &branch), before, "nothing committed");
     assert!(
         edit_text(&host, cx) == format!("{original}x"),
@@ -926,9 +959,12 @@ async fn discovery_pending_offers_resume_in_a_banner(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.label("item-save-pending", cx).as_deref(),
-        Some(SAVED_INDEX_PENDING)
+        Some("Saved on this computer, but the search index is not updated yet. Nothing is lost.")
     );
-    assert_eq!(shell.label("item-save-resume", cx).as_deref(), Some(RESUME));
+    assert_eq!(
+        shell.label("item-save-resume", cx).as_deref(),
+        Some("Resume")
+    );
     assert!(!dirty(&host, cx));
     assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED));
 
@@ -1050,12 +1086,12 @@ async fn secondary_s_on_a_clean_editor_says_no_changes_to_save(cx: &mut TestAppC
     assert!(saves(&shell, cx).is_empty());
     assert_eq!(
         shell.label("toolbar-status", cx).as_deref(),
-        Some(NO_CHANGES_TO_SAVE)
+        Some("No changes to save")
     );
     type_at_end(&shell, &host, "x", cx);
     assert_ne!(
         shell.label("toolbar-status", cx).as_deref(),
-        Some(NO_CHANGES_TO_SAVE),
+        Some("No changes to save"),
         "the text changed"
     );
 }
@@ -1146,7 +1182,7 @@ async fn an_external_change_opens_the_review_under_the_change_banner(cx: &mut Te
     assert_eq!(pill(&shell, cx).as_deref(), Some(REVIEWING));
     assert_eq!(
         shell.label("item-save-changed", cx).as_deref(),
-        Some(CHANGED_OUTSIDE)
+        Some("Someone changed this file outside Manyhands. Your edits are kept.")
     );
     assert_eq!(commits(&root, &branch), before, "nothing is written");
     let item = shown(&shell, &root, TICKET);
@@ -1199,4 +1235,347 @@ async fn with_crash_recovery_off_save_commits_without_a_draft(cx: &mut TestAppCo
     assert_eq!(phase(&shell, cx), Phase::Editing, "no review");
     let item = shown(&shell, &root, TICKET);
     assert!(item.body.as_deref() == Some(format!("{original}xy").as_str()));
+}
+
+// Fix round 1: ruling 2 (Save after a failed draft write), and the
+// review's Minors 3 and 4.
+
+/// Edit; "x" typed and written to a draft; then the drafts folder made
+/// read-only and "y" typed, so the next write fails and the toolbar says
+/// so. Gives the host, the text before the edits, the draft and the hold
+/// on the folder's mode.
+#[cfg(unix)]
+async fn failed_write(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> (Entity<EditorHost>, String, DraftId, FolderMode) {
+    open(shell, ticket(root, TICKET), cx);
+    let host = edit(shell, cx).await;
+    let original = edit_text(&host, cx);
+    type_at_end(shell, &host, "x", cx);
+    let id = attached(shell, root, TICKET, cx).expect("a draft began");
+    assert!(stored_body(&shell.fixture.draft_store(), id) == Some(format!("{original}x")));
+    let read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
+    type_at_end(shell, &host, "y", cx);
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some("Draft not kept. Save to protect your changes")
+    );
+    (host, original, id, read_only)
+}
+
+/// Ruling 2: the draft's last write failed, and the toolbar says "Draft
+/// not kept. Save to protect your changes". Save commits all the same,
+/// from the text in memory, once. The session then retires, though that
+/// revision was never written: the commit holds it. The folder stays
+/// read-only, so the older revision cannot be discarded: it stays
+/// stored, and nothing is lost.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_save_after_a_failed_draft_write_commits_and_reads_saved(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Unkept", "");
+    });
+    let (host, original, id, _read_only) = failed_write(&shell, &root, cx).await;
+    let branch = branch_of(&shell, &root, TICKET);
+    let before = commits(&root, &branch);
+
+    let request = save(&shell, cx).await;
+    assert_eq!(saves(&shell, cx), [request], "one save");
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert_eq!(commits(&root, &branch), before + 1, "one commit");
+    let item = shown(&shell, &root, TICKET);
+    assert!(item.body.as_deref() == Some(format!("{original}xy").as_str()));
+    assert!(!dirty(&host, cx));
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some("Editing \u{b7} saved on this computer")
+    );
+    assert_ne!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some("Draft not kept. Save to protect your changes")
+    );
+    assert_eq!(
+        attached(&shell, &root, TICKET, cx),
+        None,
+        "the session retired"
+    );
+    assert!(
+        stored_body(&shell.fixture.draft_store(), id) == Some(format!("{original}x")),
+        "the older revision stays stored"
+    );
+}
+
+/// Ruling 2, with the older revision stored first and the folder writable
+/// again before the save settles: the older revision is discarded, and no
+/// draft of the item is listed.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_save_after_a_failed_draft_write_discards_the_older_revision(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discarded", "");
+    });
+    let (host, _, id, read_only) = failed_write(&shell, &root, cx).await;
+
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held.wait_reached();
+    drop(read_only);
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert!(!dirty(&host, cx));
+    assert_eq!(attached(&shell, &root, TICKET, cx), None);
+    let store = shell.fixture.draft_store();
+    assert!(
+        stored(&store, id).is_none(),
+        "the older revision is discarded"
+    );
+    let listed = store.list().unwrap().into_iter().any(|listing| {
+        matches!(&listing.entry, Entry::Draft(draft) if draft.target.item_id == item_id(TICKET))
+    });
+    assert!(!listed, "no draft of the item is listed");
+}
+
+/// Ruling 2, with typing while the save runs: the newer text stays dirty,
+/// in a live session, rebased onto the base the save left.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn typing_while_a_save_after_a_failed_write_runs_stays_dirty_and_live(
+    cx: &mut TestAppContext,
+) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Newer", "");
+    });
+    let (host, original, _, _read_only) = failed_write(&shell, &root, cx).await;
+
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held.wait_reached();
+    shell.run(cx);
+    type_at_end(&shell, &host, "z", cx);
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+
+    let item = shown(&shell, &root, TICKET);
+    assert!(item.body.as_deref() == Some(format!("{original}xy").as_str()));
+    assert!(edit_text(&host, cx) == format!("{original}xyz"));
+    assert!(dirty(&host, cx), "the newer text stays dirty");
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some("Editing \u{b7} unsaved changes")
+    );
+    let id = attached(&shell, &root, TICKET, cx).expect("a live session");
+    let (current, observation) = registry(&shell, cx).read_with(cx, |registry, _| {
+        let session = registry.session(id).expect("live");
+        (
+            body_of(session.current()).to_owned(),
+            session.base().and_then(|base| base.observation.clone()),
+        )
+    });
+    assert!(current == format!("{original}xyz"));
+    assert_eq!(
+        observation, item.observation,
+        "rebased onto the save's base"
+    );
+}
+
+/// Ruling 2, against a store that keeps failing (every write, through the
+/// store's own failure point): Save sends exactly one save, which
+/// commits, and no write loop follows it.
+#[gpui_kit::test]
+async fn a_save_against_a_store_that_keeps_failing_is_sent_once(cx: &mut TestAppContext) {
+    use manyhands::drafts::{DraftErrorKind, FailureAction, FailurePoint as DraftFailurePoint};
+
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Failing", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let branch = branch_of(&shell, &root, TICKET);
+    let before = commits(&root, &branch);
+    type_at_end(&shell, &host, "x", cx);
+    assert!(
+        attached(&shell, &root, TICKET, cx).is_some(),
+        "a draft began"
+    );
+    // Clones share the failure point: the desktop's store fails too.
+    let _ = shell.fixture.draft_store().with_failure_point_for_testing(
+        DraftFailurePoint::CreateTemp,
+        FailureAction::Fail(DraftErrorKind::NoSpace),
+    );
+    type_at_end(&shell, &host, "y", cx);
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some("Draft not kept. Save to protect your changes")
+    );
+    let writes = shell.backend.reads_seen(ReadKind::DraftWrite);
+
+    let request = save(&shell, cx).await;
+    assert_eq!(saves(&shell, cx), [request], "exactly one save");
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert_eq!(commits(&root, &branch), before + 1);
+    let more = shell.backend.reads_seen(ReadKind::DraftWrite) - writes;
+    assert!(more <= 2, "one write before the save, one after: {more}");
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some("Editing \u{b7} saved on this computer")
+    );
+}
+
+/// Minor 3: while D2 finishes the last save, retiring its revision or
+/// storing newer text again, the tab is still saving: the pill says so,
+/// and Save is disabled. Ctrl/Cmd-S meanwhile is not dropped: it waits,
+/// and saves once D2 is done.
+#[gpui_kit::test]
+async fn save_waits_while_d2_finishes_the_last_save(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Finishing", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let branch = branch_of(&shell, &root, TICKET);
+    let before = commits(&root, &branch);
+    let original = edit_text(&host, cx);
+    type_at_end(&shell, &host, "x", cx);
+
+    // The retirement is the next store call that writes.
+    let retirement = shell.backend.hold_read(ReadKind::DraftWrite);
+    save(&shell, cx).await;
+    assert_eq!(commits(&root, &branch), before + 1);
+    type_at_end(&shell, &host, "y", cx);
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some(SAVING),
+        "D2 is still saving"
+    );
+    shell.click("item-save", cx);
+    assert_eq!(saves(&shell, cx).len(), 1, "Save is disabled meanwhile");
+    let editor = host_editor(&host, cx);
+    let end = text(&editor, cx).len();
+    focus_at(&shell, &editor, end, cx);
+    shell.keys("secondary-s", cx);
+    assert_eq!(saves(&shell, cx).len(), 1, "the key waits");
+
+    retirement.send(()).unwrap();
+    shell.run(cx);
+    let sent = saves(&shell, cx);
+    assert_eq!(sent.len(), 2, "then it saves");
+    ended(&shell, sent[0], cx).await;
+    assert_eq!(commits(&root, &branch), before + 2);
+    let item = shown(&shell, &root, TICKET);
+    assert!(item.body.as_deref() == Some(format!("{original}xy").as_str()));
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some("Editing \u{b7} saved on this computer")
+    );
+}
+
+/// Minor 4: a pending checkpoint whose operation is abandoned, as the
+/// operation area does it. D2 ends that save, and the tab follows: the
+/// banner goes, and Save is enabled again while the editor is dirty, with
+/// no Retry bound to fail.
+#[gpui_kit::test]
+async fn an_abandoned_pending_checkpoint_clears_its_banner_and_frees_save(cx: &mut TestAppContext) {
+    use manyhands::repository::{
+        ConfirmationId, OperationAbandonInput, OperationId, PrepareDataDto,
+    };
+
+    use crate::desktop::services::{Backend, requests::Lane};
+
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Abandoned", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+    let request = save(&shell, cx).await;
+    assert_eq!(
+        shell.label("item-save-failed", cx).as_deref(),
+        Some("Could not save a checkpoint on this computer. Your text is kept.")
+    );
+    shell.click("item-save", cx);
+    assert_eq!(saves(&shell, cx), [request], "Save waits for Retry");
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+
+    // The operation area's Abandon: `operation abandon` of the operation
+    // the pending save named, confirmed.
+    let operation = shell
+        .operations(cx)
+        .read_with(cx, |operations, _| {
+            match &operations.request(request).unwrap().state {
+                RequestState::Finished(_, _, _, recovery, _) => recovery
+                    .iter()
+                    .find_map(|action| action.operation_id.clone()),
+                _ => None,
+            }
+        })
+        .expect("a pending save names its operation");
+    let operation_id = OperationId::parse(&operation).unwrap();
+    let prepared =
+        shell
+            .backend
+            .service()
+            .prepare(&Mutation::OperationAbandon(OperationAbandonInput {
+                root: root.clone(),
+                operation_id,
+            }));
+    let Some(PrepareDataDto::Preview(preview)) = prepared.data else {
+        panic!("operation abandon gave no preview: {}", prepared.message);
+    };
+    let confirmation = ConfirmationId::parse(&preview.confirmation_id).unwrap();
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    let abandon = services.worker().submit(
+        Intent::OperationAbandon {
+            root: root.clone(),
+            operation_id,
+        },
+        Lane::User,
+        Some(confirmation),
+        None,
+    );
+    ended(&shell, abandon, cx).await;
+    assert_eq!(code(&shell, abandon, cx), Some(ResultCode::Ok));
+
+    assert!(!shell.present("item-save-failed", cx), "the banner goes");
+    assert!(!shell.present("item-save-retry", cx));
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert!(dirty(&host, cx));
+    shell.click("item-save", cx);
+    let sent = saves(&shell, cx);
+    assert_eq!(sent.len(), 2, "Save is enabled again");
+    ended(&shell, sent[0], cx).await;
 }

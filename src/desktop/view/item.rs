@@ -154,7 +154,7 @@ impl ItemPane {
         });
         let drafts = cx.observe(services.drafts(), |pane, _, cx| {
             pane.sync_status(cx);
-            pane.save_settle_lost(cx);
+            pane.follow_registry(cx);
             cx.notify()
         });
         let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {

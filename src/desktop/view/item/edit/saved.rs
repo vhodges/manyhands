@@ -2,6 +2,7 @@
 //! R-69, R-70): on D2's `DraftSaved`, or on this tab's own read when no D2
 //! session held the text, the session has saved, its baseline and base
 //! move, the tab reads the item again, and the remotes are read (fact 41).
+//! The tab's save also follows what D2 does with it (`follow_registry`).
 //! The save itself is `save`.
 
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use manyhands::{
 
 use crate::desktop::{
     model::{
-        drafts::save::base_after_save,
+        drafts::{Saving, save::base_after_save},
         edit::{Phase, fields_with_body},
         navigation::OpenTarget,
         stamp::Stamp,
@@ -164,14 +165,47 @@ impl ItemPane {
             .update(cx, |host, cx| host.reload_clean(&body, cx));
     }
 
-    /// The registry changed: a committed save whose session D2 ended before
-    /// it settled, as a discard does, has nothing left to settle it.
-    pub(in crate::desktop::view::item) fn save_settle_lost(&mut self, cx: &mut Context<Self>) {
-        let lost = self.edit.save.run.as_ref().is_some_and(|run| {
-            run.settling && run.direct.is_none() && self.live_draft(cx).is_none()
-        });
-        if lost {
-            self.end_run(cx);
+    /// The registry changed, and the tab's save follows D2's:
+    /// - a committed save whose session D2 ended before it settled, as a
+    ///   discard does, has nothing left to settle it;
+    /// - a pending checkpoint D2 no longer holds is over: its operation was
+    ///   abandoned, or its session ended. Its banner goes, and Save is
+    ///   enabled again, with no Retry bound to fail;
+    /// - a save waiting for D2 to finish the last one is sent once it has.
+    pub(in crate::desktop::view::item) fn follow_registry(&mut self, cx: &mut Context<Self>) {
+        let Some(run) = &self.edit.save.run else {
+            return;
+        };
+        if run.direct.is_some() {
+            return;
+        }
+        let (settling, request, waiting) = (run.settling, run.request, run.waiting());
+        let live = self.live_draft(cx);
+        if settling {
+            if live.is_none() {
+                self.end_run(cx);
+            }
+            return;
+        }
+        match request {
+            // Waiting for Retry.
+            Some(request) if self.edit.phase != Phase::Saving => {
+                let held = live
+                    .and_then(|id| self.services.drafts().read(cx).session(id))
+                    .is_some_and(|session| {
+                        matches!(
+                            session.saving(),
+                            Some(Saving::Submitted(saving, _)) if saving == request
+                        )
+                    });
+                if !held {
+                    self.edit.save.answer = None;
+                    self.end_run(cx);
+                }
+            }
+            Some(_) => {}
+            None if waiting && self.edit.phase == Phase::Saving => self.send_save(cx),
+            None => {}
         }
     }
 }

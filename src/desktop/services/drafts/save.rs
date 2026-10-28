@@ -2,13 +2,18 @@
 //!
 //! A save retires only the revision it saved, never newer text (review
 //! focus 1). `save` first writes the newest revision N, then sends N's
-//! fields (ruling R21), one save at a time (R15). On a committed answer the
-//! item is read again for the new base (R5), any write in flight lands,
-//! and only then is the session compared with N:
+//! fields (ruling R21), one save at a time (R15). When that write fails, N
+//! is sent from memory all the same (controller ruling 2). On a committed
+//! answer the item is read again for the new base (R5), any write in
+//! flight lands, and only then is the session compared with N:
 //!
 //! - its revision in memory is still N, and N is what the store holds:
 //!   the claim is taken out of its slot off the foreground and retired at
 //!   N, and the session ends;
+//! - its text is still what was sent, but that text was never stored as
+//!   the store's newest revision (its write failed, or an edit came and
+//!   was undone): the commit holds the session's whole text, so the draft
+//!   is discarded, any older revision with it, and the session ends;
 //! - anything newer, an edit or a base change, whether its write landed or
 //!   failed: nothing is retired. The session is rebased onto the new base,
 //!   which raises its revision, and is written at once.
@@ -54,11 +59,12 @@ pub(super) struct SaveRecord {
 
 impl DraftRegistry {
     /// Saves the session `id`'s newest revision: writes it to the store if
-    /// it is not there yet, then sends it on the user lane. Answers the
-    /// request, or `None`, having sent nothing, while a save of this
-    /// session is in flight or its revision retires, when it has no base
-    /// (a new item is D3's), when its base is unverified, and when the
-    /// write before it failed.
+    /// it is not there yet, then sends it on the user lane. When that write
+    /// fails, the revision is sent from memory all the same (controller
+    /// ruling 2, Task 15 fix round 1). Answers the request, or `None`,
+    /// having sent nothing, while a save of this session is in flight or
+    /// its revision retires, when it has no base (a new item is D3's), and
+    /// when its base is unverified.
     pub(crate) fn save(
         &mut self,
         id: DraftId,
@@ -126,12 +132,14 @@ impl DraftRegistry {
         if session.saving() != Some(Saving::Flushing) {
             return Send::Refused;
         }
-        if flushed.is_err() {
-            // The flush failure is shown; nothing is sent.
-            session.set_saving(None);
-            return Send::Refused;
-        }
-        if session.busy() || !matches!(session.recovery_state(), RecoveryState::Saved(_)) {
+        // A flush that failed is shown, and the text is sent from memory at
+        // once (controller ruling 2): Save is what protects it now. It is
+        // never asked to be stored first again, which a failing store would
+        // answer the same way for ever. The revision is not written, so it
+        // never retires as written (`retire.rs`).
+        if flushed.is_ok()
+            && (session.busy() || !matches!(session.recovery_state(), RecoveryState::Saved(_)))
+        {
             return Send::Again;
         }
         let fields = session.current().clone();

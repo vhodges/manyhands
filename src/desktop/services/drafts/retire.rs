@@ -1,7 +1,10 @@
 //! A committed save's completion: the item read again for the new base,
 //! `DraftSaved` emitted with it (R-69), then the saved revision retired,
 //! only if it is still the session's newest, or the session rebased onto
-//! that base.
+//! that base. A session whose text is still what the save sent, though it
+//! was never stored as that revision (its write failed), ends too: its
+//! draft is discarded, any older revision with it, since the commit holds
+//! the text (controller ruling, Task 15 fix round 1).
 //!
 //! While the revision retires no write is taken; edits are still taken in
 //! memory. If the store kept the draft, the claim goes back and the
@@ -83,10 +86,11 @@ impl DraftRegistry {
     }
 
     /// Retires revision `saved` if it is still the session's newest, in
-    /// memory and in the store; otherwise rebases the session onto `base`.
-    /// Waits first for any write in flight. Either way, `DraftSaved` tells
-    /// the tab first, with `submitted`, the fields the save sent, and
-    /// `base` (R-69).
+    /// memory and in the store; discards the draft when the session's text
+    /// is still `submitted`, the fields the save sent, but was not stored
+    /// as `saved`; otherwise rebases the session onto `base`. Waits first
+    /// for any write in flight. Whichever it does, `DraftSaved` tells the
+    /// tab first, with `submitted` and `base` (R-69).
     fn settle(
         &mut self,
         id: DraftId,
@@ -113,7 +117,15 @@ impl DraftRegistry {
         });
         let session = &mut live.session;
         session.set_saving(None);
-        if session.revision() != saved || session.flushed() != saved {
+        let written = session.revision() == saved && session.flushed() == saved;
+        // The commit holds the session's whole text, though the store does
+        // not hold it as its newest revision: its write failed, or an edit
+        // came and was undone. The session ends, and the draft is
+        // discarded, any older revision with it (controller ruling, Task 15
+        // fix round 1). A discard that fails leaves the draft stored, for
+        // the Drafts page.
+        let whole = !written && session.current() == submitted;
+        if !written && !whole {
             // Newer text, or a base change, came after the save: it is not
             // retired, and takes the base the save left.
             session.rebase(base.clone(), cx.background_executor().now());
@@ -121,6 +133,8 @@ impl DraftRegistry {
             cx.notify();
             return Settle::Done;
         }
+        // Text that comes while the claim is out is newer than this.
+        let at = session.revision();
         let slot = session.begin_retire();
         let kept = slot.clone();
         let base = base.clone();
@@ -129,14 +143,21 @@ impl DraftRegistry {
         let work = off_thread(
             &self.backend,
             ReadKind::DraftWrite,
-            move |_| take(&slot)?.retire(saved),
+            move |_| {
+                let claim = take(&slot)?;
+                if whole {
+                    claim.discard().map(|()| Retired::Deleted)
+                } else {
+                    claim.retire(saved)
+                }
+            },
             cx,
         );
         let task = cx
             .spawn(async move |registry, cx| {
                 let result = work.await;
                 let _ = registry.update(cx, |registry, cx| {
-                    registry.retire_landed(id, saved, base, &kept, result, cx)
+                    registry.retire_landed(id, at, base, &kept, result, cx)
                 });
             })
             .shared();
@@ -144,10 +165,12 @@ impl DraftRegistry {
         Settle::Done
     }
 
+    /// The retirement or discard of the claim, decided at the session's
+    /// revision `at`, landed.
     fn retire_landed(
         &mut self,
         id: DraftId,
-        saved: u64,
+        at: u64,
         base: DraftBase,
         slot: &Mutex<Option<DraftClaim>>,
         result: Result<Retired, DraftError>,
@@ -161,7 +184,7 @@ impl DraftRegistry {
             }
             return;
         };
-        let newer = live.session.revision() != saved;
+        let newer = live.session.revision() != at;
         match result {
             Ok(Retired::Kept(claim)) => {
                 live.session.retire_kept(claim);

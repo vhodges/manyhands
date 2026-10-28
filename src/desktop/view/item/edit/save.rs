@@ -7,8 +7,10 @@
 //!   in the toolbar's status item. On an unverified base Save reads
 //!   "Review before saving" and opens the review instead (R-36).
 //! - **The save** is D2's (`DraftRegistry::save`): it writes the newest
-//!   revision first, then sends it, one save at a time. A draft still
-//!   beginning is saved once it lands. With no D2 session (the store did
+//!   revision first, then sends it, one save at a time; a write that fails
+//!   leaves it sent from memory (controller ruling 2). A draft still
+//!   beginning is saved once it lands, and a save asked for while D2
+//!   finishes the last one, once it is done. With no D2 session (the store did
 //!   not open, or the draft could not begin) the fields are sent as they
 //!   are, and this tab reads the base the save leaves itself, by D2's rule
 //!   (`base_after_save`).
@@ -56,14 +58,24 @@ use crate::desktop::{
 #[derive(Default)]
 pub(super) struct SaveRun {
     /// The request, once sent: `None` while D2 writes the revision first,
-    /// or while the draft begins.
+    /// while the draft begins, and while D2 finishes the last save.
     pub(super) request: Option<DesktopRequestId>,
+    /// D2 was asked to save, and has not yet answered with its request.
+    asked: bool,
     /// The attempt of `request` whose answer was taken.
     taken: u32,
     /// Sent with no D2 session: the fields sent.
     pub(super) direct: Option<DraftFields>,
     /// It committed: the base it leaves is being read.
     pub(super) settling: bool,
+}
+
+impl SaveRun {
+    /// Not yet sent, nor asked of D2: it waits for the draft to begin, or
+    /// for D2 to finish the last save.
+    pub(super) fn waiting(&self) -> bool {
+        self.request.is_none() && !self.asked && self.direct.is_none()
+    }
 }
 
 /// A save's answer, for its banner. It holds the library's message, never
@@ -168,18 +180,22 @@ impl ItemPane {
 
     /// Sends the save waiting in `run`: through D2's session, or, with none,
     /// as the fields are. A draft still beginning sends it once it lands
-    /// (`draft_begun`).
+    /// (`draft_begun`); while D2 finishes the last save, once it is done
+    /// (`follow_registry`).
     pub(super) fn send_save(&mut self, cx: &mut Context<Self>) {
         let Some(session) = &self.edit.session else {
             return;
         };
-        if session.draft == DraftLink::Beginning {
+        if session.draft == DraftLink::Beginning || self.store_settling(cx) {
             return;
         }
         let Some(id) = self.live_draft(cx) else {
             self.send_direct(cx);
             return;
         };
+        if let Some(run) = &mut self.edit.save.run {
+            run.asked = true;
+        }
         let sent = self
             .services
             .drafts()
@@ -191,13 +207,14 @@ impl ItemPane {
         .detach();
     }
 
-    /// D2 sent the save as `request`, or sent nothing: its write before it
-    /// failed, which the toolbar shows, or it was saving already. A session
-    /// D2 ended meanwhile leaves the fields to send as they are.
+    /// D2 sent the save as `request`, or sent nothing, its base being
+    /// unverified or a save of it in flight already. A session D2 ended
+    /// meanwhile leaves the fields to send as they are.
     fn registry_sent(&mut self, request: Option<DesktopRequestId>, cx: &mut Context<Self>) {
         let Some(run) = &mut self.edit.save.run else {
             return;
         };
+        run.asked = false;
         if let Some(request) = request {
             run.request = Some(request);
             self.save_progressed(cx);

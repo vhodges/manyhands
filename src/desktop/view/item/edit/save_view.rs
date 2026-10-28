@@ -3,9 +3,11 @@
 //! each in the words of `model::edit::save_state`.
 //!
 //! - **Save** (`save` icon, "Save a checkpoint on this computer (Ctrl S)")
-//!   is enabled only while dirty, not saving and not in the review. On an
-//!   unverified base it reads "Review before saving".
-//! - **The pill** while editing: unsaved while dirty; saved on this
+//!   is enabled only while dirty, not saving and not in the review; D2
+//!   retiring the last save's revision, or storing newer text again, is
+//!   still saving. On an unverified base it reads "Review before saving".
+//! - **The pill** while editing: "Saving…" while D2 finishes the last
+//!   save; otherwise unsaved while dirty, and saved on this
 //!   computer when clean, not shared yet once a save has found a selected
 //!   publication remote (fact 41).
 //! - **The banners**: check the current version, with Review…, on an
@@ -38,9 +40,12 @@ use crate::desktop::{
 
 impl ItemPane {
     /// Whether Save can save now: editing, dirty, and no save in flight or
-    /// waiting for its Retry.
+    /// waiting for its Retry, D2's finishing of the last one included.
     pub(in crate::desktop::view::item) fn save_offered(&self, cx: &App) -> bool {
-        self.edit.phase() == Phase::Editing && self.edit.save.run.is_none() && self.edit_dirty(cx)
+        self.edit.phase() == Phase::Editing
+            && self.edit.save.run.is_none()
+            && !self.store_settling(cx)
+            && self.edit_dirty(cx)
     }
 
     /// The header's Save while editing, before Done.
@@ -67,6 +72,10 @@ impl ItemPane {
         let (phase, dirty) = (self.edit.phase(), self.edit_dirty(cx));
         if phase != Phase::Editing {
             return edit_state(phase, dirty);
+        }
+        // D2 finishing the last save is still saving.
+        if self.store_settling(cx) {
+            return edit_state(Phase::Saving, dirty);
         }
         let saved = self
             .edit
