@@ -6,16 +6,23 @@
 //! from one, is tried first, then primary:
 //! - **Exact.** `observe_path` says whether a file is at the path, and
 //!   refuses a path no item can be at as `invalid_path` (fact 4) without
-//!   opening anything. A file that is there is read with `show_path`: a
-//!   managed item opens its tab; any other file is no managed item.
-//!   `invalid_path` and absence go on to the nearest name.
+//!   opening anything. That answer, absence, and an observe that stays
+//!   busy or fails all go on: to primary, then to the nearest name. A file
+//!   that is there is read with `show_path` in the same context. A managed
+//!   item opens its tab. Any other file, one with no ID, opens its Inspect
+//!   tab in that context, as the lists open it (controller, Task 11 fix
+//!   round 1). `show_path`'s own `invalid_path`, for a symbolic link or
+//!   something that is not a regular file, is not found.
 //! - **Nearest name.** Among the managed documents `list_documents` gives
 //!   with the same file name: the context's copies first, then the fewest
-//!   folder steps, then path order. The tab says which path opened.
+//!   folder steps, then path order. The tab says which path opened. An
+//!   item's context holds the item alone, so its one copy there is the
+//!   linking item's own.
 //!
 //! A title link matches document titles, ignoring case, nearest first. A
-//! path refused as not found (`links::link_path`) is never looked up. Any
-//! read that gives nothing stops the lookup as not found.
+//! path refused as not found (`links::link_path`) is never looked up. The
+//! repository's resolution, `show_path` and the listing stop the lookup as
+//! not found when they give nothing.
 //!
 //! Nothing here is shown or kept but what the library returned: a read's
 //! failure keeps its code alone, and the target is never logged.
@@ -38,7 +45,9 @@ use crate::desktop::model::{
 /// link's own text.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum LinkResolution {
-    /// A managed item at the exact path, or the document a title names.
+    /// The item at the exact path, by its ID, or the file there by its
+    /// path in its context when it has none; or the document a title
+    /// names.
     Item(ItemLocator),
     /// No item at the path: the nearest document of the same file name,
     /// at `path` in its context.
@@ -46,7 +55,8 @@ pub(crate) enum LinkResolution {
         locator: ItemLocator,
         path: String,
     },
-    /// A file is at the item path, but it is no managed item.
+    /// Something is at the item path that Manyhands does not read: a
+    /// symbolic link, or not a regular file.
     NotManaged,
     NotFound,
 }
@@ -163,7 +173,8 @@ impl Linking {
     }
 
     /// What is at `path` in `context` (primary when `None`): `None` when
-    /// nothing is, or no item can be, so the lookup goes on.
+    /// nothing is, no item can be, or the observe stayed busy or failed,
+    /// so the lookup goes on.
     #[allow(clippy::result_large_err)] // The library's read error, as every read gives it.
     async fn exact(
         &self,
@@ -188,10 +199,9 @@ impl Linking {
             })
             .await;
         match shown {
-            ReadResult::Ok(item) => Some(match ItemLocator::for_item(&item) {
-                locator @ ItemLocator::Identified { .. } => LinkResolution::Item(locator),
-                ItemLocator::Inspect { .. } => LinkResolution::NotManaged,
-            }),
+            // By its ID, or by its path in this context when it has none,
+            // as the lists open a row.
+            ReadResult::Ok(item) => Some(LinkResolution::Item(ItemLocator::for_item(&item))),
             // Gone since it was observed.
             ReadResult::Failed(failure) if failure.code == ResultCode::PathNotFound => None,
             ReadResult::Failed(failure) if failure.code == ResultCode::InvalidPath => {

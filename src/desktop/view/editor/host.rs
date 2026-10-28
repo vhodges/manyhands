@@ -27,7 +27,7 @@
 //!   link key asks the toolbar for an address (`LinkRequested`).
 //! - **Caret** (R-67). Kept in view in the region `place` names.
 //! - **Links** (decision 10). A clicked link for the browser opens from
-//!   here; any other the host passes to its tab as a `LinkTarget`
+//!   here, and every clicked link goes to the tab as a `LinkTarget`
 //!   (`clicked_link`). Markdown mode shows links as text, and the editor
 //!   reports no click on them there.
 //!
@@ -324,8 +324,8 @@ impl EditorHost {
 
 impl EventEmitter<EditorHostEvent> for EditorHost {}
 
-/// A clicked link the host did not open itself, for its tab. It is body
-/// text, so it is not an `EditorHostEvent`, which derives `Debug`.
+/// A clicked link, for its tab; one for the browser is open already. It
+/// is body text, so it is not an `EditorHostEvent`, which derives `Debug`.
 impl EventEmitter<LinkTarget> for EditorHost {}
 
 impl Render for EditorHost {

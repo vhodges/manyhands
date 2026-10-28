@@ -176,6 +176,46 @@ fn dot_dot_past_the_root_is_not_found_with_no_fallback() {
     assert!(looked_up("..", "docs").is_none());
 }
 
+/// The path is decoded before it is contained, so an encoded `..` and a
+/// `..` joined by an encoded `/` are steps like any other: past the root,
+/// they are refused; inside it, they are followed.
+#[test]
+fn encoded_dots_and_slashes_are_contained_after_decoding() {
+    for raw in [
+        "%2e%2e/%2e%2e/%2e%2e/x.md",
+        "%2E%2E/%2E%2E/%2E%2E/x.md",
+        "..%2F..%2F..%2Fx.md",
+        "%2e%2e%2f%2e%2e%2f%2e%2e%2fx.md",
+        "/%2e%2e/x.md",
+    ] {
+        assert!(looked_up(raw, "docs/guides").is_none(), "{raw}");
+    }
+    assert_eq!(
+        looked_up("%2e%2e/x.md", "docs/guides").as_deref(),
+        Some("docs/x.md")
+    );
+    assert_eq!(
+        looked_up("sub%2Fy.md", "docs/guides").as_deref(),
+        Some("docs/guides/sub/y.md")
+    );
+}
+
+/// `a%3Ab.md` holds no `:` as written, so the scheme check, made on the
+/// raw text before decoding, finds none: it is a path, never "not opened".
+/// Decoded, it starts with `a:`, a drive-relative path on Windows, so it is
+/// refused as not found, as any drive step is. With two letters before the
+/// `:` it is no drive, and it is looked up as a file name.
+#[test]
+fn an_encoded_colon_is_a_path_and_a_drive_step_once_decoded() {
+    assert!(parse_link("a%3Ab.md") == path("a:b.md", false));
+    assert!(looked_up("a%3Ab.md", "docs/guides").is_none());
+    assert!(looked_up("sub/z%3Ab.md", "docs/guides").is_none());
+    assert_eq!(
+        looked_up("ab%3Ac.md", "docs/guides").as_deref(),
+        Some("docs/guides/ab:c.md")
+    );
+}
+
 fn candidate(path: &str, in_context: bool) -> CandidatePath {
     CandidatePath {
         path: path.to_owned(),

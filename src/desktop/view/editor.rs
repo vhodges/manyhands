@@ -203,25 +203,22 @@ pub(crate) fn step_over_blocks(
 
 /// Decision 10, in every editor: a click on a link (`OpenLink`, parsed as
 /// a link's text, or `OpenWikiLink`, as a title) is opened here when it is
-/// for the browser, `http`, `https` or `mailto`, and dropped when it names
-/// nothing to open. Any other target, a path, a title or a scheme that is
-/// not opened, is the editor's owner's, which resolves it or says why
-/// nothing opened. Any other event gives none. Links open by pointer
-/// only: the editor emits these on a left click alone (fact 35).
+/// for the browser, `http`, `https` or `mailto`. Every clicked link, that
+/// one included, then goes to the editor's owner: following any link is
+/// the tab's next navigation, which clears its link banner, and the owner
+/// resolves a path or a title, or says why nothing opened. Any other event
+/// gives none. Links open by pointer only: the editor emits these on a
+/// left click alone (fact 35).
 pub(crate) fn clicked_link(event: &EditorEvent, cx: &mut App) -> Option<LinkTarget> {
     let target = match event {
         EditorEvent::OpenLink(raw) => parse_link(raw),
         EditorEvent::OpenWikiLink(raw) => parse_wiki_link(raw),
         _ => return None,
     };
-    match target {
-        LinkTarget::External(url) => {
-            cx.open_url(&url);
-            None
-        }
-        LinkTarget::Ignored => None,
-        target => Some(target),
+    if let LinkTarget::External(url) = &target {
+        cx.open_url(url);
     }
+    Some(target)
 }
 
 /// The block event a pointer press caused, read as a forward entry: the

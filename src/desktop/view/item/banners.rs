@@ -10,11 +10,11 @@
 //! yet. The other rows of the design's table are named here for the tasks
 //! that raise them.
 //!
-//! A link clicked in one of the tab's editors that the editor did not open
-//! is followed here (decision 10; `services::links`). The link banner says
-//! when it was not found or is a kind that is not opened, or names the
-//! path the nearest match opened, the repository's own; it never names the
-//! link's text. The next link clears it.
+//! A link clicked in one of the tab's editors is followed here (decision
+//! 10; `services::links`). The link banner says when it was not found or
+//! is a kind that is not opened, or names the path the nearest match
+//! opened, the repository's own; it never names the link's text. The next
+//! link clicked in the tab, of any kind, clears it.
 
 use gpui_kit::{
     AnyElement, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
@@ -285,11 +285,12 @@ impl ItemPane {
 
 impl ItemPane {
     /// Decision 10: a link clicked in one of this tab's editors, the read
-    /// view, a comment's or the edit editor, that the editor did not open
-    /// itself. It is the tab's next navigation, so the last link's banner
-    /// goes, and so does a resolution still running. A scheme that is not
-    /// opened says so; a path or a title is resolved from the item's
-    /// folder, a comment's too, and opens its item's tab, or says it was
+    /// view, a comment's or the edit editor. It is the tab's next
+    /// navigation, so the last link's banner goes, and so does a
+    /// resolution still running. A browser link, which the editor opened,
+    /// and a link to nothing, such as a heading here, do no more. A scheme
+    /// that is not opened says so; a path or a title is resolved from the
+    /// item's folder, a comment's too, and opens its tab, or says it was
     /// not found. The banner never names the target.
     pub(crate) fn follow_link(&mut self, target: &LinkTarget, cx: &mut Context<Self>) {
         self.link_note = None;
@@ -315,8 +316,9 @@ impl ItemPane {
         }));
     }
 
-    /// A resolved item opens its tab in this repository; the nearest match
-    /// says, in this tab, which path opened; anything else is not found.
+    /// A resolved item, or a file with no ID, opens its tab in this
+    /// repository; the nearest match says, in this tab, which path opened;
+    /// anything else is not found.
     fn link_resolved(&mut self, resolution: LinkResolution, cx: &mut Context<Self>) {
         self.link_read = None;
         let repo = self.repo().to_owned();

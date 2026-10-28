@@ -37,6 +37,8 @@ const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5KD1";
 const NEAR: &str = "01ARZ3NDEKTSV4RRFFQ69G5KE1";
 const FAR: &str = "01ARZ3NDEKTSV4RRFFQ69G5KF1";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KG1";
+/// Sorts before `LINKING`.
+const SORTS_FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5K91";
 
 /// The schemes no editor opens, tried before the ones it does.
 const UNSAFE: [&str; 6] = [
@@ -306,6 +308,102 @@ fn an_unresolved_link_says_not_found_in_a_banner(cx: &mut TestAppContext) {
     assert_eq!(cx.opened_url(), None);
     assert!(shell.requests(cx, |_| true).is_empty());
     assert_eq!(shown(&shell, cx), Some(document(&root, LINKING)));
+
+    // Any link followed from the tab is its next navigation, and clears
+    // the banner: one to a heading in the same text, and one the browser
+    // opens.
+    let editor = read_editor(&shell, cx);
+    click(&shell, &editor, link("#a-heading"), cx);
+    assert_eq!(banner(&shell, cx), None, "a heading link cleared it");
+    click(&shell, &editor, link("nothing/here.md"), cx);
+    assert_eq!(banner(&shell, cx).as_deref(), Some(LINK_NOT_FOUND));
+    click(&shell, &editor, link("https://example.com/a"), cx);
+    assert_eq!(banner(&shell, cx), None, "a browser link cleared it");
+}
+
+/// A file at an item path that is no managed item, here a ticket file
+/// with no ID, opens as the lists open it: its Inspect tab, in the
+/// context where it was found. The linking tab says nothing.
+#[gpui_kit::test]
+fn a_link_to_an_unmanaged_file_opens_its_inspect_tab(cx: &mut TestAppContext) {
+    let (shell, root) = linking(cx, |fixture, root| {
+        commit_document(fixture, root, LINKING, "docs/a.md", "Linking");
+        fixture.commit_nonconforming_ticket(root, OTHER);
+    });
+    let path = format!(".manyhands/tickets/{OTHER}/ticket.md");
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let file = service.show_path(&repo, None, Path::new(&path)).unwrap();
+    assert!(file.id.is_none(), "the ticket file has no ID");
+
+    let editor = read_editor(&shell, cx);
+    click(&shell, &editor, link(&format!("../{path}")), cx);
+    assert_eq!(
+        shown(&shell, cx),
+        Some(OpenTarget::Inspect {
+            repo: key(&root),
+            worktree: file.context.worktree.clone(),
+            path,
+        })
+    );
+    assert_eq!(
+        banner(&shell, cx),
+        None,
+        "the Inspect tab has no link banner"
+    );
+    back_to_linking(&shell, &root, cx);
+    assert_eq!(banner(&shell, cx), None, "the linking tab says nothing");
+}
+
+/// Nearest name looks at the linking item's own context first. That
+/// context holds the item alone: the library observes every other item in
+/// an item worktree from primary (`repository/discovery.rs`), so the one
+/// candidate in it is the item itself, in its own folder, and nothing is
+/// nearer. A document on primary at the same path ties it on folder steps
+/// and path, and its ID sorts first, so the listing's order alone would
+/// pick it. The context's copy wins.
+#[gpui_kit::test]
+fn a_nearest_name_in_the_items_context_wins_over_one_on_primary(cx: &mut TestAppContext) {
+    let (shell, root) = linking(cx, |fixture, root| {
+        fixture.create_document(root, LINKING, "docs/guides/target.md", "Linking");
+        commit_document(
+            fixture,
+            root,
+            SORTS_FIRST,
+            "docs/guides/target.md",
+            "On primary",
+        );
+    });
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let listed: Vec<(Option<String>, String, ItemContextKind)> = service
+        .list_documents(&repo)
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|row| (row.id, row.path, row.context.kind))
+        .collect();
+    let at = "docs/guides/target.md".to_owned();
+    assert_eq!(
+        listed,
+        [
+            (
+                Some(SORTS_FIRST.to_owned()),
+                at.clone(),
+                ItemContextKind::Primary
+            ),
+            (Some(LINKING.to_owned()), at, ItemContextKind::Active),
+        ],
+        "both are listed at one path, primary's first"
+    );
+
+    let editor = read_editor(&shell, cx);
+    click(&shell, &editor, link("gone/target.md"), cx);
+    assert_eq!(shown(&shell, cx), Some(document(&root, LINKING)));
+    assert_eq!(
+        banner(&shell, cx),
+        Some(format!("{NEAREST_MATCH} docs/guides/target.md"))
+    );
 }
 
 /// The comment's file is under `.manyhands/comments/`, but its link is
@@ -339,8 +437,9 @@ fn a_comments_link_resolves_from_its_items_folder(cx: &mut TestAppContext) {
 }
 
 /// Containment: a backslash, a drive letter, a leading `//` and a `..`
-/// past the root are not found, and no read is made for them, not even
-/// the nearest name's, though `docs/x.md` would answer it.
+/// past the root, written out or percent-encoded, are not found, and no
+/// read is made for them, not even the nearest name's, though `docs/x.md`
+/// would answer it.
 #[gpui_kit::test]
 fn refused_targets_never_reach_the_repository(cx: &mut TestAppContext) {
     let (shell, root) = linking(cx, |fixture, root| {
@@ -355,6 +454,9 @@ fn refused_targets_never_reach_the_repository(cx: &mut TestAppContext) {
         "//host/share/x.md",
         "../../x.md",
         "/../x.md",
+        "%2e%2e/%2e%2e/x.md",
+        "..%2F..%2Fx.md",
+        "a%3Ax.md",
     ] {
         let editor = read_editor(&shell, cx);
         let before = shell.backend.reads_in_order().len();
@@ -424,8 +526,8 @@ fn a_comment_editor_opens_only_browser_links(cx: &mut TestAppContext) {
 }
 
 /// An `EditorHost` in a window of its own, as Task 14 will place one: it
-/// opens browser links itself, and passes every other target it does not
-/// ignore to its owner.
+/// opens browser links itself, and passes every link clicked to its owner,
+/// which clears its banner on each and follows the paths and titles.
 #[gpui_kit::test]
 fn an_edit_host_opens_only_browser_links(cx: &mut TestAppContext) {
     let shell = Shell::open(Fixture::new(), cx);
@@ -458,12 +560,9 @@ fn an_edit_host_opens_only_browser_links(cx: &mut TestAppContext) {
     let editor = host.read_with(cx, |host, _| host.editor().clone());
     only_browser_links_open(&shell, &editor, cx);
     let passed = passed.borrow();
-    let unsafe_passed = passed
-        .iter()
-        .filter(|target| **target == LinkTarget::Unsafe)
-        .count();
+    let count = |wanted: &LinkTarget| passed.iter().filter(|target| *target == wanted).count();
     assert_eq!(
-        unsafe_passed,
+        count(&LinkTarget::Unsafe),
         UNSAFE.len(),
         "each unsafe link goes to the owner"
     );
@@ -473,8 +572,25 @@ fn an_edit_host_opens_only_browser_links(cx: &mut TestAppContext) {
     }));
     assert!(passed.contains(&LinkTarget::Title("No Such Title".to_owned())));
     assert_eq!(
-        passed.len(),
-        UNSAFE.len() + 2,
-        "ignored and browser links stay with the host"
+        count(&LinkTarget::Ignored),
+        3,
+        "a heading and two block links"
     );
+    let opened: Vec<&str> = passed
+        .iter()
+        .filter_map(|target| match target {
+            LinkTarget::External(url) => Some(url.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        opened,
+        [
+            "https://example.com/a#part",
+            "http://example.com/b",
+            "mailto:ada@example.invalid?subject=Hi&body=Text",
+        ],
+        "a browser link, once opened, goes to the owner as well"
+    );
+    assert_eq!(passed.len(), UNSAFE.len() + 8, "every link clicked");
 }
