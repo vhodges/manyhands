@@ -1012,3 +1012,36 @@ Notes for later tasks: Task 22 leaves `targets()` in
 - Ruling (controller, Task 18, obligation 8): D2's words stay. Main's
   `drafts_tests.rs:388` and `drafts_held_tests.rs:86`, and Task 16's
   `edit_done_tests.rs:107`, pin "Restored in this window".
+- Ruling (controller, Task 18 review I1): a late read adopts the read's
+  base only once the editor holds the read's body, and the reload is
+  decided on the session's clean state, not on the editor's own flag
+  (`EditorHost::reload_read`). — The editor's flag keeps its baseline
+  after a save that newer typing outlived. Adopting the base first let a
+  plain Save send our older body with another actor's token, which
+  breaks contract 7. — If wrong: a small host method more than needed.
+- Ruling (controller, Task 18 review I2): the close dialog's Save covers a
+  session kept after Done. It un-keeps the session without moving focus,
+  then saves, and closes the tab once the draft retires. — The design's
+  "Closing the tab" lists a kept draft, with Save enabled when dirty and
+  nothing is saving. — If wrong: Save could have read unavailable, with
+  its reason.
+- Ruling (controller, Task 18 review M1): Cancel, Keep draft and Discard
+  turn a close-dialog Save still in Continue editing's steps into
+  Continue editing alone, and a continued draft that ended is dropped. —
+  A write the user cancelled must not happen. — If wrong: nothing; the
+  editor still opens on the draft.
+- Ruling (controller, Task 18 review M2): D2's dialog's Save is gated on
+  `edit_available`, as the section's Save is. While a prepare waits for
+  Resume, the dialog says so, and Cancel returns to the banner's Resume.
+  The dialog offers no Resume of its own. — It keeps one Resume, in the
+  tab. — If wrong: one extra Cancel.
+- Carried (Task 18 review), to Task 19:
+  - M3: a clean session on an unverified base takes another actor's body
+    while its base keeps our fields, so it reads dirty for text the user
+    never typed. This is Task 16's N2 on the late-read path.
+  - The post-save read still decides its reload on the editor's own flag
+    (`reload_clean`). It never adopts a base, so nothing is overwritten,
+    but it should follow I1's rule. Task 19 decides both paths together.
+  - M4: the review opened from the close dialog sits behind the dialog.
+- Parked (Task 18), for the whole-branch review: M6,
+  `view/workspace/content.rs` at 613 lines.
