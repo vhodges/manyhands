@@ -455,7 +455,8 @@ fn c4_merging_clean_divergence() -> Result<(), FixtureError> {
         assert!(merged.data.is_none());
         assert!(merged.recovery.is_empty());
         let merge = s.local_tip()?;
-        assert_eq!(merged.effects, super::published(merge));
+        // The merge commit is named: the integration complete.
+        assert_eq!(merged.effects, self::merged(super::published(merge), merge));
         // One merge commit of the two, in that order, published.
         s.assert_merge(merge, local, incoming)?;
         assert_eq!(merge_commits(&s.w.repo()?)?, 1);
@@ -889,6 +890,7 @@ fn c4_merging_index_refresh_fails_after_publication() -> Result<(), FixtureError
             Effects {
                 publication: PublicationEffect::Published,
                 discovery: DiscoveryEffect::Pending,
+                integration: IntegrationEffect::Complete,
                 commit_oid: Some(merge.to_string()),
                 ..Effects::not_requested()
             }
@@ -996,7 +998,7 @@ fn c4_merging_identity_then_the_same_request() -> Result<(), FixtureError> {
         assert_eq!(merged.outcome, Outcome::Success);
         assert_eq!(merged.operation_id, stopped.operation_id);
         let merge = s.local_tip()?;
-        assert_eq!(merged.effects, super::published(merge));
+        assert_eq!(merged.effects, self::merged(super::published(merge), merge));
         // Committed once, by the identity that was set, and published once.
         s.assert_merge(merge, local, incoming)?;
         let repo = s.w.repo()?;

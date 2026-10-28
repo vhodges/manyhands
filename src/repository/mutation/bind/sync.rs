@@ -19,11 +19,13 @@
 //! merge another synchronization left pending is in a worktree it
 //! inspects, is `busy`, as one that reaches the reservation is.
 //!
-//! A merge commit the request made stays whatever stops it. A request
-//! that stops after one names it: the integration complete and the
-//! commit, and the request is `partial`; a cancelled one keeps those
-//! effects and stays `cancelled`. A merge commit made before a conflict
-//! leaves the integration pending, and that request is `partial` too.
+//! A merge commit the request made stays whatever stops it, and the
+//! effects name it whether the request succeeds, stops or is cancelled:
+//! the integration complete and the commit. A request that stops after
+//! one is `partial`; a cancelled one keeps those effects and stays
+//! `cancelled`. A fast-forward or a plain push makes no merge commit and
+//! names none. A merge commit made before a conflict leaves the
+//! integration pending, and that request is `partial` too.
 //!
 //! A merge commits with the repository's own identity. With none it
 //! stops as `identity_required`, holding what it began, and the same
@@ -736,7 +738,7 @@ impl SyncBinding {
             };
         };
         let error = match result {
-            Ok(result) => return self.finished(&result),
+            Ok(result) => return self.finished(service, accepted, &result),
             Err(error) => error,
         };
         if !(watch.unsettled && watch.cancellation_is_pending()) {
@@ -767,7 +769,12 @@ impl SyncBinding {
 
     /// The domain returned a result: the synchronization has its
     /// outcome, and all that can remain is its index hand-off.
-    fn finished(&self, result: &SynchronizationResult) -> Ran {
+    fn finished(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        result: &SynchronizationResult,
+    ) -> Ran {
         let (outcome, discovery, standing) = match result {
             SynchronizationResult::Complete(outcome) => {
                 (outcome, DiscoveryEffect::Current, Standing::Final)
@@ -810,6 +817,10 @@ impl SyncBinding {
                 };
             }
         };
+        // A merge commit the request made is named, as on every stop: the
+        // integration is complete. A fast-forward or a plain push names
+        // none.
+        let effects = with_merge(effects, merge_made(service, accepted));
         Ran {
             answer: Answer {
                 effects,

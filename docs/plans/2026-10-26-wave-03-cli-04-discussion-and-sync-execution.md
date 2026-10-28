@@ -811,8 +811,30 @@ merge`, on `ca5f17d`. `remote/` is untouched.
    (both commands), makes a ticket conflict and a plain-file conflict in one
    merge: two conflicted paths, `external_repair`.
 
-Not changed: a successful merge's effects still name the published commit
-and leave `integration` as `not_requested`. The ruling covered stops only.
+5. **A successful merge is named too (controller ruling, folded into this
+   round).** `finished` takes the service and the accepted request, and
+   applies `with_merge(effects, merge_made(..))`. A sync whose request made
+   a merge commit then says `integration: complete` plus the commit,
+   whether it succeeds, stops or is cancelled. A fast-forward or a plain
+   push makes no merge commit and keeps `integration: not_requested`. The
+   module doc says so. C4's own cases are updated: clean divergence,
+   identity then the same request, and index refresh failing after
+   publication (`partial`, with `integration: complete`).
+   - No pre-existing golden changes: no golden is of a successful merge.
+   - **One pre-existing test changes: the E-3 rewrite**
+     `a_divergent_remote_is_merged_by_the_same_request_with_no_rebase`
+     (`tests/mutation_remote.rs:2909`). Its expected effects gain
+     `integration: complete`. The implementer stopped and reported it. The
+     controller ruled that it is an E-3 site, which E-3 sends to the
+     clean-divergence outcome, so the edit is within E-3. It was then made,
+     as a one-line change to that assertion.
+
+**Recorded limit (controller-accepted).** `beside_a_pending_merge` places a
+pending merge's worktree only for `synchronize_primary` and
+`synchronize_context` operations. A merge pending under a `promote` or
+`close` operation is not matched, and the domain's answer
+(`worktree_conflicted` or `item_not_found`) stands for a new sync that
+inspects that worktree.
 
 **Commands** (each `devenv shell -- cargo … --locked`):
 

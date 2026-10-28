@@ -2906,7 +2906,13 @@ fn a_divergent_remote_is_merged_by_the_same_request_with_no_rebase() -> Result<(
     assert_eq!(merged.outcome, Outcome::Success);
     assert!(merged.recovery.is_empty());
     let merge = fixed(repo.refname_to_id("refs/heads/main"))?;
-    assert_eq!(merged.effects, published(merge));
+    assert_eq!(
+        merged.effects,
+        Effects {
+            integration: results::IntegrationEffect::Complete,
+            ..published(merge)
+        }
+    );
     let commit = fixed(repo.find_commit(merge))?;
     assert_eq!(commit.parent_ids().collect::<Vec<_>>(), [local, incoming]);
     assert_eq!(commit.summary(), Some("Merge remote primary"));
