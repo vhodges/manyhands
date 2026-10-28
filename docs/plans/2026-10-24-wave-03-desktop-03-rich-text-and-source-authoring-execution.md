@@ -902,3 +902,29 @@ Notes for later tasks: Task 22 leaves `targets()` in
 - Parked (Task 15 fix 1): a pending save sent with no D2 session ends
   only on Retry or Dismiss, not when its operation is abandoned. The
   same goes to the whole-branch review.
+- Ruling (Task 16 review, Important 1): a session is dirty when its
+  current fields differ from its base, the saved copy after a save
+  (R-69), or when the item is not yet created. The editor's own dirty
+  flag is not used. This applies at every reading: Done, closing, the
+  pill, Save and the unsaved mark. — The design defines dirty against
+  the baseline, the saved copy. Before this, the editor's own flag let
+  Done discard text that had been undone past a save. — If wrong: one
+  predicate.
+- Ruling (Task 16 fix 2): the read after a save reloads the edit editor
+  only when the session is clean and no live draft holds text. Otherwise
+  the editor keeps its text and undo. — R-79, and the design's Late
+  results ("not dirty, no draft"). — If wrong: one guard.
+- Ruling (Task 16 fix 1): the D3 test's refusal case now comes from a
+  library failure point, not a self-dependency. Task 21's cycle check
+  would block the self-dependency before it was sent.
+- Parked (Task 16): two items wait for later tasks.
+  - **For Task 19.** After a save, another actor's body is reloaded into
+    a clean editor, and it then reads dirty against the unverified base.
+    Done's and closing's words then say the changes could not be kept as
+    a draft. The next Save opens the review, and nothing is lost. The
+    suggestion is that the base takes the reloaded body and stays
+    unverified.
+  - **For Task 18 and the whole-branch review.** Review Minor 9: a failed
+    Keep draft for a kept session says nothing. Also, the Drafts page
+    lists an edit session's draft as "Restored in this window", which are
+    D2's words.
