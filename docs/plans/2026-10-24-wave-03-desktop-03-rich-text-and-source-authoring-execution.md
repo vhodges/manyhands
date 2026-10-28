@@ -873,3 +873,29 @@ Notes for later tasks: Task 22 leaves `targets()` in
     kept (checklist step 10);
   - Minor 6: D2's close dialog says "restored draft" for an edit
     session's draft. That is for Task 16 or 18.
+- Ruling (Task 15, concern 2 and review): Save commits after a failed
+  draft write.
+  - D2's `send_save` sends the session's current fields directly from
+    the failed-flush branch, once, with no retry loop.
+  - A committed save whose submitted fields equal the session's current
+    fields retires the session, even though that revision was never
+    written. Any older stored revision is discarded.
+  - Newer typing keeps D2's rebase.
+  - A failed discard keeps the draft.
+
+  — The toolbar says "Draft not kept. Save to protect your changes", and
+  Task 16's row "Done, dirty, the write fails" offers Save. — If wrong:
+  one branch of `send_save` and one of `settle`.
+- Ruling (Task 15, concerns 3 and 4): two choices are accepted.
+  - With no D2 session, because the store did not open or the draft did
+    not begin, the tab sends the fields itself and applies D2's
+    `base_after_save`.
+  - A context leaves `CreatedContexts` at the services level when a
+    save's checkpoint is committed. That covers a tab closed before its
+    save finishes.
+- Ruling (Task 15, concern 1): Save on an unverified base, or an
+  `external_change` answer, enters `Phase::Review` with nothing written.
+  The review's content and Cancel are Task 19's.
+- Parked (Task 15 fix 1): a pending save sent with no D2 session ends
+  only on Retry or Dismiss, not when its operation is abandoned. The
+  same goes to the whole-branch review.
