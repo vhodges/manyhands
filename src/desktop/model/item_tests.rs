@@ -65,7 +65,6 @@ fn the_unavailable_actions_are_the_designs() {
     assert_eq!(
         LATER,
         [
-            "Edit",
             "Comment",
             "Share",
             "Approve and merge…",

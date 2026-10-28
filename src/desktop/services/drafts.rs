@@ -286,7 +286,6 @@ impl DraftRegistry {
     /// session is inserted releases the claim: revision 1 stays on disk as
     /// an unclaimed draft. No text is lost; the next listing offers it for
     /// recovery.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
     pub(crate) fn begin(
         &mut self,
         target: DraftTarget,
@@ -323,7 +322,6 @@ impl DraftRegistry {
     }
 
     /// The editor's newest text of `id`, scheduled to be written.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
     pub(crate) fn edit(&mut self, id: DraftId, current: DraftFields, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let Some(id) = self.current_id(id) else {

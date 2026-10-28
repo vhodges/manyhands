@@ -310,7 +310,7 @@ fn typing_and_paste_in_the_tab_change_nothing_and_begin_no_draft(cx: &mut TestAp
     let editor = read_editor(&shell, cx);
     focus_read(&shell, &editor, 5, cx);
 
-    shell.visual(cx).simulate_input("typed");
+    shell.visual(cx).simulate_input("typing");
     cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
     shell.keys(
         "enter backspace delete secondary-v shift-right secondary-x",
@@ -701,7 +701,7 @@ fn viewing_changes_nothing_in_the_repository(cx: &mut TestAppContext) {
             "down right shift-down secondary-c secondary-a secondary-c",
             cx,
         );
-        shell.visual(cx).simulate_input("typed");
+        shell.visual(cx).simulate_input("typing");
         shell.keys("enter backspace delete secondary-v secondary-x", cx);
         assert!(text(&editor, cx) == load(RICH), "unchanged");
         pane(&shell, cx).update(cx, |pane, cx| {
@@ -803,7 +803,7 @@ fn typing_and_paste_in_the_tab_queue_no_request(cx: &mut TestAppContext) {
     let editor = read_editor(&shell, cx);
     focus_read(&shell, &editor, 5, cx);
 
-    shell.visual(cx).simulate_input("typed");
+    shell.visual(cx).simulate_input("typing");
     cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
     shell.keys(
         "enter backspace delete secondary-v shift-right secondary-x",
@@ -831,7 +831,7 @@ fn viewing_queues_no_request(cx: &mut TestAppContext) {
         let at = point_at(&shell, &editor, 5, cx);
         press(&shell, at, Modifiers::none(), cx);
         shell.keys("down right shift-down secondary-c", cx);
-        shell.visual(cx).simulate_input("typed");
+        shell.visual(cx).simulate_input("typing");
         shell.keys("enter backspace delete secondary-v secondary-x", cx);
         pane(&shell, cx).update(cx, |pane, cx| {
             pane.reload(cx);

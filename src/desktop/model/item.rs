@@ -38,16 +38,10 @@ pub(crate) const CLOSE_TICKET: &str = "Close ticket…";
 pub(crate) const REPAIR: &str = "Repair";
 
 /// The actions the item view shows that are not available yet, with the
-/// design's labels: the header's Edit, Share and primary action, the
-/// discussion's Comment, and the "Needs fixing" banner's Repair.
-pub(crate) const LATER: [&str; 6] = [
-    EDIT,
-    COMMENT,
-    SHARE,
-    APPROVE_AND_MERGE,
-    CLOSE_TICKET,
-    REPAIR,
-];
+/// design's labels: the header's Share and primary action, the
+/// discussion's Comment, and the "Needs fixing" banner's Repair. Edit is
+/// available (E-6).
+pub(crate) const LATER: [&str; 5] = [COMMENT, SHARE, APPROVE_AND_MERGE, CLOSE_TICKET, REPAIR];
 pub(crate) const LATER_NOTE: &str = "Available in a later release";
 
 /// The problems that make the header a recovery view: the item's branch

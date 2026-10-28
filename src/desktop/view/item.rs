@@ -24,6 +24,10 @@
 //! subscriptions; none writes the item. Every editor of the tab draws the
 //! local images its text names from the tab's own `TabImages`
 //! (`services::images`), which a reload clears.
+//!
+//! `edit` makes the tab edit (design, Part C): Edit prepares the item's
+//! private work context, the edit editor and its toolbar replace the read
+//! view, and D2's draft follows the text.
 
 mod banners;
 mod chips;
@@ -31,6 +35,7 @@ mod details;
 mod discussion;
 mod draft;
 mod draft_actions;
+mod edit;
 mod header;
 mod page;
 mod pill;
@@ -50,7 +55,10 @@ use gpui_kit::{
 
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
-    model::{item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope},
+    keys::{Edit, ITEM_TAB_CONTEXT, ToggleRich},
+    model::{
+        edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
+    },
     services::{Services, images::TabImages, requests::DesktopRequestId},
 };
 #[cfg(test)]
@@ -124,6 +132,8 @@ pub(crate) struct ItemPane {
     /// The local images every editor of the tab draws from (decision 9),
     /// cleared on reload.
     images: TabImages,
+    /// Edit: the phase, the session and what stopped a prepare.
+    edit: edit::TabEdit,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
@@ -140,7 +150,10 @@ impl ItemPane {
         let operations = cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
         });
-        let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        let drafts = cx.observe(services.drafts(), |pane, _, cx| {
+            pane.sync_status(cx);
+            cx.notify()
+        });
         let images = TabImages::new(&services);
         // The tab's images leave the windows' atlases with it.
         cx.on_release(|pane, cx| pane.images.close(cx)).detach();
@@ -165,6 +178,7 @@ impl ItemPane {
             link_note: None,
             link_read: None,
             images,
+            edit: edit::TabEdit::new(cx),
             _operations: operations,
             _drafts: drafts,
         };
@@ -258,6 +272,9 @@ impl ItemPane {
 impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
+        // Before the read editor takes a new read: Edit compares the two
+        // (R-65).
+        self.sync_edit(window, cx);
         self.sync_read(window, cx);
         self.sync_discussion(window, cx);
         let item = self.model.item().rows().cloned();
@@ -268,7 +285,12 @@ impl Render for ItemPane {
         let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
         let identity = inspect.then(|| self.identity(item.as_ref(), cx));
         let banner = self.draft_banner(item.as_ref(), cx);
-        let section = self.draft_section(window, cx);
+        // While editing, the session's text is the edit editor's.
+        let section = if self.editing() {
+            None
+        } else {
+            self.draft_section(window, cx)
+        };
         let body = item.as_ref().map(|item| {
             let details = inspect.then(|| {
                 v_flex()
@@ -282,6 +304,8 @@ impl Render for ItemPane {
             // file read by its path keeps D1's source view (R-64).
             let text = if inspect {
                 self.source(item, cx)
+            } else if let Some(editing) = self.edit_view() {
+                editing
             } else {
                 self.read_body(item, cx)
             };
@@ -294,7 +318,8 @@ impl Render for ItemPane {
             .children(banner)
             .children(section)
             .children(body);
-        let page = self.page.render(content, &self.scroll, window, cx);
+        let viewing = !inspect && self.edit.phase() == Phase::Viewing;
+        let page = self.page.render(content, &self.scroll, viewing, window, cx);
         let discussion = self.discussion_section(later, window, cx);
         let end = self
             .region_end
@@ -303,12 +328,26 @@ impl Render for ItemPane {
         let over = self.over_region(cx);
         // No zero minimum: the pane is never shorter than its header, so a
         // window too short for the header scrolls the content column.
+        // The toolbar sits under the header, in the content region, so its
+        // Home and End come before the region's.
         v_flex()
             .id("item-view")
             .test_support()
+            .key_context(ITEM_TAB_CONTEXT)
+            .on_action(cx.listener(|pane, _: &Edit, window, cx| {
+                if !pane.edit_requested(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &ToggleRich, _, cx| {
+                if !pane.toggle_rich(cx) {
+                    cx.propagate();
+                }
+            }))
             .flex_1()
             .w_full()
             .child(header)
+            .children(self.toolbar_view())
             .child(page::region(&self.scroll, page, discussion, end, over, cx))
     }
 }
@@ -340,3 +379,7 @@ mod discussion_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/images_tests.rs"]
 mod images_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/edit_tests.rs"]
+mod edit_tests;

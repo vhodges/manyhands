@@ -1,7 +1,6 @@
 //! How the toolbar is drawn (`item_view/02-editor-and-toolbar.md`): its
 //! row, the segmented mode switch, the controls with their separators,
-//! and the empty status slot on the right. Sizes and colours are the
-//! handoff's.
+//! and the status item on the right. Sizes and colours are the handoff's.
 
 use gpui_kit::{
     AnyElement, AnyView, App, ClickEvent, Context, Div, Hsla, InteractiveElement, IntoElement,
@@ -12,6 +11,8 @@ use gpui_kit::{
     div, px, rgb,
 };
 
+use time::OffsetDateTime;
+
 use super::{
     Step, Toolbar,
     controls::Control,
@@ -20,7 +21,10 @@ use super::{
 use crate::desktop::{
     assets::icon_path,
     keys::{TOOLBAR_CONTEXT, ToggleRich, ToolbarFirst, ToolbarLast, ToolbarNext, ToolbarPrevious},
-    model::markdown_edit::Mark,
+    model::{
+        edit::{draft_indicator, indicator_words},
+        markdown_edit::Mark,
+    },
     view::item::tokens::{ItemColors, item_colors},
 };
 
@@ -206,6 +210,22 @@ impl Toolbar {
             .into_any_element()
     }
 
+    /// The status item: D2's state of the text in words, at this moment's
+    /// age, or nothing before the first write. Its words are its name.
+    fn status_item(&self, colors: &ItemColors) -> impl IntoElement + use<> {
+        let words = draft_indicator(self.status, OffsetDateTime::now_utc()).map(indicator_words);
+        let mut item = div()
+            .id("toolbar-status")
+            .test_support()
+            .flex_none()
+            .whitespace_nowrap()
+            .text_color(colors.page_muted);
+        if let Some(words) = words {
+            item = item.aria_label(words.clone()).child(words);
+        }
+        item
+    }
+
     /// The Link control, with its popover.
     fn link_control(&mut self, rich: bool, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let button = self.control(Control::Link, rich, window, cx);
@@ -292,9 +312,7 @@ impl Render for Toolbar {
             };
             row = row.child(element);
         }
-        let row = row
-            .child(div().flex_1())
-            .child(div().id("toolbar-status").test_support().flex_none());
+        let row = row.child(div().flex_1()).child(self.status_item(&colors));
         div().flex().flex_col().child(row).child(hint(&colors))
     }
 }

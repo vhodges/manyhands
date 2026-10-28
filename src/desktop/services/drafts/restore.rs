@@ -59,6 +59,18 @@ impl DraftRegistry {
         self.current_id(*self.attached.get(tab)?)
     }
 
+    /// Attaches the live session `id`, which the item tab `tab` began in its
+    /// edit editor, to that tab, as a restore attaches one: the tab holds
+    /// it, the strip marks it unsaved, closing asks first and the Drafts
+    /// page lists it as held here. A session already ended is not attached.
+    pub(crate) fn attach(&mut self, tab: TabKey, id: DraftId, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id(id) else {
+            return;
+        };
+        self.attached.insert(tab, id);
+        cx.notify();
+    }
+
     /// The tab the session of `id` is attached to, by the ID it goes on
     /// under: where the Drafts page's Show goes.
     pub(crate) fn tab_of(&self, id: DraftId) -> Option<TabKey> {

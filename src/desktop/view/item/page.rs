@@ -20,6 +20,11 @@
 //! read view, focus goes into the content region.
 //! The page's ring shows only after Back to top, never after a press.
 //!
+//! While editing, the page holds the edit editor instead, in the tab's
+//! draft section (R-38), and a press below its text puts its caret at the
+//! end. While viewing, the page is the key context where `e` edits
+//! (`keys::ITEM_PAGE_CONTEXT`).
+//!
 //! The region shows the Kit's vertical scrollbar on its own handle, thumb
 //! in `page-border-strong` at rest, hovered and dragged, laid over the
 //! region as the Kit's own scrollables lay it. The discussion's floating
@@ -37,10 +42,11 @@ use gpui_kit::{
 
 use super::{ItemPane, tokens::item_colors};
 use crate::desktop::{
+    keys::ITEM_PAGE_CONTEXT,
     model::{links::LinkTarget, navigation::OpenTarget},
     services::images::{ImageSource, TabImages},
     view::{
-        editor::{CaretInView, read_only::ReadOnly},
+        editor::{CaretInView, host::EditorHost, read_only::ReadOnly},
         scroll::ContentScroll,
     },
 };
@@ -68,7 +74,8 @@ pub(crate) struct Page {
     reveal: Option<CaretInView>,
     /// The links clicked in the read editor go to the pane (decision 10).
     links: Option<Subscription>,
-    /// The bottom of the read view in the last frame, in the window.
+    /// The bottom of the editor the page showed in the last frame, the
+    /// read view's or the edit editor's, in the window.
     read_bottom: Rc<Cell<Pixels>>,
 }
 
@@ -135,6 +142,14 @@ impl Page {
         self.body = body.to_owned();
     }
 
+    /// The read editor's cursor, when the text it holds is `text`: Edit
+    /// carries it into the edit editor (R-65). The texts are compared as
+    /// loaded; neither is loaded again (R-79).
+    pub(super) fn read_cursor_if_holding(&self, text: &str, cx: &App) -> Option<usize> {
+        let editor = self.read.as_ref()?.read(cx).editor().read(cx);
+        (editor.text() == text).then(|| editor.cursor())
+    }
+
     /// R-67: when the read editor has taken focus since the last frame,
     /// its caret is brought into view once this frame is drawn.
     fn note_focus(&mut self, window: &Window, cx: &mut Context<ItemPane>) {
@@ -150,21 +165,29 @@ impl Page {
     }
 
     /// A left press on the page. A press never rings the page: the ring is
-    /// Back to top's. One that no control took focuses the read editor,
-    /// with its caret at the end of the body when the press is below the
-    /// text, and where it was otherwise. With no read view, the press goes
-    /// on, so focus goes into the content region, as D1's did.
-    fn pressed(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut App) {
+    /// Back to top's. One that no control took focuses the editor the page
+    /// shows, `editing` while editing and the read editor otherwise, with
+    /// its caret at the end of the body when the press is below the text,
+    /// and where it was otherwise. With neither, the press goes on, so
+    /// focus goes into the content region, as D1's did.
+    fn pressed(
+        &mut self,
+        event: &MouseDownEvent,
+        editing: Option<Entity<zorite_editor::EditorState>>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         self.ring = false;
         if window.default_prevented() {
             return;
         }
-        let Some(read) = &self.read else {
-            return;
+        let editor = match (editing, &self.read) {
+            (Some(editor), _) => editor,
+            (None, Some(read)) => read.read(cx).editor().clone(),
+            (None, None) => return,
         };
         window.prevent_default();
         let below = event.position.y >= self.read_bottom.get();
-        let editor = read.read(cx).editor().clone();
         editor.update(cx, |editor, cx| {
             if below {
                 editor.set_cursor(editor.text().len(), cx);
@@ -197,11 +220,41 @@ impl Page {
         )
     }
 
-    /// The page, holding `content`, in the region `scroll` scrolls.
+    /// The edit editor's view, for the page's content while editing: the
+    /// host in the tab's draft section, where draft text belongs (R-38),
+    /// noting where it ends.
+    pub(super) fn edit_view(&self, host: &Entity<EditorHost>) -> AnyElement {
+        let bottom = self.read_bottom.clone();
+        div()
+            .id("draft-section")
+            .test_support()
+            .w_full()
+            .child(
+                div()
+                    .id("item-edit-view")
+                    .test_support()
+                    .relative()
+                    .w_full()
+                    .child(host.clone())
+                    .child(
+                        canvas(
+                            move |bounds, _, _| bottom.set(bounds.bottom()),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The page, holding `content`, in the region `scroll` scrolls; while
+    /// `viewing`, the key context where `e` edits.
     pub(super) fn render<C: IntoElement>(
         &self,
         content: C,
         scroll: &ContentScroll,
+        viewing: bool,
         window: &Window,
         cx: &Context<ItemPane>,
     ) -> impl IntoElement + use<C> {
@@ -217,10 +270,11 @@ impl Page {
                 .border_color(cx.theme().ring)
         });
         let (top, sides, bottom) = PADDING;
-        v_flex()
-            .id("item-page")
-            .test_support()
-            .track_focus(&self.focus)
+        let mut page = v_flex().id("item-page").test_support();
+        if viewing {
+            page = page.key_context(ITEM_PAGE_CONTEXT);
+        }
+        page.track_focus(&self.focus)
             .relative()
             .flex_none()
             .w_full()
@@ -232,7 +286,8 @@ impl Page {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|pane, event: &MouseDownEvent, window, cx| {
-                    pane.page.pressed(event, window, cx)
+                    let editing = pane.edit_editor(cx);
+                    pane.page.pressed(event, editing, window, cx)
                 }),
             )
             .child(

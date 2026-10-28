@@ -63,11 +63,9 @@ use crate::desktop::{
 };
 
 /// Markdown mode's font size.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 const MARKDOWN_SIZE: f32 = 13.5;
 
 /// What the host tells its tab.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EditorHostEvent {
     /// The text now differs from the baseline (`true`), or matches it
@@ -83,7 +81,6 @@ pub(crate) enum EditorHostEvent {
 }
 
 /// The edit editor and what it is compared with.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 pub(crate) struct EditorHost {
     editor: Entity<EditorState>,
     /// The host's tab stop, which hands focus to the editor.
@@ -111,7 +108,6 @@ pub(crate) struct EditorHost {
     _subscriptions: [Subscription; 2],
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 impl EditorHost {
     /// A host editing `body` in rich text, its caret at `cursor`, clamped,
     /// or at the start.
@@ -201,6 +197,7 @@ impl EditorHost {
 
     /// R-69: `saved`, the text the editor still holds, was saved. It
     /// becomes the baseline; the text and its undo history stay.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     pub(crate) fn mark_saved(&mut self, saved: &str, cx: &mut Context<Self>) {
         self.baseline = saved.to_owned();
         self.update_dirty(cx);
@@ -210,6 +207,7 @@ impl EditorHost {
     /// exactly (R-79), which restarts undo; `baseline`, theirs, is what a
     /// clean editor would hold. The caret stays, clamped. The draft was
     /// written already, so this is no edit to feed.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 19.
     pub(crate) fn rebase(&mut self, baseline: String, text: &str, cx: &mut Context<Self>) {
         let cursor = self.editor.read(cx).cursor();
         set_exact(&self.editor, text, cx);
@@ -226,6 +224,7 @@ impl EditorHost {
     /// is the text last saved or loaded, or the body first loaded. A
     /// second load of a text the editor holds could change it (fact 81).
     /// A dirty editor is left alone too: its text is the user's.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
     pub(crate) fn reload_clean(&mut self, body: &str, cx: &mut Context<Self>) {
         if self.dirty || crlf_to_lf(body) == self.baseline || load(body) == self.baseline {
             return;
@@ -399,7 +398,6 @@ impl Render for EditorHost {
 
 /// Notes a key move, one of those that can enter a block, before the
 /// editor makes it: the last input is then a key (R-66).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 fn moved<A: Action>(cx: &mut Context<EditorHost>) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(|this, _: &A, _, _| this.pressed = false)
 }

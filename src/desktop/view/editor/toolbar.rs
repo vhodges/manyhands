@@ -29,9 +29,11 @@
 //! the editor, so a muted line under the toolbar says how to leave it
 //! (contract 13); the line takes no focus.
 //!
-//! The status item on the right is an empty slot until Task 14.
-
-#![cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
+//! **The status item** on the right says what D2 holds of the text: "Draft
+//! kept · {n}s ago", "Draft not kept. Save to protect your changes" or
+//! "Crash recovery is off" (`model::edit::draft_indicator`). Its tab gives
+//! it D2's state (`set_status`); it keeps none of its own, and while a
+//! draft is kept it is drawn again each second, so its age stays true.
 
 pub(crate) mod controls;
 mod popovers;
@@ -41,8 +43,11 @@ mod table;
 #[cfg(test)]
 use std::collections::HashMap;
 
+use std::time::Duration;
+
 use gpui_kit::{
-    Action, App, Context, Entity, EntityInputHandler, FocusHandle, Focusable, Subscription, Window,
+    Action, App, Context, Entity, EntityInputHandler, FocusHandle, Focusable, Subscription, Task,
+    Window,
 };
 use zorite_editor::{Bold, Code, EditorState, Italic, Redo, Strike, Undo};
 
@@ -51,10 +56,16 @@ use self::{
     popovers::Popover,
 };
 use super::host::{EditorHost, EditorHostEvent};
-use crate::desktop::model::markdown_edit::{
-    BlockStyle, HostEdit, LinePrefix, Mark, Selection, active_marks, block_style_at, code_block,
-    insert_table, selection_from_utf16, table_at, toggle_prefix,
+use crate::desktop::model::{
+    edit::DraftState,
+    markdown_edit::{
+        BlockStyle, HostEdit, LinePrefix, Mark, Selection, active_marks, block_style_at,
+        code_block, insert_table, selection_from_utf16, table_at, toggle_prefix,
+    },
 };
+
+/// How often a kept draft's age is drawn again.
+const AGE_TICK: Duration = Duration::from_secs(1);
 
 /// What the toolbar shows of the caret and the selection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +109,10 @@ pub(crate) struct Toolbar {
     handles: Vec<FocusHandle>,
     active: Active,
     popover: Option<Popover>,
+    /// What D2 holds of the text, as the tab last said.
+    status: DraftState,
+    /// Draws the status again each second while a draft is kept.
+    tick: Option<Task<()>>,
     /// The opacity each control was drawn at in the last frame.
     #[cfg(test)]
     drawn: HashMap<Control, f32>,
@@ -130,6 +145,8 @@ impl Toolbar {
                 in_table: false,
             },
             popover: None,
+            status: DraftState::NotBegun,
+            tick: None,
             #[cfg(test)]
             drawn: HashMap::new(),
             #[cfg(test)]
@@ -152,6 +169,27 @@ impl Toolbar {
             EditorHostEvent::LinkRequested => self.toggle_link(window, cx),
             EditorHostEvent::DirtyChanged(_) => {}
         }
+    }
+
+    /// D2's state of the text, for the status item. While a draft is kept,
+    /// the item is drawn again each second, so its age stays true; the
+    /// tick stops with any other state.
+    pub(crate) fn set_status(&mut self, status: DraftState, cx: &mut Context<Self>) {
+        if status == self.status {
+            return;
+        }
+        self.status = status;
+        self.tick = matches!(status, DraftState::Written(_)).then(|| {
+            cx.spawn(async move |toolbar, cx| {
+                loop {
+                    cx.background_executor().timer(AGE_TICK).await;
+                    if toolbar.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            })
+        });
+        cx.notify();
     }
 
     /// Reads the active state again from the editor's text and selection.
@@ -279,6 +317,12 @@ impl Toolbar {
             let table = self.handle(Control::Table);
             cx.defer_in(window, move |_, window, cx| window.focus(&table, cx));
         }
+    }
+
+    /// What D2 holds of the text, as the tab last said.
+    #[cfg(test)]
+    pub(crate) fn status(&self) -> DraftState {
+        self.status
     }
 
     #[cfg(test)]

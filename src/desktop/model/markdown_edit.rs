@@ -12,8 +12,6 @@
 //! No type here derives `Debug` over body text: `HostEdit` holds the
 //! replacement text and so has no `Debug`.
 
-#![cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
-
 mod table;
 
 use std::ops::Range;

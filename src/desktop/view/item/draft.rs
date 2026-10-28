@@ -40,6 +40,7 @@ use super::{ItemPane, text};
 use crate::desktop::{
     model::{
         drafts::RecoveryState,
+        editor_text::normalized,
         navigation::{ItemLocator, OpenTarget},
         tabs::TabKey,
     },
@@ -158,7 +159,7 @@ impl ItemPane {
     }
 
     /// Restores the stored draft `id` into this tab, once at a time.
-    fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
+    pub(super) fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
         let OpenTarget::Item {
             repo,
             kind,
@@ -246,7 +247,8 @@ impl ItemPane {
             let registry = self.services.drafts().read(cx);
             let stored = registry.stored_for(&repo, kind, &id)?;
             let (draft, held) = registry.listed(stored)?;
-            let state = classify(draft, Ok(item));
+            // Normalized as the base is (R-11, R-72).
+            let state = classify(draft, Ok(&normalized(item)));
             let policy = restore_policy(draft, &state, held);
             Some((stored, state, policy))
         });

@@ -21,7 +21,6 @@ pub(crate) fn crlf_to_lf(body: &str) -> String {
 /// The text an editor holds after loading `body`: N-1, then the editor's
 /// own math-fence rewrite, which it applies only to a text holding `$$`
 /// (`zorite-editor` `normalize_loaded`). Baselines and comparisons use it.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 pub(crate) fn load(body: &str) -> String {
     let text = crlf_to_lf(body);
     if !text.contains("$$") {
@@ -36,7 +35,6 @@ pub(crate) fn load(body: &str) -> String {
 /// `item` as a session's base holds it (R-11): its body through `load`,
 /// and a ticket's `deps` in ID order, as the library writes them (R-72).
 /// Nothing else changes.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
 pub(crate) fn normalized(item: &ItemDto) -> ItemDto {
     let mut item = item.clone();
     item.body = item.body.as_deref().map(load);

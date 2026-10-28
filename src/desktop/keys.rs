@@ -55,7 +55,6 @@ gpui_kit::actions!(
         /// heading.
         JumpToDiscussion,
         /// Edit the shown item.
-        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
         Edit,
         /// Save the item being edited.
         #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
@@ -112,6 +111,18 @@ pub(crate) const WHY_BLOCKED_CONTEXT: &str = "WhyBlocked";
 /// The key context of the Drafts page's Inspect panel, where Escape
 /// closes it.
 pub(crate) const DRAFT_INSPECT_CONTEXT: &str = "DraftInspect";
+
+/// The key context of an item tab (`view::item`): `secondary-shift-e`
+/// edits while viewing, and the mode key reaches the edit editor from
+/// anywhere in the tab while editing.
+pub(crate) const ITEM_TAB_CONTEXT: &str = "ItemTab";
+
+/// The key context of an item tab's page, set only while it is viewing:
+/// `e` edits there, the read editor included, whose guard stops the
+/// letter's text and not its binding (fact 76). A dialog, the details
+/// sheet, a text field outside the page, the toolbar and the edit editor
+/// are outside it.
+pub(crate) const ITEM_PAGE_CONTEXT: &str = "ItemPage";
 
 /// The key context of the edit editor's host (`view::editor::host`), where
 /// the mode key switches Rich text and Markdown.
@@ -171,6 +182,12 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("escape", EditorEscape, Some(EDIT_HOST_EDITOR)),
         KeyBinding::new("secondary-k", InsertLink, Some(EDIT_HOST_EDITOR)),
         KeyBinding::new("secondary-shift-m", ToggleRich, Some(EDIT_HOST_CONTEXT)),
+        // Edit: `e` on the page while viewing, `secondary-shift-e` in the
+        // item tab. The mode key reaches the editor from the whole tab while
+        // editing; the tab forwards it to the host.
+        KeyBinding::new("e", Edit, Some(ITEM_PAGE_CONTEXT)),
+        KeyBinding::new("secondary-shift-e", Edit, Some(ITEM_TAB_CONTEXT)),
+        KeyBinding::new("secondary-shift-m", ToggleRich, Some(ITEM_TAB_CONTEXT)),
         // The edit toolbar: its controls, its Style menu and its link
         // popover. The mode key is the host's, forwarded from a control.
         KeyBinding::new("left", ToolbarPrevious, Some(TOOLBAR_CONTEXT)),

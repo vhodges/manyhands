@@ -7,9 +7,10 @@
 //! reverse, so they sit on the right, wrap below the title on a narrow
 //! pane, and still come first in the tab order (strip, header actions,
 //! chips, page). After the pill, Comments {n} jumps to the discussion
-//! (`discussion`). Edit, Share and the primary action are not available
-//! yet (decision 16): each is disabled, with "Available in a later
-//! release" as its tooltip and its accessible description.
+//! (`discussion`), then Edit while viewing, or Done while editing
+//! (`edit`). Share and the primary action are not available yet (decision
+//! 16): each is disabled, with "Available in a later release" as its
+//! tooltip and its accessible description.
 
 use std::path::Path;
 
@@ -30,7 +31,7 @@ use super::{ItemPane, chips::chips, pill, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{APPROVE_AND_MERGE, CLOSE_TICKET, EDIT, LATER, LATER_NOTE, SHARE},
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET, LATER, LATER_NOTE, SHARE},
         navigation::OpenTarget,
         tabs::TabKey,
     },
@@ -171,10 +172,11 @@ pub(super) fn later_action(
     }
 }
 
-/// The header's later actions for an item of `kind`: Edit, Share, and the
-/// primary action of its kind, when the kind is known.
+/// The header's later actions for an item of `kind`: Share, and the
+/// primary action of its kind, when the kind is known. Edit is available
+/// (E-6).
 pub(crate) fn header_later(kind: Option<ItemDtoKind>) -> Vec<&'static str> {
-    let mut actions = vec![EDIT, SHARE];
+    let mut actions = vec![SHARE];
     match kind {
         Some(ItemDtoKind::Ticket) => actions.push(CLOSE_TICKET),
         Some(ItemDtoKind::Document) => actions.push(APPROVE_AND_MERGE),
@@ -203,8 +205,11 @@ impl ItemPane {
     ) -> (AnyElement, usize) {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(item));
-        let pill =
-            item.map(|item| pill::pill(pill::viewing_state(item, self.draft_kept(cx)), item, cx));
+        let state = pill::edit_state(self.edit.phase(), self.edit_dirty(cx));
+        let pill = item.map(|item| {
+            let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
+            pill::pill(state, item, cx)
+        });
         let actions = h_flex()
             .id("item-actions")
             .flex_none()
@@ -213,13 +218,13 @@ impl ItemPane {
             .gap(px(8.))
             .children(pill)
             .children(self.comments_button(window, cx))
+            .children(self.edit_action(item, window, cx))
             .children(
                 later
                     .iter()
                     .enumerate()
                     .map(|(ix, label)| {
                         let icon = match *label {
-                            EDIT => Some("pencil"),
                             SHARE => Some("cloud-upload"),
                             _ => None,
                         };

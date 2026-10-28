@@ -116,6 +116,8 @@ impl ItemPane {
                     // An attached draft is classified against the new read;
                     // its text and base stay as they are.
                     this.draft.reads_landed();
+                    // While Loading, the edit editor opens from this read.
+                    this.edit.read_landed();
                     this.locate_images(cx);
                     cx.notify();
                 }
@@ -139,7 +141,9 @@ impl ItemPane {
 
     /// Finished requests trigger Workspace's tab reload; unsent/cancelled ones
     /// reload here. A missing request is still queued in the worker channel.
+    /// An Edit's prepare goes on as its request does (`edit`).
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
+        self.prepare_progressed(cx);
         let Some(id) = self.refreshing else {
             return;
         };

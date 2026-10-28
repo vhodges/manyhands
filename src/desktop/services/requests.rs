@@ -149,7 +149,6 @@ pub(crate) enum Intent {
         observation: String,
     },
     /// Prepares the work context an edit or a new item is written in.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
     ContextPrepare {
         root: PathBuf,
         kind: AuthoringKind,

@@ -514,8 +514,8 @@ fn comment_is_disabled_with_its_note(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, TICKET, "Discussed", "");
         commit_comment(fixture, root, A, None, 1, Some(ADA), "First.\n");
     });
-    // After the header's Edit, Share and Close ticket….
-    let comment = 3usize;
+    // After the header's Share and Close ticket….
+    let comment = 2usize;
     assert_eq!(
         shell.label(("later-action", comment), cx).as_deref(),
         Some(COMMENT)

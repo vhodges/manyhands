@@ -4,6 +4,7 @@
 pub(crate) mod discussion;
 pub(crate) mod documents;
 pub(crate) mod drafts;
+pub(crate) mod edit;
 pub(crate) mod editor_text;
 pub(crate) mod find;
 pub(crate) mod item;

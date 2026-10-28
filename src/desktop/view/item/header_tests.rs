@@ -24,9 +24,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        item::{
-            APPROVE_AND_MERGE, CLOSE_TICKET, COMMENT, EDIT, ItemReads, LATER_NOTE, REPAIR, SHARE,
-        },
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET, COMMENT, ItemReads, LATER_NOTE, REPAIR, SHARE},
         list_state::LABEL_BUSY,
         navigation::OpenTarget,
     },
@@ -558,10 +556,10 @@ fn show_read(shell: &Shell, item: ItemDto, cx: &mut TestAppContext) {
     shell.run(cx);
 }
 
-/// Edit, Share and the primary action (Close ticket… for a ticket,
-/// Approve and merge… for a document) are in the header, disabled, each
-/// with "Available in a later release"; pressing one changes nothing.
-/// Comment is the discussion's.
+/// Share and the primary action (Close ticket… for a ticket, Approve and
+/// merge… for a document) are in the header, disabled, each with
+/// "Available in a later release"; pressing one changes nothing. Comment
+/// is the discussion's. Edit is available (E-6).
 #[gpui_kit::test]
 fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -575,7 +573,7 @@ fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppCon
         open(&shell, target, cx);
         let before = RepositorySnapshot::take(&root);
         let pill = shell.label("item-pill", cx);
-        for (ix, label) in [EDIT, SHARE, primary].into_iter().enumerate() {
+        for (ix, label) in [SHARE, primary].into_iter().enumerate() {
             assert_eq!(
                 shell.label(("later-action", ix), cx).as_deref(),
                 Some(label)
@@ -594,11 +592,11 @@ fn share_and_the_primary_action_are_disabled_with_their_note(cx: &mut TestAppCon
             assert_eq!(shell.label("item-pill", cx), pill, "{label} did nothing");
         }
         assert_eq!(
-            shell.label(("later-action", 3usize), cx).as_deref(),
+            shell.label(("later-action", 2usize), cx).as_deref(),
             Some(COMMENT)
         );
-        assert!(inside(&shell, ("later-action", 3usize), "discussion", cx));
-        assert!(!shell.present(("later-action", 4usize), cx));
+        assert!(inside(&shell, ("later-action", 2usize), "discussion", cx));
+        assert!(!shell.present(("later-action", 3usize), cx));
         assert_eq!(RepositorySnapshot::take(&root), before);
     }
 }
@@ -801,7 +799,7 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
         [ProblemCode::MalformedFrontMatter.guidance()]
     );
     assert!(in_header(&shell, ("item-problem", 0usize), cx));
-    let repair = 3usize;
+    let repair = 2usize;
     assert_eq!(
         shell.label(("later-action", repair), cx).as_deref(),
         Some(REPAIR)
@@ -824,14 +822,14 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
     assert!(shell.present("item-source", cx));
     assert!(!shell.present(ChipField::All.id(), cx));
     assert_eq!(
-        shell.label(("later-action", 2usize), cx).as_deref(),
+        shell.label(("later-action", 1usize), cx).as_deref(),
         Some(CLOSE_TICKET)
     );
 
     open(&shell, inspect(&root, MARKER), cx);
     assert!(shell.present("item-needs-fixing", cx));
     assert_eq!(
-        shell.label(("later-action", 2usize), cx).as_deref(),
+        shell.label(("later-action", 1usize), cx).as_deref(),
         Some(APPROVE_AND_MERGE)
     );
 }
@@ -854,14 +852,14 @@ fn an_inspect_tab_of_a_conforming_item_needs_no_fixing(cx: &mut TestAppContext) 
     );
     assert_eq!(
         shell.rows("later-action", cx),
-        [EDIT, SHARE, CLOSE_TICKET],
+        [SHARE, CLOSE_TICKET],
         "the header's actions only, with no Repair"
     );
 }
 
-/// Tab runs from the tab strip into the header, through the chips in
-/// order, then into the page; the header's actions, all unavailable, take
-/// no focus. Shift-Tab runs back.
+/// Tab runs from the tab strip into the header, through Edit and the
+/// chips in order, then into the page; the header's unavailable actions
+/// take no focus. Shift-Tab runs back.
 #[gpui_kit::test]
 fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -889,11 +887,10 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
         shell.keys("tab", cx);
     }
     shell.keys("tab", cx);
-    assert!(
-        focused(&shell, chips[0].id(), cx),
-        "the chips after Comments"
-    );
-    for later in 0..3usize {
+    assert!(focused(&shell, "item-edit", cx), "Edit after Comments");
+    shell.keys("tab", cx);
+    assert!(focused(&shell, chips[0].id(), cx), "the chips after Edit");
+    for later in 0..2usize {
         assert!(!focused(&shell, ("later-action", later), cx));
     }
     for pair in chips.windows(2) {
@@ -915,10 +912,9 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     }
     assert!(focused(&shell, chips[0].id(), cx));
     shell.keys("shift-tab", cx);
-    assert!(
-        focused(&shell, "item-comments", cx),
-        "Comments before the chips"
-    );
+    assert!(focused(&shell, "item-edit", cx), "Edit before the chips");
+    shell.keys("shift-tab", cx);
+    assert!(focused(&shell, "item-comments", cx), "Comments before Edit");
     shell.keys("shift-tab", cx);
     assert!(on_the_strip(&shell, cx), "back in the strip");
 }

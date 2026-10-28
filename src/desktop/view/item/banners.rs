@@ -7,8 +7,9 @@
 //! shown, a context that needs recovery, and an item not found with
 //! Refresh. A nonconforming file, an entry with no ID, "Needs fixing":
 //! D1's reason (each problem and its guidance), with Repair not available
-//! yet. The other rows of the design's table are named here for the tasks
-//! that raise them.
+//! yet. An Edit raises crash recovery off, a prepare still owed and a
+//! refusal (`edit`). The other rows of the design's table are named here
+//! for the tasks that raise them.
 //!
 //! A link clicked in one of the tab's editors is followed here (decision
 //! 10; `services::links`). The link banner says when it was not found or
@@ -80,11 +81,11 @@ pub(crate) enum Banner {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
     DraftDiscarded,
     /// Crash recovery off.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
     RecoveryOff,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     CheckpointFailed,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    /// A hand-off to the index still owed: a prepare's, whose Resume sends
+    /// it again (R-77), or a save's.
     DiscoveryPending,
     /// The item changed under a dirty or kept draft (R-68).
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
@@ -92,7 +93,6 @@ pub(crate) enum Banner {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     ReviewBeforeSaving,
     /// Another refusal, in the library's message.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     Refused,
     /// A nonconforming file, a ticket with no type included (owner,
     /// 2026-10-27): D1's reason, since the library names no missing field.
@@ -193,6 +193,7 @@ impl ItemPane {
         if let Some(note) = &self.link_note {
             banners.push((Banner::Link, link_banner(note, cx)));
         }
+        banners.extend(self.edit_banners(cx));
         let framed = most_severe_first(banners)
             .into_iter()
             .enumerate()

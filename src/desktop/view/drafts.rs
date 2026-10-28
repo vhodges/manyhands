@@ -42,6 +42,7 @@ use super::{confirm::local_time, scroll::ContentScroll, sidebar::RETRY};
 use crate::desktop::{
     model::{
         drafts::DraftRow,
+        editor_text::normalized,
         navigation::OpenTarget,
         stamp::{Generations, Stamp, ViewScope},
         tabs::TabKey,
@@ -343,9 +344,16 @@ async fn read_target(reader: Reader, draft: Draft) -> (TargetState, Option<Strin
         Err(code) => return (classify(&draft, Err(code)), None),
     };
     let id = &draft.target.item_id;
-    let item = reader
+    // Classified as the base holds the item, its body as the editor loads
+    // it and its `deps` in ID order (R-11, R-72); a comment's draft is
+    // checked against the same read.
+    let item = match reader
         .call(ReadKind::Item, |service| service.show_item(repo, id))
-        .await;
+        .await
+    {
+        ReadResult::Ok(item) => ReadResult::Ok(normalized(&item)),
+        other => other,
+    };
     let title = match &item {
         ReadResult::Ok(item) => item.title.clone(),
         _ => None,

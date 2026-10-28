@@ -6,6 +6,7 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod created_contexts;
 pub(crate) mod drafts;
 pub(crate) mod images;
 pub(crate) mod links;
@@ -25,6 +26,7 @@ use manyhands::{
 };
 
 use crate::desktop::model::operations::Operations;
+use created_contexts::CreatedContexts;
 use drafts::DraftRegistry;
 use worker::{WorkerEvent, WorkerHandle};
 
@@ -112,7 +114,6 @@ pub(crate) enum JobKind {
     OperationAbandon,
     DocumentSave,
     TicketSave,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
     ContextPrepare,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     ContextRelease,
@@ -204,6 +205,9 @@ pub(crate) struct Services {
     operations: Entity<Operations>,
     /// The drafts this session knows of, shared by every view.
     drafts: Entity<DraftRegistry>,
+    /// The work contexts this process made and saved nothing into (R-75).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    created: Entity<CreatedContexts>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -223,12 +227,18 @@ impl Services {
     /// an abandoned operation ends the pending save it held. The registry
     /// outlives tabs, so a save that finishes after its tab closed still
     /// retires its revision.
+    ///
+    /// A finished `context prepare` is first passed to `CreatedContexts`,
+    /// in the same update, so a context is counted before any view hears
+    /// of its answer, and whether or not its tab is still open (R-37).
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
         let drafts = cx.new(|_| DraftRegistry::new(backend.clone(), worker.clone()));
         let registry = drafts.downgrade();
+        let created = cx.new(|_| CreatedContexts::default());
+        let made = created.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -238,10 +248,15 @@ impl Services {
                 let applied = model.update(cx, |operations, cx| {
                     let mut finished = Vec::new();
                     for event in batch {
-                        if let WorkerEvent::Finished(id, envelope) = &event
-                            && let Some(forward) = for_drafts(operations, *id, envelope)
-                        {
-                            finished.push(forward);
+                        if let WorkerEvent::Finished(id, envelope) = &event {
+                            if let Some(request) = operations.request(*id) {
+                                let _ = made.update(cx, |created, _| {
+                                    created.finished(&request.intent, envelope)
+                                });
+                            }
+                            if let Some(forward) = for_drafts(operations, *id, envelope) {
+                                finished.push(forward);
+                            }
                         }
                         operations.apply(event);
                     }
@@ -273,6 +288,7 @@ impl Services {
             worker,
             operations,
             drafts: drafts.clone(),
+            created,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -310,6 +326,12 @@ impl Services {
     /// The drafts this session knows of.
     pub(crate) fn drafts(&self) -> &Entity<DraftRegistry> {
         &self.drafts
+    }
+
+    /// The work contexts this process made and saved nothing into.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
+    pub(crate) fn created_contexts(&self) -> &Entity<CreatedContexts> {
+        &self.created
     }
 
     #[cfg(test)]

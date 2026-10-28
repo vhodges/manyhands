@@ -4,7 +4,8 @@
 //!
 //! While viewing, the pill reads the item: a context that needs recovery,
 //! a closed ticket, a kept or stored draft, then the copy it was read
-//! from. The editing states are named here for Tasks 14 and 15.
+//! from. While a session is made ready or lives, the pill reads its phase
+//! (`edit_state`).
 
 use gpui_kit::{
     App, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
@@ -16,7 +17,10 @@ use manyhands::repository::{ClosureState, ItemContextKind, ItemDto};
 
 use crate::desktop::{
     assets::icon_path,
-    model::item::{context_problems, provenance_label},
+    model::{
+        edit::Phase,
+        item::{context_problems, provenance_label},
+    },
 };
 
 /// The pill's text.
@@ -34,19 +38,16 @@ pub(crate) enum PillState {
     /// Viewing, with a kept or stored draft (decision 15).
     ViewingDraftKept,
     /// Preparing or Loading the private copy.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
     Preparing,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     Saving,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     Review,
     /// Editing, dirty.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
     EditingUnsaved,
     /// Editing, saved and clean; `not_shared` with a selected publication
     /// remote.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
-    EditingSaved { not_shared: bool },
+    EditingSaved {
+        not_shared: bool,
+    },
     /// A closed ticket.
     Closed,
     /// A closed ticket, with a kept or stored draft.
@@ -104,6 +105,23 @@ pub(crate) fn viewing_state(item: &ItemDto, draft_kept: bool) -> PillState {
         PillState::ViewingPrivate
     } else {
         PillState::ViewingShared
+    }
+}
+
+/// The state of a tab whose session is being made ready or lives, from
+/// its `phase`; `None` while viewing, when the item decides
+/// (`viewing_state`). A clean editor has nothing unsaved: what it shows is
+/// what is saved on this computer. Whether it is shared yet is read only
+/// after a save (fact 41), so a session that has not saved says nothing
+/// of it.
+pub(crate) fn edit_state(phase: Phase, dirty: bool) -> Option<PillState> {
+    match phase {
+        Phase::Viewing => None,
+        Phase::Preparing(_) | Phase::Loading => Some(PillState::Preparing),
+        Phase::Editing if dirty => Some(PillState::EditingUnsaved),
+        Phase::Editing => Some(PillState::EditingSaved { not_shared: false }),
+        Phase::Saving => Some(PillState::Saving),
+        Phase::Review => Some(PillState::Review),
     }
 }
 
