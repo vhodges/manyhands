@@ -5,18 +5,21 @@
 //! - **Closing the tab.** Unsaved work, a kept or stored draft, or a
 //!   draft still being stored asks first (R-41), in the leave dialog
 //!   (`view::close_draft`): Keep draft where a draft is stored, waiting
-//!   while one is being stored; Discard and Cancel always, Discard waiting
-//!   while a save is in flight; Save shown unavailable until the close
-//!   dialog saves (Task 18). A clean tab with no draft closes at once.
+//!   while one is being stored; Discard and Cancel always; Keep draft and
+//!   Discard waiting while a save is in flight; Save shown unavailable
+//!   until the close dialog saves (Task 18). The message follows what is
+//!   offered. A clean tab with no draft closes at once.
 //!   Keep draft closes the tab once the draft is written and let go of; a
 //!   failed write keeps the tab, with the failure in the toolbar. Discard
 //!   closes it once the draft is deleted; a failed discard keeps it open
 //!   and says so, the draft let go of and listed again.
 //! - **Ended elsewhere** (R-71). When D2 discards the session's draft for
 //!   a reason the tab did not cause, from the Drafts page, a kept session
-//!   is dropped and a live one ends: the tab is viewing the saved copy,
-//!   saying "The draft was discarded.". A never-created item, which has no
-//!   saved copy, closes its tab. A draft of the item still stored is
+//!   is dropped and a live one ends: the tab is viewing the saved copy and,
+//!   once the discard lands, says "The draft was discarded.". A discard the
+//!   store refused says nothing: D2's banner offers the draft, still
+//!   stored. A never-created item, which has no saved copy, closes its tab
+//!   once the discard lands. A draft of the item still stored is
 //!   offered by D2's draft banner.
 //! - **Release on leave** is Task 17's: every path the design says it
 //!   applies to calls `release_on_leave`, which releases nothing yet.
@@ -55,6 +58,15 @@ pub(crate) enum Leaving {
 /// discard elsewhere ended a never-created item's session (R-71).
 pub(crate) struct CloseThisTab;
 
+/// A discard elsewhere that ended the tab's session (R-71).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Elsewhere {
+    /// The store call lands next; a never-created item's tab closes then.
+    Landing { never_created: bool },
+    /// The draft is gone: the banner says so until the next Edit.
+    Discarded,
+}
+
 impl EventEmitter<CloseThisTab> for ItemPane {}
 
 impl ItemPane {
@@ -75,13 +87,18 @@ impl ItemPane {
         }
     }
 
+    /// Whether the edit session is dirty: the tab's unsaved mark shows it
+    /// whether or not a draft is stored (design, Done and leaving).
+    pub(in crate::desktop::view) fn unsaved_edit(&self, cx: &App) -> bool {
+        self.edit_dirty(cx)
+    }
+
     /// Asks before this tab closes with its edit session's unsaved work.
     pub(in crate::desktop::view) fn ask_to_close(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let keeps = self.keep_offer(cx).is_some();
         let pane = cx.entity().downgrade();
         let reader = pane.clone();
         let offers = Rc::new(move |cx: &App| {
@@ -94,22 +111,20 @@ impl ItemPane {
                     discard: false,
                 })
         });
-        close_draft::open(
-            Ask::session(keeps, offers),
-            window,
-            cx,
-            move |choice, _, cx| {
-                let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
-            },
-        );
+        close_draft::open(Ask::session(offers), window, cx, move |choice, _, cx| {
+            let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
+        });
     }
 
-    /// What the close dialog offers now.
+    /// What the close dialog offers now. While a save is in flight, Keep
+    /// draft and Discard wait, so neither drops the save's record or races
+    /// its commit.
     fn close_offers(&self, cx: &App) -> Offers {
+        let saving = self.save_in_flight(cx);
         Offers {
-            keep: self.keep_offer(cx),
+            keep: self.keep_offer(cx).map(|ready| ready && !saving),
             save: None,
-            discard: !self.save_in_flight(cx),
+            discard: !saving,
         }
     }
 
@@ -210,26 +225,39 @@ impl ItemPane {
 
     /// R-71: D2 discarded the draft of the session attached to `event`'s
     /// tab. When it is this tab's, and the tab still holds its session (it
-    /// did not cause the discard), the session ends and the tab says so; a
-    /// never-created item's tab closes.
+    /// did not cause the discard), the session ends at once. Once the
+    /// discard lands, the tab says the draft was discarded, and release on
+    /// leave applies; a discard the store refused leaves the draft stored,
+    /// for D2's banner to offer, and the tab says nothing of it. A
+    /// never-created item, with no saved copy to view, closes its tab then.
     pub(in crate::desktop::view::item) fn session_discarded(
         &mut self,
         event: &SessionDiscarded,
         cx: &mut Context<Self>,
     ) {
-        let SessionDiscarded(tab) = event;
-        if *tab != self.tab_key() {
-            return;
-        }
-        let Some(session) = &self.edit.session else {
-            return;
-        };
-        let never_created = session.never_created();
-        self.end_session(None, cx);
-        self.edit.discarded = true;
-        self.release_on_leave(cx);
-        if never_created {
-            cx.emit(CloseThisTab);
+        match event {
+            SessionDiscarded::Ended(tab) if *tab == self.tab_key() => {
+                let Some(session) = &self.edit.session else {
+                    return;
+                };
+                let never_created = session.never_created();
+                self.end_session(None, cx);
+                self.edit.discarded = Some(Elsewhere::Landing { never_created });
+            }
+            SessionDiscarded::Landed(tab, discarded) if *tab == self.tab_key() => {
+                let Some(Elsewhere::Landing { never_created }) = self.edit.discarded else {
+                    return;
+                };
+                self.edit.discarded = discarded.then_some(Elsewhere::Discarded);
+                if *discarded {
+                    self.release_on_leave(cx);
+                }
+                if never_created {
+                    cx.emit(CloseThisTab);
+                }
+                cx.notify();
+            }
+            SessionDiscarded::Ended(_) | SessionDiscarded::Landed(..) => {}
         }
     }
 

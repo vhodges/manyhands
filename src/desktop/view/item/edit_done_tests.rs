@@ -22,6 +22,7 @@ const VIEWING_PRIVATE: &str = "Viewing your private copy";
 const KEPT_WORDS: &str = "Your unsaved changes are kept as a draft on this computer.";
 const DISCARDED_WORDS: &str = "The draft was discarded.";
 const CHANGED_WORDS: &str = "Someone changed this file outside Manyhands. Your edits are kept.";
+#[cfg(unix)]
 const NOT_KEPT_WORDS: &str = "Your unsaved changes could not be kept as a draft on this \
                               computer; they are only in the editor. Save them, or discard them.";
 const NOT_CREATED_WORDS: &str = "This item is not created yet, so there is no saved copy to \
@@ -29,6 +30,7 @@ const NOT_CREATED_WORDS: &str = "This item is not created yet, so there is no sa
                                  continue later.";
 const CLOSE_KEEP_WORDS: &str = "Keep draft keeps your unsaved changes on this computer, to \
                                 continue later. Discard deletes them.";
+#[cfg(unix)]
 const CLOSE_UNKEPT_WORDS: &str = "Your unsaved changes are not kept as a draft on this \
                                   computer. Discard deletes them; Cancel goes back to the tab.";
 
@@ -234,12 +236,30 @@ async fn done_during_a_save(shell: &Shell, cx: &mut TestAppContext) -> DesktopRe
     sent[0]
 }
 
-/// Row: Done while a save is in flight, and it answers a pending
-/// checkpoint, a refusal or `external_change`. Done stops each time: the
-/// banner shows the checkpoint with Retry, or the refusal, or the review
+/// A service over the fixture's data that fails at `point`, in place of
+/// the one in use.
+fn failing_at(shell: &Shell, point: manyhands::repository::FailurePoint) {
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(shell.fixture.data_dir(), point)
+            .unwrap(),
+    );
+}
+
+/// The fixture's own service, in place of a failing one.
+fn working(shell: &Shell) {
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+}
+
+/// Row: Done while a save is in flight, and it answers a refusal, a
+/// pending checkpoint or `external_change`. Done stops each time: the
+/// banner shows the refusal, or the checkpoint with Retry, or the review
 /// opens; nothing is discarded or released.
 #[gpui_kit::test]
 async fn done_stops_when_the_waited_save_answers_anything_but_committed(cx: &mut TestAppContext) {
+    use manyhands::repository::FailurePoint;
+
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, TICKET, "Stopped", "");
@@ -248,14 +268,26 @@ async fn done_stops_when_the_waited_save_answers_anything_but_committed(cx: &mut
     let host = edit(&shell, cx).await;
     type_at_end(&shell, &host, "x", cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    let typed = edit_text(&host, cx);
+
+    // A refusal: the library stops the request before its domain call, a
+    // refusal no desktop check can make first.
+    failing_at(&shell, FailurePoint::BeforeRequestDomainCall);
+    let refused = done_during_a_save(&shell, cx).await;
+    working(&shell);
+    assert_eq!(code(&shell, refused, cx), Some(ResultCode::InternalError));
+    assert_eq!(
+        shell.label("item-save-refused", cx).as_deref(),
+        Some("Could not save on this computer. Your edits are kept.")
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    done_stopped(&shell, &root, id, &typed, cx);
+    assert!(created(&shell, &root, TICKET, cx), "the context is kept");
 
     // A pending checkpoint: the file is written, the commit is not.
-    shell.backend.replace_service(
-        RepositoryService::open_at_with_failure_point_for_testing(
-            shell.fixture.data_dir(),
-            manyhands::repository::FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
-        )
-        .unwrap(),
+    failing_at(
+        &shell,
+        FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
     );
     let pending = done_during_a_save(&shell, cx).await;
     assert_eq!(
@@ -264,52 +296,21 @@ async fn done_stops_when_the_waited_save_answers_anything_but_committed(cx: &mut
     );
     assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some("Retry"));
     assert_eq!(phase(&shell, cx), Phase::Editing);
-    let typed = edit_text(&host, cx);
     done_stopped(&shell, &root, id, &typed, cx);
     assert!(created(&shell, &root, TICKET, cx), "the context is kept");
 
     // Retry commits, with Done no longer waiting: the session goes on.
-    shell
-        .backend
-        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    working(&shell);
     shell.click("item-save-retry", cx);
     ended(&shell, pending, cx).await;
     shell.run(cx);
     assert_eq!(code(&shell, pending, cx), Some(ResultCode::Ok));
     assert_eq!(session(&shell, cx), Some(false), "still editing");
 
-    // A refusal: the ticket made to depend on itself, which the save
-    // refuses as a cycle (through the session's fields, as the details
-    // sheet's controls will change them).
+    // `external_change`: another actor saved since the base.
     type_at_end(&shell, &host, "y", cx);
     let id = attached(&shell, &root, TICKET, cx).expect("a draft began again");
-    let mut fields = pane(&shell, cx).read_with(cx, |pane, _| {
-        pane.edit_session().unwrap().base().fields.clone()
-    });
-    if let DraftFields::Ticket { deps, .. } = &mut fields {
-        *deps = vec![TICKET.to_owned()];
-    }
-    pane(&shell, cx).update(cx, |pane, cx| pane.change_fields(fields, cx));
-    shell.run(cx);
-    let refused = done_during_a_save(&shell, cx).await;
-    assert_eq!(
-        code(&shell, refused, cx),
-        Some(ResultCode::RelationshipCycle)
-    );
-    assert_eq!(
-        shell.label("item-save-refused", cx).as_deref(),
-        Some("Could not save on this computer. Your edits are kept.")
-    );
-    assert_eq!(phase(&shell, cx), Phase::Editing);
     let typed = edit_text(&host, cx);
-    done_stopped(&shell, &root, id, &typed, cx);
-
-    // `external_change`: another actor saved since the base.
-    let fields = pane(&shell, cx).read_with(cx, |pane, _| {
-        pane.edit_session().unwrap().base().fields.clone()
-    });
-    pane(&shell, cx).update(cx, |pane, cx| pane.change_fields(fields, cx));
-    shell.run(cx);
     shell.fixture.save_ticket(&root, TICKET, "Theirs");
     let changed = done_during_a_save(&shell, cx).await;
     assert_eq!(code(&shell, changed, cx), Some(ResultCode::ExternalChange));
@@ -329,6 +330,45 @@ async fn done_stops_when_the_waited_save_answers_anything_but_committed(cx: &mut
     assert_eq!(phase(&shell, cx), Phase::Review, "Done does nothing");
     assert!(!shell.present("done-draft-dialog", cx));
     assert_eq!(session(&shell, cx), Some(false));
+}
+
+/// Minor 1 (review): a pending checkpoint already answered still holds the
+/// save. Done stops: the tab stays editing, and the checkpoint's banner,
+/// with Retry, stays in view, never hidden under a kept session.
+#[gpui_kit::test]
+async fn done_with_a_pending_checkpoint_stops_and_shows_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Pending", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    let typed = edit_text(&host, cx);
+    failing_at(
+        &shell,
+        manyhands::repository::FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+    );
+    shell.click("item-save", cx);
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    working(&shell);
+    assert!(
+        shell.present("item-save-failed", cx),
+        "the checkpoint is pending"
+    );
+
+    done(&shell, cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing, "Done stops");
+    assert!(!shell.present("done-draft-dialog", cx));
+    assert_eq!(
+        shell.label("item-save-failed", cx).as_deref(),
+        Some("Could not save a checkpoint on this computer. Your text is kept.")
+    );
+    assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some("Retry"));
+    assert_ne!(pill(&shell, cx).as_deref(), Some(KEPT));
+    done_stopped(&shell, &root, id, &typed, cx);
 }
 
 /// Row: Done, dirty, and the write succeeds. The tab is viewing at once;
@@ -668,9 +708,9 @@ async fn done_writes_a_revision_still_waiting_on_the_timer_first(cx: &mut TestAp
     assert_eq!(session(&shell, cx), Some(true), "then kept");
 }
 
-/// R-58: while the session is kept, the page, the header, the details
-/// sheet and the tab's title show the saved copy, though the draft holds
-/// another body and another title; the tab keeps its unsaved mark.
+/// R-58: while the session is kept, the page, the header, its chips, the
+/// details sheet and the tab's title show the saved copy, though the draft
+/// holds another body, title and type; the tab keeps its unsaved mark.
 #[gpui_kit::test]
 async fn the_kept_session_shows_the_saved_copy_in_page_header_sheet_and_title(
     cx: &mut TestAppContext,
@@ -683,7 +723,14 @@ async fn the_kept_session_shows_the_saved_copy_in_page_header_sheet_and_title(
     let host = edit(&shell, cx).await;
     let original = edit_text(&host, cx);
     type_at_end(&shell, &host, "x", cx);
-    let fields = titled(&shell, "Draft title", cx);
+    let chip = shell
+        .label(ChipField::Type.id(), cx)
+        .expect("the type chip");
+    assert!(chip.contains("task"), "{chip}");
+    let mut fields = titled(&shell, "Draft title", cx);
+    if let DraftFields::Ticket { ticket_type, .. } = &mut fields {
+        *ticket_type = "bug".to_owned();
+    }
     pane(&shell, cx).update(cx, |pane, cx| pane.change_fields(fields, cx));
     shell.run(cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
@@ -696,15 +743,20 @@ async fn the_kept_session_shows_the_saved_copy_in_page_header_sheet_and_title(
             .map(|session| session.current().clone())
     });
     assert!(
-        matches!(&draft, Some(DraftFields::Ticket { title, body, .. })
-            if title == "Draft title" && *body == format!("{original}x")),
-        "the draft holds the other title and body"
+        matches!(&draft, Some(DraftFields::Ticket { title, ticket_type, body, .. })
+            if title == "Draft title" && ticket_type == "bug" && *body == format!("{original}x")),
+        "the draft holds the other title, type and body"
     );
     assert!(text(&read_editor(&shell, cx), cx) == original, "the page");
     assert_eq!(
         shell.label("item-title", cx).as_deref(),
         Some("Saved title"),
         "the header"
+    );
+    assert_eq!(
+        shell.label(ChipField::Type.id(), cx).as_deref(),
+        Some(chip.as_str()),
+        "the chip"
     );
     assert_eq!(
         shell.rows("tab", cx),
@@ -936,7 +988,8 @@ async fn closing_a_tab_with_a_kept_session_asks_first(cx: &mut TestAppContext) {
 
 /// R-15: a metadata change alone makes the tab dirty, so closing it asks,
 /// though the body is untouched and, with crash recovery off, no draft is
-/// stored. The same session clean closes at once.
+/// stored. The tab is marked unsaved all the same. The same session clean
+/// closes at once.
 #[cfg(unix)]
 #[gpui_kit::test]
 async fn a_metadata_change_alone_makes_closing_ask(cx: &mut TestAppContext) {
@@ -960,11 +1013,17 @@ async fn a_metadata_change_alone_makes_closing_ask(cx: &mut TestAppContext) {
     open(&shell, ticket(&root, TICKET), cx);
     let host = edit_without_a_store(&shell, cx).await;
     let original = edit_text(&host, cx);
+    assert_eq!(shell.rows("tab", cx), ["Metadata"], "clean: no mark");
     let fields = titled(&shell, "Another title", cx);
     pane(&shell, cx).update(cx, |pane, cx| pane.change_fields(fields, cx));
     shell.run(cx);
     assert!(edit_text(&host, cx) == original, "the body is untouched");
     assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_UNSAVED));
+    assert_eq!(
+        shell.rows("tab", cx),
+        ["Metadata, unsaved"],
+        "the unsaved mark, with no draft stored"
+    );
     shell.keys("secondary-w", cx);
     assert!(shell.present("close-draft-dialog", cx), "it asks first");
     assert!(!shell.present("close-draft-keep", cx), "no draft to keep");
@@ -1049,6 +1108,263 @@ async fn closing_a_dirty_tab_with_no_stored_draft_asks_first(cx: &mut TestAppCon
     let store = shell.fixture.draft_store();
     assert!(matches!(held(&store, id), Some(Held::No)));
     assert!(stored_body(&store, id) == Some(typed));
+}
+
+// Fix round 1.
+
+/// "b" typed and saved, with "c" typed while the save is in flight: the
+/// save commits "b", and the session goes on, dirty, over the saved copy.
+/// Gives the editor and the text before "b".
+async fn saved_under_newer_typing(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> (Entity<EditorState>, String) {
+    open(shell, ticket(root, TICKET), cx);
+    let host = edit(shell, cx).await;
+    let original = edit_text(&host, cx);
+    type_at_end(shell, &host, "b", cx);
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held.wait_reached();
+    type_at_end(shell, &host, "c", cx);
+    held.release();
+    let request = saves(shell, cx)[0];
+    ended(shell, request, cx).await;
+    shell.run(cx);
+    assert_eq!(code(shell, request, cx), Some(ResultCode::Ok));
+    let item = shown_item(shell, root);
+    assert!(item.body.as_deref() == Some(format!("{original}b").as_str()));
+    assert!(edit_text(&host, cx) == format!("{original}bc"));
+    (host_editor(&host, cx), original)
+}
+
+/// Important 1 (review): dirty is measured against the saved copy. After a
+/// save that newer typing outlived, both edits are undone, back to the
+/// text before the save. That differs from the saved copy, so the tab is
+/// still dirty, and Done keeps the session with the draft holding it.
+#[gpui_kit::test]
+async fn undoing_past_a_save_that_newer_typing_outlived_stays_dirty(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Outlived", "");
+    });
+    let (editor, original) = saved_under_newer_typing(&shell, &root, cx).await;
+    assert!(undo_reaches(&shell, &editor, &original, cx), "undone");
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_UNSAVED));
+
+    done(&shell, cx);
+    assert_eq!(session(&shell, cx), Some(true), "kept, not discarded");
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft is kept");
+    assert!(body(&shell, id) == Some(original.clone()), "with that text");
+    assert!(text(&read_editor(&shell, cx), cx) == format!("{original}b"));
+}
+
+/// Important 1's converse: after the same save, only the newer typing is
+/// undone, back to the saved copy. The tab is clean, and Done discards the
+/// draft that holds it and ends the session.
+#[gpui_kit::test]
+async fn undoing_back_to_the_saved_copy_after_a_save_is_clean(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Back to saved", "");
+    });
+    let (editor, original) = saved_under_newer_typing(&shell, &root, cx).await;
+    let id = attached(&shell, &root, TICKET, cx).expect("the newer text is drafted");
+    let saved = format!("{original}b");
+    assert!(undo_reaches(&shell, &editor, &saved, cx), "undone");
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED));
+
+    done(&shell, cx);
+    assert_eq!(session(&shell, cx), None, "the session ends");
+    assert!(
+        held(&shell.fixture.draft_store(), id).is_none(),
+        "discarded"
+    );
+    assert!(stored_bodies(&shell).is_empty());
+}
+
+/// Minor 5 (review): text typed while Done writes the draft is written too
+/// before Done keeps the session: the draft holds the newest revision.
+#[gpui_kit::test]
+async fn text_typed_while_done_writes_is_written_before_it_keeps(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Typed during", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let original = edit_text(&host, cx);
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    type_at_end(&shell, &host, "y", cx);
+    let write = shell.backend.hold_read(ReadKind::DraftWrite);
+    done(&shell, cx);
+    assert_eq!(session(&shell, cx), Some(false), "Done is writing");
+    type_at_end(&shell, &host, "z", cx);
+    drop(write);
+    shell.run(cx);
+    assert_eq!(session(&shell, cx), Some(true), "then kept");
+    assert!(
+        body(&shell, id) == Some(format!("{original}xyz")),
+        "the newest"
+    );
+}
+
+/// Minor 3 (review): a Drafts-page discard that the store refuses (its
+/// folder cannot be written) still ends the tab's session, whose draft D2
+/// let go of, but the tab does not say it was discarded: D2's banner
+/// offers the draft again.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_failed_drafts_page_discard_does_not_say_discarded(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Not discarded", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    done(&shell, cx);
+    assert_eq!(session(&shell, cx), Some(true), "kept");
+
+    let read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
+    shell.keys("secondary-shift-d", cx);
+    shell.click(row_id(id, "discard"), cx);
+    shell.click("discard-draft-confirm", cx);
+    shell.run(cx);
+    open(&shell, ticket(&root, TICKET), cx);
+    assert_eq!(session(&shell, cx), None, "D2 let the session go");
+    assert!(
+        !shell.present("item-draft-discarded", cx),
+        "not said to be discarded"
+    );
+    assert!(shell.present("draft-banner", cx), "the draft is offered");
+    drop(read_only);
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), id),
+        Some(Held::No)
+    ));
+}
+
+/// Minor 4 (review): while a save is in flight, the close dialog's Keep
+/// draft waits, as its Discard does; once the save is over, Keep draft
+/// keeps the newer text.
+#[gpui_kit::test]
+async fn closing_while_a_save_is_in_flight_waits_to_keep_or_discard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Closed saving", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let held_save = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held_save.wait_reached();
+    type_at_end(&shell, &host, "y", cx);
+    let typed = edit_text(&host, cx);
+
+    shell.keys("secondary-w", cx);
+    assert!(shell.present("close-draft-dialog", cx), "it asks first");
+    for part in ["close-draft-keep-button", "close-draft-discard-button"] {
+        shell.click(part, cx);
+        assert!(shell.present("close-draft-dialog", cx), "{part} waits");
+    }
+
+    held_save.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    shell.run(cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the newer text is drafted");
+    shell.click("close-draft-keep-button", cx);
+    shell.run(cx);
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .is_empty(),
+        "Keep draft closes it"
+    );
+    let store = shell.fixture.draft_store();
+    assert!(matches!(held(&store, id), Some(Held::No)));
+    assert!(stored_body(&store, id) == Some(typed));
+}
+
+/// Minor 6 (review): the close dialog's message follows what it offers.
+/// While the first write is held it offers Keep draft, and says so; once
+/// that write fails (the drafts folder cannot be written), Keep draft goes,
+/// and so do its words.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn the_close_dialogs_message_follows_its_offers(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Message", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let begin = shell.backend.hold_read(ReadKind::Drafts);
+    let read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
+    type_at_end(&shell, &host, "x", cx);
+    shell.keys("secondary-w", cx);
+    assert_eq!(
+        shell.label("close-draft-message", cx).as_deref(),
+        Some(CLOSE_KEEP_WORDS)
+    );
+    assert!(shell.present("close-draft-keep", cx), "Keep draft waits");
+
+    drop(begin);
+    shell.run(cx);
+    assert_eq!(
+        attached(&shell, &root, TICKET, cx),
+        None,
+        "the write failed"
+    );
+    assert!(!shell.present("close-draft-keep", cx), "Keep draft goes");
+    assert_eq!(
+        shell.label("close-draft-message", cx).as_deref(),
+        Some(CLOSE_UNKEPT_WORDS)
+    );
+    shell.click("close-draft-cancel-button", cx);
+    drop(read_only);
+}
+
+/// Minor 8 (review): the never-created prompt's Discard discards the draft
+/// and closes the tab, since there is no saved copy to view.
+#[gpui_kit::test]
+async fn discard_on_a_never_created_item_closes_the_tab(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discarded new", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    pane(&shell, cx).update(cx, |pane, _| pane.edit_session_mut().unwrap().as_new_item());
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+
+    done(&shell, cx);
+    shell.click("done-draft-discard-button", cx);
+    shell.run(cx);
+    assert!(
+        held(&shell.fixture.draft_store(), id).is_none(),
+        "discarded"
+    );
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .is_empty(),
+        "the tab closes"
+    );
 }
 
 /// Done's rules in the design's order (Done and leaving, steps 3 and 5): a

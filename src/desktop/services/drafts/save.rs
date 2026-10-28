@@ -258,7 +258,8 @@ impl DraftRegistry {
     /// On failure the store has released the draft, which stays on disk:
     /// the session is over either way. The store is listed again once it
     /// lands, whatever it answered. The tab the session was attached to
-    /// hears `SessionDiscarded` (R-71).
+    /// hears `SessionDiscarded` as the session ends, and again once the
+    /// discard lands, with what it came to (R-71).
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
@@ -275,8 +276,8 @@ impl DraftRegistry {
         let id = live.session.id();
         self.saves.retain(|_, record| record.draft != id);
         self.detach_ended();
-        if let Some(tab) = tab {
-            cx.emit(SessionDiscarded(tab));
+        if let Some(tab) = &tab {
+            cx.emit(SessionDiscarded::Ended(tab.clone()));
         }
         cx.notify();
         let Live { session, write, .. } = live;
@@ -310,6 +311,9 @@ impl DraftRegistry {
             // Gone or released, the draft is listed as it now is.
             let _ = registry.update(cx, |registry, cx| {
                 registry.reload_listing(cx);
+                if let Some(tab) = tab {
+                    cx.emit(SessionDiscarded::Landed(tab, discarded.is_ok()));
+                }
             });
             discarded
         })

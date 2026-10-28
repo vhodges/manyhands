@@ -173,6 +173,10 @@ impl EditorHost {
         self.editor.read(cx).text().to_owned()
     }
 
+    /// Whether the text differs from the host's own baseline. The tab reads
+    /// dirty against its session's base, the saved copy, instead (Task 16
+    /// fix round 1); the host's flag drives `DirtyChanged`, and tests.
+    #[cfg(test)]
     pub(crate) fn is_dirty(&self) -> bool {
         self.dirty
     }

@@ -3,13 +3,16 @@
 //! 1. **During the review** Done is disabled, with its note (`actions`).
 //! 2. **A save in flight**: Done waits for its answer. A committed one,
 //!    with D2's store call after it, goes on; any other answer stops Done,
-//!    and the review or the banner shows it, as Save's states say. Nothing
-//!    is discarded.
+//!    and the review or the banner shows it, as Save's states say. A
+//!    pending checkpoint already answered, waiting for Retry, stops Done
+//!    too. Nothing is discarded.
 //! 3. **A never-created item**: Done asks Save, Keep draft, Discard or
 //!    Cancel.
 //! 4. **Write now**: D2 writes the session's newest revision at once
 //!    (`flush_now`), one waiting on its timer included, after any write in
 //!    flight; a draft still beginning is waited for (RFC lines 162–163).
+//!    The draft counts as written only when D2 holds its newest revision
+//!    then: text typed meanwhile is written once more.
 //! 5. **Then** (`model::edit::done_outcome`): a clean session ends, its
 //!    stored draft discarded; a dirty one whose draft is written is kept
 //!    (`kept`); one whose draft is not written asks Save, Discard or Cancel.
@@ -26,10 +29,14 @@
 use std::rc::Rc;
 
 use gpui_kit::{App, Context, Window, component::WindowExt};
+use manyhands::drafts::DraftId;
 
 use super::{DraftLink, leave::CloseThisTab};
 use crate::desktop::{
-    model::edit::{DoneOutcome, Phase, done_outcome},
+    model::{
+        drafts::RecoveryState,
+        edit::{DoneOutcome, Phase, done_outcome},
+    },
     view::{
         close_draft::{self, Ask, CloseWithDraft, Offers},
         drafts::actions::may_open,
@@ -85,6 +92,11 @@ impl ItemPane {
             cx.notify();
             return;
         }
+        // A pending checkpoint, waiting for Retry, still holds the save: it
+        // did not commit, so Done stops, and its banner stays in view.
+        if self.edit.save.run.is_some() {
+            return;
+        }
         if session.never_created() {
             self.ask_done(true, window, cx);
             return;
@@ -97,21 +109,57 @@ impl ItemPane {
             self.done_decide(false, window, cx);
             return;
         };
+        self.done_write(id, false, window, cx);
+    }
+
+    /// Step 4: D2 writes the draft `id` now. Done decides once the newest
+    /// revision is stored, as D2's recovery state says then; text typed
+    /// while it was written is written once `again`, and otherwise counts
+    /// as not written.
+    fn done_write(
+        &mut self,
+        id: DraftId,
+        again: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.edit.finishing = Some(Finishing::Write);
         let flush = self
             .services
             .drafts()
             .update(cx, |registry, cx| registry.flush_now(id, cx));
         cx.spawn_in(window, async move |pane, cx| {
-            let written = flush.await.is_ok();
+            let flushed = flush.await.is_ok();
             let _ = pane.update_in(cx, |pane, window, cx| {
-                if matches!(pane.edit.finishing, Some(Finishing::Write)) {
-                    pane.edit.finishing = None;
-                    pane.done_decide(written, window, cx);
+                if !matches!(pane.edit.finishing, Some(Finishing::Write)) {
+                    return;
+                }
+                pane.edit.finishing = None;
+                let written = flushed && pane.draft_written(cx);
+                match pane.live_draft(cx) {
+                    Some(id) if flushed && !written && !again => {
+                        pane.done_write(id, true, window, cx)
+                    }
+                    _ => pane.done_decide(written, window, cx),
                 }
             });
         })
         .detach();
+    }
+
+    /// Whether the session's draft holds its newest revision: D2 says it
+    /// is saved for recovery, with no store call in flight.
+    fn draft_written(&self, cx: &App) -> bool {
+        let Some(id) = self.live_draft(cx) else {
+            return false;
+        };
+        self.services
+            .drafts()
+            .read(cx)
+            .session(id)
+            .is_some_and(|session| {
+                !session.busy() && matches!(session.recovery_state(), RecoveryState::Saved(_))
+            })
     }
 
     /// Step 5, once the draft is written as far as it can be: `written`

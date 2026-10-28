@@ -85,10 +85,16 @@ pub(crate) struct DraftSaved {
 
 impl gpui_kit::EventEmitter<DraftSaved> for DraftRegistry {}
 
-/// A discard ended the session attached to the item tab `0` (R-71): from
-/// the Drafts page, or from the tab itself, which has let go of its
-/// session first. It holds no text.
-pub(crate) struct SessionDiscarded(pub TabKey);
+/// A discard of the session attached to an item tab (R-71): from the Drafts
+/// page, or from the tab itself, which has let go of its session first. It
+/// holds no text.
+pub(crate) enum SessionDiscarded {
+    /// The session attached to the tab ended; its draft is being discarded.
+    Ended(TabKey),
+    /// The discard landed: the draft is gone (`true`), or the store refused
+    /// and let go of it, still stored and listed again.
+    Landed(TabKey, bool),
+}
 
 impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
 

@@ -23,13 +23,22 @@ impl ItemPane {
     /// begins the draft; every later change, back to the base included,
     /// updates it.
     pub(super) fn feed(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = &self.edit.session else {
+        let Some(session) = &mut self.edit.session else {
             return;
         };
+        let current = session.current(cx);
+        // Dirty is read against the saved copy, which the editor's own flag
+        // does not follow: the pill, Save and the tab's mark are drawn again
+        // when it changes.
+        let differs = current != session.base.fields;
+        let dirty = differs || session.never_created();
+        if dirty != session.dirty_seen {
+            session.dirty_seen = dirty;
+            cx.notify();
+        }
         if session.draft == DraftLink::Beginning {
             return;
         }
-        let current = session.current(cx);
         if let Some(id) = self.live_draft(cx) {
             self.services
                 .drafts()
@@ -40,7 +49,7 @@ impl ItemPane {
             return;
         }
         let unavailable = self.services.drafts().read(cx).unavailable().is_some();
-        if current != session.base.fields && !unavailable {
+        if differs && !unavailable {
             self.begin(current, cx);
         }
     }

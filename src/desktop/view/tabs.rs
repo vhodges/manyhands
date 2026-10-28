@@ -157,7 +157,9 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
     let key = pane.tab_key();
     let unsaved = match &key {
         TabKey::Item { repo, kind, id } => {
-            registry.attached(&key).is_some() || registry.stored_for(repo, *kind, id).is_some()
+            pane.unsaved_edit(cx)
+                || registry.attached(&key).is_some()
+                || registry.stored_for(repo, *kind, id).is_some()
         }
         TabKey::Inspect { .. } => false,
     };

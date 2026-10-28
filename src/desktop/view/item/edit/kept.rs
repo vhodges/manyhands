@@ -26,6 +26,7 @@ use gpui_kit::{
 };
 use manyhands::drafts::TargetState;
 
+use super::leave::Elsewhere;
 use crate::desktop::{
     model::edit::{
         COMPARE, CONTINUE_EDITING, DRAFT_DISCARDED, KEPT_AFTER_DONE, Phase,
@@ -109,7 +110,7 @@ impl ItemPane {
     /// session, that it was discarded (R-71).
     pub(super) fn kept_banners(&self, cx: &mut Context<Self>) -> Vec<(Banner, AnyElement)> {
         let mut banners = Vec::new();
-        if self.edit.discarded && self.edit.session.is_none() {
+        if self.edit.discarded == Some(Elsewhere::Discarded) && self.edit.session.is_none() {
             banners.push((
                 Banner::DraftDiscarded,
                 text("item-draft-discarded", DRAFT_DISCARDED).into_any_element(),

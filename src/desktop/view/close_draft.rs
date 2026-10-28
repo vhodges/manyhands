@@ -7,12 +7,14 @@
 //! It offers Keep draft, the default (Enter) and first Tab stop where it
 //! is offered, then Save where it can be chosen (R-16), Discard and Cancel
 //! (Escape); a Save not available yet is shown last, unavailable, with its
-//! note. What it offers is read again as each frame is drawn, so Keep
-//! draft waits while a draft is being stored, and Discard while a save is
-//! in flight. Without Keep draft, Enter is Save where it can be chosen,
-//! else Cancel. The messages hold no draft text: D2's names the item by
-//! its title, never the draft's (ruling R25); an edit session's names
-//! nothing. Focus goes back where it was when the dialog closes.
+//! note. What it offers, and an edit session's message with it, is read
+//! again as each frame is drawn: Keep draft waits while a draft is being
+//! stored, Keep draft and Discard while a save is in flight, and the
+//! message names Keep draft only while it is offered. Without Keep draft,
+//! Enter is Save where it can be chosen, else Cancel. The messages hold no
+//! draft text: D2's names the item by its title, never the draft's (ruling
+//! R25); an edit session's names nothing. Focus goes back where it was when
+//! the dialog closes.
 
 use std::rc::Rc;
 
@@ -80,12 +82,30 @@ pub(crate) struct Offers {
     pub(crate) discard: bool,
 }
 
+/// What the dialog says.
+pub(crate) enum Message {
+    Fixed(String),
+    /// An edit session's close: Keep draft's words while it is offered,
+    /// read with the offers as each frame is drawn.
+    Session,
+}
+
+impl Message {
+    fn words(&self, offers: Offers) -> String {
+        match self {
+            Self::Fixed(words) => words.clone(),
+            Self::Session if offers.keep.is_some() => SESSION_KEEP.to_owned(),
+            Self::Session => SESSION_UNKEPT.to_owned(),
+        }
+    }
+}
+
 /// The dialog to open.
 pub(crate) struct Ask {
     /// Its element IDs' prefix.
     pub(crate) id: &'static str,
     pub(crate) title: &'static str,
-    pub(crate) message: String,
+    pub(crate) message: Message,
     /// The note of a Save not available yet.
     pub(crate) later: &'static str,
     /// What it offers, read as each frame is drawn.
@@ -100,7 +120,7 @@ impl Ask {
         Self {
             id: "close-draft",
             title: TITLE,
-            message: message(item),
+            message: Message::Fixed(message(item)),
             later: EDITOR_LATER,
             offers: Rc::new(|_| Offers {
                 keep: Some(true),
@@ -113,11 +133,11 @@ impl Ask {
     /// Closing a tab whose edit session has unsaved work: Keep draft where
     /// a draft is stored or being stored, Discard and Cancel, and Save shown
     /// unavailable until the close dialog saves (Task 18).
-    pub(crate) fn session(keeps: bool, offers: Rc<dyn Fn(&App) -> Offers>) -> Self {
+    pub(crate) fn session(offers: Rc<dyn Fn(&App) -> Offers>) -> Self {
         Self {
             id: "close-draft",
             title: SESSION_TITLE,
-            message: if keeps { SESSION_KEEP } else { SESSION_UNKEPT }.to_owned(),
+            message: Message::Session,
             later: LATER_NOTE,
             offers,
         }
@@ -133,7 +153,7 @@ impl Ask {
         Self {
             id: "done-draft",
             title,
-            message: message.to_owned(),
+            message: Message::Fixed(message.to_owned()),
             later: LATER_NOTE,
             offers,
         }
@@ -201,6 +221,7 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
     let muted = cx.theme().muted_foreground;
     let prefix = ask.id;
     let default = default_choice(offers);
+    let message = ask.message.words(offers);
     let button = |part: &str, label: &'static str, choice: CloseWithDraft, enabled: bool| {
         let id = format!("{prefix}-{part}");
         let choose = choose.clone();
@@ -260,9 +281,9 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
             div()
                 .id(ElementId::from(format!("{prefix}-message")))
                 .test_support()
-                .aria_label(ask.message.clone())
+                .aria_label(message.clone())
                 .text_sm()
-                .child(ask.message.clone()),
+                .child(message),
         )
         .child(
             h_flex()

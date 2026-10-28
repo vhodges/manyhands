@@ -1,8 +1,8 @@
 //! An item tab's edit session as pure decisions (design, Part C, Phases,
 //! and Done and leaving): where the tab stands, whether Edit is offered,
 //! the base a session's draft begins on, what the toolbar's status item
-//! says of D2's recovery copy, what Done comes to, and when a session is
-//! dirty or its item never created.
+//! says of D2's recovery copy, what Done comes to, and whether an item was
+//! never created.
 //!
 //! Nothing here holds the item's text but `fields_with_body`'s answer, a
 //! draft's fields, which derive no `Debug`. What a save comes to is
@@ -182,12 +182,6 @@ pub(crate) fn done_outcome(
 /// Task 22's `is_new_item_base` states the same rule for the library.
 pub(crate) fn new_item_base(base: &DraftBase) -> bool {
     base.observation.is_none() && base.source.is_none()
-}
-
-/// Whether `a` and `b` hold the same fields besides the body: a metadata
-/// change alone makes a session dirty (design, Done and leaving).
-pub(crate) fn same_metadata(a: &DraftFields, b: &DraftFields) -> bool {
-    fields_with_body(a, String::new()) == fields_with_body(b, String::new())
 }
 
 /// The indicator in words.

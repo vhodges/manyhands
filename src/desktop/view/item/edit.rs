@@ -66,9 +66,7 @@ use zorite_editor::EditorState;
 use super::ItemPane;
 use crate::desktop::{
     model::{
-        edit::{
-            Phase, base_for_edit, edit_offered, fields_with_body, new_item_base, same_metadata,
-        },
+        edit::{Phase, base_for_edit, edit_offered, fields_with_body, new_item_base},
         links::LinkTarget,
         stamp::ViewScope,
         tabs::TabKey,
@@ -129,6 +127,9 @@ pub(super) struct EditSession {
     draft: DraftLink,
     /// A save has committed in this session.
     saved: bool,
+    /// Whether the session was dirty when last fed: the tab redraws when it
+    /// changes.
+    dirty_seen: bool,
     /// The session is kept after Done: the tab views the saved copy, and
     /// the edit editor waits, with its text, caret and undo (R-58).
     kept: bool,
@@ -173,11 +174,12 @@ impl EditSession {
     }
 
     /// Dirty (design, Done and leaving): the text or any other field differs
-    /// from the baseline, or the item is not yet created.
+    /// from the baseline, the saved copy the session's base holds (R-69),
+    /// or the item is not yet created. It is the difference that begins a
+    /// draft (`feed`). The editor's own flag is not it: its baseline moves
+    /// only when a save leaves the editor holding what was sent.
     fn dirty(&self, cx: &App) -> bool {
-        self.host.read(cx).is_dirty()
-            || !same_metadata(&self.meta, &self.base.fields)
-            || self.never_created()
+        self.current(cx) != self.base.fields || self.never_created()
     }
 }
 
@@ -193,9 +195,9 @@ pub(super) struct TabEdit {
     done: FocusHandle,
     /// Where Done stands, once pressed and until it ends, keeps or asks.
     finishing: Option<done::Finishing>,
-    /// A discard elsewhere ended the tab's session (R-71): the banner says
-    /// so until the next Edit.
-    discarded: bool,
+    /// A discard elsewhere that ended the tab's session (R-71), while it
+    /// lands and once the draft is gone.
+    discarded: Option<leave::Elsewhere>,
     /// The kept-draft banner's Discard…, where its dialog gives the focus
     /// back.
     kept_discard: FocusHandle,
@@ -215,7 +217,7 @@ impl TabEdit {
             session: None,
             done: cx.focus_handle().tab_stop(true),
             finishing: None,
-            discarded: false,
+            discarded: None,
             kept_discard: cx.focus_handle(),
             kept_changed: None,
             save: save::TabSave::new(scope),
@@ -318,7 +320,7 @@ impl ItemPane {
         let TabKey::Item { repo, kind, id } = &tab else {
             return false;
         };
-        self.edit.discarded = false;
+        self.edit.discarded = None;
         let registry = self.services.drafts().read(cx);
         // R-35: a stored draft is continued, not a second one begun. Until
         // Task 18's restored-draft route, Continue editing restores it as
@@ -428,6 +430,7 @@ impl ItemPane {
             meta,
             draft: DraftLink::None,
             saved: false,
+            dirty_seen: false,
             kept: false,
             _subscriptions: subscriptions,
         });
