@@ -2560,8 +2560,10 @@ R-45 by decision 18.
 - A kept session holds a second editor, each with up to 256 whole-text undo
   steps; every comment body is its own editor (R-63).
 - A remote image shows as its source text.
-- An image beside a ticket or comment, under `.manyhands/`, is refused (R-34
-  check 2). Images live outside `.manyhands`, as in `docs/` (Task 12).
+- An image file beside a ticket, under `.manyhands/`, is refused (R-34
+  check 2). A ticket's relative `src`, and its comments', resolve from the
+  ticket's folder; with no file there, nearest name finds the image in
+  `docs/` (Task 12).
 - Image containment is checked by path. A folder replaced by a link while
   an image is read is outside the checks; only the final file is checked
   by identity (Task 12).

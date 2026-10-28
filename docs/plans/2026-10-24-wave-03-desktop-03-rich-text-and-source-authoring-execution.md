@@ -710,3 +710,13 @@ Notes for later tasks: Task 22 leaves `targets()` in
   holds anything at the path decides. A refused file there does not fall
   through. — A refused file never leads to a different image. — If
   wrong: one function in `services/images.rs`.
+- Parked (Task 12 fix 1):
+  - review Minor 4: the test helpers `png`, `drawn_as_image` and `pane`
+    are repeated across three test files;
+  - `services/images.rs` is 511 lines, about 45 of them test-only. The
+    implementer proposes splitting out `services/images/load.rs`;
+  - the GIF case of `max_alloc` was not built. A 4096 × 4096 RGBA16 PNG
+    pins `max_alloc` instead.
+
+  These go to the whole-branch review. The owner checks the redraw after
+  a reload on screen (Task 27).
