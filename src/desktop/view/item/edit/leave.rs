@@ -4,15 +4,15 @@
 //!
 //! - **Closing the tab.** Unsaved work, a kept or stored draft, or a
 //!   draft still being stored asks first (R-41), in the leave dialog
-//!   (`view::close_draft`): Keep draft where a draft is stored, waiting
-//!   while one is being stored; Discard and Cancel always; Keep draft and
-//!   Discard waiting while a save is in flight; Save shown unavailable
-//!   until the close dialog saves (Task 18). The message follows what is
-//!   offered. A clean tab with no draft closes at once.
-//!   Keep draft closes the tab once the draft is written and let go of; a
-//!   failed write keeps the tab, with the failure in the toolbar. Discard
-//!   closes it once the draft is deleted; a failed discard keeps it open
-//!   and says so, the draft let go of and listed again.
+//!   (`view::close_draft`, opened and answered by `close_save`): Keep
+//!   draft where a draft is stored, waiting while one is being stored;
+//!   Save while dirty and nothing saves (Task 18); Discard and Cancel
+//!   always; Keep draft and Discard waiting while a save is in flight. The
+//!   message follows what is offered. A clean tab with no draft closes at
+//!   once. Keep draft closes the tab once the draft is written and let go
+//!   of; a failed write keeps the tab, with the failure in the toolbar.
+//!   Discard closes it once the draft is deleted; a failed discard keeps it
+//!   open and says so, the draft let go of and listed again.
 //! - **Ended elsewhere** (R-71). When D2 discards the session's draft for
 //!   a reason the tab did not cause, from the Drafts page, a kept session
 //!   is dropped and a live one ends: the tab is viewing the saved copy and,
@@ -28,20 +28,13 @@
 //! The tab's own discards let go of the session before D2 discards, so
 //! the registry's `SessionDiscarded` finds none to end.
 
-use std::rc::Rc;
-
 use futures::channel::oneshot;
 use gpui_kit::{App, Context, EventEmitter, Task, Window};
 use manyhands::drafts::{DraftErrorKind, DraftId};
 
 use super::DraftLink;
 use crate::desktop::{
-    model::edit::Phase,
-    services::drafts::SessionDiscarded,
-    view::{
-        close_draft::{self, Ask, CloseWithDraft, Offers},
-        item::ItemPane,
-    },
+    model::edit::Phase, services::drafts::SessionDiscarded, view::item::ItemPane,
 };
 
 /// What closing an item tab asks (design, Done and leaving: Closing the
@@ -95,41 +88,6 @@ impl ItemPane {
         self.edit_dirty(cx)
     }
 
-    /// Asks before this tab closes with its edit session's unsaved work.
-    pub(in crate::desktop::view) fn ask_to_close(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let pane = cx.entity().downgrade();
-        let reader = pane.clone();
-        let offers = Rc::new(move |cx: &App| {
-            reader
-                .upgrade()
-                .map(|pane| pane.read(cx).close_offers(cx))
-                .unwrap_or(Offers {
-                    keep: None,
-                    save: None,
-                    discard: false,
-                })
-        });
-        close_draft::open(Ask::session(offers), window, cx, move |choice, _, cx| {
-            let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
-        });
-    }
-
-    /// What the close dialog offers now. While a save is in flight, Keep
-    /// draft and Discard wait, so neither drops the save's record or races
-    /// its commit.
-    fn close_offers(&self, cx: &App) -> Offers {
-        let saving = self.save_in_flight(cx);
-        Offers {
-            keep: self.keep_offer(cx).map(|ready| ready && !saving),
-            save: None,
-            discard: !saving,
-        }
-    }
-
     /// Keep draft: offered while a draft of the session is stored, and
     /// waiting while its first write is in flight.
     pub(super) fn keep_offer(&self, cx: &App) -> Option<bool> {
@@ -138,23 +96,6 @@ impl ItemPane {
             Some(true)
         } else {
             (session.draft == DraftLink::Beginning).then_some(false)
-        }
-    }
-
-    /// What the close dialog chose.
-    fn close_chosen(&mut self, choice: CloseWithDraft, cx: &mut Context<Self>) {
-        match choice {
-            CloseWithDraft::Cancel | CloseWithDraft::Save => {}
-            CloseWithDraft::KeepDraft => self.keep_and_close(cx),
-            CloseWithDraft::Discard => {
-                let discarded = self.discard_session(None, cx);
-                cx.spawn(async move |pane, cx| {
-                    if discarded.await.is_ok() {
-                        let _ = pane.update(cx, |_, cx| cx.emit(CloseThisTab));
-                    }
-                })
-                .detach();
-            }
         }
     }
 

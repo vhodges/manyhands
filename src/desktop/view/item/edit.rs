@@ -1,37 +1,42 @@
-//! Edit (design, Part C, Phases, steps 1 to 6, and Done and leaving): the
-//! item's private work context made ready, the edit editor opened on a
-//! fresh read, D2's draft begun and fed as the text changes, the text
-//! saved, and the session left.
+//! Edit (design, Part C, Phases, steps 1 to 6, Done and leaving, and
+//! Restored drafts and the close dialog): the item's private work context
+//! made ready, the edit editor opened on a fresh read, D2's draft begun and
+//! fed as the text changes, the text saved, and the session left.
 //!
 //! - **Viewing.** Edit, `e` on the page and `secondary-shift-e` in the tab
 //!   start it, where it is offered (`model::edit::edit_offered`). While a
-//!   draft of the item is kept or stored it reads Continue editing (R-35).
+//!   draft of the item is kept or stored it reads Continue editing (R-35):
+//!   a kept session shows its editor again, and a stored or restored draft
+//!   takes the restored-draft route (`restored`, R-42).
 //! - **Preparing.** `context prepare` with the Edit intent runs on the user
 //!   lane (`prepare`). The pill says the private copy is being made ready,
 //!   Edit is disabled, and the page stays readable. A tab closed meanwhile
 //!   opens nothing; a context the answer made is still counted,
 //!   process-wide (`services::created_contexts`).
 //! - **Loading.** On `ok` the item is read again under a new stamp (R-70),
-//!   and the edit editor opens from that read: on the body as the editor
-//!   loads it, with the read editor's caret when the read editor holds that
-//!   text (R-65), the toolbar above the page and focus in the editor. A
-//!   prepare that answered `discovery_pending` waits in Loading for Resume,
-//!   which sends the same request again (R-13, R-77): the pill still says
-//!   the copy is being made ready, and no read opens the editor meanwhile.
-//!   A refusal is shown in a banner, and the tab stays viewing.
+//!   and the edit editor opens from that read (`open`): on the body as the
+//!   editor loads it, with the read editor's caret when the read editor
+//!   holds that text (R-65), or on a continued draft's text, exactly
+//!   (R-79); the toolbar above the page and focus in the editor. A prepare
+//!   that answered `discovery_pending` waits in Loading for Resume, which
+//!   sends the same request again (R-13, R-77): the pill still says the
+//!   copy is being made ready, and no read opens the editor meanwhile. A
+//!   refusal is shown in a banner, and the tab stays viewing.
 //! - **Editing.** The first difference from the base, of the body or of
 //!   any other field, begins D2's draft, on the base the read gave (R-11);
 //!   text typed before it lands is written with it, and every later
 //!   difference, undo's included (R-12), updates it. The draft is attached
 //!   to the tab. A draft store that did not open is said before editing
 //!   starts, and the user chooses whether to go on (`recovery_off`). The
-//!   toolbar's status item says what D2 holds of the text.
+//!   toolbar's status item says what D2 holds of the text. A late read
+//!   never replaces a dirty or drafted editor (`late`, contract 6).
 //! - **Saving** and the session after a save are `save` and `saved`, with
 //!   their button, pill and banners in `save_view`.
 //! - **Done** (`done`) waits for a save in flight, writes the draft now,
 //!   and ends the session, keeps it (`kept`: the tab views the saved copy
 //!   while the edit editor and its undo stay, R-58), or asks. A session
-//!   ended elsewhere, and closing the tab, are `leave`.
+//!   ended elsewhere, and closing the tab, are `leave`; the close dialog's
+//!   Save is `close_save`.
 //!
 //! Release on leave (`release`) hands the tab's item to the services' release
 //! when the tab leaves clean, and offers the release of a stranded context
@@ -39,13 +44,17 @@
 //! nothing here derives `Debug`.
 
 mod actions;
+mod close_save;
 mod done;
 mod feed;
 mod kept;
+mod late;
 mod leave;
+mod open;
 mod prepare;
 mod recovery_off;
 mod release;
+mod restored;
 mod save;
 mod save_view;
 mod saved;
@@ -53,11 +62,12 @@ mod saved;
 pub(crate) use self::leave::{CloseThisTab, Leaving};
 #[cfg(test)]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
+use self::restored::{Continuing, Then};
 
 use futures::channel::oneshot;
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
+    AnyElement, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
 };
 use manyhands::{
     drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId},
@@ -68,16 +78,12 @@ use zorite_editor::EditorState;
 use super::ItemPane;
 use crate::desktop::{
     model::{
-        edit::{Phase, base_for_edit, edit_offered, fields_with_body, new_item_base},
-        links::LinkTarget,
+        edit::{Phase, edit_offered, fields_with_body, new_item_base},
         stamp::ViewScope,
         tabs::TabKey,
     },
     services::requests::DesktopRequestId,
-    view::editor::{
-        host::{EditorHost, EditorHostEvent},
-        toolbar::Toolbar,
-    },
+    view::editor::{host::EditorHost, toolbar::Toolbar},
 };
 
 /// A prepare that was refused: the step, then the library's message and
@@ -215,6 +221,12 @@ pub(super) struct TabEdit {
     /// answered by.
     begins: u64,
     save: save::TabSave,
+    /// Continue editing's draft, from the prepare until the editor opens
+    /// on it (`restored`).
+    continuing: Option<Continuing>,
+    /// The close dialog's Save runs: the tab closes once the draft retires
+    /// (`close_save`).
+    closing: bool,
 }
 
 impl TabEdit {
@@ -233,6 +245,8 @@ impl TabEdit {
             discard_begun: None,
             begins: 0,
             save: save::TabSave::new(scope),
+            continuing: None,
+            closing: false,
         }
     }
 
@@ -295,7 +309,7 @@ impl ItemPane {
 
     /// Whether an edit session lives, kept or not: its draft is the edit
     /// editor's, never D2's restored section.
-    pub(super) fn has_session(&self) -> bool {
+    pub(in crate::desktop::view) fn has_session(&self) -> bool {
         self.edit.session.is_some()
     }
 
@@ -320,20 +334,17 @@ impl ItemPane {
         if self.resume_kept(window, cx) {
             return true;
         }
-        let tab = self.tab_key();
-        let TabKey::Item { repo, kind, id } = &tab else {
+        if !matches!(self.tab_key(), TabKey::Item { .. }) {
             return false;
-        };
+        }
         self.edit.discarded = None;
-        let registry = self.services.drafts().read(cx);
-        // R-35: a stored draft is continued, not a second one begun. Until
-        // Task 18's restored-draft route, Continue editing restores it as
-        // D2's banner does.
-        if let Some(stored) = registry.stored_for(repo, *kind, id) {
-            self.restore(stored, cx);
+        // R-35: a draft stored or restored here is continued, not a second
+        // one begun (`restored`).
+        if self.continue_requested(Then::Edit, cx) {
             return true;
         }
-        match registry.unavailable() {
+        self.edit.continuing = None;
+        match self.services.drafts().read(cx).unavailable() {
             Some(reason) => {
                 let pane = cx.entity().downgrade();
                 recovery_off::open(reason, window, cx, move |cx| {
@@ -345,109 +356,20 @@ impl ItemPane {
         true
     }
 
-    /// Whether Edit can start now: viewing an item it is offered for, with
-    /// no draft restored in the tab, which Task 18 continues; a kept
-    /// session is continued. A prepare waiting for Resume is in Loading. Not
-    /// while a Discard waits for its draft (re-review N2).
-    fn edit_available(&self, cx: &App) -> bool {
+    /// Whether Edit can start now: viewing an item it is offered for; a
+    /// kept session is continued, and so is a draft stored or restored here,
+    /// but not a new item's, which waits for Task 22's Create. A prepare
+    /// waiting for Resume is in Loading. Not while a Discard waits for its
+    /// draft (re-review N2), nor while a draft is being claimed.
+    pub(super) fn edit_available(&self, cx: &App) -> bool {
         let Some(item) = self.model.item().rows() else {
             return false;
         };
-        let kept = self.session_kept();
         self.edit.phase == Phase::Viewing
             && self.edit.discard_begun.is_none()
+            && !self.draft.restoring()
             && edit_offered(self.model.target(), item)
-            && (kept
-                || self
-                    .services
-                    .drafts()
-                    .read(cx)
-                    .attached(&self.tab_key())
-                    .is_none())
-    }
-
-    /// As a frame is drawn, before the read editor takes the read: the
-    /// read that landed while Loading opens the edit editor. A read that
-    /// failed, or kept an older one, leaves the tab viewing, with D1's
-    /// banners.
-    pub(super) fn sync_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.edit.phase != Phase::Loading || !self.edit.loaded || self.edit.stopped.is_some() {
-            return;
-        }
-        self.edit.loaded = false;
-        self.edit.phase = Phase::Viewing;
-        if self.model.not_refreshed().is_some() {
-            return;
-        }
-        let Some(item) = self.model.item().rows().cloned() else {
-            return;
-        };
-        if !edit_offered(self.model.target(), &item) {
-            return;
-        }
-        let (Some(base), Some(body)) = (base_for_edit(&item), item.body.as_deref()) else {
-            return;
-        };
-        self.open_editor(base, body, window, cx);
-    }
-
-    /// Opens the edit editor on `body`, the read's, whose loaded text is
-    /// `base`'s body. When the read editor holds that same text, its caret
-    /// carries across, clamped (R-65); otherwise the read editor reloads
-    /// from this read as the frame goes on, and the caret starts at the
-    /// start.
-    fn open_editor(
-        &mut self,
-        base: DraftBase,
-        body: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let loaded = match &base.fields {
-            DraftFields::Document { body, .. } | DraftFields::Ticket { body, .. } => body.as_str(),
-            DraftFields::Comment { .. } => return,
-        };
-        let cursor = self.page.read_cursor_if_holding(loaded, cx);
-        let host = cx.new(|cx| EditorHost::new(body, cursor, window, cx));
-        let (done, scroll) = (self.edit.done.clone(), self.scroll.clone());
-        host.update(cx, |host, cx| {
-            host.place(done, &scroll, window, cx);
-            host.show_images(&self.images, cx);
-        });
-        let toolbar = cx.new(|cx| Toolbar::new(host.clone(), window, cx));
-        let subscriptions = [
-            cx.subscribe(&host, |pane, _, event: &EditorHostEvent, cx| match event {
-                EditorHostEvent::Edited => pane.feed(cx),
-                EditorHostEvent::DirtyChanged(_) => cx.notify(),
-                EditorHostEvent::SelectionChanged | EditorHostEvent::LinkRequested => {}
-            }),
-            // Decision 10: the edit editor's links go where the tab's others
-            // do.
-            cx.subscribe(&host, |pane, _, target: &LinkTarget, cx| {
-                pane.follow_link(target, cx)
-            }),
-        ];
-        let editor = host.read(cx).editor().clone();
-        let meta = base.fields.clone();
-        self.edit.session = Some(EditSession {
-            host,
-            toolbar,
-            base,
-            meta,
-            draft: DraftLink::None,
-            saved: false,
-            dirty_seen: false,
-            kept: false,
-            _subscriptions: subscriptions,
-        });
-        self.edit.phase = Phase::Editing;
-        self.sync_status(cx);
-        // Focus moves into the editor once the frame that draws it is
-        // drawn.
-        cx.defer_in(window, move |_, window, cx| {
-            editor.update(cx, |editor, cx| editor.focus(window, cx));
-        });
-        cx.notify();
+            && !self.continues_new_item(cx)
     }
 
     /// The edit session while its editor is shown, not kept.

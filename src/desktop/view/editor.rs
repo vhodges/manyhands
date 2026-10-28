@@ -260,7 +260,6 @@ fn entered_by_pointer(event: &EditorEvent) -> EditorEvent {
 /// the editor's own second pass of `text` (the design's Known Limits).
 /// The caret is at the start after `set_text` alone, and at the end after
 /// the replace; a caller that cares sets it.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
 pub(crate) fn set_exact(editor: &Entity<EditorState>, text: &str, cx: &mut App) {
     editor.update(cx, |editor, cx| {
         editor.set_text(text, cx);

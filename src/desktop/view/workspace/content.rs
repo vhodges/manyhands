@@ -275,9 +275,9 @@ impl Workspace {
 
     /// Closes the tab `id`, asking first when it holds unsaved work (design,
     /// Done and leaving: Closing the tab; R-41): a restored draft asks
-    /// D2's Keep draft, Discard or Cancel; an edit session with unsaved
-    /// work, a kept or stored draft, or one being stored, asks in its tab
-    /// (`ItemPane::ask_to_close`), which closes once its choice is
+    /// D2's Keep draft, Save, Discard or Cancel; an edit session with
+    /// unsaved work, a kept or stored draft, or one being stored, asks in
+    /// its tab (`ItemPane::ask_to_close`), which closes once its choice is
     /// settled. A clean tab closes at once, and release on leave applies.
     /// True when the tab closed now. While quitting waits for drafts or a
     /// job, with Quit now in view, nothing closes and nothing opens in
@@ -296,8 +296,8 @@ impl Workspace {
         let leaving = pane
             .as_ref()
             .map_or(Leaving::Clean, |pane| pane.read(cx).leaving(cx));
-        let draft = match leaving {
-            Leaving::Clean => {
+        let (draft, pane) = match (leaving, pane) {
+            (Leaving::Clean, pane) => {
                 if let Some(pane) = &pane {
                     pane.update(cx, |pane, cx| pane.release_on_leave(cx));
                 }
@@ -308,20 +308,20 @@ impl Workspace {
                 return closed;
             }
             _ if window.has_active_dialog(cx) => return false,
-            Leaving::Session => {
-                if let Some(pane) = pane {
-                    pane.update(cx, |pane, cx| pane.ask_to_close(window, cx));
-                }
+            (Leaving::Session, Some(pane)) => {
+                pane.update(cx, |pane, cx| pane.ask_to_close(window, cx));
                 return false;
             }
-            Leaving::Restored(draft) => draft,
+            (Leaving::Restored(draft), Some(pane)) => (draft, pane),
+            (_, None) => return false,
         };
-        let title = pane
-            .map(|pane| pane.read(cx).tab_title())
-            .unwrap_or_default();
+        let title = pane.read(cx).tab_title();
+        // What it offers and says is the tab's: its Save goes through
+        // Continue editing's steps.
+        let (offers, note) = pane.update(cx, |pane, cx| pane.close_readers(cx));
         let workspace = cx.entity().downgrade();
         close_draft::open(
-            Ask::restored(&title),
+            Ask::restored(&title, offers, note),
             window,
             cx,
             move |choice, window, cx| {
@@ -343,12 +343,14 @@ impl Workspace {
         }
     }
 
-    /// What the close dialog chose for the tab `id` and its draft. Keep
-    /// closes the tab once the draft is written and let go of; a failed
-    /// write leaves the tab open with the failure. Discard closes it once
-    /// the draft is deleted; a failed discard leaves it open and says so,
-    /// the draft let go of and listed again. A tab closed here gives the
-    /// focus to the content region, as `secondary-w` does.
+    /// What the close dialog chose for the tab `id` and its draft. Save,
+    /// Retry and Cancel are the tab's (`ItemPane::close_chosen`), and so is
+    /// every choice once its Save opened an edit session. Keep closes the
+    /// tab once the draft is written and let go of; a failed write leaves
+    /// the tab open with the failure. Discard closes it once the draft is
+    /// deleted; a failed discard leaves it open and says so, the draft let
+    /// go of and listed again. A tab closed here gives the focus to the
+    /// content region, as `secondary-w` does.
     fn close_with_draft(
         &mut self,
         id: TabId,
@@ -357,10 +359,22 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let pane = self.content.tabs.pane(id).cloned();
+        let the_tabs = matches!(
+            choice,
+            CloseWithDraft::Save | CloseWithDraft::Retry | CloseWithDraft::Cancel
+        ) || pane
+            .as_ref()
+            .is_some_and(|pane| pane.read(cx).has_session());
+        if the_tabs {
+            if let Some(pane) = pane {
+                pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
+            }
+            return;
+        }
         let drafts = self.services.drafts().clone();
         let closing = match choice {
-            // D2's dialog offers no Save until Task 18.
-            CloseWithDraft::Cancel | CloseWithDraft::Save => return,
+            CloseWithDraft::Cancel | CloseWithDraft::Save | CloseWithDraft::Retry => return,
             CloseWithDraft::KeepDraft => {
                 drafts.update(cx, |registry, cx| registry.release(draft, cx))
             }

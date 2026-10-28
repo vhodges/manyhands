@@ -6,7 +6,7 @@
 //!
 //! It offers Keep draft, the default (Enter) and first Tab stop where it
 //! is offered, then Save where it can be chosen (R-16), Discard and Cancel
-//! (Escape); a Save not available yet is shown last, unavailable, with its
+//! (Escape); a Save not available is shown last, unavailable, with its
 //! note. What it offers, and an edit session's message with it, is read
 //! again as each frame is drawn: Keep draft waits while a draft is being
 //! stored, Keep draft and Discard while a save is in flight, and the
@@ -15,6 +15,13 @@
 //! draft text: D2's names the item by its title, never the draft's (ruling
 //! R25); an edit session's names nothing. Focus goes back where it was when
 //! the dialog closes.
+//!
+//! The close dialogs' Save (Task 18; design, Restored drafts and the close
+//! dialog) keeps the dialog open while it saves: the tab closes it once
+//! the draft retires. A save that answers anything but committed is shown
+//! in the dialog, read as each frame is drawn, with Retry for a pending
+//! checkpoint and the library's message and code for a refusal; the tab
+//! stays. The note holds fixed words and the library's own message.
 
 use std::rc::Rc;
 
@@ -29,9 +36,10 @@ use gpui_kit::{
     },
     div,
 };
+use manyhands::results::ResultCode;
 
-use super::{confirm::CANCEL, item::EDITOR_LATER};
-use crate::desktop::model::item::LATER_NOTE;
+use super::confirm::CANCEL;
+use crate::desktop::model::{edit::save_state::RETRY, item::LATER_NOTE};
 
 pub(crate) const KEEP_DRAFT: &str = "Keep draft";
 pub(crate) const DISCARD: &str = "Discard";
@@ -55,6 +63,8 @@ pub(crate) const NOT_CREATED_TITLE: &str = "Not created yet";
 pub(crate) const NOT_CREATED: &str = "This item is not created yet, so there is no saved copy \
                                       to view. Save creates it; Keep draft keeps it on this \
                                       computer, to continue later.";
+/// The close dialog's Save while it runs.
+pub(crate) const SAVING: &str = "Saving\u{2026}";
 
 /// What the user chose.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -67,6 +77,8 @@ pub(crate) enum CloseWithDraft {
     Cancel,
     /// Save the text, where the dialog offers it.
     Save,
+    /// The close dialog's pending checkpoint again, under the same request.
+    Retry,
 }
 
 /// What the dialog offers now.
@@ -80,6 +92,26 @@ pub(crate) struct Offers {
     pub(crate) save: Option<bool>,
     /// Discard can be chosen now: not while a save is in flight.
     pub(crate) discard: bool,
+}
+
+/// What the close dialog's Save came to, while it is not yet closed: fixed
+/// words, the library's message and code for a refusal, and whether Retry
+/// is offered. It holds no draft text.
+pub(crate) struct SaveNote {
+    pub(crate) words: String,
+    pub(crate) detail: Option<(String, ResultCode)>,
+    pub(crate) retry: bool,
+}
+
+impl SaveNote {
+    /// `words` alone.
+    pub(crate) fn says(words: impl Into<String>) -> Self {
+        Self {
+            words: words.into(),
+            detail: None,
+            retry: false,
+        }
+    }
 }
 
 /// What the dialog says.
@@ -100,51 +132,55 @@ impl Message {
     }
 }
 
+/// What the dialog reads of its tab as each frame is drawn.
+pub(crate) type Read<T> = Rc<dyn Fn(&App) -> T>;
+
 /// The dialog to open.
 pub(crate) struct Ask {
     /// Its element IDs' prefix.
     pub(crate) id: &'static str,
     pub(crate) title: &'static str,
     pub(crate) message: Message,
-    /// The note of a Save not available yet.
-    pub(crate) later: &'static str,
     /// What it offers, read as each frame is drawn.
-    pub(crate) offers: Rc<dyn Fn(&App) -> Offers>,
+    pub(crate) offers: Read<Offers>,
+    /// What its Save came to, read as each frame is drawn.
+    pub(crate) note: Read<Option<SaveNote>>,
+    /// Save and Retry keep the dialog open: the tab closes it.
+    pub(crate) stays: bool,
 }
 
 impl Ask {
     /// D2's dialog for the tab showing `item`, by its title or ID, with a
-    /// restored draft: Keep draft, Discard and Cancel, and Save shown
-    /// unavailable.
-    pub(crate) fn restored(item: &str) -> Self {
+    /// restored draft: Keep draft, Save, Discard and Cancel. Save goes
+    /// through Continue editing's steps (the tab's).
+    pub(crate) fn restored(item: &str, offers: Read<Offers>, note: Read<Option<SaveNote>>) -> Self {
         Self {
             id: "close-draft",
             title: TITLE,
             message: Message::Fixed(message(item)),
-            later: EDITOR_LATER,
-            offers: Rc::new(|_| Offers {
-                keep: Some(true),
-                save: None,
-                discard: true,
-            }),
+            offers,
+            note,
+            stays: true,
         }
     }
 
     /// Closing a tab whose edit session has unsaved work: Keep draft where
-    /// a draft is stored or being stored, Discard and Cancel, and Save shown
-    /// unavailable until the close dialog saves (Task 18).
-    pub(crate) fn session(offers: Rc<dyn Fn(&App) -> Offers>) -> Self {
+    /// a draft is stored or being stored, Save while dirty and nothing
+    /// saves, Discard and Cancel.
+    pub(crate) fn session(offers: Read<Offers>, note: Read<Option<SaveNote>>) -> Self {
         Self {
             id: "close-draft",
             title: SESSION_TITLE,
             message: Message::Session,
-            later: LATER_NOTE,
             offers,
+            note,
+            stays: true,
         }
     }
 
     /// Done, when the draft cannot be written, or on an item never created.
-    pub(crate) fn done(never_created: bool, offers: Rc<dyn Fn(&App) -> Offers>) -> Self {
+    /// Its Save is the header's, once the dialog has gone.
+    pub(crate) fn done(never_created: bool, offers: Read<Offers>) -> Self {
         let (title, message) = if never_created {
             (NOT_CREATED_TITLE, NOT_CREATED)
         } else {
@@ -154,9 +190,16 @@ impl Ask {
             id: "done-draft",
             title,
             message: Message::Fixed(message.to_owned()),
-            later: LATER_NOTE,
             offers,
+            note: Rc::new(|_| None),
+            stays: false,
         }
+    }
+
+    /// Whether `choice` leaves the dialog open: the close dialogs' Save and
+    /// Retry.
+    fn stays_for(&self, choice: CloseWithDraft) -> bool {
+        self.stays && matches!(choice, CloseWithDraft::Save | CloseWithDraft::Retry)
     }
 }
 
@@ -178,8 +221,8 @@ fn default_choice(offers: Offers) -> Option<CloseWithDraft> {
     }
 }
 
-/// Opens `ask`. `choose` gets the choice once the dialog has closed;
-/// Cancel and Escape give `Cancel`.
+/// Opens `ask`. `choose` gets the choice once the dialog has closed, or at
+/// once for a choice that keeps it open; Cancel and Escape give `Cancel`.
 pub(crate) fn open(
     ask: Ask,
     window: &mut Window,
@@ -192,16 +235,18 @@ pub(crate) fn open(
     window.open_dialog(cx, move |base, _, cx| {
         let (enter, cancel, close) = (choose.clone(), choose.clone(), origin.clone());
         let offers = (ask.offers)(cx);
+        let note = (ask.note)(cx);
+        let stays = ask.clone();
         base.title(ask.title)
             .close_button(false)
             .overlay_closable(false)
-            .child(body(&ask, offers, &choose, cx))
+            .child(body(&ask, offers, note, &choose, cx))
             // Enter: the default; the Kit closes the dialog, unless Keep
-            // draft still waits.
+            // draft still waits, or the default keeps it open.
             .on_ok(move |_, window, cx| match default_choice(offers) {
                 Some(choice) => {
                     enter(choice, window, cx);
-                    true
+                    !stays.stays_for(choice)
                 }
                 None => false,
             })
@@ -217,7 +262,13 @@ pub(crate) fn open(
     });
 }
 
-fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElement + use<> {
+fn body(
+    ask: &Rc<Ask>,
+    offers: Offers,
+    note: Option<SaveNote>,
+    choose: &Choose,
+    cx: &App,
+) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
     let prefix = ask.id;
     let default = default_choice(offers);
@@ -231,9 +282,12 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
         if default == Some(choice) && choice != CloseWithDraft::Cancel {
             button = button.primary();
         }
+        let closes = !ask.stays_for(choice);
         let press = enabled.then(|| {
             Rc::new(move |window: &mut Window, cx: &mut App| {
-                window.close_dialog(cx);
+                if closes {
+                    window.close_dialog(cx);
+                }
                 choose(choice, window, cx);
             })
         });
@@ -260,6 +314,10 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
     let save = offers
         .save
         .map(|ready| button("save", SAVE, CloseWithDraft::Save, ready));
+    let retry = note
+        .as_ref()
+        .filter(|note| note.retry)
+        .map(|_| button("retry", RETRY, CloseWithDraft::Retry, true));
     let later = offers.save.is_none().then(|| {
         v_flex()
             .child(button("save", SAVE, CloseWithDraft::Save, false))
@@ -267,12 +325,13 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
                 div()
                     .id(ElementId::from(format!("{prefix}-save-note")))
                     .test_support()
-                    .aria_label(ask.later)
+                    .aria_label(LATER_NOTE)
                     .text_xs()
                     .text_color(muted)
-                    .child(ask.later),
+                    .child(LATER_NOTE),
             )
     });
+    let note = note.map(|note| save_note(prefix, note, cx));
     v_flex()
         .id(ElementId::from(format!("{prefix}-dialog")))
         .test_support()
@@ -285,11 +344,13 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
                 .text_sm()
                 .child(message),
         )
+        .children(note)
         .child(
             h_flex()
                 .gap_2()
                 .children(keep)
                 .children(save)
+                .children(retry)
                 .child(button(
                     "discard",
                     DISCARD,
@@ -299,4 +360,28 @@ fn body(ask: &Ask, offers: Offers, choose: &Choose, cx: &App) -> impl IntoElemen
                 .child(button("cancel", CANCEL, CloseWithDraft::Cancel, true))
                 .children(later),
         )
+}
+
+/// What the dialog's Save came to: its words, then the library's message
+/// and code.
+fn save_note(prefix: &'static str, note: SaveNote, cx: &App) -> impl IntoElement + use<> {
+    let muted = cx.theme().muted_foreground;
+    let line = move |part: &str, words: String| {
+        div()
+            .id(ElementId::from(format!("{prefix}-{part}")))
+            .test_support()
+            .aria_label(words.clone())
+            .text_sm()
+            .child(words)
+    };
+    let detail = note.detail.map(|(message, code)| {
+        v_flex()
+            .text_color(muted)
+            .child(line("save-message", message))
+            .child(line("save-code", code.as_str().to_owned()))
+    });
+    v_flex()
+        .gap_1()
+        .child(line("save-state", note.words))
+        .children(detail)
 }

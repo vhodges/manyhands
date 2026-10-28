@@ -26,7 +26,7 @@ use crate::desktop::{
 };
 
 /// The body among `fields`.
-fn body_of(fields: &DraftFields) -> &str {
+pub(super) fn body_of(fields: &DraftFields) -> &str {
     match fields {
         DraftFields::Document { body, .. }
         | DraftFields::Ticket { body, .. }
@@ -115,6 +115,8 @@ impl ItemPane {
         // Done waiting for this save goes on (design, Done and leaving, step
         // 2).
         self.done_saved(cx);
+        // The close dialog's Save closes the tab once it has settled.
+        self.follow_close_save(cx);
         cx.notify();
     }
 
@@ -151,26 +153,28 @@ impl ItemPane {
     /// no draft; design, Late results) reloads from it only a body that
     /// differs from what it holds (R-19, R-79). Dirty is the session's,
     /// against the saved copy: text undone back past the save, while the
-    /// read was out, stays with its undo history.
+    /// read was out, stays with its undo history. False when `stamp` is not
+    /// that read's: another read is `late`'s.
     pub(in crate::desktop::view::item) fn post_save_read_landed(
         &mut self,
         stamp: &Stamp,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self.edit.save.reread.as_ref() != Some(stamp) {
-            return;
+            return false;
         }
         self.edit.save.reread = None;
         let body = self.model.item().rows().and_then(|item| item.body.clone());
         let (Some(session), Some(body)) = (&self.edit.session, body) else {
-            return;
+            return true;
         };
         if session.dirty(cx) || self.live_draft(cx).is_some() {
-            return;
+            return true;
         }
         session
             .host
             .update(cx, |host, cx| host.reload_clean(&body, cx));
+        true
     }
 
     /// The registry changed, and the tab's save follows D2's:

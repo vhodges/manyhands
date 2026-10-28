@@ -16,8 +16,9 @@
 //!   `Changed`, are seen this way too.
 //! - **Baseline.** `mark_saved` moves it to the saved text and nothing
 //!   else (R-69); `rebase` puts the review's result in exactly (R-18,
-//!   R-79); `reload_clean` loads a new body read into a clean editor
-//!   (R-19).
+//!   R-79); `put_exact` puts a restored draft's text in exactly over the
+//!   baseline (R-79); `reload_clean` loads a new body read into a clean
+//!   editor (R-19).
 //! - **Blocks** (R-66). In rich text the caret steps over math and
 //!   property blocks as in the read editor; Markdown edits them.
 //! - **Keys.** Tab and Shift-Tab indent and outdent; F6, Shift-F6 and the
@@ -203,6 +204,18 @@ impl EditorHost {
     /// becomes the baseline; the text and its undo history stay.
     pub(crate) fn mark_saved(&mut self, saved: &str, cx: &mut Context<Self>) {
         self.baseline = saved.to_owned();
+        self.update_dirty(cx);
+    }
+
+    /// R-79: a restored draft's `text`, which an editor already loaded,
+    /// goes in exactly (Task 18), with the caret at `cursor`, clamped; the
+    /// baseline, the body as loaded, stays. Undo restarts. The draft holds
+    /// the text already, so this is no edit to feed.
+    pub(crate) fn put_exact(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
+        set_exact(&self.editor, text, cx);
+        self.editor
+            .update(cx, |editor, cx| editor.set_cursor(cursor, cx));
+        self.last = self.text(cx);
         self.update_dirty(cx);
     }
 

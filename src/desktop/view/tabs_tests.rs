@@ -7,7 +7,7 @@ use std::{fs, path::PathBuf, time::Duration};
 use gpui_kit::{Entity, Focusable, TestAppContext, test::TestWindowExt};
 use manyhands::{
     drafts::{DraftFields, DraftId, Held},
-    repository::{ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
+    repository::{FailurePoint, ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
     results::ResultCode,
 };
 use zorite_editor::EditorState;
@@ -16,7 +16,7 @@ use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
     model::{navigation::OpenTarget, tabs::TabKey},
     services::{
-        ReadKind,
+        JobKind, ReadKind,
         drafts::DraftRegistry,
         requests::{DesktopRequestId, Intent, Lane},
     },
@@ -27,8 +27,9 @@ use crate::desktop::{
     view::{
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
-        harness::{Shell, key},
-        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED, tokens::colors},
+        editor::host::EditorHost,
+        harness::{Shell, WAIT, key},
+        item::{NOT_REFRESHED, NOT_SAVED, tokens::colors},
         workspace::{REGIONS, Region},
     },
 };
@@ -788,8 +789,9 @@ fn close_dialog_shown(shell: &Shell, cx: &mut TestAppContext) -> bool {
 
 /// The tab's Close and `secondary-w` both ask first for a tab with a
 /// draft attached, and close a tab without one at once. The dialog offers
-/// Keep draft, Discard and Cancel, and Save unavailable; Cancel, Escape
-/// and Save keep the tab and its draft.
+/// Keep draft, Save, Discard and Cancel; Save is enabled, the stored draft
+/// differing from the item (E-9). Cancel and Escape keep the tab and its
+/// draft.
 #[gpui_kit::test]
 fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut TestAppContext) {
     let Restored { shell, a, draft } = restored(cx);
@@ -808,19 +810,22 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
         Some(CANCEL)
     );
     assert_eq!(shell.label("close-draft-save", cx).as_deref(), Some(SAVE));
-    assert_eq!(
-        shell.label("close-draft-save-note", cx).as_deref(),
-        Some(EDITOR_LATER)
+    assert!(
+        !shell.present("close-draft-save-note", cx),
+        "Save is available"
     );
+    let offered = shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .map(|pane| pane.read(cx).close_offers(cx).save)
+    });
+    assert_eq!(offered, Some(Some(true)), "Save is enabled");
     assert_eq!(
         strip(&shell, cx),
         ["One, unsaved", "Two"],
         "nothing closed yet"
     );
 
-    assert!(shell.inert_button("close-draft-save-button", cx));
-    shell.click("close-draft-save-button", cx);
-    assert!(close_dialog_shown(&shell, cx), "Save does nothing");
     shell.click("close-draft-cancel-button", cx);
     assert!(!close_dialog_shown(&shell, cx));
     assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
@@ -953,6 +958,290 @@ fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut T
         held(&shell.fixture.draft_store(), draft),
         Some(Held::Here)
     ));
+}
+
+// The close dialog's Save (Task 18; design, Restored drafts and the close
+// dialog; R-16, R-76). Each test that waits on the worker allows parking.
+
+/// Draws frames, with the worker running, until `done` holds: the edit
+/// editor opens as a frame is drawn.
+async fn until_drawn(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+    what: &str,
+    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+) {
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+        if done(shell, cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not happen"
+        );
+        cx.executor().timer(Duration::from_millis(10)).await;
+    }
+}
+
+/// The shown tab's edit host, once Edit has opened its editor.
+async fn edit_shown(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
+    shell.click("item-edit", cx);
+    until_drawn(shell, cx, "the edit editor", |shell, cx| {
+        shell.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .item_pane()
+                .is_some_and(|pane| pane.read(cx).edit_host().is_some())
+        })
+    })
+    .await;
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .and_then(|pane| pane.read(cx).edit_host())
+            .expect("editing")
+    })
+}
+
+/// Types `typed` at the end of the edit editor's text, after setting the
+/// caret, focusing the editor and drawing a frame.
+fn type_at_end(shell: &Shell, host: &Entity<EditorHost>, typed: &str, cx: &mut TestAppContext) {
+    let editor = host.read_with(cx, |host, _| host.editor().clone());
+    let end = editor.read_with(cx, |editor, _| editor.text().len());
+    editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    shell.frame(cx, |window, cx| window.focus(&handle, cx));
+    shell.frame(cx, |_, _| ());
+    shell.visual(cx).simulate_input(typed);
+    shell.run(cx);
+}
+
+/// The ticket `id`'s body, as the library reads it now.
+fn body(shell: &Shell, root: &std::path::Path, id: &str) -> Option<String> {
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    service.show_item(&repo, &item_id(id)).unwrap().body
+}
+
+/// This session's requests of the kind `pick` picks, newest first.
+fn picked(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+    pick: fn(&Intent) -> bool,
+) -> Vec<DesktopRequestId> {
+    shell.requests(cx, move |request| pick(&request.intent))
+}
+
+fn is_save(intent: &Intent) -> bool {
+    matches!(intent, Intent::TicketSave { .. })
+}
+
+fn is_prepare(intent: &Intent) -> bool {
+    matches!(intent, Intent::ContextPrepare { .. })
+}
+
+/// Whether the element `id` holds focus.
+fn holds_focus(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| {
+        window.try_find(id).and_then(|element| element.focused()) == Some(true)
+    })
+}
+
+/// The close dialog's Save saves, then closes the tab once the draft
+/// retires; the dialog stays open while it saves. From D2's dialog of a
+/// restored draft it first makes the context ready (design, Restored
+/// drafts); from an edit session's, it saves the editor's text.
+#[gpui_kit::test]
+async fn save_in_the_close_dialog_saves_then_closes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, draft } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("close-draft-save-button", cx);
+    prepare.wait_reached();
+    assert!(
+        close_dialog_shown(&shell, cx),
+        "it stays open while it saves"
+    );
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
+    prepare.release();
+    until_drawn(&shell, cx, "One's tab closing", |shell, cx| {
+        strip(shell, cx) == ["Two"]
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx), "the dialog closed with it");
+    assert!(body(&shell, &a, ONE).as_deref() == Some("Draft body"));
+    assert!(
+        held(&shell.fixture.draft_store(), draft).is_none(),
+        "the draft retired"
+    );
+    let (prepared, saved) = (picked(&shell, cx, is_prepare), picked(&shell, cx, is_save));
+    assert_eq!((prepared.len(), saved.len()), (1, 1));
+    assert!(prepared[0] < saved[0], "the context was made ready first");
+
+    // An edit session's dialog.
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.click("close-draft-save-button", cx);
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx).is_empty()
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx));
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+    assert_eq!(picked(&shell, cx, is_save).len(), 2, "one save more");
+}
+
+/// A save the library refuses, from the close dialog: the dialog stays
+/// open with the refusal, in the library's code, and the tab stays, with
+/// its text.
+#[gpui_kit::test]
+async fn a_refused_save_from_the_close_dialog_keeps_the_tab(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeRequestDomainCall,
+        )
+        .unwrap(),
+    );
+
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.click("close-draft-save-button", cx);
+    let request = picked(&shell, cx, is_save)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    assert!(close_dialog_shown(&shell, cx), "the dialog stays open");
+    assert_eq!(
+        shell.label("close-draft-save-state", cx).as_deref(),
+        Some("Could not save on this computer. Your edits are kept.")
+    );
+    assert_eq!(
+        shell.label("close-draft-save-code", cx).as_deref(),
+        Some("internal_error")
+    );
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two, unsaved"]);
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two, unsaved"],
+        "the tab stays"
+    );
+    assert!(
+        host.read_with(cx, |host, cx| host.text(cx)) == typed,
+        "with its text"
+    );
+}
+
+/// The design's session-outcome row for Task 18 (R-76): the close dialog's
+/// Save answering a pending checkpoint. The dialog stays open with Retry,
+/// and the tab stays. Retry sends the same request again; once it commits
+/// and the draft retires, the tab closes.
+#[gpui_kit::test]
+async fn a_pending_checkpoint_from_the_close_dialog_keeps_it_open_with_retry(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+
+    shell.click(("tab-close", 1usize), cx);
+    shell.click("close-draft-save-button", cx);
+    let request = picked(&shell, cx, is_save)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    assert!(close_dialog_shown(&shell, cx), "the dialog stays open");
+    assert_eq!(
+        shell.label("close-draft-save-state", cx).as_deref(),
+        Some("Could not save a checkpoint on this computer. Your text is kept.")
+    );
+    assert_eq!(
+        shell.label("close-draft-retry", cx).as_deref(),
+        Some("Retry")
+    );
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two, unsaved"],
+        "the tab stays"
+    );
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == typed);
+
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    shell.click("close-draft-retry-button", cx);
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx) == ["One, unsaved"]
+    })
+    .await;
+    assert_eq!(picked(&shell, cx, is_save), [request], "the same request");
+    assert!(!close_dialog_shown(&shell, cx));
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+}
+
+/// R-16: Save comes after Keep draft, which stays the default and the
+/// first Tab stop, in D2's dialog of a restored draft and in an edit
+/// session's.
+#[gpui_kit::test]
+async fn keep_draft_is_still_the_first_tab_stop_of_the_close_dialog(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, .. } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-keep-button", cx),
+        "Keep draft first"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-save-button", cx),
+        "then Save"
+    );
+    shell.keys("escape", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    assert!(shell.present("close-draft-keep", cx), "a draft is stored");
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-keep-button", cx),
+        "Keep draft first"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-save-button", cx),
+        "then Save"
+    );
+    shell.keys("escape", cx);
+    assert!(!close_dialog_shown(&shell, cx));
 }
 
 const DOC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";

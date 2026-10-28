@@ -2,29 +2,28 @@
 //! of one restored here.
 //!
 //! The banner shows when the last listing holds a draft of this item that
-//! this process has not claimed. Nothing is restored on its own; Restore
-//! asks the registry to claim the draft and attach it to this tab, then
-//! opens the tab through its item locator (ruling R25). A refusal is
-//! shown in words; a draft another process holds may be tried again.
-//! Review in Drafts asks the workspace to open the Drafts page on the
-//! draft's row.
+//! this process has not claimed. It sits in the header's banner slot
+//! (`Banner::StoredDraft`; design, Banners). Nothing is restored on its
+//! own; Restore asks the registry to claim the draft and attach it to this
+//! tab, then opens the tab through its item locator (ruling R25). A
+//! refusal is shown in words; a draft another process holds may be tried
+//! again. Review in Drafts asks the workspace to open the Drafts page on
+//! the draft's row. Continue editing, last, takes the restored-draft route
+//! (`edit`'s `restored`).
 //!
 //! The section shows the draft's own fields read-only, whether its newest
 //! text is saved for recovery (Retry on a failed write), where the item
-//! stands against it (Retry on a failed read) and, when the item changed,
-//! Compare, which expands the comparison inline, and Export… and Discard…,
-//! the Drafts page's own (`draft_actions`). Edit and Save wait for
-//! the editor. A reload of the tab recomputes where the item stands; it
-//! never touches the draft's text or base.
+//! stands against it (Retry on a failed read), Continue editing and Save,
+//! which go on through the restored-draft route, then, when the item
+//! changed, Compare, which expands the comparison inline (R-17), and
+//! Export… and Discard…, the Drafts page's own (`draft_actions`). A reload
+//! of the tab recomputes where the item stands; it never touches the
+//! draft's text or base. The section is the tab's `draft-section` (R-38).
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, ElementId, EventEmitter, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt,
-    component::{
-        ActiveTheme, Disableable,
-        button::{Button, ButtonVariants},
-        h_flex, v_flex,
-    },
+    component::{ActiveTheme, button::Button, h_flex, v_flex},
     div,
 };
 use manyhands::{
@@ -66,9 +65,6 @@ pub(crate) const ANOTHER_OPEN: &str = "Another draft of this item is open";
 pub(crate) const NO_LONGER_KEPT: &str = "This draft is no longer kept";
 pub(crate) const NOT_THIS_ITEM: &str = "This draft is not of this item";
 pub(crate) const NOT_DISCARDED: &str = "Draft not discarded";
-/// The draft actions that wait for the editor.
-pub(crate) const DRAFT_ACTIONS: [&str; 2] = ["Edit", "Save"];
-pub(crate) const EDITOR_LATER: &str = "Available with the editor in a later release";
 
 /// The restored draft section's own fields.
 const SECTION_FIELDS: FieldIds = FieldIds {
@@ -108,6 +104,16 @@ impl TabDraft {
     /// The tab read again: where the item stands is computed afresh.
     pub(super) fn reads_landed(&mut self) {
         self.target = None;
+    }
+
+    /// Whether a claim of a stored draft is in flight.
+    pub(super) fn restoring(&self) -> bool {
+        self.restoring
+    }
+
+    /// What the last claim was refused for.
+    pub(super) fn refused(&self) -> Option<RestoreRefused> {
+        self.refused
     }
 }
 
@@ -158,17 +164,37 @@ impl ItemPane {
         TabKey::for_target(self.model.target())
     }
 
-    /// Restores the stored draft `id` into this tab, once at a time.
+    /// Restores the stored draft `id` into this tab, once at a time, and
+    /// shows the tab, as an item's tab is opened anywhere (D2's Restore).
     pub(super) fn restore(&mut self, id: DraftId, cx: &mut Context<Self>) {
-        let OpenTarget::Item {
-            repo,
-            kind,
-            id: item,
-        } = self.model.target().clone()
-        else {
-            return;
-        };
-        if self.draft.restoring {
+        self.claim(
+            id,
+            |pane, _, cx| {
+                let OpenTarget::Item {
+                    repo,
+                    kind,
+                    id: item,
+                } = pane.model.target().clone()
+                else {
+                    return;
+                };
+                let locator = ItemLocator::Identified { kind, id: item };
+                cx.emit(OpenRelated(locator.in_repository(&repo)));
+            },
+            cx,
+        );
+    }
+
+    /// Claims the stored draft `id` into this tab, once at a time, and
+    /// attaches it; then `claimed` goes on with the session's ID. A refusal
+    /// is said in the banner.
+    pub(super) fn claim(
+        &mut self,
+        id: DraftId,
+        claimed: impl FnOnce(&mut Self, DraftId, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.model.target(), OpenTarget::Item { .. }) || self.draft.restoring {
             return;
         }
         self.draft.restoring = true;
@@ -185,12 +211,10 @@ impl ItemPane {
             let shown = pane.update(cx, |pane, cx| {
                 pane.draft.restoring = false;
                 match restored {
-                    Ok(_) => {
+                    Ok(restored) => {
                         pane.draft.comparing = false;
                         pane.draft.target = None;
-                        // Shown, as an item's tab is opened anywhere.
-                        let locator = ItemLocator::Identified { kind, id: item };
-                        cx.emit(OpenRelated(locator.in_repository(&repo)));
+                        claimed(pane, restored, cx);
                     }
                     Err(refused) => pane.draft.refused = Some(refused),
                 }
@@ -253,42 +277,52 @@ impl ItemPane {
             Some((stored, state, policy))
         });
         let banner = offered.map(|(stored, state, policy)| {
-            let action = match policy {
-                // Held elsewhere may pass: Restore stays offered.
+            // Held elsewhere may pass: Restore stays offered.
+            let restorable = matches!(
+                policy,
                 Restore::Allowed
-                | Restore::AllowedFlagged
-                | Restore::Refused(RefusalReason::OpenElsewhere) => button(
+                    | Restore::AllowedFlagged
+                    | Restore::Refused(RefusalReason::OpenElsewhere)
+            );
+            let action = if restorable {
+                button(
                     "draft-restore",
                     RESTORE,
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(stored, cx)),
                 )
-                .into_any_element(),
-                Restore::Refused(_) => text("draft-banner-state", target_label(&state))
+                .into_any_element()
+            } else {
+                text("draft-banner-state", target_label(&state))
                     .text_xs()
                     .text_color(muted)
-                    .into_any_element(),
+                    .into_any_element()
             };
             let review = button(
                 "draft-review",
                 REVIEW_IN_DRAFTS,
                 cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(ReviewInDrafts(stored))),
             );
+            // D2's actions stay; Continue editing comes last (design,
+            // Banners and Design Deviations).
+            let continue_editing =
+                restorable.then(|| self.continue_button("draft-banner-continue", cx));
             h_flex()
+                .flex_wrap()
                 .gap_2()
+                .items_center()
                 .child(text("draft-banner", DRAFT_KEPT).text_sm())
                 .child(action)
                 .child(review)
+                .children(continue_editing)
                 .into_any_element()
         });
         if banner.is_none() && refused.is_none() && discard_failed.is_none() {
             return None;
         }
+        // In the header's banner slot, which frames it.
         Some(
             v_flex()
                 .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().border)
                 .children(banner)
                 .children(refused)
                 .children(discard_failed)
@@ -346,6 +380,11 @@ impl ItemPane {
                 ))
                 .children(expanded.then(|| comparison.render(cx)))
         });
+        let continuing = h_flex()
+            .flex_wrap()
+            .gap_2()
+            .child(self.continue_button("draft-continue", cx))
+            .child(self.restored_save_button(cx));
         Some(
             v_flex()
                 .id("draft-section")
@@ -359,9 +398,10 @@ impl ItemPane {
                 .child(draft_fields(SECTION_FIELDS, &mine, cx))
                 .child(self.recovery_line(id, recovery, cx))
                 .children(target)
+                // Continue editing before Compare (R-17), then D2's order.
+                .child(continuing)
                 .children(compare)
                 .child(self.draft_actions(id, window, cx))
-                .child(later(cx))
                 .into_any_element(),
         )
     }
@@ -405,34 +445,6 @@ impl ItemPane {
             .child(text("draft-target", target_label(state)).text_sm())
             .children(retry)
     }
-}
-
-/// Edit and Save, unavailable until the editor arrives.
-fn later(cx: &App) -> impl IntoElement + use<> {
-    let muted = cx.theme().muted_foreground;
-    h_flex()
-        .flex_wrap()
-        .gap_2()
-        .children(DRAFT_ACTIONS.iter().enumerate().map(|(ix, action)| {
-            v_flex()
-                .child(
-                    div()
-                        .id(("draft-later", ix))
-                        .test_support()
-                        .aria_label(*action)
-                        .child(
-                            Button::new(("draft-later-button", ix))
-                                .label(*action)
-                                .ghost()
-                                .disabled(true),
-                        ),
-                )
-                .child(
-                    text(("draft-later-note", ix), EDITOR_LATER)
-                        .text_xs()
-                        .text_color(muted),
-                )
-        }))
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

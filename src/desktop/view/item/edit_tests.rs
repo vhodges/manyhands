@@ -38,7 +38,6 @@ use crate::desktop::{
         drafts::IDLE,
         edit::{CONTINUE_EDITING, DRAFT_NOT_KEPT, DraftState, Phase, RECOVERY_OFF, base_for_edit},
         editor_text::load,
-        item::LATER_NOTE,
         navigation::OpenTarget,
         tabs::TabKey,
     },
@@ -463,16 +462,21 @@ fn edit_of_a_closed_ticket_is_not_offered(cx: &mut TestAppContext) {
 }
 
 /// R-35: while a draft of the item is stored, Edit reads Continue editing,
-/// and no second draft begins: until Task 18's route it restores the
-/// stored draft, as D2's banner does, and prepares nothing. Once the draft
-/// is restored in the tab, Continue editing waits for Task 18.
+/// and no second draft begins. It takes the restored-draft route (Task
+/// 18): the stored draft is claimed into the tab, and the context is
+/// prepared once; pressed again meanwhile, it starts nothing more. A draft
+/// restored in its tab by D2's Restore offers Continue editing too, with
+/// no note, through the same route.
 #[gpui_kit::test]
 fn edit_reads_continue_editing_while_a_draft_is_stored(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
     fixture.commit_ticket(&root, TICKET, "Drafted", "");
+    fixture.commit_ticket(&root, OTHER, "Restored", "");
     fixture.refresh(&root);
     let stored = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Draft body");
+    let restored = store_draft(&fixture, &root, ItemDtoKind::Ticket, OTHER, "Other body");
     let shell = Shell::open(fixture, cx);
     open(&shell, ticket(&root, TICKET), cx);
 
@@ -484,6 +488,8 @@ fn edit_reads_continue_editing_while_a_draft_is_stored(cx: &mut TestAppContext) 
         !shell.present("item-edit-note", cx),
         "offered, it needs no note"
     );
+    // The prepare is held, so the tab stays Preparing.
+    let held = shell.backend.hold_job(JobKind::ContextPrepare);
     shell.click("item-edit", cx);
     shell.run(cx);
     assert_eq!(
@@ -491,28 +497,34 @@ fn edit_reads_continue_editing_while_a_draft_is_stored(cx: &mut TestAppContext) 
         Some(stored),
         "restored"
     );
-    assert!(shell.present("draft-section", cx), "restored in the tab");
-    assert!(prepares(&shell, cx).is_empty(), "nothing is prepared");
-    assert_eq!(
-        shell.label("item-edit", cx).as_deref(),
-        Some(CONTINUE_EDITING)
-    );
-    assert!(shell.inert_button("item-edit", cx), "Task 18 continues it");
-    assert_eq!(
-        shell.label("item-edit-note", cx).as_deref(),
-        Some(LATER_NOTE),
-        "said as the header's other disabled actions say it"
-    );
+    assert_eq!(prepares(&shell, cx).len(), 1, "the context is prepared");
     shell.click("item-edit", cx);
     shell.run(cx);
-    assert!(
-        prepares(&shell, cx).is_empty(),
-        "pressed, it does nothing yet"
-    );
+    assert_eq!(prepares(&shell, cx).len(), 1, "pressed again, no more");
     assert!(
         shell.label("draft-refused", cx).is_none(),
         "no second restore"
     );
+
+    // Restored in its tab by D2's Restore: Continue editing is offered,
+    // with no note, and prepares that item's context.
+    open(&shell, ticket(&root, OTHER), cx);
+    shell.click("draft-restore-button", cx);
+    shell.run(cx);
+    assert_eq!(attached(&shell, &root, OTHER, cx), Some(restored));
+    assert!(shell.present("draft-section", cx), "restored in the tab");
+    assert_eq!(
+        shell.label("item-edit", cx).as_deref(),
+        Some(CONTINUE_EDITING)
+    );
+    assert!(
+        !shell.present("item-edit-note", cx),
+        "offered, it needs no note"
+    );
+    shell.click("item-edit", cx);
+    shell.run(cx);
+    assert_eq!(prepares(&shell, cx).len(), 2, "its context is prepared");
+    held.release();
 }
 
 /// Review Focus 3: Edit of a primary file edited by hand and not
@@ -1299,3 +1311,7 @@ mod done;
 /// Release on leave (Task 17).
 #[path = "edit_release_tests.rs"]
 mod release;
+
+/// Restored drafts and late results (Task 18).
+#[path = "edit_restored_tests.rs"]
+mod restored;

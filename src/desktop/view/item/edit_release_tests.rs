@@ -1373,3 +1373,40 @@ fn refusals_count_only_when_every_attempt_was_refused() {
         "an unrefused attempt blocks for good"
     );
 }
+
+/// P-4 (written in Task 18, once the restored-draft route exists):
+/// Continue editing of a stored draft made the item's context; the close
+/// dialog's Discard deletes the draft, and that context is released.
+#[gpui_kit::test]
+async fn discarding_a_restored_draft_releases_the_context_continue_editing_made(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Restored, then discarded", "");
+    fixture.refresh(&root);
+    let stored = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Draft body");
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root, TICKET), cx);
+
+    shell.click("draft-banner-continue-button", cx);
+    until_editing(&shell, cx).await;
+    assert_eq!(attached(&shell, &root, TICKET, cx), Some(stored));
+    assert!(
+        created(&shell, &root, TICKET, cx),
+        "Continue editing made it"
+    );
+    assert!(made_here(&shell, &root, TICKET, cx));
+
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx), "it asks first");
+    shell.click("close-draft-discard-button", cx);
+    let request = released(&shell, TICKET, cx).await;
+    assert_released(&shell, &root, TICKET, request, cx);
+    assert_eq!(tab_count(&shell, cx), 0, "the tab closed");
+    assert!(
+        held(&shell.fixture.draft_store(), stored).is_none(),
+        "discarded"
+    );
+}

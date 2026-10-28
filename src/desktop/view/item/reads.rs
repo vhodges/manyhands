@@ -120,7 +120,10 @@ impl ItemPane {
                     // While Loading, the edit editor opens from this read;
                     // after a save, a clean one reloads a body that differs.
                     this.edit.read_landed();
-                    this.post_save_read_landed(&landed, cx);
+                    // Late results: a clean edit editor takes a newer read.
+                    if !this.post_save_read_landed(&landed, cx) {
+                        this.late_read_landed(cx);
+                    }
                     this.locate_images(cx);
                     cx.notify();
                 }
@@ -150,6 +153,7 @@ impl ItemPane {
         self.prepare_progressed(cx);
         self.save_progressed(cx);
         self.follow_done(cx);
+        self.follow_close_save(cx);
         let Some(id) = self.refreshing else {
             return;
         };

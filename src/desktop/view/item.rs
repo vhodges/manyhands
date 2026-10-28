@@ -74,7 +74,7 @@ pub(crate) use chips::{ChipField, OpenDetails};
 pub(super) use details::text;
 #[cfg(test)]
 pub(crate) use draft::NOT_SAVED;
-pub(crate) use draft::{EDITOR_LATER, NOT_DISCARDED, ReviewInDrafts, refused_label};
+pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
 pub(crate) use edit::{CloseThisTab, Leaving};
 pub(crate) use sheet::open_details;
@@ -166,6 +166,7 @@ impl ItemPane {
             pane.sync_status(cx);
             pane.follow_registry(cx);
             pane.follow_done(cx);
+            pane.follow_close_save(cx);
             cx.notify()
         });
         let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {
@@ -310,7 +311,6 @@ impl Render for ItemPane {
         // its problems in "Needs fixing".
         let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
         let identity = inspect.then(|| self.identity(item.as_ref(), cx));
-        let banner = self.draft_banner(item.as_ref(), cx);
         // While a session lives, kept or not, its text is the edit editor's.
         let section = if self.has_session() {
             None
@@ -337,11 +337,11 @@ impl Render for ItemPane {
             };
             v_flex().gap_3().children(details).child(text)
         });
-        // D2's draft, on the page until Task 18 moves its banner.
+        // D2's restored draft at the top of the page (R-38); its banner is
+        // in the header's slot.
         let content = v_flex()
             .gap_3()
             .children(identity)
-            .children(banner)
             .children(section)
             .children(body);
         let viewing = !inspect && self.edit.phase() == Phase::Viewing;

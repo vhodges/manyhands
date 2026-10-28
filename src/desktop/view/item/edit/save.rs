@@ -145,25 +145,35 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(session) = self.edit.session.as_ref().filter(|session| !session.kept) else {
+        if self.shown_session().is_none() {
+            return false;
+        }
+        if !window.has_active_dialog(cx) {
+            self.start_save(cx);
+        }
+        true
+    }
+
+    /// Saves the shown session: one save at a time, a pending checkpoint's
+    /// waiting for its Retry included, and none during the review. A clean
+    /// session says "No changes to save"; an unverified base opens the
+    /// review instead (R-36). True when a save started. The header's Save,
+    /// a restored draft's Save and the close dialog's come here.
+    pub(super) fn start_save(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(session) = self.shown_session() else {
             return false;
         };
-        // One save at a time, a pending checkpoint's waiting for its Retry
-        // included, and none during the review.
-        if window.has_active_dialog(cx)
-            || self.edit.phase == Phase::Review
-            || self.edit.save.run.is_some()
-        {
-            return true;
+        if self.edit.phase == Phase::Review || self.edit.save.run.is_some() {
+            return false;
         }
         if !session.dirty(cx) {
             let toolbar = session.toolbar.clone();
             toolbar.update(cx, |toolbar, cx| toolbar.note(NO_CHANGES_TO_SAVE, cx));
-            return true;
+            return false;
         }
         if !self.base_verified() {
             self.open_review(cx);
-            return true;
+            return false;
         }
         self.edit.phase = Phase::Saving;
         self.edit.save.answer = None;

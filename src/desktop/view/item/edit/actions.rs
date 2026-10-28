@@ -29,8 +29,9 @@ use crate::desktop::{
 impl ItemPane {
     /// The header's actions for editing: Edit, or Continue editing while a
     /// draft is kept or stored (R-35), where it is offered, disabled while
-    /// it cannot start, with "Available in a later release" while a draft
-    /// restored in the tab waits for Task 18; Save and Done while editing.
+    /// it cannot start, with "Available in a later release" for a new
+    /// item's draft, which waits for Task 22's Create; Save and Done while
+    /// editing.
     pub(in crate::desktop::view::item) fn edit_action(
         &self,
         item: Option<&ItemDto>,
@@ -56,19 +57,12 @@ impl ItemPane {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }));
-        // A draft restored in the tab waits for Task 18's route: until then
-        // Continue editing is disabled and says so, as the header's other
-        // disabled actions do (design, Header block). Its label is not a
-        // later action's. While preparing, the pill and the banners say why.
-        let restored = self.edit.phase() == Phase::Viewing
-            && !self.has_session()
-            && self
-                .services
-                .drafts()
-                .read(cx)
-                .attached(&self.tab_key())
-                .is_some();
-        if !restored {
+        // A new item's draft waits for Task 22's route: Continue editing is
+        // disabled and says so, as the header's other disabled actions do
+        // (design, Header block). Its label is not a later action's. While
+        // preparing, the pill and the banners say why.
+        let later = self.edit.phase() == Phase::Viewing && self.continues_new_item(cx);
+        if !later {
             return vec![button.into_any_element()];
         }
         vec![

@@ -43,9 +43,19 @@ impl ItemPane {
             return;
         }
         if let Some(id) = self.live_draft(cx) {
-            self.services
+            // A restored draft's text, put in as the editor opened, is what
+            // the draft holds already: no revision to write.
+            let held = self
+                .services
                 .drafts()
-                .update(cx, |registry, cx| registry.edit(id, current, cx));
+                .read(cx)
+                .session(id)
+                .is_some_and(|session| *session.current() == current);
+            if !held {
+                self.services
+                    .drafts()
+                    .update(cx, |registry, cx| registry.edit(id, current, cx));
+            }
             return;
         }
         if self.edit.save.run.is_some() {

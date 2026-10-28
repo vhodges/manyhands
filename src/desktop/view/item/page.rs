@@ -43,7 +43,7 @@ use gpui_kit::{
 use super::{ItemPane, tokens::item_colors};
 use crate::desktop::{
     keys::ITEM_PAGE_CONTEXT,
-    model::{links::LinkTarget, navigation::OpenTarget},
+    model::{editor_text::load, links::LinkTarget, navigation::OpenTarget},
     services::images::{ImageSource, TabImages},
     view::{
         editor::{CaretInView, host::EditorHost, read_only::ReadOnly},
@@ -104,11 +104,13 @@ impl Page {
     }
 
     /// Shows `body`, the last successful read's, in the read editor. The
-    /// first body makes it; a changed body is loaded into it in place,
-    /// keeping its cursor, clamped (R-19); the same body leaves it
-    /// untouched. A read with no body, a file that is not UTF-8, drops it.
-    /// The read editor keeps its caret in view in `scroll`'s region, and
-    /// draws its images from `images`.
+    /// first body makes it. A newer read, whose body as the library read it
+    /// differs from the last one (and so its observation: contract 6), is
+    /// loaded into it in place only when the text it loads to differs from
+    /// what the editor shows, keeping its cursor, clamped (R-19); the same
+    /// body leaves it untouched. A read with no body, a file that is not
+    /// UTF-8, drops it. The read editor keeps its caret in view in
+    /// `scroll`'s region, and draws its images from `images`.
     fn show(
         &mut self,
         body: Option<&str>,
@@ -126,7 +128,10 @@ impl Page {
         };
         if let Some(read) = &self.read {
             if self.body != body {
-                read.update(cx, |read, cx| read.reload(body, cx));
+                let shown = read.read(cx).editor().read(cx).text() == load(body);
+                if !shown {
+                    read.update(cx, |read, cx| read.reload(body, cx));
+                }
                 self.body = body.to_owned();
             }
             return;

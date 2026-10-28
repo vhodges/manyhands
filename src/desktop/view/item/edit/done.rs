@@ -280,7 +280,7 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) {
         match choice {
-            CloseWithDraft::Cancel => {}
+            CloseWithDraft::Cancel | CloseWithDraft::Retry => {}
             // Once the dialog has gone, as the header's Save does.
             CloseWithDraft::Save => {
                 cx.defer_in(window, |pane, window, cx| pane.done_save(window, cx))

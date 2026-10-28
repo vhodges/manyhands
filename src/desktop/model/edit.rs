@@ -1,8 +1,8 @@
 //! An item tab's edit session as pure decisions (design, Part C, Phases,
 //! and Done and leaving): where the tab stands, whether Edit is offered,
-//! the base a session's draft begins on, what the toolbar's status item
-//! says of D2's recovery copy, what Done comes to, and whether an item was
-//! never created.
+//! the base a session's draft begins on, the base a restored draft goes on
+//! over (R-42), what the toolbar's status item says of D2's recovery
+//! copy, what Done comes to, and whether an item was never created.
 //!
 //! Nothing here holds the item's text but `fields_with_body`'s answer, a
 //! draft's fields, which derive no `Debug`. What a save comes to is
@@ -80,6 +80,30 @@ pub(crate) fn edit_offered(target: &OpenTarget, item: &ItemDto) -> bool {
 /// `None` for a nonconforming entry.
 pub(crate) fn base_for_edit(item: &ItemDto) -> Option<DraftBase> {
     DraftBase::of(&normalized(item))
+}
+
+/// R-42: the base a restored draft goes on over once Continue editing has
+/// read its item again in the context it made ready. Only when the branch
+/// alone changed the token: the draft's `base` had an observation, the
+/// read's source is the base's, and the read's fields are the base's (as
+/// read, or normalized as a base holds them: R-11). Then the base takes
+/// the read's observation and context, keeping its own path, source and
+/// fields. `None` otherwise, and the review opens.
+pub(crate) fn adopted_base(base: &DraftBase, read: &ItemDto) -> Option<DraftBase> {
+    base.observation.as_ref()?;
+    let observation = read.observation.clone()?;
+    if read.source != base.source {
+        return None;
+    }
+    let theirs = base_for_edit(read)?;
+    if theirs.fields != base.fields && DraftFields::of(read).as_ref() != Some(&base.fields) {
+        return None;
+    }
+    Some(DraftBase {
+        observation: Some(observation),
+        context: theirs.context,
+        ..base.clone()
+    })
 }
 
 /// `fields` with `body` as its body: the draft of an editor's text over
