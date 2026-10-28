@@ -5,14 +5,15 @@
 //! button in a focus-tracking wrapper with the content region's scroll
 //! marker. Show and Retry act here; Restore, Export…, Export raw… and
 //! Discard… are the page's `row_actions`, and Inspect opens its panel under
-//! the row. What the last of them came to is said on the row.
+//! the row. What the last of them came to is said on the row. Discard… is
+//! disabled while a save of its draft is in flight (R-71).
 
 use std::{rc::Rc, sync::Arc};
 
 use gpui_kit::{
     AnyElement, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, button::Button, h_flex, v_flex},
+    component::{ActiveTheme, Disableable, button::Button, h_flex, v_flex},
     div,
 };
 use manyhands::drafts::{DraftError, DraftId, Held, TargetState};
@@ -225,11 +226,14 @@ impl DraftsPage {
             _ => Rc::new(|_, _, _| {}),
         };
         let pressed = act.clone();
+        // Discard waits while a save of the draft is in flight (R-71).
+        let disabled = part == "discard" && self.saving(id, cx);
         let button = Button::new(ElementId::NamedChild(
             Arc::new(wrapper.clone()),
             "button".into(),
         ))
         .label(label)
+        .disabled(disabled)
         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| act(this, window, cx)));
         div()
             .id(wrapper)

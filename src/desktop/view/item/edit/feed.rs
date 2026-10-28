@@ -14,11 +14,7 @@ use manyhands::drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget};
 
 use super::{DraftLink, Phase, item_kind};
 use crate::desktop::{
-    model::{
-        drafts::RecoveryState,
-        edit::{DraftState, fields_with_body},
-        navigation::OpenTarget,
-    },
+    model::{drafts::RecoveryState, edit::DraftState, navigation::OpenTarget},
     view::item::ItemPane,
 };
 
@@ -33,8 +29,7 @@ impl ItemPane {
         if session.draft == DraftLink::Beginning {
             return;
         }
-        let text = session.host.read(cx).text(cx);
-        let current = fields_with_body(&session.base.fields, text);
+        let current = session.current(cx);
         if let Some(id) = self.live_draft(cx) {
             self.services
                 .drafts()
@@ -128,8 +123,7 @@ impl ItemPane {
         match begun {
             Ok(id) => {
                 session.draft = DraftLink::Live(id);
-                let text = session.host.read(cx).text(cx);
-                let now = fields_with_body(&session.base.fields, text);
+                let now = session.current(cx);
                 self.services.drafts().update(cx, |registry, cx| {
                     registry.attach(tab, id, cx);
                     if now != begun_with {
@@ -145,16 +139,41 @@ impl ItemPane {
             self.send_save(cx);
         }
         self.sync_status(cx);
+        // Done waits for a draft still beginning (design, Done and leaving,
+        // step 4).
+        self.follow_done(cx);
+        cx.notify();
+    }
+
+    /// The fields besides the body changed, from the details sheet's
+    /// controls: they mark the session dirty exactly as typing does, and
+    /// feed the draft (design, Named controls in the details sheet). The
+    /// body is the editor's, whatever `fields` holds.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 20.
+    pub(in crate::desktop::view::item) fn change_fields(
+        &mut self,
+        fields: DraftFields,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = &mut self.edit.session else {
+            return;
+        };
+        session.meta = fields;
+        self.feed(cx);
         cx.notify();
     }
 
     /// Gives the toolbar's status item D2's state of the session's text.
+    /// A kept session's toolbar is not drawn: it says nothing, so its age
+    /// does not tick.
     pub(in crate::desktop::view::item) fn sync_status(&mut self, cx: &mut Context<Self>) {
         let Some(session) = &self.edit.session else {
             return;
         };
         let registry = self.services.drafts().read(cx);
-        let state = if registry.unavailable().is_some() {
+        let state = if session.kept {
+            DraftState::NotBegun
+        } else if registry.unavailable().is_some() {
             DraftState::StoreUnavailable
         } else {
             match session.draft {

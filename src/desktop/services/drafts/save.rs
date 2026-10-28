@@ -35,7 +35,7 @@ use manyhands::{
     results::Envelope,
 };
 
-use super::{DraftRegistry, Live, off_thread, retire::take};
+use super::{DraftRegistry, Live, SessionDiscarded, off_thread, retire::take};
 use crate::desktop::{
     model::drafts::{
         RecoveryState, Saving,
@@ -257,12 +257,15 @@ impl DraftRegistry {
     /// finishes. A slot left empty by a draft already gone answers `Ok`.
     /// On failure the store has released the draft, which stays on disk:
     /// the session is over either way. The store is listed again once it
-    /// lands, whatever it answered.
+    /// lands, whatever it answered. The tab the session was attached to
+    /// hears `SessionDiscarded` (R-71).
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
+        // The tab the session is attached to learns it ended (R-71).
+        let tab = self.tab_of(id);
         let Some(live) = self
             .current_id(id)
             .and_then(|current| self.sessions.remove(&current))
@@ -272,6 +275,9 @@ impl DraftRegistry {
         let id = live.session.id();
         self.saves.retain(|_, record| record.draft != id);
         self.detach_ended();
+        if let Some(tab) = tab {
+            cx.emit(SessionDiscarded(tab));
+        }
         cx.notify();
         let Live { session, write, .. } = live;
         let slot = session.claim_slot();

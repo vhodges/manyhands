@@ -85,6 +85,13 @@ pub(crate) struct DraftSaved {
 
 impl gpui_kit::EventEmitter<DraftSaved> for DraftRegistry {}
 
+/// A discard ended the session attached to the item tab `0` (R-71): from
+/// the Drafts page, or from the tab itself, which has let go of its
+/// session first. It holds no text.
+pub(crate) struct SessionDiscarded(pub TabKey);
+
+impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
+
 /// The store's item kind of a desktop item.
 fn item_kind(kind: ItemDtoKind) -> ItemKind {
     match kind {

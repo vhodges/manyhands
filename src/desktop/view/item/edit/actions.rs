@@ -1,11 +1,13 @@
 //! The header's part in editing: Edit or Continue editing while viewing,
-//! Save and Done while editing, and the banners an Edit and its saves
-//! raise.
+//! Save and Done while editing, and the banners an Edit, its saves and a
+//! kept session raise.
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
-    component::{ActiveTheme, Disableable, Icon, Sizable, button::Button, h_flex, v_flex},
+    component::{
+        ActiveTheme, Disableable, Icon, Sizable, button::Button, h_flex, tooltip::Tooltip, v_flex,
+    },
     div, px,
 };
 use manyhands::repository::ItemDto;
@@ -14,7 +16,7 @@ use super::{PREPARE_PENDING, PREPARE_REFUSED, RESUME, RETRY, Stopped};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        edit::{CONTINUE_EDITING, DONE, Phase, RECOVERY_OFF, edit_offered},
+        edit::{CONTINUE_EDITING, DONE, DONE_IN_REVIEW, Phase, RECOVERY_OFF, edit_offered},
         item::{EDIT, LATER_NOTE},
     },
     view::item::{ItemPane, banners::Banner, text},
@@ -55,6 +57,7 @@ impl ItemPane {
         // disabled actions do (design, Header block). Its label is not a
         // later action's. While preparing, the pill and the banners say why.
         let restored = self.edit.phase() == Phase::Viewing
+            && !self.has_session()
             && self
                 .services
                 .drafts()
@@ -84,12 +87,20 @@ impl ItemPane {
     }
 
     /// The header's Done while editing: the focus Escape in the editor
-    /// gives (R-59). Its rules are Task 16's.
-    fn done_action(&self, window: &Window, cx: &App) -> AnyElement {
+    /// gives (R-59), pressed by a click, Enter or Space (`done`). During
+    /// the review it is disabled, with "Use these choices or Cancel first"
+    /// as its tooltip and accessible description.
+    fn done_action(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let focused = self.edit.done.is_focused(window);
         let ring = if focused { theme.ring } else { theme.input };
-        h_flex()
+        let review = self.edit.phase() == Phase::Review;
+        let words = if review {
+            theme.muted_foreground
+        } else {
+            theme.foreground
+        };
+        let done = h_flex()
             .id("item-done")
             .test_support()
             .role(Role::Button)
@@ -104,11 +115,25 @@ impl ItemPane {
             .border_1()
             .border_color(ring)
             .bg(theme.secondary)
-            .text_color(theme.foreground)
+            .text_color(words)
             .text_size(px(12.))
             .whitespace_nowrap()
             .child(Icon::default().path(icon_path("eye")).w(px(13.)).h(px(13.)))
-            .child(DONE)
+            .child(DONE);
+        if !review {
+            return done
+                .on_click(
+                    cx.listener(|this, _: &ClickEvent, window, cx| this.done_requested(window, cx)),
+                )
+                .into_any_element();
+        }
+        div()
+            .id("item-done-note")
+            .test_support()
+            .aria_label(DONE_IN_REVIEW)
+            .flex_none()
+            .tooltip(|window, cx| Tooltip::new(DONE_IN_REVIEW).build(window, cx))
+            .child(done.aria_description(DONE_IN_REVIEW))
             .into_any_element()
     }
 
@@ -176,6 +201,7 @@ impl ItemPane {
             None => {}
         }
         banners.extend(self.save_banners(cx));
+        banners.extend(self.kept_banners(cx));
         banners
     }
 }

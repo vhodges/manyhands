@@ -9,9 +9,10 @@
 //! D1's reason (each problem and its guidance), with Repair not available
 //! yet. An Edit raises crash recovery off, a prepare still owed and a
 //! refusal; its saves raise a base to review, a hand-off owed, a pending
-//! checkpoint, the change banner under the review and a refusal (`edit`).
-//! The other rows of the design's table are named here for the tasks that
-//! raise them.
+//! checkpoint, the change banner under the review and a refusal; a kept
+//! session raises the kept draft and the change banner, and a session a
+//! discard elsewhere ended says so (`edit`). The other rows of the
+//! design's table are named here for the tasks that raise them.
 //!
 //! A link clicked in one of the tab's editors is followed here (decision
 //! 10; `services::links`). The link banner says when it was not found or
@@ -77,10 +78,8 @@ pub(crate) enum Banner {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 18.
     StoredDraft,
     /// Changes kept after Done.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
     KeptAfterDone,
     /// A draft discarded elsewhere ended this tab's session (R-71).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 16.
     DraftDiscarded,
     /// Crash recovery off.
     RecoveryOff,

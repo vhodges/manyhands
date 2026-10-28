@@ -299,6 +299,17 @@ impl DraftsPage {
         self.slots.iter().find(|slot| slot.row.id == id)
     }
 
+    /// Whether a save of the draft `id` is in flight, held by this
+    /// process's session of it: its Discard waits, as the tab's does, so a
+    /// discard never races a commit (design, Done and leaving; R-71).
+    fn saving(&self, id: DraftId, cx: &gpui_kit::App) -> bool {
+        self.services
+            .drafts()
+            .read(cx)
+            .session(id)
+            .is_some_and(|session| session.saving().is_some())
+    }
+
     /// Show: the host shows and focuses the tab the draft is restored in.
     fn show_tab_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
         if let Some(tab) = self.services.drafts().read(cx).tab_of(id) {

@@ -141,8 +141,12 @@ impl DraftsPage {
         .detach();
     }
 
-    /// Discard…: asks first, naming the draft as its row does.
+    /// Discard…: asks first, naming the draft as its row does. Not while a
+    /// save of it is in flight.
     pub(super) fn discard(&mut self, id: DraftId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.saving(id, cx) {
+            return;
+        }
         let (Some(slot), Some(focus)) = (self.slot(id), self.focus.get(&id)) else {
             return;
         };

@@ -27,7 +27,9 @@
 //!
 //! `edit` makes the tab edit (design, Part C): Edit prepares the item's
 //! private work context, the edit editor and its toolbar replace the read
-//! view, D2's draft follows the text, and Save, or `secondary-s`, saves it.
+//! view, D2's draft follows the text, Save, or `secondary-s`, saves it,
+//! and Done ends the session or keeps it while the tab views the saved
+//! copy.
 
 mod banners;
 mod chips;
@@ -59,7 +61,12 @@ use crate::desktop::{
     model::{
         edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
-    services::{Services, drafts::DraftSaved, images::TabImages, requests::DesktopRequestId},
+    services::{
+        Services,
+        drafts::{DraftSaved, SessionDiscarded},
+        images::TabImages,
+        requests::DesktopRequestId,
+    },
 };
 #[cfg(test)]
 pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
@@ -69,6 +76,7 @@ pub(super) use details::text;
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{EDITOR_LATER, NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
+pub(crate) use edit::{CloseThisTab, Leaving};
 pub(crate) use sheet::open_details;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
@@ -139,6 +147,8 @@ pub(crate) struct ItemPane {
     _drafts: Subscription,
     /// A save of this tab's session committed (R-69).
     _saved: Subscription,
+    /// A discard elsewhere ended this tab's session (R-71).
+    _discarded: Subscription,
 }
 
 impl ItemPane {
@@ -155,11 +165,16 @@ impl ItemPane {
         let drafts = cx.observe(services.drafts(), |pane, _, cx| {
             pane.sync_status(cx);
             pane.follow_registry(cx);
+            pane.follow_done(cx);
             cx.notify()
         });
         let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {
             pane.draft_saved(event, cx)
         });
+        let discarded = cx.subscribe(
+            services.drafts(),
+            |pane, _, event: &SessionDiscarded, cx| pane.session_discarded(event, cx),
+        );
         let images = TabImages::new(&services);
         // The tab's images leave the windows' atlases with it.
         cx.on_release(|pane, cx| pane.images.close(cx)).detach();
@@ -189,6 +204,7 @@ impl ItemPane {
             _operations: operations,
             _drafts: drafts,
             _saved: saved,
+            _discarded: discarded,
         };
         let stamp = pane.model.load();
         pane.read(stamp, cx);
@@ -285,6 +301,7 @@ impl Render for ItemPane {
         self.sync_edit(window, cx);
         self.sync_read(window, cx);
         self.sync_discussion(window, cx);
+        self.sync_kept(cx);
         let item = self.model.item().rows().cloned();
         let (header, later) = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
@@ -293,8 +310,8 @@ impl Render for ItemPane {
         let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
         let identity = inspect.then(|| self.identity(item.as_ref(), cx));
         let banner = self.draft_banner(item.as_ref(), cx);
-        // While editing, the session's text is the edit editor's.
-        let section = if self.editing() {
+        // While a session lives, kept or not, its text is the edit editor's.
+        let section = if self.has_session() {
             None
         } else {
             self.draft_section(window, cx)

@@ -45,7 +45,7 @@ use super::{DraftLink, Phase};
 use crate::desktop::{
     model::{
         drafts::save::{SaveVerdict, save_intent, save_verdict},
-        edit::{fields_with_body, save_state::NO_CHANGES_TO_SAVE},
+        edit::save_state::NO_CHANGES_TO_SAVE,
         operations::RecoveryStep,
         stamp::{Generations, Stamp, ViewScope},
     },
@@ -126,17 +126,26 @@ impl TabSave {
     pub(super) fn stamp(&mut self) -> Stamp {
         self.generations.next(self.scope.clone())
     }
+
+    /// The session ended: no save of it is followed any more. The reads
+    /// after a save find no session to settle.
+    pub(super) fn clear(&mut self) {
+        self.run = None;
+        self.answer = None;
+        self.resume = None;
+        self.reread = None;
+    }
 }
 
 impl ItemPane {
-    /// Save and `secondary-s`. False when there is no edit session, so the
-    /// key goes on.
+    /// Save and `secondary-s`. False when no edit editor is shown, a kept
+    /// session's included, so the key goes on.
     pub(in crate::desktop::view::item) fn save_requested(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(session) = &self.edit.session else {
+        let Some(session) = self.edit.session.as_ref().filter(|session| !session.kept) else {
             return false;
         };
         // One save at a time, a pending checkpoint's waiting for its Retry
@@ -147,7 +156,7 @@ impl ItemPane {
         {
             return true;
         }
-        if !session.host.read(cx).is_dirty() {
+        if !session.dirty(cx) {
             let toolbar = session.toolbar.clone();
             toolbar.update(cx, |toolbar, cx| toolbar.note(NO_CHANGES_TO_SAVE, cx));
             return true;
@@ -234,8 +243,7 @@ impl ItemPane {
         let Some((session, target)) = self.edit.session.as_ref().zip(target) else {
             return self.end_run(cx);
         };
-        let text = session.host.read(cx).text(cx);
-        let fields = fields_with_body(&session.base.fields, text);
+        let fields = session.current(cx);
         let Some(intent) = save_intent(&target, &fields, &session.base) else {
             return self.end_run(cx);
         };

@@ -150,6 +150,15 @@ impl Page {
         (editor.text() == text).then(|| editor.cursor())
     }
 
+    /// Focuses the read editor, its caret where it was: Done gives the
+    /// page the focus as the tab returns to viewing.
+    pub(super) fn focus_read(&self, window: &mut Window, cx: &mut App) {
+        if let Some(read) = &self.read {
+            let editor = read.read(cx).editor().clone();
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        }
+    }
+
     /// R-67: when the read editor has taken focus since the last frame,
     /// its caret is brought into view once this frame is drawn.
     fn note_focus(&mut self, window: &Window, cx: &mut Context<ItemPane>) {

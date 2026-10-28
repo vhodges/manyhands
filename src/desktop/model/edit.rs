@@ -1,7 +1,8 @@
-//! An item tab's edit session as pure decisions (design, Part C, Phases):
-//! where the tab stands, whether Edit is offered, the base a session's
-//! draft begins on, and what the toolbar's status item says of D2's
-//! recovery copy.
+//! An item tab's edit session as pure decisions (design, Part C, Phases,
+//! and Done and leaving): where the tab stands, whether Edit is offered,
+//! the base a session's draft begins on, what the toolbar's status item
+//! says of D2's recovery copy, what Done comes to, and when a session is
+//! dirty or its item never created.
 //!
 //! Nothing here holds the item's text but `fields_with_body`'s answer, a
 //! draft's fields, which derive no `Debug`. What a save comes to is
@@ -22,6 +23,18 @@ pub(crate) mod save_state;
 pub(crate) const CONTINUE_EDITING: &str = "Continue editing";
 /// The header's way back to viewing while editing.
 pub(crate) const DONE: &str = "Done";
+
+/// Done's note while the review is open (design, Done and leaving, step
+/// 1).
+pub(crate) const DONE_IN_REVIEW: &str = "Use these choices or Cancel first";
+/// The banner of a session kept after Done (design, Banners; decision 15).
+pub(crate) const KEPT_AFTER_DONE: &str =
+    "Your unsaved changes are kept as a draft on this computer.";
+/// The banner of a session a discard elsewhere ended (design, Banners;
+/// R-71).
+pub(crate) const DRAFT_DISCARDED: &str = "The draft was discarded.";
+/// The change banner's action, which opens the review (R-68).
+pub(crate) const COMPARE: &str = "Compare\u{2026}";
 
 /// The toolbar's status words (design, The toolbar).
 pub(crate) const DRAFT_NOT_KEPT: &str = "Draft not kept. Save to protect your changes";
@@ -44,8 +57,8 @@ pub(crate) enum Phase {
     /// takes typing meanwhile.
     Saving,
     /// The review is open: Save on an unverified base (R-36), or an
-    /// `external_change` answer. Save is disabled; the review itself is
-    /// Task 19's.
+    /// `external_change` answer. Save and Done are disabled; the review
+    /// itself is Task 19's.
     Review,
 }
 
@@ -124,6 +137,57 @@ pub(crate) fn draft_indicator(state: DraftState, now: OffsetDateTime) -> Option<
             })
         }
     }
+}
+
+/// What Done comes to (design, Done and leaving, steps 3 and 5), once a
+/// save in flight has committed and the session's text has been written as
+/// far as it can be.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DoneOutcome {
+    /// Not dirty, nothing stored: the session ends.
+    End,
+    /// Not dirty, with a stored draft (typed, written, then undone): the
+    /// draft is discarded, and the session ends.
+    Discard,
+    /// Dirty, and the draft is written: the session is kept (R-58).
+    Keep,
+    /// Dirty, and the draft is not written: Save, Discard or Cancel.
+    AskNotKept,
+    /// A never-created item: Save, Keep draft, Discard or Cancel.
+    AskNotCreated,
+}
+
+/// Done's rule, in the design's order: a never-created item asks first
+/// (step 3); then, after the write (step 4), a clean session ends,
+/// discarding what is stored, and a dirty one is kept when its draft is
+/// written, and asks otherwise. No typed text is dropped without a choice
+/// (R-15, R-73).
+pub(crate) fn done_outcome(
+    never_created: bool,
+    dirty: bool,
+    stored: bool,
+    written: bool,
+) -> DoneOutcome {
+    match (never_created, dirty, stored) {
+        (true, ..) => DoneOutcome::AskNotCreated,
+        (false, false, false) => DoneOutcome::End,
+        (false, false, true) => DoneOutcome::Discard,
+        (false, true, true) if written => DoneOutcome::Keep,
+        (false, true, _) => DoneOutcome::AskNotKept,
+    }
+}
+
+/// Whether `base` is a new item's (R-20): it has neither an observation
+/// nor a source, as only a draft written before its item's create has.
+/// Task 22's `is_new_item_base` states the same rule for the library.
+pub(crate) fn new_item_base(base: &DraftBase) -> bool {
+    base.observation.is_none() && base.source.is_none()
+}
+
+/// Whether `a` and `b` hold the same fields besides the body: a metadata
+/// change alone makes a session dirty (design, Done and leaving).
+pub(crate) fn same_metadata(a: &DraftFields, b: &DraftFields) -> bool {
+    fields_with_body(a, String::new()) == fields_with_body(b, String::new())
 }
 
 /// The indicator in words.

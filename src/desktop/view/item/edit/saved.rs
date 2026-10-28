@@ -17,7 +17,7 @@ use manyhands::{
 use crate::desktop::{
     model::{
         drafts::{Saving, save::base_after_save},
-        edit::{Phase, fields_with_body},
+        edit::Phase,
         navigation::OpenTarget,
         stamp::Stamp,
     },
@@ -94,8 +94,7 @@ impl ItemPane {
             return;
         };
         session.saved = true;
-        let text = session.host.read(cx).text(cx);
-        if fields_with_body(&session.base.fields, text) == *submitted {
+        if session.current(cx) == *submitted {
             let saved = body_of(submitted);
             session
                 .host
@@ -113,6 +112,9 @@ impl ItemPane {
             self.feed(cx);
         }
         self.sync_status(cx);
+        // Done waiting for this save goes on (design, Done and leaving, step
+        // 2).
+        self.done_saved(cx);
         cx.notify();
     }
 

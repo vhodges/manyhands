@@ -12,7 +12,7 @@
 use super::{
     item::text,
     item::{
-        DraftDiscarded, ItemPane, OpenDetails, ReviewInDrafts,
+        CloseThisTab, DraftDiscarded, ItemPane, OpenDetails, ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -193,8 +193,9 @@ pub(crate) struct TabContent {
     focus: HashMap<TabId, FocusHandle>,
     close_focus: HashMap<TabId, FocusHandle>,
     /// Each pane's related item opened, its Review in Drafts, its restored
-    /// draft discarded, and its chips' requests for the details sheet.
-    related: HashMap<TabId, [Subscription; 4]>,
+    /// draft discarded, its chips' requests for the details sheet, and its
+    /// own close once its unsaved work was settled.
+    related: HashMap<TabId, [Subscription; 5]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -267,8 +268,11 @@ impl TabContent {
             let details = cx.subscribe(&pane, |this, pane, event: &OpenDetails, cx| {
                 this.ask_details(&pane, event.0, cx)
             });
+            let close = cx.subscribe(&pane, move |this, _, _: &CloseThisTab, cx| {
+                this.close_settled(id, cx)
+            });
             self.related
-                .insert(id, [related, review, discarded, details]);
+                .insert(id, [related, review, discarded, details, close]);
             self.panes.insert(id, pane);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());

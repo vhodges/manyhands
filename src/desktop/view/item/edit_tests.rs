@@ -1291,3 +1291,7 @@ async fn a_new_session_is_neither_saved_nor_kept(cx: &mut TestAppContext) {
 /// Save, the session after a save, and the save states (Task 15).
 #[path = "edit_save_tests.rs"]
 mod save;
+
+/// Done, the kept session and closing the tab (Task 16).
+#[path = "edit_done_tests.rs"]
+mod done;

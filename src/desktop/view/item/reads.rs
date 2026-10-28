@@ -149,6 +149,7 @@ impl ItemPane {
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
         self.prepare_progressed(cx);
         self.save_progressed(cx);
+        self.follow_done(cx);
         let Some(id) = self.refreshing else {
             return;
         };

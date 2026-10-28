@@ -14,9 +14,9 @@ use crate::desktop::{
     },
     services::requests::DesktopRequestId,
     view::{
-        close_draft::{self, CloseWithDraft},
+        close_draft::{self, Ask, CloseWithDraft},
         drafts::DraftsEvent,
-        item::{ChipField, ItemPane, RegionEnd, open_details},
+        item::{ChipField, ItemPane, Leaving, RegionEnd, open_details},
         scroll::ContentScroll,
         sidebar,
     },
@@ -273,10 +273,15 @@ impl Workspace {
         }
     }
 
-    /// Closes the tab `id`. A tab with a restored draft attached asks
-    /// first: Keep draft, Discard or Cancel. True when the tab closed now.
-    /// While quitting waits for drafts or a job, with Quit now in view,
-    /// nothing closes and nothing opens in front of it.
+    /// Closes the tab `id`, asking first when it holds unsaved work (design,
+    /// Done and leaving: Closing the tab; R-41): a restored draft asks
+    /// D2's Keep draft, Discard or Cancel; an edit session with unsaved
+    /// work, a kept or stored draft, or one being stored, asks in its tab
+    /// (`ItemPane::ask_to_close`), which closes once its choice is
+    /// settled. A clean tab closes at once, and release on leave applies.
+    /// True when the tab closed now. While quitting waits for drafts or a
+    /// job, with Quit now in view, nothing closes and nothing opens in
+    /// front of it.
     pub(in crate::desktop::view) fn close_tab(
         &mut self,
         id: TabId,
@@ -287,28 +292,55 @@ impl Workspace {
         {
             return false;
         }
-        let attached = self.content.tabs.pane(id).and_then(|pane| {
-            let pane = pane.read(cx);
-            let draft = self.services.drafts().read(cx).attached(&pane.tab_key())?;
-            Some((draft, pane.tab_title()))
-        });
-        let Some((draft, title)) = attached else {
-            let closed = self.content.tabs.close(id);
-            if closed {
-                cx.notify();
+        let pane = self.content.tabs.pane(id).cloned();
+        let leaving = pane
+            .as_ref()
+            .map_or(Leaving::Clean, |pane| pane.read(cx).leaving(cx));
+        let draft = match leaving {
+            Leaving::Clean => {
+                if let Some(pane) = &pane {
+                    pane.update(cx, |pane, cx| pane.release_on_leave(cx));
+                }
+                let closed = self.content.tabs.close(id);
+                if closed {
+                    cx.notify();
+                }
+                return closed;
             }
-            return closed;
+            _ if window.has_active_dialog(cx) => return false,
+            Leaving::Session => {
+                if let Some(pane) = pane {
+                    pane.update(cx, |pane, cx| pane.ask_to_close(window, cx));
+                }
+                return false;
+            }
+            Leaving::Restored(draft) => draft,
         };
-        if window.has_active_dialog(cx) {
-            return false;
-        }
+        let title = pane
+            .map(|pane| pane.read(cx).tab_title())
+            .unwrap_or_default();
         let workspace = cx.entity().downgrade();
-        close_draft::open(title, window, cx, move |choice, window, cx| {
-            let _ = workspace.update(cx, |workspace, cx| {
-                workspace.close_with_draft(id, draft, choice, window, cx)
-            });
-        });
+        close_draft::open(
+            Ask::restored(&title),
+            window,
+            cx,
+            move |choice, window, cx| {
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.close_with_draft(id, draft, choice, window, cx)
+                });
+            },
+        );
         false
+    }
+
+    /// The tab `id` settled what its unsaved work comes to, in its own
+    /// dialog or after a discard elsewhere (R-71): it closes, and the next
+    /// frame focuses the content region, as `secondary-w` does.
+    pub(in crate::desktop::view) fn close_settled(&mut self, id: TabId, cx: &mut Context<Self>) {
+        if self.content.tabs.close(id) {
+            self.content.refocus = true;
+            cx.notify();
+        }
     }
 
     /// What the close dialog chose for the tab `id` and its draft. Keep
@@ -327,7 +359,8 @@ impl Workspace {
     ) {
         let drafts = self.services.drafts().clone();
         let closing = match choice {
-            CloseWithDraft::Cancel => return,
+            // D2's dialog offers no Save until Task 18.
+            CloseWithDraft::Cancel | CloseWithDraft::Save => return,
             CloseWithDraft::KeepDraft => {
                 drafts.update(cx, |registry, cx| registry.release(draft, cx))
             }
