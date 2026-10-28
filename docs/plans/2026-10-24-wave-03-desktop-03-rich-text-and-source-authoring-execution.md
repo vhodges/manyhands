@@ -951,3 +951,38 @@ Notes for later tasks: Task 22 leaves `targets()` in
   the Drafts page, of another process's draft, while a clean tab edits
   the item. Without this rule, the release removes that tab's worktree. —
   If wrong: a context stays until its tab leaves.
+- Ruling (Task 17 re-review 1, N1): the owner's narrowing of R-78 is
+  decided over every attempt.
+  - A release exempts the earlier prepare only while every attempt of it
+    finished with a refusal that touched nothing, and none is in flight.
+  - An attempt that is lost, unknown or partial, or that answered `ok`,
+    blocks for good.
+
+  — The narrowing's own words say a release whose answer was lost still
+  blocks. Deciding by the last attempt alone would let a refused retry
+  hide an earlier attempt that deleted the context. — If wrong: a prepare
+  stays blocked, and Abandon in the operation area recovers.
+- Ruling (Task 17 fix 2): Edit waits while the close dialog's Discard
+  waits for a draft that is beginning. The Discard is tied to that begin
+  by a token. — Without this, an Edit during the wait started a session
+  that the dialog then closed. — If wrong: Edit is inert for that moment,
+  and nothing is lost.
+- Copy accepted (Task 17): the banner for a Resume that R-78 blocks
+  reads "Your private copy cannot be made ready again from this request:
+  a release of this item was sent since."
+  - When the operation area lists the item's pending row, it goes on:
+    "Abandon its pending operation in the operation area, then press
+    Edit."
+  - Otherwise it goes on: "Press Edit to try again."
+
+  The operation area's Retry note "Not sent again after a later Edit or
+  release" is accepted too.
+- Parked (Task 17), for the whole-branch review:
+  - M5: a repeated leave keeps the first leave's mark, so the context is
+    kept;
+  - closing the tab again while its Discard waits keeps the landed draft
+    for the Drafts page;
+  - Edit gives no reason while it waits on a Discard;
+  - `pending_row_listed` does not match the row against the request's
+    operation ID;
+  - `Releases::pending` is ready for Task 24's Move.
