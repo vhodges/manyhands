@@ -17,6 +17,12 @@
 //! - past anything but a folder there is no path, `..` included, as the
 //!   system finds it.
 //!
+//! A step Windows reads as a device name (`LPT1.png`, `con`, `NUL`),
+//! written or in a link's target, is refused on every system before it is
+//! looked up: on Windows the lookup would open the device, and a mapped
+//! port can reach a network printer (contract 12: a device is never
+//! opened).
+//!
 //! Only once every link on the way has passed is a path made canonical,
 //! and checks 1 and 2 run on that. That path is the place the walk
 //! reached, the root and the names it found, none of them a link, never
@@ -156,6 +162,8 @@ fn walk(root: &Path, written: Vec<OsString>, lookups: &impl Lookups) -> Result<P
                 depth -= 1;
                 continue;
             }
+            // Never looked up: on Windows the lookup opens the device.
+            Step::Name(name) if device(&name) => return Err(Found::Refused),
             Step::Name(name) => name,
         };
         at.push(&name);
@@ -245,6 +253,32 @@ pub(super) fn reserved(name: &OsStr) -> bool {
     let name = name.split(':').next().unwrap_or_default();
     let name = name.trim_end_matches(['.', ' ']);
     name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".manyhands")
+}
+
+/// A name Windows reads as a device, which the walk never looks up
+/// (contract 12: a device is never opened), on every system, as with
+/// `reserved`. Windows takes the part before the first `.`, its trailing
+/// spaces trimmed, ignoring ASCII case: CON, PRN, AUX, NUL, COM or LPT and
+/// a digit, or a superscript 1, 2 or 3, CONIN$ or CONOUT$. A `:` ends the
+/// name too, as in `reserved`, so `CON:` is one.
+fn device(name: &OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let name = name.split(['.', ':']).next().unwrap_or_default();
+    let name = name.trim_end_matches(' ');
+    if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"]
+        .iter()
+        .any(|device| name.eq_ignore_ascii_case(device))
+    {
+        return true;
+    }
+    let Some((at, digit)) = name.char_indices().last() else {
+        return false;
+    };
+    let port = &name[..at];
+    (port.eq_ignore_ascii_case("COM") || port.eq_ignore_ascii_case("LPT"))
+        && matches!(digit, '0'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
 }
 
 #[cfg(test)]

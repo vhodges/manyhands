@@ -7,11 +7,12 @@
 
 use std::{
     cell::RefCell,
+    ffi::OsStr,
     fs, io,
     path::{Path, PathBuf},
 };
 
-use super::{Found, HOP_LIMIT, Lookups, locate_with};
+use super::{Found, HOP_LIMIT, Lookups, device, locate_with};
 
 /// The filesystem, recording the paths it is given.
 #[derive(Default)]
@@ -282,15 +283,14 @@ fn a_chain_past_the_hop_limit_is_refused() {
     chain("a", HOP_LIMIT);
     chain("b", HOP_LIMIT + 1);
 
+    // Only the place the walk reached is made canonical, so no system's own
+    // link limit meets the chain.
     let (seen, recorder) = look(&root, "docs/a1");
-    assert!(
-        !recorder.canonicalized.borrow().is_empty(),
-        "the walk passed 40 links"
+    assert_eq!(seen, contained_at(&picture), "the walk passed 40 links");
+    assert_eq!(
+        recorder.canonicalized.borrow().as_slice(),
+        &[root.clone(), picture]
     );
-    // Other systems stop sooner: macOS follows 32.
-    if cfg!(target_os = "linux") {
-        assert_eq!(seen, contained_at(&picture));
-    }
     refused_unfollowed(&root, "docs/b1");
 
     link("loop", &root.join("docs/loop"));
@@ -387,5 +387,100 @@ fn a_relative_link_into_git_is_refused() {
         let (_, recorder) = look(&root, written);
         let walked: Vec<PathBuf> = walked.iter().map(|path| root.join(path)).collect();
         assert_eq!(*recorder.looked.borrow(), walked, "{written}");
+    }
+}
+
+/// What Windows reads as a device name: the part before the first `.`,
+/// its trailing spaces trimmed, ignoring ASCII case, is CON, PRN, AUX,
+/// NUL, COM0 to COM9 or LPT0 to LPT9 (and COM or LPT with a superscript
+/// 1, 2 or 3), CONIN$ or CONOUT$. A `:` ends the name too, as `reserved`
+/// reads it.
+#[test]
+fn a_windows_device_name_is_matched_as_windows_reads_it() {
+    for name in [
+        "CON",
+        "con.png",
+        "PRN",
+        "aux .png",
+        "NUL",
+        "nul",
+        "nul.",
+        "Nul .tar.gz",
+        "COM0",
+        "com9.png",
+        "Com3.tar.png",
+        "LPT0",
+        "lpt9.jpg",
+        "LPT1.png",
+        "COM\u{b9}",
+        "lpt\u{b2}.png",
+        "LPT\u{b3}",
+        "CONIN$",
+        "conout$.png",
+        "CON:",
+        "lpt1:x.png",
+    ] {
+        assert!(device(OsStr::new(name)), "{name}");
+    }
+    for name in [
+        "console.png",
+        "lpt10.png",
+        "com.png",
+        "con_x.png",
+        "connect",
+        "auxiliary",
+        "nul_",
+        " con.png",
+        "COM\u{b4}",
+        "LPT\u{2074}",
+        "CONIN",
+        "CONOUT",
+        "x.con",
+        "docs",
+    ] {
+        assert!(!device(OsStr::new(name)), "{name}");
+    }
+}
+
+/// Contract 12: a device is never opened. A step Windows reads as a
+/// device, written or in a link's target, is refused on every system,
+/// before any lookup of that step; a name that only starts like one is a
+/// name. Here the devices are plain files, so only the name refuses them.
+#[cfg(unix)]
+#[test]
+fn a_windows_device_name_is_refused_without_a_lookup() {
+    let Trees { _dir, root, .. } = trees();
+    let devices = [
+        "LPT1.png",
+        "con.png",
+        "nul",
+        "Com3.tar.png",
+        "aux .png",
+        "NUL.png",
+    ];
+    for name in devices {
+        write(&root.join("docs").join(name), b"image");
+    }
+    link("../docs/NUL.png", &root.join("imgs/n.png"));
+    let refused = devices[..5]
+        .iter()
+        .map(|name| (format!("docs/{name}"), format!("docs/{name}")))
+        .chain([("imgs/n.png".to_owned(), "docs/NUL.png".to_owned())]);
+    for (written, device) in refused {
+        refused_unfollowed(&root, &written);
+        let (_, recorder) = look(&root, &written);
+        assert!(
+            !recorder.looked.borrow().contains(&root.join(&device)),
+            "{written}: {device} was looked up"
+        );
+    }
+    for name in ["console.png", "lpt10.png", "com.png"] {
+        let path = root.join("docs").join(name);
+        write(&path, b"image");
+        assert_eq!(
+            look(&root, &format!("docs/{name}")).0,
+            contained_at(&path),
+            "{name}"
+        );
     }
 }
