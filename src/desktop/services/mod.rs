@@ -14,6 +14,7 @@ pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
+pub(crate) mod unkept;
 pub(crate) mod worker;
 
 use std::{sync::Arc, time::Duration};
@@ -30,6 +31,7 @@ use crate::desktop::model::operations::Operations;
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use release::Releases;
+use unkept::UnkeptEdits;
 use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
@@ -212,6 +214,9 @@ pub(crate) struct Services {
     created: Entity<CreatedContexts>,
     /// Release on leave (R-37), shared by every view.
     releases: Entity<Releases>,
+    /// The item tabs whose unsaved edit text no draft holds (Part C fix 1,
+    /// I1): a repository's removal says how many of its tabs close.
+    unkept: Entity<UnkeptEdits>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -327,6 +332,7 @@ impl Services {
             #[cfg(test)]
             created,
             releases,
+            unkept: cx.new(|_| UnkeptEdits::default()),
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -376,6 +382,11 @@ impl Services {
     /// hand over (R-37).
     pub(crate) fn releases(&self) -> &Entity<Releases> {
         &self.releases
+    }
+
+    /// The item tabs whose unsaved edit text no draft holds, by repository.
+    pub(crate) fn unkept(&self) -> &Entity<UnkeptEdits> {
+        &self.unkept
     }
 
     #[cfg(test)]

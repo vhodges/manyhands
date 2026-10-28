@@ -9,6 +9,7 @@
 //! retires a revision or stores the text again, the tab is still saving
 //! (`store_settling`).
 
+use futures::{FutureExt, channel::oneshot, future::Shared};
 use gpui_kit::{App, Context};
 use manyhands::{
     drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget, ItemKind},
@@ -121,6 +122,9 @@ impl ItemPane {
             .drafts()
             .update(cx, |registry, cx| registry.begin(target, base, current, cx));
         let drafts = self.services.drafts().clone();
+        // Part C fix 1, I1: quitting waits for this, once it has landed.
+        let (landing, landed) = oneshot::channel();
+        self.edit.begin_landing = Some(landed.shared());
         cx.spawn(async move |pane, cx| {
             let begun = begun.await;
             let landed = pane.update(cx, |pane, cx| {
@@ -132,8 +136,24 @@ impl ItemPane {
             if let (Err(_), Ok(id)) = (landed, begun) {
                 drafts.update(cx, |registry, cx| registry.release_when_stored(id, cx));
             }
+            let _ = landing.send(());
         })
         .detach();
+    }
+
+    /// The begin still in flight, which resolves once it has landed: the
+    /// draft attached to the tab, or the text left the editor's only.
+    /// `None` when none is (Part C fix 1, I1).
+    pub(in crate::desktop::view) fn begin_in_flight(
+        &self,
+    ) -> Option<Shared<oneshot::Receiver<()>>> {
+        // Polled once, so a begin that has landed reads as landed though no
+        // one awaited it.
+        self.edit
+            .begin_landing
+            .as_ref()
+            .filter(|landing| (*landing).clone().now_or_never().is_none())
+            .cloned()
     }
 
     /// `begin` landed. The draft is attached to the tab, and text typed

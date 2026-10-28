@@ -5,7 +5,9 @@
 //! this process has not claimed. It sits in the header's banner slot
 //! (`Banner::StoredDraft`; design, Banners). Nothing is restored on its
 //! own; Restore asks the registry to claim the draft and attach it to this
-//! tab, then opens the tab through its item locator (ruling R25). A
+//! tab, then opens the tab through its item locator (ruling R25). It is
+//! not offered, and claims nothing, while an edit session of the tab lives
+//! or is made ready (Part C fix 1, M3). A
 //! refusal is shown in words; a draft another process holds may be tried
 //! again. Review in Drafts asks the workspace to open the Drafts page on
 //! the draft's row. Continue editing, last, takes the restored-draft route
@@ -39,6 +41,7 @@ use super::{ItemPane, text};
 use crate::desktop::{
     model::{
         drafts::RecoveryState,
+        edit::Phase,
         editor_text::normalized,
         navigation::{ItemLocator, OpenTarget},
         tabs::TabKey,
@@ -194,7 +197,10 @@ impl ItemPane {
         claimed: impl FnOnce(&mut Self, DraftId, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(self.model.target(), OpenTarget::Item { .. }) || self.draft.restoring {
+        if !matches!(self.model.target(), OpenTarget::Item { .. })
+            || self.draft.restoring
+            || !self.restore_offered()
+        {
             return;
         }
         self.draft.restoring = true;
@@ -230,6 +236,14 @@ impl ItemPane {
             }
         })
         .detach();
+    }
+
+    /// Whether a stored draft may be claimed into this tab: not while an
+    /// edit session lives, kept or not, nor while the tab is not viewing
+    /// (Part C fix 1, M3). A second session would be attached over the
+    /// first, its claim left behind (R-35).
+    fn restore_offered(&self) -> bool {
+        !self.has_session() && self.edit.phase() == Phase::Viewing
     }
 
     /// The draft's discard failed: the store has let go of it, and it is
@@ -284,18 +298,26 @@ impl ItemPane {
                     | Restore::AllowedFlagged
                     | Restore::Refused(RefusalReason::OpenElsewhere)
             );
-            let action = if restorable {
-                button(
-                    "draft-restore",
-                    RESTORE,
-                    cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(stored, cx)),
+            // M3: no Restore above an edit session, nor while one is made
+            // ready; its banner still says the draft is kept.
+            let action = if restorable && !self.restore_offered() {
+                None
+            } else if restorable {
+                Some(
+                    button(
+                        "draft-restore",
+                        RESTORE,
+                        cx.listener(move |this, _: &ClickEvent, _, cx| this.restore(stored, cx)),
+                    )
+                    .into_any_element(),
                 )
-                .into_any_element()
             } else {
-                text("draft-banner-state", target_label(&state))
-                    .text_xs()
-                    .text_color(muted)
-                    .into_any_element()
+                Some(
+                    text("draft-banner-state", target_label(&state))
+                        .text_xs()
+                        .text_color(muted)
+                        .into_any_element(),
+                )
             };
             let review = button(
                 "draft-review",
@@ -311,7 +333,7 @@ impl ItemPane {
                 .gap_2()
                 .items_center()
                 .child(text("draft-banner", DRAFT_KEPT).text_sm())
-                .child(action)
+                .children(action)
                 .child(review)
                 .children(continue_editing)
                 .into_any_element()

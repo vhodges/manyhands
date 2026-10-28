@@ -408,13 +408,27 @@ impl Workspace {
         .detach();
     }
 
-    /// Closes every tab of `root`. Their restored drafts are written and
-    /// let go of first, kept in Drafts, never discarded.
+    /// Closes every tab of `root`, as the user's confirmed removal does: the
+    /// confirmation said which tabs hold unsaved text that no draft holds
+    /// (Part C fix 1, I1). Their restored drafts are written and let go of
+    /// first, kept in Drafts, never discarded.
     pub(crate) fn close_repository(&mut self, root: &str, cx: &mut Context<Self>) {
         self.services
             .drafts()
             .update(cx, |registry, cx| registry.release_repository(root, cx));
-        self.content.tabs.close_repository(root);
+        self.content.tabs.close_repository(root, false, cx);
+        cx.notify();
+    }
+
+    /// `root` left the list with no removal the user confirmed: its tabs
+    /// close as `close_repository`'s do, except a tab whose edit session
+    /// holds unsaved text that no draft holds, which stays open; its own
+    /// close asks (Part C fix 1, I1).
+    pub(super) fn drop_repository(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.services
+            .drafts()
+            .update(cx, |registry, cx| registry.release_repository(root, cx));
+        self.content.tabs.close_repository(root, true, cx);
         cx.notify();
     }
 

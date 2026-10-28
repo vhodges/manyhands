@@ -53,6 +53,7 @@ impl ItemPane {
             None,
         );
         self.edit.phase = Phase::Preparing(request);
+        self.edit.prepare_taken = 0;
         self.edit.stopped = None;
         cx.notify();
     }
@@ -76,11 +77,21 @@ impl ItemPane {
         self.send_again(request, cx);
     }
 
-    /// Sends the prepare `request` again, or says R-78 does not.
+    /// Sends the prepare `request` again, or says R-78 does not. Until the
+    /// worker's `Queued` reaches the request model, the model still holds
+    /// the answer Resume or Retry was pressed on: only a later attempt's is
+    /// taken (Part C fix 1, M5), as a save's are.
     fn send_again(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
+        let answered = self
+            .services
+            .operations()
+            .read(cx)
+            .request(request)
+            .map_or(0, |request| request.attempt);
         if self.services.worker().retry(request, None) {
             self.edit.stopped = None;
             self.edit.phase = Phase::Preparing(request);
+            self.edit.prepare_taken = answered;
         } else {
             self.edit.stopped = Some(Stopped::NotSentAgain(request));
         }
@@ -94,12 +105,16 @@ impl ItemPane {
         let Phase::Preparing(request) = self.edit.phase else {
             return;
         };
-        let state = self
+        let found = self
             .services
             .operations()
             .read(cx)
             .request(request)
-            .map(|request| request.state.clone());
+            .map(|request| (request.attempt, request.state.clone()));
+        // M5: the answer Resume or Retry was pressed on is not taken again.
+        let state = found
+            .filter(|(attempt, _)| *attempt > self.edit.prepare_taken)
+            .map(|(_, state)| state);
         match state {
             None | Some(RequestState::Queued | RequestState::Running { .. }) => return,
             Some(RequestState::Finished(_, ResultCode::Ok, ..)) => {

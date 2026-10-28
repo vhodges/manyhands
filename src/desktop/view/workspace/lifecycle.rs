@@ -2,19 +2,23 @@
 
 use super::{QuitPhase, Region, Workspace};
 use crate::desktop::{
+    model::stamp::TabId,
     services::{prompts::PromptReply, worker::QuitState},
     view::{
         operations::draft_flush_id,
         passphrase::open_dialog,
-        quit::{DraftsNotSaved, NotSavedChoice},
+        quit::{DraftsNotSaved, EditsNotKept, NotSavedChoice},
     },
 };
+use futures::future::join_all;
 use gpui_kit::{Context, WeakEntity, Window, component::WindowExt};
 use manyhands::drafts::{DraftErrorKind, DraftId};
 
 impl Workspace {
-    /// The action and window-close request use the same handler. Draft
-    /// sessions are flushed first; then D1's quit waits for a job. Prompts
+    /// The action and window-close request use the same handler. An edit
+    /// session's text that no draft holds is asked about first
+    /// (`unkept_asks_first`); then draft
+    /// sessions are flushed; then D1's quit waits for a job. Prompts
     /// are answered `Unavailable` only once quitting is committed to D1's
     /// phases: while drafts are saved, and while their dialog asks, a
     /// prompt is held, neither shown nor answered, so that Cancel can
@@ -36,11 +40,101 @@ impl Workspace {
             QuitPhase::SavingDrafts => return false,
             QuitPhase::Running => {}
         }
+        // Part C fix 1, I1: an edit session's text that no draft holds is
+        // asked about first, once every begin in flight has landed.
+        if self.unkept_asks_first(window, cx) {
+            return false;
+        }
+        self.quit_with_drafts(window, cx)
+    }
+
+    /// D2's quit: every draft session is flushed first, then D1's quit.
+    fn quit_with_drafts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.services.drafts().read(cx).unsaved() {
             self.save_drafts(window, cx);
             return false;
         }
         self.finish_job(window, cx)
+    }
+
+    /// Part C fix 1, I1 (the Cycle's contract 6). A begin still in flight
+    /// is waited for, under "Saving drafts for recovery" and Quit now, as
+    /// D2's flush is: it stores a draft. Then, when tabs hold unsaved edit
+    /// text that no draft holds (crash recovery off, or a begin that
+    /// failed), the dialog asks, holding a prompt as D2's does: Cancel, the
+    /// default, stays and shows the first such tab; Quit anyway goes on to
+    /// D2's quit, whose own question follows when a flush fails. False
+    /// when neither applies: quitting goes on.
+    fn unkept_asks_first(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let begins = self.content.tabs.begins_in_flight(cx);
+        if !begins.is_empty() {
+            self.hold_prompt(window, cx);
+            self.wait_to_quit(QuitPhase::SavingDrafts, window, cx);
+            cx.spawn_in(window, async move |workspace, cx| {
+                join_all(begins).await;
+                let _ = workspace.update_in(cx, |workspace, window, cx| {
+                    workspace.begins_landed(window, cx)
+                });
+            })
+            .detach();
+            return true;
+        }
+        let unkept = self.content.tabs.unkept(cx);
+        if unkept.is_empty() {
+            return false;
+        }
+        self.hold_prompt(window, cx);
+        window.close_all_dialogs(cx);
+        let workspace = cx.entity().downgrade();
+        EditsNotKept {
+            count: unkept.len(),
+        }
+        .open(window, cx, move |choice, window, cx| {
+            let _ = workspace.update(cx, |workspace, cx| {
+                workspace.unkept_chosen(choice, &unkept, window, cx)
+            });
+        });
+        true
+    }
+
+    /// Every begin quitting waited for has landed: quitting is asked for
+    /// again, unless Quit now quit meanwhile.
+    fn begins_landed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit != QuitPhase::SavingDrafts {
+            return;
+        }
+        self.set_quit(QuitPhase::Running, cx);
+        cx.notify();
+        self.request_quit(window, cx);
+    }
+
+    /// Quit anyway goes on to D2's quit. Cancel stays, with the first such
+    /// tab shown and the content region focused; a prompt held meanwhile
+    /// shows once the dialog has closed.
+    fn unkept_chosen(
+        &mut self,
+        choice: NotSavedChoice,
+        unkept: &[TabId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.quit != QuitPhase::Running {
+            return;
+        }
+        match choice {
+            NotSavedChoice::QuitAnyway => {
+                self.quit_with_drafts(window, cx);
+            }
+            NotSavedChoice::Cancel => {
+                self.prompts_held = false;
+                if let Some(&id) = unkept.first() {
+                    self.show_tab(id, cx);
+                    self.focus_region(Region::Content, window, cx);
+                }
+                cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
+                cx.notify();
+            }
+        }
     }
 
     /// Sets the phase; the request model knows when drafts are saving, so

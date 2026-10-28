@@ -13,7 +13,9 @@
 //!   workspace's reload after a request, a list's Retry), as the next frame
 //!   is drawn, the review takes mine (the session's current), theirs (the
 //!   read, normalized, with its observation) and the base (the session's
-//!   own), and the body's result goes into an editor of its own, exactly
+//!   own, each field the read gives as the file has it taken as theirs,
+//!   normalized: Part C fix 1, M1), and the body's result goes into an
+//!   editor of its own, exactly
 //!   (R-79), in an edit host context, so Escape there focuses Done (R-59).
 //!   While it reads, Cancel is offered; a read that fails says so, with
 //!   Retry and Cancel.
@@ -54,7 +56,7 @@ use gpui_kit::{
     },
     div,
 };
-use manyhands::results::ResultCode;
+use manyhands::{drafts::DraftFields, results::ResultCode};
 
 use super::{DraftLink, Phase, saved::body_of};
 use crate::desktop::{
@@ -63,6 +65,7 @@ use crate::desktop::{
         links::LinkTarget,
         review::{
             BodyChoice, Choice, KEEP_MY_EDITS, REPLACE, REPLACE_DETAIL, REPLACE_YOUR_EDITS, Review,
+            base_as_read,
         },
     },
     view::{
@@ -163,12 +166,9 @@ impl ItemPane {
             return;
         }
         let fresh = self.model.not_refreshed().is_none();
-        let theirs = self
-            .model
-            .item()
-            .rows()
-            .filter(|_| fresh)
-            .and_then(base_for_edit);
+        let read = self.model.item().rows().filter(|_| fresh);
+        let theirs = read.and_then(base_for_edit);
+        let raw = read.and_then(DraftFields::of);
         let Some(session) = &self.edit.session else {
             return;
         };
@@ -177,12 +177,15 @@ impl ItemPane {
             return;
         };
         review.landed = false;
-        let Some(theirs) = theirs else {
+        let (Some(theirs), Some(raw)) = (theirs, raw) else {
             review.failed = true;
             cx.notify();
             return;
         };
         review.failed = false;
+        // M1: the session's own base, a restored draft's kept one included,
+        // holds no normalization-only difference from theirs.
+        let base = base_as_read(&base, &raw, &theirs.fields);
         review.model = Some(Review::new(base, theirs, mine));
         let focus = review.focus.clone();
         self.show_result(window, cx);

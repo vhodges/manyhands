@@ -1451,3 +1451,125 @@ fn done_follows_the_designs_order() {
         );
     }
 }
+
+// Part C fix 1, M2: true words on close.
+
+const DRAFT_TITLE: &str = "Close a tab with a draft";
+const UNSAVED_TITLE: &str = "Close a tab with unsaved changes";
+#[cfg(unix)]
+const KEEP_FAILED_WORDS: &str = "Your newest changes could not be kept as a draft on this \
+                                 computer; they are only in the editor. Keep draft tries again \
+                                 and closes the tab once they are kept. Discard deletes them.";
+
+/// M2: typed, written, then undone to the loaded text, the session is
+/// clean, and its draft is stored. Closing asks, as a stored draft does,
+/// in D2's words for a tab with a draft, not of unsaved changes; Keep
+/// draft keeps the draft.
+#[gpui_kit::test]
+async fn closing_a_clean_session_with_a_stored_draft_says_it_has_a_draft(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Undone", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let original = edit_text(&host, cx);
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    shell.keys("secondary-z", cx);
+    assert!(edit_text(&host, cx) == original, "undone");
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED), "clean");
+
+    shell.keys("secondary-w", cx);
+    assert!(
+        shell.present("close-draft-dialog", cx),
+        "a stored draft asks"
+    );
+    assert_eq!(
+        shell.label("close-draft-message", cx).as_deref(),
+        Some("Undone has a restored draft. Keep it to restore it later, or discard it.")
+    );
+    assert_eq!(
+        shell.label("close-draft-dialog", cx).as_deref(),
+        Some(DRAFT_TITLE)
+    );
+    shell.click("close-draft-keep-button", cx);
+    shell.run(cx);
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .is_empty(),
+        "Keep draft closes it"
+    );
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), id),
+        Some(Held::No)
+    ));
+}
+
+/// M2: while the draft's last write failed, the close dialog still offers
+/// Keep draft, which writes again; its words say the newest changes are
+/// only in the editor, not that Keep draft keeps them. A Keep draft whose
+/// write fails again keeps the tab; once the store can write, it keeps
+/// the newest text and closes.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn the_close_dialog_says_when_the_last_write_failed(cx: &mut TestAppContext) {
+    if superuser() {
+        return;
+    }
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Failing", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    let read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
+    type_at_end(&shell, &host, "y", cx);
+    cx.executor().advance_clock(IDLE);
+    shell.run(cx);
+    assert_eq!(status(&shell, cx), DraftState::Failed, "the write failed");
+
+    shell.keys("secondary-w", cx);
+    assert_eq!(
+        shell.label("close-draft-message", cx).as_deref(),
+        Some(KEEP_FAILED_WORDS)
+    );
+    assert_eq!(
+        shell.label("close-draft-dialog", cx).as_deref(),
+        Some(UNSAVED_TITLE)
+    );
+    assert!(
+        shell.present("close-draft-keep", cx),
+        "Keep draft writes again"
+    );
+    shell.click("close-draft-keep-button", cx);
+    shell.run(cx);
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .len(),
+        1,
+        "the write failed again: the tab stays"
+    );
+
+    drop(read_only);
+    shell.keys("secondary-w", cx);
+    shell.click("close-draft-keep-button", cx);
+    shell.run(cx);
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .is_empty(),
+        "kept, and closed"
+    );
+    let typed = stored_body(&shell.fixture.draft_store(), id).expect("stored");
+    assert!(typed.ends_with("xy"), "the newest text");
+}

@@ -69,7 +69,7 @@ pub(crate) use self::leave::{CloseThisTab, Leaving};
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 use self::restored::{Continuing, Then};
 
-use futures::channel::oneshot;
+use futures::{channel::oneshot, future::Shared};
 use gpui_kit::{
     AnyElement, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
     Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
@@ -226,6 +226,13 @@ pub(super) struct TabEdit {
     /// How many begins the tab has sent: the token a waiting Discard is
     /// answered by.
     begins: u64,
+    /// The latest begin, which resolves once it has landed: quitting waits
+    /// for a begin still in flight (Part C fix 1, I1).
+    begin_landing: Option<Shared<oneshot::Receiver<()>>>,
+    /// The attempt of the prepare whose answer was taken, or that Resume
+    /// or Retry sent again over: only a later attempt's answer is taken
+    /// (Part C fix 1, M5).
+    prepare_taken: u32,
     save: save::TabSave,
     /// Continue editing's draft, from the prepare until the editor opens
     /// on it (`restored`).
@@ -252,6 +259,8 @@ impl TabEdit {
             changed: None,
             discard_begun: None,
             begins: 0,
+            begin_landing: None,
+            prepare_taken: 0,
             save: save::TabSave::new(scope),
             continuing: None,
             closing: false,

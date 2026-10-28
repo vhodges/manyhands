@@ -28,6 +28,7 @@ use crate::desktop::{
     },
     services::Services,
 };
+use futures::{channel::oneshot, future::Shared};
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Hsla,
     InteractiveElement, IntoElement, ParentElement, Role, ScrollHandle, StatefulInteractiveElement,
@@ -294,10 +295,48 @@ impl TabContent {
         }
     }
 
-    pub(super) fn close_repository(&mut self, root: &str) {
-        for id in self.tabs.close_repository(root) {
-            self.forget(id);
+    /// Closes every tab of `root`. With `keep_unkept`, a tab whose edit
+    /// session holds unsaved text that no draft holds stays open, for its
+    /// own close to ask (Part C fix 1, I1).
+    pub(super) fn close_repository(&mut self, root: &str, keep_unkept: bool, cx: &App) {
+        if !keep_unkept {
+            for id in self.tabs.close_repository(root) {
+                self.forget(id);
+            }
+            return;
         }
+        for id in self.tabs.of_repository(root) {
+            let kept = self
+                .panes
+                .get(&id)
+                .is_some_and(|pane| pane.read(cx).unkept_edit(cx));
+            if !kept && self.tabs.close(id) {
+                self.forget(id);
+            }
+        }
+    }
+
+    /// The tabs whose edit session holds unsaved text that no draft holds,
+    /// in strip order (Part C fix 1, I1).
+    pub(super) fn unkept(&self, cx: &App) -> Vec<TabId> {
+        self.tabs
+            .tabs()
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| {
+                self.panes
+                    .get(id)
+                    .is_some_and(|pane| pane.read(cx).unkept_edit(cx))
+            })
+            .collect()
+    }
+
+    /// Each tab's begin still in flight, which resolves once it has landed.
+    pub(super) fn begins_in_flight(&self, cx: &App) -> Vec<Shared<oneshot::Receiver<()>>> {
+        self.panes
+            .values()
+            .filter_map(|pane| pane.read(cx).begin_in_flight())
+            .collect()
     }
 
     pub(super) fn step(&mut self, step: isize) -> Option<TabId> {

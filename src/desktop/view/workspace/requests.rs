@@ -60,7 +60,13 @@ impl Workspace {
             return;
         }
         for root in &changed.removed {
-            self.close_repository(root, cx);
+            // The user's confirmation said which tabs close (Part C fix 1,
+            // I1); a removal found already done was not confirmed.
+            if changed.confirmed.contains(root) {
+                self.close_repository(root, cx);
+            } else {
+                self.drop_repository(root, cx);
+            }
             if self.navigation.forget(root) {
                 self.clear_lists(cx);
             }

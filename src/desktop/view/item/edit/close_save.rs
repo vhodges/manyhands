@@ -33,6 +33,7 @@ use super::{
     restored::Then,
 };
 use crate::desktop::{
+    model::drafts::RecoveryState,
     model::edit::save_state::{
         CHANGED_OUTSIDE, CHECK_CURRENT_VERSION, CHECKPOINT_FAILED, SAVE_REFUSED,
         SAVED_INDEX_PENDING, SaveState, save_state,
@@ -46,6 +47,10 @@ use crate::desktop::{
 
 impl ItemPane {
     /// Asks before this tab closes with its edit session's unsaved work.
+    /// A clean session whose draft is stored, or being stored, asks too, in
+    /// D2's words for a tab with a draft: it has no unsaved changes (Part C
+    /// fix 1, M2). While the draft's last write failed, the words say Keep
+    /// draft tries again.
     pub(in crate::desktop::view) fn ask_to_close(
         &mut self,
         window: &mut Window,
@@ -53,14 +58,28 @@ impl ItemPane {
     ) {
         let pane = cx.entity().downgrade();
         let (offers, note) = self.close_readers(cx);
-        close_draft::open(
-            Ask::session(offers, note),
-            window,
-            cx,
-            move |choice, _, cx| {
-                let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
-            },
-        );
+        let ask = if self.edit_dirty(cx) || self.session_kept() {
+            let reading = pane.clone();
+            let failed = Rc::new(move |cx: &App| {
+                reading
+                    .upgrade()
+                    .is_some_and(|pane| pane.read(cx).last_write_failed(cx))
+            });
+            Ask::session(offers, note, failed)
+        } else {
+            Ask::restored(&self.tab_title(), offers, note)
+        };
+        close_draft::open(ask, window, cx, move |choice, _, cx| {
+            let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
+        });
+    }
+
+    /// Whether the last write of the session's draft failed: its newest
+    /// text is the editor's only.
+    fn last_write_failed(&self, cx: &App) -> bool {
+        self.live_draft(cx)
+            .and_then(|id| self.services.drafts().read(cx).recovery_state(id))
+            .is_some_and(|state| matches!(state, RecoveryState::Failed(_)))
     }
 
     /// What this tab's close dialog offers and says, read as each frame is

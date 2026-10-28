@@ -8,8 +8,10 @@
 //!   draft where a draft is stored, waiting while one is being stored;
 //!   Save while dirty and nothing saves (Task 18); Discard and Cancel
 //!   always; Keep draft and Discard waiting while a save is in flight. The
-//!   message follows what is offered. A clean tab with no draft closes at
-//!   once. Keep draft closes the tab once the draft is written and let go
+//!   message follows what is offered, and says while the draft's last
+//!   write failed that Keep draft tries again; a clean session whose draft
+//!   is stored asks in D2's words for a tab with a draft (Part C fix 1,
+//!   M2). A clean tab with no draft closes at once. Keep draft closes the tab once the draft is written and let go
 //!   of; a failed write keeps the tab, with the failure in the toolbar.
 //!   Discard closes it once the draft is deleted; a failed discard keeps it
 //!   open and says so, the draft let go of and listed again.
@@ -34,7 +36,9 @@ use manyhands::drafts::{DraftErrorKind, DraftId};
 
 use super::DraftLink;
 use crate::desktop::{
-    model::edit::Phase, services::drafts::SessionDiscarded, view::item::ItemPane,
+    model::{edit::Phase, tabs::TabKey},
+    services::{drafts::SessionDiscarded, unkept::Unkept},
+    view::item::ItemPane,
 };
 
 /// What closing an item tab asks (design, Done and leaving: Closing the
@@ -86,6 +90,29 @@ impl ItemPane {
     /// whether or not a draft is stored (design, Done and leaving).
     pub(in crate::desktop::view) fn unsaved_edit(&self, cx: &App) -> bool {
         self.edit_dirty(cx)
+    }
+
+    /// Whether the edit session holds unsaved text that no draft holds:
+    /// with crash recovery off, after a begin that failed, while one is
+    /// still in flight, or once D2 has ended the draft and newer text waits
+    /// (Part C fix 1, I1). Quitting asks first; a repository's removal says
+    /// so, and a repository that leaves the list keeps the tab.
+    pub(in crate::desktop::view) fn unkept_edit(&self, cx: &App) -> bool {
+        self.edit_dirty(cx) && self.live_draft(cx).is_none()
+    }
+
+    /// Tells the window's services, for as long as the tab lives, whether
+    /// its edit session holds unsaved text that no draft holds: a
+    /// repository's removal counts its tabs that do.
+    pub(in crate::desktop::view::item) fn watch_unkept(&self, cx: &mut Context<Self>) {
+        let TabKey::Item { repo, .. } = self.tab_key() else {
+            return;
+        };
+        let pane = cx.weak_entity();
+        let unkept: Unkept =
+            Box::new(move |cx: &App| pane.upgrade().map(|pane| pane.read(cx).unkept_edit(cx)));
+        let services = self.services.unkept().clone();
+        services.update(cx, |tabs, _| tabs.watch(repo, unkept));
     }
 
     /// Keep draft: offered while a draft of the session is stored, and

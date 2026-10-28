@@ -609,3 +609,53 @@ async fn e_with_a_stored_draft_takes_the_restored_draft_route(cx: &mut TestAppCo
     assert_eq!(prepares(&shell, cx).len(), 1, "then prepared");
     assert!(edit_text(&host, cx) == "Draft body", "the draft's text");
 }
+
+/// Part C fix 1, M3: a stored draft of the item appears while a clean
+/// session edits, here another process's. D2's banner says it is kept,
+/// with no Restore above the live session, and Restore, pressed anyway,
+/// claims nothing: no second session is attached to the tab, and no claim
+/// is left.
+#[gpui_kit::test]
+async fn restore_is_not_offered_above_a_live_edit_session(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Edited", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let text = edit_text(&host, cx);
+    let stored = store_draft(
+        &shell.fixture,
+        &root,
+        ItemDtoKind::Ticket,
+        TICKET,
+        "Elsewhere",
+    );
+    registry(&shell, cx).update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+
+    assert!(
+        shell.present("draft-banner", cx),
+        "the banner says it is kept"
+    );
+    assert!(
+        !shell.present("draft-restore", cx),
+        "no Restore over the editor"
+    );
+    pane(&shell, cx).update(cx, |pane, cx| pane.restore(stored, cx));
+    shell.run(cx);
+    assert!(
+        registry(&shell, cx).read_with(cx, |registry, _| registry.session(stored).is_none()),
+        "nothing is claimed"
+    );
+    assert_eq!(attached(&shell, &root, TICKET, cx), None, "nor attached");
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), stored),
+        Some(Held::No)
+    ));
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert!(edit_text(&host, cx) == text, "the session goes on");
+}

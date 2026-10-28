@@ -52,6 +52,13 @@ pub(crate) const SESSION_KEEP: &str = "Keep draft keeps your unsaved changes on 
 pub(crate) const SESSION_UNKEPT: &str = "Your unsaved changes are not kept as a draft on this \
                                          computer. Discard deletes them; Cancel goes back to the \
                                          tab.";
+/// Keep draft's words while the draft's last write failed: it writes
+/// again, and closes only once the newest text is stored (Part C fix 1,
+/// M2).
+pub(crate) const SESSION_KEEP_FAILED: &str = "Your newest changes could not be kept as a draft \
+                                              on this computer; they are only in the editor. \
+                                              Keep draft tries again and closes the tab once \
+                                              they are kept. Discard deletes them.";
 /// Done, with a draft that cannot be written (store unavailable, or the
 /// write failed).
 pub(crate) const NOT_KEPT_TITLE: &str = "Changes not kept";
@@ -119,15 +126,20 @@ pub(crate) enum Message {
     Fixed(String),
     /// An edit session's close: Keep draft's words while it is offered,
     /// read with the offers as each frame is drawn.
-    Session,
+    /// It reads whether the draft's last write failed: Keep draft then
+    /// promises nothing the store has not done (Part C fix 1, M2).
+    Session(Read<bool>),
 }
 
 impl Message {
-    fn words(&self, offers: Offers) -> String {
+    fn words(&self, offers: Offers, cx: &App) -> String {
         match self {
             Self::Fixed(words) => words.clone(),
-            Self::Session if offers.keep.is_some() => SESSION_KEEP.to_owned(),
-            Self::Session => SESSION_UNKEPT.to_owned(),
+            Self::Session(failed) if offers.keep.is_some() && failed(cx) => {
+                SESSION_KEEP_FAILED.to_owned()
+            }
+            Self::Session(_) if offers.keep.is_some() => SESSION_KEEP.to_owned(),
+            Self::Session(_) => SESSION_UNKEPT.to_owned(),
         }
     }
 }
@@ -166,12 +178,17 @@ impl Ask {
 
     /// Closing a tab whose edit session has unsaved work: Keep draft where
     /// a draft is stored or being stored, Save while dirty and nothing
-    /// saves, Discard and Cancel.
-    pub(crate) fn session(offers: Read<Offers>, note: Read<Option<SaveNote>>) -> Self {
+    /// saves, Discard and Cancel. `failed` reads whether the draft's last
+    /// write failed.
+    pub(crate) fn session(
+        offers: Read<Offers>,
+        note: Read<Option<SaveNote>>,
+        failed: Read<bool>,
+    ) -> Self {
         Self {
             id: "close-draft",
             title: SESSION_TITLE,
-            message: Message::Session,
+            message: Message::Session(failed),
             offers,
             note,
             stays: true,
@@ -272,7 +289,7 @@ fn body(
     let muted = cx.theme().muted_foreground;
     let prefix = ask.id;
     let default = default_choice(offers);
-    let message = ask.message.words(offers);
+    let message = ask.message.words(offers, cx);
     let button = |part: &str, label: &'static str, choice: CloseWithDraft, enabled: bool| {
         let id = format!("{prefix}-{part}");
         let choose = choose.clone();
@@ -335,6 +352,8 @@ fn body(
     v_flex()
         .id(ElementId::from(format!("{prefix}-dialog")))
         .test_support()
+        // Named by its title, which the Kit draws above it.
+        .aria_label(ask.title)
         .gap_2()
         .child(
             div()

@@ -34,7 +34,9 @@
 //! prepare, since that prepare), or still queued or running once the store
 //! has answered, stops the release; and the worker never sends a context
 //! request again once a later one of its item would undo it
-//! (`Intent::undone_by`).
+//! (`Intent::undone_by`). A later leave, or a discard of the item that
+//! lands, while a check waits re-arms it from the newer of the two, with a
+//! listing taken again (Part C fix 1, M4).
 //!
 //! The release goes on the user lane, after what the user asked for before
 //! it, and counts as released as it is sent: a refusal is shown in the
@@ -131,16 +133,25 @@ impl Releases {
 
     /// Condition 2: the tab of `key`'s item left clean, or a draft of the
     /// item was discarded. Only a context this process made goes on to the
-    /// store's listing; one already waiting for it is not listed twice.
+    /// store's listing. A check already waiting for it is re-armed (Part C
+    /// fix 1, M4).
     pub(crate) fn leave(&mut self, key: ContextKey, cx: &mut Context<Self>) {
         let since = self.worker.newest();
         self.leave_since(key, since, cx);
     }
 
     /// `leave`, with a prepare of the item sent after `since` stopping the
-    /// release (R-78).
+    /// release (R-78). A check of the item already waiting takes the newer
+    /// listing and the newer mark (Part C fix 1, M4): a later leave, or a
+    /// discard of the item that has landed, follows what the first leave's
+    /// mark or listing would count against it (a prepare that a second
+    /// leave followed, a draft its own discard has since deleted), and the
+    /// clean context would otherwise be kept for good. The listing is taken
+    /// again, so the one that decides is newer than both. `decide` still
+    /// stops a release for a prepare in flight, a tab that edits the item
+    /// and a save in flight, and the listing for any draft of the item.
     fn leave_since(&mut self, key: ContextKey, since: SendMark, cx: &mut Context<Self>) {
-        if self.checks.contains_key(&key) || self.worker.quitting() || !self.made_here(&key, cx) {
+        if self.worker.quitting() || !self.made_here(&key, cx) {
             return;
         }
         let Some(drafts) = self.drafts.upgrade() else {
@@ -150,6 +161,10 @@ impl Releases {
         if drafts.read(cx).unavailable().is_some() {
             return;
         }
+        let since = self
+            .checks
+            .get(&key)
+            .map_or(since, |waiting| waiting.since.max(since));
         let landed = drafts.update(cx, |registry, cx| {
             registry.reload_listing(cx);
             registry.listings_landed()

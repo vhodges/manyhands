@@ -217,6 +217,91 @@ impl Review {
     }
 }
 
+/// The base the review compares, normalized as theirs is (Part C fix 1,
+/// M1; contract 8). A base taken from the file as it was, or kept from the
+/// library's read after a save (fact 81), holds values the read's
+/// normalization changes. Each field of `base` that equals `raw`'s, the
+/// read as the file has it, takes `theirs`' value, the read normalized as
+/// a base holds it (R-11, R-72), so that only a change of the item reads
+/// as theirs. It is the dual comparison `adopted_base` applies to the
+/// whole base. Fields of another kind of item are left as they are.
+pub(crate) fn base_as_read(
+    base: &DraftFields,
+    raw: &DraftFields,
+    theirs: &DraftFields,
+) -> DraftFields {
+    fn same<T: PartialEq + Clone>(value: &mut T, raw: &T, theirs: &T) {
+        if value == raw {
+            value.clone_from(theirs);
+        }
+    }
+    let mut normalized = base.clone();
+    match (&mut normalized, raw, theirs) {
+        (
+            DraftFields::Document { title, body },
+            DraftFields::Document {
+                title: raw_title,
+                body: raw_body,
+            },
+            DraftFields::Document {
+                title: their_title,
+                body: their_body,
+            },
+        ) => {
+            same(title, raw_title, their_title);
+            same(body, raw_body, their_body);
+        }
+        (
+            DraftFields::Ticket {
+                title,
+                ticket_type,
+                status,
+                project,
+                team,
+                deps,
+                parent,
+                body,
+            },
+            DraftFields::Ticket {
+                title: raw_title,
+                ticket_type: raw_type,
+                status: raw_status,
+                project: raw_project,
+                team: raw_team,
+                deps: raw_deps,
+                parent: raw_parent,
+                body: raw_body,
+            },
+            DraftFields::Ticket {
+                title: their_title,
+                ticket_type: their_type,
+                status: their_status,
+                project: their_project,
+                team: their_team,
+                deps: their_deps,
+                parent: their_parent,
+                body: their_body,
+            },
+        ) => {
+            same(title, raw_title, their_title);
+            same(ticket_type, raw_type, their_type);
+            same(status, raw_status, their_status);
+            same(project, raw_project, their_project);
+            same(team, raw_team, their_team);
+            same(deps, raw_deps, their_deps);
+            same(parent, raw_parent, their_parent);
+            same(body, raw_body, their_body);
+        }
+        (
+            DraftFields::Comment { body },
+            DraftFields::Comment { body: raw_body },
+            DraftFields::Comment { body: their_body },
+        ) => same(body, raw_body, their_body),
+        _ => {}
+    }
+    normalized
+}
+
 /// The choice a field starts with: theirs for their change alone, mine for
 /// mine, and mine where both sides hold the same; none where both changed
 /// it differently.

@@ -1300,6 +1300,65 @@ async fn a_new_session_is_neither_saved_nor_kept(cx: &mut TestAppContext) {
     assert!(!saved && !kept);
 }
 
+/// Part C fix 1, M5: Resume of a prepare whose hand-off is owed takes only
+/// its own answer. Until the worker's `Queued` reaches the request model,
+/// the model still holds the earlier `discovery_pending`; a
+/// pending-operations list read that lands meanwhile notifies it, and the
+/// tab stays Preparing, then opens the editor on the new answer.
+#[gpui_kit::test]
+async fn resume_takes_only_its_own_answer(cx: &mut TestAppContext) {
+    use crate::desktop::services::ReadResult;
+
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Resumed", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            manyhands::repository::FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap(),
+    );
+    shell.click("item-edit", cx);
+    let request = prepares(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(
+        code(&shell, request, cx),
+        Some(ResultCode::DiscoveryPending)
+    );
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+
+    // Resume, with nothing run after it: the worker's `Queued` waits in its
+    // channel.
+    shell.frame(cx, |window, cx| window.click("item-prepare-resume", cx));
+    let phase = |shell: &Shell, cx: &mut TestAppContext| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_phase())
+    };
+    assert_eq!(phase(&shell, cx), Phase::Preparing(request));
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let listed = ReadResult::Ok(service.list_operations(&repo).unwrap());
+    shell.operations(cx).update(cx, |operations, cx| {
+        let stamp = operations.load_pending(key(&root));
+        if operations.apply_pending(stamp, listed) {
+            cx.notify();
+        }
+    });
+    assert_eq!(
+        phase(&shell, cx),
+        Phase::Preparing(request),
+        "the earlier answer is not taken again"
+    );
+
+    until_editing(&shell, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert!(!shell.present("item-prepare-pending", cx));
+}
+
 /// Save, the session after a save, and the save states (Task 15).
 #[path = "edit_save_tests.rs"]
 mod save;
@@ -1319,3 +1378,8 @@ mod restored;
 /// The stale-edit review (Task 19).
 #[path = "review_tests.rs"]
 mod review;
+
+/// Quitting and repository removal with unsaved text no draft holds (Part
+/// C fix 1, I1).
+#[path = "edit_quit_tests.rs"]
+mod quit;

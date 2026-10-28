@@ -1419,3 +1419,102 @@ async fn discarding_a_restored_draft_releases_the_context_continue_editing_made(
         "discarded"
     );
 }
+
+// Part C fix 1, M4: a check waiting for the store's listing is re-armed by
+// a later leave or discard of its item.
+
+/// M4, Task 17's M5: Done leaves clean, and its check waits for the store's
+/// listing, held. Edit again sends a prepare after that leave, and Done
+/// leaves clean again, after the prepare. The context is released once.
+#[gpui_kit::test]
+async fn a_second_leave_after_a_prepare_releases_the_context_once(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Left twice", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    edit(&shell, cx).await;
+    assert!(made_here(&shell, &root, TICKET, cx));
+    let listing = shell.backend.hold_read(ReadKind::Drafts);
+    done(&shell, cx);
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "the first leave waits for the listing"
+    );
+
+    edit(&shell, cx).await;
+    assert_eq!(prepares(&shell, cx).len(), 2, "a prepare after the leave");
+    done(&shell, cx);
+    drop(listing);
+    let request = released(&shell, TICKET, cx).await;
+    assert_released(&shell, &root, TICKET, request, cx);
+    shell.run(cx);
+    assert_eq!(releases(&shell, TICKET, cx).len(), 1, "once");
+}
+
+/// M4, Task 19's N1: a clean Use these choices discards the session's
+/// draft, and the tab closes before that discard has landed: the tab's
+/// leave lists the store while the draft is still there. Once the discard
+/// lands, the context is released once. The review is a restored draft's,
+/// whose item was retitled on primary before the draft was continued, so
+/// the context Continue editing makes holds no one's commit.
+#[gpui_kit::test]
+async fn a_leave_before_a_clean_uses_discard_lands_releases_the_context_once(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Used clean", "");
+    fixture.refresh(&root);
+    let stored = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Draft body");
+    // Retitled on primary, its body as it was: no context is made.
+    let retitled = ticket_with_body(TICKET, "Theirs", "", "Body of Used clean.\n");
+    fixture.commit_file(&root, &ticket_path(TICKET), retitled.as_bytes());
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-banner-continue-button", cx);
+    let deadline = Instant::now() + WAIT;
+    while !shell.present("review-use", cx) {
+        assert!(Instant::now() < deadline, "the review did not open");
+        shell.run(cx);
+        cx.executor().timer(Duration::from_millis(10)).await;
+    }
+    assert!(
+        made_here(&shell, &root, TICKET, cx),
+        "Continue editing made it"
+    );
+    // Their body and their title: the choices leave nothing changed.
+    let body = shell
+        .rows("review-field", cx)
+        .iter()
+        .position(|field| field == "Body")
+        .expect("the review lists the body");
+    shell.click(("review-take-theirs", body), cx);
+
+    let discard = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.click("review-use", cx);
+    assert_eq!(
+        attached(&shell, &root, TICKET, cx),
+        None,
+        "clean: let go of"
+    );
+    shell.keys("secondary-w", cx);
+    assert_eq!(tab_count(&shell, cx), 0, "a clean tab closes at once");
+    shell.run(cx);
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "the draft is listed"
+    );
+
+    drop(discard);
+    let request = released(&shell, TICKET, cx).await;
+    assert_released(&shell, &root, TICKET, request, cx);
+    assert!(
+        held(&shell.fixture.draft_store(), stored).is_none(),
+        "discarded"
+    );
+    shell.run(cx);
+    assert_eq!(releases(&shell, TICKET, cx).len(), 1, "once");
+}

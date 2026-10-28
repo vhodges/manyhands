@@ -117,6 +117,12 @@ pub(crate) struct Changed {
     /// found already gone (ruling R-T13a): their tabs close and their
     /// selection goes (design, Repositories).
     pub removed: BTreeSet<RepoKey>,
+    /// Those of `removed` whose `repo remove` request the user confirmed
+    /// and the worker ran. A preview that found the registration gone was
+    /// never confirmed: a tab whose edit session holds unsaved text that no
+    /// draft holds stays open, as when a repository leaves the list (Part C
+    /// fix 1, I1).
+    pub confirmed: BTreeSet<RepoKey>,
 }
 
 impl Changed {
@@ -209,6 +215,7 @@ impl Operations {
                 if let Some((root, items, removed)) = root {
                     if removed {
                         self.changed.removed.insert(root.clone());
+                        self.changed.confirmed.insert(root.clone());
                         self.removals += 1;
                     }
                     self.changed.insert(root, items);

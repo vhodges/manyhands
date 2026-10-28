@@ -1285,3 +1285,95 @@ async fn using_the_choices_writes_the_draft_file(cx: &mut TestAppContext) {
         "its base is the current version"
     );
 }
+
+// Part C fix 1, M1: the review's base, normalized against the read.
+
+/// CRLF line endings, which the editor's load normalizes (N-1).
+const CRLF_BODY: &str = "First line\r\nSecond line\r\n";
+
+/// M1 (a): a restored draft whose stored base holds the body as the file
+/// has it, with CRLF line endings; mine edits the body, and another actor
+/// retitles, leaving the body's bytes as they were. Normalization is no
+/// change of theirs: the body keeps mine with no choice needed, the title
+/// takes theirs, and Use goes on at once.
+#[gpui_kit::test]
+async fn a_restored_drafts_unnormalized_base_body_is_no_change_of_theirs(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let source = ticket_with_body(TICKET, "Mine", "", CRLF_BODY);
+    fixture.commit_file(&root, &ticket_path(TICKET), source.as_bytes());
+    fixture.refresh(&root);
+    let stored = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "My body.\n");
+    let base = fixture
+        .draft_store()
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|listing| listing.id == stored)
+        .and_then(|listing| match listing.entry {
+            manyhands::drafts::Entry::Draft(draft) => draft.base,
+            manyhands::drafts::Entry::Unreadable(_) => None,
+        })
+        .expect("the stored draft's base");
+    assert!(
+        body_of(&base.fields) == CRLF_BODY,
+        "the base's body as filed"
+    );
+    let retitled = ticket_with_body(TICKET, "Theirs", "", CRLF_BODY);
+    fixture.commit_file(&root, &ticket_path(TICKET), retitled.as_bytes());
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root, TICKET), cx);
+
+    shell.click("draft-banner-continue-button", cx);
+    until_review(&shell, cx).await;
+    assert_eq!(state(&shell, "Body", cx).as_deref(), Some(KEEPING_MINE));
+    assert_eq!(state(&shell, "Title", cx).as_deref(), Some(TAKING_THEIRS));
+    shell.click("review-use", cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing, "no choice was needed");
+    let host = pane(&shell, cx)
+        .read_with(cx, |pane, _| pane.edit_host())
+        .expect("the edit editor");
+    assert!(edit_text(&host, cx) == "My body.\n", "mine");
+}
+
+/// M1 (b): a body of fact 81's shape, saved in the session, is held by the
+/// session's base as the file has it, which a second load would change.
+/// Another actor retitles, and the user types: the body is not theirs to
+/// change, so the review neither takes theirs nor asks for a choice, and
+/// Use leaves the edit editor's body byte for byte.
+#[gpui_kit::test]
+async fn a_fact_81_body_saved_in_the_session_is_no_change_of_theirs(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        let source = ticket_with_body(TICKET, "Mine", "", FACT_81);
+        fixture.commit_file(root, &ticket_path(TICKET), source.as_bytes());
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let saved = edit_text(&host, cx);
+    assert!(load(&saved) != saved, "a second load would change it");
+    let request = save(&shell, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        body_of(&session_base(&shell, cx).fields) == saved,
+        "the base holds the body as saved"
+    );
+
+    shell.fixture.save_ticket(&root, TICKET, "Theirs");
+    type_at_end(&shell, &host, "y", cx);
+    let mine = edit_text(&host, cx);
+    stale_save(&shell, cx).await;
+    let body = state(&shell, "Body", cx);
+    assert_ne!(body.as_deref(), Some(TAKING_THEIRS));
+    assert_ne!(body.as_deref(), Some(CHOOSE_ONE));
+    assert_eq!(body.as_deref(), Some(KEEPING_MINE));
+    assert_eq!(state(&shell, "Title", cx).as_deref(), Some(TAKING_THEIRS));
+    shell.click("review-use", cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert!(edit_text(&host, cx) == mine, "byte for byte");
+}

@@ -44,6 +44,7 @@ use crate::desktop::{
         KEY_STORE_UNAVAILABLE, Services,
         requests::{DesktopRequestId, Intent, Lane, NotBuilt, RequestState},
     },
+    view::quit::unkept_tabs,
 };
 
 pub(crate) const CONFIRM: &str = "Confirm";
@@ -62,6 +63,18 @@ pub(crate) const PINNED_KEY: &str = "Pinned key";
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
 /// A removal keeps the drafts of the repository's items (design, Tabs).
 pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay in Drafts.";
+
+/// A removal closes the repository's tabs, `count` of which hold unsaved
+/// text that no draft holds (Part C fix 1, I1): `None` when none do. The
+/// words name no item and no text.
+pub(crate) fn removing_closes(count: usize) -> Option<String> {
+    let them = match count {
+        0 => return None,
+        1 => "it",
+        _ => "them",
+    };
+    Some(format!("{}. Removing closes {them}.", unkept_tabs(count)))
+}
 
 /// The answers that mean the preview no longer stands: the dialog offers
 /// Prepare again.
@@ -624,7 +637,22 @@ impl ConfirmDialog {
         .into_any_element()
     }
 
-    fn preview_body(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+    /// A repository removal's tabs whose edit session holds unsaved text
+    /// that no draft holds, read as the dialog is drawn (Part C fix 1, I1):
+    /// the confirmation says they close.
+    fn unkept_tabs(&self, cx: &mut Context<Self>) -> usize {
+        let Intent::RepoRemove { root } = &self.intent else {
+            return 0;
+        };
+        let Some(root) = root.to_str() else {
+            return 0;
+        };
+        self.services
+            .unkept()
+            .update(cx, |tabs, cx| tabs.count(root, cx))
+    }
+
+    fn preview_body(&self, unkept: usize, cx: &App) -> Option<impl IntoElement + use<>> {
         let (preview, _) = self.preview.as_ref()?;
         let muted = cx.theme().muted_foreground;
         let note = match &preview.details {
@@ -635,8 +663,12 @@ impl ConfirmDialog {
             }
             _ => None,
         };
-        let drafts = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_))
-            .then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
+        let removal = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_));
+        let drafts = removal.then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
+        let unkept = removal
+            .then(|| removing_closes(unkept))
+            .flatten()
+            .map(|words| text("confirm-unkept-note", words).text_sm());
         Some(
             v_flex()
                 .gap_1()
@@ -659,6 +691,7 @@ impl ConfirmDialog {
                 )
                 .children(note)
                 .children(drafts)
+                .children(unkept)
                 .child(
                     text(
                         "confirm-expires",
@@ -728,7 +761,8 @@ impl Render for ConfirmDialog {
             }
             Phase::Ready | Phase::Submitted => {
                 let submitted = matches!(self.phase, Phase::Submitted);
-                body = body.children(self.preview_body(cx));
+                let unkept = self.unkept_tabs(cx);
+                body = body.children(self.preview_body(unkept, cx));
                 if submitted {
                     body = body.child(text("confirm-state", SUBMITTED).text_sm());
                 }
