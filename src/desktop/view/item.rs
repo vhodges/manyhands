@@ -167,6 +167,7 @@ impl ItemPane {
             pane.follow_registry(cx);
             pane.follow_done(cx);
             pane.follow_close_save(cx);
+            pane.follow_continuing(cx);
             cx.notify()
         });
         let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {

@@ -7,11 +7,16 @@
 //!   never-created item's and one whose save runs are left alone: their
 //!   text is the user's (Task 16 fix round 2's rule, for every read);
 //! - a clean one takes a read whose observation differs from its base's.
-//!   It reloads only a body that differs from what it holds, keeping its
-//!   caret, clamped (`EditorHost::reload_clean`); an equal body is not
-//!   loaded again, so undo is kept. A verified base becomes the read's, so
-//!   the session stays clean on it; an unverified one stays, and the next
-//!   Save opens the review (R-36).
+//!   Clean is the session's, against its saved copy: the editor's own flag
+//!   can still read dirty after a save that newer typing outlived, and it
+//!   does not decide (Task 18 fix 1). The editor loads only a body that
+//!   differs from what it holds, keeping its caret, clamped
+//!   (`EditorHost::reload_read`); an equal body is not loaded again, so
+//!   undo is kept. Only once the editor holds the read's body does a
+//!   verified base become the read's, so the session stays clean on it
+//!   and a later Save never sends our older text over another actor's
+//!   token (contract 7). An unverified base stays, and the next Save opens
+//!   the review (R-36).
 
 use gpui_kit::Context;
 
@@ -47,13 +52,13 @@ impl ItemPane {
         let Some(session) = self.edit.session.as_mut() else {
             return;
         };
-        if session.base.observation.is_some() {
+        let holds = session
+            .host
+            .update(cx, |host, cx| host.reload_read(&body, cx));
+        if holds && session.base.observation.is_some() {
             session.meta = base.fields.clone();
             session.base = base;
         }
-        session
-            .host
-            .update(cx, |host, cx| host.reload_clean(&body, cx));
         cx.notify();
     }
 }

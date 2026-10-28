@@ -1244,6 +1244,95 @@ async fn keep_draft_is_still_the_first_tab_stop_of_the_close_dialog(cx: &mut Tes
     assert!(!close_dialog_shown(&shell, cx));
 }
 
+/// The shown tab's close dialog's Save, as the dialog draws it.
+fn close_save_offered(shell: &Shell, cx: &mut TestAppContext) -> Option<Option<bool>> {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .map(|pane| pane.read(cx).close_offers(cx).save)
+    })
+}
+
+/// I2 (Task 18 fix 1): the close dialog's Save for a session kept after
+/// Done. It is dirty and nothing saves, so Save is enabled; it saves the
+/// kept text, and the tab closes once the draft retires.
+#[gpui_kit::test]
+async fn save_in_the_close_dialog_saves_a_kept_session_then_closes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.click("item-done", cx);
+    until_drawn(&shell, cx, "the session kept", |shell, cx| {
+        shell.label("item-pill", cx).as_deref() == Some("Viewing \u{b7} unsaved changes kept")
+    })
+    .await;
+
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    assert_eq!(
+        close_save_offered(&shell, cx),
+        Some(Some(true)),
+        "Save is enabled"
+    );
+    assert!(!shell.present("close-draft-save-note", cx));
+    shell.click("close-draft-save-button", cx);
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx) == ["One, unsaved"]
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx), "the dialog closed with it");
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+    assert_eq!(picked(&shell, cx, is_save).len(), 1, "one save");
+}
+
+/// M1 (Task 18 fix 1): Cancel in D2's dialog while its Save is still in
+/// Continue editing's steps. The editor opens once the prepare lands, on
+/// the draft, and nothing is saved: a write the user cancelled never
+/// happens.
+#[gpui_kit::test]
+async fn cancelling_the_close_dialogs_save_in_its_steps_saves_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, draft } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("close-draft-save-button", cx);
+    prepare.wait_reached();
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!close_dialog_shown(&shell, cx), "Cancel closes the dialog");
+    prepare.release();
+    until_drawn(&shell, cx, "the edit editor", |shell, cx| {
+        shell.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .item_pane()
+                .is_some_and(|pane| pane.read(cx).edit_host().is_some())
+        })
+    })
+    .await;
+    for _ in 0..3 {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+    }
+    let host = shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .and_then(|pane| pane.read(cx).edit_host())
+            .expect("editing")
+    });
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == "Draft body");
+    assert!(picked(&shell, cx, is_save).is_empty(), "nothing is saved");
+    assert!(body(&shell, &a, ONE).as_deref() == Some("Body of One.\n"));
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"], "the tab stays");
+    let tab = TabKey::for_target(&ticket(&a, ONE));
+    assert_eq!(
+        drafts(&shell, cx).read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(draft),
+        "with its draft"
+    );
+}
+
 const DOC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";
 const CODE: &str = "mh-vh-k9x2b";
 

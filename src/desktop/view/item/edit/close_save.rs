@@ -88,12 +88,15 @@ impl ItemPane {
 
     /// What the close dialog offers now. While a save, or the steps before
     /// one, run, Keep draft and Discard wait, so neither drops the save's
-    /// record or races its commit, and Save waits too.
+    /// record or races its commit, and Save waits too. D2's dialog's Save
+    /// is enabled as the section's is, while Continue editing can start
+    /// (Task 18 fix 1, M2).
     pub(in crate::desktop::view) fn close_offers(&self, cx: &App) -> Offers {
         let busy = self.close_busy(cx);
         if self.edit.session.is_none() {
             // D2's dialog of a draft restored here.
-            let save = (!self.continues_new_item(cx)).then(|| !busy && self.restored_unsaved(cx));
+            let save = (!self.continues_new_item(cx))
+                .then(|| !busy && self.edit_available(cx) && self.restored_unsaved(cx));
             return Offers {
                 keep: Some(!busy),
                 save,
@@ -102,9 +105,19 @@ impl ItemPane {
         }
         Offers {
             keep: self.keep_offer(cx).map(|ready| ready && !busy),
-            save: Some(!busy && self.save_offered(cx)),
+            save: Some(!busy && self.close_save_offered(cx)),
             discard: !busy,
         }
+    }
+
+    /// The session's Save in the close dialog: the header's, or, for a
+    /// session kept after Done, while it is dirty and nothing saves (Task
+    /// 18 fix 1, I2: the design's rule covers a kept draft).
+    fn close_save_offered(&self, cx: &App) -> bool {
+        if self.session_kept() {
+            return self.edit.save.run.is_none() && !self.store_settling(cx) && self.edit_dirty(cx);
+        }
+        self.save_offered(cx)
     }
 
     /// Whether a save is in flight, or Continue editing's steps before one
@@ -123,6 +136,11 @@ impl ItemPane {
     /// tab: `None` until it is pressed, and once the dialog has nothing
     /// to say of it.
     pub(in crate::desktop::view) fn close_note(&self, cx: &App) -> Option<SaveNote> {
+        // A prepare waiting for Resume is why D2's Save waits (M2): Resume
+        // is the tab's banner's, which Cancel returns to.
+        if matches!(self.edit.stopped, Some(Stopped::Pending(_))) {
+            return Some(SaveNote::says(PREPARE_PENDING));
+        }
         if !self.edit.closing {
             return None;
         }
@@ -173,7 +191,9 @@ impl ItemPane {
     }
 
     /// What the close dialog chose. Cancel, Keep draft and Discard end the
-    /// close's save; Save and Retry keep the dialog open.
+    /// close's save, and a Save still in Continue editing's steps goes on
+    /// as Continue editing alone: a write the user cancelled never happens
+    /// (Task 18 fix 1, M1). Save and Retry keep the dialog open.
     pub(in crate::desktop::view) fn close_chosen(
         &mut self,
         choice: CloseWithDraft,
@@ -181,6 +201,7 @@ impl ItemPane {
     ) {
         if !matches!(choice, CloseWithDraft::Save | CloseWithDraft::Retry) {
             self.edit.closing = false;
+            self.continue_without_saving();
         }
         match choice {
             CloseWithDraft::Cancel => {}
@@ -200,11 +221,13 @@ impl ItemPane {
         cx.notify();
     }
 
-    /// The close dialog's Save: the session saves, or a restored draft is
-    /// continued, then saved (`restored`).
+    /// The close dialog's Save: the session saves, a session kept after
+    /// Done editing again first, focus left where it is (I2); or a
+    /// restored draft is continued, then saved (`restored`).
     fn close_save(&mut self, cx: &mut Context<Self>) {
         self.edit.closing = true;
         if self.edit.session.is_some() {
+            self.unkeep(cx);
             self.start_save(cx);
         } else {
             self.continue_requested(Then::Save, cx);

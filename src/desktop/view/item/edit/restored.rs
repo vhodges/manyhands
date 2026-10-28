@@ -149,6 +149,31 @@ impl ItemPane {
         }
     }
 
+    /// A close dialog's Save still in Continue editing's steps was
+    /// cancelled, or the dialog closed otherwise: the editor still opens on
+    /// the draft, but nothing is saved (Task 18 fix 1, M1).
+    pub(in crate::desktop::view) fn continue_without_saving(&mut self) {
+        if let Some(continuing) = &mut self.edit.continuing {
+            continuing.then = Then::Edit;
+        }
+    }
+
+    /// The registry changed: a continued draft that has ended (discarded
+    /// elsewhere, or let go of) is no longer continued, so a later Retry
+    /// of its prepare opens the item as Edit does (M1).
+    pub(in crate::desktop::view::item) fn follow_continuing(&mut self, cx: &App) {
+        let ended = self.edit.continuing.as_ref().is_some_and(|continuing| {
+            self.services
+                .drafts()
+                .read(cx)
+                .current_id(continuing.draft)
+                .is_none()
+        });
+        if ended {
+            self.edit.continuing = None;
+        }
+    }
+
     /// Save from D2's restored section: Continue editing's steps, then the
     /// save.
     fn save_restored(&mut self, cx: &mut Context<Self>) {

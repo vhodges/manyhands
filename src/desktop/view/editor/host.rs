@@ -18,7 +18,8 @@
 //!   else (R-69); `rebase` puts the review's result in exactly (R-18,
 //!   R-79); `put_exact` puts a restored draft's text in exactly over the
 //!   baseline (R-79); `reload_clean` loads a new body read into a clean
-//!   editor (R-19).
+//!   editor (R-19), and `reload_read` into one its tab found clean, its
+//!   own flag aside (contract 6).
 //! - **Blocks** (R-66). In rich text the caret steps over math and
 //!   property blocks as in the read editor; Markdown edits them.
 //! - **Keys.** Tab and Shift-Tab indent and outdent; F6, Shift-F6 and the
@@ -252,6 +253,30 @@ impl EditorHost {
         });
         self.baseline = self.text(cx);
         self.last = self.baseline.clone();
+    }
+
+    /// R-19, contract 6 (Task 18 fix 1): the session, which its tab has
+    /// found clean, takes `body`, a newer body read from the repository.
+    /// The editor's own flag does not decide: its baseline moves only when
+    /// a save leaves the editor holding what was sent. A text the editor
+    /// already holds as `body` loads to stays, with its undo history (R-79);
+    /// otherwise `body` is loaded once, with the caret kept, clamped. The
+    /// baseline becomes the text either way. True when the editor now
+    /// holds `body` as loaded, so the tab may adopt the read's base.
+    pub(crate) fn reload_read(&mut self, body: &str, cx: &mut Context<Self>) -> bool {
+        let loaded = load(body);
+        if self.text(cx) != loaded {
+            let cursor = self.editor.read(cx).cursor();
+            let text = crlf_to_lf(body);
+            self.editor.update(cx, |editor, cx| {
+                editor.set_text(text, cx);
+                editor.set_cursor(cursor, cx);
+            });
+        }
+        self.baseline = self.text(cx);
+        self.last = self.baseline.clone();
+        self.update_dirty(cx);
+        self.baseline == loaded
     }
 
     /// The text style the editor was last painted in.

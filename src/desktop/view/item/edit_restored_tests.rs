@@ -515,3 +515,97 @@ async fn a_clean_editor_reloads_only_on_a_newer_body_and_keeps_its_cursor(cx: &m
         "clean on it"
     );
 }
+
+/// I1 (Task 18 fix 1): with crash recovery off, a save that newer typing
+/// outlived leaves the editor's own flag apart from the session's. The
+/// typing is deleted, so the session is clean on the saved copy, while the
+/// editor's flag still reads dirty. Another actor then commits, and a tab
+/// read lands: the editor takes their body, the session reads clean on
+/// their token, and Save has nothing to send, so their change is never
+/// overwritten without the review (contracts 7 and 8).
+#[gpui_kit::test]
+async fn a_late_read_reloads_a_clean_editor_whatever_its_own_flag_says(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    // The drafts folder is a file: the store does not open.
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Recovery off", "");
+    fixture.refresh(&root);
+    std::fs::write(fixture.data_dir().join("drafts"), b"not a folder").unwrap();
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("item-edit", cx);
+    shell.click("recovery-off-continue", cx);
+    let host = until_editing(&shell, cx).await;
+    let original = edit_text(&host, cx);
+    type_at_end(&shell, &host, "a", cx);
+
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click("item-save", cx);
+    held.wait_reached();
+    shell.run(cx);
+    type_at_end(&shell, &host, "b", cx);
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    let saved = format!("{original}a");
+    assert!(shown(&shell, &root, TICKET).body.as_deref() == Some(saved.as_str()));
+
+    // The typed "b" deleted: the session is clean on the saved copy, while
+    // the editor's own baseline is still the text before the save.
+    let editor = host_editor(&host, cx);
+    let end = text(&editor, cx).len();
+    focus_at(&shell, &editor, end, cx);
+    shell.keys("backspace", cx);
+    assert!(edit_text(&host, cx) == saved);
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED), "clean");
+    assert!(
+        host.read_with(cx, |host, _| host.is_dirty()),
+        "the editor's own flag disagrees"
+    );
+
+    theirs(&shell, &root, TICKET, "Recovery off", "Their body.\n");
+    read_again(&shell, cx);
+    let item = shown(&shell, &root, TICKET);
+    assert!(
+        edit_text(&host, cx) == "Their body.\n",
+        "the editor holds theirs"
+    );
+    assert_eq!(
+        pill(&shell, cx).as_deref(),
+        Some(EDITING_SAVED),
+        "clean on it"
+    );
+    assert_eq!(session_base(&shell, cx).observation, item.observation);
+    let sent = saves(&shell, cx).len();
+    shell.click("item-save", cx);
+    assert_eq!(saves(&shell, cx).len(), sent, "Save has nothing to send");
+    assert!(
+        shown(&shell, &root, TICKET).body.as_deref() == Some("Their body.\n"),
+        "their change stands"
+    );
+}
+
+/// M7 (Task 18 fix 1): `e` on the page, with a stored draft, takes the
+/// restored-draft route, not D2's Restore: the draft is claimed into the
+/// tab, then the context is prepared, and the editor opens on the draft's
+/// text.
+#[gpui_kit::test]
+async fn e_with_a_stored_draft_takes_the_restored_draft_route(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, stored) = with_stored_draft(cx, "Keyed", "Draft body");
+    open(&shell, ticket(&root, TICKET), cx);
+    let read = read_editor(&shell, cx);
+    focus_at(&shell, &read, 3, cx);
+    assert!(
+        in_page_context(&shell, cx),
+        "the read editor is on the page"
+    );
+
+    shell.keys("e", cx);
+    let host = until_editing(&shell, cx).await;
+    assert_eq!(attached(&shell, &root, TICKET, cx), Some(stored), "claimed");
+    assert_eq!(prepares(&shell, cx).len(), 1, "then prepared");
+    assert!(edit_text(&host, cx) == "Draft body", "the draft's text");
+}

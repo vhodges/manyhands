@@ -1398,9 +1398,18 @@ async fn discarding_a_restored_draft_releases_the_context_continue_editing_made(
         "Continue editing made it"
     );
     assert!(made_here(&shell, &root, TICKET, cx));
+    shell.run(cx);
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "nothing is released while it edits"
+    );
 
     shell.click(("tab-close", 0usize), cx);
     assert!(shell.present("close-draft-dialog", cx), "it asks first");
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "only the Discard releases"
+    );
     shell.click("close-draft-discard-button", cx);
     let request = released(&shell, TICKET, cx).await;
     assert_released(&shell, &root, TICKET, request, cx);

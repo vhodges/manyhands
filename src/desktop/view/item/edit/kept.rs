@@ -19,12 +19,13 @@
 //! The banners name no draft text.
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Styled,
-    Window,
+    AnyElement, App, ClickEvent, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Styled, Window,
     component::{Disableable, Sizable, button::Button, h_flex},
     div,
 };
 use manyhands::drafts::TargetState;
+use zorite_editor::EditorState;
 
 use super::leave::Elsewhere;
 use crate::desktop::{
@@ -60,19 +61,27 @@ impl ItemPane {
     /// Continue editing a kept session: the same editor again, focused,
     /// with its text, caret and undo. False when no session is kept.
     pub(super) fn resume_kept(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let Some(session) = self.edit.session.as_mut().filter(|session| session.kept) else {
+        let Some(editor) = self.unkeep(cx) else {
             return false;
         };
-        session.kept = false;
-        let editor = session.host.read(cx).editor().clone();
-        self.edit.phase = Phase::Editing;
-        self.sync_status(cx);
         // Once the frame that draws it again is drawn.
         cx.defer_in(window, move |_, window, cx| {
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         });
-        cx.notify();
         true
+    }
+
+    /// The kept session is editing again, with its text, caret and undo,
+    /// and the focus where it was: the close dialog's Save saves it (Task
+    /// 18 fix 1). Gives its editor; `None` when no session is kept.
+    pub(super) fn unkeep(&mut self, cx: &mut Context<Self>) -> Option<Entity<EditorState>> {
+        let session = self.edit.session.as_mut().filter(|session| session.kept)?;
+        session.kept = false;
+        let editor = session.host.read(cx).editor().clone();
+        self.edit.phase = Phase::Editing;
+        self.sync_status(cx);
+        cx.notify();
+        Some(editor)
     }
 
     /// As each frame is drawn: whether the kept draft's item changed, by

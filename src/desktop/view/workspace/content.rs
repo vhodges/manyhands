@@ -372,6 +372,11 @@ impl Workspace {
             }
             return;
         }
+        // D2's Keep draft or Discard: nothing the tab was continuing is
+        // saved after this (Task 18 fix 1, M1).
+        if let Some(pane) = &pane {
+            pane.update(cx, |pane, _| pane.continue_without_saving());
+        }
         let drafts = self.services.drafts().clone();
         let closing = match choice {
             CloseWithDraft::Cancel | CloseWithDraft::Save | CloseWithDraft::Retry => return,
