@@ -2578,6 +2578,9 @@ R-45 by decision 18.
   review).
 - An image reached through a symbolic link with an absolute target is
   refused, even when the target is inside the repository (Part B review).
+- A path step that Windows reads as a device name, such as `CON`, `NUL`,
+  `COM1` or `LPT1.png`, is refused as an image on every platform (Part B
+  review).
 - The details sheet's backdrop dims the whole window.
 - A very large body is laid out in full when it opens; checklist step 10
   records the cost.

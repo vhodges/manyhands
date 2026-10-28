@@ -786,3 +786,24 @@ Notes for later tasks: Task 22 leaves `targets()` in
   it filters them. Nothing is written today, since no logger is
   installed.
 - Part B review: none of the parked minors is load-bearing.
+- Ruling (Part B re-review 2, an older Windows issue from Task 12): a
+  step that Windows reads as a device name (CON, PRN, AUX, NUL, COM0 to
+  COM9, LPT0 to LPT9, COM¹²³, LPT¹²³, CONIN$, CONOUT$) is refused.
+  - It is matched as Windows matches it: the part before the first `.`
+    or `:`, with trailing spaces trimmed, ignoring ASCII case.
+  - It applies to the written path and to a link's target, on every
+    platform, before any lookup.
+
+  — Contract 12: a device is never opened, and a mapped port can reach a
+  network printer. — If wrong: an image named like a device shows as
+  source on Unix. This is a Known Limit.
+- Ruling (Part B fix 3): the hop-limit test is D3's own. Its macOS
+  comment and Linux-only guard are dropped. It now asserts the same on
+  every platform.
+- Part B checkpoint: complete.
+  - The whole desktop binary passed at 399035d: 737 passed, 0 failed.
+  - After fix 3: `resources` 29 and `images` 12 passed.
+  - Clippy (desktop only, and all targets with all features) and fmt
+    are clean.
+  - CLI isolation is clean (at af24fa5).
+  - Main is unchanged, and merge-tree is clean.
