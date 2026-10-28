@@ -667,3 +667,22 @@ Notes for later tasks: Task 22 leaves `targets()` in
   toolbar forwards it to the host. Widening it to the whole editing tab
   is for Task 14 or 15. — It follows the common toolbar pattern and
   fact 67. — If wrong: key handling in one file.
+- Ruling (Task 11 review, judgment 4): a link whose exact path finds a
+  file with no ID opens that file's Inspect tab, in the context where it
+  was found, as the lists open such a file. A symbolic link, or a file
+  that is not a regular file, still says "Link not found". — The file
+  exists, so "not found" is untrue (contract 8). The design names only
+  managed items, `invalid_path` and absence. — If wrong: one arm in
+  `services/links.rs`.
+- Ruling (Task 11 review, judgment 5): a `#tag` click is a Known Limit
+  and nothing changes. zorite 0.10.0 sends it as `OpenWikiLink("tag")`,
+  with the `#` already removed, so it cannot be told apart from
+  `[[tag]]`. — If wrong: a banner on a tag click.
+- Parked (Task 11 fix 1): the item's context holds only the item itself
+  (`repository/discovery.rs:932-935`).
+  - So the test `an_exact_path_in_the_items_context_wins_over_primary`
+    opens a context file the index does not hold.
+  - The context-first nearest-name test covers a zero-step tie.
+  - The resolution is right, but the scenario is not realistic. A
+    realistic one moves the linking document itself within its context.
+    This goes to the Part B review.

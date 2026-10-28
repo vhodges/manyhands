@@ -2536,6 +2536,9 @@ R-45 by decision 18.
   refuses any change.
 - Links and images open by pointer only. Moving the caret onto a link shows
   its address.
+- A `#tag` click is followed as the title link `[[tag]]`: the pinned
+  editor reports it without its `#`. A tag that names no document title
+  says the link was not found (Task 11).
 - Selecting in the read view shows the raw Markdown of the lines it
   touches, with a caret; Copy copies Markdown.
 - In rich text the caret steps over math and property blocks; they are
