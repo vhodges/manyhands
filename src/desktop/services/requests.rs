@@ -195,6 +195,7 @@ pub(crate) enum Intent {
         destination_path: PathBuf,
         destination_observation: String,
     },
+    /// A folder below `docs/`, by its path with forward slashes.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     FolderCreate {
         root: PathBuf,

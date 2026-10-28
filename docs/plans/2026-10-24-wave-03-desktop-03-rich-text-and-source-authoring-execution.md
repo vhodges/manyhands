@@ -808,3 +808,11 @@ Notes for later tasks: Task 22 leaves `targets()` in
     are clean.
   - CLI isolation is clean (at af24fa5).
   - Main is unchanged, and merge-tree is clean.
+- Ruling (Task 13): Task 11's `ReadKind::Observe` is renamed
+  `ObservePath`, and it serves every `observe_path` read. No second kind
+  is added. — The plan names `ObservePath`, which Task 11 did not know.
+  — If wrong: a rename.
+- Ruling (Task 13): `ReadKind::NewId` and `RelationshipCheck` carry a
+  plain `allow(dead_code)`, because no test builds them yet. Tasks 22 and
+  21 remove it. — Under `--all-targets`, the `cfg_attr(not(test), …)`
+  form warns. — If wrong: one attribute each.
