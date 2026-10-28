@@ -104,11 +104,18 @@ impl ItemPane {
         if !self.editing() {
             return banners;
         }
-        if self.edit.phase() != Phase::Review && !self.base_verified() {
+        // While the review is open, Retry and Resume wait, as Save does; and
+        // no review opens while a save is kept for its Retry (I2).
+        let reviewing = self.edit.phase() == Phase::Review;
+        let kept = self.edit.save.run.is_some();
+        if !reviewing && !self.base_verified() {
             let state = before_save(false);
-            let action = action("item-save-review", state, cx, |this, cx| {
-                this.open_review(cx)
-            });
+            let action = match kept {
+                true => None,
+                false => action("item-save-review", state, cx, |this, cx| {
+                    this.open_review(cx)
+                }),
+            };
             banners.push((
                 Banner::ReviewBeforeSaving,
                 row("item-save-unverified", state, action),
@@ -122,11 +129,12 @@ impl ItemPane {
             .map(|answer| save_state(answer.code, &answer.effects, self.edit.save.remote));
         // The change banner (R-68): a save answered `external_change`, until
         // the review's choices are used, or a refresh found the item changed
-        // under the draft. Compare… opens the review; while it is open the
-        // banner stays, with nothing to press.
+        // under the draft. Compare… opens the review, but not over a save
+        // kept for its Retry; while it is open the banner stays, with nothing
+        // to press.
         let changed = matches!(self.edit.changed, Some((_, _, true)));
         if state == Some(SaveState::Changed) || changed {
-            let compare = (self.edit.phase() == Phase::Editing).then(|| {
+            let compare = (self.edit.phase() == Phase::Editing && !kept).then(|| {
                 Button::new("item-save-compare")
                     .label(COMPARE)
                     .small()
@@ -142,16 +150,22 @@ impl ItemPane {
         };
         match state {
             SaveState::DiscoveryPending => {
-                let resume = action("item-save-resume", state, cx, |this, cx| {
-                    this.resume_save(cx)
-                });
+                let resume = match reviewing {
+                    true => None,
+                    false => action("item-save-resume", state, cx, |this, cx| {
+                        this.resume_save(cx)
+                    }),
+                };
                 banners.push((
                     Banner::DiscoveryPending,
                     row("item-save-pending", state, resume),
                 ));
             }
             SaveState::CheckpointFailed => {
-                let retry = action("item-save-retry", state, cx, |this, cx| this.retry_save(cx));
+                let retry = match reviewing {
+                    true => None,
+                    false => action("item-save-retry", state, cx, |this, cx| this.retry_save(cx)),
+                };
                 banners.push((
                     Banner::CheckpointFailed,
                     row("item-save-failed", state, retry),
@@ -159,18 +173,19 @@ impl ItemPane {
             }
             SaveState::Refused(code) => {
                 let muted = cx.theme().muted_foreground;
-                let again = answer
-                    .recovery
-                    .iter()
-                    .any(|action| action.action == RecoveryActionKind::RequestRetry)
-                    .then(|| {
-                        Button::new("item-save-again")
-                            .label(super::RETRY)
-                            .small()
-                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                this.save_requested(window, cx);
-                            }))
-                    });
+                let offered = !reviewing
+                    && answer
+                        .recovery
+                        .iter()
+                        .any(|action| action.action == RecoveryActionKind::RequestRetry);
+                let again = offered.then(|| {
+                    Button::new("item-save-again")
+                        .label(super::RETRY)
+                        .small()
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.save_requested(window, cx);
+                        }))
+                });
                 banners.push((
                     Banner::Refused,
                     v_flex()

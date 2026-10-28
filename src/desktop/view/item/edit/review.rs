@@ -8,23 +8,31 @@
 //!   unverified base (R-36), and on Compare… of the change banner (R-68),
 //!   a kept session's included; a restored draft whose base the branch
 //!   alone did not move opens it too (R-42). It never opens by itself.
-//! - **On opening** the item is read again, under a new stamp. Once the
-//!   read lands, as the next frame is drawn, the review takes mine (the
-//!   session's current), theirs (the read, normalized, with its
-//!   observation) and the base (the session's own), and the body's result
-//!   goes into an editor of its own, exactly (R-79), in an edit host
-//!   context, so Escape there focuses Done (R-59). A read that fails says
-//!   so, with Retry.
+//! - **On opening** the item is read again, under a new stamp. Once a read
+//!   of the tab lands, that one or a newer one that superseded it (the
+//!   workspace's reload after a request, a list's Retry), as the next frame
+//!   is drawn, the review takes mine (the session's current), theirs (the
+//!   read, normalized, with its observation) and the base (the session's
+//!   own), and the body's result goes into an editor of its own, exactly
+//!   (R-79), in an edit host context, so Escape there focuses Done (R-59).
+//!   While it reads, Cancel is offered; a read that fails says so, with
+//!   Retry and Cancel.
+//! - **It never opens** while a save is in flight or kept for its Retry:
+//!   the save's answer, or its Retry, comes first.
 //! - **While it is open** the draft feed is suspended, here and in D2's
 //!   schedule: nothing is written to the draft or the store. The page's
-//!   place is the review's, the toolbar is hidden, and Done and Save are
-//!   disabled.
+//!   place is the review's, the toolbar is hidden, and Done, Save and the
+//!   save banners' Retry and Resume are disabled.
 //! - **Use these choices**, once every both-changed field has a choice:
 //!   the base becomes theirs; the session's fields become the chosen ones
 //!   and the body's result; the edit editor takes the result exactly,
 //!   which restarts undo (R-18, R-79), its caret kept, clamped, and its
 //!   baseline theirs; D2's draft moves onto the new base and takes the
-//!   fields, written at once, or begins on it; and the feed resumes.
+//!   fields, written at once, or begins on it; and the feed resumes. When
+//!   the choices leave nothing changed, the session is clean and its draft
+//!   is discarded instead, so a clean tab never asks on close. A change
+//!   banner from an `external_change` answer is resolved; any other
+//!   answer's banner stays.
 //! - **Cancel** shows mine again in the edit editor, which the review never
 //!   touched, and resumes the feed. The draft and its file are unchanged.
 //!
@@ -46,8 +54,9 @@ use gpui_kit::{
     },
     div,
 };
+use manyhands::results::ResultCode;
 
-use super::{Phase, saved::body_of};
+use super::{DraftLink, Phase, saved::body_of};
 use crate::desktop::{
     model::{
         edit::base_for_edit,
@@ -55,7 +64,6 @@ use crate::desktop::{
         review::{
             BodyChoice, Choice, KEEP_MY_EDITS, REPLACE, REPLACE_DETAIL, REPLACE_YOUR_EDITS, Review,
         },
-        stamp::Stamp,
     },
     view::{
         editor::host::{EditorHost, EditorHostEvent},
@@ -66,12 +74,13 @@ use crate::desktop::{
 /// What Replace does once "Replace your edits?" is answered.
 type Replace = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// The review while it is open: the read it opened on, then its model and
+/// The review while it is open: the read it waits for, then its model and
 /// the body's result editor. It holds draft text, so it derives nothing.
 pub(super) struct ReviewState {
-    /// The read the review opened on, until it lands.
-    pub(super) read: Option<Stamp>,
-    /// That read landed: the model is built as the next frame is drawn.
+    /// A read of the tab landed while the review had no model: the model is
+    /// built from it as the next frame is drawn. Every read that lands is at
+    /// least as new as the one the review opened on, which a later reload
+    /// of the tab supersedes (I1).
     pub(super) landed: bool,
     /// The read failed, or gave no item to review: Retry reads again.
     pub(super) failed: bool,
@@ -87,9 +96,13 @@ impl ItemPane {
     /// The review opens (R-36, R-68): from Save, its answer, a banner's
     /// Compare… or Review…, or a restored draft. The item is read again;
     /// the draft feed is suspended until Use these choices or Cancel.
-    pub(super) fn open_review(&mut self, cx: &mut Context<Self>) {
-        // Not while a save is in flight: its answer comes first.
-        if self.shown_session().is_none() || self.edit.phase == Phase::Saving {
+    pub(in crate::desktop::view::item) fn open_review(&mut self, cx: &mut Context<Self>) {
+        // Not while a save is in flight, or kept for its Retry: its answer,
+        // or its Retry, comes first (I2).
+        if self.shown_session().is_none()
+            || self.edit.phase == Phase::Saving
+            || self.edit.save.run.is_some()
+        {
             return;
         }
         self.edit.phase = Phase::Review;
@@ -98,9 +111,8 @@ impl ItemPane {
                 .drafts()
                 .update(cx, |registry, _| registry.suspend(id));
         }
-        let read = self.reload(cx);
+        self.reload(cx);
         self.edit.review = Some(ReviewState {
-            read: Some(read),
             landed: false,
             failed: false,
             model: None,
@@ -113,9 +125,8 @@ impl ItemPane {
 
     /// Retry of a read that failed: the item is read again.
     pub(super) fn review_retry(&mut self, cx: &mut Context<Self>) {
-        let read = self.reload(cx);
+        self.reload(cx);
         if let Some(review) = &mut self.edit.review {
-            review.read = Some(read);
             review.failed = false;
         }
         cx.notify();
@@ -317,9 +328,18 @@ impl ItemPane {
         self.close_review(cx);
         self.edit.phase = Phase::Editing;
         // The change it reviewed is resolved: the base is the current
-        // version.
-        self.edit.save.answer = None;
+        // version. Another answer's banner, a hand-off owed, stays.
+        if self
+            .edit
+            .save
+            .answer
+            .as_ref()
+            .is_some_and(|answer| answer.code == ResultCode::ExternalChange)
+        {
+            self.edit.save.answer = None;
+        }
         let draft = self.live_draft(cx);
+        let tab = self.tab_key();
         let Some(session) = &mut self.edit.session else {
             return;
         };
@@ -331,10 +351,22 @@ impl ItemPane {
         session
             .host
             .update(cx, |host, cx| host.rebase(baseline, &result, cx));
+        // M3: choices that change nothing leave a clean session, and its
+        // draft would hold nothing the item does not: it is discarded, as
+        // the tab's, so a clean tab never asks on close.
+        let clean = !session.dirty(cx);
         if let Some(id) = draft {
-            self.services
-                .drafts()
-                .update(cx, |registry, cx| registry.adopt_base(id, theirs, cx));
+            if clean {
+                session.draft = DraftLink::None;
+                self.services.drafts().update(cx, |registry, cx| {
+                    registry.detach(&tab);
+                    registry.discard(id, cx).detach();
+                });
+            } else {
+                self.services
+                    .drafts()
+                    .update(cx, |registry, cx| registry.adopt_base(id, theirs, cx));
+            }
         }
         // D2's draft takes the chosen fields, or one begins on the new base.
         self.feed(cx);

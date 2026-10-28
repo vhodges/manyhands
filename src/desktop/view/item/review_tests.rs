@@ -36,6 +36,9 @@ const DOCUMENT_BODY: &str = "# One\n";
 /// change it again.
 const FACT_81: &str = "wer $$\na $$b$$ c\n$$ wer\n";
 const SENTINEL: &str = "SENTINEL-D3-REVIEW-41b9";
+/// The review's intro, true whoever changed the item (M5).
+const INTRO: &str = "This item changed since your edits began. Choose what to keep for \
+     each field. Nothing is saved until you use your choices and save.";
 
 /// A repository `a` holding the ticket `TICKET`, "Mine", and the document
 /// `DOCUMENT`, "One", in an open window.
@@ -651,6 +654,7 @@ async fn a_stale_save_opens_the_review_and_leaves_the_draft_file_unchanged(
 
     stale_save(&shell, cx).await;
     assert_eq!(pill(&shell, cx).as_deref(), Some(REVIEWING));
+    assert_eq!(shell.label("review-intro", cx).as_deref(), Some(INTRO));
     assert!(shell.present("item-review", cx));
     assert!(!shell.present("item-toolbar", cx), "the toolbar is hidden");
     assert!(!shell.present("item-edit-view", cx), "the page's place");
@@ -1061,4 +1065,223 @@ async fn the_close_dialogs_save_into_the_review_says_cancel_to_review(cx: &mut T
     until_review(&shell, cx).await;
     assert!(shell.present("item-review", cx), "the review is in view");
     assert!(shell.present("item-view", cx), "the tab stays");
+}
+
+// Task 19 fix round 1.
+
+/// Opens the ticket's change banner: a dirty session, another actor's
+/// retitle, and a refresh that classifies the draft `Changed`.
+async fn change_banner(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> Entity<EditorHost> {
+    let host = edited_ticket(shell, root, cx).await;
+    shell.fixture.save_ticket(root, TICKET, "Theirs");
+    read_again(shell, cx);
+    assert!(
+        shell.present("item-save-compare", cx),
+        "Compare… is offered"
+    );
+    host
+}
+
+/// I1: the review's read is superseded by a newer read of the tab before
+/// it lands (the workspace's reload after a request, a list's Retry). The
+/// review takes the newer read and builds; while it reads, Cancel is
+/// offered.
+#[gpui_kit::test]
+async fn a_reload_while_the_review_reads_does_not_strand_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    change_banner(&shell, &root, cx).await;
+
+    let first = shell.backend.hold_read(ReadKind::Item);
+    shell.click("item-save-compare", cx);
+    assert_eq!(phase(&shell, cx), Phase::Review);
+    assert!(shell.present("review-status", cx), "it reads");
+    assert!(shell.present("review-cancel", cx), "Cancel while it reads");
+    read_again(&shell, cx);
+    until_review(&shell, cx).await;
+    assert_eq!(value(&shell, "review-theirs", "Title", cx), "Theirs");
+    drop(first);
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("review-use", cx), "the review stays built");
+}
+
+/// I1: Cancel while the review reads goes back to editing, mine kept, and
+/// the feed resumes; the read landing after it opens nothing.
+#[gpui_kit::test]
+async fn cancel_while_the_review_reads_goes_back_to_editing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    let host = change_banner(&shell, &root, cx).await;
+    let mine = edit_text(&host, cx);
+    let id = draft_of(&shell, &ticket(&root, TICKET), cx).expect("a draft");
+
+    let held = shell.backend.hold_read(ReadKind::Item);
+    shell.click("item-save-compare", cx);
+    shell.click("review-cancel", cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert!(edit_text(&host, cx) == mine, "mine stays");
+    drop(held);
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        !shell.present("item-review", cx),
+        "the late read opens nothing"
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+
+    type_at_end(&shell, &host, "w", cx);
+    idle(&shell, cx);
+    assert!(drafted_body(&shell, id, cx) == format!("{mine}w"));
+    let store = shell.fixture.draft_store();
+    assert!(
+        stored_body(&store, id).as_deref() == Some(format!("{mine}w").as_str()),
+        "the feed resumed"
+    );
+}
+
+/// I2 and M1: a pending checkpoint keeps its save for Retry. Its file is
+/// written but not committed, so the tab's next read has a new token, and
+/// with text typed since, D2 would classify its draft `Changed`: our own
+/// write, not someone else's. (Another actor cannot commit meanwhile: the
+/// library answers `recovery_required`.) While the save is kept, no change
+/// banner shows, Compare… is not offered, and the review does not open.
+#[gpui_kit::test]
+async fn no_review_opens_over_a_kept_pending_checkpoint(cx: &mut TestAppContext) {
+    use manyhands::repository::FailurePoint;
+
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    let host = edited_ticket(&shell, &root, cx).await;
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+    save(&shell, cx).await;
+    assert!(shell.present("item-save-retry", cx), "the save is kept");
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    type_at_end(&shell, &host, "y", cx);
+    idle(&shell, cx);
+    read_again(&shell, cx);
+
+    assert!(!shell.present("item-save-compare", cx), "no Compare…");
+    assert!(!shell.present("item-save-changed", cx), "no change banner");
+    pane(&shell, cx).update(cx, |pane, cx| pane.open_review(cx));
+    shell.run(cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing, "no review opens");
+    assert!(!shell.present("item-review", cx));
+    assert!(shell.present("item-save-retry", cx), "Retry stays");
+}
+
+/// M2: the close dialog opened while the review is open, not through the
+/// dialog's own Save, says how to reach the review.
+#[gpui_kit::test]
+async fn closing_the_tab_during_the_review_says_cancel_to_review(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    edited_ticket(&shell, &root, cx).await;
+    shell.fixture.save_ticket(&root, TICKET, "Theirs");
+    stale_save(&shell, cx).await;
+
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx));
+    assert_eq!(
+        shell.label("close-draft-save-state", cx).as_deref(),
+        Some(CANCEL_TO_REVIEW)
+    );
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!shell.present("close-draft-dialog", cx));
+    assert!(shell.present("item-review", cx), "the review is in view");
+}
+
+/// M3: choices that change nothing (theirs taken everywhere, no edit)
+/// leave a clean session and no draft: closing the tab asks nothing, and
+/// the draft is gone.
+#[gpui_kit::test]
+async fn choices_that_change_nothing_leave_no_draft_and_close_at_once(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    let host = edited_document(&shell, &root, cx).await;
+    let id = draft_of(&shell, &document(&root), cx).expect("a draft");
+    their_document(&shell, &root, "One", THEIR_BODY);
+    stale_save(&shell, cx).await;
+    take_theirs(&shell, "Body", cx);
+    shell.click("review-use", cx);
+    idle(&shell, cx);
+    assert!(edit_text(&host, cx) == THEIR_BODY);
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED), "clean");
+
+    shell.click(("tab-close", 0usize), cx);
+    assert!(!shell.present("close-draft-dialog", cx), "it asks nothing");
+    assert!(!shell.present("item-view", cx), "the tab closed");
+    shell.run(cx);
+    let store = shell.fixture.draft_store();
+    assert!(held(&store, id).is_none(), "the draft is discarded");
+}
+
+/// M4, R-18: Use these choices restarts undo: undo does not go back past
+/// the result.
+#[gpui_kit::test]
+async fn undo_after_using_the_choices_does_not_go_back_past_the_result(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    let host = edited_document(&shell, &root, cx).await;
+    their_document(&shell, &root, "One", THEIR_BODY);
+    stale_save(&shell, cx).await;
+    take_theirs(&shell, "Body", cx);
+    type_in_result(&shell, "z", cx);
+    shell.click("review-use", cx);
+    let result = format!("{THEIR_BODY}z");
+    assert!(edit_text(&host, cx) == result);
+
+    let editor = host_editor(&host, cx);
+    let end = text(&editor, cx).len();
+    focus_at(&shell, &editor, end, cx);
+    shell.keys("secondary-z", cx);
+    assert!(
+        edit_text(&host, cx) == result,
+        "undo restarted at the result"
+    );
+}
+
+/// M4: Use these choices writes the draft's file, its fields and its new
+/// base, not only D2's memory.
+#[gpui_kit::test]
+async fn using_the_choices_writes_the_draft_file(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    edited_document(&shell, &root, cx).await;
+    let id = draft_of(&shell, &document(&root), cx).expect("a draft");
+    let bytes = draft_bytes(&shell, id);
+    their_document(&shell, &root, "One", THEIR_BODY);
+    stale_save(&shell, cx).await;
+    take_theirs(&shell, "Body", cx);
+    type_in_result(&shell, "z", cx);
+    shell.click("review-use", cx);
+    idle(&shell, cx);
+
+    assert!(draft_bytes(&shell, id) != bytes, "the file is written");
+    let store = shell.fixture.draft_store();
+    let result = format!("{THEIR_BODY}z");
+    assert!(stored_body(&store, id).as_deref() == Some(result.as_str()));
+    let stored = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|listing| listing.id == id)
+        .and_then(|listing| match listing.entry {
+            manyhands::drafts::Entry::Draft(draft) => draft.base,
+            manyhands::drafts::Entry::Unreadable(_) => None,
+        })
+        .expect("the stored draft's base");
+    assert_eq!(
+        stored.observation,
+        shown(&shell, &root, DOCUMENT).observation,
+        "its base is the current version"
+    );
 }

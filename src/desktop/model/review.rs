@@ -19,8 +19,8 @@ use manyhands::drafts::{Change, DraftBase, DraftFields, Field, compare};
 
 /// The review's words (`06-language-and-states.md`; the design's own).
 pub(crate) const REVIEW_TITLE: &str = "Review changes";
-pub(crate) const REVIEW_INTRO: &str = "Someone changed this item since your edits began. Choose what \
-     to keep for each field. Nothing is saved until you use your choices and save.";
+pub(crate) const REVIEW_INTRO: &str = "This item changed since your edits began. Choose what to keep \
+     for each field. Nothing is saved until you use your choices and save.";
 pub(crate) const BEFORE: &str = "Before";
 pub(crate) const THEIRS: &str = "Theirs";
 pub(crate) const MINE: &str = "Mine";

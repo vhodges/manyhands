@@ -95,6 +95,13 @@ impl ItemPane {
             self.edit.changed = None;
             return;
         };
+        // M1: a shown session's own save, in flight, kept for its Retry, or
+        // still being settled by D2, moves the item before the draft's base
+        // follows it: that is no one else's change.
+        if !self.session_kept() && (self.edit.save.run.is_some() || self.store_settling(cx)) {
+            self.edit.changed = None;
+            return;
+        }
         let registry = self.services.drafts().read(cx);
         let Some(revision) = registry.session(id).map(|session| session.revision()) else {
             return;

@@ -135,7 +135,11 @@ impl DraftRegistry {
     /// of it is written on its schedule until `resume`. A write already in
     /// flight lands. A flush asked for at once still writes: a close's
     /// Keep draft and a quit protect the text the session holds, which the
-    /// review never changes.
+    /// review never changes. That is the controller's ruling (Task 19 fix
+    /// 1, M2): the design's "nothing is written to the draft or the store
+    /// until Use these choices" governs the review's own model and this
+    /// schedule, and the Cycle's contract 6, "newer text survives", governs
+    /// the user's own typed text; the Cycle governs the design.
     pub(crate) fn suspend(&mut self, id: DraftId) {
         let Some(live) = self
             .current_id(id)

@@ -77,6 +77,14 @@ impl DraftRegistry {
         cx.notify();
     }
 
+    /// The tab `tab` lets go of its session's draft while its edit session
+    /// goes on: the stale-edit review's choices left nothing to keep (Task
+    /// 19 fix 1, M3). A discard of the draft that follows tells the tab
+    /// nothing, so its session is not ended.
+    pub(crate) fn detach(&mut self, tab: &TabKey) {
+        self.attached.remove(tab);
+    }
+
     /// The tab the session of `id` is attached to, by the ID it goes on
     /// under: where the Drafts page's Show goes.
     pub(crate) fn tab_of(&self, id: DraftId) -> Option<TabKey> {

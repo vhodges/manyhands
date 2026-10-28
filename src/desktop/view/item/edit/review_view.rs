@@ -4,8 +4,8 @@
 //! every field, the body first, with its base, theirs and mine side by
 //! side, who changed it, Take theirs and Keep mine and what is chosen;
 //! and the body's result in its own editor once the body has a side.
-//! While the read it opened on is out, it says so; a read that failed
-//! offers Retry.
+//! While its read is out, it says so, with Cancel; a read that failed
+//! offers Retry and Cancel.
 //!
 //! All of it is inside the tab's draft section, where draft text belongs
 //! (R-38). Layout follows the page's tokens; it is checked on screen.
@@ -75,7 +75,17 @@ impl ItemPane {
                         .child(cancel(cx)),
                 );
             }
-            None => content = content.child(text("review-status", READING).text_color(muted)),
+            // While it reads, Cancel goes back to editing (I1).
+            None => {
+                content = content.child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap_3()
+                        .items_center()
+                        .child(text("review-status", READING).text_color(muted))
+                        .child(cancel(cx)),
+                );
+            }
         }
         div()
             .id("draft-section")

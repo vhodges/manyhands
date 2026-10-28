@@ -344,6 +344,10 @@ impl ItemPane {
     /// Retry of a pending checkpoint: the same request, under its own
     /// request ID.
     pub(super) fn retry_save(&mut self, cx: &mut Context<Self>) {
+        // Not while the review is open: only its Use or Cancel leaves it.
+        if self.edit.phase == Phase::Review {
+            return;
+        }
         let Some(request) = self.edit.save.run.as_ref().and_then(|run| run.request) else {
             return;
         };
@@ -356,6 +360,9 @@ impl ItemPane {
     /// Resume of a save's owed hand-off: the operation it names resumed, or
     /// else the same request again.
     pub(super) fn resume_save(&mut self, cx: &mut Context<Self>) {
+        if self.edit.phase == Phase::Review {
+            return;
+        }
         let Some(answer) = &self.edit.save.answer else {
             return;
         };

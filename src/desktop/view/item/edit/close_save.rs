@@ -137,12 +137,27 @@ impl ItemPane {
 
     /// What the close dialog's Save came to, while it has not closed the
     /// tab: `None` until it is pressed, and once the dialog has nothing
-    /// to say of it.
+    /// to say of it. While the review is open, how to reach it.
     pub(in crate::desktop::view) fn close_note(&self, cx: &App) -> Option<SaveNote> {
         // A prepare waiting for Resume is why D2's Save waits (M2): Resume
         // is the tab's banner's, which Cancel returns to.
         if matches!(self.edit.stopped, Some(Stopped::Pending(_))) {
             return Some(SaveNote::says(PREPARE_PENDING));
+        }
+        // The review waits behind the dialog, whether the dialog's own Save
+        // opened it (Task 18's M4) or it was open already (Task 19 fix 1,
+        // M2): Cancel reaches it, and Keep draft or Discard leaves it.
+        if self.edit.phase == Phase::Review {
+            let answered = self.edit.save.answer.as_ref().map(|answer| {
+                save_state(answer.code, &answer.effects, false) == SaveState::Changed
+            });
+            let changed = answered == Some(true) || matches!(self.edit.changed, Some((_, _, true)));
+            let words = if changed {
+                CHANGED_OUTSIDE
+            } else {
+                CHECK_CURRENT_VERSION
+            };
+            return Some(SaveNote::says(format!("{words} {CANCEL_TO_REVIEW}")));
         }
         if !self.edit.closing {
             return None;
@@ -169,17 +184,6 @@ impl ItemPane {
         }
         let answer = self.edit.save.answer.as_ref();
         let state = answer.map(|answer| save_state(answer.code, &answer.effects, false));
-        // The review the Save opened waits behind the dialog, which stays
-        // open with the change, as any other answer keeps it (Task 18's M4):
-        // Cancel reaches the review.
-        if self.edit.phase == Phase::Review {
-            let words = if state == Some(SaveState::Changed) {
-                CHANGED_OUTSIDE
-            } else {
-                CHECK_CURRENT_VERSION
-            };
-            return Some(SaveNote::says(format!("{words} {CANCEL_TO_REVIEW}")));
-        }
         match (state?, answer?) {
             (SaveState::CheckpointFailed, _) => Some(SaveNote {
                 words: CHECKPOINT_FAILED.to_owned(),

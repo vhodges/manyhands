@@ -84,7 +84,7 @@ use super::ItemPane;
 use crate::desktop::{
     model::{
         edit::{Phase, edit_offered, fields_with_body, new_item_base},
-        stamp::{Stamp, ViewScope},
+        stamp::ViewScope,
         tabs::TabKey,
     },
     services::requests::DesktopRequestId,
@@ -263,17 +263,17 @@ impl TabEdit {
         self.phase
     }
 
-    /// A read landed, under `stamp`: while Loading, and not waiting for
-    /// Resume, the editor opens from it; the review it opened on takes it;
-    /// a session's draft is classified against it again.
-    pub(super) fn read_landed(&mut self, stamp: &Stamp) {
+    /// A read landed: while Loading, and not waiting for Resume, the editor
+    /// opens from it; a review still waiting for its read takes it, the one
+    /// it opened on or a newer one that superseded it (I1); a session's
+    /// draft is classified against it again.
+    pub(super) fn read_landed(&mut self) {
         if self.phase == Phase::Loading && self.stopped.is_none() {
             self.loaded = true;
         }
         if let Some(review) = &mut self.review
-            && review.read.as_ref() == Some(stamp)
+            && review.model.is_none()
         {
-            review.read = None;
             review.landed = true;
         }
         self.changed = None;
