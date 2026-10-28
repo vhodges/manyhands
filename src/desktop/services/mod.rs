@@ -73,8 +73,15 @@ pub(crate) enum ReadKind {
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
     DraftItem,
-    /// `observe_path`, of the path a clicked link names.
-    Observe,
+    /// `observe_path`: the path a clicked link names, and any other path
+    /// the desktop asks the library about.
+    ObservePath,
+    /// `new_id`, for a new item's ID.
+    #[allow(dead_code)] // Called from Task 22; no test builds it.
+    NewId,
+    /// The check of a relationship a draft sets, before it is saved.
+    #[allow(dead_code)] // Called from Task 21; no test builds it.
+    RelationshipCheck,
     /// A local image an editor shows, read from the tab's trees and
     /// decoded (`images`): no library call, but held like one.
     Image,
@@ -105,6 +112,22 @@ pub(crate) enum JobKind {
     OperationAbandon,
     DocumentSave,
     TicketSave,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
+    ContextPrepare,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
+    ContextRelease,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
+    DocumentCreate,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
+    TicketCreate,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
+    DocumentMove,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
+    FolderCreate,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
+    DocumentRepair,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
+    TicketRepair,
     ObserveHost,
 }
 

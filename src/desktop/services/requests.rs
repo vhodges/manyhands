@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 
 use manyhands::{
     repository::{
-        ConfirmationId, InitialsChange, OperationId, ProgressStage, RelationshipWrite, RequestId,
-        SharedKeyId, transport::SshAuthority,
+        AuthoringKind, ConfirmationId, ContextPrepareIntent, InitialsChange, OperationId,
+        ProgressStage, RelationshipWrite, RequestId, SharedKeyId, transport::SshAuthority,
     },
     results::{Effects, Outcome, RecoveryAction, ResultCode},
 };
@@ -148,6 +148,74 @@ pub(crate) enum Intent {
         parent: RelationshipWrite<String>,
         observation: String,
     },
+    /// Prepares the work context an edit or a new item is written in.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 14.
+    ContextPrepare {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        intent: ContextPrepareIntent,
+    },
+    /// Releases the work context of an item.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
+    ContextRelease {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// A new document at `path`. It holds the body.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
+    DocumentCreate {
+        root: PathBuf,
+        id: ItemId,
+        path: PathBuf,
+        title: String,
+        body: String,
+    },
+    /// A new ticket. It holds the body.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
+    TicketCreate {
+        root: PathBuf,
+        id: ItemId,
+        title: String,
+        ticket_type: String,
+        status: String,
+        project: Option<String>,
+        team: Option<String>,
+        body: String,
+        deps: Vec<String>,
+        parent: Option<String>,
+    },
+    /// A document moved to another path.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
+    DocumentMove {
+        root: PathBuf,
+        id: ItemId,
+        observation: Option<String>,
+        destination_path: PathBuf,
+        destination_observation: String,
+    },
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
+    FolderCreate {
+        root: PathBuf,
+        path: String,
+    },
+    /// A nonconforming document file, given its corrected source.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
+    DocumentRepair {
+        root: PathBuf,
+        path: PathBuf,
+        observation: String,
+        source: String,
+    },
+    /// A nonconforming ticket file, given its corrected source.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
+    TicketRepair {
+        root: PathBuf,
+        path: PathBuf,
+        observation: String,
+        source: String,
+    },
 }
 
 impl Intent {
@@ -164,7 +232,9 @@ impl Intent {
             | Self::KeyDelete { .. }
             | Self::HostApprove { .. }
             | Self::HostReplace { .. }
-            | Self::OperationAbandon { .. } => true,
+            | Self::OperationAbandon { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. } => true,
             Self::RemoteAdd { .. }
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
@@ -176,7 +246,13 @@ impl Intent {
             | Self::KeyRemove { .. }
             | Self::OperationResume { .. }
             | Self::DocumentSave { .. }
-            | Self::TicketSave { .. } => false,
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. } => false,
         }
     }
 
@@ -205,6 +281,14 @@ impl Intent {
             Self::OperationAbandon { .. } => "Abandon operation",
             Self::DocumentSave { .. } => "Save document",
             Self::TicketSave { .. } => "Save ticket",
+            Self::ContextPrepare { .. } => "Prepare to edit",
+            Self::ContextRelease { .. } => "Release work context",
+            Self::DocumentCreate { .. } => "Create document",
+            Self::TicketCreate { .. } => "Create ticket",
+            Self::DocumentMove { .. } => "Move document",
+            Self::FolderCreate { .. } => "Create folder",
+            Self::DocumentRepair { .. } => "Repair document",
+            Self::TicketRepair { .. } => "Repair ticket",
         }
     }
 
@@ -225,7 +309,15 @@ impl Intent {
             | Self::OperationResume { root, .. }
             | Self::OperationAbandon { root, .. }
             | Self::DocumentSave { root, .. }
-            | Self::TicketSave { root, .. } => Some(root),
+            | Self::TicketSave { root, .. }
+            | Self::ContextPrepare { root, .. }
+            | Self::ContextRelease { root, .. }
+            | Self::DocumentCreate { root, .. }
+            | Self::TicketCreate { root, .. }
+            | Self::DocumentMove { root, .. }
+            | Self::FolderCreate { root, .. }
+            | Self::DocumentRepair { root, .. }
+            | Self::TicketRepair { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -257,7 +349,15 @@ impl Intent {
             | Self::RepoCreate { .. }
             | Self::RepoEnable { .. }
             | Self::DocumentSave { .. }
-            | Self::TicketSave { .. } => true,
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -298,6 +398,14 @@ impl Intent {
             Self::OperationAbandon { .. } => JobKind::OperationAbandon,
             Self::DocumentSave { .. } => JobKind::DocumentSave,
             Self::TicketSave { .. } => JobKind::TicketSave,
+            Self::ContextPrepare { .. } => JobKind::ContextPrepare,
+            Self::ContextRelease { .. } => JobKind::ContextRelease,
+            Self::DocumentCreate { .. } => JobKind::DocumentCreate,
+            Self::TicketCreate { .. } => JobKind::TicketCreate,
+            Self::DocumentMove { .. } => JobKind::DocumentMove,
+            Self::FolderCreate { .. } => JobKind::FolderCreate,
+            Self::DocumentRepair { .. } => JobKind::DocumentRepair,
+            Self::TicketRepair { .. } => JobKind::TicketRepair,
         }
     }
 }

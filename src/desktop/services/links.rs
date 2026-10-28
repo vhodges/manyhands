@@ -185,7 +185,7 @@ impl Linking {
         let at = Path::new(path);
         let observed = self
             .reader
-            .call(ReadKind::Observe, |service| {
+            .call(ReadKind::ObservePath, |service| {
                 service.observe_path(repo, context, at)
             })
             .await;
