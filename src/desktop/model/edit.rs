@@ -32,7 +32,8 @@ pub(crate) enum Phase {
     /// `context prepare` runs as this request.
     Preparing(DesktopRequestId),
     /// The context is ready; the item is read again before the editor opens
-    /// (R-70).
+    /// (R-70). After a `discovery_pending` answer, the tab waits here for
+    /// Resume (R-13, R-77).
     Loading,
     /// The edit editor holds the item.
     Editing,

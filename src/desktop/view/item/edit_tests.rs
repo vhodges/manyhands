@@ -38,6 +38,7 @@ use crate::desktop::{
         drafts::IDLE,
         edit::{CONTINUE_EDITING, DRAFT_NOT_KEPT, DraftState, Phase, RECOVERY_OFF, base_for_edit},
         editor_text::load,
+        item::LATER_NOTE,
         navigation::OpenTarget,
         tabs::TabKey,
     },
@@ -55,7 +56,7 @@ use crate::desktop::{
         draft_comparison::CURRENT,
         drafts::row_id,
         editor::host::EditorHost,
-        harness::{Shell, WAIT, key},
+        harness::{Shell, WAIT, key, wait_until},
     },
 };
 
@@ -479,6 +480,10 @@ fn edit_reads_continue_editing_while_a_draft_is_stored(cx: &mut TestAppContext) 
         shell.label("item-edit", cx).as_deref(),
         Some(CONTINUE_EDITING)
     );
+    assert!(
+        !shell.present("item-edit-note", cx),
+        "offered, it needs no note"
+    );
     shell.click("item-edit", cx);
     shell.run(cx);
     assert_eq!(
@@ -493,6 +498,11 @@ fn edit_reads_continue_editing_while_a_draft_is_stored(cx: &mut TestAppContext) 
         Some(CONTINUE_EDITING)
     );
     assert!(shell.inert_button("item-edit", cx), "Task 18 continues it");
+    assert_eq!(
+        shell.label("item-edit-note", cx).as_deref(),
+        Some(LATER_NOTE),
+        "said as the header's other disabled actions say it"
+    );
     shell.click("item-edit", cx);
     shell.run(cx);
     assert!(
@@ -556,8 +566,10 @@ async fn edit_of_an_uncommitted_primary_file_is_refused_and_nothing_is_made(
 }
 
 /// R-13, R-77 (owner, 2026-10-26): a prepare whose hand-off to the index
-/// fails answers `discovery_pending`; the tab waits, with Resume, which
-/// sends the same request again. Its `ok, created: true` enters
+/// fails answers `discovery_pending`; the tab waits in Loading, with the
+/// pill saying the copy is being made ready, Edit disabled and Resume in
+/// the banner, which sends the same request again (controller ruling,
+/// 2026-10-28). A read that lands meanwhile opens nothing. Its `ok, created: true` enters
 /// `CreatedContexts`, and the editor opens.
 #[gpui_kit::test]
 async fn a_discovery_pending_context_waits_for_resume(cx: &mut TestAppContext) {
@@ -590,9 +602,19 @@ async fn a_discovery_pending_context_waits_for_resume(cx: &mut TestAppContext) {
         Some(RESUME)
     );
     assert!(!shell.present("item-toolbar", cx), "editing waits");
+    let phase = pane(&shell, cx).read_with(cx, |pane, _| pane.edit_phase());
+    assert_eq!(phase, Phase::Loading, "it waits in Loading");
+    assert_eq!(pill(&shell, cx).as_deref(), Some(GETTING_READY));
     assert!(shell.inert_button("item-edit", cx), "Resume, not Edit");
     shell.click("item-edit", cx);
     assert_eq!(prepares(&shell, cx), [request], "Edit sends nothing new");
+    // The tab's reads land, the repository's reload among them; none opens
+    // the editor before Resume.
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(!shell.present("item-toolbar", cx), "still waiting");
+    let phase = pane(&shell, cx).read_with(cx, |pane, _| pane.edit_phase());
+    assert_eq!(phase, Phase::Loading);
     assert!(!created(&shell, &root, TICKET, cx), "not before the retry");
     let first = shell.operations(cx).read_with(cx, |operations, _| {
         let request = operations.request(request).unwrap();
@@ -680,20 +702,29 @@ async fn a_created_answer_enters_created_contexts_and_a_reused_one_does_not(
 }
 
 /// R-65: the read editor's caret carries into the edit editor when both
-/// hold the same text.
+/// hold the same text. The body is one the load changes (CRLF and a
+/// words-mixed `$$` pair), so the carry depends on comparing the texts as
+/// loaded (R-79), never the raw body.
 #[gpui_kit::test]
 async fn edit_carries_the_read_cursor_into_the_editor(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Carried", "");
+        let source = ticket_with_body(TICKET, "Carried", "", RAW);
+        fixture.commit_file(root, &ticket_path(TICKET), source.as_bytes());
     });
     open(&shell, ticket(&root, TICKET), cx);
     let read = read_editor(&shell, cx);
+    assert!(
+        text(&read, cx) == load(RAW),
+        "the read editor holds it loaded"
+    );
+    assert!(load(RAW) != RAW, "the load changes the fixture");
     focus_at(&shell, &read, 5, cx);
     let host = edit(&shell, cx).await;
     let editor = host_editor(&host, cx);
     assert_eq!(cursor(&editor, cx), 5);
-    assert!(text(&editor, cx) == text(&read, cx));
+    assert!(text(&editor, cx) == load(RAW));
+    assert!(text(&read, cx) == load(RAW));
 }
 
 /// R-70: Loading reads the item again, under a new stamp. When that read's
@@ -1110,9 +1141,9 @@ async fn unsorted_deps_classify_as_current(cx: &mut TestAppContext) {
 
 /// Review Focus 4, a smoke test: a 200 KiB body opens in the edit editor,
 /// and a key typed into it lands. A test build takes seconds to draw a
-/// frame of such a body, so this test draws as few as it can: Edit is
-/// asked for directly, and the editor, focused as it opens, takes the
-/// caret before the one frame typing needs.
+/// frame of such a body, so this test forces only the one frame typing
+/// needs: Edit is asked for directly, and the editor opens and takes focus
+/// on the frames the test build draws as effects flush.
 #[gpui_kit::test]
 async fn a_large_body_opens_in_the_editor(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -1142,20 +1173,29 @@ async fn a_large_body_opens_in_the_editor(cx: &mut TestAppContext) {
         cx,
     );
     let pane = pane(&shell, cx);
-    shell.frame(cx, |window, cx| {
-        pane.update(cx, |pane, cx| pane.edit_requested(window, cx))
-    });
-    shell.run(cx);
-    let request = prepares(&shell, cx)[0];
+    // A test build draws each dirty window as its effects flush, so the
+    // editor opens and takes focus without a frame forced here.
+    shell
+        .visual(cx)
+        .update(|window, cx| pane.update(cx, |pane, cx| pane.edit_requested(window, cx)));
+    let Phase::Preparing(request) = pane.read_with(cx, |pane, _| pane.edit_phase()) else {
+        panic!("Edit prepares the context");
+    };
     shell.until_ended(request, cx).await;
-    shell.run(cx);
-    let host = until_editing(&shell, cx).await;
+    wait_until(cx, &pane, |pane, _| pane.edit_host().is_some()).await;
+    let host = pane
+        .read_with(cx, |pane, _| pane.edit_host())
+        .expect("the editor opened");
     let editor = host_editor(&host, cx);
     assert!(text(&editor, cx) == load(&body));
     let end = load(&body).len();
     editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
-    shell.frame(cx, |_, _| ());
-    assert!(focused(&shell, &editor, cx), "focus moved into the editor");
+    // The one frame before typing, which also shows focus moved in.
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    assert!(
+        shell.frame(cx, move |window, _| handle.is_focused(window)),
+        "focus moved into the editor"
+    );
     shell.visual(cx).simulate_input("x");
     shell.run(cx);
     let typed = text(&editor, cx);

@@ -14,9 +14,10 @@
 //!   and the edit editor opens from that read: on the body as the editor
 //!   loads it, with the read editor's caret when the read editor holds that
 //!   text (R-65), the toolbar above the page and focus in the editor. A
-//!   prepare that answered `discovery_pending` waits for Resume, which
-//!   sends the same request again (R-13, R-77); a refusal is shown in a
-//!   banner, and the tab stays viewing.
+//!   prepare that answered `discovery_pending` waits in Loading for Resume,
+//!   which sends the same request again (R-13, R-77): the pill still says
+//!   the copy is being made ready, and no read opens the editor meanwhile.
+//!   A refusal is shown in a banner, and the tab stays viewing.
 //! - **Editing.** The first difference from the base begins D2's draft,
 //!   on the base the read gave (R-11); text typed before it lands is
 //!   written with it, and every later difference, undo's included (R-12),
@@ -157,9 +158,10 @@ impl TabEdit {
         self.phase
     }
 
-    /// A read landed: while Loading, the editor opens from it.
+    /// A read landed: while Loading, and not waiting for Resume, the editor
+    /// opens from it.
     pub(super) fn read_landed(&mut self) {
-        if self.phase == Phase::Loading {
+        if self.phase == Phase::Loading && self.stopped.is_none() {
             self.loaded = true;
         }
     }
@@ -249,14 +251,13 @@ impl ItemPane {
     }
 
     /// Whether Edit can start now: viewing an item it is offered for, with
-    /// no prepare waiting for Resume and no draft restored in the tab,
-    /// which Task 18 continues.
+    /// no draft restored in the tab, which Task 18 continues. A prepare
+    /// waiting for Resume is in Loading.
     fn edit_available(&self, cx: &App) -> bool {
         let Some(item) = self.model.item().rows() else {
             return false;
         };
         self.edit.phase == Phase::Viewing
-            && !matches!(self.edit.stopped, Some(Stopped::Pending(_)))
             && edit_offered(self.model.target(), item)
             && self
                 .services
@@ -326,8 +327,11 @@ impl ItemPane {
                 self.edit.loaded = false;
                 self.reload(cx);
             }
+            // R-13, R-77: editing waits in Loading for Resume (controller
+            // ruling, 2026-10-28). No read opens the editor meanwhile.
             Some(RequestState::Finished(_, ResultCode::DiscoveryPending, ..)) => {
-                self.edit.phase = Phase::Viewing;
+                self.edit.phase = Phase::Loading;
+                self.edit.loaded = false;
                 self.edit.stopped = Some(Stopped::Pending(request));
             }
             Some(RequestState::Finished(_, code, _, recovery, message)) => {
@@ -354,7 +358,7 @@ impl ItemPane {
     /// failed, or kept an older one, leaves the tab viewing, with D1's
     /// banners.
     pub(super) fn sync_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.edit.phase != Phase::Loading || !self.edit.loaded {
+        if self.edit.phase != Phase::Loading || !self.edit.loaded || self.edit.stopped.is_some() {
             return;
         }
         self.edit.loaded = false;

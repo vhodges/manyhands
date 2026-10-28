@@ -5,7 +5,7 @@ use gpui_kit::{
     AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Disableable, Icon, Sizable, button::Button, h_flex, v_flex},
-    px,
+    div, px,
 };
 use manyhands::repository::ItemDto;
 
@@ -14,7 +14,7 @@ use crate::desktop::{
     assets::icon_path,
     model::{
         edit::{CONTINUE_EDITING, DONE, Phase, RECOVERY_OFF, edit_offered},
-        item::EDIT,
+        item::{EDIT, LATER_NOTE},
     },
     view::item::{ItemPane, banners::Banner, text},
 };
@@ -22,7 +22,8 @@ use crate::desktop::{
 impl ItemPane {
     /// The header's action for editing: Edit, or Continue editing while a
     /// draft is kept or stored (R-35), where it is offered, disabled while
-    /// it cannot start; Done while editing.
+    /// it cannot start, with "Available in a later release" while a draft
+    /// restored in the tab waits for Task 18; Done while editing.
     pub(in crate::desktop::view::item) fn edit_action(
         &self,
         item: Option<&ItemDto>,
@@ -40,15 +41,43 @@ impl ItemPane {
         } else {
             EDIT
         };
+        let button = Button::new("item-edit")
+            .label(label)
+            .small()
+            .icon(Icon::default().path(icon_path("pencil")))
+            .disabled(!self.edit_available(cx))
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.edit_requested(window, cx);
+            }));
+        // A draft restored in the tab waits for Task 18's route: until then
+        // Continue editing is disabled and says so, as the header's other
+        // disabled actions do (design, Header block). Its label is not a
+        // later action's. While preparing, the pill and the banners say why.
+        let restored = self.edit.phase() == Phase::Viewing
+            && self
+                .services
+                .drafts()
+                .read(cx)
+                .attached(&self.tab_key())
+                .is_some();
+        if !restored {
+            return Some(button.into_any_element());
+        }
         Some(
-            Button::new("item-edit")
-                .label(label)
-                .small()
-                .icon(Icon::default().path(icon_path("pencil")))
-                .disabled(!self.edit_available(cx))
-                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                    this.edit_requested(window, cx);
-                }))
+            div()
+                .id("item-edit-action")
+                .test_support()
+                .role(Role::Group)
+                .aria_label(label)
+                .aria_description(LATER_NOTE)
+                .flex_none()
+                .child(
+                    div()
+                        .id("item-edit-note")
+                        .test_support()
+                        .aria_label(LATER_NOTE)
+                        .child(button.tooltip(LATER_NOTE)),
+                )
                 .into_any_element(),
         )
     }

@@ -59,7 +59,7 @@ impl DraftRegistry {
     /// session is in flight or its revision retires, when it has no base
     /// (a new item is D3's), when its base is unverified, and when the
     /// write before it failed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 15.
     pub(crate) fn save(
         &mut self,
         id: DraftId,
