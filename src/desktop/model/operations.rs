@@ -35,7 +35,7 @@ use super::{
 use crate::desktop::services::{
     DraftStoreUnavailable, ReadResult,
     prompts::PromptRequest,
-    requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
+    requests::{DesktopRequest, DesktopRequestId, Intent, Refusals, RequestState},
     worker::WorkerEvent,
 };
 
@@ -83,6 +83,8 @@ pub(crate) struct Operations {
     /// attempt (R-78), and how many have been.
     sent: HashMap<DesktopRequestId, u64>,
     sends: u64,
+    /// What each request's attempts were answered (R-78's exemption).
+    answers: HashMap<DesktopRequestId, Refusals>,
     /// Each listed repository's pending operations, by root.
     pending: BTreeMap<RepoKey, ListState<OperationListDto>>,
     generations: Generations,
@@ -151,6 +153,7 @@ impl Operations {
             WorkerEvent::Queued(request) => {
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
+                self.answers.entry(request.id).or_default().queued();
                 match self.request_mut(request.id) {
                     // A retry: the same request, in its place.
                     Some(existing) => *existing = request,
@@ -174,6 +177,15 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                // What it was answered, for R-78's exemption (`Refusals`).
+                self.answers
+                    .entry(id)
+                    .or_default()
+                    .finished(Intent::refused_answer(
+                        envelope.outcome,
+                        envelope.code,
+                        &envelope.recovery,
+                    ));
                 // A removal that succeeded took its registration out, and one
                 // answered `already_applied` found it gone (ruling R-T13a); a
                 // refused one left it.
@@ -439,14 +451,43 @@ impl Operations {
             return false;
         };
         self.requests.iter().any(|later| {
-            let refused = matches!(
-                &later.state,
-                RequestState::Finished(outcome, code, _, recovery, _)
-                    if Intent::refused_answer(*outcome, *code, recovery)
-            );
+            let refused = self
+                .answers
+                .get(&later.id)
+                .is_some_and(Refusals::all_refused);
             self.sent.get(&later.id).is_some_and(|sent| sent > at)
                 && request.intent.kept_from_again_by(&later.intent, refused)
         })
+    }
+
+    /// Whether the request `id`'s last answer named a pending operation of
+    /// its own, offered for Abandon, and the operation area lists it for
+    /// the request's repository (Task 17 fix 2).
+    pub(crate) fn pending_row_listed(&self, id: DesktopRequestId) -> bool {
+        let Some(request) = self.request(id) else {
+            return false;
+        };
+        let RequestState::Finished(_, _, _, recovery, _) = &request.state else {
+            return false;
+        };
+        let Some(operation) = recovery
+            .iter()
+            .find(|action| action.action == RecoveryActionKind::OperationAbandon)
+            .and_then(|action| action.operation_id.as_deref())
+        else {
+            return false;
+        };
+        request
+            .intent
+            .root()
+            .and_then(Path::to_str)
+            .and_then(|root| self.pending.get(root))
+            .and_then(ListState::rows)
+            .is_some_and(|list| {
+                list.items
+                    .iter()
+                    .any(|row| row.operation_id.as_deref() == Some(operation))
+            })
     }
 
     /// Whether `action`, offered on the request `id`, is a Retry that R-78

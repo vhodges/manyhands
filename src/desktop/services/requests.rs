@@ -415,7 +415,8 @@ impl Intent {
         self.undone_by(later) && !(refused && matches!(later, Self::ContextRelease { .. }))
     }
 
-    /// Whether a finished request was refused, touching nothing: the
+    /// Whether a finished request was refused, touching nothing (see
+    /// `Refusals` for a request's attempts together): the
     /// library answered with a code that refuses (class `Blocked` or
     /// `Input`), with no durable effect (the outcome is not `partial`) and
     /// no record left for the same request to go on from (no
@@ -469,6 +470,40 @@ impl Intent {
             Self::DocumentRepair { .. } => JobKind::DocumentRepair,
             Self::TicketRepair { .. } => JobKind::TicketRepair,
         }
+    }
+}
+
+/// What a request's attempts were answered, for R-78's exemption (owner,
+/// 2026-10-28): a release frees the earlier prepare of its item only when
+/// every one of its attempts was refused, touching nothing
+/// (`Intent::refused_answer`). An attempt answered otherwise (unknown,
+/// partial, `ok`) makes it block for good (Task 17 re-review, N1), and so
+/// does one still queued or running, until it is refused. The worker and
+/// the request model each keep one per request.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct Refusals {
+    /// The last attempt finished, and was refused.
+    last: bool,
+    /// An attempt finished and was not refused.
+    unrefused: bool,
+}
+
+impl Refusals {
+    /// An attempt was queued: it is not answered yet.
+    pub(crate) fn queued(&mut self) {
+        self.last = false;
+    }
+
+    /// The attempt finished, `refused` or not. One not refused is never
+    /// forgotten.
+    pub(crate) fn finished(&mut self, refused: bool) {
+        self.last = refused;
+        self.unrefused |= !refused;
+    }
+
+    /// Whether every attempt so far was refused, touching nothing.
+    pub(crate) fn all_refused(&self) -> bool {
+        self.last && !self.unrefused
     }
 }
 

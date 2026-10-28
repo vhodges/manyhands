@@ -41,7 +41,7 @@ use manyhands::{
 use super::{
     BUSY_RETRY_DELAYS, Backend, JobKind,
     prompts::{DesktopProvider, PromptRequest},
-    requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+    requests::{DesktopRequest, DesktopRequestId, Intent, Lane, Refusals, RequestState},
 };
 
 pub(crate) use super::requests::NotSent;
@@ -137,9 +137,8 @@ struct Submitted {
     attempt: u32,
     /// When that attempt was queued, in the order of every attempt (R-78).
     sent: SendMark,
-    /// Its last answer was a refusal that touched nothing
-    /// (`Intent::refused_answer`).
-    refused: bool,
+    /// What its attempts were answered, for R-78's exemption.
+    answers: Refusals,
 }
 
 /// Where an attempt stands in the order every attempt was queued in: a
@@ -326,7 +325,7 @@ impl WorkerHandle {
             later.sent > asked.sent
                 && asked
                     .intent
-                    .kept_from_again_by(&later.intent, later.refused)
+                    .kept_from_again_by(&later.intent, later.answers.all_refused())
         }) {
             return None;
         }
@@ -334,7 +333,7 @@ impl WorkerHandle {
         let submitted = state.submitted.get_mut(&id)?;
         submitted.attempt += 1;
         submitted.sent = sent;
-        submitted.refused = false;
+        submitted.answers.queued();
         if confirmation.is_some() {
             submitted.confirmation = confirmation;
         }
@@ -527,7 +526,7 @@ fn submit(
             lane,
             attempt: 1,
             sent,
-            refused: false,
+            answers: Refusals::default(),
         },
     );
     shared.send(WorkerEvent::Queued(DesktopRequest {
@@ -671,7 +670,7 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                 let refused =
                     Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
                 if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
-                    submitted.refused = refused;
+                    submitted.answers.finished(refused);
                 }
                 // The job is over before the UI hears so, so a quit that
                 // hears it finds the worker idle.

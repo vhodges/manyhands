@@ -20,13 +20,16 @@ use manyhands::{
         Mutation, MutationCall, NoProgress, OperationAction, RelationshipWrite, RequestId,
         keys::SessionCredentials,
     },
-    results::RecoveryActionKind,
+    results::{Effects, Envelope, Outcome, RecoveryAction, RecoveryActionKind, Scope},
 };
 
 use super::*;
 use crate::desktop::{
-    model::list_state::ListState,
-    services::requests::Lane,
+    model::{list_state::ListState, operations::Operations},
+    services::{
+        requests::{DesktopRequest, Lane, Refusals},
+        worker::WorkerEvent,
+    },
     test_support::fixtures::{NoPassphrase, abandon_through},
     view::operations::recovery_id,
 };
@@ -37,6 +40,9 @@ const NOT_SENT_AGAIN: &str = "Retry (Not sent again after a later Edit or releas
 const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from this \
                                   request: a release of this item was sent since. Abandon its \
                                   pending operation in the operation area, then press Edit.";
+const NOT_PREPARED_AGAIN_NO_ROW: &str = "Your private copy cannot be made ready again from this \
+                                         request: a release of this item was sent since. Press \
+                                         Edit to try again.";
 
 /// The `context release` requests of this session for the ticket `id`,
 /// newest first.
@@ -882,6 +888,11 @@ async fn discard_while_the_draft_begins_releases_only_after_its_discard(cx: &mut
         releases(&shell, TICKET, cx).is_empty(),
         "nothing is released while the draft begins"
     );
+    // Re-review N2: no new session begins while the Discard waits, so no
+    // other begin can answer it.
+    assert!(shell.inert_button("item-edit", cx), "Edit waits");
+    shell.click("item-edit", cx);
+    assert_eq!(prepares(&shell, cx).len(), 1, "no new prepare");
 
     drop(first_write);
     let request = released(&shell, TICKET, cx).await;
@@ -1167,6 +1178,37 @@ async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestA
     shell.run(cx);
     assert_eq!(attempt(&shell, pending, cx), 1, "not sent again");
 
+    // Re-review nit: with no pending row of the prepare listed, the banner
+    // does not send the user to abandon one. The row is abandoned (as from
+    // the operation area), and the list is read again.
+    let operation = shell
+        .operations(cx)
+        .read_with(cx, |operations, _| {
+            match &operations.request(pending).unwrap().state {
+                RequestState::Finished(_, _, _, recovery, _) => recovery
+                    .iter()
+                    .find(|action| action.action == RecoveryActionKind::OperationAbandon)
+                    .and_then(|action| action.operation_id.clone()),
+                _ => None,
+            }
+        })
+        .expect("the prepare's row is offered for Abandon");
+    abandon_through(shell.fixture.service(), &root, &operation);
+    let refresh = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::IndexRefresh { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    ended(&shell, refresh, cx).await;
+    shell.run(cx);
+    assert_eq!(
+        shell.label("item-prepare-not-sent", cx).as_deref(),
+        Some(NOT_PREPARED_AGAIN_NO_ROW)
+    );
+
     shell.click("item-edit", cx);
     let again = prepares(&shell, cx);
     assert_eq!(again.len(), 2, "a new request");
@@ -1187,4 +1229,147 @@ async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestA
 
 fn phase(shell: &Shell, cx: &mut TestAppContext) -> Phase {
     pane(shell, cx).read_with(cx, |pane, _| pane.edit_phase())
+}
+
+/// One request of the N1 history, as the worker announces it.
+fn queued(id: u64, intent: Intent, attempt: u32) -> WorkerEvent {
+    WorkerEvent::Queued(DesktopRequest {
+        id: DesktopRequestId(id),
+        request_id: RequestId::new(),
+        intent,
+        confirmation: None,
+        lane: Lane::User,
+        attempt,
+        state: RequestState::Queued,
+    })
+}
+
+/// An answer of the N1 history, offering Retry when `retry`.
+fn answered(id: u64, outcome: Outcome, code: ResultCode, retry: bool) -> WorkerEvent {
+    let recovery = retry
+        .then(|| RecoveryAction {
+            action: RecoveryActionKind::RequestRetry,
+            operation_id: None,
+            arguments: serde_json::Map::new(),
+        })
+        .into_iter()
+        .collect();
+    WorkerEvent::Finished(
+        DesktopRequestId(id),
+        Box::new(Envelope {
+            schema_version: 1,
+            command: "context".to_owned(),
+            request_id: None,
+            operation_id: None,
+            outcome,
+            code,
+            message: String::new(),
+            scope: Scope::default(),
+            effects: Effects::not_requested(),
+            data: None,
+            recovery,
+        }),
+    )
+}
+
+fn prepare_of(id: &str) -> Intent {
+    Intent::ContextPrepare {
+        root: PathBuf::from("/work/a"),
+        kind: AuthoringKind::Ticket,
+        id: item_id(id),
+        intent: ContextPrepareIntent::Edit,
+    }
+}
+
+fn release_of(id: &str) -> Intent {
+    Intent::ContextRelease {
+        root: PathBuf::from("/work/a"),
+        kind: AuthoringKind::Ticket,
+        id: item_id(id),
+    }
+}
+
+/// Re-review N1: a release exempts the earlier prepare of its item only
+/// when every one of its attempts was refused, touching nothing. The
+/// history is built from the worker's events, since the library's answer
+/// to a release retried after its row was abandoned is not produced here:
+/// a prepare whose last answer was `busy`, with Retry; a release whose
+/// first attempt was interrupted (`internal_error`, Retry offered), retried
+/// and then refused (`external_change`, nothing touched). The prepare stays
+/// blocked, while it waits and once refused; a release refused on every
+/// attempt frees its own prepare. The worker keeps the same record
+/// (`Refusals`).
+#[test]
+fn a_release_answered_unknown_once_keeps_blocking_after_a_refused_retry() {
+    let mut operations = Operations::default();
+    operations.apply(queued(1, prepare_of(TICKET), 1));
+    operations.apply(answered(1, Outcome::Error, ResultCode::Busy, true));
+    operations.apply(queued(2, release_of(TICKET), 1));
+    assert!(
+        operations.not_sent_again(DesktopRequestId(1)),
+        "a release queued"
+    );
+    operations.apply(answered(2, Outcome::Error, ResultCode::InternalError, true));
+    assert!(
+        operations.not_sent_again(DesktopRequestId(1)),
+        "its answer unknown"
+    );
+    operations.apply(queued(2, release_of(TICKET), 2));
+    assert!(operations.not_sent_again(DesktopRequestId(1)), "sent again");
+    operations.apply(answered(
+        2,
+        Outcome::Blocked,
+        ResultCode::ExternalChange,
+        false,
+    ));
+    assert!(
+        operations.not_sent_again(DesktopRequestId(1)),
+        "an earlier attempt's unknown answer still blocks"
+    );
+
+    // A release refused on every attempt.
+    operations.apply(queued(3, prepare_of(OTHER), 1));
+    operations.apply(answered(3, Outcome::Error, ResultCode::Busy, true));
+    operations.apply(queued(4, release_of(OTHER), 1));
+    operations.apply(answered(
+        4,
+        Outcome::Blocked,
+        ResultCode::RecoveryRequired,
+        false,
+    ));
+    assert!(!operations.not_sent_again(DesktopRequestId(3)), "refused");
+    operations.apply(queued(4, release_of(OTHER), 2));
+    assert!(
+        operations.not_sent_again(DesktopRequestId(3)),
+        "its retry is in flight"
+    );
+    operations.apply(answered(
+        4,
+        Outcome::Blocked,
+        ResultCode::RecoveryRequired,
+        false,
+    ));
+    assert!(
+        !operations.not_sent_again(DesktopRequestId(3)),
+        "refused again"
+    );
+}
+
+/// The worker's half of N1: the record each request keeps of its answers.
+#[test]
+fn refusals_count_only_when_every_attempt_was_refused() {
+    let mut answers = Refusals::default();
+    assert!(!answers.all_refused(), "not answered yet");
+    answers.finished(true);
+    assert!(answers.all_refused());
+    answers.queued();
+    assert!(!answers.all_refused(), "an attempt in flight");
+    answers.finished(false);
+    assert!(!answers.all_refused());
+    answers.queued();
+    answers.finished(true);
+    assert!(
+        !answers.all_refused(),
+        "an unrefused attempt blocks for good"
+    );
 }

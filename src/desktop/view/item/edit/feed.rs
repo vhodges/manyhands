@@ -10,9 +10,12 @@
 //! (`store_settling`).
 
 use gpui_kit::{App, Context};
-use manyhands::drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget};
+use manyhands::{
+    drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget, ItemKind},
+    repository::ItemDtoKind,
+};
 
-use super::{DraftLink, Phase, item_kind};
+use super::{DraftLink, Phase};
 use crate::desktop::{
     model::{drafts::RecoveryState, edit::DraftState, navigation::OpenTarget},
     view::item::ItemPane,
@@ -95,6 +98,8 @@ impl ItemPane {
             return;
         };
         session.draft = DraftLink::Beginning;
+        self.edit.begins += 1;
+        let token = self.edit.begins;
         let base = Some(session.base.clone());
         let begun_with = current.clone();
         let begun = self
@@ -104,7 +109,9 @@ impl ItemPane {
         let drafts = self.services.drafts().clone();
         cx.spawn(async move |pane, cx| {
             let begun = begun.await;
-            let landed = pane.update(cx, |pane, cx| pane.draft_begun(begun, begun_with, cx));
+            let landed = pane.update(cx, |pane, cx| {
+                pane.draft_begun(token, begun, begun_with, cx)
+            });
             // The tab closed meanwhile: nothing shows the session, so it is
             // let go of, its draft kept for the Drafts page, as a restore
             // does.
@@ -122,11 +129,12 @@ impl ItemPane {
     /// that waited for it discards it instead (`leave`).
     fn draft_begun(
         &mut self,
+        token: u64,
         begun: Result<DraftId, DraftErrorKind>,
         begun_with: DraftFields,
         cx: &mut Context<Self>,
     ) {
-        if self.begun_discarded(begun, cx) {
+        if self.begun_discarded(token, begun, cx) {
             return;
         }
         let tab = self.tab_key();
@@ -205,5 +213,13 @@ impl ItemPane {
         };
         let toolbar = session.toolbar.clone();
         toolbar.update(cx, |toolbar, cx| toolbar.set_status(state, cx));
+    }
+}
+
+/// The store's item kind of a desktop item.
+fn item_kind(kind: ItemDtoKind) -> ItemKind {
+    match kind {
+        ItemDtoKind::Document => ItemKind::Document,
+        ItemDtoKind::Ticket => ItemKind::Ticket,
     }
 }

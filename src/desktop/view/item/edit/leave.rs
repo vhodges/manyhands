@@ -218,7 +218,8 @@ impl ItemPane {
         // only then is release on leave handed anything (`begun_discarded`).
         if beginning {
             let (sender, receiver) = oneshot::channel();
-            self.edit.discard_begun = Some(sender);
+            // The begin in flight is the tab's latest: only it answers (N2).
+            self.edit.discard_begun = Some((self.edit.begins, sender));
             return cx.spawn(async move |_, _| receiver.await.unwrap_or(Err(DraftErrorKind::Io)));
         }
         let Some(id) = draft else {
@@ -241,13 +242,17 @@ impl ItemPane {
     /// M4: the begin a Discard waited for landed, the session already
     /// ended. A draft it stored is discarded, and the registry reports the
     /// discard to release on leave; with none stored, the tab leaves clean
-    /// now. False when no Discard waited.
+    /// now. False when no Discard waited for this begin, `token` (N2).
     pub(super) fn begun_discarded(
         &mut self,
+        token: u64,
         begun: Result<DraftId, DraftErrorKind>,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(waiting) = self.edit.discard_begun.take() else {
+        if !matches!(&self.edit.discard_begun, Some((waited, _)) if *waited == token) {
+            return false;
+        }
+        let Some((_, waiting)) = self.edit.discard_begun.take() else {
             return false;
         };
         let Ok(id) = begun else {

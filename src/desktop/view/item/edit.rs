@@ -60,8 +60,7 @@ use gpui_kit::{
     ParentElement, Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
 };
 use manyhands::{
-    drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId, ItemKind},
-    repository::ItemDtoKind,
+    drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId},
     results::ResultCode,
 };
 use zorite_editor::EditorState;
@@ -103,7 +102,7 @@ enum Stopped {
     },
     /// Resume or Retry found the request not to be sent again, a release
     /// of the item having been sent since (R-78): the tab is viewing.
-    NotSentAgain,
+    NotSentAgain(DesktopRequestId),
 }
 
 /// The session's D2 draft.
@@ -211,7 +210,10 @@ pub(super) struct TabEdit {
     /// draft and revision it was, until a read lands.
     kept_changed: Option<(DraftId, u64, bool)>,
     /// A Discard waiting for the draft still beginning (`leave`).
-    discard_begun: Option<oneshot::Sender<Result<(), DraftErrorKind>>>,
+    discard_begun: Option<(u64, oneshot::Sender<Result<(), DraftErrorKind>>)>,
+    /// How many begins the tab has sent: the token a waiting Discard is
+    /// answered by.
+    begins: u64,
     save: save::TabSave,
 }
 
@@ -229,6 +231,7 @@ impl TabEdit {
             kept_discard: cx.focus_handle(),
             kept_changed: None,
             discard_begun: None,
+            begins: 0,
             save: save::TabSave::new(scope),
         }
     }
@@ -244,14 +247,6 @@ impl TabEdit {
             self.loaded = true;
         }
         self.kept_changed = None;
-    }
-}
-
-/// The store's item kind of a desktop item.
-fn item_kind(kind: ItemDtoKind) -> ItemKind {
-    match kind {
-        ItemDtoKind::Document => ItemKind::Document,
-        ItemDtoKind::Ticket => ItemKind::Ticket,
     }
 }
 
@@ -352,13 +347,15 @@ impl ItemPane {
 
     /// Whether Edit can start now: viewing an item it is offered for, with
     /// no draft restored in the tab, which Task 18 continues; a kept
-    /// session is continued. A prepare waiting for Resume is in Loading.
+    /// session is continued. A prepare waiting for Resume is in Loading. Not
+    /// while a Discard waits for its draft (re-review N2).
     fn edit_available(&self, cx: &App) -> bool {
         let Some(item) = self.model.item().rows() else {
             return false;
         };
         let kept = self.session_kept();
         self.edit.phase == Phase::Viewing
+            && self.edit.discard_begun.is_none()
             && edit_offered(self.model.target(), item)
             && (kept
                 || self

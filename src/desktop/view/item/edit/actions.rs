@@ -13,7 +13,8 @@ use gpui_kit::{
 use manyhands::repository::ItemDto;
 
 use super::{
-    PREPARE_PENDING, PREPARE_REFUSED, RESUME, RETRY, Stopped, prepare::NOT_PREPARED_AGAIN,
+    PREPARE_PENDING, PREPARE_REFUSED, RESUME, RETRY, Stopped,
+    prepare::{ABANDON_THEN_EDIT, NOT_PREPARED_AGAIN, PRESS_EDIT},
     release::RELEASE_STRANDED,
 };
 use crate::desktop::{
@@ -209,12 +210,26 @@ impl ItemPane {
                         .into_any_element(),
                 ));
             }
-            // M3: R-78 did not send the prepare again; the way on is the
-            // operation area's Abandon.
-            Some(Stopped::NotSentAgain) => banners.push((
-                Banner::DiscoveryPending,
-                text("item-prepare-not-sent", NOT_PREPARED_AGAIN).into_any_element(),
-            )),
+            // M3: R-78 did not send the prepare again. The way on is the
+            // operation area's Abandon when it lists the prepare's own row,
+            // and otherwise Edit.
+            Some(Stopped::NotSentAgain(request)) => {
+                let listed = self
+                    .services
+                    .operations()
+                    .read(cx)
+                    .pending_row_listed(*request);
+                let next = if listed {
+                    ABANDON_THEN_EDIT
+                } else {
+                    PRESS_EDIT
+                };
+                let words = format!("{NOT_PREPARED_AGAIN} {next}");
+                banners.push((
+                    Banner::DiscoveryPending,
+                    text("item-prepare-not-sent", words).into_any_element(),
+                ));
+            }
             None => {}
         }
         banners.extend(self.save_banners(cx));

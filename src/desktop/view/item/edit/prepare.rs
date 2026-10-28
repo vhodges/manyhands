@@ -19,12 +19,14 @@ use crate::desktop::{
     view::item::ItemPane,
 };
 
-/// Resume or Retry of a prepare that R-78 does not send again: why, and
-/// where its pending row is abandoned (Task 17 fix 1, M3).
-pub(crate) const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from \
-                                             this request: a release of this item was sent \
-                                             since. Abandon its pending operation in the \
-                                             operation area, then press Edit.";
+/// Resume or Retry of a prepare that R-78 does not send again: why
+/// (Task 17 fix 1, M3), then where its pending row is abandoned, when the
+/// operation area lists one, or else to press Edit (fix 2).
+pub(crate) const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from this request: a release of this item \
+     was sent since.";
+pub(crate) const ABANDON_THEN_EDIT: &str =
+    "Abandon its pending operation in the operation area, then press Edit.";
+pub(crate) const PRESS_EDIT: &str = "Press Edit to try again.";
 
 impl ItemPane {
     /// Submits `context prepare` with the Edit intent for this tab's item.
@@ -80,7 +82,7 @@ impl ItemPane {
             self.edit.stopped = None;
             self.edit.phase = Phase::Preparing(request);
         } else {
-            self.edit.stopped = Some(Stopped::NotSentAgain);
+            self.edit.stopped = Some(Stopped::NotSentAgain(request));
         }
         cx.notify();
     }
