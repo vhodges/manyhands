@@ -17,14 +17,13 @@ use manyhands::{
     drafts::{DraftError, DraftErrorKind},
     repository::{
         AuthoringKind, CancellationToken, ContextPrepareInput, ContextPrepareIntent, FailurePoint,
-        Mutation, MutationCall, NoProgress, OperationAction, RequestId, keys::SessionCredentials,
+        Mutation, MutationCall, NoProgress, OperationAction, RelationshipWrite, RequestId,
+        keys::SessionCredentials,
     },
     results::RecoveryActionKind,
 };
 
 use super::*;
-#[cfg(unix)]
-use crate::desktop::test_support::drafts::{FolderMode, superuser};
 use crate::desktop::{
     model::list_state::ListState,
     services::requests::Lane,
@@ -35,6 +34,9 @@ use crate::desktop::{
 const VIEWING_PRIVATE: &str = "Viewing your private copy";
 const STRANDED: &str = "Release stranded work context";
 const NOT_SENT_AGAIN: &str = "Retry (Not sent again after a later Edit or release)";
+const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from this \
+                                  request: a release of this item was sent since. Abandon its \
+                                  pending operation in the operation area, then press Edit.";
 
 /// The `context release` requests of this session for the ticket `id`,
 /// newest first.
@@ -721,41 +723,53 @@ async fn discard_is_disabled_while_a_save_is_in_flight(cx: &mut TestAppContext) 
     assert_kept(&shell, &root, TICKET, cx);
 }
 
-/// Condition 3: a save of the item in flight stops a release, even when
-/// the store lists no draft of the item. No Discard or close reaches a
-/// leave while a save runs (above), so the leave is asked of the release
-/// service directly; the draft never began, its folder read-only, and the
-/// save is sent from the editor's text.
-#[cfg(unix)]
+/// Condition 3: a save of the item in flight stops a release. Done after
+/// an unused Edit waits for the store's listing; meanwhile a save of the
+/// item is sent, and held. No tab edits the item then, and none can save,
+/// so the save is sent through the worker. Nothing is released; once the
+/// save commits, the context holds work.
 #[gpui_kit::test]
 async fn a_save_in_flight_prevents_release(cx: &mut TestAppContext) {
-    if superuser() {
-        return;
-    }
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Saved unstored", "");
+        fixture.commit_ticket(root, TICKET, "Saved meanwhile", "");
     });
     open(&shell, ticket(&root, TICKET), cx);
-    let host = edit(&shell, cx).await;
-    let _read_only = FolderMode::set(&shell.fixture.data_dir().join("drafts"), 0o500);
-    type_at_end(&shell, &host, "x", cx);
-    assert!(
-        attached(&shell, &root, TICKET, cx).is_none(),
-        "nothing stored"
-    );
-    let held_save = shell.backend.hold_job(JobKind::TicketSave);
-    shell.click("item-save", cx);
-    held_save.wait_reached();
+    edit(&shell, cx).await;
+    let listing = shell.backend.hold_read(ReadKind::Drafts);
+    done(&shell, cx);
+    assert_eq!(kept(&shell, cx), None, "the session ends");
 
-    let item = context_key(&root, TICKET);
-    release_service(&shell, cx).update(cx, |releases, cx| releases.leave(item, cx));
+    let item = shown(&shell, &root, TICKET);
+    let held_save = shell.backend.hold_job(JobKind::TicketSave);
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::TicketSave {
+                root: root.clone(),
+                id: item_id(TICKET),
+                title: item.title.clone().unwrap(),
+                ticket_type: item.ticket_type.clone().unwrap(),
+                status: item.status.clone().unwrap(),
+                project: item.project.clone(),
+                team: item.team.clone(),
+                body: format!("{}x", item.body.clone().unwrap_or_default()),
+                deps: RelationshipWrite::Unchanged,
+                parent: RelationshipWrite::Unchanged,
+                observation: item.observation.clone().unwrap(),
+            },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held_save.wait_reached();
+    drop(listing);
     shell.run(cx);
     assert!(
         releases(&shell, TICKET, cx).is_empty(),
         "a save is in flight"
     );
-    assert!(created(&shell, &root, TICKET, cx));
+    assert!(made_here(&shell, &root, TICKET, cx));
 
     held_save.release();
     let request = shell.requests(cx, |request| {
@@ -765,6 +779,118 @@ async fn a_save_in_flight_prevents_release(cx: &mut TestAppContext) {
     assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
     assert!(!created(&shell, &root, TICKET, cx), "it holds work now");
     assert_kept(&shell, &root, TICKET, cx);
+}
+
+/// M2 (controller ruling): nothing is released while a tab of this process
+/// edits the item. A clean tab edits; a draft of the item that another
+/// session left is discarded from the Drafts page, and nothing is released.
+/// The tab's Done then releases.
+#[gpui_kit::test]
+async fn a_drafts_page_discard_while_a_tab_edits_the_item_releases_nothing(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Edited here", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    edit(&shell, cx).await;
+    let theirs = store_draft(&shell.fixture, &root, ItemDtoKind::Ticket, TICKET, "Theirs");
+    registry(&shell, cx).update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    shell.run(cx);
+
+    discard_on_the_drafts_page(&shell, theirs, cx);
+    assert!(
+        held(&shell.fixture.draft_store(), theirs).is_none(),
+        "discarded"
+    );
+    assert_kept(&shell, &root, TICKET, cx);
+    assert!(made_here(&shell, &root, TICKET, cx));
+
+    open(&shell, ticket(&root, TICKET), cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing, "the tab still edits");
+    done(&shell, cx);
+    let request = released(&shell, TICKET, cx).await;
+    assert_released(&shell, &root, TICKET, request, cx);
+}
+
+/// M1: a tab closed while its Edit prepares hands the prepare over. The
+/// item is opened and edited again before the store's listing lands: the
+/// new Edit's prepare comes after the closed one, and the new tab edits,
+/// so nothing is released. That tab's Done then releases.
+#[gpui_kit::test]
+async fn a_closed_tabs_prepare_releases_nothing_once_the_item_is_edited_again(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Closed, then edited", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let held = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("item-edit", cx);
+    held.wait_reached();
+    shell.keys("secondary-w", cx);
+    assert_eq!(tab_count(&shell, cx), 0, "the tab closed");
+
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("item-edit", cx);
+    assert_eq!(prepares(&shell, cx).len(), 2, "the second waits behind");
+    let listing = shell.backend.hold_read(ReadKind::Drafts);
+    held.release();
+    let first = prepares(&shell, cx)[1];
+    ended(&shell, first, cx).await;
+    assert_eq!(code(&shell, first, cx), Some(ResultCode::Ok));
+    until_editing(&shell, cx).await;
+    assert_eq!(
+        code(&shell, prepares(&shell, cx)[0], cx),
+        Some(ResultCode::Ok)
+    );
+
+    drop(listing);
+    assert_kept(&shell, &root, TICKET, cx);
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    done(&shell, cx);
+    let request = released(&shell, TICKET, cx).await;
+    assert_released(&shell, &root, TICKET, request, cx);
+}
+
+/// M4: Discard while the draft's first write is still beginning waits for
+/// it. The draft that lands is discarded, the tab closes, and only then is
+/// the context released.
+#[gpui_kit::test]
+async fn discard_while_the_draft_begins_releases_only_after_its_discard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discarded beginning", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let first_write = shell.backend.hold_read(ReadKind::Drafts);
+    type_at_end(&shell, &host, "x", cx);
+    assert!(
+        attached(&shell, &root, TICKET, cx).is_none(),
+        "still beginning"
+    );
+    shell.keys("secondary-w", cx);
+    assert!(shell.present("close-draft-dialog", cx), "it asks first");
+    shell.click("close-draft-discard-button", cx);
+    shell.run(cx);
+    assert!(
+        releases(&shell, TICKET, cx).is_empty(),
+        "nothing is released while the draft begins"
+    );
+
+    drop(first_write);
+    let request = released(&shell, TICKET, cx).await;
+    assert!(
+        stored_bodies(&shell).is_empty(),
+        "the draft that landed is discarded"
+    );
+    assert_eq!(tab_count(&shell, cx), 0, "Discard closes the tab");
+    assert_released(&shell, &root, TICKET, request, cx);
 }
 
 /// R-78: a release is never sent across a later prepare of its item. Done
@@ -922,15 +1048,67 @@ async fn a_release_is_not_retried_once_the_item_is_prepared_again(cx: &mut TestA
     assert_eq!(releases(&shell, TICKET, cx), [release]);
 }
 
-/// R-78: once a release of the item was sent, its earlier prepare is never
-/// sent again. The prepare answered `discovery_pending`, and the tab waits
-/// for Resume (R-77); then a release of the item is sent (through the
-/// release service's own entry, as the tab's stranded release sends one;
-/// the prepare's pending row refuses it). Resume sends nothing and the tab
-/// is viewing again; the operation area's Retry of the prepare is
+/// R-78 as the owner narrowed it (2026-10-28, review M3): a release the
+/// library refused, touching nothing, does not count against the earlier
+/// prepare. The prepare answered `discovery_pending`, and the tab waits for
+/// Resume (R-77); a release of the item is sent (through the release
+/// service's own entry, as the tab's stranded release sends one) and its
+/// pending row refuses it, `recovery_required`. Resume then sends the same
+/// request again, and it finishes: the editor opens. The release, for its
+/// part, is never sent again after that prepare.
+#[gpui_kit::test]
+async fn a_refused_release_lets_the_earlier_prepare_resume(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Refused, then resumed", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    failing_at(&shell, FailurePoint::BeforeIndexTransactionCommit);
+    shell.click("item-edit", cx);
+    let pending = prepares(&shell, cx)[0];
+    ended(&shell, pending, cx).await;
+    assert_eq!(
+        code(&shell, pending, cx),
+        Some(ResultCode::DiscoveryPending)
+    );
+    working(&shell);
+
+    let item = context_key(&root, TICKET);
+    release_service(&shell, cx).update(cx, |releases, _| releases.stranded(item));
+    let release = released(&shell, TICKET, cx).await;
+    assert_eq!(
+        code(&shell, release, cx),
+        Some(ResultCode::RecoveryRequired)
+    );
+    let control = retry_control(&shell, pending, cx);
+    assert_eq!(
+        shell.label(control, cx).as_deref(),
+        Some("Retry"),
+        "still offered"
+    );
+
+    shell.click("item-prepare-resume", cx);
+    until_editing(&shell, cx).await;
+    assert_eq!(prepares(&shell, cx), [pending], "the same request");
+    assert_eq!(attempt(&shell, pending, cx), 2, "sent again");
+    assert_eq!(code(&shell, pending, cx), Some(ResultCode::Ok));
+    assert!(!shell.present("item-prepare-not-sent", cx));
+    assert!(made_here(&shell, &root, TICKET, cx), "made by the retry");
+    let sent = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().retry(release, None)
+    });
+    assert!(!sent, "the release is not sent after the later prepare");
+    assert_eq!(attempt(&shell, release, cx), 1);
+}
+
+/// R-78: once a release of the item was sent, and not refused, its earlier
+/// prepare is never sent again. The prepare answered `discovery_pending`,
+/// and the tab waits for Resume (R-77); then a release of the item is sent
+/// (through the release service's own entry) and dies after acceptance,
+/// its answer unknown. Resume sends nothing, and the tab is viewing again
+/// and says why (M3); the operation area's Retry of the prepare is
 /// unavailable, and the worker refuses it. A new Edit is a new request,
-/// under a new request ID (which that pending row refuses in turn, until
-/// it is abandoned).
+/// under a new request ID.
 #[gpui_kit::test]
 async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -952,21 +1130,29 @@ async fn a_prepare_is_not_sent_again_once_its_context_is_released(cx: &mut TestA
     );
     let control = retry_control(&shell, pending, cx);
     assert_eq!(shell.label(control.clone(), cx).as_deref(), Some("Retry"));
-    working(&shell);
 
+    failing_at(&shell, FailurePoint::BeforeRequestDomainCall);
     let item = context_key(&root, TICKET);
     release_service(&shell, cx).update(cx, |releases, _| releases.stranded(item));
     let release = released(&shell, TICKET, cx).await;
     assert_eq!(
         code(&shell, release, cx),
-        Some(ResultCode::RecoveryRequired)
+        Some(ResultCode::InternalError),
+        "its answer is unknown"
     );
+    working(&shell);
 
     shell.click("item-prepare-resume", cx);
     shell.run(cx);
     assert_eq!(prepares(&shell, cx), [pending], "nothing new");
     assert_eq!(attempt(&shell, pending, cx), 1, "not sent again");
     assert_eq!(phase(&shell, cx), Phase::Viewing, "viewing again");
+    // M3: the tab says why, and where the pending row is abandoned.
+    assert_eq!(
+        shell.label("item-prepare-not-sent", cx).as_deref(),
+        Some(NOT_PREPARED_AGAIN)
+    );
+    assert!(!shell.present("item-prepare-resume", cx), "no Resume");
     assert_eq!(
         shell.label(control.clone(), cx).as_deref(),
         Some(NOT_SENT_AGAIN)

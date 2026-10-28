@@ -14,7 +14,7 @@
 //! shown as text, unavailable.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
@@ -79,6 +79,10 @@ impl Rows for OperationListDto {
 #[derive(Default)]
 pub(crate) struct Operations {
     requests: Vec<DesktopRequest>,
+    /// When each request's last attempt was queued, in the order of every
+    /// attempt (R-78), and how many have been.
+    sent: HashMap<DesktopRequestId, u64>,
+    sends: u64,
     /// Each listed repository's pending operations, by root.
     pending: BTreeMap<RepoKey, ListState<OperationListDto>>,
     generations: Generations,
@@ -144,11 +148,15 @@ impl Operations {
     /// never saw queued (a host observation) changes nothing here.
     pub(crate) fn apply(&mut self, event: WorkerEvent) {
         match event {
-            WorkerEvent::Queued(request) => match self.request_mut(request.id) {
-                // A retry: the same request, in its place.
-                Some(existing) => *existing = request,
-                None => self.requests.insert(0, request),
-            },
+            WorkerEvent::Queued(request) => {
+                self.sends += 1;
+                self.sent.insert(request.id, self.sends);
+                match self.request_mut(request.id) {
+                    // A retry: the same request, in its place.
+                    Some(existing) => *existing = request,
+                    None => self.requests.insert(0, request),
+                }
+            }
             WorkerEvent::Started(id) => self.set(
                 id,
                 RequestState::Running {
@@ -420,16 +428,25 @@ impl Operations {
     }
 
     /// R-78: whether the request `id` is never sent again, a later context
-    /// request of its item having been sent (`Intent::undone_by`): a
-    /// release once the item was prepared again, a prepare once its
-    /// context was released. The worker refuses it too.
+    /// request of its item having been sent (`Intent::kept_from_again_by`):
+    /// a release once the item was prepared again, a prepare once its
+    /// context was released, unless the library refused that release,
+    /// touching nothing (owner, 2026-10-28). "Later" is the order the
+    /// worker queued attempts in, as their `Queued` events came. The worker
+    /// refuses it too.
     pub(crate) fn not_sent_again(&self, id: DesktopRequestId) -> bool {
-        let Some(request) = self.request(id) else {
+        let (Some(request), Some(at)) = (self.request(id), self.sent.get(&id)) else {
             return false;
         };
-        self.requests
-            .iter()
-            .any(|later| later.id > id && request.intent.undone_by(&later.intent))
+        self.requests.iter().any(|later| {
+            let refused = matches!(
+                &later.state,
+                RequestState::Finished(outcome, code, _, recovery, _)
+                    if Intent::refused_answer(*outcome, *code, recovery)
+            );
+            self.sent.get(&later.id).is_some_and(|sent| sent > at)
+                && request.intent.kept_from_again_by(&later.intent, refused)
+        })
     }
 
     /// Whether `action`, offered on the request `id`, is a Retry that R-78

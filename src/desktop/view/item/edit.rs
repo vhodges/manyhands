@@ -54,12 +54,13 @@ pub(crate) use self::leave::{CloseThisTab, Leaving};
 #[cfg(test)]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 
+use futures::channel::oneshot;
 use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
 };
 use manyhands::{
-    drafts::{DraftBase, DraftFields, DraftId, ItemKind},
+    drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId, ItemKind},
     repository::ItemDtoKind,
     results::ResultCode,
 };
@@ -87,8 +88,6 @@ pub(crate) const PREPARE_REFUSED: &str =
 /// A prepare whose hand-off to the index is still owed (R-13).
 pub(crate) const PREPARE_PENDING: &str =
     "Your private copy is made, but the search index is not updated yet. Nothing is lost.";
-/// R-40's offer, in the design's words (Phases, step 1).
-pub(crate) const RELEASE_STRANDED: &str = "Release stranded work context";
 pub(crate) use crate::desktop::model::edit::save_state::{RESUME, RETRY};
 
 /// Where an Edit that did not reach the editor stopped.
@@ -102,6 +101,9 @@ enum Stopped {
         message: String,
         retry: Option<DesktopRequestId>,
     },
+    /// Resume or Retry found the request not to be sent again, a release
+    /// of the item having been sent since (R-78): the tab is viewing.
+    NotSentAgain,
 }
 
 /// The session's D2 draft.
@@ -208,6 +210,8 @@ pub(super) struct TabEdit {
     /// Whether the kept draft's item changed, as last classified: for the
     /// draft and revision it was, until a read lands.
     kept_changed: Option<(DraftId, u64, bool)>,
+    /// A Discard waiting for the draft still beginning (`leave`).
+    discard_begun: Option<oneshot::Sender<Result<(), DraftErrorKind>>>,
     save: save::TabSave,
 }
 
@@ -224,6 +228,7 @@ impl TabEdit {
             discarded: None,
             kept_discard: cx.focus_handle(),
             kept_changed: None,
+            discard_begun: None,
             save: save::TabSave::new(scope),
         }
     }

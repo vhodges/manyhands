@@ -30,6 +30,7 @@
 
 use std::rc::Rc;
 
+use futures::channel::oneshot;
 use gpui_kit::{App, Context, EventEmitter, Task, Window};
 use manyhands::drafts::{DraftErrorKind, DraftId};
 
@@ -207,7 +208,19 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
         let draft = self.live_draft(cx);
+        let beginning = self
+            .edit
+            .session
+            .as_ref()
+            .is_some_and(|session| session.draft == DraftLink::Beginning);
         self.end_session(window, cx);
+        // M4: a draft still beginning is waited for, then discarded, and
+        // only then is release on leave handed anything (`begun_discarded`).
+        if beginning {
+            let (sender, receiver) = oneshot::channel();
+            self.edit.discard_begun = Some(sender);
+            return cx.spawn(async move |_, _| receiver.await.unwrap_or(Err(DraftErrorKind::Io)));
+        }
         let Some(id) = draft else {
             self.release_on_leave(cx);
             return Task::ready(Ok(()));
@@ -223,6 +236,38 @@ impl ItemPane {
             }
             discarded
         })
+    }
+
+    /// M4: the begin a Discard waited for landed, the session already
+    /// ended. A draft it stored is discarded, and the registry reports the
+    /// discard to release on leave; with none stored, the tab leaves clean
+    /// now. False when no Discard waited.
+    pub(super) fn begun_discarded(
+        &mut self,
+        begun: Result<DraftId, DraftErrorKind>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(waiting) = self.edit.discard_begun.take() else {
+            return false;
+        };
+        let Ok(id) = begun else {
+            self.release_on_leave(cx);
+            let _ = waiting.send(Ok(()));
+            return true;
+        };
+        let discard = self
+            .services
+            .drafts()
+            .update(cx, |registry, cx| registry.discard(id, cx));
+        cx.spawn(async move |pane, cx| {
+            let discarded = discard.await;
+            if let Err(kind) = discarded {
+                let _ = pane.update(cx, |pane, cx| pane.discard_failed(kind, cx));
+            }
+            let _ = waiting.send(discarded);
+        })
+        .detach();
+        true
     }
 
     /// R-71: D2 discarded the draft of the session attached to `event`'s

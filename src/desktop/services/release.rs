@@ -20,15 +20,21 @@
 //!    comment's draft on the item counts; one that cannot be read names no
 //!    item.
 //!
+//! Nor is a context released while a tab of this process edits its item,
+//! live or kept, Preparing and Loading included (controller ruling, Task
+//! 17 fix 1): each item tab says so (`watch`), and the release happens when
+//! that tab leaves.
+//!
 //! A tab closed while its Edit prepares leaves the prepare here: once it
 //! answers `ok` with `created: true`, release on leave applies as for a
 //! clean tab; any other answer releases nothing (R-37, Known Limits).
 //!
 //! R-78: a release is never sent across a later prepare of its item. A
-//! prepare of the item sent since the leave began, or still queued or
-//! running once the store has answered, stops the release; and the worker
-//! never sends a context request again once a later one of its item would
-//! undo it (`Intent::undone_by`).
+//! prepare of the item sent since the leave began (for a closed tab's
+//! prepare, since that prepare), or still queued or running once the store
+//! has answered, stops the release; and the worker never sends a context
+//! request again once a later one of its item would undo it
+//! (`Intent::undone_by`).
 //!
 //! The release goes on the user lane, after what the user asked for before
 //! it, and counts as released as it is sent: a refusal is shown in the
@@ -51,7 +57,7 @@ use super::{
     created_contexts::{ContextKey, CreatedContexts},
     drafts::{DraftDiscardLanded, DraftRegistry},
     requests::{DesktopRequestId, Intent, Lane},
-    worker::WorkerHandle,
+    worker::{SendMark, WorkerHandle},
 };
 
 /// A release waiting for the draft store's listing (condition 4).
@@ -59,8 +65,9 @@ struct Check {
     /// How many listings had landed when the store was listed again: the
     /// next to land is this leave's, or a later one.
     landed: u64,
-    /// The newest request when the leave began (R-78).
-    since: DesktopRequestId,
+    /// The newest attempt when the leave began, or the closed prepare's own
+    /// (R-78).
+    since: SendMark,
 }
 
 /// The releases this process sends on leave, and what each waits for.
@@ -75,8 +82,15 @@ pub(crate) struct Releases {
     /// The contexts whose release was sent, until a prepare of this
     /// process makes one again.
     released: HashSet<ContextKey>,
+    /// What each item tab says of its item (`watch`).
+    editing: Vec<(ContextKey, Editing)>,
     _subscriptions: [Subscription; 2],
 }
+
+/// What an item tab says of its item: `Some(true)` while it holds an edit
+/// session of it, live or kept, from Preparing through Loading; `None` once
+/// the tab is gone.
+pub(crate) type Editing = Box<dyn Fn(&App) -> Option<bool>>;
 
 impl Releases {
     pub(crate) fn new(
@@ -98,6 +112,7 @@ impl Releases {
             checks: HashMap::new(),
             closed: HashMap::new(),
             released: HashSet::new(),
+            editing: Vec::new(),
             _subscriptions: subscriptions,
         }
     }
@@ -108,10 +123,23 @@ impl Releases {
         self.created.read(cx).contains(key) && !self.released.contains(key)
     }
 
+    /// A tab of `key`'s item says, through `editing`, whether it edits the
+    /// item: no release of it is decided while one does.
+    pub(crate) fn watch(&mut self, key: ContextKey, editing: Editing) {
+        self.editing.push((key, editing));
+    }
+
     /// Condition 2: the tab of `key`'s item left clean, or a draft of the
     /// item was discarded. Only a context this process made goes on to the
     /// store's listing; one already waiting for it is not listed twice.
     pub(crate) fn leave(&mut self, key: ContextKey, cx: &mut Context<Self>) {
+        let since = self.worker.newest();
+        self.leave_since(key, since, cx);
+    }
+
+    /// `leave`, with a prepare of the item sent after `since` stopping the
+    /// release (R-78).
+    fn leave_since(&mut self, key: ContextKey, since: SendMark, cx: &mut Context<Self>) {
         if self.checks.contains_key(&key) || self.worker.quitting() || !self.made_here(&key, cx) {
             return;
         }
@@ -122,7 +150,6 @@ impl Releases {
         if drafts.read(cx).unavailable().is_some() {
             return;
         }
-        let since = self.worker.newest();
         let landed = drafts.update(cx, |registry, cx| {
             registry.reload_listing(cx);
             registry.listings_landed()
@@ -154,7 +181,13 @@ impl Releases {
             return;
         };
         if made {
-            self.leave(key, cx);
+            // The mark is the prepare's own: one sent after it, by a tab
+            // that opened the item again, stops the release (M1).
+            let since = self
+                .worker
+                .sent_mark(request)
+                .unwrap_or_else(|| self.worker.newest());
+            self.leave_since(key, since, cx);
         }
     }
 
@@ -214,18 +247,32 @@ impl Releases {
     }
 
     /// Once the store has answered: condition 1 again (a save may have
-    /// committed meanwhile), condition 3 on the worker, and R-78.
-    fn decide(&mut self, key: ContextKey, since: DesktopRequestId, cx: &mut Context<Self>) {
+    /// committed meanwhile), condition 3 on the worker, R-78, and no tab of
+    /// this process editing the item.
+    fn decide(&mut self, key: ContextKey, since: SendMark, cx: &mut Context<Self>) {
         let prepared = |intent: &Intent| key.prepared_by(intent);
         if self.worker.quitting()
             || !self.made_here(&key, cx)
             || self.worker.in_flight(|intent| key.saved_by(intent))
             || self.worker.sent_since(since, prepared)
             || self.worker.in_flight(prepared)
+            || self.edited(&key, cx)
         {
             return;
         }
         self.send(key);
+    }
+
+    /// Whether a tab of this process edits `key`'s item, live or kept,
+    /// Preparing and Loading included (controller ruling, Task 17 fix 1).
+    /// The release happens when that tab leaves. A tab that is gone is
+    /// forgotten. It is read only here, as the registry's listing lands,
+    /// when no tab is being updated.
+    fn edited(&mut self, key: &ContextKey, cx: &App) -> bool {
+        self.editing.retain(|(_, editing)| editing(cx).is_some());
+        self.editing
+            .iter()
+            .any(|(item, editing)| item == key && editing(cx) == Some(true))
     }
 
     /// Sends the release of `key`'s context on the user lane; it counts as

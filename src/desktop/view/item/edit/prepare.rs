@@ -2,7 +2,7 @@
 //! prepare` with the Edit intent submitted on the user lane, its answer
 //! taken, and Resume of a hand-off still owed, which sends the same
 //! request again (R-13, R-77), never once a release of the item was sent
-//! (R-78).
+//! and not refused (R-78; owner, 2026-10-28).
 
 use std::path::PathBuf;
 
@@ -18,6 +18,13 @@ use crate::desktop::{
     services::requests::{DesktopRequestId, Intent, Lane, RequestState},
     view::item::ItemPane,
 };
+
+/// Resume or Retry of a prepare that R-78 does not send again: why, and
+/// where its pending row is abandoned (Task 17 fix 1, M3).
+pub(crate) const NOT_PREPARED_AGAIN: &str = "Your private copy cannot be made ready again from \
+                                             this request: a release of this item was sent \
+                                             since. Abandon its pending operation in the \
+                                             operation area, then press Edit.";
 
 impl ItemPane {
     /// Submits `context prepare` with the Edit intent for this tab's item.
@@ -50,28 +57,30 @@ impl ItemPane {
 
     /// Resume of a prepare whose hand-off is owed: the same request again,
     /// under its own request ID (R-77). Once a release of the item was
-    /// sent, the worker never sends it again (R-78): the tab is viewing,
-    /// and Edit sends a new request.
+    /// sent, and not refused, the worker never sends it again (R-78): the
+    /// tab is viewing, says why, and Edit sends a new request.
     pub(super) fn resume(&mut self, cx: &mut Context<Self>) {
         let Some(Stopped::Pending(request)) = self.edit.stopped else {
             return;
         };
-        self.edit.stopped = None;
-        self.edit.phase = if self.services.worker().retry(request, None) {
-            Phase::Preparing(request)
-        } else {
-            Phase::Viewing
-        };
-        cx.notify();
+        self.edit.phase = Phase::Viewing;
+        self.send_again(request, cx);
     }
 
     /// Retry of a refused prepare whose recovery offers the same request:
-    /// sent again, unless a release of the item was sent since (R-78); then
-    /// the tab stays viewing.
+    /// sent again, unless a release of the item was sent since, and not
+    /// refused (R-78); then the tab stays viewing, and says why.
     pub(super) fn retry_prepare(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
-        self.edit.stopped = None;
+        self.send_again(request, cx);
+    }
+
+    /// Sends the prepare `request` again, or says R-78 does not.
+    fn send_again(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
         if self.services.worker().retry(request, None) {
+            self.edit.stopped = None;
             self.edit.phase = Phase::Preparing(request);
+        } else {
+            self.edit.stopped = Some(Stopped::NotSentAgain);
         }
         cx.notify();
     }

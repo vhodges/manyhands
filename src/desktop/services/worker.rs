@@ -135,7 +135,17 @@ struct Submitted {
     lane: Lane,
     /// The attempt the last `Queued` event announced.
     attempt: u32,
+    /// When that attempt was queued, in the order of every attempt (R-78).
+    sent: SendMark,
+    /// Its last answer was a refusal that touched nothing
+    /// (`Intent::refused_answer`).
+    refused: bool,
 }
+
+/// Where an attempt stands in the order every attempt was queued in: a
+/// request sent again moves on (R-78).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) struct SendMark(u64);
 
 /// The job the worker is running.
 struct Running {
@@ -157,9 +167,17 @@ struct State {
     /// running job returns.
     shut_down: bool,
     submitted: HashMap<DesktopRequestId, Submitted>,
+    /// How many attempts have been queued.
+    sends: u64,
 }
 
 impl State {
+    /// The mark of an attempt queued now.
+    fn next_send(&mut self) -> SendMark {
+        self.sends += 1;
+        SendMark(self.sends)
+    }
+
     fn queued(&self, id: DesktopRequestId) -> bool {
         self.user
             .iter()
@@ -258,10 +276,12 @@ impl WorkerHandle {
     /// library answers a finished one from its record. A request that is
     /// queued or running, or that this worker never took, is left alone,
     /// and so is every request once quitting has closed the queue: its
-    /// last result stands. So is a context request that a later one of its
-    /// item would be undone by (R-78, `Intent::undone_by`): a release once
-    /// a later prepare of the item was sent, a prepare once a later
-    /// release was. True when it was queued again.
+    /// last result stands. So is a context request that a later attempt of
+    /// its item would be undone by (R-78, `Intent::kept_from_again_by`): a
+    /// release once a prepare of the item was sent after it, a prepare once
+    /// a release was, unless the library refused that release, touching
+    /// nothing (owner, 2026-10-28). "After" is the order attempts were
+    /// queued in. True when it was queued again.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) -> bool {
         self.requeue(id, None, secret).is_some()
     }
@@ -297,16 +317,24 @@ impl WorkerHandle {
         {
             return None;
         }
-        let asked = &state.submitted.get(&id)?.intent;
-        if state
-            .submitted
-            .iter()
-            .any(|(later, sent)| *later > id && asked.undone_by(&sent.intent))
-        {
+        // R-78, as the owner narrowed it (2026-10-28): a request is not sent
+        // again once a later attempt of its item would be undone by it,
+        // unless that later attempt was a release refused with nothing
+        // touched (`Intent::kept_from_again_by`).
+        let asked = state.submitted.get(&id)?;
+        if state.submitted.values().any(|later| {
+            later.sent > asked.sent
+                && asked
+                    .intent
+                    .kept_from_again_by(&later.intent, later.refused)
+        }) {
             return None;
         }
+        let sent = state.next_send();
         let submitted = state.submitted.get_mut(&id)?;
         submitted.attempt += 1;
+        submitted.sent = sent;
+        submitted.refused = false;
         if confirmation.is_some() {
             submitted.confirmation = confirmation;
         }
@@ -337,24 +365,25 @@ impl WorkerHandle {
         Some(attempt)
     }
 
-    /// The newest request submitted so far: a mark `sent_since` counts
-    /// from.
-    pub(crate) fn newest(&self) -> DesktopRequestId {
-        DesktopRequestId(self.shared().lock().next_id)
+    /// The mark of the newest attempt queued so far: one `sent_since`
+    /// counts from.
+    pub(crate) fn newest(&self) -> SendMark {
+        SendMark(self.shared().lock().sends)
     }
 
-    /// Whether a request submitted after `mark` asked for what `pick`
-    /// picks.
-    pub(crate) fn sent_since(
-        &self,
-        mark: DesktopRequestId,
-        pick: impl Fn(&Intent) -> bool,
-    ) -> bool {
+    /// The mark of the request `id`'s last attempt.
+    pub(crate) fn sent_mark(&self, id: DesktopRequestId) -> Option<SendMark> {
+        Some(self.shared().lock().submitted.get(&id)?.sent)
+    }
+
+    /// Whether an attempt queued after `mark`, a request's first or a
+    /// retry, asked for what `pick` picks.
+    pub(crate) fn sent_since(&self, mark: SendMark, pick: impl Fn(&Intent) -> bool) -> bool {
         self.shared()
             .lock()
             .submitted
-            .iter()
-            .any(|(id, submitted)| *id > mark && pick(&submitted.intent))
+            .values()
+            .any(|submitted| submitted.sent > mark && pick(&submitted.intent))
     }
 
     /// Whether a request that asks for what `pick` picks is queued, waiting
@@ -488,6 +517,7 @@ fn submit(
     let mut state = shared.lock();
     let id = next_id(&mut state);
     let request_id = RequestId::new();
+    let sent = state.next_send();
     state.submitted.insert(
         id,
         Submitted {
@@ -496,6 +526,8 @@ fn submit(
             confirmation,
             lane,
             attempt: 1,
+            sent,
+            refused: false,
         },
     );
     shared.send(WorkerEvent::Queued(DesktopRequest {
@@ -633,6 +665,13 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                         },
                     );
                     continue;
+                }
+                // Whether it was refused, touching nothing, is kept before the
+                // UI hears of the answer (R-78, as narrowed).
+                let refused =
+                    Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
+                if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
+                    submitted.refused = refused;
                 }
                 // The job is over before the UI hears so, so a quit that
                 // hears it finds the worker idle.

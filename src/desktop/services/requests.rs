@@ -17,7 +17,7 @@ use manyhands::{
         AuthoringKind, ConfirmationId, ContextPrepareIntent, InitialsChange, OperationId,
         ProgressStage, RelationshipWrite, RequestId, SharedKeyId, transport::SshAuthority,
     },
-    results::{Effects, Outcome, RecoveryAction, ResultCode},
+    results::{Effects, FailureClass, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
 use manyhands::canonical::ItemId;
@@ -400,6 +400,40 @@ impl Intent {
             ) => root == later_root && kind == later_kind && id == later_id,
             _ => false,
         }
+    }
+
+    /// Whether `later`, sent after this request, keeps it from being sent
+    /// again (R-78, `undone_by`), `refused` saying whether `later` was
+    /// answered with a refusal (`refused_release`). The owner narrowed
+    /// R-78 on 2026-10-28 (Task 17 review, M3): a release the library
+    /// refused, touching nothing, does not count against the earlier
+    /// prepare of its item, which may be sent again under its request ID
+    /// (R-77). A release still queued or running, one whose answer is
+    /// unknown, and one that answered `ok` still do. A release is never
+    /// sent again after a later prepare, whatever that prepare answered.
+    pub(crate) fn kept_from_again_by(&self, later: &Intent, refused: bool) -> bool {
+        self.undone_by(later) && !(refused && matches!(later, Self::ContextRelease { .. }))
+    }
+
+    /// Whether a finished request was refused, touching nothing: the
+    /// library answered with a code that refuses (class `Blocked` or
+    /// `Input`), with no durable effect (the outcome is not `partial`) and
+    /// no record left for the same request to go on from (no
+    /// `request.retry`). An interrupted request (`internal_error`), a busy
+    /// one and one cancelled are not refusals: what they did is not known
+    /// or not final.
+    pub(crate) fn refused_answer(
+        outcome: Outcome,
+        code: ResultCode,
+        recovery: &[RecoveryAction],
+    ) -> bool {
+        matches!(
+            code.failure_class(),
+            Some(FailureClass::Blocked | FailureClass::Input)
+        ) && matches!(outcome, Outcome::Blocked | Outcome::Error)
+            && !recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::RequestRetry)
     }
 
     /// The kind the backend's seam knows the job by.

@@ -86,7 +86,8 @@ pub(crate) enum Banner {
     /// A save's checkpoint is pending, with Retry.
     CheckpointFailed,
     /// A hand-off to the index still owed: a prepare's, whose Resume sends
-    /// it again (R-77), or a save's.
+    /// it again (R-77), or a save's; or a prepare's that R-78 does not send
+    /// again, whose pending row the operation area abandons.
     DiscoveryPending,
     /// The item changed under a dirty or kept draft (R-68), or a save
     /// answered `external_change`.

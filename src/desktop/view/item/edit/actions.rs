@@ -12,7 +12,10 @@ use gpui_kit::{
 };
 use manyhands::repository::ItemDto;
 
-use super::{PREPARE_PENDING, PREPARE_REFUSED, RELEASE_STRANDED, RESUME, RETRY, Stopped};
+use super::{
+    PREPARE_PENDING, PREPARE_REFUSED, RESUME, RETRY, Stopped, prepare::NOT_PREPARED_AGAIN,
+    release::RELEASE_STRANDED,
+};
 use crate::desktop::{
     assets::icon_path,
     model::{
@@ -138,9 +141,9 @@ impl ItemPane {
     }
 
     /// The banners an Edit raises: crash recovery off while editing, a
-    /// prepare's hand-off still owed, with Resume, and a refusal, with
-    /// "Release stranded work context" where R-40 offers it; then its
-    /// saves' (`save_view`).
+    /// prepare's hand-off still owed, with Resume, a refusal, with
+    /// "Release stranded work context" where R-40 offers it, and a prepare
+    /// R-78 does not send again; then its saves' (`save_view`).
     pub(in crate::desktop::view::item) fn edit_banners(
         &self,
         cx: &mut Context<Self>,
@@ -206,6 +209,12 @@ impl ItemPane {
                         .into_any_element(),
                 ));
             }
+            // M3: R-78 did not send the prepare again; the way on is the
+            // operation area's Abandon.
+            Some(Stopped::NotSentAgain) => banners.push((
+                Banner::DiscoveryPending,
+                text("item-prepare-not-sent", NOT_PREPARED_AGAIN).into_any_element(),
+            )),
             None => {}
         }
         banners.extend(self.save_banners(cx));

@@ -118,13 +118,17 @@ impl ItemPane {
     /// `begin` landed. The draft is attached to the tab, and text typed
     /// meanwhile is written. A failure keeps the text in the editor; the
     /// next difference begins again. A save asked for meanwhile is sent
-    /// now, through the draft or, with none, as the fields are.
+    /// now, through the draft or, with none, as the fields are. A Discard
+    /// that waited for it discards it instead (`leave`).
     fn draft_begun(
         &mut self,
         begun: Result<DraftId, DraftErrorKind>,
         begun_with: DraftFields,
         cx: &mut Context<Self>,
     ) {
+        if self.begun_discarded(begun, cx) {
+            return;
+        }
         let tab = self.tab_key();
         let Some(session) = &mut self.edit.session else {
             return;
