@@ -1262,8 +1262,9 @@ reports it.
 | "Table (edited in Markdown for now)" | Table inserts a table. Inside one, the toolbar offers row, column and alignment actions. | The editor edits tables (fact 36). |
 | Toolbar active marks | Read from the text around the caret. | Fact 73; R-55. |
 | Arrow keys along the toolbar | Built by the app. | Fact 67. |
+| No hint below the toolbar | A muted line below the edit toolbar: "Esc: Done · F6: next region". | Contract 13: Tab stays in the editor, so a hint says how to leave (Keys). Product owner, 2026-10-27, from the Part B review. |
 | A view-mode renderer | The read editor. | Decision 17. |
-| A view mode with no editing handles | On hover, the read view shows the editor's own handles: the block drag grip, a table's +/− pills and column-resize bands, and a callout's fold arrow. Using one changes nothing; the guard reverts it. | The read view is the editor, read-only (decision 17); the pinned editor has no switch to hide them. Product owner, 2026-10-27, from the Part A review (checklist step 2). |
+| A view mode with no editing handles | On hover, the read view shows the editor's own handles: the block drag grip, a table's +/− pills and column-resize bands, and a callout's fold arrow. Each image, in the read view and in comments, shows the editor's corner resize grip at all times, in the link colour. Using one changes nothing; the guard reverts it. | The read view is the editor, read-only (decision 17); the pinned editor has no switch to hide them. Product owner, 2026-10-27, from the Part A review (checklist step 2). The grip: product owner, 2026-10-27, from the Part B review. |
 | Waiting on as a chip per dependency, while viewing | D1's dependency rows (code, title, lifecycle; each opens its ticket), with the readiness note. The chips come with editing (Task 21). | E-23 and E-26 read the rows' IDs. Product owner, 2026-10-27, from the Part A review. |
 | IBM Plex fonts | The Kit's fonts. | Not bundled; not decided. |
 | The item tab filling the content area, its scroll region holding the page and then the discussion | The item's scroll region ends, after the discussion, with D1's details of the selected repository (name, configuration, index, Retry, Remove), which D1 drew at the end of the content column. The page still fills the region's height. | No workspace rework (Cycle exclusions); D1's `opening_a_tab_does_not_change_the_selection` reads `selection-name` with a tab open; a fixed panel below the tab left the region about 58 px tall in a 700 px window. Product owner, 2026-10-27, from Task 5a ("for now"; the owner checks it on screen, checklist step 1). |
@@ -2080,6 +2081,8 @@ On a throwaway branch of this project's repository:
      column drag and a right-click change nothing.
    - Hovering shows the editor's block grip and table handles (a Design
      Deviation); using them changes nothing.
+   - Each image shows a corner resize grip (a Design Deviation); dragging
+     it changes nothing.
    - Arrow through the `$$` block: the caret passes it.
    - The sheet's Inspect link shows the file.
    - `git status` is unchanged.
@@ -2570,6 +2573,11 @@ R-45 by decision 18.
 - After a reload, a tab's images draw as source until each is read again.
   An image added after its `src` was first looked up shows only after a
   reload (Task 12).
+- On Windows, any reparse point is refused as an image, so a OneDrive
+  Files On-Demand or other cloud placeholder file shows as source (Part B
+  review).
+- An image reached through a symbolic link with an absolute target is
+  refused, even when the target is inside the repository (Part B review).
 - The details sheet's backdrop dims the whole window.
 - A very large body is laid out in full when it opens; checklist step 10
   records the cost.
