@@ -219,7 +219,8 @@ impl ItemPane {
     /// Edit, Continue editing, `e` and `secondary-shift-e`. False when
     /// nothing was started, so a key goes on.
     pub(super) fn edit_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // A dialog in front of the tab takes every key (owner, 2026-10-27).
+        // A dialog in front of the tab takes every key (controller ruling,
+        // 2026-10-27).
         if window.has_active_dialog(cx) || !self.edit_available(cx) {
             return false;
         }

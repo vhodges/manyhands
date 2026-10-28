@@ -349,7 +349,7 @@ async fn edit_prepares_the_context_with_progress_in_the_pill_before_the_editor_o
 /// `e` on the page, the read editor included, and `secondary-shift-e`
 /// anywhere in the tab start Edit while viewing. Neither acts while
 /// editing, where `e` is typed; nor in the link popover, the details
-/// sheet, an Inspect tab's source or the Find field (owner's ruling,
+/// sheet, an Inspect tab's source or the Find field (controller ruling,
 /// 2026-10-27). A dialog is the unavailable store's test's.
 #[gpui_kit::test]
 async fn e_and_secondary_shift_e_start_edit_only_while_viewing(cx: &mut TestAppContext) {
