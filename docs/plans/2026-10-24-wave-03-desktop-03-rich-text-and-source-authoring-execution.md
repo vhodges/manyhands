@@ -1093,3 +1093,52 @@ Notes for later tasks: Task 22 leaves `targets()` in
   - re-review N1: a tab closed, or Done, before a clean Use's discard
     lands can skip that discard's release, so a context may be kept. It
     never releases wrongly.
+- Part C checkpoint (controller): the review found 1 Important and 5
+  Minor issues. Two fix rounds closed them all, and the re-review
+  approved round 1. The controller checked round 2's diff.
+- Ruling (controller, Part C review I1): quit and the window-close
+  request first wait for a begin still in flight. They then ask when any
+  tab holds unsaved text that no draft holds: "1 tab has unsaved changes
+  that are not kept as a draft" or "N tabs have unsaved changes that are
+  not kept as drafts", with Quit anyway and Cancel. Cancel is the
+  default and shows the first such tab. D2's own question follows Quit
+  anyway.
+  - A removal by the user adds to its confirmation "1 tab has unsaved
+    changes that are not kept as a draft. Removing closes it." (or "N
+    tabs … Removing closes them."). The set it counted is fixed at
+    Confirm, and a tab that becomes unkept later stays open.
+  - A repository that leaves the list without the user removing it keeps
+    such tabs open (Known Limits). No context of it is released by
+    leaving afterwards.
+
+  — The Cycle's contract 6: a dirty editor is never dropped without the
+  user's choice. — If wrong: one more dialog.
+- Ruling (controller, Part C review M2 and re-review N3): a clean session
+  whose draft is stored still asks on close, as the design's "Closing the
+  tab" says. It uses D2's title, "Close a tab with a draft", with words
+  that name nothing: "This tab has a draft, and no unsaved changes. Keep
+  it to continue later, or discard it." While the last write failed,
+  Keep draft's words say it tries again.
+- Ruling (controller, Part C review M1, M3 to M5):
+  - the review's base fields equal to the raw read take theirs'
+    normalized value;
+  - D2's banner Restore, and the Drafts page's Restore ("Open in its tab
+    to continue editing"), are disabled while a tab of this window edits
+    the item (R-35);
+  - a waiting release check re-arms on a later leave or discard (the two
+    kept-forever paths of Task 17 M5 and Task 19 N1);
+  - a prepare's Resume or Retry takes only its own attempt's answer.
+- Ruling (controller, Part C fix 2): Task 18's
+  `save_in_the_close_dialog_saves_then_closes` waits in stages, each with
+  its own `WAIT`, and its assertions are unchanged. — Its one 10 s wait
+  covered six steps of real git work, and timed out in whole-binary runs
+  at a load average of about 19. — If wrong: none; it proves the same
+  outcome.
+- Copy for the owner's on-screen check (Part C): the quit and removal
+  lines above, the clean-session close words, "Open in its tab to
+  continue editing", and "Cancel to review the changes."
+- Parked (Part C), for the whole-branch review:
+  - files that grew over 500 lines: `view/workspace/content.rs`,
+    `view/tabs.rs` and `view/confirm.rs`;
+  - D's Restore gate is held both by the disabled button and by a check
+    in `restore`, so its test fails only when both are removed.

@@ -2586,6 +2586,11 @@ R-45 by decision 18.
 - A path step that Windows reads as a device name, such as `CON`, `NUL`,
   `COM1` or `LPT1.png`, is refused as an image on every platform (Part B
   review).
+- A repository can leave the list without the user removing it. A tab of
+  it with unsaved changes that no draft holds then stays open, and its
+  text stays, but it cannot save there: Save is refused as not
+  registered. Copy the text out, or register the repository again (Part
+  C review).
 - The details sheet's backdrop dims the whole window.
 - A very large body is laid out in full when it opens; checklist step 10
   records the cost.
