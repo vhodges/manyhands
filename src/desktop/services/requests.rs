@@ -156,7 +156,6 @@ pub(crate) enum Intent {
         intent: ContextPrepareIntent,
     },
     /// Releases the work context of an item.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     ContextRelease {
         root: PathBuf,
         kind: AuthoringKind,
@@ -371,6 +370,35 @@ impl Intent {
             | Self::KeyDelete { .. }
             | Self::HostApprove { .. }
             | Self::HostReplace { .. } => false,
+        }
+    }
+
+    /// R-78 (owner, 2026-10-26): whether sending this request again, once
+    /// `later` was sent after it, would undo `later`. Neither context
+    /// command records a checkpoint, so a request sent again runs as new: a
+    /// release after a later prepare of its item would release that newer
+    /// context, and a prepare after a later release would make the context
+    /// again. Such a request is never sent again.
+    pub(crate) fn undone_by(&self, later: &Intent) -> bool {
+        match (self, later) {
+            (
+                Self::ContextRelease { root, kind, id },
+                Self::ContextPrepare {
+                    root: later_root,
+                    kind: later_kind,
+                    id: later_id,
+                    ..
+                },
+            )
+            | (
+                Self::ContextPrepare { root, kind, id, .. },
+                Self::ContextRelease {
+                    root: later_root,
+                    kind: later_kind,
+                    id: later_id,
+                },
+            ) => root == later_root && kind == later_kind && id == later_id,
+            _ => false,
         }
     }
 

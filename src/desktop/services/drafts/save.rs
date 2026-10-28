@@ -30,12 +30,12 @@
 use futures::FutureExt;
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftErrorKind, DraftFields, DraftId},
+    drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget},
     repository::MutationDataDto,
     results::Envelope,
 };
 
-use super::{DraftRegistry, Live, SessionDiscarded, off_thread, retire::take};
+use super::{DraftDiscardLanded, DraftRegistry, Live, SessionDiscarded, off_thread, retire::take};
 use crate::desktop::{
     model::drafts::{
         RecoveryState, Saving,
@@ -259,7 +259,8 @@ impl DraftRegistry {
     /// the session is over either way. The store is listed again once it
     /// lands, whatever it answered. The tab the session was attached to
     /// hears `SessionDiscarded` as the session ends, and again once the
-    /// discard lands, with what it came to (R-71).
+    /// discard lands, with what it came to (R-71); a discard that deleted
+    /// the draft is `DraftDiscardLanded` too, for release on leave.
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
@@ -281,6 +282,7 @@ impl DraftRegistry {
         }
         cx.notify();
         let Live { session, write, .. } = live;
+        let target = session.target().clone();
         let slot = session.claim_slot();
         cx.spawn(async move |registry, cx| {
             if let Some(write) = write {
@@ -314,9 +316,21 @@ impl DraftRegistry {
                 if let Some(tab) = tab {
                     cx.emit(SessionDiscarded::Landed(tab, discarded.is_ok()));
                 }
+                if discarded.is_ok() {
+                    cx.emit(DraftDiscardLanded(target));
+                }
             });
             discarded
         })
+    }
+
+    /// Whether a save of a draft of `target`'s item is in flight in this
+    /// process: being stored before it is sent, sent, or pending its
+    /// checkpoint (design, Release on leave, condition 3).
+    pub(crate) fn saving_item(&self, target: impl Fn(&DraftTarget) -> bool) -> bool {
+        self.sessions
+            .values()
+            .any(|live| live.session.saving().is_some() && target(live.session.target()))
     }
 
     #[cfg(test)]

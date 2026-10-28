@@ -98,6 +98,13 @@ pub(crate) enum SessionDiscarded {
 
 impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
 
+/// A draft was discarded, the store having deleted it: from a tab, its
+/// banners or the Drafts page, with or without a tab (design, Release on
+/// leave, condition 2). Its target names the item; it holds no text.
+pub(crate) struct DraftDiscardLanded(pub DraftTarget);
+
+impl gpui_kit::EventEmitter<DraftDiscardLanded> for DraftRegistry {}
+
 /// The store's item kind of a desktop item.
 fn item_kind(kind: ItemDtoKind) -> ItemKind {
     match kind {

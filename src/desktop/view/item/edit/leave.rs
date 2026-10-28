@@ -21,8 +21,9 @@
 //!   stored. A never-created item, which has no saved copy, closes its tab
 //!   once the discard lands. A draft of the item still stored is
 //!   offered by D2's draft banner.
-//! - **Release on leave** is Task 17's: every path the design says it
-//!   applies to calls `release_on_leave`, which releases nothing yet.
+//! - **Release on leave** (`release`): a tab that leaves clean hands its
+//!   item over; a discard of a stored draft reaches it through the
+//!   registry, once the store has deleted the draft.
 //!
 //! The tab's own discards let go of the session before D2 discards, so
 //! the registry's `SessionDiscarded` finds none to end.
@@ -196,8 +197,10 @@ impl ItemPane {
     }
 
     /// Ends the session and discards its draft, if one is stored. Release
-    /// on leave applies once the discard has landed. A failed discard has
-    /// released the draft, still stored: the banner says so.
+    /// on leave applies at once when none is, and otherwise once the
+    /// discard has landed and deleted it, as the registry reports
+    /// (`DraftDiscardLanded`). A failed discard has released the draft,
+    /// still stored: the banner says so.
     pub(super) fn discard_session(
         &mut self,
         window: Option<&mut Window>,
@@ -215,10 +218,9 @@ impl ItemPane {
             .update(cx, |registry, cx| registry.discard(id, cx));
         cx.spawn(async move |pane, cx| {
             let discarded = discard.await;
-            let _ = pane.update(cx, |pane, cx| match discarded {
-                Ok(()) => pane.release_on_leave(cx),
-                Err(kind) => pane.discard_failed(kind, cx),
-            });
+            if let Err(kind) = discarded {
+                let _ = pane.update(cx, |pane, cx| pane.discard_failed(kind, cx));
+            }
             discarded
         })
     }
@@ -227,8 +229,9 @@ impl ItemPane {
     /// tab. When it is this tab's, and the tab still holds its session (it
     /// did not cause the discard), the session ends at once. Once the
     /// discard lands, the tab says the draft was discarded, and release on
-    /// leave applies; a discard the store refused leaves the draft stored,
-    /// for D2's banner to offer, and the tab says nothing of it. A
+    /// leave applies, as the registry reports the discard to it
+    /// (`DraftDiscardLanded`); a discard the store refused leaves the draft
+    /// stored, for D2's banner to offer, and the tab says nothing of it. A
     /// never-created item, with no saved copy to view, closes its tab then.
     pub(in crate::desktop::view::item) fn session_discarded(
         &mut self,
@@ -249,9 +252,6 @@ impl ItemPane {
                     return;
                 };
                 self.edit.discarded = discarded.then_some(Elsewhere::Discarded);
-                if *discarded {
-                    self.release_on_leave(cx);
-                }
                 if never_created {
                     cx.emit(CloseThisTab);
                 }
@@ -260,9 +260,4 @@ impl ItemPane {
             SessionDiscarded::Ended(_) | SessionDiscarded::Landed(..) => {}
         }
     }
-
-    /// Release on leave (R-37, R-75, decision 18): Task 17 submits
-    /// `Intent::ContextRelease` here for the tab's item when the design's
-    /// four conditions hold. Until then nothing is released.
-    pub(in crate::desktop::view) fn release_on_leave(&mut self, _cx: &mut Context<Self>) {}
 }

@@ -308,7 +308,9 @@ impl Workspace {
             Some(RecoveryStep::Retry(id)) if self.protected_generation(id, cx) => {
                 self.retry_generation_in_settings(id, window, cx);
             }
-            Some(RecoveryStep::Retry(id)) => self.services.worker().retry(id, None),
+            Some(RecoveryStep::Retry(id)) => {
+                self.services.worker().retry(id, None);
+            }
             Some(RecoveryStep::Prepare(id)) => {
                 prepare_again(id, origin, &self.services, window, cx);
             }

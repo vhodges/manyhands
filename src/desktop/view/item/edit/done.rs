@@ -17,7 +17,7 @@
 //!    stored draft discarded; a dirty one whose draft is written is kept
 //!    (`kept`); one whose draft is not written asks Save, Discard or Cancel.
 //!    Release on leave applies where the session ends
-//!    (`leave::release_on_leave`).
+//!    (`release::release_on_leave`).
 //!
 //! Done's prompts are the leave dialog's (`view::close_draft`). Their Save
 //! is the header's, which commits from the text in memory when the draft's

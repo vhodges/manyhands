@@ -258,9 +258,12 @@ impl WorkerHandle {
     /// library answers a finished one from its record. A request that is
     /// queued or running, or that this worker never took, is left alone,
     /// and so is every request once quitting has closed the queue: its
-    /// last result stands.
-    pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) {
-        self.requeue(id, None, secret);
+    /// last result stands. So is a context request that a later one of its
+    /// item would be undone by (R-78, `Intent::undone_by`): a release once
+    /// a later prepare of the item was sent, a prepare once a later
+    /// release was. True when it was queued again.
+    pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) -> bool {
+        self.requeue(id, None, secret).is_some()
     }
 
     /// Queues the request `id` again, under its own request ID, with the
@@ -294,6 +297,14 @@ impl WorkerHandle {
         {
             return None;
         }
+        let asked = &state.submitted.get(&id)?.intent;
+        if state
+            .submitted
+            .iter()
+            .any(|(later, sent)| *later > id && asked.undone_by(&sent.intent))
+        {
+            return None;
+        }
         let submitted = state.submitted.get_mut(&id)?;
         submitted.attempt += 1;
         if confirmation.is_some() {
@@ -324,6 +335,47 @@ impl WorkerHandle {
         };
         admit(shared, &mut state, Job::new(id, work, lane));
         Some(attempt)
+    }
+
+    /// The newest request submitted so far: a mark `sent_since` counts
+    /// from.
+    pub(crate) fn newest(&self) -> DesktopRequestId {
+        DesktopRequestId(self.shared().lock().next_id)
+    }
+
+    /// Whether a request submitted after `mark` asked for what `pick`
+    /// picks.
+    pub(crate) fn sent_since(
+        &self,
+        mark: DesktopRequestId,
+        pick: impl Fn(&Intent) -> bool,
+    ) -> bool {
+        self.shared()
+            .lock()
+            .submitted
+            .iter()
+            .any(|(id, submitted)| *id > mark && pick(&submitted.intent))
+    }
+
+    /// Whether a request that asks for what `pick` picks is queued, waiting
+    /// out `busy`, or running.
+    pub(crate) fn in_flight(&self, pick: impl Fn(&Intent) -> bool) -> bool {
+        let state = self.shared().lock();
+        let picked = |id: &DesktopRequestId| {
+            state
+                .submitted
+                .get(id)
+                .is_some_and(|submitted| pick(&submitted.intent))
+        };
+        state
+            .running
+            .as_ref()
+            .is_some_and(|running| picked(&running.id))
+            || state
+                .user
+                .iter()
+                .chain(&state.background)
+                .any(|job| picked(&job.id))
     }
 
     /// A provider that asks this worker's UI, as the worker's own does:

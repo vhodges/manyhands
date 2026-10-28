@@ -33,9 +33,10 @@
 //!   while the edit editor and its undo stay, R-58), or asks. A session
 //!   ended elsewhere, and closing the tab, are `leave`.
 //!
-//! Release on leave is Task 17's (`leave::release_on_leave`). Draft text
-//! stays in the editor, the registry and the store; nothing here derives
-//! `Debug`.
+//! Release on leave (`release`) hands the tab's item to the services' release
+//! when the tab leaves clean, and offers the release of a stranded context
+//! (R-40). Draft text stays in the editor, the registry and the store;
+//! nothing here derives `Debug`.
 
 mod actions;
 mod done;
@@ -44,6 +45,7 @@ mod kept;
 mod leave;
 mod prepare;
 mod recovery_off;
+mod release;
 mod save;
 mod save_view;
 mod saved;
@@ -85,6 +87,8 @@ pub(crate) const PREPARE_REFUSED: &str =
 /// A prepare whose hand-off to the index is still owed (R-13).
 pub(crate) const PREPARE_PENDING: &str =
     "Your private copy is made, but the search index is not updated yet. Nothing is lost.";
+/// R-40's offer, in the design's words (Phases, step 1).
+pub(crate) const RELEASE_STRANDED: &str = "Release stranded work context";
 pub(crate) use crate::desktop::model::edit::save_state::{RESUME, RETRY};
 
 /// Where an Edit that did not reach the editor stopped.

@@ -44,6 +44,9 @@ pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not ava
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
 pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
+/// Why the Retry of a context request is unavailable once a later request
+/// of its item was sent (R-78).
+pub(crate) const NOT_SENT_AGAIN: &str = "Not sent again after a later Edit or release";
 /// The persistent entry of a draft store that did not open.
 pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
 
@@ -401,9 +404,50 @@ pub(crate) fn parse_authority(text: &str) -> Option<SshAuthority> {
 }
 
 impl Operations {
+    /// The request this session holds by the request ID `action` names;
+    /// `id` itself when it names none.
+    fn named(&self, id: DesktopRequestId, action: &RecoveryAction) -> Option<DesktopRequestId> {
+        match action.arguments.get("request_id") {
+            None => Some(id),
+            Some(named) => {
+                let named = named.as_str()?;
+                self.requests
+                    .iter()
+                    .find(|request| request.request_id.to_string() == named)
+                    .map(|request| request.id)
+            }
+        }
+    }
+
+    /// R-78: whether the request `id` is never sent again, a later context
+    /// request of its item having been sent (`Intent::undone_by`): a
+    /// release once the item was prepared again, a prepare once its
+    /// context was released. The worker refuses it too.
+    pub(crate) fn not_sent_again(&self, id: DesktopRequestId) -> bool {
+        let Some(request) = self.request(id) else {
+            return false;
+        };
+        self.requests
+            .iter()
+            .any(|later| later.id > id && request.intent.undone_by(&later.intent))
+    }
+
+    /// Whether `action`, offered on the request `id`, is a Retry that R-78
+    /// forbids: the operation area says so.
+    pub(crate) fn retry_not_sent_again(
+        &self,
+        id: DesktopRequestId,
+        action: &RecoveryAction,
+    ) -> bool {
+        recovery_control(action.action) == RecoveryControl::Retry
+            && self
+                .named(id, action)
+                .is_some_and(|named| self.not_sent_again(named))
+    }
+
     /// What the recovery action `action`, offered on the request `id`,
-    /// runs; `None` when D1 does not offer it, or it names nothing this
-    /// session can act on.
+    /// runs; `None` when D1 does not offer it, it names nothing this
+    /// session can act on, or it is a Retry that R-78 forbids.
     pub(crate) fn recovery_step(
         &self,
         id: DesktopRequestId,
@@ -424,16 +468,7 @@ impl Operations {
         };
         // A request this session holds, by the request ID the action
         // names; this one when it names none.
-        let named = || match action.arguments.get("request_id") {
-            None => Some(id),
-            Some(named) => {
-                let named = named.as_str()?;
-                self.requests
-                    .iter()
-                    .find(|request| request.request_id.to_string() == named)
-                    .map(|request| request.id)
-            }
-        };
+        let named = || self.named(id, action);
         Some(match recovery_control(action.action) {
             RecoveryControl::IndexRefresh => {
                 RecoveryStep::Submit(Intent::IndexRefresh { root: root()? })
@@ -441,7 +476,13 @@ impl Operations {
             RecoveryControl::IndexRebuild => {
                 RecoveryStep::Submit(Intent::IndexRebuild { root: root()? })
             }
-            RecoveryControl::Retry => RecoveryStep::Retry(named()?),
+            RecoveryControl::Retry => {
+                let named = named()?;
+                if self.not_sent_again(named) {
+                    return None;
+                }
+                RecoveryStep::Retry(named)
+            }
             RecoveryControl::Prepare => {
                 if !request.intent.confirmed() {
                     return None;

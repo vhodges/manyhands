@@ -1295,3 +1295,7 @@ mod save;
 /// Done, the kept session and closing the tab (Task 16).
 #[path = "edit_done_tests.rs"]
 mod done;
+
+/// Release on leave (Task 17).
+#[path = "edit_release_tests.rs"]
+mod release;

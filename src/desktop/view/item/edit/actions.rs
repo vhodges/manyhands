@@ -12,7 +12,7 @@ use gpui_kit::{
 };
 use manyhands::repository::ItemDto;
 
-use super::{PREPARE_PENDING, PREPARE_REFUSED, RESUME, RETRY, Stopped};
+use super::{PREPARE_PENDING, PREPARE_REFUSED, RELEASE_STRANDED, RESUME, RETRY, Stopped};
 use crate::desktop::{
     assets::icon_path,
     model::{
@@ -138,7 +138,8 @@ impl ItemPane {
     }
 
     /// The banners an Edit raises: crash recovery off while editing, a
-    /// prepare's hand-off still owed, with Resume, and a refusal; then its
+    /// prepare's hand-off still owed, with Resume, and a refusal, with
+    /// "Release stranded work context" where R-40 offers it; then its
     /// saves' (`save_view`).
     pub(in crate::desktop::view::item) fn edit_banners(
         &self,
@@ -181,11 +182,17 @@ impl ItemPane {
                         .label(RETRY)
                         .small()
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            this.edit.stopped = None;
-                            this.edit.phase = Phase::Preparing(request);
-                            this.services.worker().retry(request, None);
-                            cx.notify();
+                            this.retry_prepare(request, cx)
                         }))
+                });
+                // R-40: the context left by an abandoned prepare blocks Edit.
+                let stranded = self.stranded_offered(*code).then(|| {
+                    Button::new("item-release-stranded")
+                        .label(RELEASE_STRANDED)
+                        .small()
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.release_stranded(cx)),
+                        )
                 });
                 banners.push((
                     Banner::Refused,
@@ -195,6 +202,7 @@ impl ItemPane {
                         .child(text("item-prepare-message", message.clone()).text_color(muted))
                         .child(text("item-prepare-code", code.as_str()).text_color(muted))
                         .children(retry)
+                        .children(stranded)
                         .into_any_element(),
                 ));
             }

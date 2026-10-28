@@ -12,6 +12,7 @@ pub(crate) mod images;
 pub(crate) mod links;
 pub(crate) mod prompts;
 mod reads;
+pub(crate) mod release;
 pub(crate) mod requests;
 pub(crate) mod worker;
 
@@ -26,8 +27,9 @@ use manyhands::{
 };
 
 use crate::desktop::model::operations::Operations;
-use created_contexts::CreatedContexts;
+use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
+use release::Releases;
 use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
@@ -115,7 +117,6 @@ pub(crate) enum JobKind {
     DocumentSave,
     TicketSave,
     ContextPrepare,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     ContextRelease,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
     DocumentCreate,
@@ -205,9 +206,12 @@ pub(crate) struct Services {
     operations: Entity<Operations>,
     /// The drafts this session knows of, shared by every view.
     drafts: Entity<DraftRegistry>,
-    /// The work contexts this process made and saved nothing into (R-75).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
+    /// The work contexts this process made and saved nothing into (R-75):
+    /// `releases` reads them; tests read them here.
+    #[cfg(test)]
     created: Entity<CreatedContexts>,
+    /// Release on leave (R-37), shared by every view.
+    releases: Entity<Releases>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -231,6 +235,9 @@ impl Services {
     /// A finished `context prepare` is first passed to `CreatedContexts`,
     /// in the same update, so a context is counted before any view hears
     /// of its answer, and whether or not its tab is still open (R-37).
+    /// Once the request model has it, release on leave hears of it too, as
+    /// of a prepare removed from the queue or not sent: a tab that closed
+    /// while it prepared releases the context it made.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
@@ -239,6 +246,8 @@ impl Services {
         let registry = drafts.downgrade();
         let created = cx.new(|_| CreatedContexts::default());
         let made = created.downgrade();
+        let releases = cx.new(|cx| Releases::new(worker.clone(), created.clone(), &drafts, cx));
+        let releasing = releases.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -247,25 +256,52 @@ impl Services {
                 }
                 let applied = model.update(cx, |operations, cx| {
                     let mut finished = Vec::new();
+                    let mut prepared = Vec::new();
                     for event in batch {
+                        let ended = match &event {
+                            WorkerEvent::Finished(id, _)
+                            | WorkerEvent::Removed(id)
+                            | WorkerEvent::NotSent(id, _) => operations.request(*id),
+                            _ => None,
+                        };
+                        // A prepare's end, for release on leave: what it
+                        // made, if anything. One removed from the queue, or
+                        // not sent, made nothing.
+                        let prepare = ended.and_then(|request| {
+                            matches!(request.intent, requests::Intent::ContextPrepare { .. })
+                                .then(|| (request.id, ContextKey::of(&request.intent)))
+                        });
+                        let mut made_here = false;
                         if let WorkerEvent::Finished(id, envelope) = &event {
                             if let Some(request) = operations.request(*id) {
-                                let _ = made.update(cx, |created, _| {
-                                    created.finished(&request.intent, envelope)
-                                });
+                                made_here = made
+                                    .update(cx, |created, _| {
+                                        created.finished(&request.intent, envelope)
+                                    })
+                                    .unwrap_or(false);
                             }
                             if let Some(forward) = for_drafts(operations, *id, envelope) {
                                 finished.push(forward);
                             }
                         }
+                        if let Some((id, item)) = prepare {
+                            prepared.push((id, item, made_here));
+                        }
                         operations.apply(event);
                     }
                     cx.notify();
-                    finished
+                    (finished, prepared)
                 });
-                let Ok(finished) = applied else {
+                let Ok((finished, prepared)) = applied else {
                     break;
                 };
+                if !prepared.is_empty() {
+                    let _ = releasing.update(cx, |releases, cx| {
+                        for (id, item, made) in prepared {
+                            releases.prepared(id, item, made, cx);
+                        }
+                    });
+                }
                 if finished.is_empty() {
                     continue;
                 }
@@ -288,7 +324,9 @@ impl Services {
             worker,
             operations,
             drafts: drafts.clone(),
+            #[cfg(test)]
             created,
+            releases,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -329,9 +367,15 @@ impl Services {
     }
 
     /// The work contexts this process made and saved nothing into.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
+    #[cfg(test)]
     pub(crate) fn created_contexts(&self) -> &Entity<CreatedContexts> {
         &self.created
+    }
+
+    /// Release on leave: what each item's tab and its drafts' discards
+    /// hand over (R-37).
+    pub(crate) fn releases(&self) -> &Entity<Releases> {
+        &self.releases
     }
 
     #[cfg(test)]

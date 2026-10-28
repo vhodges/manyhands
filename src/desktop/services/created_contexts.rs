@@ -5,14 +5,16 @@
 //! It is one set for the process, kept by the services and fed from the
 //! worker's answers as they land, so a context made for a tab that closed
 //! while preparing is in it as well (R-37). Leaving and discarding consult
-//! it; a context it does not hold is never released by them. A prepare
-//! that answered `discovery_pending` enters it only once a retry answers
-//! `ok` (R-77). A save that commits into a context takes it out: it holds
-//! work now.
+//! it (`release`); a context it does not hold is never released by them. A
+//! prepare that answered `discovery_pending` enters it only once a retry
+//! answers `ok` (R-77). A save that commits into a context takes it out: it
+//! holds work now. A release leaves it in: the release service keeps what
+//! it has released.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 
 use manyhands::{
+    canonical::ItemId,
     repository::{AuthoringKind, ItemDtoKind, MutationDataDto},
     results::{CheckpointEffect, Envelope, ResultCode},
 };
@@ -36,6 +38,59 @@ impl ContextKey {
             id: id.to_owned(),
         }
     }
+
+    /// The item a context command or a save names.
+    pub(crate) fn of(intent: &Intent) -> Option<Self> {
+        let (root, kind, id) = match intent {
+            Intent::ContextPrepare { root, kind, id, .. }
+            | Intent::ContextRelease { root, kind, id } => (root, dto_kind(*kind), id),
+            Intent::DocumentSave { root, id, .. } => (root, ItemDtoKind::Document, id),
+            Intent::TicketSave { root, id, .. } => (root, ItemDtoKind::Ticket, id),
+            _ => return None,
+        };
+        Some(Self::new(root.to_str()?, kind, &id.to_string()))
+    }
+
+    /// Whether `intent` prepares this item's context.
+    pub(crate) fn prepared_by(&self, intent: &Intent) -> bool {
+        matches!(intent, Intent::ContextPrepare { .. }) && Self::of(intent).as_ref() == Some(self)
+    }
+
+    /// Whether `intent` releases this item's context.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
+    pub(crate) fn released_by(&self, intent: &Intent) -> bool {
+        matches!(intent, Intent::ContextRelease { .. }) && Self::of(intent).as_ref() == Some(self)
+    }
+
+    /// Whether `intent` saves this item.
+    pub(crate) fn saved_by(&self, intent: &Intent) -> bool {
+        matches!(
+            intent,
+            Intent::DocumentSave { .. } | Intent::TicketSave { .. }
+        ) && Self::of(intent).as_ref() == Some(self)
+    }
+
+    /// The `context release` of this item's context; `None` for an ID the
+    /// item types do not take.
+    pub(crate) fn release(&self) -> Option<Intent> {
+        let id: ItemId = self.id.parse().ok()?;
+        let kind = match self.kind {
+            ItemDtoKind::Document => AuthoringKind::Document,
+            ItemDtoKind::Ticket => AuthoringKind::Ticket,
+        };
+        Some(Intent::ContextRelease {
+            root: PathBuf::from(&self.root),
+            kind,
+            id,
+        })
+    }
+}
+
+fn dto_kind(kind: AuthoringKind) -> ItemDtoKind {
+    match kind {
+        AuthoringKind::Document => ItemDtoKind::Document,
+        AuthoringKind::Ticket => ItemDtoKind::Ticket,
+    }
 }
 
 /// The contexts this process made and saved nothing into.
@@ -46,7 +101,6 @@ pub(crate) struct CreatedContexts {
 
 impl CreatedContexts {
     /// Whether this process made `key`'s context and saved nothing into it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 17.
     pub(crate) fn contains(&self, key: &ContextKey) -> bool {
         self.contexts.contains(key)
     }
@@ -55,41 +109,37 @@ impl CreatedContexts {
     /// `created: true` adds its item's context, and a save whose checkpoint
     /// committed takes its item's out (R-75), whether or not its tab is
     /// still open. Any other answer, and any other request, changes
-    /// nothing.
-    pub(crate) fn finished(&mut self, intent: &Intent, envelope: &Envelope<MutationDataDto>) {
-        let saved = match intent {
-            Intent::DocumentSave { root, id, .. } => Some((root, ItemDtoKind::Document, id)),
-            Intent::TicketSave { root, id, .. } => Some((root, ItemDtoKind::Ticket, id)),
-            _ => None,
+    /// nothing. True when the answer made the context: a tab that closed
+    /// while it prepared releases it then (R-37).
+    pub(crate) fn finished(
+        &mut self,
+        intent: &Intent,
+        envelope: &Envelope<MutationDataDto>,
+    ) -> bool {
+        let Some(key) = ContextKey::of(intent) else {
+            return false;
         };
-        if let Some((root, kind, id)) = saved {
-            if envelope.effects.checkpoint == CheckpointEffect::Committed
-                && let Some(root) = root.to_str()
-            {
-                self.remove(&ContextKey::new(root, kind, &id.to_string()));
+        match intent {
+            Intent::DocumentSave { .. } | Intent::TicketSave { .. } => {
+                if envelope.effects.checkpoint == CheckpointEffect::Committed {
+                    self.remove(&key);
+                }
+                false
             }
-            return;
-        }
-        let Intent::ContextPrepare { root, kind, id, .. } = intent else {
-            return;
-        };
-        let created = envelope.code == ResultCode::Ok
-            && matches!(&envelope.data, Some(MutationDataDto::Context(data)) if data.created);
-        let Some(root) = root.to_str() else {
-            return;
-        };
-        if created {
-            let kind = match kind {
-                AuthoringKind::Document => ItemDtoKind::Document,
-                AuthoringKind::Ticket => ItemDtoKind::Ticket,
-            };
-            self.contexts
-                .insert(ContextKey::new(root, kind, &id.to_string()));
+            Intent::ContextPrepare { .. } => {
+                let created = envelope.code == ResultCode::Ok
+                    && matches!(&envelope.data, Some(MutationDataDto::Context(data)) if data.created);
+                if created {
+                    self.contexts.insert(key);
+                }
+                created
+            }
+            _ => false,
         }
     }
 
-    /// A save committed into `key`'s context, or it was released: it no
-    /// longer counts as made and unused.
+    /// A save committed into `key`'s context: it no longer counts as made
+    /// and unused.
     pub(crate) fn remove(&mut self, key: &ContextKey) -> bool {
         self.contexts.remove(key)
     }

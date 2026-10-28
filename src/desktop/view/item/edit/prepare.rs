@@ -1,7 +1,8 @@
 //! Edit's prepare (design, Part C, Phases, steps 2 and 3): `context
 //! prepare` with the Edit intent submitted on the user lane, its answer
 //! taken, and Resume of a hand-off still owed, which sends the same
-//! request again (R-13, R-77).
+//! request again (R-13, R-77), never once a release of the item was sent
+//! (R-78).
 
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ use manyhands::{
 use super::Stopped;
 use crate::desktop::{
     model::{edit::Phase, navigation::OpenTarget},
-    services::requests::{Intent, Lane, RequestState},
+    services::requests::{DesktopRequestId, Intent, Lane, RequestState},
     view::item::ItemPane,
 };
 
@@ -48,14 +49,30 @@ impl ItemPane {
     }
 
     /// Resume of a prepare whose hand-off is owed: the same request again,
-    /// under its own request ID (R-77).
+    /// under its own request ID (R-77). Once a release of the item was
+    /// sent, the worker never sends it again (R-78): the tab is viewing,
+    /// and Edit sends a new request.
     pub(super) fn resume(&mut self, cx: &mut Context<Self>) {
         let Some(Stopped::Pending(request)) = self.edit.stopped else {
             return;
         };
         self.edit.stopped = None;
-        self.edit.phase = Phase::Preparing(request);
-        self.services.worker().retry(request, None);
+        self.edit.phase = if self.services.worker().retry(request, None) {
+            Phase::Preparing(request)
+        } else {
+            Phase::Viewing
+        };
+        cx.notify();
+    }
+
+    /// Retry of a refused prepare whose recovery offers the same request:
+    /// sent again, unless a release of the item was sent since (R-78); then
+    /// the tab stays viewing.
+    pub(super) fn retry_prepare(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
+        self.edit.stopped = None;
+        if self.services.worker().retry(request, None) {
+            self.edit.phase = Phase::Preparing(request);
+        }
         cx.notify();
     }
 
