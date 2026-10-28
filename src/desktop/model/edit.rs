@@ -56,9 +56,9 @@ pub(crate) enum Phase {
     /// A save is in flight, or its committed answer settles; the editor
     /// takes typing meanwhile.
     Saving,
-    /// The review is open: Save on an unverified base (R-36), or an
-    /// `external_change` answer. Save and Done are disabled; the review
-    /// itself is Task 19's.
+    /// The stale-edit review is open: Save on an unverified base (R-36),
+    /// an `external_change` answer, or Compare… (R-68). Save and Done are
+    /// disabled, and the draft feed is suspended (R-44).
     Review,
 }
 

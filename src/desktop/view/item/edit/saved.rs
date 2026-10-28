@@ -2,8 +2,10 @@
 //! R-69, R-70): on D2's `DraftSaved`, or on this tab's own read when no D2
 //! session held the text, the session has saved, its baseline and base
 //! move, the tab reads the item again, and the remotes are read (fact 41).
-//! The tab's save also follows what D2 does with it (`follow_registry`).
-//! The save itself is `save`.
+//! A clean session takes the tab's read after the save as a late read is
+//! taken (`late`), once D2 has retired the saved draft
+//! (`follow_post_save_read`). The tab's save also follows what D2 does
+//! with it (`follow_registry`). The save itself is `save`.
 
 use std::path::PathBuf;
 
@@ -149,12 +151,15 @@ impl ItemPane {
         ));
     }
 
-    /// The tab's read after a save landed: a clean edit editor (not dirty,
-    /// no draft; design, Late results) reloads from it only a body that
-    /// differs from what it holds (R-19, R-79). Dirty is the session's,
-    /// against the saved copy: text undone back past the save, while the
-    /// read was out, stays with its undo history. False when `stamp` is not
-    /// that read's: another read is `late`'s.
+    /// The tab's read after a save landed (R-70): a clean edit editor (not
+    /// dirty, no draft; design, Late results) takes it by the late reads'
+    /// rule (`take_clean_read`): its body, loaded once only when it differs
+    /// from what the editor holds (R-19, R-79), then the base. Clean is the
+    /// session's, against the saved copy, never the editor's own flag (Task
+    /// 18 fix 1): text undone back past the save, while the read was out,
+    /// stays with its undo history. While D2 still retires the saved draft,
+    /// the read waits until it has (`follow_post_save_read`). False when
+    /// `stamp` is not that read's: another read is `late`'s.
     pub(in crate::desktop::view::item) fn post_save_read_landed(
         &mut self,
         stamp: &Stamp,
@@ -164,17 +169,42 @@ impl ItemPane {
             return false;
         }
         self.edit.save.reread = None;
-        let body = self.model.item().rows().and_then(|item| item.body.clone());
-        let (Some(session), Some(body)) = (&self.edit.session, body) else {
-            return true;
-        };
-        if session.dirty(cx) || self.live_draft(cx).is_some() {
-            return true;
-        }
-        session
-            .host
-            .update(cx, |host, cx| host.reload_clean(&body, cx));
+        self.edit.save.reread_waits = true;
+        self.follow_post_save_read(cx);
         true
+    }
+
+    /// The read after a save, once landed: taken by a clean session whose
+    /// draft has ended, as the save retired it. One that is dirty, under
+    /// the review, or whose draft goes on, holds the user's text, and the
+    /// read is let go of; one whose draft D2 still retires waits for it.
+    /// A read that kept older rows is not taken.
+    pub(in crate::desktop::view::item) fn follow_post_save_read(&mut self, cx: &mut Context<Self>) {
+        if !self.edit.save.reread_waits {
+            return;
+        }
+        let Some(session) = &self.edit.session else {
+            self.edit.save.reread_waits = false;
+            return;
+        };
+        if session.dirty(cx) || self.edit.phase == Phase::Review {
+            self.edit.save.reread_waits = false;
+            return;
+        }
+        if self.live_draft(cx).is_some() {
+            if !self.store_settling(cx) {
+                self.edit.save.reread_waits = false;
+            }
+            return;
+        }
+        self.edit.save.reread_waits = false;
+        if self.model.not_refreshed().is_some() {
+            return;
+        }
+        let Some(item) = self.model.item().rows().cloned() else {
+            return;
+        };
+        self.take_clean_read(&item, cx);
     }
 
     /// The registry changed, and the tab's save follows D2's:

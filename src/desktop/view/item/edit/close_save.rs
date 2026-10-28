@@ -15,7 +15,9 @@
 //!   closes, with the dialog. Anything else keeps the tab, and the dialog
 //!   says what it came to (`close_note`): a pending checkpoint with Retry,
 //!   under the same request, a refusal with the library's message and
-//!   code, the review, or a prepare or claim that did not go through.
+//!   code, the review, with "Cancel to review the changes." (Task 18's M4:
+//!   the review waits behind the dialog), or a prepare or claim that did
+//!   not go through.
 //! - **Cancel, Keep draft and Discard** end the close's save: a save still
 //!   running goes on, but the tab no longer closes when it settles.
 //!
@@ -35,6 +37,7 @@ use crate::desktop::{
         CHANGED_OUTSIDE, CHECK_CURRENT_VERSION, CHECKPOINT_FAILED, SAVE_REFUSED,
         SAVED_INDEX_PENDING, SaveState, save_state,
     },
+    model::review::CANCEL_TO_REVIEW,
     view::{
         close_draft::{self, Ask, CloseWithDraft, Offers, Read, SAVING, SaveNote},
         item::{ItemPane, refused_label},
@@ -166,13 +169,16 @@ impl ItemPane {
         }
         let answer = self.edit.save.answer.as_ref();
         let state = answer.map(|answer| save_state(answer.code, &answer.effects, false));
+        // The review the Save opened waits behind the dialog, which stays
+        // open with the change, as any other answer keeps it (Task 18's M4):
+        // Cancel reaches the review.
         if self.edit.phase == Phase::Review {
             let words = if state == Some(SaveState::Changed) {
                 CHANGED_OUTSIDE
             } else {
                 CHECK_CURRENT_VERSION
             };
-            return Some(SaveNote::says(words));
+            return Some(SaveNote::says(format!("{words} {CANCEL_TO_REVIEW}")));
         }
         match (state?, answer?) {
             (SaveState::CheckpointFailed, _) => Some(SaveNote {

@@ -125,12 +125,15 @@ impl ItemPane {
     /// window, the page's read editor takes the focus. Nothing of a save of
     /// it is followed any more.
     pub(super) fn end_session(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if self.edit.session.take().is_none() {
+        if self.edit.session.is_none() {
             return;
         }
+        // A review still open goes with it, and D2's schedule resumes.
+        self.close_review(cx);
+        self.edit.session = None;
         self.edit.phase = Phase::Viewing;
         self.edit.finishing = None;
-        self.edit.kept_changed = None;
+        self.edit.changed = None;
         self.edit.save.clear();
         if let Some(window) = window {
             self.page.focus_read(window, cx);

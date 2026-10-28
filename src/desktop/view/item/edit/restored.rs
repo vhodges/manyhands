@@ -12,7 +12,7 @@
 //!   the tab is dirty, with Save enabled. The base is the draft's own. It
 //!   takes the read's token and context only when the branch alone changed
 //!   the token (`model::edit::adopted_base`), and D2's draft moves onto it;
-//!   otherwise the review opens (Task 19's content).
+//!   otherwise the review opens (`review`).
 //! - **Save** from a restored draft (D2's section, or the close dialog)
 //!   runs those steps, then saves.
 //! - **A new item's draft** (`NotCreated`, R-20) is continued through

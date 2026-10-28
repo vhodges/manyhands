@@ -165,6 +165,7 @@ impl ItemPane {
         let drafts = cx.observe(services.drafts(), |pane, _, cx| {
             pane.sync_status(cx);
             pane.follow_registry(cx);
+            pane.follow_post_save_read(cx);
             pane.follow_done(cx);
             pane.follow_close_save(cx);
             pane.follow_continuing(cx);
@@ -302,9 +303,11 @@ impl Render for ItemPane {
         // Before the read editor takes a new read: Edit compares the two
         // (R-65).
         self.sync_edit(window, cx);
+        // The review takes the read it opened on.
+        self.sync_review(window, cx);
         self.sync_read(window, cx);
         self.sync_discussion(window, cx);
-        self.sync_kept(cx);
+        self.sync_changed(cx);
         let item = self.model.item().rows().cloned();
         let (header, later) = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
@@ -331,7 +334,7 @@ impl Render for ItemPane {
             // file read by its path keeps D1's source view (R-64).
             let text = if inspect {
                 self.source(item, cx)
-            } else if let Some(editing) = self.edit_view() {
+            } else if let Some(editing) = self.edit_view(cx) {
                 editing
             } else {
                 self.read_body(item, cx)

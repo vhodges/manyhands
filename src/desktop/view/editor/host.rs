@@ -224,7 +224,6 @@ impl EditorHost {
     /// exactly (R-79), which restarts undo; `baseline`, theirs, is what a
     /// clean editor would hold. The caret stays, clamped. The draft was
     /// written already, so this is no edit to feed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 19.
     pub(crate) fn rebase(&mut self, baseline: String, text: &str, cx: &mut Context<Self>) {
         let cursor = self.editor.read(cx).cursor();
         set_exact(&self.editor, text, cx);
@@ -258,25 +257,20 @@ impl EditorHost {
     /// R-19, contract 6 (Task 18 fix 1): the session, which its tab has
     /// found clean, takes `body`, a newer body read from the repository.
     /// The editor's own flag does not decide: its baseline moves only when
-    /// a save leaves the editor holding what was sent. A text the editor
-    /// already holds as `body` loads to stays, with its undo history (R-79);
-    /// otherwise `body` is loaded once, with the caret kept, clamped. The
-    /// baseline becomes the text either way. True when the editor now
-    /// holds `body` as loaded, so the tab may adopt the read's base.
+    /// a save leaves the editor holding what was sent, so it becomes the
+    /// text first, and the body is then reloaded as a clean editor reloads
+    /// one (`reload_clean`). A text the editor already holds, as `body`
+    /// loads to or as `body` is, stays, with its undo history: a body this
+    /// editor saved is the text it holds, and a second load of it could
+    /// change it (R-79, fact 81). Otherwise `body` is loaded once, with the
+    /// caret kept, clamped. True when the editor now holds `body`, so the
+    /// tab may move its base onto the read.
     pub(crate) fn reload_read(&mut self, body: &str, cx: &mut Context<Self>) -> bool {
-        let loaded = load(body);
-        if self.text(cx) != loaded {
-            let cursor = self.editor.read(cx).cursor();
-            let text = crlf_to_lf(body);
-            self.editor.update(cx, |editor, cx| {
-                editor.set_text(text, cx);
-                editor.set_cursor(cursor, cx);
-            });
-        }
         self.baseline = self.text(cx);
         self.last = self.baseline.clone();
         self.update_dirty(cx);
-        self.baseline == loaded
+        self.reload_clean(body, cx);
+        self.baseline == load(body) || self.baseline == crlf_to_lf(body)
     }
 
     /// The text style the editor was last painted in.

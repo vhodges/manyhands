@@ -52,7 +52,7 @@ impl ItemPane {
         };
         session.kept = true;
         self.edit.phase = Phase::Viewing;
-        self.edit.kept_changed = None;
+        self.edit.changed = None;
         self.sync_status(cx);
         self.page.focus_read(window, cx);
         cx.notify();
@@ -84,23 +84,22 @@ impl ItemPane {
         Some(editor)
     }
 
-    /// As each frame is drawn: whether the kept draft's item changed, by
-    /// D2's classification of the tab's read, its body as the editor loads
-    /// it (R-11). It is computed again for a new revision, or once a read
+    /// As each frame is drawn: whether the item changed under the session's
+    /// draft, kept or shown, by D2's classification of the tab's read, its
+    /// body as the editor loads it (R-11). The change banner says so
+    /// (R-68): the kept session's here, the shown one's with the saves'
+    /// banners. It is computed again for a new revision, or once a read
     /// lands.
-    pub(in crate::desktop::view::item) fn sync_kept(&mut self, cx: &App) {
-        if !self.session_kept() {
-            self.edit.kept_changed = None;
-            return;
-        }
+    pub(in crate::desktop::view::item) fn sync_changed(&mut self, cx: &App) {
         let Some(id) = self.live_draft(cx) else {
+            self.edit.changed = None;
             return;
         };
         let registry = self.services.drafts().read(cx);
         let Some(revision) = registry.session(id).map(|session| session.revision()) else {
             return;
         };
-        if matches!(self.edit.kept_changed, Some((at, seen, _)) if at == id && seen == revision) {
+        if matches!(self.edit.changed, Some((at, seen, _)) if at == id && seen == revision) {
             return;
         }
         let Some(item) = self.model.item_read() else {
@@ -110,7 +109,7 @@ impl ItemPane {
             registry.classify(id, item),
             Some(TargetState::Changed { .. })
         );
-        self.edit.kept_changed = Some((id, revision, changed));
+        self.edit.changed = Some((id, revision, changed));
     }
 
     /// The kept session's banners: the kept draft, with Continue editing
@@ -159,7 +158,7 @@ impl ItemPane {
                 .child(discard)
                 .into_any_element(),
         ));
-        if matches!(self.edit.kept_changed, Some((_, _, true))) {
+        if matches!(self.edit.changed, Some((_, _, true))) {
             let compare = Button::new("item-kept-compare")
                 .label(COMPARE)
                 .small()
@@ -181,8 +180,7 @@ impl ItemPane {
         banners
     }
 
-    /// Compare…: the kept session is continued, into the review (R-68),
-    /// whose content is Task 19's.
+    /// Compare…: the kept session is continued, into the review (R-68).
     fn compare_kept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.edit_available(cx) && self.resume_kept(window, cx) {
             self.open_review(cx);

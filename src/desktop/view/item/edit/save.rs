@@ -24,8 +24,9 @@
 //!   sent, its baseline becomes them (`mark_saved`, keeping undo); the
 //!   session's next draft begins on the base the save left, unverified when
 //!   another actor changed the item in between; the tab reads the item
-//!   again under a new stamp (R-70), from which a clean editor reloads only
-//!   a body that differs (`reload_clean`, R-79); and the remotes are read
+//!   again under a new stamp (R-70), which a clean editor takes as a late
+//!   read is taken (`late::take_clean_read`, R-79), once D2 has retired the
+//!   saved draft; and the remotes are read
 //!   (fact 41). Text typed while a save without a D2 session settles waits
 //!   in the editor and is drafted once the base is known. D2 rebases newer
 //!   text itself, which is no edit to feed.
@@ -97,6 +98,9 @@ pub(super) struct TabSave {
     pub(super) remote: bool,
     /// The tab's read after a committed save (R-70).
     pub(super) reread: Option<Stamp>,
+    /// That read landed, and waits for D2 to retire the saved draft before
+    /// a clean session takes it (`saved`).
+    pub(super) reread_waits: bool,
     /// Resume of a save's owed hand-off: the request, and its attempt when
     /// it was asked.
     resume: Option<(DesktopRequestId, u32)>,
@@ -115,6 +119,7 @@ impl TabSave {
             answer: None,
             remote: false,
             reread: None,
+            reread_waits: false,
             resume: None,
             generations: Generations::default(),
             scope,
@@ -134,6 +139,7 @@ impl TabSave {
         self.answer = None;
         self.resume = None;
         self.reread = None;
+        self.reread_waits = false;
     }
 }
 
@@ -189,12 +195,6 @@ impl ItemPane {
             .session
             .as_ref()
             .is_some_and(|session| session.base.observation.is_some())
-    }
-
-    /// The review opens (R-36, R-68). Its content is Task 19's.
-    pub(super) fn open_review(&mut self, cx: &mut Context<Self>) {
-        self.edit.phase = Phase::Review;
-        cx.notify();
     }
 
     /// Sends the save waiting in `run`: through D2's session, or, with none,
@@ -324,11 +324,12 @@ impl ItemPane {
                     SaveVerdict::Pending => self.edit.phase = Phase::Editing,
                     SaveVerdict::Keep => {
                         self.edit.save.run = None;
-                        self.edit.phase = if code == ResultCode::ExternalChange {
-                            Phase::Review
-                        } else {
-                            Phase::Editing
-                        };
+                        self.edit.phase = Phase::Editing;
+                        // The item changed since the base: the review opens
+                        // on it, read again.
+                        if code == ResultCode::ExternalChange {
+                            self.open_review(cx);
+                        }
                     }
                 }
             }

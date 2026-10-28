@@ -161,6 +161,9 @@ struct Live {
     /// The last store call started on the claim (a write, a retirement or
     /// a store again), for a flush, a save or a discard to wait on.
     write: Option<Shared<Task<()>>>,
+    /// The review is open over it (R-44): nothing is written on its
+    /// schedule until it closes.
+    suspended: bool,
 }
 
 impl DraftRegistry {
@@ -347,6 +350,7 @@ impl DraftRegistry {
                         session,
                         timer: None,
                         write: None,
+                        suspended: false,
                     };
                     registry.sessions.insert(id, live);
                     cx.notify();

@@ -12,10 +12,12 @@
 //!   publication remote (fact 41).
 //! - **The banners**: check the current version, with Review…, on an
 //!   unverified base until the review opens; a hand-off owed, with Resume;
-//!   a pending checkpoint, with Retry; the change banner while the review
-//!   an `external_change` opened stays open; a refusal, with the library's
-//!   message and code, and Retry when its recovery offers the request
-//!   again.
+//!   a pending checkpoint, with Retry; the change banner, after an
+//!   `external_change` answer until the review's choices are used, or once
+//!   a refresh finds the item changed under the draft, with Compare…,
+//!   which opens the review, but for while it is open (R-68); a refusal,
+//!   with the library's message and code, and Retry when its recovery
+//!   offers the request again.
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, IntoElement, ParentElement, Styled,
@@ -26,6 +28,7 @@ use manyhands::results::RecoveryActionKind;
 use super::Phase;
 use crate::desktop::{
     assets::icon_path,
+    model::edit::COMPARE,
     model::edit::save_state::{
         REVIEW_BEFORE_SAVING, SAVE, SAVE_TOOLTIP, SaveState, before_save, save_banner, save_offer,
         save_state,
@@ -111,10 +114,32 @@ impl ItemPane {
                 row("item-save-unverified", state, action),
             ));
         }
-        let Some(answer) = &self.edit.save.answer else {
+        let state = self
+            .edit
+            .save
+            .answer
+            .as_ref()
+            .map(|answer| save_state(answer.code, &answer.effects, self.edit.save.remote));
+        // The change banner (R-68): a save answered `external_change`, until
+        // the review's choices are used, or a refresh found the item changed
+        // under the draft. Compare… opens the review; while it is open the
+        // banner stays, with nothing to press.
+        let changed = matches!(self.edit.changed, Some((_, _, true)));
+        if state == Some(SaveState::Changed) || changed {
+            let compare = (self.edit.phase() == Phase::Editing).then(|| {
+                Button::new("item-save-compare")
+                    .label(COMPARE)
+                    .small()
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_review(cx)))
+            });
+            banners.push((
+                Banner::Changed,
+                row("item-save-changed", SaveState::Changed, compare),
+            ));
+        }
+        let (Some(answer), Some(state)) = (&self.edit.save.answer, state) else {
             return banners;
         };
-        let state = save_state(answer.code, &answer.effects, self.edit.save.remote);
         match state {
             SaveState::DiscoveryPending => {
                 let resume = action("item-save-resume", state, cx, |this, cx| {
@@ -131,10 +156,6 @@ impl ItemPane {
                     Banner::CheckpointFailed,
                     row("item-save-failed", state, retry),
                 ));
-            }
-            // The change banner stays while the review it opened is open.
-            SaveState::Changed if self.edit.phase() == Phase::Review => {
-                banners.push((Banner::Changed, row("item-save-changed", state, None)));
             }
             SaveState::Refused(code) => {
                 let muted = cx.theme().muted_foreground;

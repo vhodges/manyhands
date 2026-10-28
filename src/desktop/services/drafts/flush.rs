@@ -1,5 +1,6 @@
 //! Writing a session's newest revision: on its schedule, at once (Retry,
-//! a close, a quit, a save) and after a write in flight.
+//! a close, a quit, a save) and after a write in flight. The schedule is
+//! suspended while the stale-edit review is open over the session (R-44).
 
 use futures::future::{FutureExt, Shared, join_all};
 use gpui_kit::{Context, Task};
@@ -130,12 +131,45 @@ impl DraftRegistry {
         }
     }
 
-    /// Waits on a timer for the session's due time, then writes it.
+    /// The stale-edit review is open over the session `id` (R-44): nothing
+    /// of it is written on its schedule until `resume`. A write already in
+    /// flight lands. A flush asked for at once still writes: a close's
+    /// Keep draft and a quit protect the text the session holds, which the
+    /// review never changes.
+    pub(crate) fn suspend(&mut self, id: DraftId) {
+        let Some(live) = self
+            .current_id(id)
+            .and_then(|id| self.sessions.get_mut(&id))
+        else {
+            return;
+        };
+        live.suspended = true;
+        live.timer = None;
+    }
+
+    /// The review over the session `id` closed: its schedule resumes, and
+    /// a revision that waited is written when due.
+    pub(crate) fn resume(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id(id) else {
+            return;
+        };
+        if let Some(live) = self.sessions.get_mut(&id) {
+            live.suspended = false;
+        }
+        self.schedule(id, cx);
+    }
+
+    /// Waits on a timer for the session's due time, then writes it; not
+    /// while the review is open over it.
     pub(super) fn schedule(&mut self, id: DraftId, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let Some(live) = self.sessions.get_mut(&id) else {
             return;
         };
+        if live.suspended {
+            live.timer = None;
+            return;
+        }
         let Some(due) = live.session.flush_due() else {
             live.timer = None;
             return;

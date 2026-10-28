@@ -198,6 +198,7 @@ impl DraftRegistry {
                 session,
                 timer: None,
                 write: None,
+                suspended: false,
             },
         );
         self.attached.insert(tab, id);

@@ -37,6 +37,9 @@
 //!   while the edit editor and its undo stay, R-58), or asks. A session
 //!   ended elsewhere, and closing the tab, are `leave`; the close dialog's
 //!   Save is `close_save`.
+//! - **Review** (`review`, drawn by `review_view`): the stale-edit review
+//!   takes the page's place, with the draft feed suspended, until Use
+//!   these choices or Cancel (decision 4).
 //!
 //! Release on leave (`release`) hands the tab's item to the services' release
 //! when the tab leaves clean, and offers the release of a stranded context
@@ -55,6 +58,8 @@ mod prepare;
 mod recovery_off;
 mod release;
 mod restored;
+mod review;
+mod review_view;
 mod save;
 mod save_view;
 mod saved;
@@ -79,7 +84,7 @@ use super::ItemPane;
 use crate::desktop::{
     model::{
         edit::{Phase, edit_offered, fields_with_body, new_item_base},
-        stamp::ViewScope,
+        stamp::{Stamp, ViewScope},
         tabs::TabKey,
     },
     services::requests::DesktopRequestId,
@@ -212,9 +217,10 @@ pub(super) struct TabEdit {
     /// The kept-draft banner's Discard…, where its dialog gives the focus
     /// back.
     kept_discard: FocusHandle,
-    /// Whether the kept draft's item changed, as last classified: for the
-    /// draft and revision it was, until a read lands.
-    kept_changed: Option<(DraftId, u64, bool)>,
+    /// Whether the session's item changed under its draft, kept or shown,
+    /// as last classified (R-68): for the draft and revision it was, until
+    /// a read lands.
+    changed: Option<(DraftId, u64, bool)>,
     /// A Discard waiting for the draft still beginning (`leave`).
     discard_begun: Option<(u64, oneshot::Sender<Result<(), DraftErrorKind>>)>,
     /// How many begins the tab has sent: the token a waiting Discard is
@@ -227,6 +233,8 @@ pub(super) struct TabEdit {
     /// The close dialog's Save runs: the tab closes once the draft retires
     /// (`close_save`).
     closing: bool,
+    /// The stale-edit review, while it is open (`review`).
+    review: Option<review::ReviewState>,
 }
 
 impl TabEdit {
@@ -241,12 +249,13 @@ impl TabEdit {
             finishing: None,
             discarded: None,
             kept_discard: cx.focus_handle(),
-            kept_changed: None,
+            changed: None,
             discard_begun: None,
             begins: 0,
             save: save::TabSave::new(scope),
             continuing: None,
             closing: false,
+            review: None,
         }
     }
 
@@ -254,13 +263,20 @@ impl TabEdit {
         self.phase
     }
 
-    /// A read landed: while Loading, and not waiting for Resume, the editor
-    /// opens from it; a kept draft is classified against it again.
-    pub(super) fn read_landed(&mut self) {
+    /// A read landed, under `stamp`: while Loading, and not waiting for
+    /// Resume, the editor opens from it; the review it opened on takes it;
+    /// a session's draft is classified against it again.
+    pub(super) fn read_landed(&mut self, stamp: &Stamp) {
         if self.phase == Phase::Loading && self.stopped.is_none() {
             self.loaded = true;
         }
-        self.kept_changed = None;
+        if let Some(review) = &mut self.review
+            && review.read.as_ref() == Some(stamp)
+        {
+            review.read = None;
+            review.landed = true;
+        }
+        self.changed = None;
     }
 }
 
@@ -289,14 +305,24 @@ impl ItemPane {
         self.edit.phase
     }
 
+    /// The review's body editor, once the body has a result.
+    #[cfg(test)]
+    pub(crate) fn review_host(&self) -> Option<Entity<EditorHost>> {
+        self.edit.review.as_ref()?.host.clone()
+    }
+
     /// The edit editor's toolbar, while a session lives.
     #[cfg(test)]
     pub(crate) fn edit_toolbar(&self) -> Option<Entity<Toolbar>> {
         Some(self.edit.session.as_ref()?.toolbar.clone())
     }
 
-    /// The edit editor, while it is shown.
+    /// The edit editor, while it is shown: not while the review takes its
+    /// place.
     pub(super) fn edit_editor(&self, cx: &App) -> Option<Entity<EditorState>> {
+        if self.edit.phase == Phase::Review {
+            return None;
+        }
         let session = self.shown_session()?;
         Some(session.host.read(cx).editor().clone())
     }
@@ -383,19 +409,28 @@ impl ItemPane {
     }
 
     /// The mode key, from anywhere in the tab while editing: the host
-    /// switches. False when no editor is shown, so the key goes on.
+    /// switches, the review's body editor while the review is open. False
+    /// when no editor is shown, so the key goes on.
     pub(super) fn toggle_rich(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(session) = self.shown_session() else {
             return false;
         };
-        session
-            .host
-            .update(cx, |host, cx| host.set_rich(!host.is_rich(), cx));
+        let host = match &self.edit.review {
+            Some(review) => review.host.clone(),
+            None => Some(session.host.clone()),
+        };
+        if let Some(host) = host {
+            host.update(cx, |host, cx| host.set_rich(!host.is_rich(), cx));
+        }
         true
     }
 
-    /// The toolbar, under the header while editing.
+    /// The toolbar, under the header while editing; hidden while the
+    /// review is open.
     pub(super) fn toolbar_view(&self) -> Option<AnyElement> {
+        if self.edit.phase == Phase::Review {
+            return None;
+        }
         let session = self.shown_session()?;
         Some(
             div()
@@ -408,10 +443,15 @@ impl ItemPane {
         )
     }
 
-    /// The page's edit editor, while editing; a kept session's page is the
-    /// saved copy's.
-    pub(super) fn edit_view(&self) -> Option<AnyElement> {
+    /// The page's edit editor, while editing, or the review in its place
+    /// while that is open; a kept session's page is the saved copy's.
+    pub(super) fn edit_view(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.shown_session()?;
+        if self.edit.phase == Phase::Review
+            && let Some(review) = &self.edit.review
+        {
+            return Some(self.review_view(review, cx));
+        }
         Some(self.page.edit_view(&session.host))
     }
 }

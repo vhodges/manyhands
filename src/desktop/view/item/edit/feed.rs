@@ -24,8 +24,12 @@ use crate::desktop::{
 impl ItemPane {
     /// The editor's text changed: the first difference from the base
     /// begins the draft; every later change, back to the base included,
-    /// updates it.
+    /// updates it. Nothing is fed while the review is open (R-44): the
+    /// review's own model holds its texts until Use these choices.
     pub(super) fn feed(&mut self, cx: &mut Context<Self>) {
+        if self.edit.phase == Phase::Review {
+            return;
+        }
         let Some(session) = &mut self.edit.session else {
             return;
         };
@@ -155,9 +159,20 @@ impl ItemPane {
             Ok(id) => {
                 session.draft = DraftLink::Live(id);
                 let now = session.current(cx);
+                let base = session.base.clone();
+                let review = self.edit.phase == Phase::Review;
                 self.services.drafts().update(cx, |registry, cx| {
                     registry.attach(tab, id, cx);
-                    if now != begun_with {
+                    // The review's choices were used while it began: it goes
+                    // on over the base they left.
+                    if registry.session(id).and_then(|live| live.base()) != Some(&base) {
+                        registry.adopt_base(id, base, cx);
+                    }
+                    // While the review is open nothing is written (R-44);
+                    // what came meanwhile is fed once it closes.
+                    if review {
+                        registry.suspend(id);
+                    } else if now != begun_with {
                         registry.edit(id, now, cx);
                     }
                 });

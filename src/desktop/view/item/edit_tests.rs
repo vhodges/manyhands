@@ -1315,3 +1315,7 @@ mod release;
 /// Restored drafts and late results (Task 18).
 #[path = "edit_restored_tests.rs"]
 mod restored;
+
+/// The stale-edit review (Task 19).
+#[path = "review_tests.rs"]
+mod review;
