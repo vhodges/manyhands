@@ -13,7 +13,9 @@
 //! across reloads, and reloaded in place when the body changes (R-19). It
 //! keeps its own caret in view (R-67): after each caret move while it has
 //! focus, and when it takes focus. Its links go to the pane (decision 10;
-//! `banners`). A press on the page that no control takes focuses the read
+//! `banners`). It draws the local images its body names from the tab's
+//! images, which each read locates in the item's trees and folder
+//! (decision 9). A press on the page that no control takes focuses the read
 //! editor, its caret at the end when the press is below the text; with no
 //! read view, focus goes into the content region.
 //! The page's ring shows only after Back to top, never after a press.
@@ -36,6 +38,7 @@ use gpui_kit::{
 use super::{ItemPane, tokens::item_colors};
 use crate::desktop::{
     model::links::LinkTarget,
+    services::images::{ImageSource, TabImages},
     view::{
         editor::{CaretInView, read_only::ReadOnly},
         scroll::ContentScroll,
@@ -97,11 +100,13 @@ impl Page {
     /// first body makes it; a changed body is loaded into it in place,
     /// keeping its cursor, clamped (R-19); the same body leaves it
     /// untouched. A read with no body, a file that is not UTF-8, drops it.
-    /// The read editor keeps its caret in view in `scroll`'s region.
+    /// The read editor keeps its caret in view in `scroll`'s region, and
+    /// draws its images from `images`.
     fn show(
         &mut self,
         body: Option<&str>,
         scroll: &ContentScroll,
+        images: &TabImages,
         window: &mut Window,
         cx: &mut Context<ItemPane>,
     ) {
@@ -120,6 +125,7 @@ impl Page {
             return;
         }
         let read = cx.new(|cx| ReadOnly::new(body, window, cx));
+        read.update(cx, |read, cx| read.show_images(images, cx));
         let editor = read.read(cx).editor().clone();
         self.reveal = Some(CaretInView::new(&editor, scroll, window, cx));
         self.links = Some(cx.subscribe(&read, |pane, _, target: &LinkTarget, cx| {
@@ -247,8 +253,9 @@ impl Page {
 
 impl ItemPane {
     /// An item tab shows the last successful read's body in its read
-    /// editor, kept during an in-flight or failed read. An Inspect tab
-    /// keeps D1's source view (`source`).
+    /// editor, kept during an in-flight or failed read. Its images, and
+    /// its comments', resolve from where that read found the item. An
+    /// Inspect tab keeps D1's source view (`source`).
     pub(super) fn sync_read(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(
             self.model.target(),
@@ -259,8 +266,9 @@ impl ItemPane {
         let Some(item) = self.model.item().rows() else {
             return;
         };
+        self.images.locate(ImageSource::of(item, self.repo()));
         self.page
-            .show(item.body.as_deref(), &self.scroll, window, cx);
+            .show(item.body.as_deref(), &self.scroll, &self.images, window, cx);
         self.page.note_focus(window, cx);
     }
 }

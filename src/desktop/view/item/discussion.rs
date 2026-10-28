@@ -20,7 +20,8 @@
 //! view (R-67), as the page's read editor does: after a caret move while
 //! it has focus, and when it takes focus, which each frame checks. Its
 //! links go to the pane, which reads them from the item's folder, not the
-//! comment's (decision 10).
+//! comment's (decision 10), and it draws its images from the tab's, which
+//! resolve from there too (decision 9).
 //!
 //! **The jump** (`jump`). The header's Comments {n} and `secondary-shift-c`
 //! bring the discussion to the region's top and focus its heading, which
@@ -190,6 +191,7 @@ impl ItemPane {
                 continue;
             }
             let read = cx.new(|cx| ReadOnly::new(text, window, cx));
+            read.update(cx, |read, cx| read.show_images(&self.images, cx));
             let editor = read.read(cx).editor().clone();
             let reveal = CaretInView::new(&editor, &self.scroll, window, cx);
             let links = cx.subscribe(&read, |pane, _, target: &LinkTarget, cx| {

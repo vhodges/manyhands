@@ -96,8 +96,10 @@ async fn read_tab(reader: Reader, target: OpenTarget) -> ItemReads {
 }
 
 impl ItemPane {
-    /// Reload keeps the shown state until the replacement arrives.
+    /// Reload keeps the shown state until the replacement arrives. The
+    /// tab's images are cleared, so each is read again as it is now.
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) -> Stamp {
+        self.images.clear(cx);
         let stamp = self.model.reload();
         self.read(stamp.clone(), cx);
         stamp

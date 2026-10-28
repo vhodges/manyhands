@@ -14,6 +14,7 @@ pub(crate) mod names;
 pub(crate) mod navigation;
 pub(crate) mod read_state;
 pub(crate) mod relationships;
+pub(crate) mod resources;
 pub(crate) mod stamp;
 pub(crate) mod tabs;
 pub(crate) mod tickets;

@@ -21,7 +21,9 @@
 //! over the region, and `draft` the banner of a stored draft and the
 //! section of one restored here, with `draft_actions` its Export… and
 //! Discard…. All children use the same entity, stamped model and
-//! subscriptions; none writes the item.
+//! subscriptions; none writes the item. Every editor of the tab draws the
+//! local images its text names from the tab's own `TabImages`
+//! (`services::images`), which a reload clears.
 
 mod banners;
 mod chips;
@@ -49,7 +51,7 @@ use gpui_kit::{
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
     model::{item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope},
-    services::{Services, requests::DesktopRequestId},
+    services::{Services, images::TabImages, requests::DesktopRequestId},
 };
 #[cfg(test)]
 pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
@@ -119,6 +121,9 @@ pub(crate) struct ItemPane {
     link_note: Option<banners::LinkNote>,
     /// The last link's resolution; a later link drops it.
     link_read: Option<Task<()>>,
+    /// The local images every editor of the tab draws from (decision 9),
+    /// cleared on reload.
+    images: TabImages,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
@@ -136,6 +141,7 @@ impl ItemPane {
             this.operations_changed(cx)
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
+        let images = TabImages::new(&services);
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
@@ -156,6 +162,7 @@ impl ItemPane {
             draft: draft::TabDraft::default(),
             link_note: None,
             link_read: None,
+            images,
             _operations: operations,
             _drafts: drafts,
         };
@@ -188,6 +195,12 @@ impl ItemPane {
         id: &str,
     ) -> Option<Entity<super::editor::read_only::ReadOnly>> {
         self.discussion.body(id).cloned()
+    }
+
+    /// The tab's images.
+    #[cfg(test)]
+    pub(crate) fn images(&self) -> &TabImages {
+        &self.images
     }
 
     /// The vertical offset of the item's scroll region.
@@ -321,3 +334,7 @@ mod page_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "item/discussion_tests.rs"]
 mod discussion_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "item/images_tests.rs"]
+mod images_tests;

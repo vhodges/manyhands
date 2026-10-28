@@ -7,6 +7,7 @@
 //! own failure points and hooks.
 
 pub(crate) mod drafts;
+pub(crate) mod images;
 pub(crate) mod links;
 pub(crate) mod prompts;
 mod reads;
@@ -74,6 +75,9 @@ pub(crate) enum ReadKind {
     DraftItem,
     /// `observe_path`, of the path a clicked link names.
     Observe,
+    /// A local image an editor shows, read from the tab's trees and
+    /// decoded (`images`): no library call, but held like one.
+    Image,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.

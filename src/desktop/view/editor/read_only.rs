@@ -22,6 +22,10 @@
 //! focus with GPUI's default, which Tab passes by, so Tab lands on the
 //! wrapper, which hands focus to the editor. Shift-Tab leaves from the
 //! wrapper's place, or it would land on the wrapper again.
+//!
+//! Given its tab's images (`show_images`), it draws the local images its
+//! text names from them, and starts the loads each frame asked for once
+//! that frame is drawn (decision 9).
 
 use gpui_kit::{
     Action, App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
@@ -35,7 +39,10 @@ use zorite_editor::{
 };
 
 use super::{clicked_link, entered_by_pointer, open_editor, step_over_blocks};
-use crate::desktop::model::{editor_text::crlf_to_lf, links::LinkTarget};
+use crate::desktop::{
+    model::{editor_text::crlf_to_lf, links::LinkTarget},
+    services::images::TabImages,
+};
 
 /// A read editor and its guard.
 pub(crate) struct ReadOnly {
@@ -49,6 +56,8 @@ pub(crate) struct ReadOnly {
     /// The last input that can enter a block was a pointer press, not a
     /// key (R-66).
     pressed: bool,
+    /// The tab's images, once given.
+    images: Option<TabImages>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -69,12 +78,19 @@ impl ReadOnly {
             shown,
             cursor,
             pressed: false,
+            images: None,
             _subscriptions: subscriptions,
         }
     }
 
     pub(crate) fn editor(&self) -> &Entity<EditorState> {
         &self.editor
+    }
+
+    /// Draws the local images the text names from `images`, the tab's.
+    pub(crate) fn show_images(&mut self, images: &TabImages, cx: &mut Context<Self>) {
+        images.attach(&self.editor, cx);
+        self.images = Some(images.clone());
     }
 
     /// R-19: a clean reload shows `body`, loaded as the editor loads it,
@@ -166,6 +182,9 @@ impl Render for ReadOnly {
                         .update(cx, |editor, cx| editor.focus(window, cx));
                 }
             });
+        }
+        if let Some(images) = &self.images {
+            images.after_frame(cx);
         }
         div()
             .track_focus(&self.focus)

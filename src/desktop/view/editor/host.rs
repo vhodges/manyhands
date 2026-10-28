@@ -30,6 +30,10 @@
 //!   here, and every clicked link goes to the tab as a `LinkTarget`
 //!   (`clicked_link`). Markdown mode shows links as text, and the editor
 //!   reports no click on them there.
+//! - **Images** (decision 9). Given its tab's images (`show_images`), it
+//!   draws the local images the text names from them, sharing what the
+//!   tab's other editors loaded, and starts the loads each frame asked for
+//!   once that frame is drawn.
 //!
 //! The host holds the user's text, so it derives nothing.
 
@@ -54,6 +58,7 @@ use crate::desktop::{
         editor_text::{crlf_to_lf, load},
         links::LinkTarget,
     },
+    services::images::TabImages,
     view::{item::tokens::item_colors, scroll::ContentScroll},
 };
 
@@ -98,6 +103,8 @@ pub(crate) struct EditorHost {
     done: Option<FocusHandle>,
     /// The caret reveal in the tab's region, once placed.
     reveal: Option<CaretInView>,
+    /// The tab's images, once given.
+    images: Option<TabImages>,
     /// The text style the editor was last painted in.
     #[cfg(test)]
     painted: std::rc::Rc<std::cell::RefCell<Option<gpui_kit::TextStyle>>>,
@@ -134,6 +141,7 @@ impl EditorHost {
             settling: false,
             done: None,
             reveal: None,
+            images: None,
             #[cfg(test)]
             painted: Default::default(),
             _subscriptions: subscriptions,
@@ -152,6 +160,13 @@ impl EditorHost {
     ) {
         self.done = Some(done);
         self.reveal = Some(CaretInView::new(&self.editor, scroll, window, cx));
+    }
+
+    /// Draws the local images the text names from `images`, the tab's,
+    /// which its read and comment editors share.
+    pub(crate) fn show_images(&mut self, images: &TabImages, cx: &mut Context<Self>) {
+        images.attach(&self.editor, cx);
+        self.images = Some(images.clone());
     }
 
     pub(crate) fn editor(&self) -> &Entity<EditorState> {
@@ -344,6 +359,9 @@ impl Render for EditorHost {
         }
         if let Some(reveal) = &mut self.reveal {
             reveal.note_focus(window, cx);
+        }
+        if let Some(images) = &self.images {
+            images.after_frame(cx);
         }
         let mut host = div()
             .key_context(EDIT_HOST_CONTEXT)
