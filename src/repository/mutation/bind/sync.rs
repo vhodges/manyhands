@@ -13,11 +13,17 @@
 //! branch where the merge began and the reservation released. The
 //! request is `recovery_required` with the integration pending, and its
 //! data is the conflict's next step: whether the conflict can be
-//! resolved in Manyhands or is repaired in Git outside it. A merge
-//! commit made before the conflict, or before any other stop, stays, and
-//! the request is then `partial`. The same request asks the domain again
-//! with `restart`, which answers a conflict still pending without
-//! transport.
+//! resolved in Manyhands or is repaired in Git outside it. The same
+//! request asks the domain again with `restart`, which answers a
+//! conflict still pending without transport. A new request, while a
+//! merge another synchronization left pending is in a worktree it
+//! inspects, is `busy`, as one that reaches the reservation is.
+//!
+//! A merge commit the request made stays whatever stops it. A request
+//! that stops after one names it: the integration complete and the
+//! commit, and the request is `partial`; a cancelled one keeps those
+//! effects and stays `cancelled`. A merge commit made before a conflict
+//! leaves the integration pending, and that request is `partial` too.
 //!
 //! A merge commits with the repository's own identity. With none it
 //! stops as `identity_required`, holding what it began, and the same
@@ -43,6 +49,8 @@
 //! request's record has been asked to.
 
 use std::path::{Path, PathBuf};
+
+use rusqlite::OptionalExtension;
 
 use crate::{
     canonical::ItemId,
@@ -603,6 +611,57 @@ impl SyncBinding {
         }
     }
 
+    /// Whether a merge that another synchronization of the repository
+    /// left pending, unresolved, is in a worktree a synchronization of
+    /// this target inspects before it reserves: primary's, which every
+    /// synchronization inspects, or the target's own. Read only. `false`
+    /// when the registry cannot be read: the domain's answer then stands.
+    fn beside_a_pending_merge(&self, service: &RepositoryService, accepted: &Accepted) -> bool {
+        service
+            .read_session(RepositoryOperation::Read, |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT operation.action, operation.kind, operation.item_id
+                       FROM remote_integration_steps step
+                       JOIN remote_operation_records operation
+                         ON operation.id = step.operation_record_id
+                       JOIN repositories repository ON repository.id = operation.repository_id
+                      WHERE repository.root_path = ?1 AND operation.operation_ulid != ?2
+                        AND step.phase IN ('conflict_pending', 'resolution_prepared',
+                                           'commit_prepared')",
+                )?;
+                let pending = statement
+                    .query_map(
+                        rusqlite::params![
+                            accepted.scope.as_str(),
+                            accepted.operation_id.to_string()
+                        ],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                            ))
+                        },
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(pending.iter().any(|(action, kind, item)| {
+                    action == "synchronize_primary"
+                        || match &self.target {
+                            SynchronizationTarget::Primary => false,
+                            SynchronizationTarget::Context {
+                                kind: own_kind,
+                                item_id,
+                            } => {
+                                action == "synchronize_context"
+                                    && kind.as_deref() == Some(authoring_kind_segment(own_kind))
+                                    && item.as_deref() == Some(item_id.to_string().as_str())
+                            }
+                        }
+                }))
+            })
+            .unwrap_or(false)
+    }
+
     fn request(&self, accepted: &Accepted, restart: bool) -> SynchronizeRemoteRequest {
         SynchronizeRemoteRequest {
             root: accepted.root(),
@@ -807,7 +866,8 @@ impl SyncBinding {
             }
         }
         // A merge commit the request made stays whatever stopped it.
-        let local_change = made_a_commit(accepted);
+        let merge = merge_made(service, accepted);
+        let local_change = merge.is_some();
         // What the remote holds has to be read to be said. A journal
         // that cannot be read gives no answer to store: the record is
         // left as it is, and the next call of the request, which finds
@@ -815,7 +875,7 @@ impl SyncBinding {
         let Some(publication) = watch.publication() else {
             return Ran {
                 answer: Answer {
-                    effects: effects_so_far(Publication::Unknown),
+                    effects: with_merge(effects_so_far(Publication::Unknown), merge),
                     local_change,
                     ..Answer::stopped(outcome::synchronization_error_code(error))
                 },
@@ -837,16 +897,31 @@ impl SyncBinding {
             && !stopped_before_the_push
             && publication == Publication::Unknown
         {
+            let answer = not_confirmed();
             return Ran {
                 answer: Answer {
+                    effects: with_merge(answer.effects.clone(), merge),
                     local_change,
-                    ..not_confirmed()
+                    ..answer
                 },
                 standing: Standing::Final,
             };
         }
+        // Refused before it reserved, for a worktree it inspects that
+        // holds a merge another synchronization left pending: that
+        // synchronization holds the repository as a reservation would,
+        // and the request is answered as one refused by it.
+        let beside_a_pending_merge = matches!(journal, Some(JournalRow::Absent))
+            && matches!(
+                error,
+                SynchronizationError::WorktreeConflicted { target: _ }
+                    | SynchronizationError::TargetNotMaterialized
+            )
+            && self.beside_a_pending_merge(service, accepted);
         let code = if cancelled {
             ResultCode::Cancelled
+        } else if beside_a_pending_merge {
+            ResultCode::Busy
         } else {
             outcome::synchronization_error_code(error)
         };
@@ -880,7 +955,10 @@ impl SyncBinding {
                     },
                 ))
             }
-            _ => host_data(error),
+            _ => {
+                effects = with_merge(effects, merge);
+                host_data(error)
+            }
         };
         Ran {
             answer: Answer {
@@ -896,22 +974,24 @@ impl SyncBinding {
 
 /// The next step of the conflict the synchronization `operation_id` of
 /// the repository at `root` stopped on, read from one inspection of it
-/// (R-8): `resolve` when its paths are canonical content that can be
-/// resolved in Manyhands, and `external_repair` otherwise. A conflict
-/// that cannot be inspected is not one Manyhands can be given the
-/// resolution of: it is repaired outside, too.
+/// (R-8): `resolve` when it has paths and every one is canonical content
+/// that can be resolved in Manyhands, as the domain's resolution
+/// requires, and `external_repair` otherwise.
 pub(crate) fn conflict_next(
     service: &RepositoryService,
     root: &Path,
     operation_id: OperationId,
 ) -> ConflictNextDto {
+    // A conflict that cannot be inspected cannot be given a resolution in
+    // Manyhands either: it is repaired outside.
     let canonical = service
         .inspect_synchronization_recovery(root, operation_id)
         .is_ok_and(|inspection| {
-            inspection
-                .paths
-                .first()
-                .is_some_and(|path| path.eligibility == ConflictEligibility::EligibleCanonical)
+            !inspection.paths.is_empty()
+                && inspection
+                    .paths
+                    .iter()
+                    .all(|path| path.eligibility == ConflictEligibility::EligibleCanonical)
         });
     ConflictNextDto {
         operation_id: operation_id.to_string(),
@@ -923,57 +1003,51 @@ pub(crate) fn conflict_next(
     }
 }
 
-/// Whether the branch the request synchronizes holds a merge commit the
-/// request made that the remote is not known to hold: its tip is a merge
-/// commit that is neither where the request found the branch nor reached
-/// by any of the remote's tracking references. Such a commit stays when
-/// the request stops, which is then `partial`. A fast-forward to what the
-/// remote holds is no such commit, and nor is a branch the request found
-/// ahead and left as it was.
+/// The merge commit the request's operation made, while the branch it
+/// synchronizes still holds it: the last integration step of the
+/// operation's journal that applied a merge candidate of its own, as the
+/// domain recorded it. A fast-forward applies no candidate, and is no
+/// such commit. A merge commit stays whatever stops the request.
 ///
-/// `false` when Git cannot be read: nothing is claimed on that.
-fn made_a_commit(accepted: &Accepted) -> bool {
-    let Position {
-        base_ref: Some(branch),
-        base_oid,
-    } = &accepted.position
-    else {
-        return false;
-    };
-    let Ok(repository) = git2::Repository::open(accepted.root()) else {
-        return false;
-    };
-    let Ok(tip) = repository.refname_to_id(branch) else {
-        return false;
-    };
-    if Some(tip) == *base_oid
-        || repository
-            .find_commit(tip)
-            .map_or(true, |commit| commit.parent_count() < 2)
-    {
-        return false;
+/// `None` when the journal or Git cannot be read: nothing is claimed on
+/// that.
+fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::Oid> {
+    let merge = service
+        .read_session(RepositoryOperation::Read, |connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT step.result_oid
+                       FROM remote_integration_steps step
+                       JOIN remote_operation_records operation
+                         ON operation.id = step.operation_record_id
+                       JOIN repositories repository ON repository.id = operation.repository_id
+                      WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2
+                        AND step.phase = 'applied' AND step.candidate_oid IS NOT NULL
+                      ORDER BY step.window_number DESC, step.ordinal DESC
+                      LIMIT 1",
+                    rusqlite::params![accepted.scope.as_str(), accepted.operation_id.to_string()],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+        .ok()??;
+    let merge = git2::Oid::from_str(&merge).ok()?;
+    let branch = accepted.position.base_ref.as_deref()?;
+    let repository = git2::Repository::open(accepted.root()).ok()?;
+    let tip = repository.refname_to_id(branch).ok()?;
+    (tip == merge || repository.graph_descendant_of(tip, merge).ok()?).then_some(merge)
+}
+
+/// `effects`, naming the merge commit the request made, when it made
+/// one: the integration is complete, and the commit is the one named
+/// unless a published commit already is.
+fn with_merge(mut effects: Effects, merge: Option<git2::Oid>) -> Effects {
+    if let Some(merge) = merge {
+        effects.integration = IntegrationEffect::Complete;
+        effects.commit_oid.get_or_insert_with(|| merge.to_string());
     }
-    let Ok(tracking) = repository.references_glob("refs/remotes/*") else {
-        return false;
-    };
-    for reference in tracking {
-        // A tracking reference that cannot be read may reach the tip:
-        // nothing is claimed.
-        let Ok(reference) = reference else {
-            return false;
-        };
-        // A symbolic one names another, which is read in its turn.
-        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
-            continue;
-        }
-        let Some(tracked) = reference.target() else {
-            return false;
-        };
-        if tracked == tip || repository.graph_descendant_of(tracked, tip).unwrap_or(true) {
-            return false;
-        }
-    }
-    true
+    effects
 }
 
 /// What a call of the synchronization's own request leaves of its
@@ -1033,17 +1107,21 @@ fn kept_for_its_result(ran: Ran) -> Ran {
 
 /// What the repository shows of an unfinished synchronization, for a
 /// call that is refused under its request ID: the push the remote is
-/// known to hold.
+/// known to hold, and the merge commit its operation made, which the
+/// branch still holds.
 ///
 /// This is the answer to another request, and stores nothing. With a
 /// journal that cannot be read it says the publication is pending,
 /// which is what "not confirmed" is written as: neither published nor
 /// not.
 pub(crate) fn recorded_effects(service: &RepositoryService, accepted: &Accepted) -> Effects {
-    effects_so_far(match recorded_publication(service, accepted) {
-        Some(publication) => publication,
-        None => Publication::Unknown,
-    })
+    with_merge(
+        effects_so_far(match recorded_publication(service, accepted) {
+            Some(publication) => publication,
+            None => Publication::Unknown,
+        }),
+        merge_made(service, accepted),
+    )
 }
 
 impl Binding for SyncBinding {

@@ -591,7 +591,7 @@ new ticket comment (ruling P4).
 
 | Task | Commit | Checks | Review | Notes |
 | --- | --- | --- | --- | --- |
-| 1 | `feat: merge divergent history in item and repo sync` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases | pending | See "Task 1: Merging Synchronization" |
+| 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 
 ### Task 1: Merging Synchronization
 
@@ -608,13 +608,16 @@ Commit `feat: merge divergent history in item and repo sync`, on `da83fd3`.
     `recovery_required`, sets `integration: pending`, and carries
     `MutationDataDto::SynchronizationConflict` from the new
     `pub(crate) fn conflict_next(service, root, operation_id)`. It reads
-    one inspection (R-8): `resolve` when the set's eligibility is
-    `EligibleCanonical`, otherwise, or when the inspection fails,
-    `external_repair`.
-  - A stop after a merge commit of the request's own is `partial`. The new
-    private `made_a_commit` sets `Answer::local_change` when the branch's tip
-    is a merge commit (two or more parents) that is not the accepted
-    position and that no `refs/remotes/*` reference reaches. That gives the
+    one inspection (R-8): `resolve` when the paths are non-empty and every
+    one is `EligibleCanonical`, otherwise, or when the inspection fails,
+    `external_repair` (as amended in fix round 1; the first form read the
+    first path only).
+  - A stop after a merge commit of the request's own names it and is
+    `partial`, or stays `cancelled`. As amended in fix round 1 (below), the
+    private `merge_made` reads the commit from the operation's own journal
+    (the last applied integration step with a merge candidate), while the
+    branch still holds it. The first form, `made_a_commit`, judged it from
+    Git reachability and set only `Answer::local_change`. That gives the
     table's two partial rows: a stage-0 merge then a stage-1 conflict, and a
     push rejected after a merge. It also makes the not-confirmed answer after
     a merge `partial`, as the "later request … then is cancelled" row says. A
@@ -634,7 +637,7 @@ Commit `feat: merge divergent history in item and repo sync`, on `da83fd3`.
   `synchronization_conflict_mutation.schema.json` (which `$ref`s the first).
 
 **Tests.** `tests/mutation_remote/merging.rs` (new, mounted from
-`tests/mutation_remote.rs` and chained into its case list) holds 25
+`tests/mutation_remote.rs` and chained into its case list) holds 25 (26 since fix round 1, with `c4_merging_mixed_conflict`)
 `c4_merging_*` cases, one per row of the divergent-synchronization table,
 each for both commands where the row applies to both (the stage-0 row and
 "remote context deleted" are `item sync` only). `tests/mutation_remote.rs`
@@ -711,25 +714,21 @@ HEAD origin/main` exits 0.
 
 **Findings for the controller.**
 
-1. **"A new sync while another operation's conflict is pending" is `busy`
-   only when the new sync's worktrees are clean.** For a new request the
-   domain inspects the target worktree before it reserves
-   (`remote/sync.rs:5483-5485`, then the reservation at `:5506`), and an
-   item's synchronization inspects primary's worktree too. So, pinned in
-   `c4_merging_new_sync_while_a_conflict_is_pending`:
-   - while an item's conflict is pending, `repo sync` and `item sync` of
-     another item are `busy` (the row as written);
-   - a **new** `item sync` of the same item is `item_not_found` (the domain's
-     `TargetNotMaterialized` from `materialized_target`), with nothing
-     recorded;
-   - while primary's conflict is pending, a new `repo sync` and a new `item
-     sync` are `worktree_conflicted`.
-
-   The same request (restart) reads the conflict again, as the table says.
-   Front ends that allocate a new request ID per run (the CLI's interactive
-   default) will meet these answers on a second run. `item_not_found` for an
-   item whose merge is pending is misleading. Changing either is a domain
-   change in `remote/sync.rs`, which Task 1 does not make.
+1. **"A new sync while another operation's conflict is pending" (corrected in
+   fix round 1).** The controller ruled that the row covers every new
+   request, including a new `item sync` of the item whose merge is pending
+   and any new sync while primary's merge is pending. The first commit
+   answered those `item_not_found` and `worktree_conflicted`, because for a
+   new request the domain inspects the target worktree
+   (`remote/sync.rs:5483-5485`) before the reservation (`:5506`), and an
+   item's synchronization inspects primary's worktree too. Fix round 1 makes
+   the binding answer them `busy`, with nothing recorded, and does not touch
+   `remote/`. `c4_merging_new_sync_while_a_conflict_is_pending` asserts
+   `busy` for all five: `repo sync` and `item sync` of another item while an
+   item's merge is pending, a new `item sync` of that item, and a new `repo
+   sync` and `item sync` while primary's merge is pending. The same request
+   (restart) still reads the conflict, and the outside-merge row (no
+   retained operation) is still `worktree_conflicted`.
 2. **A lost push the remote has since built on is now `already_applied`.**
    Under refusal the binding reported `published` with the pushed commit
    (the domain's `observer.verified` before `MergeRequired`). Under merging the
@@ -740,14 +739,92 @@ HEAD origin/main` exits 0.
 3. **The table's "success, 0" for `already_applied` is asserted as `noop`.**
    `Outcome::of_mutation` makes every `already_applied` a `noop`, and the
    design's exit table puts `noop` in exit 0.
-4. **The Ctrl-C rows are asserted at the library's level,** through the call's
-   cancellation token (safe point before the push; after the push returned;
-   an unsettled push then cancelled; a token cancelled while the fetch's
-   advertisement is held). Exits, C2's bounded retry and the signal handling
-   itself are Tasks 7 and 13.
+4. **The Ctrl-C rows are asserted at the library's level** (corrected in fix
+   round 1). Three go through the call's own cancellation token: the safe
+   point before the push, after the push returned, and, since fix round 1, a
+   token cancelled while the fetch's advertisement is held. That last case
+   first went through `request cancel` and never cancelled the token it
+   passed. The row "a later request that begins with that unsettled push,
+   then is cancelled" goes through `request cancel`, which is how fact 74's
+   path is reached. Exits, C2's bounded retry and the signal handling itself
+   are Tasks 7 and 13.
 5. **The R-38 row's "checked before the busy row's check" is not co-staged.**
    The gate refuses to start a local sync while any remote operation is
    retained (`local_sync/record.rs:1064`), and a pending local sync refuses
    every remote reservation, so the two cannot both stand through public
    paths. The row's own answer (`recovery_required`, `[repo.inspect]`,
    nothing) is asserted for both commands.
+
+#### Task 1, fix round 1
+
+The task review found four issues; the controller ruled on each. Commit
+`fix: answer busy for a sync beside a pending merge, and name a cancelled
+merge`, on `ca5f17d`. `remote/` is untouched.
+
+1. **Busy row.** `bind/sync.rs`'s `stopped` gains a binding-level mapping.
+   - It applies when the request never reserved (journal absent) and the
+     domain refused it as `WorktreeConflicted` or `TargetNotMaterialized`.
+   - The new read-only `SyncBinding::beside_a_pending_merge` then reads the
+     registry. If another remote operation holds an integration step in
+     `conflict_pending`, `resolution_prepared` or `commit_prepared`, and
+     that step's merge is in a worktree this sync inspects (primary's, or
+     this target's own), the answer is `busy`.
+   - So the answer is the transient `busy`, with no effect, no record, and
+     `[request.retry]`.
+   - With no such operation, the domain's answer stands, so an outside
+     merge is still `worktree_conflicted`.
+   - The case asserts `busy` for five syncs: a new `item sync` of the same
+     item, `repo sync`, `item sync` of another item, and while primary's
+     merge is pending, a new `repo sync` and a new `item sync`. It then
+     reads the conflict again with the same request.
+2. **Blocked network call.** `elsewhere` takes the call's token. The case
+   cancels that token while the server holds the fetch's advertisement, then
+   releases it. **Recorded answer: `cancelled`, at the next safe point, with
+   its effects intact** (publication pending, nothing merged, nothing
+   pushed), for both commands. The `request cancel` form is dropped:
+   `a_cancellation_requested_while_the_transport_is_blocked_is_honored_when_it_returns`
+   already covers it.
+3. **A cancelled merge is named.**
+   - `made_a_commit` is replaced by `merge_made`. It returns the merge
+     commit from the operation's journal (the last applied integration step
+     with a merge candidate), while the branch still holds it.
+   - Every stop other than a conflict names that commit through
+     `with_merge`: `integration: complete`, and the commit as `commit_oid`
+     unless a published one is named already. This covers the general stop,
+     the stop with an unreadable journal, and not-confirmed. A cancellation
+     keeps those effects and stays `cancelled`.
+   - The conflict path is unchanged: `integration: pending`, and
+     `local_change` set from the same source, so the stage-0 row is still
+     `partial`.
+   - `sync::recorded_effects` uses the same source. A `request_mismatch`
+     on an accepted record after its merge is now `partial`, naming the
+     merge; `c4_merging_push_rejected_after_a_merge` asserts it.
+   - The module doc no longer says that every stop after a merge is
+     `partial`.
+   - The cases assert the named merge: the push rejected after a merge, and
+     the mismatch; cancelled before the push; cancelled after the push
+     returned (with publication published); and the unsettled push, both the
+     lost call and the not-confirmed answer.
+4. **`conflict_next`.** `resolve` only when the path set is non-empty and
+   every path is `EligibleCanonical`. An inspection failure still answers
+   `external_repair`, with a comment. A new case, `c4_merging_mixed_conflict`
+   (both commands), makes a ticket conflict and a plain-file conflict in one
+   merge: two conflicted paths, `external_repair`.
+
+Not changed: a successful merge's effects still name the published commit
+and leave `integration` as `not_requested`. The ruling covered stops only.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `test --all-features --test mutation_remote -- c4_merging` | 26 SSH cases passed (16 min 35 s) |
+| the five E-3 tests, each by its own filter | 1 SSH case passed each |
+| `test --all-features --lib mutation` | 123 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `fmt --check` | passed |
+
+The whole `--test mutation_remote` target was not run again. The controller
+asked for it only after a change to `remote/sync.rs` or to a shared helper of
+pre-existing cases, and neither was changed.

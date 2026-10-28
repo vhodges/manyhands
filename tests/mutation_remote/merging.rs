@@ -36,6 +36,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c4_merging_noncanonical_conflict",
         c4_merging_noncanonical_conflict,
     ),
+    ("c4_merging_mixed_conflict", c4_merging_mixed_conflict),
     (
         "c4_merging_same_request_while_the_conflict_is_pending",
         c4_merging_same_request_while_the_conflict_is_pending,
@@ -376,6 +377,21 @@ fn publication_pending() -> Effects {
     }
 }
 
+/// `effects`, naming the merge commit `merge` the request made: the
+/// integration complete, and the commit, unless one is named already.
+fn merged(effects: Effects, merge: git2::Oid) -> Effects {
+    Effects {
+        integration: IntegrationEffect::Complete,
+        commit_oid: Some(
+            effects
+                .commit_oid
+                .clone()
+                .unwrap_or_else(|| merge.to_string()),
+        ),
+        ..effects
+    }
+}
+
 fn c4_merging_already_current() -> Result<(), FixtureError> {
     for branch in BOTH {
         let s = Synced::new(branch)?;
@@ -552,6 +568,27 @@ fn c4_merging_noncanonical_conflict() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// A conflict whose paths are mixed, a ticket and a file that is no
+/// canonical content, is repaired outside as a whole: the domain resolves
+/// a set only when every path is canonical, so the next step is
+/// `external_repair`.
+fn c4_merging_mixed_conflict() -> Result<(), FixtureError> {
+    for branch in BOTH {
+        let s = Synced::new(branch)?;
+        s.diverge_on_a_ticket()?;
+        let local = s.local_commit("conflict", b"local conflict")?;
+        s.remote_commit("conflict", b"incoming conflict")?;
+        let stopped = s.execute(REQUEST_1);
+        assert_conflict(&stopped, ConflictNextAction::ExternalRepair)?;
+        assert_eq!(stopped.outcome, Outcome::Blocked);
+        s.assert_merge_left(local)?;
+        // Both paths are in conflict.
+        let worktree = fixed(git2::Repository::open(s.worktree()))?;
+        assert_eq!(fixed(fixed(worktree.index())?.conflicts())?.count(), 2);
+    }
+    Ok(())
+}
+
 fn c4_merging_same_request_while_the_conflict_is_pending() -> Result<(), FixtureError> {
     for branch in BOTH {
         let s = Synced::new(branch)?;
@@ -576,36 +613,28 @@ fn c4_merging_same_request_while_the_conflict_is_pending() -> Result<(), Fixture
     Ok(())
 }
 
-/// Asserts that `envelope` was refused with `code` before it reserved,
-/// for the merge a pending conflict left in a worktree it inspects:
-/// nothing is recorded and nothing offered.
-fn assert_refused_before_reserving(
-    w: &World,
-    id: &str,
-    envelope: &Envelope<MutationDataDto>,
-    code: ResultCode,
-) {
-    assert_eq!(envelope.code, code);
-    assert_eq!(envelope.outcome, code.outcome());
+/// Asserts that `envelope` is `busy`, and that nothing came of it:
+/// nothing recorded, no effect, no data, and the same request offered.
+fn assert_busy(w: &World, id: &str, envelope: &Envelope<MutationDataDto>) {
+    assert_eq!(envelope.code, ResultCode::Busy);
+    assert_eq!(envelope.failure_class(), Some(FailureClass::Transient));
     assert_eq!(envelope.effects, Effects::not_requested());
     assert!(envelope.data.is_none());
-    assert!(envelope.recovery.is_empty());
+    assert_eq!(actions(envelope), [RecoveryActionKind::RequestRetry]);
     assert!(record(w, id).is_none());
 }
 
-/// While another item's conflict is pending, a new synchronization of
-/// either command is `busy`: the worktrees it inspects are clean, so it
-/// reaches the reservation, which the pending conflict holds (fact 27).
+/// Any new synchronization while a conflict another operation holds is
+/// pending is `busy`, of either command and whatever it synchronizes.
 ///
-/// A new synchronization that inspects the worktree the pending merge is
-/// in is refused before that: the domain inspects its target before it
-/// reserves (`inspect_synchronization_local`), and an item's
-/// synchronization inspects primary's worktree as well as its own. As
-/// found, a new `item sync` of the item whose merge is pending is
-/// `item_not_found` (the domain's `TargetNotMaterialized`), and a new
-/// synchronization of either command while primary's merge is pending
-/// is `worktree_conflicted`. The same request, which `restart` takes up,
-/// reads the conflict instead (the case above).
+/// One whose worktrees are clean reaches the reservation, which the
+/// pending conflict holds (fact 27). One that inspects the worktree the
+/// pending merge is in is refused before it reserves, since the domain
+/// inspects its target first: a new `item sync` of the item whose merge
+/// is pending, and, while primary's is, any new synchronization, since an
+/// item's inspects primary's worktree as well as its own. The binding
+/// answers that refusal as the reservation would. The same request, which
+/// `restart` takes up, reads the conflict instead (the case above).
 fn c4_merging_new_sync_while_a_conflict_is_pending() -> Result<(), FixtureError> {
     // The item's conflict is pending; another item has a branch of its
     // own.
@@ -623,33 +652,31 @@ fn c4_merging_new_sync_while_a_conflict_is_pending() -> Result<(), FixtureError>
         kind: AuthoringKind::Ticket,
         id: OTHER_ITEM.parse().unwrap(),
     });
-    for (id, mutation) in [(REQUEST_2, repo_sync(&s.w)), (REQUEST_3, another_item)] {
-        let busy = execute(&s.w, id, mutation);
-        assert_eq!(busy.code, ResultCode::Busy);
-        assert_eq!(busy.failure_class(), Some(FailureClass::Transient));
-        // Nothing.
-        assert_eq!(busy.effects, Effects::not_requested());
-        assert!(busy.data.is_none());
-        assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
-        assert!(record(&s.w, id).is_none());
+    for (id, mutation) in [
+        (REQUEST_2, repo_sync(&s.w)),
+        (REQUEST_3, another_item),
+        // The item itself, under a new request.
+        (REQUEST_5, item_sync(&s.w)),
+    ] {
+        assert_busy(&s.w, id, &execute(&s.w, id, mutation));
     }
-    // A new synchronization of the item itself.
-    let same = s.execute(REQUEST_5);
-    assert_refused_before_reserving(&s.w, REQUEST_5, &same, ResultCode::ItemNotFound);
     assert_eq!(accepted(&s.w.server), pushes);
     assert_eq!(merge_rows(&s.w)?, rows);
     s.assert_merge_left(local)?;
+    // The pending conflict is still the same request's to read.
+    assert_conflict(&s.execute(REQUEST_1), ConflictNextAction::Resolve)?;
 
-    // Primary's conflict is pending: both commands inspect its worktree.
+    // Primary's conflict is pending; an item has a branch of its own.
     let mut s = Synced::new(Branch::Primary)?;
     s.w.context()?;
     let (local, _) = s.diverge_on_a_ticket()?;
     assert_conflict(&s.execute(REQUEST_1), ConflictNextAction::Resolve)?;
+    let pushes = accepted(&s.w.server);
     let rows = merge_rows(&s.w)?;
     for (id, mutation) in [(REQUEST_2, repo_sync(&s.w)), (REQUEST_3, item_sync(&s.w))] {
-        let refused = execute(&s.w, id, mutation);
-        assert_refused_before_reserving(&s.w, id, &refused, ResultCode::WorktreeConflicted);
+        assert_busy(&s.w, id, &execute(&s.w, id, mutation));
     }
+    assert_eq!(accepted(&s.w.server), pushes);
     assert_eq!(merge_rows(&s.w)?, rows);
     s.assert_merge_left(local)?;
     Ok(())
@@ -819,19 +846,29 @@ fn c4_merging_push_rejected_after_a_merge() -> Result<(), FixtureError> {
         let (local, incoming) = s.diverge()?;
         refuse_the_push(&s)?;
         let rejected = s.execute(REQUEST_1);
+        let merge = s.local_tip()?;
         assert_eq!(rejected.code, ResultCode::PushRejected);
-        // The merge commit stays: what stopped is partial.
+        // The merge commit stays, and is named: what stopped is partial.
         assert_eq!(rejected.outcome, Outcome::Partial);
-        assert_eq!(rejected.effects, publication_pending());
+        assert_eq!(rejected.effects, merged(publication_pending(), merge));
         assert!(rejected.data.is_none());
         assert_eq!(actions(&rejected), [RecoveryActionKind::RequestRetry]);
-        let merge = s.local_tip()?;
         s.assert_merge(merge, local, incoming)?;
         assert_ne!(s.served_tip()?, merge);
         assert_eq!(
             record(&s.w, REQUEST_1).ok_or(FixtureError)?.state,
             RequestState::Accepted
         );
+        // Its request ID with another command is a mismatch, which says
+        // what the repository shows of the request: the merge, partial.
+        let other = match branch {
+            Branch::Primary => item_sync(&s.w),
+            Branch::Item => repo_sync(&s.w),
+        };
+        let mismatched = execute(&s.w, REQUEST_1, other);
+        assert_eq!(mismatched.code, ResultCode::RequestMismatch);
+        assert_eq!(mismatched.outcome, Outcome::Partial);
+        assert_eq!(mismatched.effects, merged(publication_pending(), merge));
     }
     Ok(())
 }
@@ -1047,13 +1084,14 @@ fn c4_merging_cancelled_at_a_safe_point() -> Result<(), FixtureError> {
         let pushes = accepted(&s.w.server);
         // At the safe point before the push: the merge commit is made.
         let cancelled = cancelled_at(&s, REQUEST_1, ProgressStage::Pushing);
+        let merge = s.local_tip()?;
         assert_eq!(cancelled.code, ResultCode::Cancelled);
         assert_eq!(cancelled.outcome, Outcome::Cancelled);
-        // Nothing was published.
-        assert_eq!(cancelled.effects, publication_pending());
+        // The effects name what completed: the merge commit, and nothing
+        // published.
+        assert_eq!(cancelled.effects, merged(publication_pending(), merge));
         assert!(cancelled.data.is_none());
         assert!(cancelled.recovery.is_empty());
-        let merge = s.local_tip()?;
         s.assert_merge(merge, local, incoming)?;
         assert_eq!(s.served_tip()?, incoming);
         assert_eq!(accepted(&s.w.server), pushes);
@@ -1084,8 +1122,11 @@ fn c4_merging_cancelled_after_the_push_returned() -> Result<(), FixtureError> {
         let merge = s.local_tip()?;
         assert_eq!(cancelled.code, ResultCode::Cancelled);
         assert_eq!(cancelled.outcome, Outcome::Cancelled);
-        // Published, as the stored push says (fact 74).
-        assert_eq!(cancelled.effects, published_and_cancelled(merge));
+        // The merge commit, published, as the stored push says (fact 74).
+        assert_eq!(
+            cancelled.effects,
+            merged(published_and_cancelled(merge), merge)
+        );
         assert!(cancelled.recovery.is_empty());
         s.assert_merge(merge, local, incoming)?;
         assert_eq!(s.served_tip()?, merge);
@@ -1107,10 +1148,10 @@ fn c4_merging_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
         s.w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
         let lost = s.execute(REQUEST_1);
         assert_eq!(lost.code, ResultCode::TransportUnavailable);
-        // After a merge commit, which stays.
-        assert_eq!(lost.outcome, Outcome::Partial);
-        assert_eq!(lost.effects, publication_pending());
+        // After a merge commit, which stays and is named.
         let merge = s.local_tip()?;
+        assert_eq!(lost.outcome, Outcome::Partial);
+        assert_eq!(lost.effects, merged(publication_pending(), merge));
         s.assert_merge(merge, local, incoming)?;
         // From here on the server cannot be reached at all.
         s.w.server.disconnect_at(FixtureBoundary::Handshake);
@@ -1125,7 +1166,7 @@ fn c4_merging_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
         let ended = s.execute(REQUEST_1);
         assert_eq!(ended.code, ResultCode::RecoveryRequired);
         assert_eq!(ended.outcome, Outcome::Partial);
-        assert_eq!(ended.effects, publication_pending());
+        assert_eq!(ended.effects, merged(publication_pending(), merge));
         assert!(ended.data.is_none());
         assert_eq!(actions(&ended), [RecoveryActionKind::RepoInspect]);
         assert_eq!(ended.operation_id, lost.operation_id);
@@ -1140,10 +1181,12 @@ fn c4_merging_unsettled_push_then_cancelled() -> Result<(), FixtureError> {
 }
 
 /// A call of the case's synchronization on another thread, by a service
-/// of its own on the world's data.
+/// of its own on the world's data, with `token` as its cancellation
+/// token.
 fn elsewhere(
     s: &Synced,
     id: &'static str,
+    token: CancellationToken,
 ) -> Result<std::thread::JoinHandle<Envelope<MutationDataDto>>, FixtureError> {
     let service = fixed(RepositoryService::open_at(&s.w.data()))?;
     let root = s.w.root.clone();
@@ -1165,36 +1208,39 @@ fn elsewhere(
             },
             &mut SessionCredentials::new(Provider),
             &mut NoProgress,
-            &CancellationToken::new(),
+            &token,
         )
     }))
 }
 
+/// What a Ctrl-C reaches the library as: the call's own token, cancelled
+/// while the call is blocked inside a transport call (the fetch's
+/// advertisement, held by the server), before it merges. The token is
+/// read at the next safe point once the call returns: the answer is
+/// `cancelled`, with its effects intact.
 fn c4_merging_cancelled_during_a_blocked_network_call() -> Result<(), FixtureError> {
     for branch in BOTH {
         let s = Synced::new(branch)?;
         let (local, incoming) = s.diverge()?;
         let pushes = accepted(&s.w.server);
-        // The synchronization blocks inside its fetch, before it merges.
         let hold = s.w.server.hold_advertisement()?;
-        let running = elsewhere(&s, REQUEST_1)?;
+        let token = CancellationToken::new();
+        let running = elsewhere(&s, REQUEST_1, token.clone())?;
         hold.wait_until_held()?;
-        let asked =
-            s.w.service
-                .cancel_request(request(REQUEST_1))
-                .data
-                .ok_or(FixtureError)?;
-        assert!(asked.requested);
+        token.cancel();
         hold.release()?;
         let cancelled = joined(&s.w, running)?;
-        // Cancelled once the call returns, with its effects intact:
-        // nothing merged and nothing published.
         assert_eq!(cancelled.code, ResultCode::Cancelled);
         assert_eq!(cancelled.outcome, Outcome::Cancelled);
-        assert!(!cancelled.effects.is_durable());
-        assert_eq!(cancelled.effects.commit_oid, None);
+        // Nothing merged and nothing published.
+        assert_eq!(cancelled.effects, publication_pending());
         assert!(cancelled.data.is_none());
+        assert!(cancelled.recovery.is_empty());
         assert!(!reserved(&s.w));
+        assert_eq!(
+            record(&s.w, REQUEST_1).ok_or(FixtureError)?.state,
+            RequestState::Finished
+        );
         assert_eq!(accepted(&s.w.server), pushes);
         assert_eq!(s.served_tip()?, incoming);
         s.assert_no_merge(local)?;
