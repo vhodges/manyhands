@@ -7,14 +7,16 @@
 //! control again. Focus moving out of it closes it too, found as each
 //! frame is drawn (GPUI sends focus events only to an active window). In
 //! the menu, Up, Down, Home and End move through its items; Left and Right
-//! do nothing, since the menu is vertical and stays open. The address is
-//! the user's text: it stays in its field, which the popover lets go of
-//! when it closes, and goes nowhere else.
+//! do nothing, since the menu is vertical and stays open. The link
+//! popover is a dialog, so it keeps focus (contract 13): Tab and
+//! Shift-Tab go between its address and Insert. The address is the
+//! user's text: it stays in its field, which the popover lets go of when
+//! it closes, and goes nowhere else.
 
 use gpui_kit::{
-    AnyElement, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled, Subscription,
-    TestSupportExt, Window, anchored,
+    AnyElement, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled,
+    Subscription, TestSupportExt, Window, anchored,
     component::{
         ActiveTheme, Sizable,
         button::{Button, ButtonVariants},
@@ -30,8 +32,8 @@ use super::{
 };
 use crate::desktop::{
     keys::{
-        ClosePopover, MenuFirst, MenuLast, MenuNext, MenuPrevious, TOOLBAR_LINK_CONTEXT,
-        TOOLBAR_MENU_CONTEXT,
+        ClosePopover, CycleLinkPopover, MenuFirst, MenuLast, MenuNext, MenuPrevious,
+        TOOLBAR_LINK_CONTEXT, TOOLBAR_MENU_CONTEXT,
     },
     model::markdown_edit::{BlockStyle, insert_link, set_block_style},
 };
@@ -193,6 +195,30 @@ impl Toolbar {
         self.close_popover(window, cx);
     }
 
+    /// Tab or Shift-Tab in the link popover. Its two stops are the address
+    /// and Insert, so either key goes to the other, and focus stays in the
+    /// popover. Insert's focus is the Kit button's own, so it is reached
+    /// as the stop after the address; should that stop be outside, focus
+    /// stays on the address.
+    fn cycle_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Popover {
+            kind: Kind::Link { input, .. },
+            focus,
+            ..
+        }) = &self.popover
+        else {
+            return;
+        };
+        let field = input.read(cx).focus_handle(cx);
+        if field.is_focused(window) {
+            window.focus_next(cx);
+            if focus.contains_focused(window, cx) && !field.is_focused(window) {
+                return;
+            }
+        }
+        window.focus(&field, cx);
+    }
+
     /// Moves focus through the Style menu's items, stopping at its ends.
     fn menu_step(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Popover {
@@ -322,6 +348,9 @@ impl Toolbar {
             .gap(px(6.))
             .on_action(
                 cx.listener(|this, _: &ClosePopover, window, cx| this.close_popover(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CycleLinkPopover, window, cx| this.cycle_link(window, cx)),
             )
             .child(LINK_TITLE)
             .child(

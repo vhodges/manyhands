@@ -48,6 +48,10 @@ const SEGMENT: (f32, f32) = (3., 9.);
 const DIM: f32 = 0.35;
 /// The toolbar's icon and text colour, from the handoff; no token holds it.
 const INK: u32 = 0x3b4047;
+/// The line under the toolbar (contract 13): Tab stays in the editor, so
+/// it says how to leave. The product owner's words, 2026-10-27; the dot is
+/// U+00B7.
+const HINT: &str = "Esc: Done \u{b7} F6: next region";
 
 /// A control or popover as drawn: the Kit observes it for the test
 /// shell's lookups in a test-support build, and is the element itself in
@@ -288,7 +292,25 @@ impl Render for Toolbar {
             };
             row = row.child(element);
         }
-        row.child(div().flex_1())
-            .child(div().id("toolbar-status").test_support().flex_none())
+        let row = row
+            .child(div().flex_1())
+            .child(div().id("toolbar-status").test_support().flex_none());
+        div().flex().flex_col().child(row).child(hint(&colors))
     }
+}
+
+/// The hint, one muted line under the toolbar at its padding. It takes no
+/// focus and no pointer events.
+fn hint(colors: &ItemColors) -> impl IntoElement {
+    let (vertical, horizontal) = PADDING;
+    div()
+        .id("toolbar-hint")
+        .test_support()
+        .aria_label(HINT)
+        .py(px(vertical))
+        .px(px(horizontal))
+        .bg(colors.page)
+        .text_size(px(TEXT_SIZE))
+        .text_color(colors.page_muted)
+        .child(HINT)
 }

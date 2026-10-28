@@ -739,6 +739,11 @@ fn left_right_home_and_end_move_along_the_toolbar(cx: &mut TestAppContext) {
     bar.place(TWO.0, cx);
     let done = bar.done(cx);
     bar.focus(&done, cx);
+    assert_eq!(
+        bar.shell.label("toolbar-hint", cx).as_deref(),
+        Some("Esc: Done \u{b7} F6: next region"),
+        "the hint under the toolbar says how to leave the editor"
+    );
     bar.keys("tab", cx);
     assert!(
         bar.focused(Control::Rich, cx),
@@ -995,6 +1000,27 @@ fn secondary_k_opens_the_link_popover_only_in_the_edit_host(cx: &mut TestAppCont
         0,
         "Home and End never scrolled the region"
     );
+    // A dialog traps focus: Tab and Shift-Tab go between the field and
+    // Insert, and the address stays.
+    let on_insert = |cx: &mut TestAppContext| {
+        bar.snapshot("toolbar-link-insert", |found| found.focused(), cx)
+            .flatten()
+            == Some(true)
+    };
+    for (key, insert) in [
+        ("tab", true),
+        ("tab", false),
+        ("shift-tab", true),
+        ("shift-tab", false),
+    ] {
+        bar.keys(key, cx);
+        assert!(
+            bar.present("toolbar-link-popover", cx),
+            "{key} kept it open"
+        );
+        assert_eq!(on_insert(cx), insert, "{key}: on Insert");
+        assert_eq!(bar.link_field_focused(cx), !insert, "{key}: on the field");
+    }
     bar.press("enter", cx);
     assert_eq!(bar.text(cx), formatted(Control::Link));
     assert!(!bar.present("toolbar-link-popover", cx), "Enter closed it");
@@ -1019,6 +1045,15 @@ fn secondary_k_opens_the_link_popover_only_in_the_edit_host(cx: &mut TestAppCont
     assert!(!bar.present("toolbar-link-popover", cx), "Escape closed it");
     assert!(bar.text(cx) == BODY, "and changed nothing");
     assert!(bar.editor_focused(cx));
+    // From Insert too.
+    bar.keys("secondary-k", cx);
+    bar.input("https://never", cx);
+    bar.keys("tab", cx);
+    assert!(on_insert(cx));
+    bar.keys("escape", cx);
+    assert!(!bar.present("toolbar-link-popover", cx), "Escape on Insert");
+    assert!(bar.text(cx) == BODY);
+    assert!(bar.editor_focused(cx), "focus went back to the editor");
 
     // Focus moving out of it closes it too.
     bar.keys("secondary-k", cx);

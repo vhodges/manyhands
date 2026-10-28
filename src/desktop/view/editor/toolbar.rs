@@ -25,7 +25,9 @@
 //! control, or else the first, so Tab enters at the first control and Tab
 //! or Shift-Tab from any control leaves in one press.
 //! A click leaves focus where it was, in the editor. The mode key works
-//! from a control too: the toolbar forwards it to the host.
+//! from a control too: the toolbar forwards it to the host. Tab stays in
+//! the editor, so a muted line under the toolbar says how to leave it
+//! (contract 13); the line takes no focus.
 //!
 //! The status item on the right is an empty slot until Task 14.
 

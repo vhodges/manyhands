@@ -90,6 +90,9 @@ gpui_kit::actions!(
         /// Close the edit toolbar's open menu or link popover, and give
         /// focus back to where it was.
         ClosePopover,
+        /// Tab or Shift-Tab in the toolbar's link popover: focus its other
+        /// stop, the address or Insert, so focus stays in it.
+        CycleLinkPopover,
     ]
 );
 
@@ -129,7 +132,8 @@ pub(crate) const TOOLBAR_CONTEXT: &str = "EditToolbar";
 /// do nothing there.
 pub(crate) const TOOLBAR_MENU_CONTEXT: &str = "EditToolbarMenu";
 
-/// The key context of the toolbar's link popover: Escape closes it.
+/// The key context of the toolbar's link popover: Escape closes it, and Tab
+/// and Shift-Tab stay in it, between its address and Insert.
 pub(crate) const TOOLBAR_LINK_CONTEXT: &str = "EditToolbarLink";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
@@ -180,6 +184,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("end", MenuLast, Some(TOOLBAR_MENU_CONTEXT)),
         KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_MENU_CONTEXT)),
         KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_LINK_CONTEXT)),
+        KeyBinding::new("tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
+        KeyBinding::new("shift-tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
     ]);
 }
 

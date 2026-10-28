@@ -145,11 +145,11 @@ fn dot_dot_symlink_escape_git_and_other_worktrees_are_refused() {
         ] {
             assert_eq!(contained(&root, &root.join(through)), None, "{through}");
         }
-        link(&inside, &root.join("docs/alias.png"));
+        link(Path::new("inside.png"), &root.join("docs/alias.png"));
         assert_eq!(
             contained(&root, &root.join("docs/alias.png")),
             canonical(&inside),
-            "a link that stays inside is followed"
+            "a relative link that stays inside is followed"
         );
     }
 

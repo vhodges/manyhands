@@ -34,11 +34,13 @@
 //! A `src` is body text: nothing here derives `Debug`, and nothing logs or
 //! reports a `src`, a path or a failure.
 
+mod load;
+
 use std::{
     cell::RefCell,
     collections::{HashMap, VecDeque},
-    fs, mem,
-    path::{Path, PathBuf},
+    mem,
+    path::PathBuf,
     rc::Rc,
     sync::Arc,
 };
@@ -47,10 +49,11 @@ use gpui_kit::{App, Entity, RenderImage, WeakEntity};
 use manyhands::repository::{ItemContextKind, ItemDto};
 use zorite_editor::EditorState;
 
+use self::load::{Landed, Load, Walks};
 use super::{Backend, ReadKind, Services};
 use crate::desktop::model::{
-    links::{CandidatePath, LinkTarget, file_name, folder_of, link_path, nearest, parse_link},
-    resources::{DecodeBudget, decode, decoded_size, read_contained, walk_docs},
+    links::{LinkTarget, folder_of, link_path, parse_link},
+    resources::{DecodeBudget, decoded_size},
 };
 
 /// One `src`'s image in a tab.
@@ -410,100 +413,6 @@ fn local_path(src: &str, dir: &str) -> Option<String> {
         LinkTarget::Path { path, from_root } => link_path(&path, from_root, dir),
         _ => None,
     }
-}
-
-/// The files each tree's walk of `docs/` found, in the order of the
-/// source's trees.
-struct Walks(Vec<Vec<String>>);
-
-/// One load, as it runs on the background executor, with what the tab
-/// may still decode. It holds a path the body names, so it derives
-/// nothing.
-struct Load {
-    path: String,
-    source: ImageSource,
-    walks: Option<Arc<Walks>>,
-    budget: DecodeBudget,
-}
-
-/// What a load gives back: the entry, and the walk when it made one.
-struct Landed {
-    entry: ImageEntry,
-    walks: Option<Arc<Walks>>,
-}
-
-impl Load {
-    fn run(self) -> Landed {
-        let Self {
-            path,
-            source,
-            walks,
-            mut budget,
-        } = self;
-        let (bytes, walks) = match exact(&source, &path) {
-            Some(bytes) => (bytes, None),
-            None => {
-                let walks = walks.unwrap_or_else(|| {
-                    Arc::new(Walks(
-                        source
-                            .trees
-                            .iter()
-                            .map(|tree| walk_docs(&tree.root))
-                            .collect(),
-                    ))
-                });
-                (nearest_name(&source, &walks, &path), Some(walks))
-            }
-        };
-        let entry = match bytes.map(|bytes| decode(&bytes, &mut budget)) {
-            Some(Ok(frame)) => {
-                let (width, height) = frame.buffer().dimensions();
-                let image = Arc::new(RenderImage::new(vec![frame]));
-                ImageEntry::Loaded(image, width as f32, height as f32)
-            }
-            Some(Err(_)) | None => ImageEntry::Failed,
-        };
-        Landed { entry, walks }
-    }
-}
-
-/// Exact: what the first tree holding anything at `path` gives, its
-/// file's bytes or `None` when containment refuses it; `None` at the top
-/// when no tree holds anything there.
-fn exact(source: &ImageSource, path: &str) -> Option<Option<Vec<u8>>> {
-    source.trees.iter().find_map(|tree| {
-        let candidate = below(&tree.root, path);
-        fs::symlink_metadata(&candidate)
-            .is_ok()
-            .then(|| read_contained(&tree.root, &candidate))
-    })
-}
-
-/// Nearest name: the bytes of the walked file named as `path` is that is
-/// nearest the item's folder, the item's own context's first.
-fn nearest_name(source: &ImageSource, walks: &Walks, path: &str) -> Option<Vec<u8>> {
-    let name = file_name(path);
-    let mut candidates = Vec::new();
-    let mut roots = Vec::new();
-    for (tree, files) in source.trees.iter().zip(&walks.0) {
-        for file in files.iter().filter(|file| file_name(file) == name) {
-            candidates.push(CandidatePath {
-                path: file.clone(),
-                in_context: tree.in_context,
-            });
-            roots.push(&tree.root);
-        }
-    }
-    let found = nearest(&source.dir, &candidates)?;
-    let root = roots[candidates.iter().position(|candidate| candidate == found)?];
-    read_contained(root, &below(root, &found.path))
-}
-
-/// `path`, written with forward slashes, below `root`, with the
-/// platform's separators.
-fn below(root: &Path, path: &str) -> PathBuf {
-    path.split('/')
-        .fold(root.to_owned(), |at, step| at.join(step))
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

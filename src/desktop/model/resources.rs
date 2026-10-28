@@ -8,7 +8,9 @@
 //! 2. no step of its path below that root, as written or canonical, is
 //!    `.git` or `.manyhands`, ignoring ASCII case and the trailing dots,
 //!    spaces and `:stream` Windows reads as the same name;
-//! 3. every symbolic link on the way resolves inside that root;
+//! 3. every symbolic link on the way stays inside that root, as decided
+//!    from its target without following it (`contain`), and only then is
+//!    the path made canonical;
 //! 4. the canonical path is a regular file, whose identity is kept: by
 //!    `symlink_metadata` on Unix, and on Windows from a handle opened for
 //!    its attributes alone, following no link;
@@ -28,13 +30,17 @@
 
 use std::{
     collections::VecDeque,
-    ffi::OsStr,
     fs,
     io::{Cursor, Read},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use image::{Frame, ImageFormat, ImageReader, Limits};
+
+mod contain;
+
+use self::contain::reserved;
+pub(crate) use self::contain::{Found, contained, locate};
 
 /// The most an image file may hold.
 pub(crate) const IMAGE_SIZE_CAP: u64 = 20 * 1024 * 1024;
@@ -87,58 +93,6 @@ pub(crate) fn sniff(head: &[u8]) -> Option<ImageKind> {
     } else {
         None
     }
-}
-
-/// R-34 checks 1 to 3: the canonical path of `candidate`, written below
-/// `root`, the tree it was looked up in, when it is inside the tree's
-/// canonical root, no step below the root is `.git` or `.manyhands`, as
-/// written or canonical, and each symbolic link on the way resolves
-/// inside the root. A `..`, or a candidate that is not below the root as
-/// written, is refused. Something must be there.
-pub(crate) fn contained(root: &Path, candidate: &Path) -> Option<PathBuf> {
-    let written = candidate.strip_prefix(root).ok()?;
-    let steps: Vec<&OsStr> = written
-        .components()
-        .map(|step| match step {
-            Component::Normal(name) if !reserved(name) => Some(name),
-            _ => None,
-        })
-        .collect::<Option<_>>()?;
-    if steps.is_empty() {
-        return None;
-    }
-    let base = root.canonicalize().ok()?;
-    let mut at = root.to_owned();
-    for step in steps {
-        at.push(step);
-        let link = fs::symlink_metadata(&at).ok()?.file_type().is_symlink();
-        if link {
-            inside(&base, &at.canonicalize().ok()?)?;
-        }
-    }
-    let canonical = candidate.canonicalize().ok()?;
-    inside(&base, &canonical)?;
-    Some(canonical)
-}
-
-/// `path` is `base` or below it, and no step below it is reserved.
-fn inside(base: &Path, path: &Path) -> Option<()> {
-    path.strip_prefix(base)
-        .ok()?
-        .components()
-        .all(|step| matches!(step, Component::Normal(name) if !reserved(name)))
-        .then_some(())
-}
-
-/// `.git` or `.manyhands`, ignoring ASCII case, and also with what Windows
-/// ignores after a name: trailing dots and spaces, and a `:stream`.
-fn reserved(name: &OsStr) -> bool {
-    let Some(name) = name.to_str() else {
-        return false;
-    };
-    let name = name.split(':').next().unwrap_or_default();
-    let name = name.trim_end_matches(['.', ' ']);
-    name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".manyhands")
 }
 
 /// What a file is, as R-34 checks 4 and 5 compare it: its device and
@@ -304,10 +258,16 @@ pub(crate) fn read_checked(file: &Checked) -> Option<Vec<u8>> {
     (bytes.len() as u64 <= IMAGE_SIZE_CAP).then_some(bytes)
 }
 
+/// Checks 4 and 5 and the cap: the bytes of `canonical`, the path checks
+/// 1 to 3 gave (`locate`).
+pub(crate) fn read_canonical(canonical: &Path) -> Option<Vec<u8>> {
+    read_checked(&checked(canonical)?)
+}
+
 /// All five checks and the cap: the bytes of `candidate`, written below
 /// `root`, its tree.
 pub(crate) fn read_contained(root: &Path, candidate: &Path) -> Option<Vec<u8>> {
-    read_checked(&checked(&contained(root, candidate)?)?)
+    read_canonical(&contained(root, candidate)?)
 }
 
 /// What a tab may still decode, in bytes of decoded image.
