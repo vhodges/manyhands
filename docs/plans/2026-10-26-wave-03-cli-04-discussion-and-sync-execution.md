@@ -591,3 +591,163 @@ new ticket comment (ruling P4).
 
 | Task | Commit | Checks | Review | Notes |
 | --- | --- | --- | --- | --- |
+| 1 | `feat: merge divergent history in item and repo sync` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases | pending | See "Task 1: Merging Synchronization" |
+
+### Task 1: Merging Synchronization
+
+Commit `feat: merge divergent history in item and repo sync`, on `da83fd3`.
+`origin/main` is still `a372edb`. No subagent was dispatched.
+
+**What changed.**
+
+- `bind/sync.rs`: `SETTINGS` is replaced by `pub(super) const MERGING`
+  (`refuse_divergence: false`), used by both domain calls. The module doc,
+  the `resumed` doc and the `confirmed_identity` comment no longer say that
+  nothing merges (fact 84, R-16).
+  - On `ConflictPending` (not cancelled) the answer keeps
+    `recovery_required`, sets `integration: pending`, and carries
+    `MutationDataDto::SynchronizationConflict` from the new
+    `pub(crate) fn conflict_next(service, root, operation_id)`. It reads
+    one inspection (R-8): `resolve` when the set's eligibility is
+    `EligibleCanonical`, otherwise, or when the inspection fails,
+    `external_repair`.
+  - A stop after a merge commit of the request's own is `partial`. The new
+    private `made_a_commit` sets `Answer::local_change` when the branch's tip
+    is a merge commit (two or more parents) that is not the accepted
+    position and that no `refs/remotes/*` reference reaches. That gives the
+    table's two partial rows: a stage-0 merge then a stage-1 conflict, and a
+    push rejected after a merge. It also makes the not-confirmed answer after
+    a merge `partial`, as the "later request … then is cancelled" row says. A
+    fast-forward is never counted. The fenced answers are unchanged.
+- `dto.rs`: `ConflictNextAction` (`resolve`, `external_repair`),
+  `ConflictNextDto`, `SynchronizationConflictType`
+  (`synchronization_conflict`), `SynchronizationConflictMutationDto`, the
+  `MutationDataDto::SynchronizationConflict` variant, its `authority()` arm,
+  and a `from_stored` arm for `item sync`, `repo sync` and `operation resume`
+  guarded on the tag (after the gate's `local_context_sync` arm). Exported
+  from `mutation/mod.rs`.
+- `outcome.rs`: the comments of fact 6 (`:212-220`) are rewritten. No code
+  mapping changed.
+- `bind/resume.rs`: one module-doc line ("nothing is merged") corrected,
+  because `resumed` now merges. Doc only.
+- Schemas: `conflict_next.schema.json` and
+  `synchronization_conflict_mutation.schema.json` (which `$ref`s the first).
+
+**Tests.** `tests/mutation_remote/merging.rs` (new, mounted from
+`tests/mutation_remote.rs` and chained into its case list) holds 25
+`c4_merging_*` cases, one per row of the divergent-synchronization table,
+each for both commands where the row applies to both (the stage-0 row and
+"remote context deleted" are `item sync` only). `tests/mutation_remote.rs`
+gains `commit_path`, `commit_in` and `leave_local_sync_conflict(&World) ->
+OperationId` (R-38, for Tasks 2b, 4a and 5), and `call`'s data-schema check
+chooses `synchronization_conflict_mutation.schema.json` by the data's `type`.
+
+**Named edits.**
+
+- E-3: the five binding-level tests Task 0 classified are rewritten and
+  renamed, with their `CASES` entries:
+  - `a_divergent_remote_is_merge_required_and_holds_its_reservation` →
+    `a_conflicting_divergent_remote_is_recovery_required_and_releases_its_reservation`
+    (canonical-conflict row; asserts the E-4 golden);
+  - `a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge`
+    → `a_lost_push_the_remote_has_since_built_on_is_taken_up_by_the_same_request`
+    ("Local behind" row: `already_applied`, current, fast-forward, nothing
+    pushed);
+  - `merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased`
+    → `a_divergent_remote_is_merged_by_the_same_request_with_no_rebase`
+    (clean-divergence row);
+  - `a_resume_never_merges_and_leaves_nothing_of_a_merge` →
+    `a_resume_takes_up_a_lost_push_the_remote_has_since_built_on`;
+  - `a_resume_does_not_continue_a_merge_made_some_other_way` →
+    `a_resume_of_a_synchronization_whose_conflict_is_pending_reports_it_with_no_transport`
+    (resume table: `recovery_required` with `SynchronizationConflictMutationDto`,
+    no transport).
+
+  The five domain-level `REFUSING` tests are unchanged.
+- E-4: `repo_sync_merge_required.json` is renamed to
+  `repo_sync_recovery_required.json` and regenerated with
+  `MANYHANDS_UPDATE_GOLDEN=1`. Its diff was read: code `recovery_required`,
+  `integration: pending`, data `{type: synchronization_conflict, conflict:
+  {operation_id: <operation>, next_action: resolve}}`, recovery
+  `[request.retry, repo.inspect]`. The registration is renamed and kept in
+  order.
+- E-5: **no edit was needed.** `every_synchronization_error_has_its_code`'s
+  conflict rows already map `ConflictPending` and
+  `ExternalResolutionRequired` to `recovery_required`, and the
+  `MergeRequired` row stays (the code stays defined). `synchronization_error_code`
+  is unchanged, so the test passes unedited. The `merge_required` recovery
+  tests at `:1565` and `:1633` (and `:1519`, `:2216`, `:2223`, ruling P8) are
+  unchanged.
+- E-7: `DATA_ROOTS` gains `synchronization_conflict_mutation.schema.json`
+  (51). `CODES_NO_FIXTURE_CAN_PRODUCE` and `CODES_NO_MUTATION_GOLDEN_HAS`
+  gain `merge_required` with its reason. `UNBOUND_COMMANDS` is unchanged.
+- E-8: `contract_enumerations` gains `conflict_next.schema.json` /
+  `next_action` and `synchronization_conflict_mutation.schema.json` / `type`.
+- E-10: the six accessors in `tests/support/mutation.rs` and `repair_data` in
+  `tests/support/repair.rs` gain the new variant's arm.
+
+**TDD.** RED: `cargo test --all-features --locked --test mutation_remote --
+c4_merging`, with the cases written and nothing implemented, failed to
+compile with exactly the missing names (`ConflictNextDto`,
+`ConflictNextAction`, `SynchronizationConflictMutationDto`,
+`SynchronizationConflictType`, `MutationDataDto::SynchronizationConflict`).
+GREEN: the same filter ran 25 cases; the busy row's first form failed, which
+led to finding 1 below, and passed once its setup was corrected.
+
+**Verify list** (each `devenv shell -- cargo … --locked`, 2026-10-28):
+
+| Command | Result |
+| --- | --- |
+| `fmt --check` | passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `test --all-features --lib mutation::outcome` | 37 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --test mutation_bridges` | 129 passed |
+| `test --all-features --test mutation_remote` | 113 SSH cases passed (88 before, and the 25 `c4_merging_*`), 30 min 42 s |
+
+`git fetch origin`: `origin/main` is `a372edb`; `git merge-tree --write-tree
+HEAD origin/main` exits 0.
+
+**Findings for the controller.**
+
+1. **"A new sync while another operation's conflict is pending" is `busy`
+   only when the new sync's worktrees are clean.** For a new request the
+   domain inspects the target worktree before it reserves
+   (`remote/sync.rs:5483-5485`, then the reservation at `:5506`), and an
+   item's synchronization inspects primary's worktree too. So, pinned in
+   `c4_merging_new_sync_while_a_conflict_is_pending`:
+   - while an item's conflict is pending, `repo sync` and `item sync` of
+     another item are `busy` (the row as written);
+   - a **new** `item sync` of the same item is `item_not_found` (the domain's
+     `TargetNotMaterialized` from `materialized_target`), with nothing
+     recorded;
+   - while primary's conflict is pending, a new `repo sync` and a new `item
+     sync` are `worktree_conflicted`.
+
+   The same request (restart) reads the conflict again, as the table says.
+   Front ends that allocate a new request ID per run (the CLI's interactive
+   default) will meet these answers on a second run. `item_not_found` for an
+   item whose merge is pending is misleading. Changing either is a domain
+   change in `remote/sync.rs`, which Task 1 does not make.
+2. **A lost push the remote has since built on is now `already_applied`.**
+   Under refusal the binding reported `published` with the pushed commit
+   (the domain's `observer.verified` before `MergeRequired`). Under merging the
+   domain settles the publication and fast-forwards, and its outcome is
+   `AlreadyCurrent`: the result says the remote is current and names no
+   commit, though an earlier attempt of the same request made the push. That
+   matches the table's "Local behind" row, which the rewritten tests assert.
+3. **The table's "success, 0" for `already_applied` is asserted as `noop`.**
+   `Outcome::of_mutation` makes every `already_applied` a `noop`, and the
+   design's exit table puts `noop` in exit 0.
+4. **The Ctrl-C rows are asserted at the library's level,** through the call's
+   cancellation token (safe point before the push; after the push returned;
+   an unsettled push then cancelled; a token cancelled while the fetch's
+   advertisement is held). Exits, C2's bounded retry and the signal handling
+   itself are Tasks 7 and 13.
+5. **The R-38 row's "checked before the busy row's check" is not co-staged.**
+   The gate refuses to start a local sync while any remote operation is
+   retained (`local_sync/record.rs:1064`), and a pending local sync refuses
+   every remote reservation, so the two cannot both stand through public
+   paths. The row's own answer (`recovery_required`, `[repo.inspect]`,
+   nothing) is asserted for both commands.

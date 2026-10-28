@@ -10,7 +10,8 @@
 //!   as done;
 //! - a synchronization, which is taken up as its own request's next call
 //!   would take it up: the remote is asked what it holds before anything
-//!   is pushed, and nothing is merged.
+//!   is pushed, and divergent history is merged as that request merges
+//!   it.
 //!
 //! Anything else that is pending is left exactly as it was: a save that
 //! stopped before or after its write, whose body no record holds, a key

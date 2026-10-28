@@ -602,6 +602,9 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
@@ -618,6 +621,9 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
@@ -738,6 +744,9 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
@@ -754,6 +763,9 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
@@ -770,6 +782,9 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
@@ -787,6 +802,9 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
     }

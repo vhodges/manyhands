@@ -1033,6 +1033,23 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             .map(manyhands::repository::LocalContextSyncDataType::as_str)
             .to_vec(),
     ));
+    use manyhands::repository::{ConflictNextAction, SynchronizationConflictType};
+    enumerations.extend([
+        (
+            "conflict_next.schema.json",
+            "next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "synchronization_conflict_mutation.schema.json",
+            "type",
+            SynchronizationConflictType::ALL
+                .map(SynchronizationConflictType::as_str)
+                .to_vec(),
+        ),
+    ]);
     enumerations
 }
 

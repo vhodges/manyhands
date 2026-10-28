@@ -1507,7 +1507,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 50] = [
+const DATA_ROOTS: [&str; 51] = [
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
     "local_context_conflict_content.schema.json",
@@ -1556,6 +1556,7 @@ const DATA_ROOTS: [&str; 50] = [
     "repository_list.schema.json",
     "repository_removal_preview.schema.json",
     "request.schema.json",
+    "synchronization_conflict_mutation.schema.json",
     "synchronization_mutation.schema.json",
     "ticket_mutation.schema.json",
 ];
@@ -1675,12 +1676,20 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 1] = [(
-    ResultCode::RemoteUnavailable,
-    "the transport gives it only when libgit2 says the remote is not found, and the test \
-     server answers a path it does not serve by closing the connection, which is \
-     transport_unavailable; no test of the transport produces it either",
-)];
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 2] = [
+    (
+        ResultCode::RemoteUnavailable,
+        "the transport gives it only when libgit2 says the remote is not found, and the test \
+         server answers a path it does not serve by closing the connection, which is \
+         transport_unavailable; no test of the transport produces it either",
+    ),
+    (
+        ResultCode::MergeRequired,
+        "item sync and repo sync merge divergent history (Wave 03 C4, R-16), so no command \
+         of execute or prepare returns it; it stays a code of the domain for a caller set to \
+         refuse divergence, which no binding is",
+    ),
+];
 
 /// What the codes of the goldens and the published codes differ by: a code
 /// with neither a golden nor a reason, and a reason for a code that has a
@@ -1714,7 +1723,7 @@ fn code_differences(
 /// can produce. Every other code is the code of a golden under
 /// `tests/fixtures/mutation_v1`, so that a front end can see what the
 /// boundary's own envelope of it looks like, with the actions it offers.
-const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 6] = [
+const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 7] = [
     (
         ResultCode::UsageError,
         "a CLI parse result; no command of execute or prepare returns it",
@@ -1726,6 +1735,11 @@ const CODES_NO_MUTATION_GOLDEN_HAS: [(ResultCode, &str); 6] = [
     (
         ResultCode::RemoteUnavailable,
         "no fixture can produce it; see CODES_NO_FIXTURE_CAN_PRODUCE",
+    ),
+    (
+        ResultCode::MergeRequired,
+        "no command of execute or prepare returns it since item sync and repo sync merge \
+         divergent history; see CODES_NO_FIXTURE_CAN_PRODUCE",
     ),
     (
         ResultCode::InvalidId,

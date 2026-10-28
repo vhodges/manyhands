@@ -98,14 +98,16 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
-    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationMutationDto, TicketMutationDto,
+    CancelDto, ConflictNextAction, ConflictNextDto, DocumentMutationDto, HostMutationDto,
+    HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
+    IdentityPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    KeyMutationDto, LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto,
+    OperationMutationDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
+    PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
+    RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
+    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};

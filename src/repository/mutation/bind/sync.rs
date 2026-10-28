@@ -2,10 +2,26 @@
 //! branch with the publication remote. `repo sync` synchronizes the
 //! primary branch, `item sync` the editing branch of one item.
 //!
-//! Neither merges. Both call the sibling of `synchronize_remote` with
-//! its refuse-divergence setting, so a branch whose local and remote
-//! history have diverged is `merge_required` and nothing of a merge is
-//! begun.
+//! Both merge. They call the sibling of `synchronize_remote` with
+//! `MERGING`, so a branch whose local and remote history have diverged
+//! is merged as `synchronize_remote` merges it: one merge commit of the
+//! local and the incoming history, in that order, which is then
+//! published. Nothing is rebased. `merge_required` is a code no request
+//! of theirs is answered with.
+//!
+//! A merge that conflicts is left in the target worktree, with the
+//! branch where the merge began and the reservation released. The
+//! request is `recovery_required` with the integration pending, and its
+//! data is the conflict's next step: whether the conflict can be
+//! resolved in Manyhands or is repaired in Git outside it. A merge
+//! commit made before the conflict, or before any other stop, stays, and
+//! the request is then `partial`. The same request asks the domain again
+//! with `restart`, which answers a conflict still pending without
+//! transport.
+//!
+//! A merge commits with the repository's own identity. With none it
+//! stops as `identity_required`, holding what it began, and the same
+//! request goes on once `repo identity-set` gives one.
 //!
 //! Neither is an authoring write, and both answer `SaysNothing`. What
 //! says a synchronization is done is its row in the remote journal and
@@ -26,27 +42,32 @@
 //! the synchronization to stop when the call's token is cancelled or the
 //! request's record has been asked to.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{
     canonical::ItemId,
-    results::{DiscoveryEffect, Effects, PublicationEffect, ResultCode, Scope},
+    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
 };
 
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, ReadError,
-            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
-            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
-            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
-            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
+            AuthoringKind, ConfigurationInspection, ConflictEligibility, OperationFamily,
+            OperationId, ReadError, RemoteOperationSafePoint, RepositoryOperation,
+            RepositoryService, SafePointRequest, SynchronizationError, SynchronizationObserver,
+            SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
+            SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
+            read_configuration_for,
             recovery::{FinalKind, JournalRow},
             transport::SshTransportErrorKind,
         },
         command::Command,
         context::context_names,
-        dto::{MutationDataDto, SynchronizationMutationDto},
+        dto::{
+            ConflictNextAction, ConflictNextDto, MutationDataDto,
+            SynchronizationConflictMutationDto, SynchronizationConflictType,
+            SynchronizationMutationDto,
+        },
         evidence::Position,
         identity::{IntentDigestBuilder, RequestId},
         outcome,
@@ -97,9 +118,10 @@ impl From<RepoSyncInput> for SyncBinding {
     }
 }
 
-/// The bindings never merge.
-const SETTINGS: SynchronizationSettings = SynchronizationSettings {
-    refuse_divergence: true,
+/// How the bindings synchronize: divergent history is merged, and a
+/// synchronization that holds a merge of its own is continued.
+pub(super) const MERGING: SynchronizationSettings = SynchronizationSettings {
+    refuse_divergence: false,
 };
 
 /// The stage a synchronization is at when it reaches `point`: what it is
@@ -498,8 +520,9 @@ struct Configured {
 /// It is the call a re-entry of the synchronization's own request
 /// makes, with the same settings: the operation is taken up with
 /// `restart`, which asks the remote what it holds before it pushes
-/// anything, and nothing is merged. What the result says of a push is
-/// that operation's own evidence, as it is for its own request.
+/// anything, and merges as that request would. What the result says of
+/// a push is that operation's own evidence, as it is for its own
+/// request.
 ///
 /// `owner` is the request whose unfinished record holds the operation,
 /// when one does. A cancellation asked of it stops this call as it
@@ -587,7 +610,8 @@ impl SyncBinding {
             target: self.target.clone(),
             // A host is approved by its own command, never in passing.
             approval: None,
-            // Only a merge commits, and nothing here merges.
+            // A merge commits with the repository's own identity, which
+            // `repo identity-set` sets; none is confirmed in passing.
             confirmed_identity: None,
             restart,
         }
@@ -640,7 +664,7 @@ impl SyncBinding {
         let Some(result) = call.session.synchronize(
             service,
             self.request(accepted, restart),
-            SETTINGS,
+            MERGING,
             &mut watch,
         ) else {
             // No domain call was made. The record is the journal row's
@@ -673,12 +697,9 @@ impl SyncBinding {
                     active.operation_id() == accepted.operation_id && active.cancel_requested()
                 });
         if asked
-            && let Some(Err(acknowledged)) = call.session.synchronize(
-                service,
-                self.request(accepted, true),
-                SETTINGS,
-                &mut watch,
-            )
+            && let Some(Err(acknowledged)) =
+                call.session
+                    .synchronize(service, self.request(accepted, true), MERGING, &mut watch)
         {
             return self.stopped(service, accepted, &watch, &acknowledged);
         }
@@ -785,6 +806,8 @@ impl SyncBinding {
                 let _ = service.take_cancellation(owner);
             }
         }
+        // A merge commit the request made stays whatever stopped it.
+        let local_change = made_a_commit(accepted);
         // What the remote holds has to be read to be said. A journal
         // that cannot be read gives no answer to store: the record is
         // left as it is, and the next call of the request, which finds
@@ -793,6 +816,7 @@ impl SyncBinding {
             return Ran {
                 answer: Answer {
                     effects: effects_so_far(Publication::Unknown),
+                    local_change,
                     ..Answer::stopped(outcome::synchronization_error_code(error))
                 },
                 standing: Standing::Stopped { journal: None },
@@ -814,7 +838,10 @@ impl SyncBinding {
             && publication == Publication::Unknown
         {
             return Ran {
-                answer: not_confirmed(),
+                answer: Answer {
+                    local_change,
+                    ..not_confirmed()
+                },
                 standing: Standing::Final,
             };
         }
@@ -824,7 +851,7 @@ impl SyncBinding {
             outcome::synchronization_error_code(error)
         };
         // With no row the operation never reserved: nothing was begun.
-        let effects = match &journal {
+        let mut effects = match &journal {
             Some(JournalRow::Absent) => Effects::not_requested(),
             Some(
                 JournalRow::Pending(_)
@@ -836,15 +863,117 @@ impl SyncBinding {
             )
             | None => effects_so_far(publication),
         };
+        let data = match error {
+            // A merge of the request's own stopped on a conflict, which
+            // is left in the target worktree: the integration is begun
+            // and not finished, and the data is the conflict's next step.
+            SynchronizationError::ConflictPending {
+                target: _,
+                operation_id,
+                stage: _,
+            } if !cancelled => {
+                effects.integration = IntegrationEffect::Pending;
+                Some(MutationDataDto::SynchronizationConflict(
+                    SynchronizationConflictMutationDto {
+                        r#type: SynchronizationConflictType::SynchronizationConflict,
+                        conflict: conflict_next(service, &accepted.root(), *operation_id),
+                    },
+                ))
+            }
+            _ => host_data(error),
+        };
         Ran {
             answer: Answer {
                 effects,
-                data: host_data(error),
+                data,
+                local_change,
                 ..Answer::stopped(code)
             },
             standing: Standing::Stopped { journal },
         }
     }
+}
+
+/// The next step of the conflict the synchronization `operation_id` of
+/// the repository at `root` stopped on, read from one inspection of it
+/// (R-8): `resolve` when its paths are canonical content that can be
+/// resolved in Manyhands, and `external_repair` otherwise. A conflict
+/// that cannot be inspected is not one Manyhands can be given the
+/// resolution of: it is repaired outside, too.
+pub(crate) fn conflict_next(
+    service: &RepositoryService,
+    root: &Path,
+    operation_id: OperationId,
+) -> ConflictNextDto {
+    let canonical = service
+        .inspect_synchronization_recovery(root, operation_id)
+        .is_ok_and(|inspection| {
+            inspection
+                .paths
+                .first()
+                .is_some_and(|path| path.eligibility == ConflictEligibility::EligibleCanonical)
+        });
+    ConflictNextDto {
+        operation_id: operation_id.to_string(),
+        next_action: if canonical {
+            ConflictNextAction::Resolve
+        } else {
+            ConflictNextAction::ExternalRepair
+        },
+    }
+}
+
+/// Whether the branch the request synchronizes holds a merge commit the
+/// request made that the remote is not known to hold: its tip is a merge
+/// commit that is neither where the request found the branch nor reached
+/// by any of the remote's tracking references. Such a commit stays when
+/// the request stops, which is then `partial`. A fast-forward to what the
+/// remote holds is no such commit, and nor is a branch the request found
+/// ahead and left as it was.
+///
+/// `false` when Git cannot be read: nothing is claimed on that.
+fn made_a_commit(accepted: &Accepted) -> bool {
+    let Position {
+        base_ref: Some(branch),
+        base_oid,
+    } = &accepted.position
+    else {
+        return false;
+    };
+    let Ok(repository) = git2::Repository::open(accepted.root()) else {
+        return false;
+    };
+    let Ok(tip) = repository.refname_to_id(branch) else {
+        return false;
+    };
+    if Some(tip) == *base_oid
+        || repository
+            .find_commit(tip)
+            .map_or(true, |commit| commit.parent_count() < 2)
+    {
+        return false;
+    }
+    let Ok(tracking) = repository.references_glob("refs/remotes/*") else {
+        return false;
+    };
+    for reference in tracking {
+        // A tracking reference that cannot be read may reach the tip:
+        // nothing is claimed.
+        let Ok(reference) = reference else {
+            return false;
+        };
+        // A symbolic one names another, which is read in its turn.
+        if reference.kind() == Some(git2::ReferenceType::Symbolic) {
+            continue;
+        }
+        let Some(tracked) = reference.target() else {
+            return false;
+        };
+        if tracked == tip || repository.graph_descendant_of(tracked, tip).unwrap_or(true) {
+            return false;
+        }
+    }
+    true
 }
 
 /// What a call of the synchronization's own request leaves of its

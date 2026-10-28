@@ -209,12 +209,15 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
             target: _,
             expected_configuration: _,
         } => ResultCode::IdentityRequired,
+        // Only a caller set to refuse divergence is told this. The
+        // bindings merge, and none of their requests is answered with it.
         SynchronizationError::MergeRequired { target: _ } => ResultCode::MergeRequired,
         SynchronizationError::PushRejected => ResultCode::PushRejected,
         SynchronizationError::ExternalChange => ResultCode::ExternalChange,
-        // The bindings refuse divergence, so no request of theirs leaves a
-        // merge to resolve; one made some other way is not theirs to
-        // continue.
+        // A merge left to resolve or to repair outside, or a
+        // synchronization that cannot go on as it stands: the repository
+        // is what is looked at. A binding whose own merge stopped on a
+        // conflict says the conflict's next step in its data.
         SynchronizationError::ConflictPending {
             target: _,
             operation_id: _,

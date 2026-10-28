@@ -545,6 +545,7 @@ pub enum MutationDataDto {
     Key(KeyMutationDto),
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
+    SynchronizationConflict(SynchronizationConflictMutationDto),
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
     Repair(RepairMutationDto),
@@ -694,6 +695,74 @@ impl SynchronizationMutationDto {
             presented_fingerprint: text("presented_fingerprint")?,
             pinned_algorithm: optional("pinned_algorithm")?,
             pinned_fingerprint: optional("pinned_fingerprint")?,
+        })
+    }
+}
+
+contract_enum!(
+    /// What a conflict that a synchronization stopped on needs next:
+    /// `resolve` when every conflicted path is canonical content of one
+    /// item, which can be resolved in Manyhands, and `external_repair`
+    /// when any is not, so the merge is finished in Git outside it. The
+    /// set is one or the other as a whole.
+    ConflictNextAction {
+        Resolve => "resolve",
+        ExternalRepair => "external_repair",
+    }
+);
+
+/// The next step of a synchronization that stopped on a conflict: the
+/// synchronization's operation, whose merge is left in its target
+/// worktree, and what that merge needs. It names no path and holds no
+/// content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConflictNextDto {
+    /// The synchronization the conflict is of.
+    pub operation_id: String,
+    pub next_action: ConflictNextAction,
+}
+
+impl ConflictNextDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let next_action = stored.get("next_action")?.as_str()?;
+        Some(Self {
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            next_action: ConflictNextAction::ALL
+                .into_iter()
+                .find(|known| known.as_str() == next_action)?,
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `SynchronizationConflictMutationDto`: one value, so
+    /// that the data of a synchronization is told apart by it alone.
+    SynchronizationConflictType {
+        SynchronizationConflict => "synchronization_conflict",
+    }
+);
+
+/// What `item sync` and `repo sync` report when they stopped on a
+/// conflict in a merge of their own, and an `operation resume` that took
+/// such a synchronization up: the conflict's next step. The merge is left
+/// in the target worktree, the branch stays where the merge began, and
+/// the result is `recovery_required` with the integration pending.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SynchronizationConflictMutationDto {
+    pub r#type: SynchronizationConflictType,
+    pub conflict: ConflictNextDto,
+}
+
+impl SynchronizationConflictMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let tag = stored.get("type")?.as_str()?;
+        Some(Self {
+            r#type: SynchronizationConflictType::ALL
+                .into_iter()
+                .find(|known| known.as_str() == tag)?,
+            conflict: ConflictNextDto::from_stored(stored.get("conflict")?)?,
         })
     }
 }
@@ -978,7 +1047,8 @@ impl MutationDataDto {
         match self {
             Self::LocalContextSync(_) => None,
             Self::Synchronization(data) => Some(data.authority()),
-            Self::Document(_)
+            Self::SynchronizationConflict(_)
+            | Self::Document(_)
             | Self::Ticket(_)
             | Self::Remote(_)
             | Self::Key(_)
@@ -1032,8 +1102,19 @@ impl MutationDataDto {
             Command::DocumentRepair | Command::TicketRepair => {
                 RepairMutationDto::from_stored(stored).map(Self::Repair)
             }
+            // A synchronization that stopped on a conflict of its own
+            // merge, or a resume that took one up, is told apart by its
+            // tag.
+            Command::ItemSync | Command::RepoSync | Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(SynchronizationConflictType::SynchronizationConflict.as_str()) =>
+            {
+                SynchronizationConflictMutationDto::from_stored(stored)
+                    .map(Self::SynchronizationConflict)
+            }
             // A resume reports data only of a synchronization it took
-            // up: the host that synchronization stopped for.
+            // up: the host that synchronization stopped for, or the
+            // conflict above.
             Command::ItemSync | Command::RepoSync | Command::OperationResume => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
