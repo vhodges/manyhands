@@ -25,7 +25,7 @@
 //! checkpoint and the library's message and code for a refusal; the tab
 //! stays. The note holds fixed words and the library's own message.
 
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use gpui_kit::{
     App, ClickEvent, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
@@ -258,23 +258,53 @@ fn default_choice(offers: Offers) -> Option<CloseWithDraft> {
     }
 }
 
+/// An open dialog, for the tab whose Save keeps it open to follow (Task 27
+/// fix 1, A2): the focus around its body, and whether it is still open.
+pub(crate) struct Opened {
+    focus: FocusHandle,
+    open: Weak<()>,
+}
+
+impl Opened {
+    /// Whether focus is in the dialog's body: it is the dialog in front, and
+    /// closing the topmost dialog closes it.
+    pub(crate) fn focused(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
+    }
+
+    /// Whether the dialog has gone, chosen from or not: quitting closes
+    /// every dialog.
+    pub(crate) fn gone(&self) -> bool {
+        self.open.strong_count() == 0
+    }
+}
+
 /// Opens `ask`. `choose` gets the choice once the dialog has closed, or at
 /// once for a choice that keeps it open; Cancel and Escape give `Cancel`.
 /// A choice that keeps it open first gives the focus to the dialog's body,
 /// which tracks a focus of its own, as Create's form does: the button
 /// pressed waits from then on and holds no focus, and the dialog's keys,
 /// Escape among them, act only while focus is in it (Task 27 fix 1, A1).
+/// Gives the dialog, for its tab to close once its Save settles.
 pub(crate) fn open(
     ask: Ask,
     window: &mut Window,
     cx: &mut App,
     choose: impl Fn(CloseWithDraft, &mut Window, &mut App) + 'static,
-) {
+) -> Opened {
     let choose: Choose = Rc::new(choose);
     let origin = window.focused(cx);
     let ask = Rc::new(ask);
     let held = cx.focus_handle();
+    // Held only by the dialog's own builder, which the Kit drops as the
+    // dialog closes, by any route.
+    let alive = Rc::new(());
+    let opened = Opened {
+        focus: held.clone(),
+        open: Rc::downgrade(&alive),
+    };
     window.open_dialog(cx, move |base, _, cx| {
+        let _alive = &alive;
         let (enter, cancel, close) = (choose.clone(), choose.clone(), origin.clone());
         let offers = (ask.offers)(cx);
         let note = (ask.note)(cx);
@@ -306,6 +336,7 @@ pub(crate) fn open(
                 }
             })
     });
+    opened
 }
 
 fn body(

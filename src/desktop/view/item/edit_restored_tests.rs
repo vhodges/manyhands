@@ -22,7 +22,7 @@ use manyhands::{
 };
 
 use super::*;
-use crate::desktop::test_support::fixtures::NoPassphrase;
+use crate::desktop::{services::prompts::PromptReply, test_support::fixtures::NoPassphrase};
 
 const REVIEWING: &str = "Reviewing changes";
 /// Fact 81's first shape: a second load of what the first one gives would
@@ -780,4 +780,101 @@ async fn the_editor_opening_under_the_close_dialog_leaves_focus_in_it(cx: &mut T
         1,
         "Cancel kept the tab"
     );
+}
+
+/// The ticket `TICKET` edited, "x" typed and its draft begun, with its close
+/// dialog's Save held on the worker. Gives the hold.
+async fn close_save_held(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> crate::desktop::test_support::delaying::JobGate {
+    open(shell, ticket(root, TICKET), cx);
+    let host = edit(shell, cx).await;
+    type_at_end(shell, &host, "x", cx);
+    assert!(attached(shell, root, TICKET, cx).is_some(), "a draft");
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx));
+    shell.click("close-draft-save-button", cx);
+    held.wait_reached();
+    held
+}
+
+fn tabs(shell: &Shell, cx: &mut TestAppContext) -> usize {
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.tab_keys())
+        .len()
+}
+
+/// A2: a credential prompt opens above the close dialog while its Save
+/// runs. The save settles: the tab closes, as was chosen, but the dialog
+/// closes only itself, and only while focus is in it, so the prompt stays,
+/// unanswered. The close dialog, left over a closed tab, offers Cancel
+/// alone until Escape closes it.
+#[gpui_kit::test]
+async fn a_settled_close_save_closes_no_dialog_above_its_own(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Closing", "");
+    });
+    let held = close_save_held(&shell, &root, cx).await;
+    let mut answer = shell.prompt(cx);
+    assert!(shell.present("passphrase-dialog", cx));
+
+    held.release();
+    shell
+        .until_drawn(cx, "the tab closing", |shell, cx| tabs(shell, cx) == 0)
+        .await;
+    assert!(shell.present("passphrase-dialog", cx), "the prompt stays");
+    assert!(matches!(answer.try_recv(), Ok(None)), "unanswered");
+    assert!(shell.prompt_focused(cx), "with the focus");
+    assert!(shell.present("close-draft-dialog", cx), "under it");
+
+    shell.keys("escape", cx);
+    assert!(matches!(
+        answer.try_recv(),
+        Ok(Some(PromptReply::Cancelled))
+    ));
+    assert!(!shell.present("passphrase-dialog", cx));
+    assert!(shell.present("close-draft-dialog", cx));
+    assert!(!shell.present("close-draft-keep", cx), "no Keep draft");
+    assert!(shell.inert_button("close-draft-discard-button", cx));
+    assert!(shell.inert_button("close-draft-save-button", cx));
+    shell.keys("escape", cx);
+    assert!(!shell.present("close-draft-dialog", cx), "Escape closes it");
+    assert!(shell.fixture.draft_store().list().unwrap().is_empty());
+}
+
+/// A2: the close dialog goes without a choice while its Save runs, as
+/// quitting closes every dialog. The save that settles then closes
+/// nothing: not the dialog in front, nor the tab.
+#[gpui_kit::test]
+async fn a_close_dialog_gone_unanswered_closes_nothing_when_its_save_settles(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::component::WindowExt;
+
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Not closing", "");
+    });
+    let held = close_save_held(&shell, &root, cx).await;
+    shell.frame(cx, |window, cx| window.close_all_dialogs(cx));
+    assert!(!shell.present("close-draft-dialog", cx));
+    let mut answer = shell.prompt(cx);
+
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, cx| {
+            attached(shell, &root, TICKET, cx).is_none()
+        })
+        .await;
+    assert_eq!(tabs(&shell, cx), 1, "the tab stays");
+    assert!(shell.present("passphrase-dialog", cx), "the prompt stays");
+    assert!(matches!(answer.try_recv(), Ok(None)), "unanswered");
 }

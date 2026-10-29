@@ -391,7 +391,7 @@ impl Workspace {
         // Continue editing's steps.
         let (offers, note) = pane.update(cx, |pane, cx| pane.close_readers(cx));
         let workspace = cx.entity().downgrade();
-        close_draft::open(
+        let opened = close_draft::open(
             Ask::restored(&title, offers, note),
             window,
             cx,
@@ -401,6 +401,7 @@ impl Workspace {
                 });
             },
         );
+        pane.update(cx, |pane, _| pane.close_dialog_opened(opened));
         false
     }
 

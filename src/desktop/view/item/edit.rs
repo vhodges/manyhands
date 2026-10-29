@@ -92,7 +92,10 @@ use crate::desktop::{
         tabs::TabKey,
     },
     services::requests::DesktopRequestId,
-    view::editor::{host::EditorHost, toolbar::Toolbar},
+    view::{
+        close_draft::Opened,
+        editor::{host::EditorHost, toolbar::Toolbar},
+    },
 };
 
 /// A prepare that was refused: the step, then the library's message and
@@ -236,6 +239,8 @@ pub(super) struct TabEdit {
     /// The close dialog's Save runs: the tab closes once the draft retires
     /// (`close_save`).
     closing: bool,
+    /// The tab's close dialog, last opened (Task 27 fix 1, A2).
+    close_dialog: Option<Opened>,
     /// The stale-edit review, while it is open (`review`).
     review: Option<review::ReviewState>,
     /// What stands in for a new item in this tab until its read first
@@ -263,6 +268,7 @@ impl TabEdit {
             save: save::TabSave::new(scope),
             continuing: None,
             closing: false,
+            close_dialog: None,
             review: None,
             stand_in: create::StandIn::default(),
         }

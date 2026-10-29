@@ -40,7 +40,7 @@ use crate::desktop::{
     },
     model::review::CANCEL_TO_REVIEW,
     view::{
-        close_draft::{self, Ask, CloseWithDraft, Offers, Read, SAVING, SaveNote},
+        close_draft::{self, Ask, CloseWithDraft, Offers, Opened, Read, SAVING, SaveNote},
         item::{ItemPane, refused_label},
     },
 };
@@ -69,9 +69,16 @@ impl ItemPane {
         } else {
             Ask::session_draft(offers, note)
         };
-        close_draft::open(ask, window, cx, move |choice, _, cx| {
+        let opened = close_draft::open(ask, window, cx, move |choice, _, cx| {
             let _ = pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
         });
+        self.close_dialog_opened(opened);
+    }
+
+    /// The tab's close dialog opened, here or by the workspace for a draft
+    /// restored here: its Save closes it once settled (`follow_close_save`).
+    pub(in crate::desktop::view) fn close_dialog_opened(&mut self, opened: Opened) {
+        self.edit.close_dialog = Some(opened);
     }
 
     /// Whether the last write of the session's draft failed: its newest
@@ -282,8 +289,17 @@ impl ItemPane {
 
     /// The close's save has settled: committed, the draft retired and the
     /// session clean. The session ends, release on leave applies, and the
-    /// tab closes, with its dialog.
+    /// tab closes, as was chosen. Its dialog closes itself, and only while
+    /// focus is in it, as Task 23 ruled for Create, Move and New folder: the
+    /// Kit closes only the topmost dialog, and a credential prompt may have
+    /// opened above it. Left open over a closed tab, it offers Cancel alone
+    /// until Escape or Cancel. A dialog that went without a choice, as
+    /// quitting closes every dialog, ends the close: its save, settling,
+    /// closes nothing (Task 27 fix 1, A2).
     pub(in crate::desktop::view::item) fn follow_close_save(&mut self, cx: &mut Context<Self>) {
+        if self.edit.close_dialog.as_ref().is_none_or(Opened::gone) {
+            self.edit.closing = false;
+        }
         if !self.edit.closing || self.edit.phase != Phase::Editing {
             return;
         }
@@ -299,11 +315,12 @@ impl ItemPane {
             return;
         }
         self.edit.closing = false;
+        let dialog = self.edit.close_dialog.take();
         self.end_session(None, cx);
         self.release_on_leave(cx);
         cx.spawn(async move |pane, cx| {
             let _ = pane.update_in(cx, |_, window, cx| {
-                if window.has_active_dialog(cx) {
+                if dialog.is_some_and(|dialog| dialog.focused(window, cx)) {
                     window.close_dialog(cx);
                 }
                 cx.emit(CloseThisTab);
