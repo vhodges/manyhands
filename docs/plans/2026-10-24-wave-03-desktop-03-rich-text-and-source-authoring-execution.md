@@ -211,6 +211,13 @@ All present at this HEAD.
 | Wave, D4 section amendment | Wave lines 773-778 |
 | Ticket body, "merged into this branch" | ticket.md lines 39-40; no "rebased" remains |
 | Follow-up ticket for other front-matter keys (decision 14) | `01M5X0YK5JQSMEZH59K38X8458` (`vh-j39te`), on its own branch `manyhands/ticket/01M5X0YK5JQSMEZH59K38X8458`, pushed; depends on this ticket |
+| Design, Task 27 document pass: the avatar deviation (`created_by`) | design line 1259 |
+| Design, Task 27: Save waits while a relationship check runs (withdraws the Task 21 ruling) | design lines 1892-1893 |
+| Design, Task 27: Part E's Move, Repair entry, Adopt…, refusals, retries and closing, as Tasks 24, 25 and the Part E review ruled | design lines 1958-2015 |
+| Design, Task 27: Privacy, the sweep's reach (Task 26 review M8) | design lines 2026-2028 |
+| Design, Task 27: native checklist step 2's refused images | design lines 2107-2111 |
+| Design, Task 27: a fourth kept-context case (Part D review M1) | design lines 2568-2576 |
+| Design, Task 27: Known Limits from Tasks 15 to 27 and the reviews, with known defects `01M5B163PQ` and `01M4EHGE60` | design lines 2638-2721 |
 
 ## Sweep
 
@@ -1706,3 +1713,115 @@ Notes for later tasks: Task 22 leaves `targets()` in
   re-review of `b3e6ecf..b356838` found I1, M1, M2, M4, M5, M6 and M7
   addressed, with nothing new broken. The controller checked M4 itself:
   `tab_to` and `open_a_document` match `a372edb`.
+- Task 27 Step 1, the whole-branch reviews at `175cbc5` (controller):
+  - S (spec): Needs fixes; 1 Important, 8 Minor.
+  - Q1 (library, services, model): Ready; 5 Minor.
+  - Q2 (view): Needs fixes; 2 Important, 7 Minor.
+- Ruling (controller, Task 27 Q2 I1): a focus that an async landing takes
+  (the editor a prepare opens, the review once its read lands, the read
+  editor after Done's write) is dropped while a dialog or the details
+  sheet is open. — R-60 and contract 13: keys never act behind a dialog
+  or the sheet, and a credential prompt's keys must not reach a body. —
+  If wrong: one Tab after the dialog closes.
+- Ruling (controller, Task 27 Q2 I2; it extends the Task 23 ruling): the
+  close dialog's async close after its Save closes the dialog only while
+  focus is inside it; the tab still closes. — The Kit closes only the
+  topmost dialog. — If wrong: a close dialog left open, offering Cancel.
+- Ruling (controller, Task 27 S I1; copy for the owner): while a repair
+  runs, or after an answer whose effect is unknown, "Discard your
+  repair?" keeps its title and buttons, and its body reads "Your repair
+  was sent and may already be made. Closing the tab does not undo it."
+  — Contract 8: the tab states only what is true. — If wrong: one
+  sentence of copy.
+- Ruling (controller, Task 27 Q2 M1, against S's LIMIT): the send after
+  D2 sent nothing consults `save_blocked`. — Ruling Task 20: every save
+  consults one check. — If wrong: none.
+- Ruling (controller, Task 27 Q2 M2, M3): "Save is offered" and "unsaved"
+  are each computed once, and Done stops on a run kept for Retry, as
+  `done_go` does. The Drafts page's Restore gate reads `holds_session`. —
+  Part E's I1 came from two copies drifting. — If wrong: none.
+- Ruling (controller, Task 27 S M7; it withdraws the Task 21 ruling "a
+  check in flight does not block Save"): Save waits while a relationship
+  check of what the session proposes now, where that differs from its
+  base, is in flight. Its reason is "Save waits while the relationships
+  are checked." (copy for the owner). — Contract 10: a cycle is
+  explained before any save, and the save is not offered. The Cycle binds
+  over a ruling. — If wrong: Save unavailable for the moment a check
+  takes.
+- Ruling (controller, Task 27 S M6; it narrows Part E review M2): when the
+  repair's confirmation closes, focus goes to Preview if Preview is
+  enabled then, and to the repair text area only while the repair runs.
+  — Contract 13: focus returns to the control that opened the dialog,
+  where it can take focus. — If wrong: one Tab.
+- Ruling (controller, Task 27 Q1 observation): `CreatedContexts` knows a
+  `DocumentMove`, so a context a move committed into is not released as
+  unused. — Its invariant should hold however R-23's gate is reached. —
+  If wrong: a refused release in the operation area, as before.
+- Ruling (controller, Task 27 S M4, M5, M8): the normalized-item Done
+  test holds the release and asserts it; the shared-undo row is driven
+  across a switch with typing after it; repair text across a re-read is
+  tested. — Acceptance rows "Not dirty" and "Shared undo", contract 6. —
+  If wrong: none.
+- Ruling (controller, Task 27 S M1, M2, M3): the document pass adds the
+  two missing known defects to the Known Limits, brings the design's
+  Part E text in line with the Task 24 and 25 rulings (the Move retry,
+  Repair's entry, Adopt…, Prepare again), corrects the avatar
+  deviation's "derived from the name" to the whole `created_by` value, and
+  adds refused images to the native checklist's step 2. — Contract 11:
+  the design states each known defect's exception. — If wrong: design
+  wording.
+- Parked items, the controller's verdicts (reviewers' tables in W):
+  - Fixed in this round: Task 19 M4's focus on opening and Task 23's
+    editor focus under a dialog (A1); Task 20's unchecked `send_direct`
+    (B1); Task 25's "not saved anywhere" (A3).
+  - Known Limits: every item the reviewers marked LIMIT, in the words
+    added to the design at this commit. Where the reviewers differed
+    (Task 16 M9 (a), Task 22's `external_change` create, Task 23's
+    editable inputs, Part D M5's edge, Task 25's fresh view and
+    reconfirm), the item is a limit, since the user can meet it now.
+  - Gone: as the reviewers cite.
+  - Follow-ups, for the owner to decide whether they become tickets (no
+    ticket is made without the owner's go-ahead): the item-kind mappings
+    and `ContextKey::of_draft` (Q1 M1, Q2 M5); one "follow my request"
+    helper (Q1 M2); R-78's verdict kept once (Q1 M3); the sizes of
+    `bind/context.rs`, `services/requests.rs`, `workspace/content.rs`,
+    `tabs.rs` and `confirm.rs` (Q1 M4, Q2); tokens for Done's flush and
+    D2's answer (Q2 M4); shared dialog shells (Q2 M6); shared test
+    helpers (Q2 M7, Task 12's image helpers); `require_cleanup_clean`'s
+    I/O words and `context_release.rs`'s 4(d) doc (library, on main);
+    `pending_row_listed` by operation ID; pruning `Operations::rejected`;
+    Task 14's per-second redraw; Task 20's per-frame suggestions and
+    control clearing; Task 23's Folder suggestions and editable inputs;
+    a primary-branch check before New…; following every request a
+    repair view sent; and S's test-strength list (one "D3 test-strength
+    follow-up").
+- Ruling (controller, Task 27 fix 1, C2's tab half): while a tab's phase
+  is Editing, its strip mark follows the session's text, not a draft
+  attached to it or stored for it. So the strip says unsaved exactly when
+  the pill reads "Editing · unsaved changes". The draft stays attached,
+  and is updated on undo (R-12); Done discards it; closing asks N3's
+  question. — The Cycle's "Shared undo" and "Tab strip" rows; a draft at
+  its base holds nothing unsaved, as N3's dialog says. — If wrong: a tab
+  whose draft equals its base not marked in the strip.
+- Ruling (controller, Task 27 fix 1; it replaces A3's second sentence):
+  "Discard your repair?" reads "Your repair was sent and may already be
+  made. Discarding does not undo it." while the repair runs or after an
+  answer whose effect is unknown, for closing the tab and for the view's
+  own Cancel alike (copy for the owner). — Both prompts' button is
+  Discard; "Closing the tab" was untrue for Cancel. — If wrong: one
+  sentence of copy.
+- Ruling (controller, Task 27 fix 1, the implementer's concern 6): a D3
+  dialog whose OK leads to an async focus landing closes itself at once,
+  not through the Kit's deferred close. The Kit's deferred close gives
+  focus back to the opener 0.25 s later (`gpui-component` 0.6.6
+  `root.rs:341-363`), which would take it from an editor opened sooner and
+  leave it on a removed Edit. Main's dialogs are not changed. — Contract
+  13. — If wrong: a dialog that closes without its fade.
+- Known Limit (Task 27 fix 1, concern 5): a close dialog's Save that a
+  quit interrupts still saves; if the quit is cancelled, the tab stays
+  open.
+- Task 27 document pass (controller): the design's Known Limits now hold
+  each limit the parked index and the whole-branch reviews named, and the
+  two known defects; the Part E text, the avatar deviation, the
+  relationship wait, the Privacy sweep's reach, checklist step 2 and the
+  fourth kept-context case are amended (Document Amendments).

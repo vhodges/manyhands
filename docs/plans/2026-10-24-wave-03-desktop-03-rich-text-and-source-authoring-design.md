@@ -1256,7 +1256,7 @@ reports it.
 | Rich-text editing of math and property blocks | The caret steps over them; they are edited in Markdown mode. | Fact 77; R-66. |
 | Ticket details with Parent and Waiting on only | Also Dependents and Children. | The RFC (fact 54); R-54. |
 | One level of replies | Deeper replies at the reply indent, with "Reply to {name}". | Fact 59; R-53. |
-| Avatar colours per person | A colour derived from the name. | Fact 66; R-56. |
+| Avatar colours per person | A colour derived from the comment's whole author value, `created_by`. | Fact 66; R-56. |
 | Esc in edit mode moves to the header | Adopted. | R-59. |
 | The caret where the user clicked | Adopted, through the read editor's cursor. | R-65. |
 | "Table (edited in Markdown for now)" | Table inserts a table. Inside one, the toolbar offers row, column and alignment actions. | The editor edits tables (fact 36). |
@@ -1889,6 +1889,8 @@ These sit in the ticket's sheet.
   whole proposed set, under the tab's stamp (R-26).
   - A cycle is explained under its field by naming its tickets, and Save
     stays disabled.
+  - While a check of a changed set runs, Save waits, with "Save waits
+    while the relationships are checked." (Task 27).
   - An unresolved dependency is "not found, kept".
   - An incomplete index adds "Save checks again".
 - **Dependents and Children** stay read-only (R-54).
@@ -1959,13 +1961,25 @@ These sit in the ticket's sheet.
 - It is offered as Move… on the document sheet's Folder row, only while
   viewing, with no session, no kept or stored draft and no save in flight.
   So a move never adds a commit to a context an unsaved Edit created.
+  - There is no stored draft only once the draft store has said so, so
+    Move… waits for its listing. With crash recovery off, the store has
+    no listing, and Move… does not wait.
+  - Move… also waits while a private copy of the item is removed.
 - On confirm:
   1. read the observation;
   2. observe the destination in the item's context, or on primary;
   3. submit `DocumentMove`.
 - Refusals are explained, and the dialog stays open.
-- A retry after a lost answer hits known defect `01M4PB80T7`, which answers
-  `external_change`. The tab reloads by ID and shows the moved document.
+- On `external_change` the document is read again by its ID:
+  - at the destination, the move is done;
+  - where it was read, with a file now at the destination, that collision
+    is named;
+  - otherwise the dialog says the document changed, and Move is not
+    offered again until the dialog is reopened.
+- A retry after a lost answer answers `ok` or `already_applied`, and the
+  tab reloads by ID and shows the moved document. The binding works
+  around known defect `01M4PB80T7`, so the defect does not show through
+  this dialog (Task 24).
 
 **New folder** (R-24).
 - It replaces D1's disabled control.
@@ -1975,15 +1989,29 @@ These sit in the ticket's sheet.
 - A retry answers `already_applied`, shown as "Folder exists".
 
 **Repair** (R-25).
-- **Entry.** The header's "Needs fixing" banner offers Repair…, and Inspect
-  tabs under `docs/` or `.manyhands/tickets/` offer it too.
+- **Entry.** Repair… and Adopt… are offered only for a nonconforming file
+  read on primary, while the tab views it with no edit session. The
+  library repairs no conforming file.
+  - The "Needs fixing" banner offers Repair…, in an item's header and in
+    an Inspect tab under `docs/` or `.manyhands/tickets/`.
+  - An unmanaged document's banner offers Adopt…. It opens the file
+    exactly as read, below canonical front matter that holds a new ID and
+    a title: the file's first heading, else its file name. The ID is made
+    once for each read of the file, so a retried adoption makes one item.
 - **Editing.** A plain `Textarea` holds the whole file.
 - **Preview.** Preview prepares the repair, and `view/confirm.rs` adds "A new
   ID will be assigned" when adopting.
 - **Refusals.** Each is explained, with Prepare again where the library
-  offers it.
-- **Retries.** A retry answers the stored result.
-- **Closing or quitting** with edited text asks Discard or Cancel.
+  offers it. A refusal for `external_change` offers no Prepare again,
+  since the request carries the read's token and would be refused the
+  same way. The text is kept.
+- **Retries.** A retry answers the stored result. After an answer whose
+  effect is unknown, the text stays read-only, and Preview prepares the
+  same request again.
+- **Once made**, the tab follows the item by the ID its preview named.
+- **Closing or quitting** with edited text asks Discard or Cancel. While
+  the repair runs, or after an answer whose effect is unknown, the
+  question says it may already be made.
 - **Non-UTF-8 files** say they cannot be repaired here.
 
 ## Privacy
@@ -1995,6 +2023,9 @@ These sit in the ticket's sheet.
 - The privacy sweep extends D2's across save, stale save, create, move,
   repair and release. It also covers the details sheet and the comment
   editors.
+- The sweep reads the labels and values the window's test elements
+  expose, as D2's does. Text drawn as a plain child, the Kit's tooltips
+  and the Kit's own text are outside it (Task 26 review).
 
 ## Testing
 
@@ -2073,9 +2104,11 @@ On a throwaway branch of this project's repository:
    - The selected repository's details sit at the end of the item's
      scroll, after the discussion, and the page still fills the region
      (owner, 2026-10-27: to be seen on screen).
-2. **Read view.** Commit a fixture document with a words-mixed `$$` pair
-   and an image under `docs/`, then open it.
-   - It renders with its image.
+2. **Read view.** Commit a fixture document with a words-mixed `$$` pair,
+   an image, and three images that are refused (a remote one, an SVG, and
+   one whose path leaves the repository) under `docs/`, then open it.
+   - It renders with its image. Each refused image shows as its source
+     text, and nothing is fetched.
    - Select a paragraph and copy it: the paste is its Markdown.
    - Typing, pasting, a middle-click paste, a checkbox click, a table
      column drag and a right-click change nothing.
@@ -2532,11 +2565,14 @@ R-45 by decision 18.
   when it is next opened, as any body read is. When a restored draft or the
   review's result has that shape, its first undo step leads to the
   editor's own second pass of it.
-- A context is kept in three more cases:
+- A context is kept in four more cases:
   - a tab closed while its Edit was preparing, when the answer was
     `discovery_pending`;
   - a release that was refused, for example by another pending row;
-  - a never-created item's context whose release was refused.
+  - a never-created item's context whose release was refused;
+  - a fresh context whose save was answered `already_applied`, when its
+    text equals the file it branched from: nothing was committed there,
+    and the clean context is kept (Part D review).
 
   The operation area shows each refusal.
 - Releasing a clean, unused context removes its directory even if another
@@ -2599,6 +2635,90 @@ R-45 by decision 18.
 - The editor keeps 256 whole-text undo steps.
 - A table column drag or image resize writes Zorite syntax as a user edit.
 - Paste in rich mode normalizes `$$` as a user edit.
+- Repair… inserts no ID into a document whose front matter has none; the
+  user writes it (Task 25).
+- A repair refused because the file changed starts again from the file as
+  it now is (Cancel, then Repair… again). The edited text is not carried
+  over. The operation area still offers the library's Prepare again for
+  that refusal, and it is refused the same way (Task 25).
+- After a repair, the file on primary still needs fixing until the item's
+  work is merged, and repairing it again is refused (Part E review).
+- After a repair whose answer was lost, closing its view and repairing
+  again answers that it is already made, and the tab stays on the file
+  instead of following the item. The file is repaired once (Task 25).
+- A repair refused and then confirmed again from the operation area is
+  made with the text that request carried. A repair view whose text was
+  edited since stays open over it, and does not say so (Task 25).
+- An Adopt… pressed while its ID is being made does nothing; a second
+  press works (Task 25).
+- While the draft store is open but its last listing has failed, Move… is
+  unavailable, with "Move is available while viewing, with no draft or
+  save in progress.", until the store is listed again, as release on
+  leave waits (Part E review).
+- Abandoning an interrupted context release previews no item. By then the
+  worktree is removed, and at most the context's branch is left; a later
+  release of the item removes it (Part 0 review).
+- With crash recovery off, or after a draft could not begin, a save whose
+  checkpoint is pending keeps its banner and Retry after its operation is
+  abandoned in the operation area, until Retry, or the operation area's
+  Dismiss, ends it (Task 15).
+- If closing a tab that holds a session kept after Done fails to keep its
+  draft, the tab stays open and says nothing. The draft written at Done
+  stays stored, and closing again tries again (Task 16).
+- The Drafts page lists a draft that an edit session holds as "Restored in
+  this window", D2's words (Task 18).
+- While a Discard waits for a draft still being begun, Edit is unavailable
+  for a moment, with no reason given, and closing the tab again keeps
+  that draft in Drafts (Task 17).
+- If the stale-edit review opens while the item's draft is still being
+  begun, and Use these choices leaves no change, closing the tab still
+  asks once (Task 19).
+- A relationship cycle found while editing stays explained, with Save
+  unavailable, until a relationship is changed again, even if another
+  actor's change has since removed the cycle (Task 21).
+- A refused save or create, sent again, is a new request; the operation
+  area lists both (Task 22).
+- A create answered `external_change` would open the stale-edit review as
+  a save's does. Today's library answers `recovery_required` for a create
+  interrupted after its write (fact 13), so this route is not expected,
+  and it is untested (Task 22).
+- When a new item's create meets its own item already on primary, its
+  private copy gone, the tab shows the library's refusal. Done, Keep
+  draft, then reopening the tab routes it to Edit and the review (Task 22
+  review).
+- When a new item's private copy cannot be made, its tab shows no title,
+  D1's "not found" line and the draft's section. Continue editing there
+  tries again (Task 23).
+- While a new item's refused create checks its path, the tab shows no
+  refusal for that moment (Task 23).
+- A repository with no primary branch in its configuration still offers
+  New document… and New ticket…. The draft is written, and making its
+  private copy is then refused, on a tab with no title (Task 23 review).
+- Typing in the New document or New ticket dialog after Create is pressed
+  changes nothing: the item is created with the fields as they were at
+  the press (Task 23 review).
+- If focus has left a create dialog when its item is made, the dialog
+  stays open, with Create no longer offered, until Escape or Cancel (Task
+  23 review).
+- If focus has left a close dialog when its Save settles, for example to
+  a passphrase prompt above it, the tab closes and the dialog stays, with
+  only Cancel, until Escape or Cancel. A close dialog's Save that a quit
+  interrupts still saves; if the quit is cancelled, the tab stays open
+  (Task 27).
+- A new ticket whose create the library refuses for its relationships
+  shows the library's message and code, not the relationship words. A new
+  ID closes no cycle, so this is not expected (Part D review).
+- If a new item's create met its own file in a private copy the index does
+  not list yet, the tab would call it another file; nothing is written
+  (Part D review).
+- Known defect `01M5B163PQ`: an item whose work context the index rejects
+  (for example, a second file with its ID in the context) reads as
+  `item_not_found`. Its tab shows D1's not-found banner with Refresh, and
+  offers no Edit, Move or Repair.
+- Known defect `01M4EHGE60`: D3 reads an item's change time from the index
+  as D1 does. The Updated chip and the details sheet's Changed fact show
+  the index's stored value. No D3 decision reads it; Edit's precheck reads
+  Git.
 
 ## Alternatives Rejected
 
