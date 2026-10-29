@@ -122,9 +122,7 @@ pub(crate) enum JobKind {
     TicketCreate,
     DocumentMove,
     FolderCreate,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     DocumentRepair,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     TicketRepair,
     ObserveHost,
 }

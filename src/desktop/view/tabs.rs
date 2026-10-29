@@ -12,7 +12,8 @@
 use super::{
     item::text,
     item::{
-        CloseThisTab, DraftDiscarded, InitialsInSettings, ItemPane, OpenDetails, ReviewInDrafts,
+        CloseThisTab, DraftDiscarded, FollowItem, InitialsInSettings, ItemPane, OpenDetails,
+        ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -157,14 +158,16 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
     };
     let registry = pane.drafts().read(cx);
     let key = pane.tab_key();
-    let unsaved = match &key {
-        TabKey::Item { repo, kind, id } => {
-            pane.unsaved_edit(cx)
-                || registry.attached(&key).is_some()
-                || registry.stored_for(repo, *kind, id).is_some()
-        }
-        TabKey::Inspect { .. } => false,
-    };
+    // Edited repair text is unsaved too.
+    let unsaved = pane.repair_edited(cx)
+        || match &key {
+            TabKey::Item { repo, kind, id } => {
+                pane.unsaved_edit(cx)
+                    || registry.attached(&key).is_some()
+                    || registry.stored_for(repo, *kind, id).is_some()
+            }
+            TabKey::Inspect { .. } => false,
+        };
     let repository = Path::new(repo)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -209,9 +212,10 @@ pub(crate) struct TabContent {
     close_focus: HashMap<TabId, FocusHandle>,
     /// Each pane's related item opened, its Review in Drafts, its restored
     /// draft discarded, its chips' requests for the details sheet, its
-    /// create's ask for Settings on its repository, and its
-    /// own close once its unsaved work was settled.
-    related: HashMap<TabId, [Subscription; 6]>,
+    /// create's ask for Settings on its repository, its
+    /// own close once its unsaved work was settled, and its repair's item
+    /// to follow.
+    related: HashMap<TabId, [Subscription; 7]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -269,33 +273,78 @@ impl TabContent {
     ) {
         let (id, opened) = self.tabs.open(TabKey::for_target(&target));
         if opened {
-            let services = services.clone();
-            let scroll = self.scroll.clone();
-            let pane = cx.new(|cx| ItemPane::new(target, ViewScope::Tab(id), services, scroll, cx));
-            let related = cx.subscribe(&pane, |this, _, event: &OpenRelated, cx| {
-                this.open_item(event.0.clone(), cx)
-            });
-            let review = cx.subscribe(&pane, |this, _, event: &ReviewInDrafts, cx| {
-                this.review_in_drafts(event.0, cx)
-            });
-            let discarded = cx.subscribe(&pane, |this, _, _: &DraftDiscarded, cx| {
-                this.draft_discarded(cx)
-            });
-            let details = cx.subscribe(&pane, |this, pane, event: &OpenDetails, cx| {
-                this.ask_details(&pane, event.0, cx)
-            });
-            let settings = cx.subscribe(&pane, |this, _, event: &InitialsInSettings, cx| {
-                this.settings_for_initials(event.0.clone(), cx)
-            });
-            let close = cx.subscribe(&pane, move |this, _, _: &CloseThisTab, cx| {
-                this.close_settled(id, cx)
-            });
-            self.related
-                .insert(id, [related, review, discarded, details, settings, close]);
-            self.panes.insert(id, pane);
+            self.attach(id, target, services, cx);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());
         }
+    }
+
+    /// The tab `id` follows its item to `target`, once a repair has made it
+    /// (`FollowItem`): it shows `target` from now on, in its place in the
+    /// strip, with its own focus, in a pane that reads it there. When a tab
+    /// is open on `target` already, that one is shown and `id` closes. Gives
+    /// the tab that shows `target`.
+    pub(super) fn follow(
+        &mut self,
+        id: TabId,
+        target: OpenTarget,
+        services: &Services,
+        cx: &mut Context<Workspace>,
+    ) -> TabId {
+        let key = TabKey::for_target(&target);
+        if let Some(open) = self.find(&key) {
+            if open != id {
+                self.close(id);
+                self.tabs.activate(open);
+            }
+            return open;
+        }
+        if self.tabs.replace(id, key) {
+            self.panes.remove(&id);
+            self.related.remove(&id);
+            self.attach(id, target, services, cx);
+        }
+        id
+    }
+
+    /// A pane for the tab `id`, reading `target`, and what the workspace
+    /// hears from it.
+    fn attach(
+        &mut self,
+        id: TabId,
+        target: OpenTarget,
+        services: &Services,
+        cx: &mut Context<Workspace>,
+    ) {
+        let services = services.clone();
+        let scroll = self.scroll.clone();
+        let pane = cx.new(|cx| ItemPane::new(target, ViewScope::Tab(id), services, scroll, cx));
+        let related = cx.subscribe(&pane, |this, _, event: &OpenRelated, cx| {
+            this.open_item(event.0.clone(), cx)
+        });
+        let review = cx.subscribe(&pane, |this, _, event: &ReviewInDrafts, cx| {
+            this.review_in_drafts(event.0, cx)
+        });
+        let discarded = cx.subscribe(&pane, |this, _, _: &DraftDiscarded, cx| {
+            this.draft_discarded(cx)
+        });
+        let details = cx.subscribe(&pane, |this, pane, event: &OpenDetails, cx| {
+            this.ask_details(&pane, event.0, cx)
+        });
+        let settings = cx.subscribe(&pane, |this, _, event: &InitialsInSettings, cx| {
+            this.settings_for_initials(event.0.clone(), cx)
+        });
+        let close = cx.subscribe(&pane, move |this, _, _: &CloseThisTab, cx| {
+            this.close_settled(id, cx)
+        });
+        let follow = cx.subscribe(&pane, move |this, _, event: &FollowItem, cx| {
+            this.follow_tab(id, event.0.clone(), cx)
+        });
+        self.related.insert(
+            id,
+            [related, review, discarded, details, settings, close, follow],
+        );
+        self.panes.insert(id, pane);
     }
 
     pub(super) fn activate(&mut self, id: TabId) -> bool {

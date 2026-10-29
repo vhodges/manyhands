@@ -58,6 +58,9 @@ pub(crate) enum Leaving {
     /// An edit session with unsaved work, a kept or stored draft, or a
     /// draft being stored (R-41): the tab asks (`ask_to_close`).
     Session,
+    /// Repair text that differs from the file as read, which no draft
+    /// keeps: the tab asks (`ask_discard_repair`).
+    Repair,
 }
 
 /// The tab is to close without asking again: its choice was made, or a
@@ -82,6 +85,11 @@ impl EventEmitter<CloseThisTab> for ItemPane {}
 impl ItemPane {
     /// What closing this tab asks.
     pub(in crate::desktop::view) fn leaving(&self, cx: &App) -> Leaving {
+        // A repair is open only while the tab views its file, with no
+        // session.
+        if self.repair_edited(cx) {
+            return Leaving::Repair;
+        }
         let attached = self.services.drafts().read(cx).attached(&self.tab_key());
         match &self.edit.session {
             Some(session)
@@ -106,10 +114,12 @@ impl ItemPane {
     /// Whether the edit session holds unsaved text that no draft holds:
     /// with crash recovery off, after a begin that failed, while one is
     /// still in flight, or once D2 has ended the draft and newer text waits
-    /// (Part C fix 1, I1). Quitting asks first; a repository's removal says
-    /// so, and a repository that leaves the list keeps the tab.
+    /// (Part C fix 1, I1); or whether its repair view holds edited text,
+    /// which no draft ever keeps (pre-flight ruling, Task 25). Quitting asks
+    /// first; a repository's removal says so, and a repository that leaves
+    /// the list keeps the tab.
     pub(in crate::desktop::view) fn unkept_edit(&self, cx: &App) -> bool {
-        self.edit_dirty(cx) && self.live_draft(cx).is_none()
+        (self.edit_dirty(cx) && self.live_draft(cx).is_none()) || self.repair_edited(cx)
     }
 
     /// Tells the window's services, for as long as the tab lives, whether

@@ -30,6 +30,11 @@
 //! view, D2's draft follows the text, Save, or `secondary-s`, saves it,
 //! and Done ends the session or keeps it while the tab views the saved
 //! copy.
+//!
+//! `repair` makes Repair work (design, Part E): Repair…, or an unmanaged
+//! document's Adopt…, opens a plain text area over the whole file in the
+//! page's place of its text; Preview prepares the repair in the one
+//! confirmation dialog; a repair made, the tab follows the item by its ID.
 
 mod banners;
 mod chips;
@@ -43,6 +48,7 @@ mod page;
 mod pill;
 mod reads;
 mod relations_edit;
+mod repair;
 mod sheet;
 mod source;
 mod status;
@@ -60,7 +66,11 @@ use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
     keys::{Edit, ITEM_TAB_CONTEXT, Save, ToggleRich},
     model::{
-        edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
+        edit::Phase,
+        item::{ItemView, REPAIR},
+        names::TicketName,
+        navigation::OpenTarget,
+        stamp::ViewScope,
     },
     services::{
         Services,
@@ -78,6 +88,7 @@ pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
 pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving};
+pub(crate) use repair::FollowItem;
 pub(crate) use sheet::open_details;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
@@ -147,6 +158,8 @@ pub(crate) struct ItemPane {
     images: TabImages,
     /// Edit: the phase, the session and what stopped a prepare.
     edit: edit::TabEdit,
+    /// The repair view, while it is open (`repair`).
+    repair: Option<repair::Repairing>,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
@@ -213,6 +226,7 @@ impl ItemPane {
             link_read: None,
             images,
             edit,
+            repair: None,
             _operations: operations,
             _drafts: drafts,
             _saved: saved,
@@ -346,20 +360,36 @@ impl Render for ItemPane {
                 });
                 // An item tab reads its body in the read view (decision
                 // 17); a file read by its path keeps D1's source view
-                // (R-64).
-                let text = if inspect {
+                // (R-64). The repair view takes the place of either.
+                let text = if let Some(repairing) = self.repair_view(cx) {
+                    repairing
+                } else if inspect {
                     self.source(item, cx)
                 } else if let Some(editing) = self.edit_view(cx) {
                     editing
                 } else {
                     self.read_body(item, cx)
                 };
-                Some(v_flex().gap_3().children(details).child(text))
+                // An Inspect tab of a file that needs no fixing offers
+                // Repair… on its page; "Needs fixing" offers it in its
+                // banner.
+                let entry = (inspect && !banners::nonconforming(item))
+                    .then(|| self.repair_entry(item, REPAIR, cx))
+                    .flatten();
+                Some(
+                    v_flex()
+                        .gap_3()
+                        .children(details)
+                        .children(entry)
+                        .child(text),
+                )
             }
             // A new item not created yet has no item to read: its edit
-            // editor is the page (R-42).
+            // editor is the page (R-42). Repair text stays shown when a
+            // reload of its file fails.
             None => self
-                .edit_view(cx)
+                .repair_view(cx)
+                .or_else(|| self.edit_view(cx))
                 .map(|editing| v_flex().gap_3().child(editing)),
         };
         // D2's restored draft at the top of the page (R-38); its banner is
@@ -369,7 +399,8 @@ impl Render for ItemPane {
             .children(identity)
             .children(section)
             .children(body);
-        let viewing = !inspect && self.edit.phase() == Phase::Viewing;
+        // The repair view's text takes every key typed into it, `e` too.
+        let viewing = !inspect && self.edit.phase() == Phase::Viewing && self.repair.is_none();
         let page = self.page.render(content, &self.scroll, viewing, window, cx);
         let discussion = self.discussion_section(later, window, cx);
         let end = self

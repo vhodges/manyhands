@@ -766,12 +766,12 @@ fn the_status_lines_are_banners_with_their_actions(cx: &mut TestAppContext) {
 }
 
 /// A nonconforming file read by its path "Needs fixing": the banner names
-/// its problem with D1's reason and guidance, and Repair is shown,
-/// disabled, with its note; pressing it changes nothing. Its path and
-/// source are still shown, it has no chips, and the header's primary
+/// its problem with D1's reason and guidance, and offers Repair…, which is
+/// enabled: pressed, it opens the repair view and writes nothing. Its path
+/// and source are still shown, it has no chips, and the header's primary
 /// action is its kind's.
 #[gpui_kit::test]
-fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestAppContext) {
+fn a_nonconforming_item_shows_needs_fixing_with_repair_offered(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_nonconforming_ticket(root, BROKEN);
         fixture.commit_nonconforming_document(root, MARKER);
@@ -799,23 +799,12 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
         [ProblemCode::MalformedFrontMatter.guidance()]
     );
     assert!(in_header(&shell, ("item-problem", 0usize), cx));
-    let repair = 2usize;
-    assert_eq!(
-        shell.label(("later-action", repair), cx).as_deref(),
-        Some(REPAIR)
+    assert_eq!(shell.label("item-repair", cx).as_deref(), Some(REPAIR));
+    assert!(inside(&shell, "item-repair", "item-banners", cx));
+    assert!(
+        !shell.present(("later-action", 2usize), cx),
+        "Repair is no later action"
     );
-    assert!(inside(&shell, ("later-action", repair), "item-banners", cx));
-    assert_eq!(
-        shell.label(("later-note", repair), cx).as_deref(),
-        Some(LATER_NOTE)
-    );
-    assert!(shell.inert_button(("later-button", repair), cx));
-    shell.click(("later-button", repair), cx);
-    assert_eq!(
-        shell.rows("item-problem", cx),
-        [ProblemCode::MalformedFrontMatter.as_str()]
-    );
-    assert_eq!(RepositorySnapshot::take(&root), before);
 
     assert_eq!(shell.label("item-path", cx), Some(entry.path.clone()));
     assert!(shell.present("item-nonconforming", cx));
@@ -825,6 +814,15 @@ fn a_nonconforming_item_shows_needs_fixing_with_repair_disabled(cx: &mut TestApp
         shell.label(("later-action", 1usize), cx).as_deref(),
         Some(CLOSE_TICKET)
     );
+
+    // Enabled: pressed, it opens the repair view, and writes nothing.
+    shell.click("item-repair-button", cx);
+    assert!(shell.present("repair-source", cx));
+    assert_eq!(
+        shell.rows("item-problem", cx),
+        [ProblemCode::MalformedFrontMatter.as_str()]
+    );
+    assert_eq!(RepositorySnapshot::take(&root), before);
 
     open(&shell, inspect(&root, MARKER), cx);
     assert!(shell.present("item-needs-fixing", cx));

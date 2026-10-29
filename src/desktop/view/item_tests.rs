@@ -415,9 +415,10 @@ fn comments_keep_list_order_and_replies_share_one_indent(cx: &mut TestAppContext
 }
 
 /// A nonconforming entry opens by its path: it says so, shows its
-/// problem code with its guidance, and Repair is visibly unavailable.
+/// problem code with its guidance, and Repair is offered from its "Needs
+/// fixing" banner.
 #[gpui_kit::test]
-fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
+fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
     cx: &mut TestAppContext,
 ) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -450,10 +451,10 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
     assert!(present(&shell, "item-source", cx));
     assert!(!present(&shell, "comments-state", cx));
 
-    // The header's later actions and Repair in the "Needs fixing" banner
-    // are shown, and each says it is not available yet. An Inspect tab has
-    // no discussion, so Comment is not among them, and the header's
-    // primary action is the ticket's, Close ticket….
+    // The header's later actions are shown, and each says it is not
+    // available yet. An Inspect tab has no discussion, so Comment is not
+    // among them, and the header's primary action is the ticket's, Close
+    // ticket…. Repair is not one of them.
     let later: Vec<&str> = LATER
         .into_iter()
         .filter(|action| !["Comment", "Approve and merge…"].contains(action))
@@ -462,14 +463,12 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
     let notes = shell.rows("later-note", cx);
     assert_eq!(notes.len(), later.len());
     assert!(notes.iter().all(|note| note == LATER_NOTE));
-    let repair = later.iter().position(|action| *action == "Repair").unwrap();
-    assert_eq!(
-        shell.label(("later-action", repair), cx).as_deref(),
-        Some("Repair")
-    );
-    // The control does nothing: the view is as it was.
+    // Repair is offered from the "Needs fixing" banner: pressed, it opens
+    // the repair view, and the problem is still shown.
+    assert_eq!(shell.label("item-repair", cx).as_deref(), Some("Repair…"));
     let before = shell.rows("item-problem", cx);
-    shell.click(("later-button", repair), cx);
+    shell.click("item-repair-button", cx);
+    assert!(present(&shell, "repair-source", cx));
     assert_eq!(shell.rows("item-problem", cx), before);
 }
 

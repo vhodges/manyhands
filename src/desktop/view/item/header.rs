@@ -102,12 +102,11 @@ pub(super) enum Weight {
 
 /// Where a later action shows its note, "Available in a later release",
 /// besides its accessible description: as the button's tooltip in the
-/// header, or written below it, in the chrome's muted colour in a banner,
-/// or in `page-muted` on the discussion's light ground.
+/// header, or written below it, in `page-muted` on the discussion's light
+/// ground.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum NoteAt {
     Tooltip,
-    Below,
     BelowOnPage,
 }
 
@@ -144,21 +143,15 @@ pub(super) fn later_action(
         .aria_label(label)
         .aria_description(LATER_NOTE);
     match note {
-        NoteAt::Below | NoteAt::BelowOnPage => {
-            let muted = match note {
-                NoteAt::BelowOnPage => item_colors(cx).page_muted,
-                _ => cx.theme().muted_foreground,
-            };
-            v_flex()
-                .gap_1()
-                .child(action.child(button))
-                .child(
-                    text(("later-note", ix), LATER_NOTE)
-                        .text_xs()
-                        .text_color(muted),
-                )
-                .into_any_element()
-        }
+        NoteAt::BelowOnPage => v_flex()
+            .gap_1()
+            .child(action.child(button))
+            .child(
+                text(("later-note", ix), LATER_NOTE)
+                    .text_xs()
+                    .text_color(item_colors(cx).page_muted),
+            )
+            .into_any_element(),
         NoteAt::Tooltip => action
             .flex_none()
             .child(
@@ -195,8 +188,8 @@ impl ItemPane {
         }
     }
 
-    /// The header block, and how many later actions it and its banners
-    /// drew: the discussion's Comment comes after them. A new item not
+    /// The header block, and how many later actions it drew: the
+    /// discussion's Comment comes after them. A new item not
     /// created yet shows its draft's fields as its title, pill, chips and
     /// breadcrumb (`new_item_shown`); its actions and banners are the tab's
     /// own, as with no item read.
@@ -285,7 +278,7 @@ impl ItemPane {
             .gap(px(16.))
             .child(actions)
             .child(identity);
-        let (banners, banner_later) = self.banners(read, later.len(), cx);
+        let banners = self.banners(read, cx);
         let slot = (!banners.is_empty())
             .then(|| v_flex().id("item-banners").gap(px(6.)).children(banners));
         let (vertical, horizontal) = PADDING;
@@ -304,7 +297,7 @@ impl ItemPane {
             .child(row)
             .children(slot)
             .into_any_element();
-        (header, later.len() + banner_later)
+        (header, later.len())
     }
 
     /// `folder-git-2`, then repository › section › file, at 12 px, with no

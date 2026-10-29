@@ -307,6 +307,29 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A repair made in the tab `id` (`ItemPane`'s `FollowItem`): the tab
+    /// follows the item to `target`, in its place in the strip, and reads it
+    /// there; a tab already open on it is shown instead, and this one
+    /// closes. A shown tab's content takes the focus at the next frame, the
+    /// view that held it gone.
+    pub(in crate::desktop::view) fn follow_tab(
+        &mut self,
+        id: TabId,
+        target: OpenTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self.content.tabs.active() == Some(id);
+        let now = self.content.tabs.follow(id, target, &self.services, cx);
+        if let Some(pane) = self.content.tabs.pane(now).cloned() {
+            let details = Self::repository_details(cx);
+            pane.update(cx, |pane, _| pane.end_region_with(details));
+        }
+        if shown {
+            self.content.refocus = true;
+        }
+        cx.notify();
+    }
+
     /// Shows the tab `id`, and so the tabs.
     pub(in crate::desktop::view) fn show_tab(&mut self, id: TabId, cx: &mut Context<Self>) {
         if self.content.tabs.activate(id) {
@@ -320,7 +343,9 @@ impl Workspace {
     /// D2's Keep draft, Save, Discard or Cancel; an edit session with
     /// unsaved work, a kept or stored draft, or one being stored, asks in
     /// its tab (`ItemPane::ask_to_close`), which closes once its choice is
-    /// settled. A clean tab closes at once, and release on leave applies.
+    /// settled; edited repair text asks whether to discard it
+    /// (`ItemPane::ask_discard_repair`). A clean tab closes at once, and
+    /// release on leave applies.
     /// True when the tab closed now. While quitting waits for drafts or a
     /// job, with Quit now in view, nothing closes and nothing opens in
     /// front of it.
@@ -352,6 +377,10 @@ impl Workspace {
             _ if window.has_active_dialog(cx) => return false,
             (Leaving::Session, Some(pane)) => {
                 pane.update(cx, |pane, cx| pane.ask_to_close(window, cx));
+                return false;
+            }
+            (Leaving::Repair, Some(pane)) => {
+                pane.update(cx, |pane, cx| pane.ask_discard_repair(true, window, cx));
                 return false;
             }
             (Leaving::Restored(draft), Some(pane)) => (draft, pane),

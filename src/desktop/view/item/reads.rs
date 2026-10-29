@@ -149,8 +149,9 @@ impl ItemPane {
     /// Finished requests trigger Workspace's tab reload; unsent/cancelled ones
     /// reload here. A missing request is still queued in the worker channel.
     /// An Edit's prepare and its saves go on as their requests do
-    /// (`edit`).
+    /// (`edit`), and so does a repair (`repair`).
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
+        self.repair_progressed(cx);
         self.prepare_progressed(cx);
         self.save_progressed(cx);
         self.follow_done(cx);

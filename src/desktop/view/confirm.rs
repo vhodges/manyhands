@@ -17,11 +17,16 @@
 //! preview under the same desktop request and request ID. Any other
 //! answer closes the dialog: the operation area holds it. Text is the
 //! envelope's message, the code and fixed strings.
+//!
+//! A repair's preview shows its Root, Path and ID, and, when the file
+//! holds no valid ID and the source's is assigned, "A new ID will be
+//! assigned". Confirm says what it sent (`Confirmed`) to an opener that
+//! follows the request's answers (`confirm_followed`).
 
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
-    TestSupportExt, Window,
+    AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
@@ -63,6 +68,19 @@ pub(crate) const PINNED_KEY: &str = "Pinned key";
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
 /// A removal keeps the drafts of the repository's items (design, Tabs).
 pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay in Drafts.";
+/// A repair's preview that adopts the file: its ID is the source's
+/// (design, Part E: Repair).
+pub(crate) const NEW_ID: &str = "A new ID will be assigned";
+
+/// What Confirm sent: the request it submitted, or queued again after
+/// Prepare again, with the details of the preview confirmed. The opener of
+/// a dialog it follows (`confirm_followed`) follows the request's answers.
+pub(crate) struct Confirmed {
+    pub(crate) request: DesktopRequestId,
+    pub(crate) details: PreviewDetailsDto,
+}
+
+impl EventEmitter<Confirmed> for ConfirmDialog {}
 
 /// A removal closes the repository's tabs, `count` of which hold unsaved
 /// text that no draft holds (Part C fix 1, I1): `None` when none do. The
@@ -116,6 +134,19 @@ pub(crate) fn confirm(
     open(intent, None, origin, services, window, cx);
 }
 
+/// Opens the confirmation dialog for `intent`, as `confirm` does, and
+/// gives it, for its opener to hear what Confirm sends (`Confirmed`);
+/// `None` when nothing opened.
+pub(crate) fn confirm_followed(
+    intent: Intent,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<ConfirmDialog>> {
+    open(intent, None, origin, services, window, cx)
+}
+
 /// Opens the dialog for the request `id` again, whose answer asked for a
 /// new preview: a fresh preview under the same request.
 pub(crate) fn prepare_again(
@@ -143,12 +174,12 @@ fn open(
     services: &Services,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Option<Entity<ConfirmDialog>> {
     // Quitting waits for drafts or a job with Quit now in view: nothing
     // opens in front of it, and once the worker quits no request could be
     // sent.
     if services.worker().quitting() || services.operations().read(cx).saving_drafts() {
-        return;
+        return None;
     }
     let title = intent.label();
     let dialog = cx.new(|cx| {
@@ -161,6 +192,7 @@ fn open(
             cx,
         )
     });
+    let opened = dialog.clone();
     window.open_dialog(cx, move |base, _, _| {
         let confirming = dialog.clone();
         let origin = origin.clone();
@@ -178,6 +210,7 @@ fn open(
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
+    Some(opened)
 }
 
 /// Where the dialog stands.
@@ -367,6 +400,10 @@ impl ConfirmDialog {
                     return;
                 }
             },
+        }
+        if let (Some(request), Some((preview, _))) = (self.request, &self.preview) {
+            let details = preview.details.clone();
+            cx.emit(Confirmed { request, details });
         }
         // Part C fix 2, N1: once it lands, a removal closes only the tabs
         // whose unkept text the line counted as it was confirmed.
@@ -676,6 +713,10 @@ impl ConfirmDialog {
             }
             _ => None,
         };
+        // A repair that assigns the source's ID says so (design, Part E).
+        let adoption =
+            matches!(&preview.details, PreviewDetailsDto::Repair(repair) if repair.adoption)
+                .then(|| text("confirm-adoption", NEW_ID).text_sm());
         let removal = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_));
         let drafts = removal.then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
         let unkept = removal
@@ -702,6 +743,7 @@ impl ConfirmDialog {
                         .enumerate()
                         .map(|(ix, (name, value))| named(("confirm-detail", ix), name, &value)),
                 )
+                .children(adoption)
                 .children(note)
                 .children(drafts)
                 .children(unkept)

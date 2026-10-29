@@ -196,7 +196,6 @@ pub(crate) enum Intent {
         path: String,
     },
     /// A nonconforming document file, given its corrected source.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     DocumentRepair {
         root: PathBuf,
         path: PathBuf,
@@ -204,7 +203,6 @@ pub(crate) enum Intent {
         source: String,
     },
     /// A nonconforming ticket file, given its corrected source.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     TicketRepair {
         root: PathBuf,
         path: PathBuf,

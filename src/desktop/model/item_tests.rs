@@ -64,13 +64,7 @@ fn provenance_names_the_context_kind_its_branch_and_worktree() {
 fn the_unavailable_actions_are_the_designs() {
     assert_eq!(
         LATER,
-        [
-            "Comment",
-            "Share",
-            "Approve and merge…",
-            "Close ticket…",
-            "Repair"
-        ]
+        ["Comment", "Share", "Approve and merge…", "Close ticket…"]
     );
 }
 

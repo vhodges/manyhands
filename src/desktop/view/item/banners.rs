@@ -6,9 +6,11 @@
 //! loading, a failed or busy read with Retry, a read that kept what was
 //! shown, a context that needs recovery, and an item not found with
 //! Refresh. A nonconforming file, an entry with no ID, "Needs fixing":
-//! D1's reason (each problem and its guidance), with Repair not available
-//! yet. D2's banner of a stored draft, with Restore, Review in Drafts and
-//! Continue editing, is here too (`draft`). An Edit raises crash recovery
+//! D1's reason (each problem and its guidance), with Repair…; an
+//! unmanaged document, a file under `docs/` with no front matter, has the
+//! handoff's words and Adopt… instead (`repair`). D2's banner of a stored
+//! draft, with Restore, Review in Drafts and Continue editing, is here too
+//! (`draft`). An Edit raises crash recovery
 //! off, a prepare still owed and a refusal; its saves raise a base to
 //! review, a hand-off owed, a pending checkpoint, the change banner under
 //! the review and a refusal; a kept session raises the kept draft and the
@@ -33,11 +35,7 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{
-    ItemPane, RECOVERY,
-    header::{NoteAt, Weight, later_action},
-    text,
-};
+use super::{ItemPane, RECOVERY, repair::unmanaged, text};
 use crate::desktop::{
     assets::icon_path,
     model::{
@@ -101,7 +99,6 @@ pub(crate) enum Banner {
     /// 2026-10-27): D1's reason, since the library names no missing field.
     NeedsFixing,
     /// An unmanaged document, with Adopt….
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     Unmanaged,
     /// A link not found, or opened as the nearest match.
     Link,
@@ -168,14 +165,12 @@ pub(crate) fn most_severe_first<E>(mut banners: Vec<(Banner, E)>) -> Vec<(Banner
 }
 
 impl ItemPane {
-    /// The banners that apply to `item`, framed and most severe first,
-    /// and how many later actions they drew from `later_from` on.
+    /// The banners that apply to `item`, framed and most severe first.
     pub(super) fn banners(
         &self,
         item: Option<&ItemDto>,
-        later_from: usize,
         cx: &mut Context<Self>,
-    ) -> (Vec<AnyElement>, usize) {
+    ) -> Vec<AnyElement> {
         let mut banners: Vec<(Banner, AnyElement)> = Vec::new();
         let state = self.model.item();
         // A new item not created yet is not missing: its header is its
@@ -193,10 +188,13 @@ impl ItemPane {
         if let Some(recovery) = item.and_then(|item| self.recovery(item, cx)) {
             banners.push((Banner::Recovery, recovery));
         }
-        let mut used = 0;
         if let Some(item) = item.filter(|item| nonconforming(item)) {
-            banners.push((Banner::NeedsFixing, self.needs_fixing(item, later_from, cx)));
-            used += 1;
+            let banner = if unmanaged(item) {
+                (Banner::Unmanaged, self.unmanaged_banner(item, cx))
+            } else {
+                (Banner::NeedsFixing, self.needs_fixing(item, cx))
+            };
+            banners.push(banner);
         }
         if let Some(stored) = self.draft_banner(item, cx) {
             banners.push((Banner::StoredDraft, stored));
@@ -205,12 +203,11 @@ impl ItemPane {
             banners.push((Banner::Link, link_banner(note, cx)));
         }
         banners.extend(self.edit_banners(cx));
-        let framed = most_severe_first(banners)
+        most_severe_first(banners)
             .into_iter()
             .enumerate()
             .map(|(ix, (banner, content))| frame(ix, banner, content, cx))
-            .collect();
-        (framed, used)
+            .collect()
     }
 
     /// D1's recovery guidance, for a context or branch problem: it says
@@ -246,8 +243,8 @@ impl ItemPane {
     }
 
     /// "Needs fixing", D1's reason (each problem with its guidance) and
-    /// Repair, which is not available yet.
-    fn needs_fixing(&self, item: &ItemDto, later: usize, cx: &mut Context<Self>) -> AnyElement {
+    /// Repair…, where the file can be repaired here (`repair`).
+    fn needs_fixing(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let problems: Vec<_> = item
             .problems
@@ -283,14 +280,7 @@ impl ItemPane {
                     )
                     .children(problems),
             )
-            .child(later_action(
-                later,
-                REPAIR,
-                None,
-                Weight::Plain,
-                NoteAt::Below,
-                cx,
-            ))
+            .children(self.repair_entry(item, REPAIR, cx))
             .into_any_element()
     }
 }
