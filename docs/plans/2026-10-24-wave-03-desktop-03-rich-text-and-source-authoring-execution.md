@@ -1300,3 +1300,32 @@ Notes for later tasks: Task 22 leaves `targets()` in
   opens the review like a save's, which then reads an item the index may
   not list; it is not tested. The tab's Retry on a refused create sends a
   new request (as a save's does), not the same one.
+- Ruling (controller, Task 22 review M1, M2, M4, M5, M7): a restored
+  not-created draft's Save, and its close dialog's Save, each create the
+  item once, and a create sent again after a lost answer creates no second
+  item, now each with a test; the save record names its `Verb`, and the
+  context key is the Create prepare's. A kept create record leaves the
+  session not saving, so a new Save and the operation area's Retry can both
+  be in flight for one item; this is documented, not changed. — The library
+  answers the second `already_applied` or `occupied_path`, and the new send
+  drops the old record. — If wrong: a second create request shown in the
+  operation area.
+- Copy for the owner's on-screen check (Task 22 review): after a Create
+  prepare answered `occupied_path` re-routes to Edit, the operation area
+  still shows that first prepare as a failed request while the flow goes on.
+- Parked (Task 22 review), for the whole-branch review:
+  - a create answered `external_change` is likely unreachable: a crash
+    after the write leaves a journal row, which answers `recovery_required`
+    (fact 13), and fact 12 is a save's token rule. It stays untested;
+  - the retitle test (`a_retitle_between_create_and_read_reviews_with_theirs_as_default`)
+    checks the review's rule at the registry, not that the tab's Save
+    opens the review;
+  - the registry's map of Create-prepare worktrees is never pruned. Each
+    Continue editing prepares again and overwrites its entry. A create
+    committed on main is checked in the context, and falls back to the
+    refusal; Done → Keep draft and reopening the tab routes it to Edit and
+    the review;
+  - `prepare_create` keeps its own `ItemKind` → `AuthoringKind` mapping,
+    its only use;
+  - 8 pre-existing tests ran over 60 s in the whole-binary run, at a load
+    average of about 30, while another worktree's suite was running.
