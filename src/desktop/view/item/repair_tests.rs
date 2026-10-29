@@ -321,6 +321,15 @@ fn completed_marker(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> Stri
     typed
 }
 
+/// A ticket's file with no type, which does not parse as a ticket: it
+/// holds its directory's ID.
+fn untyped() -> String {
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {BROKEN}\ntitle: Untyped\n\
+         status: open\n---\nBody.\n"
+    )
+}
+
 // ---- the tests ----
 
 /// "Needs fixing" offers Repair…, by keyboard too: Tab reaches it from the
@@ -478,10 +487,7 @@ async fn a_nonconforming_document_is_repaired_after_a_preview_naming_the_new_id(
 /// follows the ticket and shows it with its type.
 #[gpui_kit::test]
 async fn a_nonconforming_ticket_is_repaired(cx: &mut TestAppContext) {
-    let untyped = format!(
-        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {BROKEN}\ntitle: Untyped\n\
-         status: open\n---\nBody.\n"
-    );
+    let untyped = untyped();
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_file(root, &ticket_path(BROKEN), untyped.as_bytes());
     });
@@ -512,6 +518,30 @@ async fn a_nonconforming_ticket_is_repaired(cx: &mut TestAppContext) {
         shown(&shell, &root, BROKEN).ticket_type.as_deref(),
         Some("task")
     );
+}
+
+/// A repaired item whose own tab is open already, found missing while the
+/// file was not a ticket: that tab is shown, reading the item again, and
+/// the repair's tab closes.
+#[gpui_kit::test]
+async fn a_repaired_item_with_its_tab_open_is_shown_there(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, &ticket_path(BROKEN), untyped().as_bytes());
+    });
+    let target = OpenTarget::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Ticket,
+        id: item_id(BROKEN),
+    };
+    open(&shell, target, cx);
+    assert!(!shell.present("item-title", cx), "not a ticket yet");
+    open(&shell, inspect(&root, &ticket_path(BROKEN)), cx);
+    open_repair(&shell, cx);
+    type_at_line(&shell, 5, "type: task\n", cx);
+    preview(&shell, cx).await;
+    let sent = confirm(&shell, cx).await;
+    assert_eq!(answer(&shell, sent, cx), (1, Some(ResultCode::Ok)));
+    follows(&shell, &root, ItemDtoKind::Ticket, BROKEN, "Untyped", cx).await;
 }
 
 /// A preview the file has changed under since: another actor commits the
