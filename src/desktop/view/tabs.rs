@@ -156,18 +156,8 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
         ItemDtoKind::Ticket => item.and_then(|item| item.slug.clone()),
         _ => None,
     };
-    let registry = pane.drafts().read(cx);
-    let key = pane.tab_key();
-    // Edited repair text is unsaved too.
-    let unsaved = pane.repair_edited(cx)
-        || match &key {
-            TabKey::Item { repo, kind, id } => {
-                pane.unsaved_edit(cx)
-                    || registry.attached(&key).is_some()
-                    || registry.stored_for(repo, *kind, id).is_some()
-            }
-            TabKey::Inspect { .. } => false,
-        };
+    // The header's pill reads the same (Task 27 fix 1, B3).
+    let unsaved = pane.unsaved_edit(cx) || pane.unsaved(cx);
     let repository = Path::new(repo)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

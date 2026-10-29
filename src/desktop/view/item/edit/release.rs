@@ -55,8 +55,10 @@ impl ItemPane {
     }
 
     /// Whether the tab holds an edit session of its item, live or kept, is
-    /// getting one ready, or waits to discard a draft still beginning.
-    fn holds_session(&self) -> bool {
+    /// getting one ready, or waits to discard a draft still beginning:
+    /// release on leave waits, and so does the Drafts page's Restore
+    /// (`watch_edit_tab`).
+    pub(super) fn holds_session(&self) -> bool {
         self.edit.phase != Phase::Viewing
             || self.edit.session.is_some()
             || self.edit.discard_begun.is_some()

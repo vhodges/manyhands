@@ -126,8 +126,10 @@ impl ItemPane {
     /// it edits its item and whether its session holds unsaved text that no
     /// draft holds: a repository's removal counts its tabs that do, and the
     /// Drafts page restores no draft into a tab that edits (Part C fixes 1
-    /// and 2). An Inspect tab never edits, but its repair text counts as
-    /// unkept, as quitting counts it (Task 25 fix 1, M4).
+    /// and 2), as release on leave counts it, a Discard waiting for a draft
+    /// still beginning included (`holds_session`; Task 27 fix 1, B3). An
+    /// Inspect tab never edits, but its repair text counts as unkept, as
+    /// quitting counts it (Task 25 fix 1, M4).
     pub(in crate::desktop::view::item) fn watch_edit_tab(&self, cx: &mut Context<Self>) {
         let tab = self.tab_key();
         let pane = cx.weak_entity();
@@ -135,7 +137,7 @@ impl ItemPane {
             pane.upgrade().map(|pane| {
                 let pane = pane.read(cx);
                 TabEditing {
-                    editing: pane.has_session() || pane.edit.phase != Phase::Viewing,
+                    editing: pane.holds_session(),
                     unkept: pane.unkept_edit(cx),
                 }
             })

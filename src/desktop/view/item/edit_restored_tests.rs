@@ -878,3 +878,60 @@ async fn a_close_dialog_gone_unanswered_closes_nothing_when_its_save_settles(
     assert!(shell.present("passphrase-dialog", cx), "the prompt stays");
     assert!(matches!(answer.try_recv(), Ok(None)), "unanswered");
 }
+
+/// B3: a Discard that waits for the draft still beginning holds the tab's
+/// session until that draft is gone: the Drafts page's Restore of another
+/// draft of the item, here another process's, is disabled meanwhile, says
+/// why, and claims nothing.
+#[gpui_kit::test]
+async fn the_drafts_pages_restore_waits_while_a_discard_waits_for_its_draft(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discarding", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let begin = shell.backend.hold_read(ReadKind::Drafts);
+    type_at_end(&shell, &host, "x", cx);
+    assert_eq!(attached(&shell, &root, TICKET, cx), None, "still beginning");
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-discard-button", cx);
+    assert!(
+        pane(&shell, cx).read_with(cx, |pane, _| pane.edit_session().is_none()),
+        "the session ended"
+    );
+    assert_eq!(tabs(&shell, cx), 1, "the Discard waits");
+
+    let stored = store_draft(
+        &shell.fixture,
+        &root,
+        ItemDtoKind::Ticket,
+        TICKET,
+        "Elsewhere",
+    );
+    registry(&shell, cx).update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    shell.run(cx);
+    shell.keys("secondary-shift-d", cx);
+    shell.run(cx);
+    assert!(shell.present(row_id(stored, "restore"), cx));
+    shell.click(row_id(stored, "restore"), cx);
+    shell.run(cx);
+    assert!(
+        registry(&shell, cx).read_with(cx, |registry, _| registry.session(stored).is_none()),
+        "nothing is claimed"
+    );
+    assert_eq!(
+        shell.label(row_id(stored, "restore-note"), cx).as_deref(),
+        Some("Open in its tab to continue editing")
+    );
+    assert!(matches!(
+        held(&shell.fixture.draft_store(), stored),
+        Some(Held::No)
+    ));
+    drop(begin);
+    shell.run(cx);
+}

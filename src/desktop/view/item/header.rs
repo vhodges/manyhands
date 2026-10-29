@@ -201,8 +201,9 @@ impl ItemPane {
     ) -> (AnyElement, usize) {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(read));
-        // Edited repair text is unsaved, while its repair runs too, as the
-        // strip marks it (Part E review, I1).
+        // What is unsaved is what the strip marks (`unsaved`): edited repair
+        // text, while its repair runs too, in the editing words (Part E
+        // review, I1), and a draft kept or stored in the viewing words.
         let state = self.edit_pill(cx).or_else(|| {
             self.repair_edited(cx)
                 .then_some(pill::PillState::EditingUnsaved)
@@ -211,7 +212,7 @@ impl ItemPane {
         let built = read.is_none().then(|| self.new_item_shown(cx)).flatten();
         let item = read.or(built.as_ref());
         let pill = item.map(|item| {
-            let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
+            let state = state.unwrap_or_else(|| pill::viewing_state(item, self.unsaved(cx)));
             // A stand-in was read from nowhere: no provenance (M2).
             pill::pill(state, read, cx)
         });
@@ -365,6 +366,14 @@ impl ItemPane {
                     .text_size(px(LEAF_SIZE))
                     .child(leaf),
             )
+    }
+
+    /// Whether the tab holds what is not saved besides an edit session's
+    /// text: a draft of its item kept or stored, or edited repair text. The
+    /// strip's unsaved mark and the header's pill both read it, so the two
+    /// agree (Task 27 fix 1, B3).
+    pub(in crate::desktop::view) fn unsaved(&self, cx: &App) -> bool {
+        self.draft_kept(cx) || self.repair_edited(cx)
     }
 
     /// Whether a draft of this item is kept or stored: attached to this
