@@ -1376,3 +1376,36 @@ Notes for later tasks: Task 22 leaves `targets()` in
     prepares again;
   - `view/create.rs` is 481 lines after the split into `create/document.rs`
     and `create/form.rs`.
+- Ruling (controller, Task 23 review I1, M1, M2, M4, M6 to M8): the
+  stand-in item is not a file. A new item's sheet has no Inspect link and
+  no Problems section, and while its Create prepare runs it says "Not
+  created yet. These can be changed once its private copy is ready." with
+  "Read only until then". The stand-in header stays until the tab's own read
+  finds the item, so the title does not blank out after the create. A
+  failed path check runs again at the next change of any field. A File
+  name with nothing before `.md` is an empty one. The create dialog closes
+  itself, and only while focus is inside it, because the Kit closes only
+  the topmost dialog and does not expose its stack. — The design gives no
+  words for a new item's sheet, and the stand-in reached the sheet's
+  Inspect action. — If wrong: copy edits, or a dialog left open under
+  another.
+- Copy for the owner's on-screen check (Task 23 review): the sheet's "Not
+  created yet. These can be changed once its private copy is ready." and
+  "Read only until then"; the unruled draft-write words above; where focus
+  lands after Create (the content region, not the editor), on native
+  checklist step 9.
+- Parked (Task 23 review), for the whole-branch review:
+  - a repository with no primary branch, from an invalid configuration
+    or a dropped entry, still offers New…: the draft is written with no
+    branch, and the prepare is refused later, on a tab with no title;
+  - keyboard tests stop at Title → Type. Tab through the remaining fields,
+    Cancel and Create, and Enter on a focused button, are untested;
+  - the dialog's inputs stay editable while a create runs, and edits made
+    then are dropped;
+  - if focus has left the dialog's own body when its item is created, the
+    dialog stays open, with Create no longer offered, until Escape or
+    Cancel. The tab still opens and nothing is lost;
+  - the edit editor takes focus when it opens, even under a dialog opened
+    above meanwhile;
+  - `view/create.rs` is 454 lines after `Render` moved to
+    `create/form.rs`.
