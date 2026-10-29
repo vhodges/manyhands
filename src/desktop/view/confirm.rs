@@ -242,7 +242,28 @@ fn open(
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&origin, cx))
     });
+    #[cfg(test)]
+    cx.set_global(OpenedConfirm(opened.downgrade()));
     Some(opened)
+}
+
+/// The confirmation last opened, for a test to read what it holds.
+#[cfg(test)]
+pub(crate) struct OpenedConfirm(pub(crate) gpui_kit::WeakEntity<ConfirmDialog>);
+
+#[cfg(test)]
+impl gpui_kit::Global for OpenedConfirm {}
+
+#[cfg(test)]
+impl ConfirmDialog {
+    /// What a prepare that gave no preview answered, as the dialog holds
+    /// it: its code and message.
+    pub(crate) fn answered(&self) -> Option<(ResultCode, &str)> {
+        match &self.phase {
+            Phase::Answered { code, message, .. } => Some((*code, message)),
+            _ => None,
+        }
+    }
 }
 
 /// Where the dialog stands.

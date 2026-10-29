@@ -6,9 +6,10 @@
 //! details sheet, viewing and editing, a field edited; Edit; a save; a save
 //! the library refuses as `invalid_input` (a NUL in Project, which the
 //! sheet lets through and the library's canonical check refuses); a stale
-//! save, which opens the review; a release; a create; a move; and a
-//! repair. After each step, every surface that may show text is read back
-//! from the window's own models and frame:
+//! save, which opens the review; a release; a create; a move; a repair
+//! refused at its preview, as `invalid_input`; and a repair. After each
+//! step, every surface that may show text is read back from the window's
+//! own models and frame:
 //!
 //! - every operation entry, its command's label and its envelope message;
 //! - every notification (the desktop shows none);
@@ -16,8 +17,9 @@
 //!   puts that text (`ALLOWED`), each dialog's included, and each dialog's
 //!   own labels again as its message;
 //! - the `Debug` and `Display` of every answer the desktop received: each
-//!   finished request's outcome, code, effects, recovery and message, and
-//!   each draft error kind the registry lists.
+//!   finished request's outcome, code, effects, recovery and message;
+//!   a refused preview's code and message, as its dialog holds them (a
+//!   prepare is no request); and each draft error kind the registry lists.
 //!
 //! The desktop logs nothing, so there is no log to read. The sentinels'
 //! appearances inside `ALLOWED` are collected too, so a test can show the
@@ -33,6 +35,7 @@ use crate::desktop::{
     services::requests::{DesktopRequestId, Intent, RequestState},
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
     view::{
+        confirm::OpenedConfirm,
         harness::{Shell, is_save, key},
         item::ItemPane,
     },
@@ -468,9 +471,10 @@ fn document_with_sentinels(id: &str, title: &str) -> String {
     )
 }
 
-/// A create, a move and a repair, each of a body holding the sentinels:
-/// none reaches an entry, a notification, a dialog, a drawn label or an
-/// answer.
+/// A create, a move, a repair refused at its preview (its source no
+/// conforming document) and a repair, each of a body holding the
+/// sentinels: none reaches an entry, a notification, a dialog, a drawn
+/// label or an answer, the refused preview's included.
 #[gpui_kit::test]
 async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -550,7 +554,9 @@ async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut Test
     seen.window(&shell, cx);
     shell.keys("escape", cx);
 
-    // Repair: the marker's front matter completed, the preview, confirmed.
+    // A repair refused at its preview (Part E review, M6): a source that
+    // is no conforming document, the sentinels in its front matter as well
+    // as its body, where a parser's message could repeat them.
     open(
         &shell,
         OpenTarget::Inspect {
@@ -561,6 +567,56 @@ async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut Test
         cx,
     );
     seen.window(&shell, cx);
+    shell.click("item-repair-button", cx);
+    shell.keys("down down", cx);
+    shell.visual(cx).simulate_input(&format!(
+        "manyhands_kind: document\nid: {BODY}\ntitle: {LINK} {IMAGE}\n"
+    ));
+    shell.run(cx);
+    seen.window(&shell, cx);
+    shell.click("repair-preview-button", cx);
+    shell
+        .until_drawn(cx, "the refused preview", |shell, cx| {
+            shell.present("confirm-code", cx)
+        })
+        .await;
+    assert_eq!(
+        shell.label("confirm-code", cx).as_deref(),
+        Some(ResultCode::InvalidInput.as_str())
+    );
+    let drawn = shell.label("confirm-message", cx).expect("its message");
+    assert!(!shell.present("confirm-ok", cx), "no Confirm");
+    seen.dialog(&shell, "confirm-dialog", cx);
+    assert!(
+        seen.read
+            .iter()
+            .any(|(at, text)| *at == "dialog message" && *text == drawn),
+        "the refusal's message is read"
+    );
+    // The prepare is no request: its answer is the dialog's.
+    let refused = cx
+        .read(|cx| {
+            cx.try_global::<OpenedConfirm>()
+                .and_then(|opened| opened.0.upgrade())
+        })
+        .expect("the confirmation")
+        .read_with(cx, |dialog, _| {
+            dialog
+                .answered()
+                .map(|(code, message)| (code, message.to_owned()))
+        });
+    let (code, message) = refused.expect("refused at its preview");
+    assert_eq!(code, ResultCode::InvalidInput);
+    assert_eq!(message, drawn);
+    seen.answers
+        .push(format!("{code:?} {} {message:?} {message}", code.as_str()));
+    shell.keys("escape", cx);
+    shell.click("repair-cancel-button", cx);
+    shell.click("repair-discard-discard-button", cx);
+    assert!(!shell.present("repair-source", cx), "the view closed");
+    seen.window(&shell, cx);
+
+    // Repair: the marker's front matter completed, the preview, confirmed.
     shell.click("item-repair-button", cx);
     shell.keys("down down", cx);
     shell.visual(cx).simulate_input(&format!(
