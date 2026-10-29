@@ -319,6 +319,34 @@ async fn a_dependency_is_chosen_from_the_list_and_by_short_code(cx: &mut TestApp
     shell.keys("escape", cx);
     assert!(!has_sheet(&shell, cx), "a second Escape closes the sheet");
 
+    // Closed with the sheet, by a route outside the picker: the sheet opens
+    // again without it, and a picker opened again has an empty filter.
+    open_sheet(&shell, cx);
+    open_picker(&shell, "rel-deps-add", cx);
+    type_in(&shell, "Search", cx);
+    shell.keys("shift-tab", cx);
+    assert!(!filter_focused(&shell, cx), "focus left the picker");
+    shell.keys("escape", cx);
+    assert!(
+        !has_sheet(&shell, cx),
+        "Escape outside the picker closes the sheet"
+    );
+    open_sheet(&shell, cx);
+    assert!(
+        !shell.present("rel-picker", cx),
+        "the picker went with the sheet"
+    );
+    open_picker(&shell, "rel-deps-add", cx);
+    let filter = pane(&shell, cx)
+        .read_with(cx, |pane, _| pane.picker_filter())
+        .expect("the picker is open");
+    assert_eq!(
+        filter.read_with(cx, |input, _| input.value().to_string()),
+        ""
+    );
+    shell.keys("escape escape", cx);
+    assert!(!has_sheet(&shell, cx));
+
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
     let drafted = registry(&shell, cx).read_with(cx, |registry, _| {
         registry.session(id).unwrap().current().clone()
@@ -333,6 +361,26 @@ async fn a_dependency_is_chosen_from_the_list_and_by_short_code(cx: &mut TestApp
     assert_eq!(
         dep_ids(&shown(&shell, &root, TICKET)),
         [OTHER, DEP_A, DEP_B]
+    );
+
+    // The item's own reads name a ticket before the picker's did: renamed
+    // and read again, its chip says the new title (fix 1, C).
+    shell
+        .fixture
+        .commit_ticket(&root, OTHER, "Sign-in page", &with_deps("mh-00002", &[]));
+    shell.fixture.refresh(&root);
+    pane(&shell, cx).update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    shell.run(cx);
+    open_sheet(&shell, cx);
+    assert_eq!(
+        shell.rows("rel-dep-name", cx),
+        [
+            "mh-00002 Sign-in page",
+            "mh-00004 Already",
+            "mh-search Search box"
+        ]
     );
 }
 
@@ -778,7 +826,7 @@ async fn saving_a_ticket_whose_file_has_unsorted_deps_leaves_a_verified_base(
 async fn a_library_relationship_cycle_answer_is_explained_the_same_way(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Main", &with_deps("mh-00001", &[]));
+        fixture.commit_ticket(root, TICKET, "Main", &with_deps("mh-00001", &[MISSING]));
         fixture.commit_ticket(root, OTHER, "Racer", &with_deps("mh-00081", &[]));
     });
     open(&shell, ticket(&root, TICKET), cx);
@@ -786,6 +834,11 @@ async fn a_library_relationship_cycle_answer_is_explained_the_same_way(cx: &mut 
     open_sheet(&shell, cx);
     pick(&shell, "rel-deps-add", "Racer", cx);
     assert_eq!(blocked(&shell, cx), None, "the check finds no cycle");
+    assert_eq!(shell.rows("rel-dep-id", cx), [OTHER, MISSING]);
+    assert_eq!(
+        shell.rows("rel-dep-state", cx),
+        [LIFECYCLE_OPEN, NOT_FOUND_KEPT]
+    );
     shell.keys("escape", cx);
 
     // Another actor makes the racer depend on this ticket.
@@ -810,7 +863,14 @@ async fn a_library_relationship_cycle_answer_is_explained_the_same_way(cx: &mut 
     shell.keys("secondary-s", cx);
     assert_eq!(saves(&shell, cx).len(), 1, "Save waits");
     assert!(dirty(&shell, cx), "nothing is lost");
-    assert!(proposed(&shell, cx).deps == [OTHER]);
+    assert!(proposed(&shell, cx).deps == [OTHER, MISSING]);
+    // The refusal changes only the rejection: what the check said of the
+    // unresolved dependency stays (fix 1, I1).
+    assert_eq!(
+        shell.rows("rel-dep-state", cx),
+        [LIFECYCLE_OPEN, NOT_FOUND_KEPT],
+        "still not found, kept"
+    );
     assert!(
         attached(&shell, &root, TICKET, cx).is_some(),
         "the draft is kept"
@@ -822,6 +882,31 @@ async fn a_library_relationship_cycle_answer_is_explained_the_same_way(cx: &mut 
     pick(&shell, "rel-deps-add", "Racer", cx);
     assert_eq!(shell.label("rel-deps-problem", cx).as_deref(), Some(words));
     assert_eq!(blocked(&shell, cx), Some(SAVE_CYCLE));
+
+    // Saved while its check still runs, which holds nothing: the refusal is
+    // held, and the check, landing after it, keeps it and says the
+    // unresolved dependency is still not found, kept (fix 1, I1).
+    shell.click(("rel-dep-remove", 0usize), cx);
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    pick(&shell, "rel-deps-add", "Racer", cx);
+    assert_eq!(blocked(&shell, cx), None, "the check is in flight");
+    shell.keys("secondary-s", cx);
+    let sent = saves(&shell, cx);
+    assert_eq!(sent.len(), 2, "the sheet's key saved");
+    ended(&shell, sent[0], cx).await;
+    assert_eq!(
+        code(&shell, sent[0], cx),
+        Some(ResultCode::RelationshipCycle)
+    );
+    held.send(()).expect("the check is still running");
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert_eq!(shell.label("rel-deps-problem", cx).as_deref(), Some(words));
+    assert_eq!(blocked(&shell, cx), Some(SAVE_CYCLE));
+    assert_eq!(
+        shell.rows("rel-dep-state", cx),
+        [LIFECYCLE_OPEN, NOT_FOUND_KEPT]
+    );
 }
 
 /// R-54: Dependents and Children are D1's rows while editing too, each
@@ -972,10 +1057,16 @@ async fn the_relationship_controls_are_read_only_while_preparing_loading_in_revi
         .position(|field| field == "Title")
         .expect("the review lists the title");
     shell.click(("review-take-theirs", title), cx);
+    let checks = shell.backend.reads_seen(ReadKind::RelationshipCheck);
     shell.click("review-use", cx);
     assert!(
         proposed(&shell, cx).deps == [OTHER, DEP_A],
         "Use keeps the chosen relationships"
+    );
+    assert_eq!(
+        shell.backend.reads_seen(ReadKind::RelationshipCheck),
+        checks + 1,
+        "Use moved the base: what the session proposes is checked again"
     );
     open_sheet(&shell, cx);
     assert!(shell.present("rel-deps-add", cx), "Editing again");

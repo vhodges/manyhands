@@ -11,6 +11,7 @@
 //! it takes the first offer, Tab reaches each offer, and a click, Enter or
 //! Space takes one. Escape closes it, not the sheet, and focus goes back
 //! to the Add… or Change… that opened it, as it does once one is taken.
+//! Closing the sheet, by any route, closes it too.
 //! Its text is drawn in the sheet's body, a `draft-section` while editing
 //! (R-38).
 
@@ -21,7 +22,7 @@ use gpui_kit::{
     IntoElement, ParentElement, Role, StatefulInteractiveElement, Styled, Subscription, Task,
     TestSupportExt, Window,
     component::{
-        ActiveTheme, Sizable,
+        ActiveTheme, Sizable, WindowExt,
         input::{Input, InputEvent, InputState},
         v_flex,
     },
@@ -260,6 +261,23 @@ impl ItemPane {
         self.change_relations(next, picker.field, cx);
         window.focus(&opener, cx);
         cx.notify();
+    }
+
+    /// The sheet it is drawn in has closed, by any route: an open picker
+    /// goes, its filter with it (Task 21 fix 1). Called as the tab is drawn.
+    pub(in crate::desktop::view::item) fn picker_follows_sheet(
+        &mut self,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if self.relations.picker.is_some() && !window.has_active_sheet(cx) {
+            self.relations.picker = None;
+        }
+    }
+
+    /// The sheet opens: no picker of an earlier opening comes back with it.
+    pub(in crate::desktop::view::item) fn forget_picker(&mut self) {
+        self.relations.picker = None;
     }
 
     /// Escape: the picker closes, and focus goes back to its opener.

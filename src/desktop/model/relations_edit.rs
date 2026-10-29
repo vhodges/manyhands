@@ -183,6 +183,8 @@ pub(crate) struct Answer {
     /// It was made from an index that is not current, or incomplete, so it
     /// may lack tickets: the save checks again.
     pub(crate) partial: bool,
+    /// Its rejection is a save's refusal, not the check's.
+    pub(crate) refused: bool,
 }
 
 impl Answer {
@@ -201,27 +203,53 @@ impl Answer {
             }),
             unresolved: check.unresolved,
             partial: !check.complete || check.index.state != IndexState::Current,
+            refused: false,
         }
     }
 
     /// A save of `proposed` over `base` answered `code` with `ids` in its
-    /// `rejected`; `None` for a code no rejection carries.
+    /// `rejected`; `None` for a code no rejection carries. The refusal
+    /// changes only the rejection: what `last`, the check's answer of the
+    /// same proposal, said of unresolved IDs and the index is kept (Task 21
+    /// fix 1). With no such answer it says nothing of them.
     pub(crate) fn of_save(
         proposed: Proposed,
         base: &Proposed,
         code: ResultCode,
         ids: Vec<String>,
+        last: Option<&Self>,
     ) -> Option<Self> {
         if !RelationshipRejectionDto::CODES.contains(&code) {
             return None;
         }
+        let (unresolved, partial) = last
+            .filter(|last| last.proposed == proposed)
+            .map(|last| (last.unresolved.clone(), last.partial))
+            .unwrap_or_default();
         Some(Self {
             field: save_field(&proposed, base),
             proposed,
             rejection: Some(Rejection { code, ids }),
-            unresolved: Vec::new(),
-            partial: false,
+            unresolved,
+            partial,
+            refused: true,
         })
+    }
+
+    /// This, a check's answer that landed after `held`, a save's refusal of
+    /// the same proposal: the refusal's rejection, and the field it is
+    /// explained under, stay; this check's unresolved IDs and index are
+    /// taken. Any other `held` changes nothing.
+    pub(crate) fn after(self, held: &Self) -> Self {
+        if !held.refused || held.proposed != self.proposed {
+            return self;
+        }
+        Self {
+            field: held.field,
+            rejection: held.rejection.clone(),
+            refused: true,
+            ..self
+        }
     }
 }
 

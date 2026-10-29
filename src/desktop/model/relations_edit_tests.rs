@@ -140,6 +140,7 @@ fn save_has_a_reason_for_each_rejection_and_its_answer_a_field() {
         &base,
         ResultCode::RelationshipCycle,
         vec![OWN.to_owned(), D.to_owned()],
+        None,
     )
     .expect("a rejection's code");
     assert_eq!(answered.field, RelationField::Parent);
@@ -149,10 +150,78 @@ fn save_has_a_reason_for_each_rejection_and_its_answer_a_field() {
             proposed(&[B], None),
             &base,
             ResultCode::ExternalChange,
-            Vec::new()
+            Vec::new(),
+            None
         )
         .is_none()
     );
+}
+
+/// Fix 1: a save's refusal changes only the rejection. What the check said
+/// of the same proposal's unresolved IDs and index is kept, and nothing of
+/// another proposal's; a check of the same proposal landing after it keeps
+/// the refusal's rejection and field, and gives its own unresolved IDs.
+#[test]
+fn a_saves_refusal_keeps_what_the_check_said_and_a_later_check_keeps_the_refusal() {
+    let base = proposed(&[], None);
+    let mine = proposed(&[B, D], None);
+    let checked = Answer::of_check(mine.clone(), RelationField::WaitingOn, {
+        let mut answer = check(None, true, IndexState::Stale);
+        answer.unresolved = vec![D.to_owned()];
+        answer
+    });
+    let refused = Answer::of_save(
+        mine.clone(),
+        &base,
+        ResultCode::RelationshipCycle,
+        vec![OWN.to_owned(), B.to_owned()],
+        Some(&checked),
+    )
+    .expect("a rejection's code");
+    assert!(refused.unresolved == [D], "the check's unresolved IDs stay");
+    assert!(refused.partial, "and what it said of the index");
+    assert!(refused.refused);
+    assert!(refused.rejection == Some(rejection(ResultCode::RelationshipCycle, &[OWN, B])));
+
+    // Another proposal's check says nothing of this one.
+    let other = Answer::of_check(proposed(&[B], None), RelationField::WaitingOn, {
+        let mut answer = check(None, false, IndexState::Current);
+        answer.unresolved = vec![D.to_owned()];
+        answer
+    });
+    let alone = Answer::of_save(
+        mine.clone(),
+        &base,
+        ResultCode::RelationshipCycle,
+        vec![OWN.to_owned(), B.to_owned()],
+        Some(&other),
+    )
+    .expect("a rejection's code");
+    assert!(alone.unresolved.is_empty());
+    assert!(!alone.partial);
+
+    // A check of the same proposal, landing after the refusal, finds no
+    // cycle: the refusal's rejection and field stay, its IDs are taken.
+    let later = Answer::of_check(mine.clone(), RelationField::Parent, {
+        let mut answer = check(None, true, IndexState::Current);
+        answer.unresolved = vec![D.to_owned()];
+        answer
+    })
+    .after(&alone);
+    assert!(later.rejection == alone.rejection);
+    assert_eq!(later.field, RelationField::WaitingOn);
+    assert!(later.refused);
+    assert!(later.unresolved == [D]);
+    assert!(!later.partial);
+    // After a check's answer, or one of another proposal, nothing is kept.
+    let plain = Answer::of_check(
+        mine,
+        RelationField::Parent,
+        check(None, true, IndexState::Current),
+    )
+    .after(&checked);
+    assert!(plain.rejection.is_none());
+    assert!(!plain.refused);
 }
 
 /// R-72: a dependency goes in where its ID sorts, once; removing it leaves

@@ -173,6 +173,7 @@ impl ItemPane {
         // A review still open goes with it, and D2's schedule resumes.
         self.close_review(cx);
         self.edit.session = None;
+        self.relations_ended();
         self.edit.phase = Phase::Viewing;
         self.edit.finishing = None;
         self.edit.changed = None;

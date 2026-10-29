@@ -309,6 +309,8 @@ impl ItemPane {
 impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
+        // A picker goes once its sheet has closed (Task 21 fix 1).
+        self.picker_follows_sheet(window, cx);
         // Before the read editor takes a new read: Edit compares the two
         // (R-65).
         self.sync_edit(window, cx);

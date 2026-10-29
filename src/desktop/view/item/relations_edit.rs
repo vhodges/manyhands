@@ -215,7 +215,13 @@ impl ItemPane {
             return;
         }
         if let ReadResult::Ok(check) = result {
-            self.relations.answer = Some(Answer::of_check(proposed, field, check));
+            let answer = Answer::of_check(proposed, field, check);
+            // A save's refusal of the same proposal keeps its rejection.
+            let answer = match &self.relations.answer {
+                Some(held) => answer.after(held),
+                None => answer,
+            };
+            self.relations.answer = Some(answer);
         }
         cx.notify();
     }
@@ -224,14 +230,33 @@ impl ItemPane {
     /// continued draft whose relationships differ from the base is checked.
     pub(super) fn relations_opened(&mut self, cx: &mut Context<Self>) {
         self.relations.picker = None;
+        self.relations_rebased(cx);
+    }
+
+    /// The base moved under the session, as the review's Use these choices
+    /// moves it, or a session opened: what it proposes is checked against
+    /// the base it now has, changed or not (Task 21 fix 1).
+    pub(super) fn relations_rebased(&mut self, cx: &mut Context<Self>) {
         self.relations.asked = None;
         self.follow_relations(cx);
     }
 
-    /// The session's proposal changed by another way than a control, the
-    /// review's choices used or a session opened: a changed one is checked,
-    /// under the field that changed.
-    pub(super) fn follow_relations(&mut self, cx: &mut Context<Self>) {
+    /// The session ended: nothing it was answered, nor any ticket its
+    /// picker named, outlives it (Task 21 fix 1).
+    pub(super) fn relations_ended(&mut self) {
+        let relations = &mut self.relations;
+        relations.generations.next(relations.scope.clone());
+        relations.check = None;
+        relations.asked = None;
+        relations.answer = None;
+        relations.known.clear();
+        relations.picker = None;
+    }
+
+    /// The session's proposal changed by another way than a control: a
+    /// changed one is checked, under the field that changed; with nothing
+    /// asked yet, under the field that differs from the base.
+    fn follow_relations(&mut self, cx: &mut Context<Self>) {
         let Some((proposed, base)) = self.proposals() else {
             return;
         };
@@ -247,7 +272,10 @@ impl ItemPane {
     /// The save `request` was refused with `code`. A relationship rejection
     /// (fact 11), its IDs in `rejected`, is held and explained as the
     /// check's is, while the session proposes what it sent; a newer change
-    /// keeps its own check.
+    /// keeps its own check. The refusal changes only the rejection: what
+    /// the check said of the same proposal's unresolved IDs and index stays,
+    /// and a check of it still running lands without undoing the refusal
+    /// (`Answer::after`; Task 21 fix 1).
     pub(super) fn relations_refused(
         &mut self,
         request: DesktopRequestId,
@@ -279,44 +307,42 @@ impl ItemPane {
         if sent != proposed {
             return;
         }
-        let Some(answer) = Answer::of_save(sent, &base, code, ids) else {
+        let last = self.relations.answer.as_ref();
+        let Some(answer) = Answer::of_save(sent, &base, code, ids, last) else {
             return;
         };
-        // The library's answer stands over a check still running.
-        self.relations
-            .generations
-            .next(self.relations.scope.clone());
-        self.relations.check = None;
         self.relations.asked = Some(proposed);
         self.relations.answer = Some(answer);
         cx.notify();
     }
 
-    /// What names the ticket `id`: the picker's reads, the ticket itself as
-    /// read, and D1's rows of its relationships. `None` where nothing
-    /// loaded names it.
+    /// What names the ticket `id`: the ticket itself as read, then D1's rows
+    /// of its relationships, from the item's own reads; the picker's reads
+    /// only for a ticket those do not have (Task 21 fix 1). `None` where
+    /// nothing loaded names it.
     pub(super) fn relation_candidate(&self, id: &str) -> Option<Candidate> {
-        if let Some(known) = self.relations.known.get(id) {
-            return Some(known.clone());
-        }
         let item = self.model.item().rows();
         if let Some(item) = item.filter(|item| item.id.as_deref() == Some(id)) {
             return Candidate::of_item(item);
         }
-        let relationships = self.model.relationships()?;
-        relationships
-            .dependency_rows()
-            .into_iter()
-            .chain(relationships.parent_row())
-            .chain(relationships.dependent_rows())
-            .chain(relationships.child_rows())
-            .find(|row| row.id == id && row.resolved)
-            .map(|row| Candidate {
+        let row = self.model.relationships().and_then(|relationships| {
+            relationships
+                .dependency_rows()
+                .into_iter()
+                .chain(relationships.parent_row())
+                .chain(relationships.dependent_rows())
+                .chain(relationships.child_rows())
+                .find(|row| row.id == id && row.resolved)
+        });
+        match row {
+            Some(row) => Some(Candidate {
                 id: row.id,
                 slug: row.slug,
                 title: row.title,
                 lifecycle: row.lifecycle,
-            })
+            }),
+            None => self.relations.known.get(id).cloned(),
+        }
     }
 
     /// The ticket `id` by short code and title, or by its ID.
@@ -327,13 +353,10 @@ impl ItemPane {
 
     /// Whether no ticket the index holds has the ID `id`: as the answer
     /// that holds says, or else as the item's read says of its own
-    /// dependencies and parent.
+    /// dependencies and parent. A ticket neither names is taken as found.
     pub(super) fn relation_unresolved(&self, id: &str) -> bool {
         if let Some(answer) = self.current_answer() {
             return answer.unresolved.iter().any(|unresolved| unresolved == id);
-        }
-        if self.relations.known.contains_key(id) {
-            return false;
         }
         self.model.relationships().is_some_and(|relationships| {
             relationships

@@ -140,7 +140,10 @@ pub(crate) fn open_details(
     cx: &mut App,
 ) {
     let chip = pane.read(cx).chip_focus[field.index()].clone();
-    let target = pane.update(cx, |pane, cx| pane.sheet_target(field, window, cx));
+    let target = pane.update(cx, |pane, cx| {
+        pane.forget_picker();
+        pane.sheet_target(field, window, cx)
+    });
     window.focus(&chip, cx);
     let pane = pane.downgrade();
     window.open_sheet(cx, move |sheet, window, cx| match pane.upgrade() {
