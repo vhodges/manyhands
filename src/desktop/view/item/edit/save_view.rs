@@ -100,12 +100,18 @@ impl ItemPane {
         }
     }
 
-    /// Whether Save can save now: editing, dirty, every required field
-    /// filled, and no save in flight or waiting for its Retry, D2's
-    /// finishing of the last one included.
+    /// Whether Save can save now: editing, and `save_ready`.
     pub(in crate::desktop::view::item) fn save_offered(&self, cx: &App) -> bool {
-        self.edit.phase() == Phase::Editing
-            && self.edit.save.run.is_none()
+        self.edit.phase() == Phase::Editing && self.save_ready(cx)
+    }
+
+    /// Whether the session has something Save can save, its phase aside:
+    /// no save in flight or waiting for its Retry, D2's finishing of the
+    /// last one included, dirty, and nothing blocking it (`save_blocked`).
+    /// The one reckoning the header's Save, the close dialog's and Done's
+    /// prompt's share (Task 27 fix 1, B2).
+    pub(in crate::desktop::view::item) fn save_ready(&self, cx: &App) -> bool {
+        self.edit.save.run.is_none()
             && !self.store_settling(cx)
             && self.edit_dirty(cx)
             && self.save_blocked(cx).is_none()

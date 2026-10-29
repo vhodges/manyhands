@@ -1569,3 +1569,44 @@ async fn the_close_dialog_says_when_the_last_write_failed(cx: &mut TestAppContex
     let typed = stored_body(&shell.fixture.draft_store(), id).expect("stored");
     assert!(typed.ends_with("xy"), "the newest text");
 }
+
+/// Task 27 fix 1, B2: Done writes the draft (the write held), and Save is
+/// pressed meanwhile; D2's session has ended under it, so the save goes as
+/// the fields are, and answers a pending checkpoint, kept for Retry. Then
+/// the write lands. Done stops, as it does on a pending checkpoint from
+/// before its press: no prompt opens, and the Retry banner shows.
+#[gpui_kit::test]
+async fn done_stops_on_a_save_kept_for_retry_once_its_write_lands(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Kept for Retry", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    type_at_end(&shell, &host, "y", cx);
+    let write = shell.backend.hold_read(ReadKind::DraftWrite);
+    done(&shell, cx);
+    assert_eq!(session(&shell, cx), Some(false), "Done is writing");
+
+    registry(&shell, cx).update(cx, |registry, cx| registry.end_session_for_testing(id, cx));
+    shell.run(cx);
+    failing_at(
+        &shell,
+        manyhands::repository::FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+    );
+    shell.click("item-save", cx);
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    working(&shell);
+    assert!(shell.present("item-save-retry", cx), "kept for Retry");
+
+    drop(write);
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(!shell.present("done-draft-dialog", cx), "Done asks nothing");
+    assert_eq!(phase(&shell, cx), Phase::Editing, "Done stops");
+    assert_eq!(session(&shell, cx), Some(false), "nothing is kept");
+    assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some("Retry"));
+}

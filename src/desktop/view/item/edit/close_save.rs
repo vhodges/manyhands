@@ -147,10 +147,7 @@ impl ItemPane {
     /// 18 fix 1, I2: the design's rule covers a kept draft).
     fn close_save_offered(&self, cx: &App) -> bool {
         if self.session_kept() {
-            return self.edit.save.run.is_none()
-                && !self.store_settling(cx)
-                && self.edit_dirty(cx)
-                && self.save_blocked(cx).is_none();
+            return self.save_ready(cx);
         }
         self.save_offered(cx)
     }
