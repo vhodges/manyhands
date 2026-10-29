@@ -146,6 +146,31 @@ impl ItemPane {
         if let Some(continuing) = &mut self.edit.continuing {
             continuing.then = Then::Edit;
         }
+        // Nor one that waits for the open's relationship check (N1).
+        self.edit.save.continued = false;
+    }
+
+    /// Continue editing's Save, its steps done and the editor open, as the
+    /// frame that opened it is drawn: the opening checks a proposal that
+    /// differs from the base, and the Save waits for that check rather than
+    /// stopping on it (Task 27 fix 2, N1). It is sent then unless something
+    /// blocks it, which the toolbar says. A press of Save meanwhile waits
+    /// as ever (`relations_blocked`).
+    pub(super) fn save_continued(&mut self, cx: &mut Context<Self>) {
+        self.edit.save.continued = true;
+        self.follow_continued_save(cx);
+    }
+
+    /// A relationship check landed, or another replaced it, or none was
+    /// asked: a Save Continue editing carried out, waiting for the check of
+    /// what the session proposes now, is started once none runs. A session
+    /// that ended, or a tab that closed, has none waiting.
+    pub(in crate::desktop::view::item) fn follow_continued_save(&mut self, cx: &mut Context<Self>) {
+        if !self.edit.save.continued || self.relations_checking() {
+            return;
+        }
+        self.edit.save.continued = false;
+        self.start_save(cx);
     }
 
     /// The registry changed: a continued draft that has ended (discarded
@@ -221,9 +246,7 @@ impl ItemPane {
             self.open_review(cx);
         } else if continuing.then == Then::Save {
             // Once the frame that opened the editor is drawn.
-            cx.defer_in(window, |pane, _, cx| {
-                pane.start_save(cx);
-            });
+            cx.defer_in(window, |pane, _, cx| pane.save_continued(cx));
         }
     }
 

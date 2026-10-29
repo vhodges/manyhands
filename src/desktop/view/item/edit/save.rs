@@ -111,6 +111,9 @@ pub(super) struct TabSave {
     /// remotes; replacing one drops the last.
     pub(super) read: Option<Task<()>>,
     pub(super) remotes: Option<Task<()>>,
+    /// A Save that Continue editing's steps carry out waits for the open's
+    /// relationship check (`restored`, Task 27 fix 2, N1).
+    pub(super) continued: bool,
 }
 
 impl TabSave {
@@ -126,6 +129,7 @@ impl TabSave {
             scope,
             read: None,
             remotes: None,
+            continued: false,
         }
     }
 
@@ -141,6 +145,7 @@ impl TabSave {
         self.resume = None;
         self.reread = None;
         self.reread_waits = false;
+        self.continued = false;
     }
 }
 

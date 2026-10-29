@@ -935,3 +935,185 @@ async fn the_drafts_pages_restore_waits_while_a_discard_waits_for_its_draft(
     drop(begin);
     shell.run(cx);
 }
+
+// Task 27 fix 2.
+
+/// A repository `a` holding the ticket `TICKET`, "Child", and `OTHER`,
+/// "Parent", and, when `cyclic`, `OTHER` a child of `TICKET`; with a stored
+/// draft of `TICKET` whose Parent is `OTHER`, which the item's is not.
+fn with_a_parent_drafted(cx: &mut TestAppContext, cyclic: bool) -> (Shell, PathBuf, DraftId) {
+    use manyhands::drafts::{DraftBase, DraftTarget, ItemKind};
+
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Child", "");
+    let extra = if cyclic {
+        format!("parent: {TICKET}\n")
+    } else {
+        String::new()
+    };
+    fixture.commit_ticket(&root, OTHER, "Parent", &extra);
+    fixture.refresh(&root);
+    let service = fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let shown = service.show_item(&repo, &item_id(TICKET)).unwrap();
+    let mut current = DraftFields::of(&shown).expect("a conforming ticket");
+    match &mut current {
+        DraftFields::Ticket { parent, .. } => *parent = Some(OTHER.to_owned()),
+        _ => unreachable!(),
+    }
+    let target = DraftTarget {
+        repository: key(&root),
+        item_kind: ItemKind::Ticket,
+        item_id: item_id(TICKET),
+        comment: None,
+    };
+    let stored = match fixture
+        .draft_store()
+        .create(target, DraftBase::of(&shown), current)
+    {
+        Ok(claim) => claim.draft().id,
+        Err(error) => panic!("the draft must be stored: {error}"),
+    };
+    (Shell::open(fixture, cx), root, stored)
+}
+
+/// The ticket `TICKET`'s parent, as read now.
+fn parent_of(shell: &Shell, root: &Path) -> Option<String> {
+    shown(shell, root, TICKET).parent.map(|parent| parent.id)
+}
+
+/// Draws frames until the edit editor opens, then until what its opening
+/// deferred has run.
+async fn opened(shell: &Shell, cx: &mut TestAppContext) {
+    until_editing(shell, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.frame(cx, |_, _| ());
+}
+
+/// N1: the restored section's Save of a ticket draft whose Parent differs
+/// from the item goes through Continue editing's steps, and the editor's
+/// opening checks the relationships. The Save waits for that check, not
+/// stopping on it: while the check is held nothing is sent; once it lands
+/// with no rejection, the one save is sent and commits.
+#[gpui_kit::test]
+async fn a_restored_save_waits_for_the_opens_relationship_check(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, stored) = with_a_parent_drafted(cx, false);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-restore-button", cx);
+    assert_eq!(attached(&shell, &root, TICKET, cx), Some(stored));
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    shell.click("draft-save-button", cx);
+    opened(&shell, cx).await;
+    assert!(saves(&shell, cx).is_empty(), "the save waits for the check");
+
+    held.send(()).expect("the check is still running");
+    shell
+        .until_drawn(cx, "the save sent", |shell, cx| {
+            !saves(shell, cx).is_empty()
+        })
+        .await;
+    let sent = saves(&shell, cx);
+    assert_eq!(sent.len(), 1, "one save");
+    ended(&shell, sent[0], cx).await;
+    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    assert_eq!(parent_of(&shell, &root).as_deref(), Some(OTHER));
+}
+
+/// N1: the close dialog's Save of the same restored draft, with no
+/// session. While the open's check is held, nothing is sent and the dialog
+/// stays open; once it lands, the save commits and the tab closes, with
+/// its dialog.
+#[gpui_kit::test]
+async fn the_close_dialogs_restored_save_waits_for_the_opens_check(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, _) = with_a_parent_drafted(cx, false);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-restore-button", cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx));
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    shell.click("close-draft-save-button", cx);
+    opened(&shell, cx).await;
+    assert!(saves(&shell, cx).is_empty(), "the save waits for the check");
+    assert!(shell.present("close-draft-dialog", cx), "the dialog stays");
+
+    held.send(()).expect("the check is still running");
+    shell
+        .until_drawn(cx, "the tab closing", |shell, cx| tabs(shell, cx) == 0)
+        .await;
+    let sent = saves(&shell, cx);
+    assert_eq!(sent.len(), 1, "one save");
+    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    assert!(
+        !shell.present("close-draft-dialog", cx),
+        "the dialog closed"
+    );
+    assert_eq!(parent_of(&shell, &root).as_deref(), Some(OTHER));
+}
+
+/// N1: the same, with a Parent that makes a cycle. Once the check lands,
+/// its rejection blocks the save: nothing is sent, the toolbar and the
+/// close dialog say the cycle's words, and the dialog stays open.
+#[gpui_kit::test]
+async fn a_restored_save_whose_check_finds_a_cycle_is_not_sent(cx: &mut TestAppContext) {
+    use crate::desktop::model::relations_edit::SAVE_CYCLE;
+
+    cx.executor().allow_parking();
+    let (shell, root, _) = with_a_parent_drafted(cx, true);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-restore-button", cx);
+    shell.click(("tab-close", 0usize), cx);
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    shell.click("close-draft-save-button", cx);
+    opened(&shell, cx).await;
+    assert!(saves(&shell, cx).is_empty());
+
+    held.send(()).expect("the check is still running");
+    shell
+        .until_drawn(cx, "the cycle said", |shell, cx| {
+            shell.label("close-draft-save-state", cx).as_deref() == Some(SAVE_CYCLE)
+        })
+        .await;
+    shell.run(cx);
+    assert!(saves(&shell, cx).is_empty(), "nothing is sent");
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some(SAVE_CYCLE)
+    );
+    assert!(shell.present("close-draft-dialog", cx), "the dialog stays");
+    assert_eq!(tabs(&shell, cx), 1);
+    assert_eq!(parent_of(&shell, &root), None, "nothing is written");
+}
+
+/// N1: the close dialog's Cancel while its Save waits for the open's check
+/// ends that Save, as it ends one still in Continue editing's steps (Task
+/// 18 fix 1, M1): once the check lands, nothing is sent, and the tab stays,
+/// editing.
+#[gpui_kit::test]
+async fn cancel_while_a_restored_save_waits_for_the_check_sends_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, _) = with_a_parent_drafted(cx, false);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-restore-button", cx);
+    shell.click(("tab-close", 0usize), cx);
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    shell.click("close-draft-save-button", cx);
+    opened(&shell, cx).await;
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!shell.present("close-draft-dialog", cx));
+
+    held.send(()).expect("the check is still running");
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(
+        saves(&shell, cx).is_empty(),
+        "the cancelled Save is not sent"
+    );
+    assert_eq!(tabs(&shell, cx), 1, "the tab stays");
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    assert_eq!(parent_of(&shell, &root), None, "nothing is written");
+}

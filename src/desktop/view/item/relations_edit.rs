@@ -151,7 +151,7 @@ impl ItemPane {
 
     /// Whether the check of what the session proposes now runs: one is in
     /// flight, asked of that proposal, which differs from the base.
-    fn relations_checking(&self) -> bool {
+    pub(super) fn relations_checking(&self) -> bool {
         let Some((proposed, base)) = self.proposals() else {
             return false;
         };
@@ -184,9 +184,18 @@ impl ItemPane {
     }
 
     /// Checks what the session proposes now, under a new stamp, so any
-    /// answer asked before it is dropped when it lands (R-26).
-    #[allow(clippy::result_large_err)]
+    /// answer asked before it is dropped when it lands (R-26). A Save that
+    /// Continue editing carried out, waiting for the check this replaces,
+    /// waits for this one, or goes on when none is asked (Task 27 fix 2,
+    /// N1).
     fn check_relations(&mut self, field: RelationField, cx: &mut Context<Self>) {
+        self.ask_relations(field, cx);
+        self.follow_continued_save(cx);
+    }
+
+    /// `check_relations`'s check, asked.
+    #[allow(clippy::result_large_err)]
+    fn ask_relations(&mut self, field: RelationField, cx: &mut Context<Self>) {
         let stamp = self
             .relations
             .generations
@@ -243,6 +252,8 @@ impl ItemPane {
             };
             self.relations.answer = Some(answer);
         }
+        // A Save Continue editing carried out goes on, or says why not.
+        self.follow_continued_save(cx);
         cx.notify();
     }
 

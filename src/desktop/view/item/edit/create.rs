@@ -330,10 +330,9 @@ impl ItemPane {
         };
         self.open_session(opening, &loaded, Text::Draft(&text), window, cx);
         if continuing.then == Then::Save {
-            // Once the frame that opened the editor is drawn.
-            cx.defer_in(window, |pane, _, cx| {
-                pane.start_save(cx);
-            });
+            // Once the frame that opened the editor is drawn, and its
+            // relationship check, if any, has landed (N1).
+            cx.defer_in(window, |pane, _, cx| pane.save_continued(cx));
         }
     }
 

@@ -1443,3 +1443,50 @@ async fn discarding_a_restored_new_item_draft_keeps_its_context(cx: &mut TestApp
     assert!(releases(&shell, cx).is_empty(), "nothing is released");
     assert_eq!(context_of(&root), (true, true), "the context is kept");
 }
+
+/// Task 27 fix 2, N1: the restored section's Save of a new ticket's draft
+/// whose Parent its base does not hold goes through Continue editing's
+/// steps with the Create intent (`create`), and the editor's opening
+/// checks the relationships. The create waits for that check: while it is
+/// held, nothing is sent; once it lands, the one create is sent and makes
+/// the ticket with its parent.
+#[gpui_kit::test]
+async fn a_restored_create_waits_for_the_opens_relationship_check(cx: &mut TestAppContext) {
+    const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH2";
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, PARENT, "Its parent", "");
+        let base_fields = new_ticket_fields("With a parent");
+        let (target, base) = new_ticket_draft(root, TICKET, &base_fields);
+        let mut fields = base_fields.clone();
+        if let DraftFields::Ticket { parent, .. } = &mut fields {
+            *parent = Some(PARENT.to_owned());
+        }
+        if let Err(error) = fixture.draft_store().create(target, Some(base), fields) {
+            panic!("the draft must be stored: {error}");
+        }
+    });
+    restore_in_tab(&shell, &root, cx).await;
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    shell.click("draft-save-button", cx);
+    shell.until_editing(cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        creates(&shell, cx).is_empty(),
+        "the create waits for the check"
+    );
+
+    held.send(()).expect("the check is still running");
+    shell
+        .until_drawn(cx, "the create", |shell, cx| {
+            creates(shell, cx)
+                .first()
+                .is_some_and(|request| request_code(shell, *request, cx).is_some())
+        })
+        .await;
+    let sent = creates(&shell, cx);
+    assert_eq!(sent.len(), 1, "one create");
+    assert_eq!(request_code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    let made = ticket_read(&shell, &root).expect("the ticket is made");
+    assert_eq!(made.parent.map(|parent| parent.id).as_deref(), Some(PARENT));
+}
