@@ -1771,6 +1771,27 @@ pub struct RemoteOperationTarget {
     local_branch: Option<String>,
 }
 
+/// What a remote operation synchronizes, when it is a synchronization:
+/// primary, or an item's editing branch. `None` for a poll, a promotion or
+/// a closure, and for a context synchronization that names no item.
+pub(in super::super) fn synchronization_target(
+    target: &RemoteOperationTarget,
+) -> Option<SynchronizationTarget> {
+    match target.action() {
+        RemoteOperationAction::SynchronizePrimary => Some(SynchronizationTarget::Primary),
+        RemoteOperationAction::SynchronizeContext => {
+            let (kind, item_id) = target.item()?;
+            Some(SynchronizationTarget::Context {
+                kind,
+                item_id: item_id.clone(),
+            })
+        }
+        RemoteOperationAction::Poll
+        | RemoteOperationAction::Promote
+        | RemoteOperationAction::Close => None,
+    }
+}
+
 impl RemoteOperationTarget {
     pub fn for_poll(plan: &RemoteRefPlan) -> Self {
         Self {
@@ -4858,21 +4879,30 @@ impl ResolutionView {
     /// native artifacts not yet released. At most one is, because a new
     /// attempt is begun only once the one before is closed.
     pub(in super::super) fn unfinished(&self) -> Option<&ResolutionAttemptView> {
-        self.attempts.iter().rev().find(|attempt| {
-            let step = self.step_of(attempt).map(|step| step.state);
-            match attempt.phase {
-                ResolutionAttemptPhase::PathsApplying => {
-                    step == Some(ConflictStepState::PathsWritten)
-                }
-                ResolutionAttemptPhase::CandidatePrepared => {
-                    step == Some(ConflictStepState::CommitPrepared)
-                }
-                ResolutionAttemptPhase::Applied => !attempt.released,
-                ResolutionAttemptPhase::Prepared | ResolutionAttemptPhase::RecoveryRequired => {
-                    false
-                }
+        self.attempts
+            .iter()
+            .rev()
+            .find(|attempt| self.is_unfinished(attempt))
+    }
+
+    /// Whether an attempt other than `attempt` is unfinished: what a new
+    /// attempt is never begun beside (fact 71).
+    pub(super) fn unfinished_besides(&self, attempt: crate::repository::OperationId) -> bool {
+        self.attempts
+            .iter()
+            .any(|other| other.attempt != attempt && self.is_unfinished(other))
+    }
+
+    fn is_unfinished(&self, attempt: &ResolutionAttemptView) -> bool {
+        let step = self.step_of(attempt).map(|step| step.state);
+        match attempt.phase {
+            ResolutionAttemptPhase::PathsApplying => step == Some(ConflictStepState::PathsWritten),
+            ResolutionAttemptPhase::CandidatePrepared => {
+                step == Some(ConflictStepState::CommitPrepared)
             }
-        })
+            ResolutionAttemptPhase::Applied => !attempt.released,
+            ResolutionAttemptPhase::Prepared | ResolutionAttemptPhase::RecoveryRequired => false,
+        }
     }
 
     /// Whether `attempt` has written paths that no commit holds yet: the one
@@ -4919,17 +4949,7 @@ pub(in super::super) fn resolution_view(
     let Some(record) = read_operation(connection, repository_id, operation_id)? else {
         return Ok(None);
     };
-    let target = match record.target.action() {
-        RemoteOperationAction::SynchronizePrimary => SynchronizationTarget::Primary,
-        RemoteOperationAction::SynchronizeContext => {
-            let (kind, item_id) = record.target.item().ok_or_else(recovery_required)?;
-            SynchronizationTarget::Context {
-                kind,
-                item_id: item_id.clone(),
-            }
-        }
-        _ => return Err(recovery_required()),
-    };
+    let target = synchronization_target(&record.target).ok_or_else(recovery_required)?;
     let steps = connection
         .prepare(
             "SELECT window_number,ordinal FROM remote_integration_steps
@@ -5089,11 +5109,13 @@ pub(in super::super) fn record_resolution_owner(
 
 /// Removes the record of who owns the attempt `attempt`, for an attempt the
 /// domain never recorded: the request that presented it was refused before
-/// anything was written, and may present another input.
+/// anything was written, and may present another input. `Ok(false)`, with
+/// the row kept, when the attempt is recorded: it is then the request's
+/// durable state.
 pub(in super::super) fn release_resolution_owner(
     tx: &Transaction<'_>,
     attempt: crate::repository::OperationId,
-) -> Result<(), RepositoryError> {
+) -> Result<bool, RepositoryError> {
     let recorded: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM remote_resolution_attempts WHERE attempt_ulid=?1)",
@@ -5102,14 +5124,14 @@ pub(in super::super) fn release_resolution_owner(
         )
         .map_err(|_| recovery_required())?;
     if recorded {
-        return Err(recovery_required());
+        return Ok(false);
     }
     tx.execute(
         "DELETE FROM remote_resolution_owners WHERE attempt_ulid=?1",
         [attempt.to_string()],
     )
     .map_err(|_| recovery_required())?;
-    Ok(())
+    Ok(true)
 }
 
 /// The request whose resolution attempt of `step`'s conflict is
@@ -5144,13 +5166,15 @@ pub(super) fn unfinished_resolution_request(
 }
 
 /// One path of a resolution attempt, as its durable row records it: the
-/// digest of its path, of the result written there, whether the write was
-/// observed, and the three sides' blobs of the conflict it resolves.
+/// digest of its path, of the result written there and of what the path held
+/// before (its pre-write image), whether the write was observed, and the
+/// three sides' blobs of the conflict it resolves.
 #[derive(Clone, Debug)]
 pub(super) struct ResolutionPathRecord {
     pub ordinal: u32,
     pub path_digest: [u8; 32],
     pub result_digest: [u8; 32],
+    pub prewrite_digest: [u8; 32],
     pub applied: bool,
     pub sides: [Option<Oid>; 3],
 }
@@ -5164,13 +5188,14 @@ pub(super) fn resolution_path_records(
         i64,
         Vec<u8>,
         Vec<u8>,
+        Vec<u8>,
         bool,
         Option<String>,
         Option<String>,
         Option<String>,
     );
     let paths = connection
-        .prepare("SELECT path.ordinal,path.path_digest,path.result_digest,path.applied,path.base_blob_oid,path.local_blob_oid,path.incoming_blob_oid FROM remote_resolution_paths path JOIN remote_resolution_attempts attempt ON attempt.id=path.attempt_id WHERE attempt.attempt_ulid=?1 AND attempt.operation_record_id=?2 AND attempt.configuration_generation=?3 ORDER BY path.ordinal")
+        .prepare("SELECT path.ordinal,path.path_digest,path.result_digest,path.prewrite_digest,path.applied,path.base_blob_oid,path.local_blob_oid,path.incoming_blob_oid FROM remote_resolution_paths path JOIN remote_resolution_attempts attempt ON attempt.id=path.attempt_id WHERE attempt.attempt_ulid=?1 AND attempt.operation_record_id=?2 AND attempt.configuration_generation=?3 ORDER BY path.ordinal")
         .and_then(|mut statement| {
             statement
                 .query_map(
@@ -5184,6 +5209,7 @@ pub(super) fn resolution_path_records(
                             row.get(4)?,
                             row.get(5)?,
                             row.get(6)?,
+                            row.get(7)?,
                         ))
                     },
                 )?
@@ -5191,11 +5217,12 @@ pub(super) fn resolution_path_records(
         })
         .map_err(|_| recovery_required())?
         .into_iter()
-        .map(|(ordinal, path, result, applied, base, local, incoming)| {
+        .map(|(ordinal, path, result, prewrite, applied, base, local, incoming)| {
             Ok(ResolutionPathRecord {
                 ordinal: ordinal.try_into().map_err(|_| recovery_required())?,
                 path_digest: path.try_into().map_err(|_| recovery_required())?,
                 result_digest: result.try_into().map_err(|_| recovery_required())?,
+                prewrite_digest: prewrite.try_into().map_err(|_| recovery_required())?,
                 applied,
                 sides: [oid(base)?, oid(local)?, oid(incoming)?],
             })

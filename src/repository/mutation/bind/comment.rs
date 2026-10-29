@@ -55,7 +55,7 @@ use super::{
             AuthoringKind, AuthoringTarget, CommentAuthor, CommentIndexingState,
             CommentPublicationPendingReason, CommentPublicationState, CommentReceipt,
             CommentSubmissionError, CommentSubmissionOutcome, ContextIntent,
-            ExpectedPathObservation, OperationFamily, OperationId, PublishCommentRequest,
+            ExpectedPathObservation, OperationId, PublishCommentRequest, ReadError,
             RepositoryOperation, RepositoryService, SubmitCommentRequest, authoring_kind_segment,
             owned_file_bytes,
             recovery::{self, FinalKind, JournalRow},
@@ -125,17 +125,22 @@ impl From<CommentAddInput> for CommentAddBinding {
 /// The comment and the synchronization that publishes it, for the
 /// comment's operation or for its synchronization, whichever
 /// `operation_id` is, in the repository at `root` (R-5). `None` when the
-/// registry binds neither to a comment there, or cannot be read.
+/// registry binds neither to a comment there. `Err` when the registry
+/// cannot be read, or holds an ID that is no operation's: nothing is
+/// taken to be no comment's on that.
 pub(crate) fn comment_synchronization(
     connection: &rusqlite::Connection,
     root: &Path,
     operation_id: OperationId,
-) -> Option<(OperationId, OperationId)> {
-    let root = root.to_str()?;
-    if !recovery::has_table(connection, "comment_publication_bindings").ok()? {
-        return None;
+) -> Result<Option<(OperationId, OperationId)>, ReadError> {
+    // A root that is not UTF-8 cannot have been stored.
+    let Some(root) = root.to_str() else {
+        return Ok(None);
+    };
+    if !recovery::has_table(connection, "comment_publication_bindings")? {
+        return Ok(None);
     }
-    let (comment, synchronization): (String, String) = connection
+    let found: Option<(String, String)> = connection
         .query_row(
             "SELECT binding.operation_ulid, binding.synchronization_ulid
                FROM comment_publication_bindings binding
@@ -145,29 +150,13 @@ pub(crate) fn comment_synchronization(
             rusqlite::params![root, operation_id.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()
-        .ok()??;
-    Some((
-        OperationId::parse(&comment).ok()?,
-        OperationId::parse(&synchronization).ok()?,
-    ))
-}
-
-/// The request `accepted`, as the binding of a synchronization is to see
-/// it: with the comment's synchronization `operation_id` in place of the
-/// comment's own operation, as a resume builds one for the operation it
-/// takes up. Its position is the comment's, on the item's branch, which
-/// is the branch the synchronization publishes.
-fn synchronization_of(accepted: &Accepted, operation_id: OperationId) -> Accepted {
-    Accepted {
-        request_id: accepted.request_id,
-        attempt: accepted.attempt,
-        scope: accepted.scope.clone(),
-        family: Some(OperationFamily::Remote),
-        operation_id,
-        position: accepted.position.clone(),
-        expected: None,
-    }
+        .optional()?;
+    let Some((comment, synchronization)) = found else {
+        return Ok(None);
+    };
+    let parsed =
+        |id: &str| OperationId::parse(id).map_err(|_| ReadError::new(ResultCode::RecoveryRequired));
+    Ok(Some((parsed(&comment)?, parsed(&synchronization)?)))
 }
 
 /// What the repository shows of the comment the request `accepted`
@@ -208,22 +197,16 @@ pub(crate) fn recorded_effects(service: &RepositoryService, accepted: &Accepted)
     if effects.checkpoint != CheckpointEffect::Committed {
         return effects;
     }
-    let bound = service
-        .read_session(RepositoryOperation::Read, |connection| {
-            Ok(comment_synchronization(
-                connection,
-                &accepted.root(),
-                accepted.operation_id,
-            ))
-        })
-        .ok()
-        .flatten();
-    // A synchronization that cannot be found is no claim of anything: the
+    let bound = service.read_session(RepositoryOperation::Read, |connection| {
+        comment_synchronization(connection, &accepted.root(), accepted.operation_id)
+    });
+    // A synchronization that is not found is no claim of anything: the
     // publication is pending, which is what "not confirmed" is written as.
+    // Effects carry no error, so a registry that cannot say which
+    // synchronization it is claims nothing either.
     effects.publication = PublicationEffect::Pending;
-    if let Some((_, synchronization)) = bound {
-        let published =
-            sync::recorded_effects(service, &synchronization_of(accepted, synchronization));
+    if let Ok(Some((_, synchronization))) = bound {
+        let published = sync::recorded_effects(service, &accepted.taking_up(synchronization));
         effects.publication = published.publication;
         effects.integration = published.integration;
     }
@@ -348,13 +331,16 @@ impl CommentAddBinding {
         let mut child = None;
         let submitted =
             service.submit_comment_with(request, author, restart, true, &mut |request| {
-                let synchronization = synchronization_of(accepted, request.operation_id);
+                // Its position is the comment's, on the item's branch,
+                // which is the branch the synchronization publishes.
+                let synchronization = accepted.taking_up(request.operation_id);
                 let (result, ran) = sync::of_a_comment(
                     call,
                     &synchronization,
                     request,
                     Subject::of(self, accepted),
                     Some(accepted.request_id),
+                    None,
                 );
                 child = Some(Child {
                     ran,

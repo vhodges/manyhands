@@ -65,6 +65,15 @@ impl RepositoryService {
             mutation,
         } = call;
         let mut binding = mutation.into_binding();
+        // What the request names is settled before its identity is taken.
+        if let Err(answer) = binding.settle_target(self) {
+            let identity = RequestIdentity::of(request_id, binding.as_ref());
+            return Reply {
+                binding: binding.as_ref(),
+                identity: &identity,
+            }
+            .envelope(answer, None, Kept::No);
+        }
         // Only removal can outlive both the registration and the filesystem.
         // Other commands retain their original scope construction/order.
         let removal = binding.command() == Command::RepoRemove;

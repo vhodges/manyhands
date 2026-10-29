@@ -2477,10 +2477,13 @@ fn tree_blobs(
     Ok(())
 }
 
-/// Whether every path a resolution attempt wrote and observed still holds
-/// exactly the result it wrote. Each recorded path is found among the live
-/// conflict's paths by its digest; one that is gone, or holds anything
-/// else, is changed.
+/// Whether every path of a resolution attempt still holds exactly what the
+/// attempt left there, as its rows show. A path whose write was observed
+/// holds its result. One whose write was not observed may have been written
+/// all the same, so it holds either its result or its recorded pre-write
+/// image. Each recorded path is found among the live conflict's paths by
+/// its digest; one that is not found, or holds anything else, is changed,
+/// and so is one that cannot be told.
 fn written_paths_unchanged(
     repository: &git2::Repository,
     inspection: &SynchronizationConflictInspection,
@@ -2489,7 +2492,7 @@ fn written_paths_unchanged(
     let workdir = repository
         .workdir()
         .ok_or(SynchronizationError::RecoveryRequired)?;
-    for recorded in paths.iter().filter(|path| path.applied) {
+    for recorded in paths {
         let Some(path) = inspection
             .paths
             .iter()
@@ -2500,8 +2503,17 @@ fn written_paths_unchanged(
         let Ok(relative) = std::str::from_utf8(&path.token.path) else {
             return Ok(false);
         };
-        match owned_result_digest(workdir, Path::new(relative)) {
-            Ok(digest) if digest == recorded.result_digest => {}
+        let relative = Path::new(relative);
+        match owned_result_digest(workdir, relative) {
+            Ok(digest) if digest == recorded.result_digest => continue,
+            Ok(_) | Err(SynchronizationError::ExternalChange) => {}
+            Err(error) => return Err(error),
+        }
+        if recorded.applied {
+            return Ok(false);
+        }
+        match conflict_worktree_digest(workdir, relative) {
+            Ok(digest) if digest == recorded.prewrite_digest => {}
             Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(false),
             Err(error) => return Err(error),
         }
@@ -4467,20 +4479,8 @@ impl RepositoryService {
         if *input.finalize().as_bytes() != expected_input_digest {
             return Err(SynchronizationError::RecoveryRequired);
         }
-        let target = match record.target.action() {
-            RemoteOperationAction::SynchronizePrimary => SynchronizationTarget::Primary,
-            RemoteOperationAction::SynchronizeContext => {
-                let (kind, item_id) = record
-                    .target
-                    .item()
-                    .ok_or(SynchronizationError::RecoveryRequired)?;
-                SynchronizationTarget::Context {
-                    kind,
-                    item_id: item_id.clone(),
-                }
-            }
-            _ => return Err(SynchronizationError::RecoveryRequired),
-        };
+        let target = state::synchronization_target(&record.target)
+            .ok_or(SynchronizationError::RecoveryRequired)?;
         let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
             return Err(SynchronizationError::RecoveryRequired);
         };
@@ -4936,6 +4936,17 @@ impl RepositoryService {
             RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
             _ => return Ok(merge::ResolveSynchronizationOutcome::RecoveryRequired),
         };
+        // Fact 71, for a caller that asks: under the conflict's reservation,
+        // and before this attempt is recorded, no other attempt of the
+        // synchronization is unfinished.
+        if request.alone
+            && state::with_transaction(self, &root, |tx, id| {
+                Ok(state::resolution_view(tx, id, request.synchronization_id)?
+                    .is_some_and(|view| view.unfinished_besides(request.attempt_id)))
+            })?
+        {
+            return Ok(merge::ResolveSynchronizationOutcome::RecoveryRequired);
+        }
         let mut repository = Self::inspect_conflict_target(&root, &inspection.target)?;
         let lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
         #[cfg(any(unix, windows))]
@@ -5496,19 +5507,8 @@ impl RepositoryService {
         else {
             return Ok(None);
         };
-        let target = match target.action() {
-            RemoteOperationAction::SynchronizePrimary => SynchronizationTarget::Primary,
-            RemoteOperationAction::SynchronizeContext => {
-                let (kind, item_id) = target
-                    .item()
-                    .ok_or(SynchronizationError::RecoveryRequired)?;
-                SynchronizationTarget::Context {
-                    kind,
-                    item_id: item_id.clone(),
-                }
-            }
-            _ => return Err(SynchronizationError::RecoveryRequired),
-        };
+        let target =
+            state::synchronization_target(&target).ok_or(SynchronizationError::RecoveryRequired)?;
         let repository = Self::inspect_conflict_target(&root, &target)?;
         let tree = repository
             .find_commit(candidate)
@@ -5538,7 +5538,7 @@ impl RepositoryService {
                 .map_err(|_| SynchronizationError::RecoveryRequired)?
                 .content()
                 .to_vec();
-            // An eligible canonical conflict has regular-file sides only.
+            // No side's mode is recorded: `classify_conflict_entry` admits only sides at `100644`.
             let [base, local, incoming] = recorded.sides;
             let mode = |side: Option<git2::Oid>| side.map(|_| 0o100644);
             resolutions.push((

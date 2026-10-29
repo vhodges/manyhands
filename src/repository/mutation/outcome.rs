@@ -1233,18 +1233,22 @@ impl RepositoryService {
                 let active = active.operation_id();
                 active.to_string() == operation_id
                     || OperationId::parse(operation_id).is_ok_and(|operation_id| {
-                        self.read_session(RepositoryOperation::Read, |connection| {
-                            Ok(comment::comment_synchronization(
+                        let bound = self.read_session(RepositoryOperation::Read, |connection| {
+                            comment::comment_synchronization(
                                 connection,
                                 Path::new(root),
                                 operation_id,
-                            ))
-                        })
-                        .ok()
-                        .flatten()
-                        .is_some_and(|(comment, synchronization)| {
-                            comment == operation_id && synchronization == active
-                        })
+                            )
+                        });
+                        // An envelope carries no second error: a registry
+                        // that cannot say whose the reservation is offers
+                        // no cancellation of it.
+                        match bound {
+                            Ok(Some((comment, synchronization))) => {
+                                comment == operation_id && synchronization == active
+                            }
+                            Ok(None) | Err(_) => false,
+                        }
                     })
             });
         if !own {

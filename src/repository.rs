@@ -115,6 +115,11 @@ pub use remote::{
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
+/// The attempt ID `conflict resolve` derives, for the source-included test
+/// target that pins it.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use mutation::conflict_resolve_attempt;
 /// The conflict read's string tokens and display rule, for the
 /// source-included test targets that pin them.
 #[cfg(test)]

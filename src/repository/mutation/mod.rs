@@ -60,6 +60,10 @@ mod settle;
 /// The synchronization a comment's operation publishes it by, for the
 /// conflict read (R-5).
 pub(super) use bind::comment::comment_synchronization;
+/// The attempt ID `conflict resolve` derives (R-14), for the
+/// source-included test target that plants a row under it.
+#[cfg(test)]
+pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,

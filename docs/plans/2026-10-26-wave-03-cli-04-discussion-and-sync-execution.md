@@ -595,7 +595,7 @@ new ticket comment (ruling P4).
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
-| 4a | `feat: bind conflict resolution that the same request can finish` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy | pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
+| 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 
 ### Task 1: Merging Synchronization
 
@@ -1927,3 +1927,95 @@ SDD directory's `logs/task-4a-*`):
 - A continuation that stops for an untrusted host answers with the
   resolution's data, which names no host, so `host.approve` is not offered
   (as Task 2b recorded for a comment's child). No table row covers it.
+
+#### Task 4a, fix round 1
+
+The task review needed fixes, with the controller's ruling on each
+(`task-4a-fix-1.md`). Commit `fix: let the original request cancel a
+resolution's publication, and close the review's gaps`, on `e485caa`.
+`origin/main` is still `a372edb`. The new cases were written first, and
+six of them failed against the library at `e485caa`
+(`logs/task-4a-fix1-red.log`).
+
+- **I1: `request cancel` of the original request reaches the
+  continuation** (design step 6).
+  - `Watch` gains a `holder`, whose flag it reads after the owner's and
+    never clears.
+  - The continuation's owner is still the resolve request, which clears
+    its own flag (R-35). Its holder is the request that holds the
+    operation:
+    - `records::operation_holder`, under the synchronization's ID;
+    - for a comment's synchronization, under the comment's operation,
+      which finds the `comment add` request (fact 79).
+  - `sync::continued` is the plain route; `of_a_comment` takes `holder`.
+  - The holder's record is not settled by the continuation. Its own next
+    call settles it as F2 does: finished, flag cleared, reservation
+    released.
+  - That call answers:
+    - `cancelled` before push intent, and for the comment;
+    - after push intent, F2's "not confirmed" (`recovery_required`,
+      fact 74). The cancel at `BeforePush` leaves the push intent
+      unaccepted, and the holder's call did not ask there.
+  - The domain does stop after push intent: at `BeforePush`, with nothing
+    pushed.
+- **S1: R-14's collision.** Before it records the owner row of an attempt
+  with no row, the binding checks `validate_child_id`, and maps a refusal
+  as the library maps its own (`recovery_required`). The case plants an
+  `operation_records` row under the derived ID (`attempt_for`, re-exported
+  for tests only) and asserts that nothing was written.
+- **Minors.**
+  1. A refused supersede releases the new request's owner row.
+  2. `disown` propagates every error but the expected "attempt recorded",
+     which `release_resolution_owner` now returns as `Ok(false)`.
+  3. `comment_synchronization` returns `Result<Option<_>, ReadError>`.
+     - The binding's lookup and continuation, `settle_target` and the
+       conflict read propagate the error.
+     - `recorded_effects` and the `request.cancel` offer have no error
+       channel, and claim nothing on an error.
+  4. Every recorded path is checked before a supersede.
+     - One that holds its result is unchanged; one `applied` that does not
+       is changed.
+     - One not `applied` must hold its recorded pre-write image, or the
+       answer is `original_request_required`.
+  5. Fact 71 is checked again under the conflict's reservation, before the
+     attempt is recorded. This is `ResolveSynchronizationRequest::alone()`,
+     a `pub(super)` flag that `new` leaves `false`, so
+     `remote_merge_recovery`'s direct calls are unchanged.
+  6. `published` carries the child's `local_change`.
+  7. A synchronization that met no conflict has a case.
+  8. A new `Binding::settle_target` hook (no-op by default) runs before the
+     request's identity is taken. `conflict resolve`'s target is the
+     resolved synchronization's ID, so a comment's ID and its
+     synchronization's ID are one intent.
+  9. Duplication:
+     - `state::synchronization_target`;
+     - `Accepted::taking_up`, shared by resume, the continuation and the
+       comment binding;
+     - the `refusal` closure.
+  10. No side's mode is recorded: a one-line comment names
+      `classify_conflict_entry`'s rule.
+- **Cases**, 7 new and 1 extended, for 37 `c4_resolution_`:
+  - `original_request_cancels_before_push_intent`;
+  - `original_request_cancels_after_push_intent`;
+  - `comment_request_cancels`;
+  - `attempt_id_collision`;
+  - `refused_supersede_releases_the_request`;
+  - `unobserved_path_edited`;
+  - `synchronization_without_conflict`;
+  - `comment_conflict`, now also the same request by the synchronization's
+    ID.
+- **Verify** (each `devenv shell -- cargo … --locked`; logs
+  `logs/task-4a-fix1-*`). Every `test` target below was `--all-features`.
+  - `mutation_remote`, as SSH cases:
+    - `c4_resolution`: 37 passed;
+    - `c4_conflict_read`: 23 passed;
+    - `c4_comment`: 34 passed;
+    - `cancel` and `resume`, for the `Watch` and `taking_up` changes: 37
+      and 21 passed.
+  - `mutation_replay`: 383 passed.
+  - `remote_merge_recovery`: 25 SSH cases passed.
+  - `--lib remote`: 477 passed. `--lib mutation`: 123 passed.
+  - `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
+    passed. The first clippy run found one `single_match`, which was
+    fixed.
+  - `check` and `clippy --features desktop --bin manyhands` passed.

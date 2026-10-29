@@ -661,15 +661,7 @@ impl OperationResumeBinding {
         };
         // The request as the synchronization's binding is to see it:
         // with the operation it takes up in place of none.
-        let operation = Accepted {
-            request_id: accepted.request_id,
-            attempt: accepted.attempt,
-            scope: accepted.scope.clone(),
-            family: Some(OperationFamily::Remote),
-            operation_id: self.operation_id,
-            position: accepted.position.clone(),
-            expected: None,
-        };
+        let operation = accepted.taking_up(self.operation_id);
         let Ran { answer, standing } = sync::resumed(
             call,
             &operation,

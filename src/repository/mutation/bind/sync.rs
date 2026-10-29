@@ -329,6 +329,11 @@ pub(crate) fn fenced_answer(
 /// is asked of the request that began the operation, and a resume that
 /// takes the operation up answers to it exactly as that request's own
 /// next call would.
+///
+/// A resolution's continuation owns the operation as its own request,
+/// and also answers to the request that holds it, the `holder`: its
+/// flag is read as the owner's is, and is left for that request's own
+/// next call to settle.
 pub(super) struct Watch<'a> {
     call: &'a CallContext<'a>,
     accepted: &'a Accepted,
@@ -337,6 +342,10 @@ pub(super) struct Watch<'a> {
     /// `request cancel` sets. `None` when no unfinished record holds
     /// it: there is then no flag, and only the call's token stops it.
     owner: Option<RequestId>,
+    /// Another request whose `request cancel` stops the call: the one
+    /// that holds the operation while a resolution's continuation owns
+    /// the call (R-15). Its flag is read and never cleared here.
+    holder: Option<RequestId>,
     /// The operation began this call with a push intended and nothing
     /// known of it.
     unsettled: bool,
@@ -354,8 +363,9 @@ pub(super) struct Watch<'a> {
 impl<'a> Watch<'a> {
     /// The observer of one domain call under `accepted`'s operation, for
     /// the call `call`: its events are of `subject`, and a cancellation is
-    /// read from the call's token and from the flag of `owner`, the
-    /// request whose record holds the operation (fact 54).
+    /// read from the call's token, from the flag of `owner`, the request
+    /// whose record holds the operation (fact 54), and from the flag of
+    /// `holder`, which is left set.
     ///
     /// `accepted` carries the operation the call synchronizes, which for
     /// a comment is the binding's child `synchronization_id`, as a resume
@@ -366,12 +376,14 @@ impl<'a> Watch<'a> {
         call: &'a CallContext<'a>,
         subject: Subject,
         owner: Option<RequestId>,
+        holder: Option<RequestId>,
     ) -> Self {
         Self {
             call,
             accepted,
             subject,
             owner,
+            holder,
             unsettled: push_is_unsettled(call.service, accepted),
             asked_at: None,
             pushed: false,
@@ -403,19 +415,21 @@ impl Watch<'_> {
     }
 
     /// Whether a cancellation is asked for and has not been passed on:
-    /// the call's token, or the request's flag, which is left as it is.
+    /// the call's token, or a request's flag, which is left as it is.
     /// A flag that cannot be read is not taken to be set.
     fn cancellation_is_pending(&self) -> bool {
-        self.call.session.cancelled() || self.asked_of_the_owner().unwrap_or(false)
+        self.call.session.cancelled() || self.asked_of_its_requests().unwrap_or(false)
     }
 
-    /// Whether the request that owns the operation has been asked to
-    /// stop. The flag is read and left set.
-    fn asked_of_the_owner(&self) -> Result<bool, ReadError> {
-        match self.owner {
-            Some(owner) => self.call.service.cancellation_requested(owner),
-            None => Ok(false),
+    /// Whether the request that owns the operation, or the one that
+    /// holds it, has been asked to stop. The flags are read and left set.
+    fn asked_of_its_requests(&self) -> Result<bool, ReadError> {
+        for request in [self.owner, self.holder].into_iter().flatten() {
+            if self.call.service.cancellation_requested(request)? {
+                return Ok(true);
+            }
         }
+        Ok(false)
     }
 }
 
@@ -466,7 +480,7 @@ impl SynchronizationObserver for Watch<'_> {
         let asked = if session.cancelled() {
             Ok(true)
         } else {
-            self.asked_of_the_owner()
+            self.asked_of_its_requests()
         };
         match asked {
             Ok(true) => {
@@ -552,8 +566,7 @@ struct Configured {
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, for
-/// a request that did not begin it: `operation resume`, and the
-/// continuation of `conflict resolve` (R-15). `accepted` is that request
+/// `operation resume`, which did not begin it. `accepted` is that request
 /// with the operation's ID and journal in place of its own, and `subject`
 /// the request as its events name it.
 ///
@@ -579,7 +592,29 @@ pub(crate) fn resumed(
         root: accepted.root(),
         target,
     }
-    .call(call, accepted, subject, owner, true)
+    .call(call, accepted, subject, owner, None, true)
+}
+
+/// Takes up the synchronization of `target` that `accepted` names, as
+/// `resumed` does, for the continuation of `conflict resolve` (R-15):
+/// `owner` is that request, which owns the call and whose flag is cleared
+/// once the operation is cancelled, and `holder` the request whose record
+/// holds the operation. `request cancel` of `holder` stops the call as it
+/// would stop that request's own; its flag is left for that request's
+/// own next call, which settles its record.
+pub(super) fn continued(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    target: SynchronizationTarget,
+    subject: Subject,
+    owner: Option<RequestId>,
+    holder: Option<RequestId>,
+) -> Ran {
+    SyncBinding {
+        root: accepted.root(),
+        target,
+    }
+    .call(call, accepted, subject, owner, holder, true)
 }
 
 /// What the domain returned of one call of a synchronization: `None`
@@ -592,6 +627,8 @@ pub(super) type Synchronized = Option<Result<SynchronizationResult, Synchronizat
 /// call, as a synchronization's own request calls it. `subject` is the
 /// `comment add` request as its events name it, and `owner` the request
 /// whose flag a cancellation is read from: that same request (fact 79).
+/// A resolution's continuation is `owner`, and the `comment add` request
+/// is then `holder`, whose flag is read and left set.
 ///
 /// It gives back what the domain returned, which the submission reads,
 /// and what a synchronization's binding makes of it: the code, the
@@ -603,6 +640,7 @@ pub(super) fn of_a_comment(
     request: SynchronizeRemoteRequest,
     subject: Subject,
     owner: Option<RequestId>,
+    holder: Option<RequestId>,
 ) -> (Synchronized, Ran) {
     let SynchronizeRemoteRequest {
         root: _,
@@ -619,7 +657,7 @@ pub(super) fn of_a_comment(
         root: accepted.root(),
         target,
     }
-    .observed(call, accepted, subject, owner, restart)
+    .observed(call, accepted, subject, owner, holder, restart)
 }
 
 /// The position on its branch of a synchronization of `target` in the
@@ -771,16 +809,19 @@ impl SyncBinding {
     /// `subject` is the request the call's events are of: the
     /// synchronization's own, or the resume that takes it up. `owner`
     /// is the request whose record holds the operation, whose flag a
-    /// cancellation is read from.
+    /// cancellation is read from; `holder` another request whose flag is
+    /// read as well, and never cleared (see `Watch`).
     fn call(
         &self,
         call: &CallContext<'_>,
         accepted: &Accepted,
         subject: Subject,
         owner: Option<RequestId>,
+        holder: Option<RequestId>,
         restart: bool,
     ) -> Ran {
-        self.observed(call, accepted, subject, owner, restart).1
+        self.observed(call, accepted, subject, owner, holder, restart)
+            .1
     }
 
     /// `call`, giving back as well what the domain returned: the last
@@ -791,11 +832,12 @@ impl SyncBinding {
         accepted: &Accepted,
         subject: Subject,
         owner: Option<RequestId>,
+        holder: Option<RequestId>,
         restart: bool,
     ) -> (Synchronized, Ran) {
         let service = call.service;
         let root = accepted.root();
-        let mut watch = Watch::new(accepted, call, subject, owner);
+        let mut watch = Watch::new(accepted, call, subject, owner, holder);
         let Some(result) = call.session.synchronize(
             service,
             self.request(accepted, restart),
@@ -1294,6 +1336,7 @@ impl Binding for SyncBinding {
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
+            None,
             false,
         ))
     }
@@ -1331,6 +1374,7 @@ impl Binding for SyncBinding {
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
+            None,
             true,
         ))
     }

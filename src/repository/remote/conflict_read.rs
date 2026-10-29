@@ -411,8 +411,9 @@ fn lookup(
     if local_sync::record::owned_identity(db, &operation_id.to_string())? {
         return Ok(Lookup::LocalSync);
     }
+    // A registry that cannot say is the read's answer, never `invalid_input`.
     let (comment_operation_id, synchronization) =
-        match mutation::comment_synchronization(db, repo.root(), operation_id) {
+        match mutation::comment_synchronization(db, repo.root(), operation_id)? {
             Some((comment, synchronization)) => (Some(comment), synchronization),
             None => (None, operation_id),
         };

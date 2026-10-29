@@ -1,7 +1,10 @@
 //! `conflict resolve`: the design's "Required outcomes: interrupted
 //! resolution" table, one `c4_resolution_` case per row; Review Focus 3;
-//! the binding's validation, in step 4's order; its data and goldens; and
-//! its row of the conformance table.
+//! the binding's validation, in step 4's order; its data and goldens; its
+//! row of the conformance table; and the review's first fix round:
+//! `request cancel` of the request that holds the synchronization (step 6),
+//! an attempt ID that collides (R-14), a refused supersede, an edited path
+//! whose write was not observed, and a synchronization with no conflict.
 //!
 //! A raw peer clone makes the remote diverge, as a second user would, and
 //! a synchronization stops on the conflict. The resolution is presented as
@@ -128,6 +131,34 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         c4_resolution_local_sync_operation,
     ),
     ("c4_resolution_conformance", c4_resolution_conformance),
+    (
+        "c4_resolution_original_request_cancels_before_push_intent",
+        c4_resolution_original_request_cancels_before_push_intent,
+    ),
+    (
+        "c4_resolution_original_request_cancels_after_push_intent",
+        c4_resolution_original_request_cancels_after_push_intent,
+    ),
+    (
+        "c4_resolution_comment_request_cancels",
+        c4_resolution_comment_request_cancels,
+    ),
+    (
+        "c4_resolution_attempt_id_collision",
+        c4_resolution_attempt_id_collision,
+    ),
+    (
+        "c4_resolution_refused_supersede_releases_the_request",
+        c4_resolution_refused_supersede_releases_the_request,
+    ),
+    (
+        "c4_resolution_unobserved_path_edited",
+        c4_resolution_unobserved_path_edited,
+    ),
+    (
+        "c4_resolution_synchronization_without_conflict",
+        c4_resolution_synchronization_without_conflict,
+    ),
 ];
 
 const MAIN: &str = "refs/heads/main";
@@ -147,6 +178,8 @@ const RESUME: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR3";
 const LATER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR4";
 /// The comment of the comment case.
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
+/// The second ticket of the conflict with two paths.
+const SECOND_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAY";
 /// A source the stores and the envelopes must never hold.
 const PRIVATE: &str = "conflict-resolve-private-source-sentinel";
 /// A well-formed token that no conflict issued.
@@ -1455,65 +1488,92 @@ fn c4_resolution_local_sync_operation() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// A comment whose synchronization stopped on its item's conflict: its
+/// `comment add` request is `SYNC`, and still holds its operation.
+struct CommentConflict {
+    w: World,
+    /// The comment's operation.
+    comment: OperationId,
+    /// The synchronization that publishes it.
+    synchronization: OperationId,
+    local: git2::Oid,
+    incoming: git2::Oid,
+    observation: String,
+    token: String,
+}
+
+impl CommentConflict {
+    fn new() -> Result<Self, FixtureError> {
+        let mut w = world()?;
+        let context = w.context()?;
+        assert_eq!(execute(&w, SETUP, item_sync(&w)).code, ResultCode::Ok);
+        let path = merging::ticket_path(ITEM);
+        let local = commit_in(
+            &context.worktree,
+            CONTEXT,
+            &path,
+            merging::ticket_source(ITEM, "Local").as_bytes(),
+        )?;
+        let incoming = remote_commit(
+            &w,
+            CONTEXT,
+            &path,
+            merging::ticket_source(ITEM, "Incoming").as_bytes(),
+        )?;
+        let added = execute(&w, SYNC, comment_add(&w));
+        assert_eq!(added.code, ResultCode::RecoveryRequired);
+        let Some(MutationDataDto::Comment(data)) = &added.data else {
+            return Err(FixtureError);
+        };
+        let synchronization =
+            OperationId::parse(&data.synchronization_id).map_err(|_| FixtureError)?;
+        let comment = OperationId::parse(added.operation_id.as_deref().ok_or(FixtureError)?)
+            .map_err(|_| FixtureError)?;
+        let repo = w.service.resolve_repository(&w.root).unwrap();
+        let shown = w.service.show_conflict(&repo, comment).unwrap();
+        Ok(Self {
+            observation: shown.observation.ok_or(FixtureError)?,
+            token: shown.paths[0].token.clone(),
+            w,
+            comment,
+            synchronization,
+            local,
+            incoming,
+        })
+    }
+
+    /// `conflict resolve` of the conflict, naming it by `operation`.
+    fn resolve(&self, operation: OperationId) -> Mutation {
+        resolve(
+            &self.w,
+            operation,
+            &self.observation,
+            [(self.token.clone(), merging::ticket_source(ITEM, "Resolved"))],
+        )
+    }
+}
+
 fn c4_resolution_comment_conflict() -> Result<(), FixtureError> {
-    // A comment whose synchronization stops on its item's conflict.
-    let mut w = world()?;
-    let context = w.context()?;
-    assert_eq!(execute(&w, SETUP, item_sync(&w)).code, ResultCode::Ok);
-    let path = merging::ticket_path(ITEM);
-    let local = commit_in(
-        &context.worktree,
-        CONTEXT,
-        &path,
-        merging::ticket_source(ITEM, "Local").as_bytes(),
-    )?;
-    let incoming = remote_commit(
-        &w,
-        CONTEXT,
-        &path,
-        merging::ticket_source(ITEM, "Incoming").as_bytes(),
-    )?;
-    let added = execute(&w, SYNC, comment_add(&w));
-    assert_eq!(added.code, ResultCode::RecoveryRequired);
-    let Some(MutationDataDto::Comment(data)) = &added.data else {
-        return Err(FixtureError);
-    };
-    let synchronization = OperationId::parse(&data.synchronization_id).map_err(|_| FixtureError)?;
-    let comment = OperationId::parse(added.operation_id.as_deref().ok_or(FixtureError)?)
-        .map_err(|_| FixtureError)?;
-    let repo = w.service.resolve_repository(&w.root).unwrap();
-    let shown = w.service.show_conflict(&repo, comment).unwrap();
+    let c = CommentConflict::new()?;
+    let w = &c.w;
     let pushes = accepted(&w.server);
     // By the comment's operation ID (R-5): its synchronization is resolved,
     // and its retry publishes the comment.
-    let resolved = resolved_on(
-        &w,
-        &w.service,
-        RESOLVE,
-        resolve(
-            &w,
-            comment,
-            shown.observation.as_deref().ok_or(FixtureError)?,
-            [(
-                shown.paths[0].token.clone(),
-                merging::ticket_source(ITEM, "Resolved"),
-            )],
-        ),
-    );
+    let resolved = resolved_on(w, &w.service, RESOLVE, c.resolve(c.comment));
     assert_eq!(resolved.code, ResultCode::Ok, "{resolved:?}");
     let Some(MutationDataDto::ConflictResolution(data)) = &resolved.data else {
         return Err(FixtureError);
     };
     // The data names the synchronization.
-    assert_eq!(data.operation_id, synchronization.to_string());
+    assert_eq!(data.operation_id, c.synchronization.to_string());
     assert_eq!(data.publication, PublicationEffect::Published);
     let commit = git2::Oid::from_str(data.commit_oid.as_deref().ok_or(FixtureError)?)
         .map_err(|_| FixtureError)?;
     // The local parent is the comment's checkpoint, on the local side.
     let repo = w.repo()?;
     let parents: Vec<_> = fixed(repo.find_commit(commit))?.parent_ids().collect();
-    assert_eq!(parents[1], incoming);
-    assert!(fixed(repo.graph_descendant_of(parents[0], local))?);
+    assert_eq!(parents[1], c.incoming);
+    assert!(fixed(repo.graph_descendant_of(parents[0], c.local))?);
     let served = w.bare()?;
     let tip = fixed(served.refname_to_id(CONTEXT))?;
     assert!(
@@ -1524,8 +1584,13 @@ fn c4_resolution_comment_conflict() -> Result<(), FixtureError> {
             .is_ok()
     );
     assert_eq!(accepted(&w.server), pushes + 1);
+    // The same request, naming the synchronization by its own ID, is the
+    // same request: the digest covers the resolved synchronization's ID
+    // (design, "Conflict Resolution"), and its result is given again.
+    let by_synchronization = resolved_on(w, &w.service, RESOLVE, c.resolve(c.synchronization));
+    assert_eq!(by_synchronization, resolved);
     // The comment's own request, sent again, finds it published.
-    let again = execute(&w, SYNC, comment_add(&w));
+    let again = execute(w, SYNC, comment_add(w));
     assert_eq!(again.code, ResultCode::Ok);
     assert_eq!(accepted(&w.server), pushes + 1);
     Ok(())
@@ -1542,6 +1607,385 @@ fn comment_add(w: &World) -> Mutation {
         body: "A comment of the resolution case.\n".to_owned(),
         created_by: None,
     })
+}
+
+/// A sink that sends `request cancel` of `request`, from a service of its
+/// own, the first time it is told of `stage`: what another process's
+/// `request cancel` does at that point of the call.
+struct AskAt {
+    stage: ProgressStage,
+    request: &'static str,
+    elsewhere: RepositoryService,
+    asked: Option<CancelDto>,
+}
+
+impl AskAt {
+    fn new(w: &World, request: &'static str, stage: ProgressStage) -> Self {
+        Self {
+            stage,
+            request,
+            elsewhere: fresh(w),
+            asked: None,
+        }
+    }
+}
+
+impl ProgressSink for AskAt {
+    fn event(&mut self, event: &ProgressEvent) {
+        if event.stage == self.stage && self.asked.is_none() {
+            self.asked = self
+                .elsewhere
+                .cancel_request(super::request(self.request))
+                .data;
+        }
+    }
+}
+
+/// One call of `conflict resolve` under `RESOLVE` whose sink sends `request
+/// cancel` of `holder` at `stage`, and what that `request cancel` answered.
+fn asked_at(
+    w: &World,
+    mutation: Mutation,
+    holder: &'static str,
+    stage: ProgressStage,
+) -> Result<(Envelope<MutationDataDto>, CancelDto), FixtureError> {
+    let mut sink = AskAt::new(w, holder, stage);
+    let envelope = checked(call(
+        w,
+        &w.service,
+        RESOLVE,
+        mutation,
+        Provider,
+        &mut sink,
+        &CancellationToken::new(),
+    ));
+    Ok((envelope, sink.asked.ok_or(FixtureError)?))
+}
+
+/// Asserts that the request `holder`, which holds the synchronization, is
+/// still accepted with its flag set: the continuation that stopped it did
+/// not settle it.
+fn assert_left_to_its_holder(w: &World, holder: &str) -> Result<(), FixtureError> {
+    let held = record(w, holder).ok_or(FixtureError)?;
+    assert_eq!(held.state, RequestState::Accepted);
+    assert!(held.cancel_requested);
+    Ok(())
+}
+
+/// Asserts that the holder's own next call settled its record as F2
+/// settles a cancelled operation's: finished, with its flag cleared, and
+/// the reservation released.
+fn assert_settled_by_its_holder(w: &World, holder: &str) -> Result<(), FixtureError> {
+    assert!(!reserved(w));
+    let held = record(w, holder).ok_or(FixtureError)?;
+    assert_eq!(held.state, RequestState::Finished);
+    assert!(!held.cancel_requested);
+    Ok(())
+}
+
+/// Asserts that `settled` is the answer of an operation cancelled before
+/// it intended a push.
+fn assert_cancelled(settled: &Envelope<MutationDataDto>) {
+    assert_eq!(settled.code, ResultCode::Cancelled, "{settled:?}");
+    assert_eq!(settled.outcome, Outcome::Cancelled);
+    assert!(settled.recovery.is_empty());
+}
+
+/// I1: `request cancel` of the synchronization's own request, while the
+/// resolution's continuation fetches. The operation intends no push yet.
+fn c4_resolution_original_request_cancels_before_push_intent() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    // The continuation reports no stage of its own before it fetches: its
+    // first is the synchronization's first safe point.
+    let (cancelled, asked) = asked_at(&c.w, c.titled("Resolved"), SYNC, ProgressStage::Fetching)?;
+    assert!(asked.requested);
+    assert_eq!(cancelled.code, ResultCode::Cancelled, "{cancelled:?}");
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    let commit = c.resolutions()[0];
+    assert_eq!(cancelled.effects, resolved_only(commit));
+    assert_eq!(c.served(), c.incoming);
+    assert_eq!(accepted(&c.w.server), pushes);
+    assert_eq!(phase(&c.w, c.operation)?, "cancelled");
+    assert_eq!(
+        record(&c.w, RESOLVE).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    assert_left_to_its_holder(&c.w, SYNC)?;
+    let settled = execute(&c.w, SYNC, repo_sync(&c.w));
+    assert_cancelled(&settled);
+    assert_settled_by_its_holder(&c.w, SYNC)?;
+    assert_eq!(accepted(&c.w.server), pushes);
+    Ok(())
+}
+
+/// I1: `request cancel` of the synchronization's own request once the
+/// operation has recorded its intent to push, when `request cancel` no
+/// longer asks the operation itself (`progress.rs`). The continuation
+/// passes it on at the safe point before the push.
+fn c4_resolution_original_request_cancels_after_push_intent() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    let (cancelled, asked) = asked_at(&c.w, c.titled("Resolved"), SYNC, ProgressStage::Pushing)?;
+    assert!(asked.requested);
+    assert_eq!(cancelled.code, ResultCode::Cancelled, "{cancelled:?}");
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    let commit = c.resolutions()[0];
+    assert_eq!(cancelled.effects, resolved_only(commit));
+    // Nothing was pushed.
+    assert_eq!(c.served(), c.incoming);
+    assert_eq!(accepted(&c.w.server), pushes);
+    assert_eq!(phase(&c.w, c.operation)?, "cancelled");
+    assert_left_to_its_holder(&c.w, SYNC)?;
+    let settled = execute(&c.w, SYNC, repo_sync(&c.w));
+    // The operation recorded its intent to push before it was cancelled,
+    // and the holder's own call cannot tell that nothing was pushed: F2
+    // says the publication is not confirmed (fact 74), as for any
+    // operation cancelled with a push intended.
+    assert_eq!(settled.code, ResultCode::RecoveryRequired, "{settled:?}");
+    assert_eq!(settled.outcome, Outcome::Partial);
+    assert_eq!(settled.effects.publication, PublicationEffect::Pending);
+    assert_eq!(settled.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(actions(&settled), [RecoveryActionKind::RepoInspect]);
+    assert_settled_by_its_holder(&c.w, SYNC)?;
+    assert_eq!(accepted(&c.w.server), pushes);
+    // A new synchronization publishes the resolution commit.
+    let later = execute(&c.w, LATER, repo_sync(&c.w));
+    assert_eq!(later.code, ResultCode::Ok);
+    assert_eq!(c.served(), commit);
+    Ok(())
+}
+
+/// I1: a comment's synchronization, whose `comment add` request holds the
+/// comment's operation and not the synchronization (fact 79), cancelled
+/// through that request.
+fn c4_resolution_comment_request_cancels() -> Result<(), FixtureError> {
+    let c = CommentConflict::new()?;
+    let w = &c.w;
+    let pushes = accepted(&w.server);
+    let (cancelled, asked) = asked_at(w, c.resolve(c.comment), SYNC, ProgressStage::Fetching)?;
+    assert!(asked.requested);
+    assert_eq!(cancelled.code, ResultCode::Cancelled, "{cancelled:?}");
+    assert_eq!(cancelled.outcome, Outcome::Cancelled);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(phase(w, c.synchronization)?, "cancelled");
+    assert_left_to_its_holder(w, SYNC)?;
+    let settled = execute(w, SYNC, comment_add(w));
+    assert_cancelled(&settled);
+    assert_settled_by_its_holder(w, SYNC)?;
+    assert_eq!(accepted(&w.server), pushes);
+    Ok(())
+}
+
+/// S1 (R-14): an attempt ID that is already some other row's. The library
+/// refuses it before it records anything, and so does the binding, before
+/// it records the request as the attempt's owner.
+fn c4_resolution_attempt_id_collision() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let (window, ordinal): (u32, u8) = fixed(c.w.db()?.query_row(
+        "SELECT step.window_number, step.ordinal FROM remote_integration_steps step
+           JOIN remote_operation_records operation ON operation.id = step.operation_record_id
+          WHERE operation.operation_ulid = ?1 AND step.conflict_digest IS NOT NULL",
+        [c.operation.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ))?;
+    let derived =
+        repository::conflict_resolve_attempt(request(RESOLVE), c.operation, window, ordinal);
+    // A finished operation of another repository's journal has that ID:
+    // one of the tables `validate_child_id` reads.
+    let plant =
+        "INSERT INTO operation_records(root_path, operation_ulid, action, state, observed_at)
+                 VALUES ('/c4-resolution-collision', ?1, 'ticket_create', 'completed', 0)";
+    fixed(c.w.db()?.execute(plant, [derived.to_string()]))?;
+    let before = state_of(&c);
+    let opened = connections(&c.w);
+    let refused = c.execute(RESOLVE, c.titled("Resolved"));
+    // As the library maps its refusal of the ID.
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_nothing_written(&c, RESOLVE, &refused, ResultCode::RecoveryRequired, before);
+    let paths: i64 = fixed(c.w.db()?.query_row(
+        "SELECT COUNT(*) FROM remote_resolution_paths",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(paths, 0);
+    assert!(!c.w.root.join(".git/index.lock").exists());
+    assert_eq!(connections(&c.w), opened);
+    // Once the ID is free again, the same request resolves the conflict.
+    fixed(c.w.db()?.execute(
+        "DELETE FROM operation_records WHERE operation_ulid = ?1",
+        [derived.to_string()],
+    ))?;
+    let pushes = accepted(&c.w.server);
+    let resolved = c.execute(RESOLVE, c.titled("Resolved"));
+    c.assert_published(&resolved, pushes);
+    Ok(())
+}
+
+/// Minor 1: a supersede refused once the new request is recorded as its
+/// attempt's owner, here by the old attempt's index sentinel, which no
+/// longer holds what that attempt wrote. The domain never recorded the new
+/// attempt, so the new request is not held to its input.
+fn c4_resolution_refused_supersede_releases_the_request() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    c.interrupted_at(FailurePoint::ResolutionAfterPathWrite, RESOLVE, "Resolved");
+    let lock = c.w.root.join(".git/index.lock");
+    let sentinel = fixed(std::fs::read(&lock))?;
+    // Rewritten in place: the same file, with other bytes.
+    fixed(std::fs::write(&lock, b"not the attempt's sentinel\n"))?;
+    let refused = c.on(&fresh(&c.w), OTHER, c.titled("Superseding"));
+    assert_eq!(refused.code, ResultCode::ExternalChange, "{refused:?}");
+    assert!(record(&c.w, OTHER).is_none());
+    // One attempt, and one owner: the first request's.
+    assert_eq!(attempts(&c.w), (1, 1));
+    let owner: String = fixed(c.w.db()?.query_row(
+        "SELECT request_ulid FROM remote_resolution_owners",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(owner, RESOLVE);
+    assert_eq!(c.written(), c.source("Resolved"));
+    // The sentinel is put back. The same request, with another input, is
+    // no mismatch: it supersedes the attempt and publishes.
+    fixed(std::fs::write(&lock, &sentinel))?;
+    let superseding = c.on(&fresh(&c.w), OTHER, c.titled("Another"));
+    c.assert_published(&superseding, pushes);
+    assert_eq!(c.written(), c.source("Another"));
+    Ok(())
+}
+
+/// A conflict on primary in two tickets' canonical sources.
+fn two_paths() -> Result<Conflict, FixtureError> {
+    let w = world()?;
+    let second = merging::ticket_path(SECOND_TICKET);
+    for ticket in [merging::PRIMARY_TICKET, SECOND_TICKET] {
+        remote_commit(
+            &w,
+            MAIN,
+            &merging::ticket_path(ticket),
+            merging::ticket_source(ticket, "Base").as_bytes(),
+        )?;
+    }
+    assert_current(&execute(&w, SETUP, repo_sync(&w)));
+    commit_in(
+        &w.root,
+        MAIN,
+        &second,
+        merging::ticket_source(SECOND_TICKET, "Local").as_bytes(),
+    )?;
+    remote_commit(
+        &w,
+        MAIN,
+        &second,
+        merging::ticket_source(SECOND_TICKET, "Incoming").as_bytes(),
+    )?;
+    let worktree = w.root.clone();
+    let c = Conflict::stopped(w, SYNC, MAIN, worktree, merging::PRIMARY_TICKET, repo_sync)?;
+    assert_eq!(c.tokens.len(), 2);
+    Ok(c)
+}
+
+/// The ticket of each path of the conflict, in the order `conflict show`
+/// gives the paths.
+fn tickets_of(c: &Conflict) -> Vec<&'static str> {
+    c.show()
+        .paths
+        .iter()
+        .map(|path| {
+            if path.display_path.contains(SECOND_TICKET) {
+                SECOND_TICKET
+            } else {
+                merging::PRIMARY_TICKET
+            }
+        })
+        .collect()
+}
+
+/// `conflict resolve` of every path of the conflict, each with its ticket's
+/// source titled `title`.
+fn all_titled(c: &Conflict, title: &str) -> Mutation {
+    let sources: Vec<String> = tickets_of(c)
+        .into_iter()
+        .map(|ticket| merging::ticket_source(ticket, title))
+        .collect();
+    c.with(&sources)
+}
+
+/// Minor 4: an attempt stopped after its first path's write, with its
+/// second path not observed. A hand edit of that path holds neither the
+/// path's pre-write image nor its result, and blocks a supersede.
+fn c4_resolution_unobserved_path_edited() -> Result<(), FixtureError> {
+    let c = two_paths()?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &c.w.data(),
+        FailurePoint::ResolutionAfterPathWrite,
+    ))?;
+    let stopped = c.on(&failing, RESOLVE, all_titled(&c, "Resolved"));
+    assert!(stopped.code.failure_class().is_some(), "{stopped:?}");
+    let unobserved: i64 = fixed(c.w.db()?.query_row(
+        "SELECT COUNT(*) FROM remote_resolution_paths WHERE applied = 0",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(unobserved, 1);
+    // The path that does not hold its result is the one not observed.
+    let pending = tickets_of(&c)
+        .into_iter()
+        .find(|ticket| {
+            std::fs::read_to_string(c.worktree.join(merging::ticket_path(ticket))).unwrap()
+                != merging::ticket_source(ticket, "Resolved")
+        })
+        .ok_or(FixtureError)?;
+    let path = c.worktree.join(merging::ticket_path(pending));
+    let edit = merging::ticket_source(pending, "Edited by hand");
+    fixed(std::fs::write(&path, &edit))?;
+    let before = state_of(&c);
+    let refused = c.on(&fresh(&c.w), OTHER, all_titled(&c, "Superseding"));
+    assert_eq!(refused.outcome, Outcome::Blocked, "{refused:?}");
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        refused.recovery[0].arguments.get("request_id"),
+        Some(&serde_json::json!(RESOLVE))
+    );
+    assert_nothing_written(
+        &c,
+        OTHER,
+        &refused,
+        ResultCode::OriginalRequestRequired,
+        before,
+    );
+    assert_eq!(fixed(std::fs::read_to_string(&path))?, edit);
+    Ok(())
+}
+
+/// Minor 7: a synchronization that met no conflict has none to resolve.
+fn c4_resolution_synchronization_without_conflict() -> Result<(), FixtureError> {
+    let w = world()?;
+    advance(&w.repo()?, MAIN, "local-advance")?;
+    let synced = execute(&w, SYNC, repo_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok);
+    let operation = OperationId::parse(synced.operation_id.as_deref().ok_or(FixtureError)?)
+        .map_err(|_| FixtureError)?;
+    let opened = connections(&w);
+    let refused = resolved_on(
+        &w,
+        &w.service,
+        RESOLVE,
+        resolve(
+            &w,
+            operation,
+            NO_SUCH_OBSERVATION,
+            [(NO_SUCH_TOKEN.to_owned(), "source\n".to_owned())],
+        ),
+    );
+    assert_eq!(refused.code, ResultCode::InvalidInput);
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert!(refused.data.is_none());
+    assert!(record(&w, RESOLVE).is_none());
+    assert_eq!(attempts(&w), (0, 0));
+    assert_eq!(connections(&w), opened);
+    Ok(())
 }
 
 // The conformance table's row of `conflict resolve`, driven by a case of

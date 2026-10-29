@@ -32,11 +32,15 @@
 //! request publishes it as the synchronization's own request would: a
 //! comment's synchronization through the comment's retry, and any other
 //! through a restart with the merging settings. Its `Watch` is this
-//! request's, whose flag nothing sets (fact 11), so the call's token stops
-//! it, and so does `request cancel` of the synchronization's own request,
-//! which still holds the operation. A cancellation seen before the
-//! continuation starts stops after the checkpoint, with the
-//! synchronization left resolved for `operation resume`.
+//! request's, whose flag nothing sets (fact 11) and which clears it, so the
+//! call's token stops it. It also reads the flag of the request that holds
+//! the operation: the synchronization's own request, or the `comment add`
+//! request whose record holds the comment's operation (fact 79). So
+//! `request cancel` of that request stops it at the next safe point, once
+//! the push is intended as before; that request's own next call settles its
+//! record. A cancellation seen before the continuation starts stops after
+//! the checkpoint, with the synchronization left resolved for `operation
+//! resume`.
 //!
 //! The input types derive no `Debug`, `Display` or `Serialize`: they hold
 //! sources. No source reaches a result, a record or a diagnostic.
@@ -71,6 +75,7 @@ use super::{
         identity::{FieldValue, IntentDigestBuilder, RequestId},
         outcome,
         progress::Subject,
+        records,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Ran, Standing,
@@ -101,6 +106,10 @@ pub(crate) struct ConflictResolveBinding {
     operation_id: OperationId,
     observation: String,
     resolutions: Vec<ConflictResolutionInput>,
+    /// The synchronization `operation_id` names, by its own ID or a
+    /// comment's, once `settle_target` has looked it up: what the request's
+    /// identity is of.
+    synchronization: Option<OperationId>,
     /// This call entered the request again: an earlier call of it started
     /// and its end was not recorded.
     entered_again: bool,
@@ -121,6 +130,7 @@ impl From<ConflictResolveInput> for ConflictResolveBinding {
             operation_id,
             observation,
             resolutions,
+            synchronization: None,
             entered_again: false,
         }
     }
@@ -151,8 +161,9 @@ fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
 /// The resolution attempt of the request `request` for the conflict at
 /// `window` and `ordinal` of the synchronization `synchronization` (R-14):
 /// a ULID made from a domain-separated BLAKE3 digest of the four, so that
-/// a request ID used again never meets another conflict's attempt.
-fn attempt_for(
+/// a request ID used again never meets another conflict's attempt. The
+/// test target that plants a row under it derives it here too.
+pub(crate) fn attempt_for(
     request: RequestId,
     synchronization: OperationId,
     window: u32,
@@ -361,27 +372,41 @@ impl Resolving<'_> {
 
     /// Lets go of the record that `attempt` is this request's, when the
     /// domain refused the request before it recorded the attempt: the same
-    /// request may then present another input. One that cannot be let go
-    /// is kept, and the next call of the request reads it.
-    fn disown(&self, attempt: OperationId) {
-        let _ = state::with_transaction(self.service(), self.root(), |tx, _| {
-            state::release_resolution_owner(tx, attempt)
-        });
+    /// request may then present another input. An attempt the domain did
+    /// record is kept as the request's durable state. A failure to let go
+    /// is the answer.
+    fn disown(&self, attempt: OperationId) -> Result<(), Answer> {
+        state::with_transaction(self.service(), self.root(), |tx, _| {
+            // `false`: the attempt is recorded, and the record of its owner
+            // stays with it.
+            state::release_resolution_owner(tx, attempt).map(|_released| ())
+        })
+        .map_err(refused)
     }
 
-    /// The request as the synchronization's binding is to see it: with the
-    /// synchronization `operation_id` in place of none, as a resume builds
-    /// one for the operation it takes up.
-    fn child(&self, operation_id: OperationId) -> Accepted {
-        Accepted {
-            request_id: self.accepted.request_id,
-            attempt: self.accepted.attempt,
-            scope: self.accepted.scope.clone(),
-            family: Some(OperationFamily::Remote),
-            operation_id,
-            position: self.accepted.position.clone(),
-            expected: None,
-        }
+    /// The request that holds the synchronization, whose `request cancel`
+    /// is to reach the continuation (design, step 6): the synchronization's
+    /// own request; or, for the synchronization of the comment `comment`,
+    /// the `comment add` request, whose record holds the comment's
+    /// operation and not its synchronization (fact 79). `None` when no
+    /// unfinished record holds it.
+    fn holder(&self, comment: Option<OperationId>) -> Result<Option<RequestId>, Answer> {
+        let (family, operation_id) = match comment {
+            Some(comment) => (OperationFamily::Local, comment),
+            None => (OperationFamily::Remote, self.synchronization),
+        };
+        let scope = self.accepted.scope.as_str();
+        let holder = self
+            .service()
+            .read_session(RepositoryOperation::Read, |db| {
+                Ok(records::operation_holder(db, family, scope, operation_id)?)
+            })
+            .map_err(|error| Answer::of_read(&error))?;
+        holder
+            .map(|holder| {
+                RequestId::parse(&holder).map_err(|_| Answer::stopped(ResultCode::InternalError))
+            })
+            .transpose()
     }
 }
 
@@ -442,7 +467,7 @@ impl ConflictResolveBinding {
                 if local_sync::record::owned_identity(db, &operation_id.to_string())? {
                     return Ok(Found::LocalSync);
                 }
-                let synchronization = comment_synchronization(db, &root, operation_id)
+                let synchronization = comment_synchronization(db, &root, operation_id)?
                     .map_or(operation_id, |(_, synchronization)| synchronization);
                 // A root that is not UTF-8 cannot have been stored.
                 let Some(root) = root.to_str() else {
@@ -580,7 +605,8 @@ impl ConflictResolveBinding {
                     );
                     match again {
                         Ok(Some(request)) => {
-                            let outcome = resolving.service().resolve_synchronization(request);
+                            let outcome =
+                                resolving.service().resolve_synchronization(request.alone());
                             self.reported(&resolving, attempt, before, outcome)
                         }
                         Ok(None) => Err(Answer::stopped(ResultCode::RecoveryRequired)),
@@ -681,23 +707,41 @@ impl ConflictResolveBinding {
                 live.ordinal,
             )
         });
+        // R-14: an ID that is already another row's is refused before the
+        // request is recorded as its owner, as the library refuses it when
+        // it records the attempt. Nothing is written.
+        if !view.attempts.iter().any(|found| found.attempt == attempt) {
+            state::with_transaction(service, root, |tx, _| state::validate_child_id(tx, attempt))
+                .map_err(|error| failed(&error.into()))?;
+        }
         resolving.own(attempt, digest)?;
         if let Some(other) = superseded {
-            match service.supersede_resolution_attempt(root, synchronization, other.attempt) {
-                Ok(true) => {}
-                Ok(false) => return Err(original_request(&other)),
-                Err(error) => return Err(failed(&error)),
+            let refusal =
+                match service.supersede_resolution_attempt(root, synchronization, other.attempt) {
+                    Ok(true) => None,
+                    Ok(false) => Some(original_request(&other)),
+                    Err(error) => Some(failed(&error)),
+                };
+            if let Some(answer) = refusal {
+                // The domain never recorded this request's attempt: the
+                // same request may present another input.
+                resolving.disown(attempt)?;
+                return Err(answer);
             }
         }
         let before = resolving.mark(attempt);
-        let outcome = service.resolve_synchronization(ResolveSynchronizationRequest::new(
-            root.to_owned(),
-            synchronization,
-            attempt,
-            inspection.observation,
-            resolutions,
-            None,
-        ));
+        let outcome = service.resolve_synchronization(
+            ResolveSynchronizationRequest::new(
+                root.to_owned(),
+                synchronization,
+                attempt,
+                inspection.observation,
+                resolutions,
+                None,
+            )
+            // Fact 71 again, under the conflict's reservation.
+            .alone(),
+        );
         self.reported(resolving, attempt, before, outcome)
     }
 
@@ -713,8 +757,8 @@ impl ConflictResolveBinding {
         outcome: Result<ResolveSynchronizationOutcome, SynchronizationError>,
     ) -> Result<Ran, Answer> {
         let synchronization = resolving.synchronization;
-        let refused = |code| {
-            resolving.disown(attempt);
+        let refusal = |code| {
+            resolving.disown(attempt)?;
             Err(Answer::stopped(code))
         };
         match outcome {
@@ -722,13 +766,13 @@ impl ConflictResolveBinding {
                 Ok(self.continued(resolving, commit_oid, Checkpointed::Now))
             }
             Ok(ResolveSynchronizationOutcome::StaleObservation) => {
-                refused(ResultCode::ExternalChange)
+                refusal(ResultCode::ExternalChange)
             }
             Ok(ResolveSynchronizationOutcome::ValidationFailed) => {
-                refused(ResultCode::InvalidInput)
+                refusal(ResultCode::InvalidInput)
             }
             Ok(ResolveSynchronizationOutcome::IdentityRequired) => {
-                refused(ResultCode::IdentityRequired)
+                refusal(ResultCode::IdentityRequired)
             }
             Ok(ResolveSynchronizationOutcome::RecoveryRequired) => Err(Answer {
                 effects: resolving.effects_of(attempt, before),
@@ -736,7 +780,7 @@ impl ConflictResolveBinding {
             }),
             // Before any write (fact 33).
             Err(SynchronizationError::ExternalResolutionRequired { .. }) => {
-                resolving.disown(attempt);
+                resolving.disown(attempt)?;
                 Err(external_repair(synchronization))
             }
             // An unfinished local-context sync among them (fact 80, R-38):
@@ -807,25 +851,38 @@ impl ConflictResolveBinding {
                 };
             }
         }
-        let comment = call
+        // Whether it publishes a comment, and which request holds it. A read
+        // that fails stops the call with the read's answer, the resolution
+        // checkpointed: nothing is continued on a guess.
+        let found = call
             .service
             .read_session(RepositoryOperation::Read, |db| {
-                Ok(comment_synchronization(
-                    db,
-                    resolving.root(),
-                    synchronization,
-                ))
+                comment_synchronization(db, resolving.root(), synchronization)
             })
-            .ok()
-            .flatten();
+            .map_err(|error| Answer::of_read(&error))
+            .and_then(|bound| {
+                let comment = bound.map(|(comment, _)| comment);
+                Ok((comment, resolving.holder(comment)?))
+            });
+        let (comment, holder) = match found {
+            Ok(found) => found,
+            Err(answer) => {
+                let ran = Ran {
+                    answer,
+                    standing: gone(),
+                };
+                return published(synchronization, commit, ran);
+            }
+        };
         let ran = match comment {
-            Some((comment, _)) => self.comment_continued(resolving, comment),
-            None => sync::resumed(
+            Some(comment) => self.comment_continued(resolving, comment, holder),
+            None => sync::continued(
                 call,
-                &resolving.child(synchronization),
+                &resolving.accepted.taking_up(synchronization),
                 resolving.target.clone(),
                 Subject::of(self, resolving.accepted),
                 Some(resolving.accepted.request_id),
+                holder,
             ),
         };
         published(synchronization, commit, ran)
@@ -834,9 +891,15 @@ impl ConflictResolveBinding {
     /// The continuation of a comment's synchronization: the comment's
     /// synchronizer-driven retry with `restart` (R-15), which proves the
     /// comment's checkpoint before it publishes, and never writes a
-    /// comment. What its synchronization's binding made of the call is the
-    /// answer; with no call made, what the retry said.
-    fn comment_continued(&self, resolving: &Resolving<'_>, comment: OperationId) -> Ran {
+    /// comment. `holder` is the `comment add` request, whose flag stops it.
+    /// What its synchronization's binding made of the call is the answer;
+    /// with no call made, what the retry said.
+    fn comment_continued(
+        &self,
+        resolving: &Resolving<'_>,
+        comment: OperationId,
+        holder: Option<RequestId>,
+    ) -> Ran {
         let call = resolving.call;
         let accepted = resolving.accepted;
         let mut child = None;
@@ -849,13 +912,14 @@ impl ConflictResolveBinding {
                 restart: true,
             },
             &mut |request| {
-                let synchronization = resolving.child(request.operation_id);
+                let synchronization = accepted.taking_up(request.operation_id);
                 let (result, ran) = sync::of_a_comment(
                     call,
                     &synchronization,
                     request,
                     Subject::of(self, accepted),
                     Some(accepted.request_id),
+                    holder,
                 );
                 child = Some(ran);
                 result
@@ -967,6 +1031,9 @@ fn published(synchronization: OperationId, commit: git2::Oid, ran: Ran) -> Ran {
         answer: Answer {
             effects,
             recovery,
+            // What the continuation said of a change of its own to the
+            // local branch; the data's commit is still the resolution's.
+            local_change: answer.local_change,
             ..Answer::stopped(code)
         }
         .with_data(data(synchronization, Some(commit), publication, conflict)),
@@ -988,20 +1055,44 @@ impl Binding for ConflictResolveBinding {
         Place::Repository(&self.root)
     }
 
-    /// The operation the request names: the synchronization, or a comment
-    /// it publishes.
+    /// Looks up the synchronization the request names, by its own ID or a
+    /// comment's (R-5), so that its identity is the same whichever ID
+    /// names it. A repository that cannot be resolved has nothing to look
+    /// up, and is refused when the request is prepared.
+    fn settle_target(&mut self, service: &RepositoryService) -> Result<(), Answer> {
+        let Ok(repository) = resolve_root(service, &self.root) else {
+            return Ok(());
+        };
+        let operation_id = self.operation_id;
+        let bound = service
+            .read_session(RepositoryOperation::Read, |db| {
+                comment_synchronization(db, repository.root(), operation_id)
+            })
+            .map_err(|error| Answer::of_read(&error))?;
+        self.synchronization =
+            Some(bound.map_or(operation_id, |(_, synchronization)| synchronization));
+        Ok(())
+    }
+
+    /// The synchronization the request resolves, by its own ID even when
+    /// the request names it by a comment's: the digest covers the resolved
+    /// synchronization's ID (design, "Conflict Resolution"). The ID as
+    /// named until it is settled.
     fn target(&self) -> String {
-        self.operation_id.to_string()
+        self.synchronization
+            .unwrap_or(self.operation_id)
+            .to_string()
     }
 
     /// The observation, then every token and its source in token order;
-    /// the target holds the operation the request names. A source is fed
-    /// here and stored nowhere.
+    /// the target holds the synchronization the request resolves. A source
+    /// is fed here and stored nowhere.
     fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
         let Self {
             // What the digest is begun with: the scope and the target.
             root: _,
             operation_id: _,
+            synchronization: _,
             observation,
             resolutions: _,
             // What a call found, and no part of the request.

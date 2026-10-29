@@ -460,6 +460,24 @@ impl Accepted {
         })
     }
 
+    /// The request as the binding of a synchronization it takes up is to
+    /// see it: with that synchronization, `operation_id`, in place of its
+    /// own operation, and with nothing expected at a path. A resume and a
+    /// resolution's continuation take a synchronization up so, and a
+    /// comment's submission its child. The position stays the request's,
+    /// on the branch the synchronization synchronizes.
+    pub(crate) fn taking_up(&self, operation_id: OperationId) -> Self {
+        Self {
+            request_id: self.request_id,
+            attempt: self.attempt,
+            scope: self.scope.clone(),
+            family: Some(OperationFamily::Remote),
+            operation_id,
+            position: self.position.clone(),
+            expected: None,
+        }
+    }
+
     /// The request's operation, as its record and its results name it:
     /// none for a request that has no operation.
     pub(crate) fn operation(&self) -> Option<RequestOperation> {
@@ -802,6 +820,14 @@ pub(crate) trait Binding {
         _persisted: Option<&ScopeKey>,
     ) -> Result<Option<ScopeKey>, Answer> {
         Ok(super::confirm::scope_key(self.place()))
+    }
+
+    /// Settles what the request names before its identity is taken from
+    /// `target` and `fields`, for a command whose input can name one thing
+    /// by more than one ID. Nothing changes by default. An answer refuses
+    /// the request before its record is read.
+    fn settle_target(&mut self, _service: &RepositoryService) -> Result<(), Answer> {
+        Ok(())
     }
 
     /// The request's target within its repository.
