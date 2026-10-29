@@ -152,3 +152,51 @@ fn a_write_committed_or_already_applied_takes_the_context_out() {
         assert!(!created.contains(&key()), "a commit takes it out");
     }
 }
+
+/// Task 27 fix 1, B6: a document's move is a write into its context, as a
+/// save is. One that committed, or that the library found already applied,
+/// takes a context this process made out: it holds the move's commit now,
+/// so it is kept, and no release is sent for it. A refusal leaves it in;
+/// while one is in flight, a release waits for it (`saved_by`).
+#[test]
+fn a_document_move_committed_takes_the_context_out() {
+    let (root, id) = (PathBuf::from(ROOT), item_id(TICKET));
+    let prepare = Intent::ContextPrepare {
+        root: root.clone(),
+        kind: AuthoringKind::Document,
+        id: id.clone(),
+        intent: ContextPrepareIntent::Edit,
+    };
+    let moved = Intent::DocumentMove {
+        root,
+        id,
+        observation: Some("observed".to_owned()),
+        destination_path: PathBuf::from("docs/moved.md"),
+        destination_observation: "absent".to_owned(),
+    };
+    let document = ContextKey::new(ROOT, ItemDtoKind::Document, TICKET);
+    assert_eq!(ContextKey::of(&moved), Some(document.clone()));
+    assert!(document.saved_by(&moved), "a release waits for it");
+    assert!(!key().saved_by(&moved), "only its own document's");
+
+    let made = answer(Outcome::Success, ResultCode::Ok, Some(true));
+    let mut committed = answer(Outcome::Success, ResultCode::Ok, None);
+    committed.effects.checkpoint = CheckpointEffect::Committed;
+    let mut created = CreatedContexts::default();
+    created.finished(&prepare, &made);
+    assert!(created.contains(&document));
+    created.finished(
+        &moved,
+        &answer(Outcome::Blocked, ResultCode::ExternalChange, None),
+    );
+    assert!(created.contains(&document), "a refusal leaves it in");
+    created.finished(&moved, &committed);
+    assert!(!created.contains(&document), "a commit takes it out");
+
+    created.finished(&prepare, &made);
+    created.finished(
+        &moved,
+        &answer(Outcome::Noop, ResultCode::AlreadyApplied, None),
+    );
+    assert!(!created.contains(&document), "already applied takes it out");
+}

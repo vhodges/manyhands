@@ -7,10 +7,11 @@
 //! while preparing is in it as well (R-37). Leaving and discarding consult
 //! it (`release`); a context it does not hold is never released by them. A
 //! prepare that answered `discovery_pending` enters it only once a retry
-//! answers `ok` (R-77). A save, or a new item's create, that commits into a
-//! context takes it out: it holds work now. So does one the library finds
-//! already applied, an earlier attempt having committed it. A release
-//! leaves it in: the release service keeps what it has released.
+//! answers `ok` (R-77). A save, a new item's create, or a document's move,
+//! that commits into a context takes it out: it holds work now. So does
+//! one the library finds already applied, an earlier attempt having
+//! committed it. A release leaves it in: the release service keeps what it
+//! has released.
 
 use std::{collections::HashSet, path::PathBuf};
 
@@ -40,14 +41,15 @@ impl ContextKey {
         }
     }
 
-    /// The item a context command, a save or a new item's create names.
+    /// The item a context command, a save, a new item's create or a
+    /// document's move names.
     pub(crate) fn of(intent: &Intent) -> Option<Self> {
         let (root, kind, id) = match intent {
             Intent::ContextPrepare { root, kind, id, .. }
             | Intent::ContextRelease { root, kind, id } => (root, dto_kind(*kind), id),
-            Intent::DocumentSave { root, id, .. } | Intent::DocumentCreate { root, id, .. } => {
-                (root, ItemDtoKind::Document, id)
-            }
+            Intent::DocumentSave { root, id, .. }
+            | Intent::DocumentCreate { root, id, .. }
+            | Intent::DocumentMove { root, id, .. } => (root, ItemDtoKind::Document, id),
             Intent::TicketSave { root, id, .. } | Intent::TicketCreate { root, id, .. } => {
                 (root, ItemDtoKind::Ticket, id)
             }
@@ -66,7 +68,8 @@ impl ContextKey {
         matches!(intent, Intent::ContextRelease { .. }) && Self::of(intent).as_ref() == Some(self)
     }
 
-    /// Whether `intent` saves this item, or creates it.
+    /// Whether `intent` writes into this item's context: saves it, creates
+    /// it, or moves it, a document (Task 27 fix 1, B6).
     pub(crate) fn saved_by(&self, intent: &Intent) -> bool {
         matches!(
             intent,
@@ -74,6 +77,7 @@ impl ContextKey {
                 | Intent::TicketSave { .. }
                 | Intent::DocumentCreate { .. }
                 | Intent::TicketCreate { .. }
+                | Intent::DocumentMove { .. }
         ) && Self::of(intent).as_ref() == Some(self)
     }
 
@@ -113,8 +117,9 @@ impl CreatedContexts {
     }
 
     /// A finished request: a `context prepare` that answered `ok` with
-    /// `created: true` adds its item's context, and a save or a new item's
-    /// create whose checkpoint committed takes its item's out (R-75),
+    /// `created: true` adds its item's context, and a save, a new item's
+    /// create or a document's move whose checkpoint committed takes its
+    /// item's out (R-75; Task 27 fix 1, B6),
     /// whether or not its tab is still open. So does one answered
     /// `already_applied` (Part D fix 1, M1): an earlier attempt, whose
     /// answer was lost, committed it, so the context holds the item's
@@ -134,7 +139,8 @@ impl CreatedContexts {
             Intent::DocumentSave { .. }
             | Intent::TicketSave { .. }
             | Intent::DocumentCreate { .. }
-            | Intent::TicketCreate { .. } => {
+            | Intent::TicketCreate { .. }
+            | Intent::DocumentMove { .. } => {
                 if envelope.effects.checkpoint == CheckpointEffect::Committed
                     || envelope.code == ResultCode::AlreadyApplied
                 {
