@@ -8,8 +8,8 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext,
-    Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
+    VisualTestContext, Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
 use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
@@ -21,7 +21,7 @@ use crate::desktop::{
     keys,
     model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
-    services::requests::{DesktopRequest, DesktopRequestId},
+    services::requests::{DesktopRequest, DesktopRequestId, Intent},
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
 
@@ -450,6 +450,53 @@ impl Shell {
             cx.executor().timer(POLL).await;
         }
     }
+}
+
+impl Shell {
+    /// The shown item tab's edit host, if its editor is open.
+    fn edit_host(&self, cx: &mut TestAppContext) -> Option<Entity<EditorHost>> {
+        let pane = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())?;
+        pane.read_with(cx, |pane, _| pane.edit_host())
+    }
+
+    /// The shown item tab's edit host, once its editor has opened: frames
+    /// are drawn while the worker and the reads run. The test allows
+    /// parking.
+    pub(crate) async fn until_editing(&self, cx: &mut TestAppContext) -> Entity<EditorHost> {
+        self.until_drawn(cx, "the edit editor opened", |shell, cx| {
+            shell.edit_host(cx).is_some()
+        })
+        .await;
+        self.edit_host(cx).expect("the edit editor is open")
+    }
+
+    /// Types `typed` at the end of `host`'s text, through the window: the
+    /// caret set there, the editor focused and a frame drawn first.
+    pub(crate) fn type_at_end(
+        &self,
+        host: &Entity<EditorHost>,
+        typed: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let editor = host.read_with(cx, |host, _| host.editor().clone());
+        let end = editor.read_with(cx, |editor, _| editor.text().len());
+        editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+        let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+        self.frame(cx, |window, cx| window.focus(&handle, cx));
+        self.frame(cx, |_, _| ());
+        self.visual(cx).simulate_input(typed);
+        self.run(cx);
+    }
+}
+
+/// Whether `intent` saves an item.
+pub(crate) fn is_save(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::TicketSave { .. } | Intent::DocumentSave { .. }
+    )
 }
 
 /// A root as the repository list gives it.

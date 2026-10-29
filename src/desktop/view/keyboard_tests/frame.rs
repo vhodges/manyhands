@@ -142,17 +142,12 @@ impl Walk {
     /// `id`.
     pub(super) fn tab_into(&self, key: &str, id: impl Into<ElementId>, cx: &mut TestAppContext) {
         let id = id.into();
-        let mut presses = 0;
-        while !self.focus_inside(id.clone(), cx) {
-            presses += 1;
-            assert!(presses <= super::TAB_LIMIT, "{key} never reached {id:?}");
-            self.keys(key, cx);
-        }
+        self.press_until(key, &id, |walk, cx| walk.focus_inside(id.clone(), cx), cx);
     }
 
     /// The innermost element holding focus inside the element `within`:
     /// its ID and whether it is labeled.
-    fn focused_in(
+    pub(super) fn focused_in(
         &self,
         within: &'static str,
         cx: &mut TestAppContext,
@@ -179,18 +174,7 @@ impl Walk {
     pub(super) fn open_document(&self, label: &str, cx: &mut TestAppContext) {
         self.keys("secondary-2", cx);
         self.region(Region::Navigation, cx);
-        let nodes = self.shell.rows("doc-node", cx);
-        let at = nodes
-            .iter()
-            .position(|node| node == label)
-            .unwrap_or_else(|| panic!("{label} is listed in {nodes:?}"));
-        let mut presses = 0;
-        while !self.shell.selected(("doc-node", at), cx) {
-            presses += 1;
-            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
-            self.keys("down", cx);
-        }
-        self.enter(cx);
+        self.open_tree_row(label, cx);
         self.region(Region::Navigation, cx);
     }
 }
@@ -268,17 +252,16 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
 }
 
 /// The sheet's stops, from the one focused onward by Tab, until Tab comes
-/// back to it: the trap. Each is labeled, but the Kit's own close button.
-fn sheet_stops(walk: &Walk, first: &'static str, cx: &mut TestAppContext) -> Vec<ElementId> {
-    let first = ElementId::from(first);
-    let mut stops = vec![first.clone()];
+/// back to it: the trap. Each is labeled, but the Kit's own close button,
+/// on screen and in the content region.
+pub(super) fn sheet_stops(walk: &Walk, cx: &mut TestAppContext) -> Vec<ElementId> {
+    let mut stops: Vec<ElementId> = Vec::new();
     loop {
-        walk.keys("tab", cx);
         assert!(has_sheet(walk, cx));
         let (id, labeled) = walk
             .focused_in("sheet-content", cx)
             .expect("focus stays in the sheet");
-        if id == first {
+        if stops.first() == Some(&id) {
             return stops;
         }
         assert!(
@@ -288,6 +271,7 @@ fn sheet_stops(walk: &Walk, first: &'static str, cx: &mut TestAppContext) -> Vec
         walk.on(id.clone(), Region::Content, cx);
         stops.push(id);
         assert!(stops.len() <= super::TAB_LIMIT, "Tab never came back");
+        walk.keys("tab", cx);
     }
 }
 
@@ -317,7 +301,8 @@ fn the_details_sheet_opens_by_enter_traps_focus_and_gives_it_back(cx: &mut TestA
     assert!(has_sheet(&walk, cx), "Enter opened it");
     walk.on("sheet-title", Region::Content, cx);
 
-    let stops = sheet_stops(&walk, "sheet-title", cx);
+    let stops = sheet_stops(&walk, cx);
+    assert_eq!(stops.first(), Some(&ElementId::from("sheet-title")));
     for id in [
         ElementId::from("sheet-type"),
         "sheet-status".into(),

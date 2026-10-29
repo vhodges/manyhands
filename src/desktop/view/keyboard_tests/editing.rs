@@ -15,10 +15,13 @@
 //! used end to end, by keyboard alone. Each waits on the worker, so each
 //! allows parking.
 
-use gpui_kit::{Entity, Focusable, TestAppContext};
+use gpui_kit::{ElementId, Entity, Focusable, TestAppContext, test::TestWindowExt};
 use manyhands::results::ResultCode;
 
-use super::{Walk, frame::has_sheet};
+use super::{
+    Walk,
+    frame::{has_sheet, sheet_stops},
+};
 use crate::desktop::{
     model::{
         edit::{CONTINUE_EDITING, Phase, fields::Field},
@@ -28,7 +31,7 @@ use crate::desktop::{
     test_support::fixtures::{Fixture, ticket_path, ticket_source},
     view::{
         editor::{host::EditorHost, toolbar::controls::Control},
-        harness::Shell,
+        harness::{Shell, is_save},
         workspace::Region,
     },
 };
@@ -61,22 +64,6 @@ fn editable(ids: &[&str], cx: &mut TestAppContext) -> Walk {
 }
 
 impl Walk {
-    /// The shown tab's edit host, once its editor opened: frames are drawn
-    /// while the worker and the reads run.
-    async fn until_editing(&self, cx: &mut TestAppContext) -> Entity<EditorHost> {
-        self.shell
-            .until_drawn(cx, "the edit editor opened", |shell, cx| {
-                shell
-                    .workspace
-                    .read_with(cx, |workspace, _| workspace.item_pane())
-                    .is_some_and(|pane| pane.read_with(cx, |pane, _| pane.edit_host().is_some()))
-            })
-            .await;
-        self.pane(cx)
-            .read_with(cx, |pane, _| pane.edit_host())
-            .expect("the edit editor is open")
-    }
-
     /// The shown tab's phase.
     fn phase(&self, cx: &mut TestAppContext) -> Phase {
         self.pane(cx).read_with(cx, |pane, _| pane.edit_phase())
@@ -112,13 +99,6 @@ impl Walk {
     }
 }
 
-fn is_save(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::TicketSave { .. } | Intent::DocumentSave { .. }
-    )
-}
-
 fn text(host: &Entity<EditorHost>, cx: &mut TestAppContext) -> String {
     host.read_with(cx, |host, cx| host.text(cx))
 }
@@ -146,13 +126,11 @@ fn undo_by_toolbar(walk: &Walk, cx: &mut TestAppContext) {
 }
 
 /// Edit, by `secondary-shift-e` from the header and by `e` from the page;
-/// the mode key; every toolbar control, reached from Done by Tab and the
-/// arrows and used by Enter or Space, the Style menu and the link popover
-/// closed by Escape with focus back on their control; Tab indenting in the
-/// editor; Escape to Done; F6 out of the editor; `secondary-s`; and Done,
-/// by Enter.
+/// the mode key; Tab indenting in the editor and Shift-Tab outdenting;
+/// Escape to Done; F6 out of the editor; `secondary-s`; and Done, by Enter.
+/// The toolbar is `every_toolbar_control_works_by_keyboard_alone`'s.
 #[gpui_kit::test]
-async fn edit_the_toolbar_save_and_done_by_keyboard_alone(cx: &mut TestAppContext) {
+async fn edit_the_mode_key_save_and_done_by_keyboard_alone(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let walk = editable(&[STARTED, EDITED], cx);
     walk.select_a_repository(cx);
@@ -165,7 +143,7 @@ async fn edit_the_toolbar_save_and_done_by_keyboard_alone(cx: &mut TestAppContex
     walk.tab_to("tab", "item-comments", cx);
     walk.on("item-comments", Region::Content, cx);
     walk.keys("secondary-shift-e", cx);
-    let host = walk.until_editing(cx).await;
+    let host = walk.shell.until_editing(cx).await;
     walk.in_editor(&host, cx);
     walk.escape_to_done(cx);
     walk.enter(cx);
@@ -178,13 +156,7 @@ async fn edit_the_toolbar_save_and_done_by_keyboard_alone(cx: &mut TestAppContex
     walk.region(Region::Content, cx);
 
     // `e` from the page's read view.
-    walk.find(EDITED, cx);
-    walk.keys("secondary-3", cx);
-    walk.tab_to("tab", "item-page", cx);
-    walk.keys("e", cx);
-    let host = walk.until_editing(cx).await;
-    walk.in_editor(&host, cx);
-    assert!(text(&host, cx) == load(BODY), "`e` was not typed");
+    let host = edit_by_e(&walk, EDITED, cx).await;
 
     // The mode key, from the editor.
     assert!(rich(&host, cx));
@@ -207,9 +179,63 @@ async fn edit_the_toolbar_save_and_done_by_keyboard_alone(cx: &mut TestAppContex
     walk.in_editor(&host, cx);
     assert!(text(&host, cx) == load(BODY), "Shift-Tab outdented");
 
+    // Escape to Done, and Tab back into the editor through the toolbar.
+    walk.escape_to_done(cx);
+    walk.tab_to("tab", "item-page", cx);
+    walk.in_editor(&host, cx);
+    walk.type_text("x", cx);
+
+    // F6 leaves the editor; the region keys come back to the tab.
+    walk.keys("f6", cx);
+    walk.region(Region::Operations, cx);
+    walk.keys("secondary-3", cx);
+    walk.region(Region::Content, cx);
+    walk.tab_to("tab", "item-page", cx);
+    walk.in_editor(&host, cx);
+
+    // `secondary-s` saves, from the editor.
+    assert_eq!(walk.save_by_key(cx).await, Some(ResultCode::Ok));
+    walk.in_editor(&host, cx);
+
+    // Escape to Done, and Done by Enter.
+    walk.escape_to_done(cx);
+    walk.enter(cx);
+    walk.shell
+        .until_drawn(cx, "Done ended the session", |shell, cx| {
+            !shell.present("item-done", cx)
+        })
+        .await;
+    assert_eq!(walk.phase(cx), Phase::Viewing);
+    walk.region(Region::Content, cx);
+}
+
+/// `e` on the read view of the ticket `id`, found by Find and reached by
+/// Tab: the edit editor opens, focused, and the letter is not typed.
+async fn edit_by_e(walk: &Walk, id: &str, cx: &mut TestAppContext) -> Entity<EditorHost> {
+    walk.find(id, cx);
+    walk.keys("secondary-3", cx);
+    walk.tab_to("tab", "item-page", cx);
+    walk.keys("e", cx);
+    let host = walk.shell.until_editing(cx).await;
+    walk.in_editor(&host, cx);
+    assert!(text(&host, cx) == load(BODY), "`e` was not typed");
+    host
+}
+
+/// Every toolbar control, reached from Done by Tab and the arrows and
+/// used by Enter or Space, with "two" selected in the editor; the Style
+/// menu and the link popover closed by Escape with focus back on their
+/// control; then Tab out of the toolbar into the editor.
+#[gpui_kit::test]
+async fn every_toolbar_control_works_by_keyboard_alone(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let walk = editable(&[EDITED], cx);
+    walk.select_a_repository(cx);
+    let host = edit_by_e(&walk, EDITED, cx).await;
+
     // Select "two", then Escape to Done and Tab into the toolbar.
     walk.keys(
-        "up up up up home right right right right shift-right shift-right shift-right",
+        "home right right right right shift-right shift-right shift-right",
         cx,
     );
     walk.escape_to_done(cx);
@@ -312,29 +338,6 @@ async fn edit_the_toolbar_save_and_done_by_keyboard_alone(cx: &mut TestAppContex
     // Tab leaves the toolbar for the editor.
     walk.keys("tab", cx);
     walk.in_editor(&host, cx);
-
-    // F6 leaves the editor; the region keys come back to the tab.
-    walk.keys("f6", cx);
-    walk.region(Region::Operations, cx);
-    walk.keys("secondary-3", cx);
-    walk.region(Region::Content, cx);
-    walk.tab_to("tab", "item-page", cx);
-    walk.in_editor(&host, cx);
-
-    // `secondary-s` saves, from the editor.
-    assert_eq!(walk.save_by_key(cx).await, Some(ResultCode::Ok));
-    walk.in_editor(&host, cx);
-
-    // Escape to Done, and Done by Enter.
-    walk.escape_to_done(cx);
-    walk.enter(cx);
-    walk.shell
-        .until_drawn(cx, "Done ended the session", |shell, cx| {
-            !shell.present("item-done", cx)
-        })
-        .await;
-    assert_eq!(walk.phase(cx), Phase::Viewing);
-    walk.region(Region::Content, cx);
 }
 
 /// Escape to Done and Done by Enter, with unsaved text: the session is
@@ -363,11 +366,7 @@ async fn continue_editing_after_done_by_keyboard_alone(cx: &mut TestAppContext) 
     cx.executor().allow_parking();
     let walk = editable(&[EDITED], cx);
     walk.select_a_repository(cx);
-    walk.find(EDITED, cx);
-    walk.keys("secondary-3", cx);
-    walk.tab_to("tab", "item-page", cx);
-    walk.keys("e", cx);
-    let host = walk.until_editing(cx).await;
+    let host = edit_by_e(&walk, EDITED, cx).await;
     walk.type_text("x", cx);
     let typed = text(&host, cx);
     assert!(typed != load(BODY), "typed");
@@ -387,20 +386,20 @@ async fn continue_editing_after_done_by_keyboard_alone(cx: &mut TestAppContext) 
     walk.tab_to("shift-tab", "item-edit", cx);
     walk.on("item-edit", Region::Content, cx);
     walk.enter(cx);
-    walk.until_editing(cx).await;
+    walk.shell.until_editing(cx).await;
     resumed(&walk, cx);
 
     done_keeping(&walk, cx).await;
     walk.tab_to("tab", "item-kept-continue", cx);
     walk.on("item-kept-continue", Region::Content, cx);
     walk.enter(cx);
-    walk.until_editing(cx).await;
+    walk.shell.until_editing(cx).await;
     resumed(&walk, cx);
 
     done_keeping(&walk, cx).await;
     walk.tab_to("tab", "item-page", cx);
     walk.keys("e", cx);
-    walk.until_editing(cx).await;
+    walk.shell.until_editing(cx).await;
     resumed(&walk, cx);
 }
 
@@ -489,11 +488,7 @@ async fn the_sheet_pickers_and_review_work_by_keyboard_alone(cx: &mut TestAppCon
     cx.executor().allow_parking();
     let walk = related(cx);
     walk.select_a_repository(cx);
-    walk.find(REVIEWED, cx);
-    walk.keys("secondary-3", cx);
-    walk.tab_to("tab", "item-page", cx);
-    walk.keys("e", cx);
-    let host = walk.until_editing(cx).await;
+    let host = edit_by_e(&walk, REVIEWED, cx).await;
     walk.type_text("x", cx);
     let mine = text(&host, cx);
 
@@ -530,6 +525,8 @@ async fn the_sheet_pickers_and_review_work_by_keyboard_alone(cx: &mut TestAppCon
         project.read_with(cx, |input, _| input.value().to_string()),
         "p"
     );
+    walk.keys("tab", cx);
+    control(Field::Team, &walk, cx);
 
     // Both pickers.
     pick_by_keyboard(&walk, "rel-parent-change", "New", cx);
@@ -539,6 +536,43 @@ async fn the_sheet_pickers_and_review_work_by_keyboard_alone(cx: &mut TestAppCon
     );
     pick_by_keyboard(&walk, "rel-deps-add", "kb-d3p00", cx);
     assert_eq!(walk.shell.rows("rel-dep-id", cx), [DEPENDENCY]);
+
+    // Every stop of the editing sheet, round to where Tab began, is named
+    // and on screen; Parent's Clear and the dependency's Remove among them.
+    let stops = sheet_stops(&walk, cx);
+    for id in [
+        ElementId::from("rel-parent-change"),
+        "rel-parent-clear".into(),
+        ("rel-dep-remove", 0usize).into(),
+        "rel-deps-add".into(),
+        "sheet-done".into(),
+        "close".into(),
+    ] {
+        assert!(stops.contains(&id), "Tab reached {id:?}: {stops:?}");
+    }
+
+    // Clear and Remove, each by Enter: they take effect, and focus stays
+    // in the sheet.
+    walk.tab_to("tab", "rel-parent-clear", cx);
+    walk.enter(cx);
+    assert!(
+        walk.shell.present("rel-parent-none", cx),
+        "Clear cleared it"
+    );
+    assert!(!walk.shell.present("rel-parent-clear", cx));
+    walk.tab_to("tab", ("rel-dep-remove", 0usize), cx);
+    walk.enter(cx);
+    assert!(
+        walk.shell.rows("rel-dep-id", cx).is_empty(),
+        "Remove removed it"
+    );
+    assert!(walk.shell.present("rel-deps-none", cx));
+    assert!(has_sheet(&walk, cx));
+    assert!(
+        walk.focused_in("sheet-content", cx).is_some(),
+        "focus stays"
+    );
+    walk.region(Region::Content, cx);
 
     // Escape closes the sheet; focus is back on All details.
     walk.keys("escape", cx);
@@ -578,8 +612,22 @@ async fn the_sheet_pickers_and_review_work_by_keyboard_alone(cx: &mut TestAppCon
         .read_with(cx, |pane, _| pane.review_host())
         .expect("the body's result");
     walk.in_editor(&result, cx);
+    walk.type_text("y", cx);
+    let edited = text(&result, cx);
+    assert!(edited != mine, "the result is edited");
     walk.escape_to_done(cx);
     assert_eq!(walk.phase(cx), Phase::Review, "nothing is cancelled");
+
+    // Take theirs on the body, by Enter, asks first, the result being
+    // edited: Escape closes it, focus is back on Take theirs, and the edit
+    // is kept.
+    walk.tab_to("tab", ("review-take-theirs", body), cx);
+    walk.enter(cx);
+    walk.dialog_open("review-replace-dialog", cx);
+    walk.keys("escape", cx);
+    assert!(!walk.shell.present("review-replace-dialog", cx), "Escape");
+    walk.on(("review-take-theirs", body), Region::Content, cx);
+    assert!(text(&result, cx) == edited, "the edit is kept");
 
     // The fields after the body's editor are reached from below: the
     // discussion's key, Tab to Back to top, then Shift-Tab. Keep mine for
@@ -603,7 +651,7 @@ async fn the_sheet_pickers_and_review_work_by_keyboard_alone(cx: &mut TestAppCon
         })
         .await;
     assert_eq!(walk.phase(cx), Phase::Editing);
-    assert!(text(&host, cx) == mine, "mine is kept");
+    assert!(text(&host, cx) == edited, "the result, edited, is used");
     walk.tab_to("tab", "item-page", cx);
     walk.in_editor(&host, cx);
     assert_eq!(walk.save_by_key(cx).await, Some(ResultCode::Ok));
@@ -695,7 +743,7 @@ async fn create_by_keyboard_alone(cx: &mut TestAppContext) {
             .await;
         walk.tab_into("tab", "create-ok", cx);
         walk.enter(cx);
-        let host = walk.until_editing(cx).await;
+        let host = walk.shell.until_editing(cx).await;
         walk.shell
             .until_drawn(cx, "the create dialog closing", |shell, cx| {
                 !shell.present("create-dialog", cx)
@@ -989,4 +1037,163 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
         .await;
     assert!(!walk.shell.present("item-needs-fixing", cx));
     assert!(!walk.shell.present("item-repair-button", cx), "no Repair…");
+}
+
+/// A window over `a` holding `EDITED`, whose draft store did not open: its
+/// folder is a link, as `edit_done_tests` makes it. The link's target goes
+/// with the last value.
+#[cfg(unix)]
+fn without_a_store(cx: &mut TestAppContext) -> (Walk, tempfile::TempDir) {
+    let fixture = Fixture::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), fixture.data_dir().join("drafts")).unwrap();
+    let a = fixture.create_repository("a");
+    let source = ticket_with_body(EDITED, "Ticket 0", BODY);
+    fixture.commit_file(&a, &ticket_path(EDITED), source.as_bytes());
+    fixture.refresh(&a);
+    (Walk::over(Shell::open(fixture, cx), a), elsewhere)
+}
+
+/// With crash recovery off, Edit by Tab and Enter asks first: Escape
+/// closes the dialog, nothing prepared, focus back on Edit; Enter on Edit
+/// again, then Enter, its default Continue, goes on into the editor.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn crash_recovery_off_asks_first_by_keyboard_alone(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (walk, _elsewhere) = without_a_store(cx);
+    walk.select_a_repository(cx);
+    walk.find(EDITED, cx);
+    walk.keys("secondary-3", cx);
+    walk.tab_to("tab", "item-edit", cx);
+    walk.on("item-edit", Region::Content, cx);
+    let prepares = |walk: &Walk, cx: &mut TestAppContext| {
+        walk.shell
+            .requests(cx, |request| {
+                matches!(request.intent, Intent::ContextPrepare { .. })
+            })
+            .len()
+    };
+
+    walk.enter(cx);
+    walk.dialog_open("recovery-off-dialog", cx);
+    walk.keys("escape", cx);
+    assert!(!walk.shell.present("recovery-off-dialog", cx), "Escape");
+    walk.on("item-edit", Region::Content, cx);
+    assert_eq!(prepares(&walk, cx), 0, "nothing is prepared");
+    assert_eq!(walk.phase(cx), Phase::Viewing);
+
+    walk.enter(cx);
+    walk.dialog_open("recovery-off-dialog", cx);
+    walk.enter(cx);
+    let host = walk.shell.until_editing(cx).await;
+    assert!(!walk.shell.present("recovery-off-dialog", cx));
+    assert_eq!(prepares(&walk, cx), 1, "Continue prepared once");
+    walk.in_editor(&host, cx);
+}
+
+/// Pinned (fix round 1, M4): a keyed Create that is refused, crash
+/// recovery being off, leaves the dialog open saying why, with focus on
+/// Create, ringed, where Enter presses it again.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn a_refused_create_by_key_leaves_focus_on_create(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (walk, _elsewhere) = without_a_store(cx);
+    walk.select_a_repository(cx);
+    walk.keys("secondary-2", cx);
+    walk.choose("pane-tickets", cx);
+    walk.keys("secondary-2", cx);
+    walk.keys("secondary-n", cx);
+    create_dialog_open(&walk, cx);
+    walk.type_text("No store", cx);
+    walk.tab_into("tab", "create-ok", cx);
+    let ids = |walk: &Walk| {
+        walk.shell
+            .backend
+            .reads_seen(crate::desktop::services::ReadKind::NewId)
+    };
+    for press in 1..=2 {
+        walk.enter(cx);
+        walk.shell
+            .until_drawn(cx, "the refusal", |shell, _| {
+                shell
+                    .backend
+                    .reads_seen(crate::desktop::services::ReadKind::NewId)
+                    == press
+            })
+            .await;
+        walk.shell
+            .until_drawn(cx, "the refusal's words", |shell, cx| {
+                shell.present("create-failure", cx)
+            })
+            .await;
+        walk.dialog_open("create-dialog", cx);
+        assert_eq!(
+            walk.focused_in("create-dialog", cx),
+            Some((ElementId::from("create-ok"), true)),
+            "press {press}: focus is on Create"
+        );
+        assert!(
+            walk.shell.frame(cx, |window, _| {
+                window
+                    .try_find("create-ok-focus-ring")
+                    .is_some_and(|ring| ring.visible())
+            }),
+            "press {press}: Create is ringed"
+        );
+    }
+    assert_eq!(ids(&walk), 2, "Enter pressed Create again");
+}
+
+/// Pinned (fix round 1, M4): a keyed Move whose destination another commits
+/// after it was checked free is refused under the File name, the dialog
+/// stays, and focus goes to the File name.
+#[gpui_kit::test]
+async fn a_refused_move_by_key_puts_focus_in_the_field_with_the_note(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {PLAN}\ntitle: Plan\n---\n\
+         # Plan\n"
+    );
+    fixture.commit_file(&a, "docs/plan.md", source.as_bytes());
+    fixture.create_folder(&a, "docs/archive");
+    fixture.refresh(&a);
+    let walk = Walk::over(Shell::open(fixture, cx), a);
+    walk.select_a_repository(cx);
+    walk.open_document("Plan", cx);
+    walk.keys("secondary-3", cx);
+    walk.tab_to("tab", "chip-all", cx);
+    walk.enter(cx);
+    walk.tab_to("tab", "sheet-move-button", cx);
+    walk.enter(cx);
+    walk.dialog_open("move-dialog", cx);
+    walk.keys("secondary-a", cx);
+    walk.type_text("docs/archive", cx);
+    walk.shell
+        .until_drawn(cx, "Move offered", |shell, cx| {
+            !shell.present("move-ok-note", cx)
+        })
+        .await;
+    walk.shell
+        .fixture
+        .commit_file(&walk.a, "docs/archive/plan.md", b"Taken.\n");
+    walk.tab_into("tab", "move-ok", cx);
+    walk.enter(cx);
+    walk.shell
+        .until_drawn(cx, "the collision's words", |shell, cx| {
+            shell.label("move-file-note", cx).is_some()
+        })
+        .await;
+    walk.dialog_open("move-dialog", cx);
+    assert!(
+        walk.focus_inside("move-file", cx),
+        "focus is in the File name"
+    );
+    let (_, labeled) = walk
+        .focused_in("move-dialog", cx)
+        .expect("focus is in the dialog");
+    assert!(labeled, "on a named control");
 }

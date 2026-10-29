@@ -174,8 +174,20 @@ impl Walk {
     /// Presses `key`, Tab or shift-Tab, until the element `id` holds focus.
     fn tab_to(&self, key: &str, id: impl Into<ElementId>, cx: &mut TestAppContext) {
         let id = id.into();
+        self.press_until(key, &id, |walk, cx| walk.holds_focus(&id, cx), cx);
+    }
+
+    /// Presses `key` until `reached` holds, at most `TAB_LIMIT` times, or
+    /// fails saying `key` never reached `id`.
+    fn press_until(
+        &self,
+        key: &str,
+        id: &ElementId,
+        reached: impl Fn(&Self, &mut TestAppContext) -> bool,
+        cx: &mut TestAppContext,
+    ) {
         let mut presses = 0;
-        while !self.holds_focus(&id, cx) {
+        while !reached(self, cx) {
             presses += 1;
             assert!(presses <= TAB_LIMIT, "{key} never reached {id:?}");
             self.keys(key, cx);
@@ -284,18 +296,7 @@ impl Walk {
     /// The document tree: the arrows move to the document and Enter opens
     /// it into a tab. Focus stays in the tree.
     fn open_a_document(&self, cx: &mut TestAppContext) {
-        let nodes = self.shell.rows("doc-node", cx);
-        let at = nodes
-            .iter()
-            .position(|node| node == "Guide")
-            .expect("the document is listed");
-        let mut presses = 0;
-        while !self.shell.selected(("doc-node", at), cx) {
-            presses += 1;
-            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
-            self.keys("down", cx);
-        }
-        self.enter(cx);
+        self.open_tree_row("Guide", cx);
         assert_eq!(
             self.opened(cx),
             Some(OpenTarget::Item {
@@ -306,6 +307,23 @@ impl Walk {
         );
         assert_eq!(self.tab_count(cx), 1);
         self.region(Region::Navigation, cx);
+    }
+
+    /// In the focused document tree, the arrows move down to the row
+    /// `label` and Enter opens it.
+    fn open_tree_row(&self, label: &str, cx: &mut TestAppContext) {
+        let nodes = self.shell.rows("doc-node", cx);
+        let at = nodes
+            .iter()
+            .position(|node| node == label)
+            .expect("the document is listed");
+        let mut presses = 0;
+        while !self.shell.selected(("doc-node", at), cx) {
+            presses += 1;
+            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
+            self.keys("down", cx);
+        }
+        self.enter(cx);
     }
 
     /// The closure and readiness filters, each by shift-Tab and Enter
