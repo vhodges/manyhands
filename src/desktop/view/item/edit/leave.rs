@@ -23,8 +23,10 @@
 //!   once the discard lands, says "The draft was discarded.". A discard the
 //!   store refused says nothing: D2's banner offers the draft, still
 //!   stored. A never-created item, which has no saved copy, closes its tab
-//!   once the discard lands. A draft of the item still stored is
-//!   offered by D2's draft banner.
+//!   once the discard lands, and so does a new item's tab still opening its
+//!   editor on the draft, which leaves as a tab closed while preparing
+//!   does. A draft of the item still stored is offered by D2's draft
+//!   banner.
 //! - **Release on leave** (`release`): a tab that leaves clean hands its
 //!   item over; a discard of a stored draft reaches it through the
 //!   registry, once the store has deleted the draft.
@@ -67,6 +69,10 @@ pub(crate) struct CloseThisTab;
 pub(super) enum Elsewhere {
     /// The store call lands next; a never-created item's tab closes then.
     Landing { never_created: bool },
+    /// The draft of a new item whose tab was opening its editor on it, its
+    /// Create prepare running or its read after it: the tab closes once
+    /// the store call lands (Part D fix 1, M6).
+    Opening,
     /// The draft is gone: the banner says so until the next Edit.
     Discarded,
 }
@@ -167,9 +173,11 @@ impl ItemPane {
     /// window, the page's read editor takes the focus. Nothing of a save of
     /// it is followed any more.
     pub(super) fn end_session(&mut self, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if self.edit.session.is_none() {
+        let Some(session) = &self.edit.session else {
             return;
-        }
+        };
+        // A created item not read yet still has its draft's header (M7).
+        self.edit.stand_in.ended(&session.base, &session.meta);
         // A review still open goes with it, and D2's schedule resumes.
         self.close_review(cx);
         self.edit.session = None;
@@ -270,6 +278,10 @@ impl ItemPane {
     /// (`DraftDiscardLanded`); a discard the store refused leaves the draft
     /// stored, for D2's banner to offer, and the tab says nothing of it. A
     /// never-created item, with no saved copy to view, closes its tab then.
+    /// So does a new item's tab whose editor was still opening on the draft
+    /// (Part D fix 1, M6): it opens nothing, and leaves as a tab closed
+    /// while preparing does, so a context its prepare made, or makes, is
+    /// released (decision 18).
     pub(in crate::desktop::view::item) fn session_discarded(
         &mut self,
         event: &SessionDiscarded,
@@ -278,6 +290,10 @@ impl ItemPane {
         match event {
             SessionDiscarded::Ended(tab) if *tab == self.tab_key() => {
                 let Some(session) = &self.edit.session else {
+                    if self.opening_discarded(cx) {
+                        self.edit.continuing = None;
+                        self.edit.discarded = Some(Elsewhere::Opening);
+                    }
                     return;
                 };
                 let never_created = session.never_created();
@@ -285,16 +301,43 @@ impl ItemPane {
                 self.edit.discarded = Some(Elsewhere::Landing { never_created });
             }
             SessionDiscarded::Landed(tab, discarded) if *tab == self.tab_key() => {
-                let Some(Elsewhere::Landing { never_created }) = self.edit.discarded else {
-                    return;
-                };
-                self.edit.discarded = discarded.then_some(Elsewhere::Discarded);
-                if never_created {
-                    cx.emit(CloseThisTab);
+                match self.edit.discarded {
+                    Some(Elsewhere::Landing { never_created }) => {
+                        self.edit.discarded = discarded.then_some(Elsewhere::Discarded);
+                        if never_created {
+                            cx.emit(CloseThisTab);
+                        }
+                    }
+                    Some(Elsewhere::Opening) => {
+                        self.edit.discarded = None;
+                        // Its read after the prepare opens nothing now.
+                        if self.edit.phase == Phase::Loading {
+                            self.edit.phase = Phase::Viewing;
+                        }
+                        self.release_on_leave(cx);
+                        cx.emit(CloseThisTab);
+                    }
+                    Some(Elsewhere::Discarded) | None => return,
                 }
                 cx.notify();
             }
             SessionDiscarded::Ended(_) | SessionDiscarded::Landed(..) => {}
         }
+    }
+
+    /// Whether the draft the tab's editor is opening on, a new item's with
+    /// the Create intent (`create`), has just been discarded: the registry
+    /// holds no session of it any more.
+    fn opening_discarded(&self, cx: &App) -> bool {
+        let Some(continuing) = &self.edit.continuing else {
+            return false;
+        };
+        self.opening_new_item()
+            && self
+                .services
+                .drafts()
+                .read(cx)
+                .current_id(continuing.draft)
+                .is_none()
     }
 }

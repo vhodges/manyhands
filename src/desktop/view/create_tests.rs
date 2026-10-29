@@ -25,19 +25,24 @@ use git2::Repository;
 use gpui_kit::{Entity, Focusable, TestAppContext, component::input::InputState};
 use manyhands::{
     drafts::{Draft, DraftStore, Entry, Held, ItemKind, is_new_item_base},
-    repository::{ItemDto, ItemDtoKind},
+    repository::{ClosureState, ItemDto, ItemDtoKind},
     results::ResultCode,
 };
 
 use super::{CreateDialog, Inputs, OpenedDialog};
 use crate::desktop::{
-    model::{edit::Phase, navigation::OpenTarget, stamp::SettingsPage},
+    model::{
+        edit::{Phase, fields::Field},
+        navigation::OpenTarget,
+        stamp::SettingsPage,
+    },
     services::{
         JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
+        drafts::row_id,
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
         item::ChipField,
@@ -182,6 +187,24 @@ fn retype(shell: &Shell, name: &str, typed: &str, cx: &mut TestAppContext) {
     shell.keys("secondary-a", cx);
     shell.visual(cx).simulate_input(typed);
     shell.run(cx);
+    shell.frame(cx, |_, _| ());
+}
+
+/// Puts `typed` in the details sheet's control of `field` in place of what
+/// it holds, through the window: focus there, select all and delete, type.
+fn sheet_retype(shell: &Shell, field: Field, typed: &str, cx: &mut TestAppContext) {
+    let input = pane(shell, cx)
+        .read_with(cx, |pane, _| pane.sheet_input(field))
+        .expect("the sheet's control is made");
+    shell.frame(cx, |window, cx| {
+        input.update(cx, |input, cx| input.focus(window, cx))
+    });
+    shell.frame(cx, |_, _| ());
+    shell.keys("secondary-a backspace", cx);
+    if !typed.is_empty() {
+        shell.visual(cx).simulate_input(typed);
+        shell.run(cx);
+    }
     shell.frame(cx, |_, _| ());
 }
 
@@ -595,8 +618,10 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
 /// Obligations 6 and 9 (native checklist step 9): a new ticket, made by
 /// keyboard in its dialog with its Title and Type, takes a dependency and a
 /// parent in the sheet's picker; Save sends `TicketCreate` with the draft's
-/// fields, `deps` and `parent`, status `open` and no initials (R-21); the
-/// committed file holds them.
+/// fields, `deps` and `parent`, and no initials (R-21); the committed file
+/// holds them. Contract 9 through `TicketCreate` (Part D fix 1, M8): a
+/// Project typed in the sheet and emptied again is absent (R-27), and a
+/// Status of `closed` is its text, the ticket still open.
 #[gpui_kit::test]
 async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -655,6 +680,19 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
         shell.click(("rel-pick", 0usize), cx);
         shell.frame(cx, |_, _| ());
     }
+    // A Project typed and emptied again; `closed` as the Status.
+    sheet_retype(&shell, Field::Project, "Typed project", cx);
+    assert_eq!(
+        shell.label(ChipField::Project.id(), cx).as_deref(),
+        Some("Project Typed project"),
+        "the session takes the Project"
+    );
+    sheet_retype(&shell, Field::Project, "", cx);
+    assert!(
+        !shell.present(ChipField::Project.id(), cx),
+        "and its emptying"
+    );
+    sheet_retype(&shell, Field::Status, "closed", cx);
     shell.keys("secondary-s", cx);
     let sent = creates(&shell, cx);
     assert_eq!(sent.len(), 1, "Save sent one create");
@@ -664,7 +702,7 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
             ref title, ref ticket_type, ref status, ref project, ref team, ref deps, ref parent, ..
         } if title == "Brand new"
             && ticket_type == "bug"
-            && status == "open"
+            && status == "closed"
             && project.is_none()
             && team.is_none()
             && deps == &[DEPENDENCY.to_owned()]
@@ -675,7 +713,12 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
     let shown = show(&shell, &root, &id).expect("the ticket is created");
     assert_eq!(shown.title.as_deref(), Some("Brand new"));
     assert_eq!(shown.ticket_type.as_deref(), Some("bug"));
-    assert_eq!(shown.status.as_deref(), Some("open"));
+    assert_eq!(shown.status.as_deref(), Some("closed"), "the text");
+    assert_eq!(shown.project, None);
+    assert!(!shown.unknown_metadata.contains_key("project"));
+    let closure = shown.closure.clone().expect("a ticket's closure");
+    assert_eq!(closure.state, ClosureState::Open, "the ticket stays open");
+    assert!(closure.closed_at.is_none() && closure.closed_by.is_none());
     let deps: Vec<&str> = shown.deps.iter().map(|dep| dep.id.as_str()).collect();
     assert_eq!(deps, [DEPENDENCY]);
     assert_eq!(
@@ -691,6 +734,9 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
     .expect("the ticket's file is committed");
     assert!(file.contains("Brand new") && file.contains("bug"));
     assert!(file.contains(DEPENDENCY) && file.contains(PARENT));
+    assert!(file.contains("status: closed\n"), "the text is saved");
+    assert!(!file.contains("project:"), "no project key");
+    assert!(!file.contains("closed_at") && !file.contains("closed_by"));
 }
 
 /// The design's Create: the new tab opens editing, with its header built
@@ -756,6 +802,9 @@ async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestA
         Some("Read only until then")
     );
     assert!(!shell.present("sheet-inspect", cx), "no file to inspect");
+    // Nothing was read: no provenance, and no closure (Part D fix 1, M2).
+    assert!(!shell.present("provenance", cx), "no provenance");
+    assert!(!shell.present("sheet-closure", cx), "no closure sentence");
     shell.keys("escape", cx);
     assert!(!shell.frame(cx, |window, cx| {
         gpui_kit::component::WindowExt::has_active_sheet(window, cx)
@@ -788,6 +837,8 @@ async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestA
     );
     assert!(!shell.present("sheet-inspect", cx), "no file to inspect");
     assert!(!shell.present("sheet-problems", cx));
+    assert!(!shell.present("provenance", cx), "no provenance");
+    assert!(!shell.present("sheet-closure", cx), "no closure sentence");
 }
 
 /// R-22 at Save: another file reached the path after the dialog checked it;
@@ -1105,4 +1156,196 @@ async fn a_dialog_above_the_create_dialog_stays_open_when_it_creates(cx: &mut Te
     assert!(!dialog_open(&shell, cx), "then the create dialog");
     prepare.release();
     until_editing(&shell, cx).await;
+}
+
+// ---- Part D fix 1 ----
+
+fn tab_count(shell: &Shell, cx: &mut TestAppContext) -> usize {
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.tab_keys().len())
+}
+
+/// This session's `context release` requests, newest first.
+fn releases(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
+    shell.requests(cx, |request| {
+        matches!(request.intent, Intent::ContextRelease { .. })
+    })
+}
+
+/// Whether the ticket `id`'s work context is there: its worktree, then its
+/// branch.
+fn ticket_context(root: &Path, id: &str) -> (bool, bool) {
+    let worktree = root.join(".manyhands/worktrees").join(id).exists();
+    let branch = Repository::open(root)
+        .unwrap()
+        .find_reference(&format!("refs/heads/manyhands/ticket/{id}"))
+        .is_ok();
+    (worktree, branch)
+}
+
+/// M3: once the tab's read has found the new item, the draft never
+/// stands in for it again: a later read that does not find it shows D1's
+/// not-found status, as any tab does, while the session lives.
+#[gpui_kit::test]
+async fn a_new_item_read_then_missing_shows_not_found(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |_, _| {});
+    new_document(&shell, "Plans", "plans.md", cx).await;
+    shell.click("create-ok", cx);
+    let host = until_editing(&shell, cx).await;
+    let id = opened_id(&shell, cx);
+    type_at_end(&shell, &host, "First", cx);
+    shell.click("item-save", cx);
+    let sent = creates(&shell, cx);
+    assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
+    until(&shell, cx, "the item read", |shell, cx| {
+        shell.present(ChipField::Updated.id(), cx)
+    })
+    .await;
+    assert_eq!(
+        phase(&shell, cx),
+        Some(Phase::Editing),
+        "the session goes on"
+    );
+
+    // A second program removes the file from the item's branch, and the
+    // index loses it.
+    let worktree = root.join(".manyhands/worktrees").join(&id);
+    shell.fixture.commit_removal(&worktree, "docs/plans.md");
+    shell.fixture.refresh(&root);
+    pane(&shell, cx).update(cx, |pane, cx| {
+        pane.reload(cx);
+    });
+    until(&shell, cx, "the read", |shell, cx| {
+        !shell.present(ChipField::Updated.id(), cx)
+    })
+    .await;
+    assert_eq!(
+        shell.label("item-failure", cx).as_deref(),
+        Some(ResultCode::ItemNotFound.message()),
+        "D1's not-found status"
+    );
+    assert!(
+        !shell.present("item-title", cx),
+        "the draft stands in no more"
+    );
+}
+
+/// M7, with M8's second point: Done's prompt on a never-created item, then
+/// its Save. One create is sent, and Done goes on, ending the session. Until
+/// the tab's read finds the item, the header keeps the draft's title, and
+/// the item is not said to be missing.
+#[gpui_kit::test]
+async fn done_then_save_creates_once_and_keeps_the_header_until_read(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |_, _| {});
+    new_document(&shell, "Plans", "plans.md", cx).await;
+    shell.click("create-ok", cx);
+    let host = until_editing(&shell, cx).await;
+    let id = opened_id(&shell, cx);
+    type_at_end(&shell, &host, "First", cx);
+
+    shell.click("item-done", cx);
+    assert!(shell.present("done-draft-dialog", cx), "Done asks");
+    // The tab's reads after the create are held where they reach the
+    // library.
+    let reads: Vec<_> = (0..3)
+        .map(|_| shell.backend.hold_read(ReadKind::Item))
+        .collect();
+    shell.click("done-draft-save-button", cx);
+    until(&shell, cx, "the create", |shell, cx| {
+        !creates(shell, cx).is_empty()
+    })
+    .await;
+    let sent = creates(&shell, cx);
+    assert!(matches!(
+        intent(&shell, sent[0], cx),
+        Intent::DocumentCreate { ref body, .. } if body == "First"
+    ));
+    assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
+    until(&shell, cx, "Done going on", |shell, cx| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+    })
+    .await;
+    assert_eq!(phase(&shell, cx), Some(Phase::Viewing), "the session ended");
+    assert!(!shell.present("done-draft-dialog", cx));
+    assert!(
+        shell.fixture.draft_store().list().unwrap().is_empty(),
+        "the draft retired"
+    );
+    assert_eq!(
+        shell.label("item-title", cx).as_deref(),
+        Some("Plans"),
+        "the draft's title, until the read"
+    );
+    assert!(!shell.present("item-failure", cx), "not said to be missing");
+
+    for held in reads {
+        let _ = held.send(());
+    }
+    until(&shell, cx, "the item read", |shell, cx| {
+        shell.label("item-title", cx).as_deref() == Some("Plans")
+            && shell.present(ChipField::Updated.id(), cx)
+    })
+    .await;
+    assert_eq!(creates(&shell, cx).len(), 1, "created once");
+    let shown = show(&shell, &root, &id).expect("the document is created");
+    assert_eq!(shown.body.as_deref(), Some("First"));
+}
+
+/// M6 (R-71, decision 18): the Drafts page discards a new ticket's draft
+/// while its tab's Create prepare runs. The tab closes once the discard
+/// lands, and the context the prepare then makes is released.
+#[gpui_kit::test]
+async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_releases(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |_, _| {});
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("pane-tickets", cx);
+    shell.click("new-ticket-button", cx);
+    shell.visual(cx).simulate_input("Discarded early");
+    shell.run(cx);
+    shell.click("create-ok", cx);
+    until(&shell, cx, "the prepare", |shell, cx| {
+        !prepares(shell, cx).is_empty()
+    })
+    .await;
+    prepare.wait_reached();
+    let id = opened_id(&shell, cx);
+    let drafts = stored(&shell.fixture.draft_store());
+    assert_eq!(drafts.len(), 1, "the new item's draft");
+    let draft = shell.fixture.draft_store().list().unwrap()[0].id;
+
+    shell.keys("secondary-shift-d", cx);
+    shell.run(cx);
+    shell.click(row_id(draft, "discard"), cx);
+    assert!(shell.present("discard-draft-dialog", cx), "it asks first");
+    shell.click("discard-draft-confirm", cx);
+    until(&shell, cx, "the tab closing", |shell, cx| {
+        tab_count(shell, cx) == 0
+    })
+    .await;
+    assert!(
+        shell.fixture.draft_store().list().unwrap().is_empty(),
+        "discarded"
+    );
+
+    prepare.release();
+    let sent = prepares(&shell, cx);
+    assert_eq!(sent.len(), 1, "one prepare");
+    assert_eq!(answered(&shell, sent[0].1, cx).await, ResultCode::Ok);
+    until(&shell, cx, "the release", |shell, cx| {
+        releases(shell, cx)
+            .first()
+            .is_some_and(|request| request_code(shell, *request, cx).is_some())
+    })
+    .await;
+    let released = releases(&shell, cx);
+    assert_eq!(released.len(), 1, "one release");
+    assert_eq!(request_code(&shell, released[0], cx), Some(ResultCode::Ok));
+    assert_eq!(
+        ticket_context(&root, &id),
+        (false, false),
+        "the context is gone"
+    );
 }

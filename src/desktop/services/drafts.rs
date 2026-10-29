@@ -164,6 +164,9 @@ pub(crate) struct DraftRegistry {
     /// the Create intent made ready, as its answer gave it: where a
     /// create's `occupied_path` is read (`create`).
     contexts: HashMap<ContextKey, PathBuf>,
+    /// Sessions whose last create met `occupied_path` and whose path could
+    /// not then be read: what is there is not known (`create`).
+    path_unread: BTreeSet<DraftId>,
 }
 
 /// A session and the tasks that write it.
@@ -198,6 +201,7 @@ impl DraftRegistry {
             attached: HashMap::new(),
             releasing: BTreeSet::new(),
             contexts: HashMap::new(),
+            path_unread: BTreeSet::new(),
         }
     }
 

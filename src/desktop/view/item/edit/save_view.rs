@@ -22,8 +22,9 @@
 //!   with the library's message and code, and Retry when its recovery
 //!   offers the request again. A new item's create refused for another file
 //!   at its path says so and that the draft is kept, once D2 has read the
-//!   path (R-22); one refused for want of initials says so, and its Open
-//!   Settings opens Settings on the repository (R-21).
+//!   path (R-22), and is shown as any other refusal when D2 could not read
+//!   it; one refused for want of initials says so, and its Open Settings
+//!   opens Settings on the repository (R-21).
 
 use std::path::PathBuf;
 
@@ -70,7 +71,9 @@ impl ItemPane {
     /// (R-21, R-22): another file at its path keeps the draft, once the
     /// registry has read the path and found no item of this draft's there
     /// (`create`); a repository with no initials says so, and its banner
-    /// points to Settings. `None` for any other refusal.
+    /// points to Settings. `None` for any other refusal, and for a path the
+    /// registry could not read, where what is there is not known: the
+    /// library's refusal is shown as any other's (Part D fix 1, M5).
     fn create_refused(&self, code: ResultCode, cx: &App) -> Option<Refused> {
         let session = self
             .edit
@@ -79,14 +82,18 @@ impl ItemPane {
             .filter(|session| session.never_created())?;
         match code {
             ResultCode::OccupiedPath => {
-                let checking = self
-                    .live_draft(cx)
-                    .and_then(|id| self.services.drafts().read(cx).session(id))
+                let registry = self.services.drafts().read(cx);
+                let draft = self.live_draft(cx);
+                let checking = draft
+                    .and_then(|id| registry.session(id))
                     .is_some_and(|session| session.saving().is_some());
-                Some(match checking {
-                    true => Refused::Checking,
-                    false => Refused::Said(path_held_draft_kept(&session.base.path)),
-                })
+                if checking {
+                    return Some(Refused::Checking);
+                }
+                if draft.is_some_and(|id| registry.path_unread(id)) {
+                    return None;
+                }
+                Some(Refused::Said(path_held_draft_kept(&session.base.path)))
             }
             ResultCode::InitialsRequired => Some(Refused::Said(INITIALS_NEEDED.to_owned())),
             _ => None,

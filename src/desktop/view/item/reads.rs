@@ -119,7 +119,8 @@ impl ItemPane {
                     this.draft.reads_landed();
                     // While Loading, the edit editor opens from this read;
                     // after a save, a clean one reloads a body that differs.
-                    this.edit.read_landed();
+                    let found = this.model.item().rows().is_some();
+                    this.edit.read_landed(found);
                     // Late results: a clean edit editor takes a newer read.
                     if !this.post_save_read_landed(&landed, cx) {
                         this.late_read_landed(cx);

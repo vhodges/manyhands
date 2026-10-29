@@ -8,8 +8,9 @@
 //! it (`release`); a context it does not hold is never released by them. A
 //! prepare that answered `discovery_pending` enters it only once a retry
 //! answers `ok` (R-77). A save, or a new item's create, that commits into a
-//! context takes it out: it holds work now. A release leaves it in: the
-//! release service keeps what it has released.
+//! context takes it out: it holds work now. So does one the library finds
+//! already applied, an earlier attempt having committed it. A release
+//! leaves it in: the release service keeps what it has released.
 
 use std::{collections::HashSet, path::PathBuf};
 
@@ -115,7 +116,10 @@ impl CreatedContexts {
     /// A finished request: a `context prepare` that answered `ok` with
     /// `created: true` adds its item's context, and a save or a new item's
     /// create whose checkpoint committed takes its item's out (R-75),
-    /// whether or not its tab is still open. Any other answer, and any
+    /// whether or not its tab is still open. So does one answered
+    /// `already_applied` (Part D fix 1, M1): an earlier attempt, whose
+    /// answer was lost, committed it, so the context holds the item's
+    /// commit, and its release would be refused. Any other answer, and any
     /// other request, changes nothing. True when the answer made the
     /// context: a tab that closed while it prepared releases it then
     /// (R-37).
@@ -132,7 +136,9 @@ impl CreatedContexts {
             | Intent::TicketSave { .. }
             | Intent::DocumentCreate { .. }
             | Intent::TicketCreate { .. } => {
-                if envelope.effects.checkpoint == CheckpointEffect::Committed {
+                if envelope.effects.checkpoint == CheckpointEffect::Committed
+                    || envelope.code == ResultCode::AlreadyApplied
+                {
                     self.remove(&key);
                 }
                 false

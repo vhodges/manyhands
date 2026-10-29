@@ -3,7 +3,9 @@
 //! lifecycle and the closure, when it was updated, its file, and D1's
 //! provenance (the context kind, branch and worktree). For a document:
 //! its kind, ID with Copy, file name, update and provenance. The design's
-//! "Main version" is not built: no read reports it.
+//! "Main version" is not built: no read reports it. A new item's stand-in
+//! (`edit::create`), which nothing was read for, gives no closure and no
+//! provenance.
 
 use gpui_kit::{
     AnyElement, App, Context, InteractiveElement, IntoElement, ParentElement, Role,
@@ -138,6 +140,10 @@ impl ItemPane {
             );
             facts = facts.child(named("ID", id, cx));
         }
+        // A new item's stand-in, which nothing was read for, says no
+        // closure and no provenance (Part D fix 1, M2), as `file_rows`
+        // gives it no file.
+        let read = self.model.item().rows().is_some();
         if let (ItemDtoKind::Ticket, Some(lifecycle)) = (kind, Self::lifecycle(item)) {
             facts = facts
                 .child(field(
@@ -146,7 +152,7 @@ impl ItemPane {
                     lifecycle.to_owned(),
                     cx,
                 ))
-                .children(closure(item, cx));
+                .children(read.then(|| closure(item, cx)).flatten());
         }
         if let Some(changed) = &item.changed_at {
             facts = facts.child(self.updated(changed, window, cx));
@@ -160,7 +166,9 @@ impl ItemPane {
                 cx,
             )),
         };
-        facts.child(self.provenance(item, cx)).into_any_element()
+        facts
+            .children(read.then(|| self.provenance(item, cx)))
+            .into_any_element()
     }
 
     /// When the index saw the item change, as D1 showed it: the field the

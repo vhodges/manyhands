@@ -24,7 +24,11 @@
 //!   draft becomes an ordinary unverified draft (R-42), which its tab
 //!   reviews: an earlier create's answer was lost. Otherwise, as for
 //!   `initials_required`, the draft is kept as it is, and its tab says why
-//!   (R-21, R-22).
+//!   (R-21, R-22). A read that could not tell, busy or failed, is
+//!   remembered (`path_unread`), and the tab names no other file there;
+//!   nothing at the path in the item's own context (`path_not_found`, or
+//!   `invalid_path` for a context the index does not hold yet) tells: the
+//!   item's own file is not there.
 //! - **A lost answer.** A create the library offers to take again under the
 //!   same request keeps its record (`save`), so the same request sent again
 //!   completes the draft once it has created the item, once.
@@ -39,6 +43,7 @@ use manyhands::{
         DraftBase, DraftErrorKind, DraftFields, DraftId, DraftTarget, ItemKind, is_new_item_base,
     },
     repository::{AuthoringKind, ContextPrepareIntent, ItemDto},
+    results::ResultCode,
 };
 
 use super::{DraftRegistry, item_kind, save::Verb};
@@ -122,6 +127,13 @@ impl DraftRegistry {
         self.flush_and_send(id, Verb::Create, cx)
     }
 
+    /// Whether the session `id`'s last create met `occupied_path` and the
+    /// read of the path could not tell, busy or failed, whether another file
+    /// is there or this draft's own item (Part D fix 1, M5).
+    pub(crate) fn path_unread(&self, id: DraftId) -> bool {
+        self.path_unread.contains(&id)
+    }
+
     /// A `context prepare` with the Create intent of `key`'s item answered
     /// `ok`, with the context's `worktree`: where a create's
     /// `occupied_path` is read.
@@ -148,6 +160,7 @@ impl DraftRegistry {
         // The key the Create prepare's answer was kept under (`for_drafts`).
         let worktree = ContextKey::of(&prepare_create(&target))
             .and_then(|key| self.contexts.get(&key).cloned());
+        let own_context = worktree.is_some();
         let root = PathBuf::from(&target.repository);
         let reader = Reader::new(self.backend.clone(), cx.background_executor().clone());
         let read = cx.background_executor().spawn(async move {
@@ -161,22 +174,26 @@ impl DraftRegistry {
         cx.spawn(async move |registry, cx| {
             let read = read.await;
             let _ = registry.update(cx, |registry, cx| {
-                registry.occupied_read(draft, &target, &read, cx)
+                registry.occupied_read(draft, &target, &read, own_context, cx)
             });
         })
         .detach();
     }
 
-    /// The read of an occupied path landed. When it is this draft's item,
-    /// the draft goes on as an ordinary unverified draft over the fields
-    /// its base holds (R-42), written at once; its tab reviews it. Anything
-    /// else keeps the draft as it is. Either way the session may save
-    /// again.
+    /// The read of an occupied path landed, in the item's own context when
+    /// `own_context`. When it is this draft's item, the draft goes on as an
+    /// ordinary unverified draft over the fields its base holds (R-42),
+    /// written at once; its tab reviews it. Anything else keeps the draft
+    /// as it is. A read that could not tell whether this draft's item is
+    /// there is remembered (`path_unread`): busy, or failed, but for
+    /// `path_not_found` or `invalid_path` in the item's own context, where
+    /// that item would be. Either way the session may save again.
     fn occupied_read(
         &mut self,
         draft: DraftId,
         target: &DraftTarget,
         read: &ReadResult<ItemDto>,
+        own_context: bool,
         cx: &mut Context<Self>,
     ) {
         let Some(id) = self.current_id(draft) else {
@@ -187,6 +204,25 @@ impl DraftRegistry {
         };
         let session = &mut live.session;
         session.set_saving(None);
+        // In the item's own context, no file at the path, or no context
+        // there that the index holds as active (a context made for a new
+        // item holds none until its create), tells that this draft's item
+        // is not there.
+        let told = match read {
+            ReadResult::Ok(_) => true,
+            ReadResult::Failed(failure) => {
+                own_context
+                    && matches!(
+                        failure.code,
+                        ResultCode::PathNotFound | ResultCode::InvalidPath
+                    )
+            }
+            ReadResult::Busy => false,
+        };
+        match told {
+            true => self.path_unread.remove(&id),
+            false => self.path_unread.insert(id),
+        };
         let own = matches!(read, ReadResult::Ok(item) if holds(item, target));
         let marked = session
             .base()

@@ -153,9 +153,6 @@ pub(super) struct EditSession {
     /// The session is kept after Done: the tab views the saved copy, and
     /// the edit editor waits, with its text, caret and undo (R-58).
     kept: bool,
-    /// The session began on a new item's draft (R-20): its tab shows the
-    /// draft's fields until its read finds the item (`create`).
-    began_new: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -241,6 +238,9 @@ pub(super) struct TabEdit {
     closing: bool,
     /// The stale-edit review, while it is open (`review`).
     review: Option<review::ReviewState>,
+    /// What stands in for a new item in this tab until its read first
+    /// finds it (`create`).
+    stand_in: create::StandIn,
 }
 
 impl TabEdit {
@@ -264,6 +264,7 @@ impl TabEdit {
             continuing: None,
             closing: false,
             review: None,
+            stand_in: create::StandIn::default(),
         }
     }
 
@@ -271,11 +272,13 @@ impl TabEdit {
         self.phase
     }
 
-    /// A read landed: while Loading, and not waiting for Resume, the editor
-    /// opens from it; a review still waiting for its read takes it, the one
-    /// it opened on or a newer one that superseded it (I1); a session's
-    /// draft is classified against it again.
-    pub(super) fn read_landed(&mut self) {
+    /// A read landed, `found` when it found the item: while Loading, and
+    /// not waiting for Resume, the editor opens from it; a review still
+    /// waiting for its read takes it, the one it opened on or a newer one
+    /// that superseded it (I1); a session's draft is classified against it
+    /// again; and once the item is found, nothing stands in for it again.
+    pub(super) fn read_landed(&mut self, found: bool) {
+        self.stand_in.read_landed(found);
         if self.phase == Phase::Loading && self.stopped.is_none() {
             self.loaded = true;
         }

@@ -1,6 +1,7 @@
 //! The state pill (design, State pill): where the tab stands, in an icon
 //! and words that always go together, never colour alone. Its tooltip
-//! gives the context kind, branch and worktree.
+//! gives the context kind, branch and worktree the item was read from; a
+//! new item's stand-in, read from nowhere, has none.
 //!
 //! While viewing, the pill reads the item: a context that needs recovery,
 //! a closed ticket, a kept or stored draft, then the copy it was read
@@ -171,12 +172,14 @@ fn look(state: PillState, cx: &App) -> (Mark, Hsla) {
     }
 }
 
-/// The pill for `state`, with `item`'s context in its tooltip.
-pub(super) fn pill(state: PillState, item: &ItemDto, cx: &App) -> impl IntoElement + use<> {
+/// The pill for `state`, with the context of `read`, the item as the tab
+/// read it, in its tooltip. A new item's stand-in, read from nowhere, has
+/// no tooltip (Part D fix 1, M2).
+pub(super) fn pill(state: PillState, read: Option<&ItemDto>, cx: &App) -> impl IntoElement + use<> {
     let theme = cx.theme();
     let (mark, color) = look(state, cx);
     let words = pill_words(state);
-    let tooltip = provenance_label(&item.context);
+    let tooltip = read.map(|item| provenance_label(&item.context));
     let mark = match mark {
         Mark::Icon(name) => Icon::default()
             .path(icon_path(name))
@@ -186,26 +189,28 @@ pub(super) fn pill(state: PillState, item: &ItemDto, cx: &App) -> impl IntoEleme
             .into_any_element(),
         Mark::Spinner => Spinner::new().color(color).into_any_element(),
     };
-    div()
+    let mut pill = div()
         .id("item-pill")
         .test_support()
         .aria_label(words)
-        .flex_none()
-        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
-        .child(
-            h_flex()
-                .gap(px(6.))
-                .items_center()
-                .px(px(10.))
-                .py(px(4.))
-                .rounded(px(5.))
-                .bg(theme.secondary)
-                .border_1()
-                .border_color(theme.border)
-                .whitespace_nowrap()
-                .text_size(px(TEXT_SIZE))
-                .text_color(color)
-                .child(mark)
-                .child(words),
-        )
+        .flex_none();
+    if let Some(tooltip) = tooltip {
+        pill = pill.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
+    }
+    pill.child(
+        h_flex()
+            .gap(px(6.))
+            .items_center()
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(5.))
+            .bg(theme.secondary)
+            .border_1()
+            .border_color(theme.border)
+            .whitespace_nowrap()
+            .text_size(px(TEXT_SIZE))
+            .text_color(color)
+            .child(mark)
+            .child(words),
+    )
 }

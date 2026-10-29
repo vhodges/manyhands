@@ -1248,6 +1248,142 @@ async fn an_occupied_path_for_this_drafts_own_item_becomes_a_review(cx: &mut Tes
     assert!(!shell.present("item-save-refused", cx), "the review's now");
 }
 
+/// The finished request `id`'s message, as the library gave it.
+fn request_message(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> String {
+    shell.operations(cx).read_with(cx, |operations, _| {
+        match &operations.request(id).unwrap().state {
+            RequestState::Finished(.., message) => message.clone(),
+            _ => panic!("the request must have finished"),
+        }
+    })
+}
+
+/// Part D fix 1, M5: an `occupied_path` whose path cannot then be read,
+/// here with this draft's own item there, names no other file: the tab
+/// shows the library's refusal, its message and code, as for any other.
+/// The draft is kept, still a new item's, and Save stays offered.
+#[gpui_kit::test]
+async fn an_occupied_path_that_cannot_be_read_names_no_other_file(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |_, _| {});
+    let (id, host) = shell.edit_new_ticket(&root, TICKET, "Mine", cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    // This draft's own item at its path: what a lost create answer left.
+    shell
+        .fixture
+        .create_ticket(&root, TICKET, "Created before", "open");
+
+    let read = shell.backend.hold_read(ReadKind::DraftItem);
+    shell.click("item-save", cx);
+    let sent = creates(&shell, cx);
+    assert_eq!(sent.len(), 1, "Save sent one create");
+    shell.until_ended(sent[0], cx).await;
+    assert_eq!(
+        request_code(&shell, sent[0], cx),
+        Some(ResultCode::OccupiedPath)
+    );
+    // The path is read on a service that knows no repository: it fails.
+    let elsewhere = tempfile::tempdir().unwrap();
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(elsewhere.path()).unwrap());
+    read.send(()).unwrap();
+    until(&shell, cx, "the refusal", |shell, cx| {
+        shell.present("item-save-code", cx)
+    })
+    .await;
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+
+    let words = shell.label("item-save-refused", cx);
+    assert!(
+        !words.is_some_and(|words| words.contains("Another file")),
+        "no other file is named"
+    );
+    assert_eq!(
+        shell.label("item-save-message", cx),
+        Some(request_message(&shell, sent[0], cx))
+    );
+    assert_eq!(
+        shell.label("item-save-code", cx).as_deref(),
+        Some(ResultCode::OccupiedPath.as_str())
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing, "no review");
+    assert!(
+        is_new_item_base(&session_base(&shell, id, cx)),
+        "the draft is kept, still a new item's"
+    );
+    assert_eq!(held(&shell.fixture.draft_store(), id), Some(Held::Here));
+    // Save stays offered: it sends the create again.
+    shell.click("item-save", cx);
+    let again = creates(&shell, cx);
+    assert_eq!(again.len(), 2, "Save stays offered");
+    shell.until_ended(again[0], cx).await;
+}
+
+/// Part D fix 1, M1: a create whose answer was lost, sent again by Save
+/// and answered `already_applied`, has its item's commit in the context:
+/// the context leaves `CreatedContexts`, and Done, which ends the clean
+/// session, sends no release, which the library would refuse.
+#[gpui_kit::test]
+async fn done_after_a_create_found_already_applied_releases_nothing(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |_, _| {});
+    let (id, host) = shell.edit_new_ticket(&root, TICKET, "Lost", cx).await;
+    assert!(created(&shell, &root, cx), "this session made the context");
+    type_at_end(&shell, &host, "x", cx);
+
+    // The create runs, and its answer is lost (the library's
+    // `BeforeRequestSettlement`).
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeRequestSettlement,
+        )
+        .unwrap(),
+    );
+    shell.click("item-save", cx);
+    let lost = creates(&shell, cx);
+    assert_eq!(lost.len(), 1, "Save sent one create");
+    shell.until_ended(lost[0], cx).await;
+    assert_eq!(
+        request_code(&shell, lost[0], cx),
+        Some(ResultCode::InternalError),
+        "lost"
+    );
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    assert!(ticket_read(&shell, &root).is_some(), "it ran");
+
+    // Save again, the text unchanged: the library finds it applied.
+    assert_eq!(phase(&shell, cx), Phase::Editing);
+    shell.click("item-save", cx);
+    let sent = creates(&shell, cx);
+    assert_eq!(sent.len(), 2, "a new request");
+    shell.until_ended(sent[0], cx).await;
+    assert_eq!(
+        request_code(&shell, sent[0], cx),
+        Some(ResultCode::AlreadyApplied)
+    );
+    until(&shell, cx, "the draft retiring", |shell, _| {
+        held(&shell.fixture.draft_store(), id).is_none()
+    })
+    .await;
+    assert!(
+        !created(&shell, &root, cx),
+        "the context holds the item's commit"
+    );
+
+    shell.click("item-done", cx);
+    until(&shell, cx, "Done ending the session", |shell, cx| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+    })
+    .await;
+    shell.run(cx);
+    assert!(releases(&shell, cx).is_empty(), "nothing is released");
+    assert_eq!(context_of(&root), (true, true), "the context is kept");
+}
+
 /// Decision 18: Discard of a new item's draft, its context made by this
 /// session's Create prepare, closes the tab and releases that context.
 #[gpui_kit::test]

@@ -214,7 +214,8 @@ impl ItemPane {
         let item = read.or(built.as_ref());
         let pill = item.map(|item| {
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
-            pill::pill(state, item, cx)
+            // A stand-in was read from nowhere: no provenance (M2).
+            pill::pill(state, read, cx)
         });
         let actions = h_flex()
             .id("item-actions")

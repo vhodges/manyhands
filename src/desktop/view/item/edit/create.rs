@@ -33,9 +33,13 @@
 //! - **The header** (design, Create: the new tab opens editing, with its
 //!   header built from the draft's fields). With no item to read, the tab
 //!   shows the draft's fields as its item, in the header, the strip and the
-//!   sheet, while the never-created session lives and while its Create
-//!   prepare runs (`new_item_shown`); D1's not-found line and D2's restored
-//!   section are not shown meanwhile.
+//!   sheet, while its Create prepare runs, and from the session that
+//!   began on the draft until the tab's read first finds the item, a
+//!   session Done ended after the create included (`StandIn`,
+//!   `new_item_shown`); D1's not-found line and D2's restored section are
+//!   not shown meanwhile. The stand-in claims no provenance and no
+//!   closure: nothing was read. Once the read has found the item, nothing
+//!   stands in for it again in that tab.
 //!
 //! Done, Discard and the Drafts page's discard of such a session are
 //! `done` and `leave`'s: there is no saved copy to view, so the tab
@@ -60,6 +64,56 @@ use crate::desktop::{
     services::drafts::NewItem,
     view::item::ItemPane,
 };
+
+/// What stands in for a new item in its tab, until the tab's read first
+/// finds the item (Part D fix 1, M3 and M7). The tab owns it, so it
+/// outlives a session that Done ended before that read landed. It holds
+/// draft fields, so it derives nothing.
+#[derive(Default)]
+pub(super) enum StandIn {
+    /// No session of the tab began on a new item's draft: a Create
+    /// prepare's draft stands in while it runs (`opening_new_item`).
+    #[default]
+    Unset,
+    /// A session began on a new item's draft: its fields stand in while it
+    /// lives.
+    Session,
+    /// That session ended, its item created, before the read found the
+    /// item: the base and fields it ended with.
+    Ended(Box<(DraftBase, DraftFields)>),
+    /// The tab's read found the item: nothing stands in for it again, so a
+    /// later read that does not find it shows D1's status.
+    Found,
+}
+
+impl StandIn {
+    /// A session opened on `base`: on a new item's, its fields stand in.
+    pub(super) fn opened(&mut self, base: &DraftBase) {
+        if is_new_item_base(base) && !matches!(self, Self::Found) {
+            *self = Self::Session;
+        }
+    }
+
+    /// The session holding `base` and `meta` ended. Its item created, they
+    /// stand in, as they were, until the read finds the item (M7). Its item
+    /// never created, nothing does: a draft still stored is D2's to offer,
+    /// as any stored draft's.
+    pub(super) fn ended(&mut self, base: &DraftBase, meta: &DraftFields) {
+        if matches!(self, Self::Session) {
+            *self = match is_new_item_base(base) {
+                true => Self::Unset,
+                false => Self::Ended(Box::new((base.clone(), meta.clone()))),
+            };
+        }
+    }
+
+    /// A read of the tab landed; `found` when it found the item.
+    pub(super) fn read_landed(&mut self, found: bool) {
+        if found {
+            *self = Self::Found;
+        }
+    }
+}
 
 impl ItemPane {
     /// A create dialog's new item (R-20): its draft, written before its
@@ -89,12 +143,14 @@ impl ItemPane {
     }
 
     /// The new item this tab shows while it is not created yet, or not yet
-    /// read since: with no item read, the session's fields while one lives
-    /// that began on a new item's draft (its create may have committed
-    /// already, the tab's own read of the item still to land: Task 23 fix
-    /// 1), or, while a Create prepare runs for the draft continued here,
+    /// read since (`StandIn`): with no item read, the session's fields
+    /// while one lives that began on a new item's draft (its create may
+    /// have committed already, the tab's own read of the item still to
+    /// land: Task 23 fix 1), the fields it ended with once Done has ended
+    /// it, or, while a Create prepare runs for the draft continued here,
     /// that draft's. `None` otherwise, a stored or restored draft not
-    /// continued included. The read that finds the item replaces it.
+    /// continued included. The read that finds the item replaces it, for
+    /// good in this tab.
     pub(in crate::desktop::view) fn new_item_shown(&self, cx: &App) -> Option<ItemDto> {
         let OpenTarget::Item { kind, id, .. } = self.model.target() else {
             return None;
@@ -127,10 +183,16 @@ impl ItemPane {
         if self.model.item().rows().is_some() {
             return None;
         }
-        if let Some(session) = &self.edit.session {
-            return session.began_new.then(|| f(&session.base, &session.meta));
+        match &self.edit.stand_in {
+            StandIn::Found => return None,
+            StandIn::Ended(ended) => return Some(f(&ended.0, &ended.1)),
+            StandIn::Session => {
+                let session = self.edit.session.as_ref()?;
+                return Some(f(&session.base, &session.meta));
+            }
+            StandIn::Unset => {}
         }
-        if !self.opening_new_item() {
+        if self.edit.session.is_some() || !self.opening_new_item() {
             return None;
         }
         let continuing = self.edit.continuing.as_ref()?;
