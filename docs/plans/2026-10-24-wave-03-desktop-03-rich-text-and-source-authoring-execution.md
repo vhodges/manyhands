@@ -217,7 +217,7 @@ All present at this HEAD.
 | Design, Task 27: Privacy, the sweep's reach (Task 26 review M8) | design lines 2026-2028 |
 | Design, Task 27: native checklist step 2's refused images | design lines 2107-2111 |
 | Design, Task 27: a fourth kept-context case (Part D review M1) | design lines 2568-2576 |
-| Design, Task 27: Known Limits from Tasks 15 to 27 and the reviews, with known defects `01M5B163PQ` and `01M4EHGE60` | design lines 2638-2721 |
+| Design, Task 27: Known Limits from Tasks 15 to 27 and the reviews, with known defects `01M5B163PQ` and `01M4EHGE60` | design lines 2638-2725 |
 
 ## Sweep
 
@@ -1827,3 +1827,43 @@ Notes for later tasks: Task 22 leaves `targets()` in
   two known defects; the Part E text, the avatar deviation, the
   relationship wait, the Privacy sweep's reach, checklist step 2 and the
   fourth kept-context case are amended (Document Amendments).
+- Task 27 fix round, scoped re-review (controller): of `175cbc5..8fbc24d`,
+  A1 to A3, B1 to B7, C1 to C3 and D1 to D3 all addressed; one new
+  Important, N1; four observations.
+- Ruling (controller, Task 27 re-review N1): a Save the user pressed that
+  Continue editing's steps carry out (the restored section's Save, the
+  close dialog's Save on a restored draft, a new item's create) waits for
+  the relationship check its open starts, and is sent once that check
+  lands unless a reason then blocks it. A press of Save or `secondary-s`
+  while a check runs still sends nothing. — An offered Save the user
+  pressed must not be dropped; B4's "waits" is then true of it. — If
+  wrong: a save sent a moment later than pressed.
+- Ruling (controller, Task 27 re-review observation 2): a refocus D3 sets
+  when a repair's answer lands is dropped while the details sheet is
+  open, as A1 drops a late focus. — R-60 and contract 13: keys never act
+  behind the sheet. — If wrong: one Tab after the sheet closes.
+- Ruling (controller, Task 27 re-review observations 1 and 3): accepted.
+  A focus that A1 dropped is not given back when the dialog or sheet
+  closes: focus returns to the control that opened it, or, if that is
+  gone, the workspace puts it in a region (Known Limit). Keep draft by
+  Enter in D3's session close dialogs closes through the Kit's deferred
+  close; its end state is the content region either way. — Contract 13:
+  focus is never left on an unseen root. — If wrong: one Tab.
+- Known Limit (Task 27 re-review): when an editor or the review opens
+  under a dialog or the details sheet, it does not take focus; once that
+  closes, focus goes back to the control that opened it, or to the
+  content region, and one Tab or a click reaches the editor.
+- Task 27 fix 2 (controller, reading `f6a87cc..44fbb31`): N1 and N2 as
+  ruled. The controller read the production diff; no separate re-review
+  was dispatched for 80 lines whose four tests failed first. The route
+  `follow_tab` sets cannot be behind the sheet: a repaired tab is an
+  Inspect tab, which has no chips.
+- Ruling (controller, Task 27 fix 2 concern 1): the close dialog's
+  Cancel, Keep draft or Discard also ends a Save waiting for the check. —
+  Task 18 fix 1's M1: a cancelled write never happens. — If wrong: a
+  second press of Save.
+- Ruling (controller, Task 27 fix 2 concern 2): a tab that closes once
+  its choice lands refocuses the content region only when it was the
+  shown tab; a tab closed in the background leaves focus where the user
+  is. — Contract 13: focus moves only where the user's action leads. —
+  If wrong: one Tab after a background close.

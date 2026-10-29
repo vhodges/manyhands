@@ -2705,6 +2705,10 @@ R-45 by decision 18.
   only Cancel, until Escape or Cancel. A close dialog's Save that a quit
   interrupts still saves; if the quit is cancelled, the tab stays open
   (Task 27).
+- An editor or the review that opens under a dialog or the details sheet
+  does not take focus. Once that closes, focus goes back to the control
+  that opened it, or, if that control is gone, to the content region; one
+  Tab or a click reaches the editor (Task 27).
 - A new ticket whose create the library refuses for its relationships
   shows the library's message and code, not the relationship words. A new
   ID closes no cycle, so this is not expected (Part D review).
