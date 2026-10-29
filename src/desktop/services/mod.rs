@@ -120,9 +120,7 @@ pub(crate) enum JobKind {
     ContextRelease,
     DocumentCreate,
     TicketCreate,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     DocumentMove,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     FolderCreate,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 25.
     DocumentRepair,

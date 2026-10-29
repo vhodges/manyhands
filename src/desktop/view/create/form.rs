@@ -1,7 +1,8 @@
 //! The create dialogs' drawing (design, Create (decision 3);
 //! `05-sheets-and-dialogs.md`): the dialog's body, from a labelled field over
 //! the Kit input, with its note in red under it, and a dialog button that
-//! Enter presses and that says, while unavailable, why.
+//! Enter presses and that says, while unavailable, why. Move… and New
+//! folder draw their dialogs with the same two (Task 24).
 
 use std::rc::Rc;
 
@@ -28,7 +29,7 @@ use crate::desktop::{
 /// A labelled field `id`: its label, the Kit input `input` in the element
 /// `{id}-input`, and, with a `note`, a red border and the note below it, as
 /// `{id}-note`.
-fn field(
+pub(in crate::desktop::view) fn field(
     id: &'static str,
     label: &'static str,
     input: &Entity<InputState>,
@@ -65,7 +66,7 @@ fn field(
 /// it presses it: its wrapper takes the dialog's Enter before the dialog
 /// does. While it is not `enabled`, it says why with `note`, in the element
 /// `{id}-note`, as its tooltip and as its description.
-fn button(
+pub(in crate::desktop::view) fn button(
     id: &'static str,
     label: &'static str,
     primary: bool,

@@ -41,7 +41,13 @@ use manyhands::{
     results::ResultCode,
 };
 
-use self::document::{PathCheck, Place};
+use self::document::Place;
+/// Move… and New folder are drawn and checked as these dialogs are (Task
+/// 24).
+pub(in crate::desktop::view) use self::{
+    document::PathCheck,
+    form::{button, field},
+};
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{

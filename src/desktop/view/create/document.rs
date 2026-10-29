@@ -7,6 +7,8 @@
 //! answer is made again at the next change of any field.
 //!
 //! The path is the user's text, so nothing here derives `Debug`.
+//!
+//! Move…'s destination is checked the same way (`PathCheck`, Task 24).
 
 use std::path::{Path, PathBuf};
 
@@ -23,7 +25,7 @@ use crate::desktop::{
 };
 
 /// Where a document's path check stands.
-pub(super) enum PathCheck {
+pub(in crate::desktop::view) enum PathCheck {
     /// Refused here, in these words.
     Refused(&'static str),
     /// `observe_path` was asked about it.
@@ -34,6 +36,33 @@ pub(super) enum PathCheck {
     Held(String),
     /// The observe gave no answer.
     Failed(ResultCode),
+}
+
+impl PathCheck {
+    /// The check of `path` as `observe_path` answered it: a file there
+    /// holds it; nothing there leaves it free; busy or a failure is the
+    /// code.
+    pub(in crate::desktop::view) fn observed(
+        path: String,
+        result: ReadResult<PathObservationDto>,
+    ) -> Self {
+        match result {
+            ReadResult::Ok(observed) if observed.exists => Self::Held(path),
+            ReadResult::Ok(_) => Self::Free(path),
+            ReadResult::Busy => Self::Failed(ResultCode::Busy),
+            ReadResult::Failed(failure) => Self::Failed(failure.code),
+        }
+    }
+
+    /// What the check says, while it says anything.
+    pub(in crate::desktop::view) fn note(&self) -> Option<String> {
+        match self {
+            Self::Refused(words) => Some((*words).to_owned()),
+            Self::Held(path) => Some(path_held(path)),
+            Self::Failed(code) => Some(code.message().to_owned()),
+            Self::Checking | Self::Free(_) => None,
+        }
+    }
 }
 
 /// A new document's Folder and File name, and their check.
@@ -49,12 +78,7 @@ impl CreateDialog {
         let Inputs::Document(place) = &self.inputs else {
             return None;
         };
-        match &place.check {
-            PathCheck::Refused(words) => Some((*words).to_owned()),
-            PathCheck::Held(path) => Some(path_held(path)),
-            PathCheck::Failed(code) => Some(code.message().to_owned()),
-            PathCheck::Checking | PathCheck::Free(_) => None,
-        }
+        place.check.note()
     }
 
     /// Whether the last path check gave no answer: it is made again at the
@@ -132,12 +156,7 @@ impl CreateDialog {
         let Inputs::Document(place) = &mut self.inputs else {
             return;
         };
-        place.check = match result {
-            ReadResult::Ok(observed) if observed.exists => PathCheck::Held(path),
-            ReadResult::Ok(_) => PathCheck::Free(path),
-            ReadResult::Busy => PathCheck::Failed(ResultCode::Busy),
-            ReadResult::Failed(failure) => PathCheck::Failed(failure.code),
-        };
+        place.check = PathCheck::observed(path, result);
         cx.notify();
     }
 }

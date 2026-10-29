@@ -62,7 +62,6 @@ impl ContextKey {
     }
 
     /// Whether `intent` releases this item's context.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     pub(crate) fn released_by(&self, intent: &Intent) -> bool {
         matches!(intent, Intent::ContextRelease { .. }) && Self::of(intent).as_ref() == Some(self)
     }

@@ -234,7 +234,6 @@ impl Releases {
     /// Whether a release of `key`'s context is queued or running, or waits
     /// for the store's listing or for a prepare's answer: Move is disabled
     /// meanwhile.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     pub(crate) fn pending(&self, key: &ContextKey) -> bool {
         self.checks.contains_key(key)
             || self.closed.values().any(|closed| closed == key)

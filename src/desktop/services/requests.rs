@@ -183,7 +183,6 @@ pub(crate) enum Intent {
         parent: Option<String>,
     },
     /// A document moved to another path.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     DocumentMove {
         root: PathBuf,
         id: ItemId,
@@ -192,7 +191,6 @@ pub(crate) enum Intent {
         destination_observation: String,
     },
     /// A folder below `docs/`, by its path with forward slashes.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     FolderCreate {
         root: PathBuf,
         path: String,

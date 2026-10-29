@@ -3,7 +3,8 @@
 //! documents show by title with their path as secondary text; a
 //! nonconforming document shows its path and problem code. Enter or a
 //! click opens a document. New document… opens its dialog
-//! (`view::create`); folder creation is visibly unavailable.
+//! (`view::create`), and New folder… its own, under the folder selected
+//! in the tree (`view::new_folder`, E-10).
 
 use std::{collections::HashMap, rc::Rc};
 
@@ -11,7 +12,7 @@ use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
     component::{
-        ActiveTheme, Disableable,
+        ActiveTheme,
         button::Button,
         h_flex,
         list::ListItem,
@@ -26,8 +27,7 @@ use crate::desktop::model::{documents::TreeNode, navigation::OpenTarget, stamp::
 
 pub(crate) const NONCONFORMING: &str = "Nonconforming";
 pub(crate) const EMPTY_FOLDER: &str = "Empty folder";
-pub(crate) const NEW_FOLDER: &str = "New folder";
-pub(crate) const NEW_FOLDER_UNAVAILABLE: &str = "Creating folders is not available yet.";
+pub(crate) const NEW_FOLDER: &str = "New folder\u{2026}";
 
 /// A folder's name: the last part of its path.
 fn folder_name(path: &str) -> &str {
@@ -48,6 +48,9 @@ enum Node {
     Folder {
         label: String,
         empty: bool,
+        /// Below the repository root, from `docs`: where New folder… makes
+        /// a folder while this one is selected.
+        path: String,
     },
     Document {
         label: String,
@@ -108,7 +111,17 @@ impl DocumentsPane {
         }
     }
 
-    /// The tree, with folder creation shown unavailable above it.
+    /// The path of the selected folder; nothing for a document, or with
+    /// nothing selected.
+    pub(crate) fn selected_folder(&self, cx: &App) -> Option<String> {
+        let id = &self.tree.read(cx).selected_item()?.id;
+        match self.nodes.get(id)? {
+            Node::Folder { path, .. } => Some(path.clone()),
+            Node::Document { .. } => None,
+        }
+    }
+
+    /// The tree, with New document… and New folder… above it.
     pub(crate) fn render(
         &self,
         workspace: WeakEntity<Workspace>,
@@ -118,6 +131,7 @@ impl DocumentsPane {
         let muted = theme.muted_foreground;
         let nodes = self.nodes.clone();
         let opener = workspace.clone();
+        let folder_opener = workspace.clone();
         let rows = tree(&self.tree, move |ix, entry, selected, _, _| {
             let indent = px(12. * entry.depth() as f32);
             let item = ListItem::new(("doc-item", ix))
@@ -127,7 +141,7 @@ impl DocumentsPane {
                 return item;
             };
             let (label, secondary) = match node {
-                Node::Folder { label, empty } => (
+                Node::Folder { label, empty, .. } => (
                     label.clone(),
                     empty.then(|| {
                         h_flex().child(
@@ -203,8 +217,8 @@ impl DocumentsPane {
                     .children(secondary),
             )
         });
-        // New document…, before New folder (`03-panels.md`): its dialog
-        // (`view::create`).
+        // New document…, before New folder… (`03-panels.md`): each opens
+        // its dialog (`view::create`, `view::new_folder`).
         let new_document = div().id("new-document").test_support().child(
             Button::new("new-document-button")
                 .label(NEW_DOCUMENT)
@@ -212,31 +226,19 @@ impl DocumentsPane {
                     let _ = opener.update(cx, |workspace, cx| workspace.new_item(window, cx));
                 }),
         );
+        let new_folder = div().id("new-folder").test_support().child(
+            Button::new("new-folder-button").label(NEW_FOLDER).on_click(
+                move |_: &ClickEvent, window, cx| {
+                    let _ =
+                        folder_opener.update(cx, |workspace, cx| workspace.new_folder(window, cx));
+                },
+            ),
+        );
         v_flex()
             .gap_1()
             .size_full()
             .min_h_0()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(new_document)
-                    .child(
-                        div().id("new-folder").test_support().child(
-                            Button::new("new-folder-button")
-                                .label(NEW_FOLDER)
-                                .disabled(true),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .id("new-folder-unavailable")
-                            .test_support()
-                            .aria_label(NEW_FOLDER_UNAVAILABLE)
-                            .text_xs()
-                            .text_color(muted)
-                            .child(NEW_FOLDER_UNAVAILABLE),
-                    ),
-            )
+            .child(h_flex().gap_2().child(new_document).child(new_folder))
             .child(
                 div()
                     .id("documents-tree")
@@ -272,6 +274,7 @@ fn items(
                         Node::Folder {
                             label: label.clone(),
                             empty: *empty,
+                            path: path.clone(),
                         },
                     );
                     TreeItem::new(id, label).expanded(true).children(children)
