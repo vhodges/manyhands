@@ -172,8 +172,10 @@ impl ItemPane {
     }
 
     /// When the index saw the item change, as D1 showed it: the field the
-    /// Updated chip opens the sheet on, so a tab stop.
+    /// Updated chip opens the sheet on, so a tab stop, named as the sheet's
+    /// other rows are.
     fn updated(&self, changed: &str, window: &Window, cx: &App) -> AnyElement {
+        let name = ChipField::Updated.key();
         let focus = &self.sheet_focus[ChipField::Updated.index()];
         let ring = focus.is_focused(window).then(|| {
             div()
@@ -186,9 +188,11 @@ impl ItemPane {
         div()
             .id("sheet-changed")
             .test_support()
+            .role(Role::Group)
+            .aria_label(name)
             .track_focus(focus)
             .relative()
-            .child(field("item-changed", "Updated", changed.to_owned(), cx))
+            .child(field("item-changed", name, changed.to_owned(), cx))
             .children(ring)
             .child(self.sheet_scroll.marker(focus))
             .into_any_element()
