@@ -174,7 +174,12 @@ impl Walk {
     /// Presses `key`, Tab or shift-Tab, until the element `id` holds focus.
     fn tab_to(&self, key: &str, id: impl Into<ElementId>, cx: &mut TestAppContext) {
         let id = id.into();
-        self.press_until(key, &id, |walk, cx| walk.holds_focus(&id, cx), cx);
+        let mut presses = 0;
+        while !self.holds_focus(&id, cx) {
+            presses += 1;
+            assert!(presses <= TAB_LIMIT, "{key} never reached {id:?}");
+            self.keys(key, cx);
+        }
     }
 
     /// Presses `key` until `reached` holds, at most `TAB_LIMIT` times, or
@@ -296,7 +301,18 @@ impl Walk {
     /// The document tree: the arrows move to the document and Enter opens
     /// it into a tab. Focus stays in the tree.
     fn open_a_document(&self, cx: &mut TestAppContext) {
-        self.open_tree_row("Guide", cx);
+        let nodes = self.shell.rows("doc-node", cx);
+        let at = nodes
+            .iter()
+            .position(|node| node == "Guide")
+            .expect("the document is listed");
+        let mut presses = 0;
+        while !self.shell.selected(("doc-node", at), cx) {
+            presses += 1;
+            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
+            self.keys("down", cx);
+        }
+        self.enter(cx);
         assert_eq!(
             self.opened(cx),
             Some(OpenTarget::Item {
