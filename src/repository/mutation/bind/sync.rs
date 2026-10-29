@@ -329,7 +329,7 @@ pub(crate) fn fenced_answer(
 /// is asked of the request that began the operation, and a resume that
 /// takes the operation up answers to it exactly as that request's own
 /// next call would.
-struct Watch<'a> {
+pub(super) struct Watch<'a> {
     call: &'a CallContext<'a>,
     accepted: &'a Accepted,
     subject: Subject,
@@ -349,6 +349,35 @@ struct Watch<'a> {
     /// What the domain said of the commit, from what the push endpoint
     /// advertised.
     verified: Option<Publication>,
+}
+
+impl<'a> Watch<'a> {
+    /// The observer of one domain call under `accepted`'s operation, for
+    /// the call `call`: its events are of `subject`, and a cancellation is
+    /// read from the call's token and from the flag of `owner`, the
+    /// request whose record holds the operation (fact 54).
+    ///
+    /// `accepted` carries the operation the call synchronizes, which for
+    /// a comment is the binding's child `synchronization_id`, as a resume
+    /// builds one for the operation it takes up. Whether the operation
+    /// began this call with a push unsettled is read here, once.
+    pub(super) fn new(
+        accepted: &'a Accepted,
+        call: &'a CallContext<'a>,
+        subject: Subject,
+        owner: Option<RequestId>,
+    ) -> Self {
+        Self {
+            call,
+            accepted,
+            subject,
+            owner,
+            unsettled: push_is_unsettled(call.service, accepted),
+            asked_at: None,
+            pushed: false,
+            verified: None,
+        }
+    }
 }
 
 impl Watch<'_> {
@@ -712,16 +741,7 @@ impl SyncBinding {
     ) -> Ran {
         let service = call.service;
         let root = accepted.root();
-        let mut watch = Watch {
-            call,
-            accepted,
-            subject,
-            owner,
-            unsettled: push_is_unsettled(service, accepted),
-            asked_at: None,
-            pushed: false,
-            verified: None,
-        };
+        let mut watch = Watch::new(accepted, call, subject, owner);
         let Some(result) = call.session.synchronize(
             service,
             self.request(accepted, restart),

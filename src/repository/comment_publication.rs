@@ -157,6 +157,16 @@ pub(super) fn recovery_error() -> RepositoryError {
     )
 }
 
+/// What publishes a comment's checkpoint: given the request of the
+/// binding's child synchronization, it makes the domain call and returns
+/// what it came to, or `None` when it made no call. The public functions
+/// pass one over `synchronize_remote`, with the default settings and no
+/// observer. `comment add` passes one over its session, with the merging
+/// settings and an observer that reports progress and stops at safe
+/// points (R-3).
+pub(crate) type Synchronizer<'a> = dyn FnMut(SynchronizeRemoteRequest) -> Option<Result<SynchronizationResult, SynchronizationError>>
+    + 'a;
+
 pub(super) fn pending_synchronization(error: SynchronizationError) -> CommentPublicationState {
     let error = match error {
         SynchronizationError::Repository(error) => {
@@ -180,7 +190,27 @@ impl RepositoryService {
         request: PublishCommentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
-        self.publish_comment_with_config(request, None, session)
+        self.submit_comment_with(request, false, false, &mut |request| {
+            Some(self.synchronize_remote(request, session))
+        })
+    }
+
+    /// `submit_comment` as `comment add` calls it (R-3, R-4).
+    ///
+    /// - `restart` is passed to every request `synchronize` is given. A
+    ///   request that enters again sets it (fact 65): a proved receipt is
+    ///   published without writing again, and a stopped child is taken up.
+    /// - `release_unwritten` selects the binding's semantics; see
+    ///   `checkpoint_comment_locally_with`.
+    /// - `synchronize` makes the publication's one domain call.
+    pub(crate) fn submit_comment_with(
+        &self,
+        request: PublishCommentRequest,
+        restart: bool,
+        release_unwritten: bool,
+        synchronize: &mut Synchronizer<'_>,
+    ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
+        self.publish_comment_with_config(request, None, restart, release_unwritten, synchronize)
     }
 
     #[doc(hidden)]
@@ -190,14 +220,22 @@ impl RepositoryService {
         effective_config: &Config,
         session: &mut SessionCredentials<P>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
-        self.publish_comment_with_config(request, Some(effective_config), session)
+        self.publish_comment_with_config(
+            request,
+            Some(effective_config),
+            false,
+            false,
+            &mut |request| Some(self.synchronize_remote(request, session)),
+        )
     }
 
-    fn publish_comment_with_config<P: SessionCredentialProvider>(
+    fn publish_comment_with_config(
         &self,
         request: PublishCommentRequest,
         config: Option<&Config>,
-        session: &mut SessionCredentials<P>,
+        restart: bool,
+        release_unwritten: bool,
+        synchronize: &mut Synchronizer<'_>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
         let id = request.comment.target.operation_id;
         let result = (|| {
@@ -218,9 +256,9 @@ impl RepositoryService {
                         LocalCheckpoint::NoChange,
                         request.approval,
                         request.confirmed_identity,
-                        false,
+                        restart,
                         persistence_pending,
-                        session,
+                        synchronize,
                     );
                 }
                 // Recorded receipts are immutable; failed proof cannot authorize a
@@ -229,7 +267,13 @@ impl RepositoryService {
                     return Err(recovery_error());
                 }
             }
-            let local = self.checkpoint_comment_locally(request.comment.clone(), config)?;
+            // The public path goes on through the function it always
+            // called (fact 73); only the binding asks for its semantics.
+            let local = if release_unwritten {
+                self.checkpoint_comment_locally_with(request.comment.clone(), config, true)?
+            } else {
+                self.checkpoint_comment_locally(request.comment.clone(), config)?
+            };
             let (context, checkpoint, pending, mut binding) = match local {
                 LocalCommentCheckpointOutcome::IdentityRequired { context } => {
                     return Ok(CommentSubmissionOutcome::IdentityRequired { context });
@@ -315,9 +359,9 @@ impl RepositoryService {
                 checkpoint,
                 request.approval,
                 request.confirmed_identity,
+                restart,
                 false,
-                false,
-                session,
+                synchronize,
             )
         })();
         result.map_err(|error: RepositoryError| {
@@ -331,6 +375,18 @@ impl RepositoryService {
         &self,
         request: RetryCommentPublicationRequest,
         session: &mut SessionCredentials<P>,
+    ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
+        self.retry_comment_publication_with(request, &mut |request| {
+            Some(self.synchronize_remote(request, session))
+        })
+    }
+
+    /// `retry_comment_publication`, publishing through `synchronize`
+    /// (R-3). It never writes a comment.
+    pub(crate) fn retry_comment_publication_with(
+        &self,
+        request: RetryCommentPublicationRequest,
+        synchronize: &mut Synchronizer<'_>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
         let result = (|| {
             let (_, root) =
@@ -351,7 +407,7 @@ impl RepositoryService {
                 request.confirmed_identity,
                 request.restart,
                 persistence_pending,
-                session,
+                synchronize,
             )
         })();
         result.map_err(|error: RepositoryError| {
@@ -381,7 +437,7 @@ impl RepositoryService {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn continue_comment_publication<P: SessionCredentialProvider>(
+    fn continue_comment_publication(
         &self,
         receipt: CommentReceipt,
         checkpoint: LocalCheckpoint,
@@ -389,7 +445,7 @@ impl RepositoryService {
         confirmed_identity: Option<ConfirmedCommitIdentity>,
         restart: bool,
         persistence_pending: bool,
-        session: &mut SessionCredentials<P>,
+        synchronize: &mut Synchronizer<'_>,
     ) -> Result<CommentSubmissionOutcome, RepositoryError> {
         let context = receipt.context();
         let mut indexing = CommentIndexingState::default();
@@ -412,7 +468,7 @@ impl RepositoryService {
                 approval,
                 confirmed_identity,
                 restart,
-                session,
+                synchronize,
                 &mut indexing,
             );
         }
@@ -460,13 +516,13 @@ impl RepositoryService {
         Ok(())
     }
 
-    fn synchronize_comment_receipt<P: SessionCredentialProvider>(
+    fn synchronize_comment_receipt(
         &self,
         receipt: &CommentReceipt,
         approval: Option<HostApproval>,
         confirmed_identity: Option<ConfirmedCommitIdentity>,
         restart: bool,
-        session: &mut SessionCredentials<P>,
+        synchronize: &mut Synchronizer<'_>,
         indexing: &mut CommentIndexingState,
     ) -> CommentPublicationState {
         let pending = pending_synchronization;
@@ -496,20 +552,23 @@ impl RepositoryService {
         }
         // Historical authority is independent of today's branch/endpoint. A
         // nonterminal child, however, may not publish a tree missing this comment.
-        let result = self.synchronize_remote(
-            SynchronizeRemoteRequest {
-                root: receipt.root.clone(),
-                operation_id: receipt.synchronization_id,
-                target: SynchronizationTarget::Context {
-                    kind: receipt.kind,
-                    item_id: receipt.item_id.clone(),
-                },
-                approval,
-                confirmed_identity,
-                restart,
+        let result = synchronize(SynchronizeRemoteRequest {
+            root: receipt.root.clone(),
+            operation_id: receipt.synchronization_id,
+            target: SynchronizationTarget::Context {
+                kind: receipt.kind,
+                item_id: receipt.item_id.clone(),
             },
-            session,
-        );
+            approval,
+            confirmed_identity,
+            restart,
+        });
+        // `None`: no domain call was made, as by a session that holds no
+        // credentials. Nothing was published, and the publication is left
+        // pending.
+        let Some(result) = result else {
+            return pending(SynchronizationError::RecoveryRequired);
+        };
         let outcome = match result {
             Ok(SynchronizationResult::Complete(outcome)) => outcome,
             Ok(SynchronizationResult::IndexPending(value)) => {
@@ -593,6 +652,56 @@ impl RepositoryService {
             binding.item_id, binding.comment_id
         ));
         Ok(find_comment_checkpoint(&repository, binding, &path)?.is_some())
+    }
+
+    /// Refuses a parent that is not a conforming comment of the item, or
+    /// that is the comment itself, before a binding row is inserted, so a
+    /// refused parent leaves none (fact 19). It reads what the parent check
+    /// after the context's preparation reads: the item's editing worktree
+    /// when there is one, and otherwise the primary checkout, as the
+    /// preparation itself reads it for the item. Content it cannot read is
+    /// left to the steps that follow, which report it as they always have.
+    pub(super) fn refuse_unknown_comment_parent(
+        &self,
+        repository: &Repository,
+        root: &Path,
+        request: &SubmitCommentRequest,
+    ) -> Result<(), RepositoryError> {
+        let Some(parent_id) = &request.parent_id else {
+            return Ok(());
+        };
+        let operation = RepositoryOperation::SubmitComment;
+        let refused = || {
+            authoring_error(
+                operation,
+                root,
+                RepositoryErrorKind::MissingAuthoringTarget,
+                "the requested parent is not a conforming comment for the selected item",
+            )
+        };
+        if parent_id == &request.comment_id {
+            return Err(refused());
+        }
+        let context = item_context(root, request.target.kind, request.target.item_id.clone());
+        let content = if context.worktree.exists() {
+            if validate_context_worktree(repository, &context, true, operation).is_err() {
+                return Ok(());
+            }
+            canonical_context_at(&context.worktree, operation)
+        } else {
+            canonical_context_at(root, operation)
+        };
+        let Ok(content) = content else {
+            return Ok(());
+        };
+        if content.items.iter().any(|item| {
+            matches!(item, canonical::CanonicalItem::Comment(comment)
+                if &comment.id == parent_id && comment.item_id == context.item_id)
+        }) {
+            Ok(())
+        } else {
+            Err(refused())
+        }
     }
 }
 

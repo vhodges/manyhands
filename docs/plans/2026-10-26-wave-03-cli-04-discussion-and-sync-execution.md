@@ -592,6 +592,7 @@ new ticket comment (ruling P4).
 | Task | Commit | Checks | Review | Notes |
 | --- | --- | --- | --- | --- |
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
+| 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 
 ### Task 1: Merging Synchronization
 
@@ -850,3 +851,190 @@ inspects that worktree.
 The whole `--test mutation_remote` target was not run again. The controller
 asked for it only after a change to `remote/sync.rs` or to a shared helper of
 pre-existing cases, and neither was changed.
+
+### Task 2a: The Library's Comment Submission
+
+The commit is on `8af90fb`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched.
+
+**Controller rulings, made before any code was written.** The implementer
+stopped and asked about two conflicts in the brief.
+
+1. **The parent check stays in place on the public path (Q1, option A).**
+   - The brief moves the parent check before the binding row's insert, but
+     `src/repository/comment_publication_tests.rs:365` pins the old order.
+     That test, `comment_publication_rejected_row_refresh_and_reopen_keep_one_binding`,
+     refuses a parent through the public `submit_comment` and expects the
+     binding row to remain. It is not a named edit, and fact 73 keeps
+     `checkpoint_comment_locally`'s behavior.
+   - So the parent is checked before the insert only on the binding's path
+     (`release_unwritten: true`). The public path, which passes `false`,
+     keeps today's order.
+2. **The author moves to Task 2b (Q2, option A).** In Task 2a nothing outside
+   tests would call `CommentAuthor::parse`. The library's non-test build
+   therefore reports `parse` as never used and `CommentAuthorError` as never
+   constructed, and `-D warnings` fails. The following move to Task 2b, where
+   `comment add` first calls them:
+   - `CommentAuthor`;
+   - its `parse` and its error type;
+   - the `author` parameter;
+   - the author domain cases.
+
+   No `allow` or `expect(dead_code)` is used.
+3. **Accepted as the implementer proposed:**
+   - the `Watch::new` signature below;
+   - a synchronizer that returns `None` leaves the publication pending, as
+     `Synchronization(RecoveryRequired)`;
+   - `restart` is passed on both paths.
+
+**What changed.**
+
+- `comment_publication.rs`:
+  - `pub(crate) type Synchronizer<'a> = dyn FnMut(SynchronizeRemoteRequest) -> Option<Result<SynchronizationResult, SynchronizationError>> + 'a`.
+  - `pub(crate) fn submit_comment_with(&self, request: PublishCommentRequest, restart: bool, release_unwritten: bool, synchronize: &mut Synchronizer<'_>) -> Result<CommentSubmissionOutcome, CommentSubmissionError>`.
+  - `pub(crate) fn retry_comment_publication_with(&self, request: RetryCommentPublicationRequest, synchronize: &mut Synchronizer<'_>) -> Result<CommentSubmissionOutcome, CommentSubmissionError>`.
+  - The public `submit_comment` and `retry_comment_publication`, and
+    `submit_comment_with_identity_config_for_testing`, keep their signatures.
+    They pass a closure over `synchronize_remote` (default settings, no
+    observer) with `restart: false` and `release_unwritten: false`.
+  - The submission no longer holds a `SessionCredentials`; the synchronizer
+    makes the one domain call.
+  - `restart` reaches the synchronizer on both the receipt path (fact 65's
+    `:216-224`, which passed `false` before) and the fresh path. On the
+    fresh path no child row exists, so the domain ignores it.
+  - **`None` from the synchronizer** means no domain call was made, as from
+    a `NoSession` preview or credentials already in use. The publication is
+    then `Pending { reason: Synchronization(RecoveryRequired) }`.
+  - New `pub(super) fn refuse_unknown_comment_parent`. It refuses a parent
+    that is not a conforming comment of the item, or that is the comment
+    itself (`MissingAuthoringTarget`, which is `item_not_found`). It reads
+    what the later parent check reads:
+    - the item's editing worktree, after `validate_context_worktree`, when
+      the worktree exists;
+    - otherwise the primary checkout, as `prepare_context_unlocked` reads it
+      for the item.
+
+    Content it cannot read is left to the later steps, which report it as
+    before.
+- `src/repository.rs`:
+  - `checkpoint_comment_locally` keeps its signature and now delegates to
+    `pub(crate) fn checkpoint_comment_locally_with(&self, request: SubmitCommentRequest, effective_config: Option<&Config>, release_unwritten: bool)`
+    with `false`.
+  - Its doc says that `release_unwritten` selects the binding's semantics:
+    the early parent check and the release of an unwritten binding.
+  - With `release_unwritten`:
+    - the parent is checked before `bind_comment_publication`, for a new row
+      only, since only a new row inserts a binding row;
+    - when `IdentityRequired` finds the comment file absent, the binding is
+      released under the lease, in place of `complete_lifecycle`. If the
+      release finds that something was written, the row is completed as
+      before.
+  - The production caller still calls `checkpoint_comment_locally` when
+    `release_unwritten` is false. That keeps fact 73's one production caller,
+    and keeps the function live in the non-test build.
+  - Nothing else in `src/repository.rs` changed.
+- `recovery.rs`: new
+  `pub(super) fn release_unwritten_comment_binding(&self, root, record, operation_id) -> Result<bool, RepositoryError>`
+  (R-34).
+  - One immediate transaction checks that:
+    - the row is the operation's `submit_comment` row and was not abandoned;
+    - its last step is null, `branch_observed`, `worktree_observed` or
+      `completed`;
+    - the binding has no checkpoint;
+    - the child synchronization has no remote row.
+  - If all hold, it deletes the binding and sets the row to `completed` /
+    `rejected`, then returns `true`. Otherwise it changes nothing and returns
+    `false`.
+  - No table, column or trigger changed.
+- `bind/sync.rs`: `Watch` is `pub(super)`. New
+  `pub(super) fn new(accepted: &'a Accepted, call: &'a CallContext<'a>, subject: Subject, owner: Option<RequestId>) -> Watch<'a>`
+  reads `unsettled` once. `SyncBinding::call` now uses it, so no test-only
+  use keeps it live.
+  - It takes a reference because `Accepted` is not `Clone` and `Watch`
+    holds `&'a Accepted`. Task 2b builds the child's `Accepted` as
+    `resume.rs:647-655` does and passes a reference.
+
+**Tests.** `tests/mutation_remote/comment_domain.rs` is new, mounted from
+`tests/mutation_remote.rs` and chained into its case list. It holds five
+`c4_comment_domain_*` SSH cases, which call the crate-private functions
+directly:
+
+- `parent_refused_before_binding` (`release_unwritten: true`):
+  - an unknown parent and a self-parent are refused with no binding row, in
+    the item's worktree;
+  - a comment of the item is accepted as a parent;
+  - on a ticket committed on primary with no context, an unknown parent is
+    refused with no binding row and no worktree made, and a primary comment
+    is accepted as a parent.
+- `identity_required_releases_an_unwritten_binding`:
+  - the binding is deleted and the row is `completed` / `rejected`;
+  - a checkpoint then lands in the context, and the same operation binds
+    afresh with a new child;
+  - the comment is checkpointed once, on the new tip, with the identity's
+    `created_by`.
+- `identity_required_after_a_write_keeps_the_binding`:
+  - the first attempt writes the file and stops at `BeforeCheckpointCommit`;
+  - `IdentityRequired` keeps the binding and the row, and leaves the file
+    unchanged;
+  - after the identity is restored, the file is checkpointed once with the
+    same bytes and the same child.
+- `without_release_the_public_path_is_unchanged` (`release_unwritten: false`):
+  - a refused parent leaves its binding row;
+  - `IdentityRequired` keeps the binding and completes the row;
+  - after a checkpoint lands, the same operation is `RecoveryRequired`.
+- `the_synchronizer_sees_the_child_and_restart`:
+  - the recorded requests carry the binding's child ID, the context target,
+    the canonical root, and `restart` as given (fresh path `false`, receipt
+    path `true`);
+  - `None` leaves the publication pending as `RecoveryRequired`;
+  - `retry_comment_publication_with`, through a real `synchronize_remote`,
+    passes the same child and publishes the comment to the server.
+
+`MERGING` is not asserted here: it is a binding setting given to
+`Session::synchronize`, not a field of `SynchronizeRemoteRequest`. Task 2b
+asserts it, where the binding's closure passes it.
+
+**TDD.** RED: `cargo test --all-features --locked --test mutation_remote --
+c4_comment_domain`, with the cases written and nothing implemented, failed to
+compile. It reported E0599 six times for `submit_comment_with` and once for
+`retry_comment_publication_with`. GREEN: the same filter ran 5 SSH cases,
+all passing, on the first run after the implementation.
+
+**Verify list** (each `devenv shell -- cargo … --locked`, 2026-10-28):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_comment_domain` | 5 SSH cases passed (25 s) |
+| `test --all-features --test comment_publication` | 41 SSH cases passed (281 s) |
+| `test --all-features --test remote_merge_recovery` | 25 SSH cases passed (309 s) |
+| `test --all-features --lib repository` | 1344 passed, 0 failed (1621 s) |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+
+The `--lib repository` run includes the 34 `comment_publication_tests`, among
+them `comment_publication_rejected_row_refresh_and_reopen_keep_one_binding`,
+which passed unchanged.
+
+**For Task 2b.**
+
+- **Author (moved by ruling Q2):**
+  - add `pub(crate) struct CommentAuthor` and
+    `parse(&str) -> Result<CommentAuthor, CommentAuthorError>` (R-7);
+  - add `author: Option<CommentAuthor>` to `submit_comment_with` (after
+    `request`) and to `checkpoint_comment_locally_with` (after
+    `effective_config`). `checkpoint_comment_locally` and the public path
+    pass `None`;
+  - when an author is given, its text replaces fact 20's
+    `format!("{} <{}>", identity.name, identity.email)` in the `if !exists`
+    branch, so it is written once. A commit identity is still required;
+  - add the domain cases "a given author is written verbatim" and "a
+    malformed one is refused before any write" to `comment_domain.rs`.
+- **The binding** calls
+  `submit_comment_with(request, restart, true, &mut synchronizer)`, with
+  `restart: true` on re-entry. Its synchronizer is a closure over
+  `call.session.synchronize(service, request, MERGING, &mut watch)`, with
+  `watch = Watch::new(&child_accepted, call, subject, owner)`.
+- **`IdentityRequired` with `release_unwritten: true`** leaves the row
+  `rejected`, which the journal reads as `Absent`. The binding keeps the
+  record accepted itself (R-34).

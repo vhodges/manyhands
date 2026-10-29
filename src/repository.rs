@@ -2761,6 +2761,32 @@ impl RepositoryService {
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
+        self.checkpoint_comment_locally_with(request, effective_config, false)
+    }
+
+    /// `checkpoint_comment_locally`, which calls this with
+    /// `release_unwritten: false`.
+    ///
+    /// `release_unwritten` selects the binding's semantics, which
+    /// `comment add` asks for: a call that writes nothing leaves no
+    /// binding behind. With it:
+    ///
+    /// - the parent is checked before a new binding row is inserted, so
+    ///   a refused parent leaves no row (fact 19);
+    /// - on `IdentityRequired`, when this operation recorded no write
+    ///   step and the comment file is absent, one registry transaction
+    ///   deletes the binding and marks the row `rejected`. The same
+    ///   operation then begins again as new and binds afresh (R-34).
+    ///
+    /// Without it, the order and the standing are the public path's:
+    /// the binding row is inserted first, and is kept with the completed
+    /// row on `IdentityRequired`.
+    pub(crate) fn checkpoint_comment_locally_with(
+        &self,
+        request: SubmitCommentRequest,
+        effective_config: Option<&Config>,
+        release_unwritten: bool,
+    ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
         let operation_id = request.target.operation_id;
         self.require_index_available(operation, Some(&request.target.root))?;
@@ -2813,6 +2839,9 @@ impl RepositoryService {
         }
         let mut known_checkpoint = None;
         let mut retained_binding = None;
+        // Set when the call stops for an identity with the comment file
+        // absent.
+        let mut unwritten = false;
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
                 return Err(authoring_error(
@@ -2821,6 +2850,10 @@ impl RepositoryService {
                     RepositoryErrorKind::MissingAuthoringTarget,
                     "comment submission requires an edit target",
                 ));
+            }
+            // Only a new row is given a new binding row.
+            if release_unwritten && record.is_new {
+                self.refuse_unknown_comment_parent(&root_repository, &root, &request)?;
             }
             retained_binding =
                 Some(self.bind_comment_publication(&root_repository, &root, &request, record)?);
@@ -3055,6 +3088,7 @@ impl RepositoryService {
             let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
+                unwritten = !exists;
                 return Ok(LocalCommentCheckpointOutcome::IdentityRequired { context });
             };
             if !exists {
@@ -3183,6 +3217,19 @@ impl RepositoryService {
                         binding,
                     })
                 }
+            }
+            Ok(LocalCommentCheckpointOutcome::IdentityRequired { context })
+                if release_unwritten && unwritten =>
+            {
+                // Under the lease, so no other call under the ID takes the
+                // binding up while it is released.
+                let released =
+                    self.release_unwritten_comment_binding(&root, record, operation_id)?;
+                drop(lease);
+                if !released {
+                    self.complete_lifecycle(&root, operation, record)?;
+                }
+                Ok(LocalCommentCheckpointOutcome::IdentityRequired { context })
             }
             Ok(value) => {
                 drop(lease);

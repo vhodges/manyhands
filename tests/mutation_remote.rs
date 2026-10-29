@@ -6,6 +6,8 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/comment_domain.rs"]
+mod comment_domain;
 #[path = "support/conformance.rs"]
 mod conformance;
 #[allow(dead_code)]
@@ -46,6 +48,7 @@ fn main() {
         .iter()
         .chain(host::CASES)
         .chain(merging::CASES)
+        .chain(comment_domain::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
