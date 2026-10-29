@@ -6,8 +6,9 @@
 //!   is enabled only while dirty, not saving and not in the review; D2
 //!   retiring the last save's revision, or storing newer text again, is
 //!   still saving. On an unverified base it reads "Review before saving".
-//!   An empty required field disables it, and every other save, its
-//!   tooltip saying why (`save_blocked`).
+//!   An empty required field, or a relationship rejection held for what
+//!   the session proposes, disables it, and every other save, its tooltip
+//!   saying why (`save_blocked`).
 //! - **The pill** while editing: "Saving…" while D2 finishes the last
 //!   save; otherwise unsaved while dirty, and saved on this
 //!   computer when clean, not shared yet once a save has found a selected
@@ -55,13 +56,13 @@ impl ItemPane {
             && self.save_blocked(cx).is_none()
     }
 
-    /// Why nothing can be saved now, in the words the tab shows: for now a
-    /// required field left empty (`missing_field`). It is the one call
-    /// every save consults: each offer, `start_save`, and `send_save`, where
-    /// a deferred save is finally sent (Task 20 fix 1). Task 21's
-    /// relationship check joins it here.
+    /// Why nothing can be saved now, in the words the tab shows: a required
+    /// field left empty (`missing_field`), else a relationship rejection
+    /// held for what the session proposes (`relations_blocked`, R-26). It
+    /// is the one call every save consults: each offer, `start_save`, and
+    /// `send_save`, where a deferred save is finally sent (Task 20 fix 1).
     pub(in crate::desktop::view::item) fn save_blocked(&self, cx: &App) -> Option<&'static str> {
-        self.missing_field(cx)
+        self.missing_field(cx).or_else(|| self.relations_blocked())
     }
 
     /// The message of a required field left empty (design, Named controls

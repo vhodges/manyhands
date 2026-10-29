@@ -1387,3 +1387,7 @@ mod quit;
 /// The details sheet's named controls (Task 20).
 #[path = "sheet/fields_tests.rs"]
 mod sheet_fields;
+
+/// A ticket's dependencies and parent in the details sheet (Task 21).
+#[path = "relations_edit_tests.rs"]
+mod relations_edit;

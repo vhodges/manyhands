@@ -374,6 +374,9 @@ impl ItemPane {
         // D2's draft takes the chosen fields, or one begins on the new base.
         self.feed(cx);
         self.sync_status(cx);
+        // Relationships chosen that changed what the session proposes are
+        // checked (R-26).
+        self.follow_relations(cx);
         cx.defer_in(window, move |_, window, cx| {
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         });

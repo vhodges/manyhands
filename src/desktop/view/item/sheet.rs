@@ -14,8 +14,9 @@
 //!
 //! While the tab is editing, its body is a `draft-section` (R-38), it says
 //! its changes are part of the draft, and the named fields are controls
-//! while the tab is Editing or Saving (`fields`); `secondary-s` inside it
-//! saves the tab (R-74). Nothing else in it writes.
+//! while the tab is Editing or Saving (`fields`), as are a ticket's Waiting
+//! on and Parent (`super::relations_edit`); `secondary-s` inside it saves
+//! the tab (R-74). Nothing else in it writes.
 
 mod document;
 mod facts;

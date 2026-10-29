@@ -153,6 +153,9 @@ impl ItemPane {
         self.edit.session = Some(session);
         self.edit.phase = Phase::Editing;
         self.sync_status(cx);
+        // Nothing an earlier session was answered holds; a continued
+        // draft's relationships are checked.
+        self.relations_opened(cx);
         // Focus moves into the editor once the frame that draws it is
         // drawn.
         cx.defer_in(window, move |_, window, cx| {

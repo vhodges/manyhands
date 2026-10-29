@@ -21,8 +21,8 @@ use std::{
 use manyhands::{
     drafts::{DraftError, DraftErrorKind},
     repository::{
-        HostObservationDto, OperationAction, OperationDto, OperationFamily, OperationId,
-        OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
+        HostObservationDto, MutationDataDto, OperationAction, OperationDto, OperationFamily,
+        OperationId, OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
     },
     results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
@@ -85,6 +85,9 @@ pub(crate) struct Operations {
     sends: u64,
     /// What each request's attempts were answered (R-78's exemption).
     answers: HashMap<DesktopRequestId, Refusals>,
+    /// The IDs a ticket request's last answer rejected it for, for its
+    /// relationships (`TicketMutationDto::rejected`): IDs, never text.
+    rejected: HashMap<DesktopRequestId, Vec<String>>,
     /// Each listed repository's pending operations, by root.
     pending: BTreeMap<RepoKey, ListState<OperationListDto>>,
     generations: Generations,
@@ -148,6 +151,13 @@ impl Operations {
         self.requests.iter().find(|request| request.id == id)
     }
 
+    /// The IDs the last answer to the ticket request `id` rejected it for,
+    /// in ID order: a relationship cycle's tickets, or the IDs that are not
+    /// tickets. Empty for any other answer.
+    pub(crate) fn rejected(&self, id: DesktopRequestId) -> &[String] {
+        self.rejected.get(&id).map_or(&[], Vec::as_slice)
+    }
+
     fn request_mut(&mut self, id: DesktopRequestId) -> Option<&mut DesktopRequest> {
         self.requests.iter_mut().find(|request| request.id == id)
     }
@@ -183,6 +193,14 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                match &envelope.data {
+                    Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
+                        self.rejected.insert(id, ticket.rejected.clone());
+                    }
+                    _ => {
+                        self.rejected.remove(&id);
+                    }
+                }
                 // What it was answered, for R-78's exemption (`Refusals`).
                 self.answers
                     .entry(id)

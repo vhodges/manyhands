@@ -91,6 +91,9 @@ gpui_kit::actions!(
         /// Tab or Shift-Tab in the toolbar's link popover: focus its other
         /// stop, the address or Insert, so focus stays in it.
         CycleLinkPopover,
+        /// Close the details sheet's ticket picker, and give focus back to
+        /// the Add… or Change… that opened it.
+        ClosePicker,
     ]
 );
 
@@ -119,6 +122,10 @@ pub(crate) const ITEM_TAB_CONTEXT: &str = "ItemTab";
 /// The key context of an item tab's details sheet, which renders in Root's
 /// layer outside the tab: `secondary-s` saves the tab from it (R-74).
 pub(crate) const ITEM_SHEET_CONTEXT: &str = "ItemSheet";
+
+/// The key context of the details sheet's ticket picker, inside it:
+/// Escape closes it, not the sheet, which binds Escape itself.
+pub(crate) const RELATION_PICKER_CONTEXT: &str = "RelationPicker";
 
 /// The key context of an item tab's page, set only while it is viewing:
 /// `e` edits there, the read editor included, whose guard stops the
@@ -196,6 +203,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-s", Save, Some(ITEM_TAB_CONTEXT)),
         // And from the tab's details sheet, outside it (R-74).
         KeyBinding::new("secondary-s", Save, Some(ITEM_SHEET_CONTEXT)),
+        // The sheet's ticket picker, inside the sheet.
+        KeyBinding::new("escape", ClosePicker, Some(RELATION_PICKER_CONTEXT)),
         // The edit toolbar: its controls, its Style menu and its link
         // popover. The mode key is the host's, forwarded from a control.
         KeyBinding::new("left", ToolbarPrevious, Some(TOOLBAR_CONTEXT)),

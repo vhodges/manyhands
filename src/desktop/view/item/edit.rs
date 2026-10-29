@@ -355,6 +355,13 @@ impl ItemPane {
         Some(&self.shown_session()?.meta)
     }
 
+    /// The session's fields besides the body and its base's, kept or not:
+    /// what a save of it would send, and against what.
+    pub(super) fn session_fields(&self) -> Option<(&DraftFields, &DraftFields)> {
+        let session = self.edit.session.as_ref()?;
+        Some((&session.meta, &session.base.fields))
+    }
+
     /// Whether the session is dirty: its text or another field differs from
     /// the baseline, or its item is not created yet.
     pub(super) fn edit_dirty(&self, cx: &App) -> bool {

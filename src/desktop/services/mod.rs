@@ -86,7 +86,6 @@ pub(crate) enum ReadKind {
     #[allow(dead_code)] // Called from Task 22; no test builds it.
     NewId,
     /// The check of a relationship a draft sets, before it is saved.
-    #[allow(dead_code)] // Called from Task 21; no test builds it.
     RelationshipCheck,
     /// A local image an editor shows, read from the tab's trees and
     /// decoded (`images`): no library call, but held like one.

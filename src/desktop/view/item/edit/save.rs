@@ -340,6 +340,8 @@ impl ItemPane {
                     SaveVerdict::Keep => {
                         self.edit.save.run = None;
                         self.edit.phase = Phase::Editing;
+                        // A relationship rejection is explained, and held.
+                        self.relations_refused(request, code, cx);
                         // The item changed since the base: the review opens
                         // on it, read again.
                         if code == ResultCode::ExternalChange {

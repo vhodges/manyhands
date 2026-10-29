@@ -125,7 +125,7 @@ impl ItemPane {
     /// Whether the sheet's named fields are controls now: the session is
     /// shown, Editing or Saving; not while Preparing, Loading or in the
     /// review, nor while the session is kept (R-74).
-    fn controls_editable(&self) -> bool {
+    pub(in crate::desktop::view::item) fn controls_editable(&self) -> bool {
         self.editing() && matches!(self.edit.phase(), Phase::Editing | Phase::Saving)
     }
 

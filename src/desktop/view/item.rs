@@ -42,6 +42,7 @@ mod header;
 mod page;
 mod pill;
 mod reads;
+mod relations_edit;
 mod sheet;
 mod source;
 mod status;
@@ -118,6 +119,8 @@ pub(crate) struct ItemPane {
     pub(super) sheet_scroll: ContentScroll,
     /// The sheet's named controls while editing, and what it suggests.
     fields: sheet::SheetFields,
+    /// The sheet's Waiting on and Parent while editing, and their check.
+    relations: relations_edit::RelationsEdit,
     refreshing: Option<DesktopRequestId>,
     /// An Inspect tab's last source plus the same textarea entity,
     /// preserving selection/focus.
@@ -184,6 +187,7 @@ impl ItemPane {
         // The tab's images leave the windows' atlases with it.
         cx.on_release(|pane, cx| pane.images.close(cx)).detach();
         let edit = edit::TabEdit::new(scope.clone(), cx);
+        let relations = relations_edit::RelationsEdit::new(scope.clone(), cx);
         let mut pane = Self {
             model: ItemView::new(target, scope),
             services,
@@ -194,6 +198,7 @@ impl ItemPane {
             sheet_focus: sheet::sheet_focus(cx),
             link_focus: cx.focus_handle(),
             fields: sheet::SheetFields::default(),
+            relations,
             sheet_scroll: scroll.region(),
             refreshing: None,
             source: None,
