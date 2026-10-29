@@ -26,6 +26,8 @@ mod merging;
 mod mutation_golden;
 #[path = "support/remote_world.rs"]
 mod remote_world;
+#[path = "mutation_remote/republish.rs"]
+mod republish;
 #[path = "mutation_remote/resolution.rs"]
 mod resolution;
 #[path = "mutation_remote/resume.rs"]
@@ -61,6 +63,7 @@ fn main() {
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
         .chain(resume::CASES)
+        .chain(republish::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -342,10 +345,9 @@ const CASES: &[ssh_harness::Case] = &[
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
-    (
-        "every_command_of_this_target_keeps_the_rules_of_the_boundary",
-        every_command_of_this_target_keeps_the_rules_of_the_boundary,
-    ),
+    ("c4_conformance_item_sync", c4_conformance_item_sync),
+    ("c4_conformance_repo_sync", c4_conformance_repo_sync),
+    ("c4_conformance_comment_add", c4_conformance_comment_add),
 ];
 
 /// Cases run only as children of the case above, which says of each
@@ -4659,13 +4661,14 @@ fn conforming(
     Ok(())
 }
 
-/// Where the row of `conflict resolve` is in `CONFORMANCE`: it is driven
-/// by a case of its own, `resolution::c4_resolution_conformance`, since
-/// its rules that need a finished request each make a conflict to resolve
-/// (owner, 2026-10-28, beside E-9).
-const RESOLUTION_ROW: usize = 3;
-
-const CONFORMANCE: [conformance::Row; 4] = [
+/// Every row is driven by a case of its own (owner, 2026-10-28 and
+/// 2026-10-29, beside E-9): each rule of a row builds a world with a
+/// server, and a case has a time it must end within. That of `conflict
+/// resolve` is `resolution::c4_resolution_conformance`, whose rules that
+/// need a finished request each make a conflict to resolve, and that of
+/// `item republish` is `republish::c4_republish_conformance`, whose rules
+/// each make a deleted branch to republish.
+const CONFORMANCE: [conformance::Row; 5] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4732,25 +4735,46 @@ const CONFORMANCE: [conformance::Row; 4] = [
         "invalid_input",
         resolution::conforming,
     ),
+    conformance::Row::new(
+        "item republish",
+        true,
+        "confirmation_not_found",
+        republish::conforming,
+    ),
 ];
 
-fn every_command_of_this_target_keeps_the_rules_of_the_boundary() -> Result<(), FixtureError> {
-    // The rows of the two commands that approve a host are driven by
-    // a case of their own, in `host`: each rule of each row builds a
-    // world with a server, and a case has a time it must end within.
-    // So is the row of `conflict resolve`, in `resolution`, whose rules
-    // each build a world with a conflict.
-    let (rows, resolution) = CONFORMANCE.split_at(RESOLUTION_ROW);
-    let elsewhere: Vec<&str> = host::CONFORMANCE
+/// Drives the row of `command` alone. Every other row of this target,
+/// those of `CONFORMANCE` and the two of `host`, is named as driven
+/// elsewhere, by its own case, so each is still checked against the
+/// target's whole set of commands.
+fn conformance_row(command: &str) -> Result<(), FixtureError> {
+    let at = CONFORMANCE
         .iter()
-        .chain(resolution)
+        .position(|row| row.command == command)
+        .ok_or(FixtureError)?;
+    let elsewhere: Vec<&str> = CONFORMANCE
+        .iter()
+        .chain(&host::CONFORMANCE)
         .map(|row| row.command)
+        .filter(|other| *other != command)
         .collect();
     conformance::run_part(
         conformance::Home::Remote,
         &request_store::bound_commands(),
-        rows,
+        &CONFORMANCE[at..=at],
         &elsewhere,
     );
     Ok(())
+}
+
+fn c4_conformance_item_sync() -> Result<(), FixtureError> {
+    conformance_row("item sync")
+}
+
+fn c4_conformance_repo_sync() -> Result<(), FixtureError> {
+    conformance_row("repo sync")
+}
+
+fn c4_conformance_comment_add() -> Result<(), FixtureError> {
+    conformance_row("comment add")
 }

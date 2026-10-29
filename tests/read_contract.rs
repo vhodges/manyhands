@@ -1160,6 +1160,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    enumerations.push((
+        "item_republish_preview.schema.json",
+        "details.kind",
+        ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+    ));
     enumerations
 }
 

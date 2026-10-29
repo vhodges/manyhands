@@ -4,7 +4,9 @@
 //! conflict on a hostile path.
 //!
 //! The table's row for an operation an `item republish` request holds is
-//! Task 5's (ruling P3), and has no case here.
+//! Task 5's (ruling P3): `c4_resume_republish`, on a republish stopped
+//! before its push. The republish table's row of one stopped after its push
+//! is `republish::c4_republish_resumed_after_the_push`.
 //!
 //! A raw peer clone makes the remote diverge, as a second user would. A
 //! publication is stopped before it pushes by the test server's disconnect
@@ -52,6 +54,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
     ("c4_resume_local_context_sync", c4_resume_local_context_sync),
     ("c4_resume_listed", c4_resume_listed),
     ("c4_resume_hostile_path", c4_resume_hostile_path),
+    ("c4_resume_republish", c4_resume_republish),
 ];
 
 const MAIN: &str = "refs/heads/main";
@@ -1050,6 +1053,69 @@ fn c4_resume_local_context_sync() -> Result<(), FixtureError> {
     assert_eq!(actions(&left), [RecoveryActionKind::RepoInspect]);
     assert_eq!(connections(&w), opened);
     assert_eq!(accepted(&w.server), pushes);
+    Ok(())
+}
+
+/// Row 6: an operation an `item republish` request holds (fact 78). A
+/// republish stopped before its push, for want of a passphrase, holds its
+/// reservation. A resume never takes its operation through item sync's
+/// merging path: it answers `original_request_required` and names the
+/// republish request, which then goes on.
+fn c4_resume_republish() -> Result<(), FixtureError> {
+    use super::republish::{REPUBLISH, Recorded, confirmed, confirmed_as, deleted, previewed};
+    let (w, tip) = deleted(Recorded::ByFetch, true)?;
+    let (confirmation, _) = previewed(&w)?;
+    let held = confirmed_as(
+        &w,
+        REPUBLISH,
+        Some(&confirmation),
+        NoPassphrase,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(held.code, ResultCode::UnlockRequired, "{}", held.message);
+    assert!(reserved(&w));
+    let operation = held.operation_id.clone().ok_or(FixtureError)?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+
+    let left = resumed(&w, &operation);
+    assert_eq!(
+        (left.outcome, left.code),
+        (Outcome::Blocked, ResultCode::OriginalRequestRequired),
+        "{left:?}"
+    );
+    assert_eq!(actions(&left), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(
+        left.recovery[0]
+            .arguments
+            .get("request_id")
+            .and_then(|id| id.as_str()),
+        Some(REPUBLISH)
+    );
+    assert!(left.data.is_none());
+    assert_no_record_of(&w, RESUME, &left);
+    // Nothing asked of the remote, nothing merged, and the republish keeps
+    // its reservation and its record.
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(merge_rows(&w)?, 0);
+    assert!(reserved(&w));
+    assert_eq!(
+        record(&w, REPUBLISH).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+
+    // The republish request goes on, and publishes.
+    let finished = confirmed(&w, REPUBLISH, &confirmation);
+    assert_eq!(finished.outcome, Outcome::Success, "{}", finished.message);
+    assert_eq!(finished.effects, published(tip));
+    assert_eq!(finished.operation_id, held.operation_id);
+    assert!(!reserved(&w));
+    // An operation that has ended owes nothing.
+    let noop = resumed_by(&w, LATER, &operation);
+    assert_eq!(noop.code, ResultCode::AlreadyApplied, "{}", noop.message);
+    assert_no_record_of(&w, LATER, &noop);
     Ok(())
 }
 

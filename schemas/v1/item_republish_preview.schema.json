@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 item republish preview",
+  "description": "The data of a prepare envelope that gives a preview of item republish: an item's editing branch, which the remote deleted, the remote it will be pushed to, the commit last published there and the local commit that will be pushed, exactly, and the confirmation an execute of the same command, repository and item presents to push it. A preview reads what is stored of the deletion and contacts no remote: it is given only when a synchronization's fetch found the published branch gone, or when the push evidence of its publication shows a synchronization would find it gone at the push endpoint. Anything else gives no preview data: a no-op (already_applied) when no deletion is recorded, the branch was never published, a fetch last found it there, or its push evidence is ambiguous or of another configuration, for which item sync is what says more; and a rejection, as for a lifecycle-closed ticket (ticket_closed) or a repository with no publication remote (publication_remote_required). The confirmation binds every field of the details and the stored deletion: a change to any of them before the request is accepted is external_change, and so is the branch found advertised again, or the local branch moved, once it is.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The branch that will be pushed again, and where to. The command pushes exactly local_oid to the branch, verifies it there and records the publication, and integrates nothing: no local branch moves and nothing is merged. The next item sync integrates primary as usual.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "kind",
+        "item_id",
+        "branch",
+        "remote",
+        "last_published_oid",
+        "local_oid"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The item's kind.",
+          "type": "string",
+          "enum": ["document", "ticket"]
+        },
+        "item_id": {
+          "description": "The item whose editing branch will be pushed again.",
+          "type": "string"
+        },
+        "branch": {
+          "description": "The item's editing branch, as its short name.",
+          "type": "string"
+        },
+        "remote": {
+          "description": "The publication remote the branch will be pushed to, by its name.",
+          "type": "string"
+        },
+        "last_published_oid": {
+          "description": "The commit last published on the branch, as the record of its deletion holds it: what a fetch last found there, or what the newest proven push put there. Null when that record holds none.",
+          "type": ["string", "null"]
+        },
+        "local_oid": {
+          "description": "The local commit the branch will be published at: its tip, which is what is pushed, unchanged.",
+          "type": "string"
+        }
+      }
+    }
+  }
+}

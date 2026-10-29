@@ -2106,17 +2106,5 @@ pub(super) fn conforming(rule: &mut dyn FnMut(&conformance::Subject<'_>)) -> Res
 /// The row of `conflict resolve`. The rows of the other commands of this
 /// target are driven by its other conformance cases.
 fn c4_resolution_conformance() -> Result<(), FixtureError> {
-    let (others, own) = CONFORMANCE.split_at(RESOLUTION_ROW);
-    let elsewhere: Vec<&str> = others
-        .iter()
-        .chain(&host::CONFORMANCE)
-        .map(|row| row.command)
-        .collect();
-    conformance::run_part(
-        conformance::Home::Remote,
-        &request_store::bound_commands(),
-        own,
-        &elsewhere,
-    );
-    Ok(())
+    conformance_row("conflict resolve")
 }

@@ -69,6 +69,7 @@ commands! {
     LocalContextResolve => "context resolve-local",
     CommentAdd => "comment add",
     ConflictResolve => "conflict resolve",
+    ItemRepublish => "item republish",
 }
 
 impl Command {
@@ -125,9 +126,11 @@ impl Command {
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
-            // hand-off is done.
+            // hand-off is done. A republish's is recorded as a
+            // synchronization of the context (fact 78).
             | Self::ItemSync
-            | Self::RepoSync => true,
+            | Self::RepoSync
+            | Self::ItemRepublish => true,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -169,7 +172,8 @@ impl Command {
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -210,7 +214,8 @@ impl Command {
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -252,7 +257,8 @@ impl Command {
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -288,9 +294,9 @@ impl Command {
 
     /// Whether the command's operation has safe points: places it can
     /// be stopped at once it is accepted, and a reservation it holds
-    /// from its first one on. Only a synchronization has, and a comment's
-    /// submission, at the safe points of the synchronization that
-    /// publishes it. Such a command honors a cancellation after
+    /// from its first one on. Only a synchronization has, a republish,
+    /// whose push-only operation is one, and a comment's submission, at
+    /// the safe points of the synchronization that publishes it. Such a command honors a cancellation after
     /// acceptance and reports a stage at each safe point, and a request
     /// of it that stopped with its reservation held is continued by the
     /// same request, whatever stopped it.
@@ -301,6 +307,9 @@ impl Command {
             // `request cancel` sets the request's flag, which the
             // publication's observer reads at its next safe point.
             Self::CommentAdd => true,
+            // A republish pushes as a synchronization does, from the safe
+            // points of its own operation (R-32).
+            Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -357,7 +366,11 @@ impl Command {
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,
-            Self::ItemSync | Self::RepoSync | Self::OperationResume | Self::CommentAdd => true,
+            Self::ItemSync
+            | Self::RepoSync
+            | Self::OperationResume
+            | Self::CommentAdd
+            | Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -398,7 +411,7 @@ impl Command {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -451,7 +464,8 @@ impl Command {
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -514,7 +528,11 @@ impl Command {
             // file over one that could not be read: its caller is shown
             // the ID, and whether it is being assigned, first.
             | Self::DocumentRepair
-            | Self::TicketRepair => true,
+            | Self::TicketRepair
+            // A republish recreates a branch the remote deleted: its
+            // caller is shown the branch, the remote and the commit, and
+            // consents to that commit (decisions 4 and 7).
+            | Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -587,6 +605,7 @@ mod tests {
         assert_eq!(Command::TicketRepair.name(), "ticket repair");
         assert_eq!(Command::CommentAdd.name(), "comment add");
         assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
+        assert_eq!(Command::ItemRepublish.name(), "item republish");
     }
 
     #[test]
@@ -600,11 +619,17 @@ mod tests {
             // of its own, and stops at that synchronization's safe
             // points; what it does first is write the comment.
             let comment = command == Command::CommentAdd;
-            let stopping =
-                local || comment || matches!(command, Command::ItemSync | Command::RepoSync);
+            // A republish pushes as a synchronization does, at its safe
+            // points, and is the one stopping command that needs
+            // confirmation (R-32).
+            let republish = command == Command::ItemRepublish;
+            let stopping = local
+                || comment
+                || republish
+                || matches!(command, Command::ItemSync | Command::RepoSync);
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
-                assert!(!command.needs_confirmation(), "{command:?}");
+                assert_eq!(command.needs_confirmation(), republish, "{command:?}");
                 assert_eq!(
                     command.has_operation(),
                     command != Command::LocalContextResolve,
@@ -629,6 +654,14 @@ mod tests {
         assert!(!Command::CommentAdd.restores_index());
         assert!(!Command::CommentAdd.creates_its_repository());
         assert!(!Command::CommentAdd.hands_off_to_any_refresh());
+        // The rest of the republish's predicates (R-32).
+        assert!(Command::ItemRepublish.has_operation());
+        assert!(Command::ItemRepublish.finishes_as_a_synchronization());
+        assert!(!Command::ItemRepublish.was_accepted_without_operation());
+        assert!(!Command::ItemRepublish.restores_index());
+        assert!(!Command::ItemRepublish.creates_its_repository());
+        assert!(!Command::ItemRepublish.hands_off_to_any_refresh());
+        assert_eq!(Command::ItemRepublish.stage(), ProgressStage::Connecting);
         // A resolution does not stop at safe points, as a resume does not
         // (R-32, R-35): it holds no operation, needs no confirmation and
         // reports `Writing` first.
@@ -681,6 +714,7 @@ mod tests {
                         | Command::HostReplace
                         | Command::DocumentRepair
                         | Command::TicketRepair
+                        | Command::ItemRepublish
                 ),
                 "{command:?}"
             );

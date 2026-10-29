@@ -1532,6 +1532,10 @@ fn a_resume_is_never_offered_again_for_what_only_the_original_request_can_do() {
 /// other operation on the repository: a new preview could not be used,
 /// so the repository is what is looked at. An item write is offered
 /// nothing, as before.
+///
+/// `item republish` is the first confirmed command that stops at safe
+/// points: one whose record was left accepted holds its reservation, and the
+/// same request, which takes that up again, comes first.
 #[test]
 fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection() {
     for command in Command::ALL {
@@ -1542,7 +1546,8 @@ fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_insp
                 command.stops_at_safe_points(),
             ) {
                 (true, false, _) => &["request.prepare"],
-                (true, true, _) => &["repo.inspect"],
+                (true, true, true) => &["request.retry", "repo.inspect"],
+                (true, true, false) => &["repo.inspect"],
                 // A synchronization that stopped with its reservation
                 // held: the same request is what takes it up again.
                 (false, true, true) => &["request.retry"],

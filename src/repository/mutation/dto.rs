@@ -7,7 +7,7 @@ use serde::{Serialize, Serializer};
 
 use super::command::Command;
 use crate::{
-    repository::{IdentityDto, OperationAction, OperationFamily},
+    repository::{IdentityDto, ItemDtoKind, OperationAction, OperationFamily},
     results::{Effects, Outcome, PublicationEffect, ResultCode, Scope, contract_enum},
 };
 
@@ -121,15 +121,22 @@ contract_enum!(
     /// request names, likewise. Neither publishes or fetches anything,
     /// and neither moves a reference.
     ///
-    /// The last four are a repair's. `context_created` is the editing
-    /// context of the repaired item made from the primary branch: its
-    /// branch and its worktree, listed when the item has none.
+    /// `context_created`, `id_adopted`, `source_written` and
+    /// `checkpoint_committed` are a repair's. `context_created` is the
+    /// editing context of the repaired item made from the primary branch:
+    /// its branch and its worktree, listed when the item has none.
     /// `id_adopted` is an ID assigned to a file that holds no valid one:
     /// the ID the corrected source carries, which the preview's details
     /// name. `source_written` is the corrected source written over the
     /// nonconforming file in that context, and `checkpoint_committed`
     /// the commit of it there. None of the four writes the primary
     /// worktree or moves the primary branch.
+    ///
+    /// `branch_republished` is an item's editing branch, which the remote
+    /// deleted, pushed to it again at exactly the local commit the
+    /// preview's details name. Nothing is integrated: no local branch
+    /// moves, and the next synchronization of the item integrates
+    /// primary.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -157,6 +164,7 @@ contract_enum!(
         IdAdopted => "id_adopted",
         SourceWritten => "source_written",
         CheckpointCommitted => "checkpoint_committed",
+        BranchRepublished => "branch_republished",
     }
 );
 
@@ -216,6 +224,28 @@ pub enum PreviewDetailsDto {
     Identity(IdentityPreviewDto),
     Host(HostPreviewDto),
     Repair(RepairPreviewDto),
+    Republish(ItemRepublishPreviewDto),
+}
+
+/// What a preview of `item republish` shows: the item's editing branch,
+/// which the remote deleted, the remote it is pushed to, the commit last
+/// published there and the local commit that will be pushed, exactly
+/// (decision 11). It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ItemRepublishPreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The branch, as its short name.
+    pub branch: String,
+    /// The publication remote, by its name.
+    pub remote: String,
+    /// The commit last published on the branch, as the record of its
+    /// deletion holds it. Null when that record holds none.
+    pub last_published_oid: Option<String>,
+    /// The local commit the branch will be published at: its tip.
+    pub local_oid: String,
 }
 
 /// What a preview of `document repair` or `ticket repair` shows: the
@@ -1270,8 +1300,12 @@ impl MutationDataDto {
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the
-            // conflict above.
-            Command::ItemSync | Command::RepoSync | Command::OperationResume => {
+            // conflict above. A republish reports only the host it
+            // stopped for: it merges nothing.
+            Command::ItemSync
+            | Command::RepoSync
+            | Command::OperationResume
+            | Command::ItemRepublish => {
                 SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
             }
             // These report no data, so a record of one stores none.

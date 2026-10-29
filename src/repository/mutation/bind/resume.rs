@@ -25,7 +25,9 @@
 //! generation, an enablement that has not registered its repository, a
 //! synchronization that was fenced, one whose conflict's resolution has
 //! written paths only, which only its own request goes on with or a new
-//! `conflict resolve` supersedes (decisions 18 and 20). While the request
+//! `conflict resolve` supersedes (decisions 18 and 20), and the operation
+//! of an `item republish`, which pushes only what its owner consented to
+//! (fact 78). While the request
 //! that began it has an unfinished record, the answer is
 //! `original_request_required` and names that request, which is what goes
 //! on. With no such record no request can be sent again, and the answer
@@ -195,7 +197,8 @@ enum Named {
     ///
     /// Also a synchronization whose resolution attempt has written paths
     /// only: `request` is the `conflict resolve` request that owns the
-    /// attempt (decision 20).
+    /// attempt (decision 20). And the operation of an `item republish`
+    /// request that holds it: `request` is that request (fact 78).
     OriginalRequest { request: String },
     /// A synchronization that was fenced, with no unfinished record
     /// that holds it: its request has been given its final answer, or
@@ -286,7 +289,8 @@ fn found_remote(
         ) => Named::Ended { synchronization },
         // A synchronization that ran to its end and has not handed what
         // it published to the index: the domain, called again, does
-        // that hand-off and nothing else.
+        // that hand-off and nothing else. A republish's is its own
+        // request's.
         (
             JournalRow::Final {
                 kind: FinalKind::Completed,
@@ -294,7 +298,10 @@ fn found_remote(
                 checkpointed: _,
             },
             Some(Some(target)),
-        ) => taken_up(target),
+        ) => match republishing(connection, root, operation_id)? {
+            Some(named) => named,
+            None => taken_up(target),
+        },
         // Cancelled, which nothing continues, or an operation that is
         // no synchronization, with work recorded as outstanding.
         (
@@ -316,6 +323,8 @@ fn found_remote(
                     Named::Fenced,
                 )?
             } else if let Some(named) = written_paths_only(connection, root, operation_id)? {
+                named
+            } else if let Some(named) = republishing(connection, root, operation_id)? {
                 named
             } else {
                 taken_up(target)
@@ -385,6 +394,29 @@ fn written_paths_only(
             synchronization: None,
         },
     }))
+}
+
+/// The standing of a synchronization of a context that an `item republish`
+/// request holds: only that request goes on with it (fact 78). Its
+/// operation is recorded as a synchronization of the context, and a resume
+/// would take it up as one, through `item sync`'s merging path, which a
+/// republish never takes: it pushes the commit its owner consented to and
+/// integrates nothing. `None` when no unfinished `item republish` record
+/// holds the operation.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn republishing(
+    connection: &rusqlite::Connection,
+    root: &str,
+    operation_id: OperationId,
+) -> Result<Option<Named>, ReadError> {
+    Ok(records::operation_holder_of(
+        connection,
+        OperationFamily::Remote,
+        root,
+        operation_id,
+        Command::ItemRepublish.name(),
+    )?
+    .map(|request| Named::OriginalRequest { request }))
 }
 
 /// What the comment `comment`'s publication synchronizes, once its

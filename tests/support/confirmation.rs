@@ -45,6 +45,8 @@ pub const HOST_PREVIEW_SCHEMA: &str = "host_preview.schema.json";
 
 pub const REPAIR_PREVIEW_SCHEMA: &str = "repair_preview.schema.json";
 
+pub const ITEM_REPUBLISH_PREVIEW_SCHEMA: &str = "item_republish_preview.schema.json";
+
 /// The published schema of the preview `command` gives.
 pub fn preview_schema(command: &str) -> &'static str {
     match command {
@@ -55,6 +57,7 @@ pub fn preview_schema(command: &str) -> &'static str {
         "repo identity-set" => IDENTITY_PREVIEW_SCHEMA,
         "host approve" | "host replace" => HOST_PREVIEW_SCHEMA,
         "document repair" | "ticket repair" => REPAIR_PREVIEW_SCHEMA,
+        "item republish" => ITEM_REPUBLISH_PREVIEW_SCHEMA,
         "repo create" | "repo enable" => PREVIEW_SCHEMA,
         // `prepare` gives no preview of any other command.
         other => panic!("{other}: no preview schema"),

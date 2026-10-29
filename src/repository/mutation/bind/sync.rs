@@ -49,6 +49,11 @@
 //! running operation: at each safe point it reports a stage, and asks
 //! the synchronization to stop when the call's token is cancelled or the
 //! request's record has been asked to.
+//!
+//! The binding of `item republish` makes its domain call through this one
+//! too (`republished`): the push-only path, in place of the
+//! synchronization, with the same observer and the same reading of what
+//! the domain returned (R-18).
 
 use std::path::{Path, PathBuf};
 
@@ -69,6 +74,7 @@ use super::{
             SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
             read_configuration_for,
             recovery::{FinalKind, JournalRow},
+            remote::sync::RepublishConsent,
             transport::SshTransportErrorKind,
         },
         command::Command,
@@ -104,6 +110,10 @@ pub struct RepoSyncInput {
 pub(crate) struct SyncBinding {
     root: PathBuf,
     target: SynchronizationTarget,
+    /// The consent of an `item republish` this binding makes the domain
+    /// call of (R-18): the push-only path is called with it in place of
+    /// the synchronization. `None` for every synchronization.
+    republish: Option<RepublishConsent>,
 }
 
 impl From<ItemSyncInput> for SyncBinding {
@@ -114,6 +124,7 @@ impl From<ItemSyncInput> for SyncBinding {
         Self {
             root,
             target: SynchronizationTarget::Context { kind, item_id: id },
+            republish: None,
         }
     }
 }
@@ -124,6 +135,7 @@ impl From<RepoSyncInput> for SyncBinding {
         Self {
             root,
             target: SynchronizationTarget::Primary,
+            republish: None,
         }
     }
 }
@@ -591,6 +603,7 @@ pub(crate) fn resumed(
     SyncBinding {
         root: accepted.root(),
         target,
+        republish: None,
     }
     .call(call, accepted, subject, owner, None, true)
 }
@@ -613,6 +626,7 @@ pub(super) fn continued(
     SyncBinding {
         root: accepted.root(),
         target,
+        republish: None,
     }
     .call(call, accepted, subject, owner, holder, true)
 }
@@ -656,8 +670,42 @@ pub(super) fn of_a_comment(
     SyncBinding {
         root: accepted.root(),
         target,
+        republish: None,
     }
     .observed(call, accepted, subject, owner, holder, restart)
+}
+
+/// The push-only path of `item republish` (R-18), for its binding: the
+/// operation `accepted` names is called as `consent` allows, with a `Watch`
+/// of the call, as a synchronization's own request calls the
+/// synchronization. `subject` is that request as its events name it, and
+/// its flag is the one a cancellation is read from. `restart` is set by a
+/// call that enters the request again.
+///
+/// It gives back what the domain returned and what a synchronization's
+/// binding makes of it: the code, the effects of the publication, a
+/// host's data, and the standing of the operation's row.
+pub(super) fn republished(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    target: SynchronizationTarget,
+    consent: RepublishConsent,
+    subject: Subject,
+    restart: bool,
+) -> (Synchronized, Ran) {
+    SyncBinding {
+        root: accepted.root(),
+        target,
+        republish: Some(consent),
+    }
+    .observed(
+        call,
+        accepted,
+        subject,
+        Some(accepted.request_id),
+        None,
+        restart,
+    )
 }
 
 /// The position on its branch of a synchronization of `target` in the
@@ -672,6 +720,7 @@ pub(crate) fn resumed_position(
     let binding = SyncBinding {
         root: root.to_owned(),
         target,
+        republish: None,
     };
     let configured = binding.configured(service)?;
     binding.position(&configured)
@@ -772,6 +821,27 @@ impl SyncBinding {
             .unwrap_or(false)
     }
 
+    /// One domain call under `accepted`'s operation, observed by `watch`:
+    /// the synchronization, or the push-only path of a republish with its
+    /// consent. `None` when no call was made.
+    fn domain_call(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        restart: bool,
+        watch: &mut Watch<'_>,
+    ) -> Synchronized {
+        let request = self.request(accepted, restart);
+        match &self.republish {
+            None => call
+                .session
+                .synchronize(call.service, request, MERGING, watch),
+            Some(consent) => call
+                .session
+                .republish(call.service, request, consent, watch),
+        }
+    }
+
     fn request(&self, accepted: &Accepted, restart: bool) -> SynchronizeRemoteRequest {
         SynchronizeRemoteRequest {
             root: accepted.root(),
@@ -838,12 +908,7 @@ impl SyncBinding {
         let service = call.service;
         let root = accepted.root();
         let mut watch = Watch::new(accepted, call, subject, owner, holder);
-        let Some(result) = call.session.synchronize(
-            service,
-            self.request(accepted, restart),
-            MERGING,
-            &mut watch,
-        ) else {
+        let Some(result) = self.domain_call(call, accepted, restart, &mut watch) else {
             // No domain call was made. The record is the journal row's
             // to settle: with none, nothing is in flight.
             let ran = Ran {
@@ -878,10 +943,7 @@ impl SyncBinding {
                 .is_some_and(|active| {
                     active.operation_id() == accepted.operation_id && active.cancel_requested()
                 });
-        if asked
-            && let Some(Err(acknowledged)) =
-                call.session
-                    .synchronize(service, self.request(accepted, true), MERGING, &mut watch)
+        if asked && let Some(Err(acknowledged)) = self.domain_call(call, accepted, true, &mut watch)
         {
             let ran = self.stopped(service, accepted, &watch, &acknowledged);
             return (Some(Err(acknowledged)), ran);
@@ -1195,7 +1257,7 @@ fn with_merge(mut effects: Effects, merge: Option<git2::Oid>) -> Effects {
 /// record released, the request sent again would be a new one, find the
 /// remote current and be finished as a no-op, for a request that
 /// published. The same request is answered from the row.
-fn kept_for_its_result(ran: Ran) -> Ran {
+pub(super) fn kept_for_its_result(ran: Ran) -> Ran {
     let Ran {
         mut answer,
         standing,
@@ -1293,8 +1355,13 @@ impl Binding for SyncBinding {
 
     fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
         // The command, the repository and the target are what the digest
-        // is begun with, and the binding holds nothing else.
-        let Self { root: _, target: _ } = self;
+        // is begun with, and the binding holds nothing else. A republish's
+        // consent is its own binding's, which never comes here.
+        let Self {
+            root: _,
+            target: _,
+            republish: _,
+        } = self;
         builder
     }
 

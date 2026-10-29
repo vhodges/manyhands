@@ -571,6 +571,11 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Path", Some(repair.path.clone()));
             put("ID", Some(repair.id.clone()));
         }
+        PreviewDetailsDto::Republish(republish) => {
+            put("Branch", Some(republish.branch.clone()));
+            put("Last published", republish.last_published_oid.clone());
+            put("Local commit", Some(republish.local_oid.clone()));
+        }
     }
     fields
 }

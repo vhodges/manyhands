@@ -597,6 +597,7 @@ new ticket comment (ruling P4).
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
+| 5 | `feat: republish a remotely deleted item branch with consent` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58 | pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
 
 ### Task 1: Merging Synchronization
 
@@ -2222,3 +2223,181 @@ standing, and pin a fenced comment's resume`, on FIX_BASE `14a60a8`
     passed.
   - `check` and `clippy --features desktop --bin manyhands` passed.
   - The full `mutation_remote` run is Task 5's (the round says so).
+
+### Task 5: Republish
+
+The commit is `feat: republish a remotely deleted item branch with consent`,
+on BASE `25d582e`. `origin/main` is still `a372edb`, and `git merge-tree
+--write-tree HEAD origin/main` exits 0. No subagent was dispatched.
+
+**The domain (decision 11, R-18), in `remote/sync.rs`.**
+
+- **One classification.** The body of `synchronization_push_absence_boundary`
+  moved, unchanged, into the free function `push_absence`. The boundary now
+  calls it with its own generation, target and operation. The function also
+  gives the commit of the newest proven publication.
+- **The reservation-free read.** `republish_evidence` reads with no
+  reservation and no connection. The push classification is asked first, as
+  `item sync` asks it:
+  - `Ambiguous` or `Unknown` is that classification;
+  - a `remotely_deleted` row is `Fetched`, with its `last_advertised_oid`;
+  - a row a fetch last found present is `None`;
+  - with no row, `Deleted` is `Pushed`, with the newest proven publication.
+  Only `Fetched` and `Pushed` give a preview.
+- **The push-only path.** `republish_context`:
+  - checks the consent before it reserves: the branch, the stored evidence
+    and `last_published`, and the local tip;
+  - reserves as a synchronization of the context (fact 78), with every check
+    of the reservation;
+  - fetches, and proves the branch absent at the fetch endpoint and at the
+    push endpoint;
+  - pushes exactly `local_oid` through the legacy checkpoints (`PushPrepared`,
+    `PushReturned`, `PushVerified`), with no push-absence boundary, no
+    publication attempt and no clean plan;
+  - classifies the publication.
+- **Restart.** A same-request restart is reconciled with
+  `reconcile_synchronization` against the push endpoint: a landed push is
+  verified and not pushed again.
+- **Refusals that end the operation.** An `ExternalChange` or `PushRejected`
+  before any push ends the operation as a cancellation does, which lets the
+  reservation go. With an earlier call's push unaccounted for, an
+  `ExternalChange` is `RecoveryRequired` instead, and the operation stays.
+
+**The binding (R-19), `bind/republish.rs`.**
+
+- It is a confirmed binding with `operation abandon`'s shape.
+- `preview` reads the stored evidence (fact 55). Its observation digest binds
+  the branch, the remote, the deletion, `last_published` and the local tip.
+- `row` answers a fenced operation finally, and gives a begun one to the
+  domain with the consent its request was accepted with: its recorded
+  position.
+- The domain call goes through `sync::republished`, a synchronization's
+  binding with `Session::republish` in place of `Session::synchronize`. The
+  `Watch`, the effects and the standing are unchanged.
+- `spent` turns `external_change` or `push_rejected` into a finished record,
+  when the operation ended or never began. A transport stop keeps its record.
+- A lifecycle-closed ticket is `ticket_closed` (decision 17), at `prepare` and
+  at execution, through `ticket_guard::require_ticket_open`.
+
+**Resume (ruling P3).** `bind/resume.rs`'s `republishing` routes a remote
+operation an accepted `item republish` record holds to `original_request_required`,
+naming that request (fact 78). It applies to a pending row and to one that owes
+its hand-off. The new `records::operation_holder_of` finds the holder by
+command. The gate's routes, a comment's publication, written paths only and
+`finish_prepared_resolution` are untouched.
+
+**Inventories.**
+
+- `Command::ItemRepublish`, with the Command Predicates table's values (R-32).
+- `Mutation::ItemRepublish`, `ItemRepublishInput` (`Clone`),
+  `ItemRepublishPreviewDto`, `PreviewDetailsDto::Republish` and
+  `PreviewEffect::BranchRepublished`.
+- `from_stored` gains the republish's host data, and `recorded_effects`
+  reads a republish as a synchronization.
+- The desktop arm shows "Branch", "Last published" and "Local commit"
+  (decision 10). The CLI gains its two `human_admin` arms.
+- New schema `item_republish_preview`. `preview_effect` gains
+  `branch_republished`, and `synchronization_mutation`'s description names
+  `item republish`.
+
+**Named edits.**
+
+- **E-5.** `an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection`
+  gains the arm for a confirmed command that stops at safe points:
+  `["request.retry", "repo.inspect"]` when held. The rule is unchanged.
+- **E-6.** `the_stopping_commands_and_their_stages_and_confirmation` takes
+  `item republish` as stopping, with an operation, `Connecting`, and the only
+  stopping command that needs confirmation, plus its other predicates.
+  `the_published_names...` and
+  `the_commands_whose_caller_must_first_be_shown_need_confirmation` gain it.
+  It was not renamed again.
+- **E-7.** `DATA_ROOTS` gains `item_republish_preview.schema.json` (55). No new
+  code, so the two code lists are unchanged.
+- **E-8.** `contract_enumerations` gains `item_republish_preview.schema.json`
+  `details.kind` (`ItemDtoKind`).
+- **E-9.** `HOMES` gains `item republish` (Remote, 35), `CONFORMANCE` its
+  row, and `preview_schema` the republish schema.
+- **Owner-authorized: the conformance split (2026-10-29), beside E-9.**
+  - `every_command_of_this_target_keeps_the_rules_of_the_boundary` is
+    replaced by one case per row: `c4_conformance_item_sync`,
+    `c4_conformance_repo_sync` and `c4_conformance_comment_add`.
+  - `item republish`'s row is `republish::c4_republish_conformance`.
+  - `c4_resolution_conformance` now calls the same helper,
+    `conformance_row`, which names every other row of `CONFORMANCE` and
+    `host::CONFORMANCE` as elsewhere. So every row is still checked against
+    the target's whole set.
+  - `RESOLUTION_ROW` is gone. Task 14 notes the split in the design.
+
+**The cases** (`tests/mutation_remote/republish.rs`, 23 `c4_republish_`; and
+`resume::c4_resume_republish`):
+
+| Row | Case(s) |
+| --- | --- |
+| 1 deletion recorded by a fetch | `preview_fetched` (golden `item_republish_preview`) |
+| 2 push-absence evidence `Deleted` | `preview_pushed` |
+| 3 `Ambiguous` or `Unknown` | `preview_ambiguous`, `preview_unknown` |
+| 4 recreated between fetch and push | `recreated_before_the_push` |
+| 5 stopped after the push, then `operation resume` | `resumed_after_the_push` |
+| 6 no deletion evidence | `preview_noop` (never published, present, not yet observed; golden `item_republish_preview_noop`) |
+| 7 lifecycle-closed ticket | `ticket_closed` (golden `item_republish_ticket_closed`) |
+| 8 nothing changed | `confirmed` (golden `item_republish`) |
+| 9 primary moved | `primary_moved` |
+| 10 context an ancestor of primary | `ancestor_of_primary` |
+| 11 local branch moved | `local_moved` |
+| 12 branch reappeared | `reappeared` (golden `item_republish_external_change`) |
+| 13 busy | `busy` |
+| 14 unfinished local sync | `local_sync_unfinished` (Task 1's helper) |
+| 15 transport, unlock or host stop | `transport_stop`, `unlock_stop`, `host_stop` |
+| 16 replay | `replayed` |
+| 17 `item sync` after | `item_sync_after` |
+| 18 Ctrl-C during execution | `cancelled` |
+| 19 Ctrl-C at the consent prompt | `cancelled_before_execution` (the library's analog; the CLI prompt is Task 12b's) |
+| Resume table row 6 | `resume::c4_resume_republish` |
+| Conformance | `c4_republish_conformance` |
+
+**TDD.** RED: the cases and the named edits, with nothing implemented, failed
+to compile with 6 errors, all missing names (`logs/task-5-red.log`). The
+first run passed 17 of 23. Five failed only because their goldens were not
+registered, and `preview_unknown` because a key cannot be registered twice
+(`logs/task-5-iter1.log`). The goldens were then written, read and committed
+(`logs/task-5-golden.log`).
+
+**Verify** (each `devenv shell -- cargo … --locked`, `--all-features` for
+tests; logs `logs/task-5-*`):
+
+- `mutation_remote`: 249 SSH cases passed, 0 failed (4433 s), no watchdog hit; on the final code, so it can serve the Part A checkpoint (`logs/task-5-final-remote.log`).
+- Focused runs: `-- c4_republish` 23, `-- c4_resume` 16, `-- c4_conformance` 3
+  and `-- c4_resolution_conformance` 1 passed.
+- `mutation_confirmation` 183, `mutation_bridges` 129, `mutation_contract` 44
+  and `read_contract` 72 passed.
+- `--lib mutation` 123, `--lib remote` 477, `--lib local_sync` 164 and
+  `--lib integration` 26 passed.
+- `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
+  passed.
+- Desktop (ruling P6):
+  - `check --features desktop --bin manyhands` and `clippy --features desktop
+    --bin manyhands -- -D warnings` passed;
+  - `check --features desktop` passed;
+  - `clippy --all-targets --features desktop -- -D warnings` shows main's 58
+    errors exactly, all in `bin "manyhands" test`, none in new code.
+
+**For review** (also in the report):
+
+- **`push_rejected` is finished.** A push the remote refused ends the
+  operation and finishes the record, as `external_change` does. The design's
+  row says only "push_rejected, exit 3; nothing pushed". Held, the same
+  request would find the recreated branch and could never go on.
+- **A refused republish's operation reads `cancelled`.** It is ended as a
+  cancellation ends one, since no new phase may be added (fact 75).
+- **Push-only evidence cannot tell present from deleted.** A branch published
+  and never fetched since gives a `Pushed` preview whether or not it is
+  there. Execution then refuses `external_change`, with nothing pushed. So
+  does a second preview right after a republish, until a fetch records the
+  branch again.
+- **Busy.** The envelope offers `request.retry` for the republish. Naming the
+  refused `item sync` request is human output, for Part B.
+- **The no-op preview** carries no action. "Run `item sync` first" is the
+  CLI's to print, since no recovery action names a synchronization.
+- **Row 15's host stop** is `host_replacement_required`. A host that is
+  already pinned cannot be `host_approval_required`, which is the code for
+  an unpinned one.

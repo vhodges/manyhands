@@ -736,6 +736,38 @@ pub(super) fn operation_holder(
         .optional()
 }
 
+/// `operation_holder`, when the request that holds the operation is of
+/// `command`: `None` when no unfinished record holds it, or one of another
+/// command does.
+pub(super) fn operation_holder_of(
+    connection: &Connection,
+    family: OperationFamily,
+    scope_key: &str,
+    operation_id: OperationId,
+    command: &str,
+) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT request_records.request_ulid
+               FROM request_operations
+               JOIN request_records USING (request_ulid)
+              WHERE request_operations.family = ?3
+                AND request_operations.operation_ulid = ?2
+                AND request_records.scope_key = ?1
+                AND request_records.state = 'accepted'
+                AND request_records.command = ?4
+              ORDER BY request_records.request_ulid LIMIT 1",
+            params![
+                scope_key,
+                operation_id.to_string(),
+                family.as_str(),
+                command
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
 /// Deletes the record `operation_owner` finds, and releases the
 /// confirmation it accepted, as settling does for a request that ended
 /// with nothing in flight: the request ID is free, and its next use is a

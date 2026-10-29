@@ -45,6 +45,7 @@ pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
+pub(crate) mod republish;
 pub(crate) mod resume;
 pub(crate) mod save;
 pub(crate) mod sync;
@@ -1001,7 +1002,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),
-        Some(Command::ItemSync | Command::RepoSync) => {
+        // A republish's operation is a synchronization of the context, and
+        // what it published is shown as a synchronization's is.
+        Some(Command::ItemSync | Command::RepoSync | Command::ItemRepublish) => {
             Recorded::of(sync::recorded_effects(service, &accepted))
         }
         // The comment's write and checkpoint, as its binding and its
