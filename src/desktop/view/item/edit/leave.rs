@@ -40,7 +40,7 @@ use manyhands::drafts::{DraftErrorKind, DraftId};
 
 use super::DraftLink;
 use crate::desktop::{
-    model::{edit::Phase, tabs::TabKey},
+    model::edit::Phase,
     services::{
         drafts::SessionDiscarded,
         edit_tabs::{TabEditing, Watch},
@@ -126,12 +126,10 @@ impl ItemPane {
     /// it edits its item and whether its session holds unsaved text that no
     /// draft holds: a repository's removal counts its tabs that do, and the
     /// Drafts page restores no draft into a tab that edits (Part C fixes 1
-    /// and 2).
+    /// and 2). An Inspect tab never edits, but its repair text counts as
+    /// unkept, as quitting counts it (Task 25 fix 1, M4).
     pub(in crate::desktop::view::item) fn watch_edit_tab(&self, cx: &mut Context<Self>) {
         let tab = self.tab_key();
-        if !matches!(tab, TabKey::Item { .. }) {
-            return;
-        }
         let pane = cx.weak_entity();
         let watch: Watch = Box::new(move |cx: &App| {
             pane.upgrade().map(|pane| {

@@ -22,6 +22,7 @@ use gpui_kit::{
     test::TestWindowExt,
 };
 use manyhands::{
+    canonical::{self, CanonicalItem, Document, ItemId},
     repository::{
         DocumentRepairInput, FailurePoint, ItemDto, ItemDtoKind, Mutation, RepositoryService,
     },
@@ -31,15 +32,15 @@ use manyhands::{
 use super::ItemPane;
 use crate::desktop::{
     model::{editor_text::load, navigation::OpenTarget, tabs::TabKey},
-    services::requests::{DesktopRequestId, Intent, RequestState},
+    services::{
+        JobKind,
+        requests::{DesktopRequestId, Intent, RequestState},
+    },
     test_support::{
         fixtures::{Fixture, item_id, ticket_path},
         snapshot::RepositorySnapshot,
     },
-    view::{
-        confirm::STALE_CODES,
-        harness::{Shell, key},
-    },
+    view::harness::{Shell, key},
 };
 
 /// A ticket's directory, whose file does not parse.
@@ -321,6 +322,35 @@ fn completed_marker(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> Stri
     typed
 }
 
+/// The canonical document front matter with `id` and `title`, then `body`,
+/// as the library writes it.
+fn adoption(id: &ItemId, title: &str, body: &str) -> String {
+    canonical::serialize_item(&CanonicalItem::Document(Document {
+        id: id.clone(),
+        title: title.to_owned(),
+        body: body.to_owned(),
+        unknown: serde_yaml::Mapping::new(),
+    }))
+    .unwrap()
+}
+
+/// Presses Adopt… and waits for the repair view, which opens once its ID
+/// is made. Gives its text and the ID that text holds.
+async fn adopt(shell: &Shell, cx: &mut TestAppContext) -> (String, ItemId) {
+    shell.click("item-repair-button", cx);
+    shell
+        .until_drawn(cx, "the adoption's view", |shell, cx| {
+            shell.present("repair-source", cx)
+        })
+        .await;
+    let text = repair_text(shell, cx);
+    let id = match canonical::parse_item(Path::new(NOTES), &text) {
+        Ok(CanonicalItem::Document(document)) => document.id,
+        _ => panic!("the prefill is a conforming document"),
+    };
+    (text, id)
+}
+
 /// A ticket's file with no type, which does not parse as a ticket: it
 /// holds its directory's ID.
 fn untyped() -> String {
@@ -335,8 +365,9 @@ fn untyped() -> String {
 /// "Needs fixing" offers Repair…, by keyboard too: Tab reaches it from the
 /// tab strip and Enter opens the repair view, its text area holding the
 /// whole file exactly as read, with focus in it; the entry goes while the
-/// view is open. An Inspect tab of a file that needs no fixing offers
-/// Repair… on its page. Opening writes nothing.
+/// view is open. An Inspect tab of a file that needs no fixing offers no
+/// Repair… (fix 1, M3): the library repairs no conforming file. Opening
+/// writes nothing.
 #[gpui_kit::test]
 async fn the_needs_fixing_banner_offers_repair(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -374,25 +405,22 @@ async fn the_needs_fixing_banner_offers_repair(cx: &mut TestAppContext) {
     assert_eq!(RepositorySnapshot::take(&root), before);
 
     open(&shell, inspect(&root, &ticket_path(READABLE)), cx);
+    assert!(shell.present("item-source", cx), "the file is read");
     assert!(!shell.present("item-needs-fixing", cx));
-    assert_eq!(shell.label("item-repair", cx).as_deref(), Some(REPAIR));
-    assert!(inside(&shell, "item-repair", "item-page", cx));
-    open_repair(&shell, cx);
-    assert_eq!(
-        repair_text(&shell, cx),
-        on_primary(&root, &ticket_path(READABLE))
-    );
+    assert!(!shell.present("item-repair", cx), "no Repair… for it");
     assert_eq!(RepositorySnapshot::take(&root), before);
 }
 
 /// An unmanaged document, a file under `docs/` with no front matter, has a
 /// banner of its own, in the handoff's words, with Adopt…, and no "Needs
-/// fixing". Adopt… opens the repair view over the file exactly as written;
-/// with a title and an ID added at the top, the preview names them and says
-/// a new ID will be assigned.
+/// fixing". Adopt… opens the repair view once an ID is made for it, on the
+/// canonical document front matter, with that ID and the file's first
+/// heading as its title, then the file byte for byte (fix 1, I1). The
+/// preview names the made ID and says a new ID will be assigned. Nothing
+/// is typed.
 #[gpui_kit::test]
 async fn an_unmanaged_document_offers_adopt(cx: &mut TestAppContext) {
-    let written = "# Notes\n\nWritten by hand.\n";
+    let written = "Intro.\n\n## Notes ##\n\nWritten by hand.\r\n";
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_file(root, NOTES, written.as_bytes());
     });
@@ -406,27 +434,48 @@ async fn an_unmanaged_document_offers_adopt(cx: &mut TestAppContext) {
     assert_eq!(shell.label("item-repair", cx).as_deref(), Some(ADOPT));
     assert!(inside(&shell, "item-repair", "item-banners", cx));
 
-    open_repair(&shell, cx);
-    assert_eq!(repair_text(&shell, cx), written);
-    type_at_line(
-        &shell,
-        0,
-        &format!(
-            "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {ADOPTED}\ntitle: Notes\n---\n"
-        ),
-        cx,
+    let (prefilled, id) = adopt(&shell, cx).await;
+    assert_eq!(
+        prefilled,
+        adoption(&id, "Notes", written),
+        "the canonical front matter, then the file byte for byte"
     );
+    assert!(prefilled.ends_with(written));
     preview(&shell, cx).await;
     let details = shell.rows("confirm-detail", cx);
     assert!(details[0].starts_with("Root: "), "{details:?}");
     assert_eq!(
         details[1..],
-        [format!("Path: {NOTES}"), format!("ID: {ADOPTED}")]
+        [format!("Path: {NOTES}"), format!("ID: {id}")]
     );
     assert_eq!(shell.label("confirm-adoption", cx).as_deref(), Some(NEW_ID));
 }
 
-/// A marker-only document is repaired, by keyboard from the text area on:
+/// Adopt… makes its ID once for a read of the file: Cancel, unasked since
+/// nothing was edited, then Adopt… again, with the file unchanged, shows
+/// the same ID, so the file is never adopted twice as two items. A file
+/// with no heading takes its file stem as its title.
+#[gpui_kit::test]
+async fn adopt_again_on_the_same_read_shows_the_same_id(cx: &mut TestAppContext) {
+    let written = "No heading here.\n";
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, NOTES, written.as_bytes());
+    });
+    open(&shell, inspect(&root, NOTES), cx);
+    let (first, id) = adopt(&shell, cx).await;
+    assert_eq!(first, adoption(&id, "notes", written));
+    shell.click("repair-cancel-button", cx);
+    assert!(
+        !shell.present("repair-discard-dialog", cx),
+        "unedited, unasked"
+    );
+    assert!(!shell.present("repair-source", cx));
+
+    let (again, same) = adopt(&shell, cx).await;
+    assert_eq!(same, id, "the same ID");
+    assert_eq!(again, first);
+}
+
 /// its front matter completed with a new ID, Tab reaches Preview and Enter
 /// prepares it; the preview names Root, Path and that ID and says a new ID
 /// will be assigned; Enter confirms. The repair is in the document's own
@@ -545,12 +594,15 @@ async fn a_repaired_item_with_its_tab_open_is_shown_there(cx: &mut TestAppContex
 }
 
 /// A preview the file has changed under since: another actor commits the
-/// file after the preview. Confirm is refused as stale and the dialog
-/// offers Prepare again, which prepares again under the same request; the
-/// file is not the one the text was read from, so that preview is refused
-/// too. Nothing is written, and the text is kept.
+/// file after the preview. Confirm is refused `external_change`. The
+/// request carries the token of the read the text came from, so a fresh
+/// preview of it would be refused the same way: no Prepare again is
+/// offered (fix 1, M5). The dialog closes, and the view shows the
+/// library's message and code and keeps the text, which can still be
+/// edited; starting again from the file as it is now is Cancel, then
+/// Repair… again. Nothing is written.
 #[gpui_kit::test]
-async fn a_stale_preview_is_refused_and_prepare_again_is_offered(cx: &mut TestAppContext) {
+async fn a_preview_the_file_changed_under_offers_no_prepare_again(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_nonconforming_document(root, MARKER);
     });
@@ -564,31 +616,30 @@ async fn a_stale_preview_is_refused_and_prepare_again_is_offered(cx: &mut TestAp
     );
 
     let sent = confirm(&shell, cx).await;
-    let (_, code) = answer(&shell, sent, cx);
-    let code = code.unwrap();
-    assert!(STALE_CODES.contains(&code), "{}", code.as_str());
     assert_eq!(
-        shell.label("confirm-code", cx).as_deref(),
-        Some(code.as_str())
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::ExternalChange))
+    );
+    let message = shell.operations(cx).read_with(cx, |operations, _| {
+        match &operations.request(sent).unwrap().state {
+            RequestState::Finished(_, _, _, _, message) => message.clone(),
+            _ => panic!("answered"),
+        }
+    });
+    assert!(!shell.present("confirm-dialog", cx), "the dialog closes");
+    assert!(!shell.present("confirm-prepare-again", cx));
+    assert_eq!(
+        shell.label("repair-failure", cx).as_deref(),
+        Some(message.as_str())
     );
     assert_eq!(
-        shell.label("confirm-prepare-again", cx).as_deref(),
-        Some("Prepare again")
-    );
-    assert!(!shell.present("confirm-ok", cx));
-    assert_eq!(own_commits(&root, &document_branch(ADOPTED)), None);
-    assert_eq!(repair_text(&shell, cx), typed, "the text is kept");
-
-    shell.click("confirm-prepare-again", cx);
-    previewed(&shell, cx).await;
-    assert_eq!(
-        shell.label("confirm-code", cx).as_deref(),
+        shell.label("repair-failure-code", cx).as_deref(),
         Some(ResultCode::ExternalChange.as_str())
     );
-    assert!(!shell.present("confirm-ok", cx));
-    assert_eq!(repairs(&shell, cx), [sent], "the same request");
     assert_eq!(own_commits(&root, &document_branch(ADOPTED)), None);
     assert_eq!(repair_text(&shell, cx), typed, "the text is kept");
+    type_at_line(&shell, 0, "x", cx);
+    assert_eq!(repair_text(&shell, cx), format!("x{typed}"), "and editable");
 }
 
 /// A corrected ID another document holds is an ambiguous identity: the
@@ -759,6 +810,10 @@ async fn closing_or_quitting_with_edited_repair_text_asks_first(cx: &mut TestApp
         assert!(!shell.present("repair-discard-dialog", cx), "{key}");
         assert_eq!(tabs(&shell, cx), 1, "{key} keeps the tab");
         assert_eq!(repair_text(&shell, cx), typed, "{key} keeps the text");
+        assert!(
+            text_focused(&shell, cx),
+            "{key} gives focus back to the text"
+        );
     }
 
     shell.click("repair-cancel-button", cx);
@@ -865,4 +920,193 @@ async fn the_repair_view_never_passes_through_the_markdown_editor(cx: &mut TestA
         Some(typed.as_str()),
         "repaired exactly as typed"
     );
+}
+
+/// The adopted title (fix 1, I1): the first ATX heading's text, its closing
+/// hashes dropped, and not one inside a fenced code block, nor a `#` with
+/// no space after it; else the file stem.
+#[test]
+fn the_adopted_title_is_the_first_heading_or_else_the_file_stem() {
+    assert_eq!(
+        super::adopt_title("docs/a/plan.md", "x\n# Plan\n## Later\n"),
+        "Plan"
+    );
+    assert_eq!(
+        super::adopt_title("docs/plan.md", "   ### Spaced ###  \r\n"),
+        "Spaced"
+    );
+    assert_eq!(
+        super::adopt_title("docs/plan.md", "```\n# not\n```\n#tag\n#\n"),
+        "plan"
+    );
+}
+
+/// After an answer whose effect is unknown, a lost one, the text stays
+/// read-only, as while the request ran, and Preview prepares that same
+/// request again: the library answers from what it stored
+/// (`already_applied`), and the tab follows the repair made, with no new
+/// request and one commit (fix 1, M1).
+#[gpui_kit::test]
+async fn preview_after_a_lost_answer_follows_the_repair_made(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    let typed = completed_marker(&shell, &root, cx);
+    preview(&shell, cx).await;
+    failing_at(&shell, FailurePoint::BeforeRequestSettlement);
+    let sent = confirm(&shell, cx).await;
+    working(&shell);
+    assert_eq!(
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::InternalError))
+    );
+    type_at_line(&shell, 0, "x", cx);
+    assert_eq!(repair_text(&shell, cx), typed, "read-only");
+
+    preview(&shell, cx).await;
+    assert_eq!(
+        shell.label("confirm-code", cx).as_deref(),
+        Some(ResultCode::AlreadyApplied.as_str())
+    );
+    follows(&shell, &root, ItemDtoKind::Document, ADOPTED, "Adopted", cx).await;
+    assert_eq!(repairs(&shell, cx), [sent], "no new request");
+    assert_eq!(own_commits(&root, &document_branch(ADOPTED)), Some(1));
+}
+
+/// A repair that lands while another tab is shown switches no tab: its
+/// tab closes for the item's own open tab, and the shown tab stays (fix
+/// 1, M2).
+#[gpui_kit::test]
+async fn a_repair_finishing_in_a_background_tab_switches_no_tab(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, &ticket_path(BROKEN), untyped().as_bytes());
+        fixture.commit_ticket(root, READABLE, "Readable", "");
+    });
+    let ticket = |id: &str| OpenTarget::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Ticket,
+        id: item_id(id),
+    };
+    open(&shell, ticket(BROKEN), cx);
+    open(&shell, ticket(READABLE), cx);
+    open(&shell, inspect(&root, &ticket_path(BROKEN)), cx);
+    open_repair(&shell, cx);
+    type_at_line(&shell, 5, "type: task\n", cx);
+    preview(&shell, cx).await;
+
+    let held = shell.backend.hold_job(JobKind::TicketRepair);
+    shell.click("confirm-ok", cx);
+    held.wait_reached();
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+    shell.keys("ctrl-shift-tab", cx);
+    let shown = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.opened(cx))
+    };
+    assert_eq!(shown(&shell, cx), Some(ticket(READABLE)));
+
+    held.release();
+    shell
+        .until_drawn(cx, "the repair's tab closing", |shell, cx| {
+            shell
+                .workspace
+                .read_with(cx, |workspace, _| workspace.tab_keys())
+                .len()
+                == 2
+        })
+        .await;
+    let sent = repairs(&shell, cx)[0];
+    assert_eq!(answer(&shell, sent, cx), (1, Some(ResultCode::Ok)));
+    assert_eq!(shown(&shell, cx), Some(ticket(READABLE)), "no switch");
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys()),
+        [
+            TabKey::for_target(&ticket(BROKEN)),
+            TabKey::for_target(&ticket(READABLE))
+        ]
+    );
+}
+
+/// A repository's removal counts a tab whose repair text is edited among
+/// those that removing closes, as quitting does (fix 1, M4). Cancel keeps
+/// the tab and its text.
+#[gpui_kit::test]
+async fn a_removal_counts_edited_repair_text(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    open(&shell, inspect(&root, MARKER), cx);
+    open_repair(&shell, cx);
+    type_at_line(&shell, 0, "x", cx);
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.remove_repository(key(&root), window, cx)
+        })
+    });
+    previewed(&shell, cx).await;
+    assert_eq!(
+        shell.label("confirm-unkept-note", cx).as_deref(),
+        Some("1 tab has unsaved changes that are not kept as a draft. Removing closes it.")
+    );
+    shell.click("confirm-cancel", cx);
+    assert_eq!(repair_text(&shell, cx), format!("x{MARKER_ONLY}"));
+}
+
+/// A clock a test moves on, which the library times its records by.
+struct MovedClock(std::sync::Mutex<time::OffsetDateTime>);
+
+impl manyhands::repository::Clock for MovedClock {
+    fn now(&self) -> time::OffsetDateTime {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// A stale preview, one that has expired, is refused, and the dialog
+/// offers Prepare again, which prepares the same request afresh; Confirm
+/// then sends that request again with the new confirmation, the repair is
+/// made, and the tab follows, with one request and one commit (fix 1, M5).
+#[gpui_kit::test]
+async fn a_stale_preview_is_refused_and_prepare_again_is_offered(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    let clock = std::sync::Arc::new(MovedClock(std::sync::Mutex::new(
+        time::OffsetDateTime::now_utc(),
+    )));
+    shell.backend.replace_service(
+        RepositoryService::open_at(shell.fixture.data_dir())
+            .unwrap()
+            .with_clock_for_testing(clock.clone()),
+    );
+    completed_marker(&shell, &root, cx);
+    preview(&shell, cx).await;
+    assert!(shell.present("confirm-ok", cx));
+    *clock.0.lock().unwrap() += time::Duration::minutes(11);
+
+    let sent = confirm(&shell, cx).await;
+    assert_eq!(
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::ConfirmationExpired))
+    );
+    assert_eq!(
+        shell.label("confirm-prepare-again", cx).as_deref(),
+        Some("Prepare again")
+    );
+    shell.click("confirm-prepare-again", cx);
+    previewed(&shell, cx).await;
+    assert!(shell.present("confirm-ok", cx), "a fresh preview");
+    shell.click("confirm-ok", cx);
+    shell
+        .until_drawn(cx, "the second answer", |shell, cx| {
+            matches!(answer(shell, sent, cx), (2, Some(_)))
+        })
+        .await;
+    assert_eq!(answer(&shell, sent, cx), (2, Some(ResultCode::Ok)));
+    follows(&shell, &root, ItemDtoKind::Document, ADOPTED, "Adopted", cx).await;
+    assert_eq!(repairs(&shell, cx), [sent], "one request");
+    assert_eq!(own_commits(&root, &document_branch(ADOPTED)), Some(1));
 }

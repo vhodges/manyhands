@@ -19,7 +19,7 @@ use manyhands::repository::ItemDto;
 
 use super::{Offer, PREVIEW, REPAIR_NOT_UTF8, UNMANAGED};
 use crate::desktop::{
-    model::item::ADOPT,
+    model::item::{ADOPT, REPAIR},
     view::{
         confirm::CANCEL,
         item::{ItemPane, SOURCE, text},
@@ -30,14 +30,15 @@ use crate::desktop::{
 const TEXT_HEIGHT: f32 = 420.;
 
 impl ItemPane {
-    /// `label`, Repair… or Adopt…, for `item`, or why the file cannot be
-    /// repaired here; nothing where neither applies.
+    /// Repair…, or Adopt… when `adopt`, for `item`, or why the file cannot
+    /// be repaired here; nothing where neither applies.
     pub(in crate::desktop::view::item) fn repair_entry(
         &self,
         item: &ItemDto,
-        label: &'static str,
+        adopt: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let label = if adopt { ADOPT } else { REPAIR };
         Some(match self.repair_offer(item)? {
             Offer::Repair => div()
                 .id("item-repair")
@@ -48,8 +49,12 @@ impl ItemPane {
                     Button::new("item-repair-button")
                         .label(label)
                         .small()
-                        .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
-                            pane.open_repair(window, cx)
+                        .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                            if adopt {
+                                pane.open_adopt(window, cx)
+                            } else {
+                                pane.open_repair(window, cx)
+                            }
                         })),
                 )
                 .into_any_element(),
@@ -75,14 +80,15 @@ impl ItemPane {
                     .min_w_0()
                     .child(text("item-unmanaged", UNMANAGED)),
             )
-            .children(self.repair_entry(item, ADOPT, cx))
+            .children(self.repair_entry(item, true, cx))
             .into_any_element()
     }
 
     /// The repair view, in the page's place of the file's text: the text
     /// area, which Tab and Shift-Tab leave as D1's source view's do, what
     /// the last answer said, then Preview and Cancel. While a repair runs,
-    /// the text is read-only and both wait.
+    /// the text is read-only and both wait; after an answer whose effect is
+    /// unknown, the text stays read-only.
     pub(in crate::desktop::view::item) fn repair_view(
         &self,
         cx: &mut Context<Self>,
@@ -94,7 +100,7 @@ impl ItemPane {
             theme.muted_foreground,
             theme.mono_font_family.clone(),
         );
-        let running = repair.running;
+        let (running, locked) = (repair.running, repair.locked());
         let failure = repair.failure.as_ref().map(|(message, code)| {
             v_flex()
                 .gap_1()
@@ -144,7 +150,7 @@ impl ItemPane {
                         })
                         .child(
                             Textarea::new(&repair.text)
-                                .readonly(running)
+                                .readonly(locked)
                                 .aria_label(SOURCE)
                                 .font_family(mono)
                                 .text_sm()

@@ -39,7 +39,7 @@ use super::{ItemPane, RECOVERY, repair::unmanaged, text};
 use crate::desktop::{
     assets::icon_path,
     model::{
-        item::{CONTEXT_PROBLEMS, REPAIR, context_problems},
+        item::{CONTEXT_PROBLEMS, context_problems},
         links::LinkTarget,
         list_state::ListState,
     },
@@ -280,7 +280,7 @@ impl ItemPane {
                     )
                     .children(problems),
             )
-            .children(self.repair_entry(item, REPAIR, cx))
+            .children(self.repair_entry(item, false, cx))
             .into_any_element()
     }
 }

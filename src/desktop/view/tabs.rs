@@ -282,8 +282,9 @@ impl TabContent {
     /// The tab `id` follows its item to `target`, once a repair has made it
     /// (`FollowItem`): it shows `target` from now on, in its place in the
     /// strip, with its own focus, in a pane that reads it there. When a tab
-    /// is open on `target` already, that one is shown and `id` closes. Gives
-    /// the tab that shows `target`.
+    /// is open on `target` already, `id` closes, and that one is shown if
+    /// `id` was: a repair that lands in a tab not shown switches no tab (fix
+    /// 1, M2). Gives the tab that shows `target`.
     pub(super) fn follow(
         &mut self,
         id: TabId,
@@ -294,8 +295,11 @@ impl TabContent {
         let key = TabKey::for_target(&target);
         if let Some(open) = self.find(&key) {
             if open != id {
+                let shown = self.tabs.active() == Some(id);
                 self.close(id);
-                self.tabs.activate(open);
+                if shown {
+                    self.tabs.activate(open);
+                }
             }
             return open;
         }

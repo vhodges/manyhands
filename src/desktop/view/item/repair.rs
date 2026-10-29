@@ -1,40 +1,47 @@
 //! Repair (design, Part E: Repair; R-25; the Cycle's contract 11 and its
-//! Known Limits): a file under `docs/` or `.manyhands/tickets/` corrected in
-//! a plain text area over the whole file, and replaced through the
-//! library's `document repair` or `ticket repair` once the one
-//! confirmation dialog has previewed it.
+//! Known Limits): a nonconforming file under `docs/` or
+//! `.manyhands/tickets/` corrected in a plain text area over the whole
+//! file, and replaced through the library's `document repair` or `ticket
+//! repair` once the one confirmation dialog has previewed it.
 //!
 //! - **Entry.** "Needs fixing" offers Repair…; an unmanaged document's
 //!   banner, a file under `docs/` with no front matter, offers Adopt…, a
-//!   repair with adoption; an Inspect tab of a file that needs no fixing
-//!   offers Repair… on its page. Each is offered while the tab views a file
-//!   it read on primary, the copy the library repairs and whose token it
-//!   takes (`DocumentRepairInput::observation`), with no edit session. A
-//!   file that is not UTF-8 says it cannot be repaired here instead. A new
-//!   item's stand-in is never read, so it is never repaired.
-//! - **Editing** (R-25). The text area holds the whole file exactly as the
-//!   tab read it, and that read's observation is the one sent with it. The
-//!   text never passes through the markdown editor, its normalization or the
-//!   draft store: it is not crash-protected (Known Limits). Tab and
-//!   Shift-Tab leave it, as D1's source view's do.
+//!   repair with adoption. A file that needs no fixing offers neither: the
+//!   library repairs no conforming file (fix 1, M3). Each is offered while
+//!   the tab views a file it read on primary, the copy the library repairs
+//!   and whose token it takes (`DocumentRepairInput::observation`), with no
+//!   edit session. A file that is not UTF-8 says it cannot be repaired here
+//!   instead. A new item's stand-in is never read, so it is never repaired.
+//! - **Editing** (R-25). Repair… opens the text area on the whole file
+//!   exactly as the tab read it; Adopt… on the canonical document front
+//!   matter, with a title and an ID made for that read, then the file
+//!   exactly as read (`adopt`, fix 1, I1). That read's observation is the one
+//!   sent. The text never passes through the markdown editor, its
+//!   normalization or the draft store: it is not crash-protected (Known
+//!   Limits). Tab and Shift-Tab leave it, as D1's source view's do.
 //! - **Preview** prepares the repair in `view::confirm`, which shows Root,
 //!   Path and ID and, for an adoption, "A new ID will be assigned". A stale
 //!   preview, an ambiguous identity and every other refusal are the
-//!   dialog's to explain, with Prepare again where the library offers it.
+//!   dialog's to explain, with Prepare again where a new preview can stand.
 //! - **The answer.** Every attempt of the confirmed request is followed, a
 //!   retry's included: the library answers a request sent again with what it
 //!   stored. A committed checkpoint, `ok` or `already_applied` is the repair
 //!   made: the view closes, and the tab follows the item by the ID the
-//!   preview named (`FollowItem`), reading it again there. Any other answer
-//!   is said under the text, the library's message and code, and the text is
-//!   kept. While a request runs, the text and Preview wait.
-//! - **Leaving.** Cancel, closing the tab, or quitting with text that
-//!   differs from the file as read asks first; unedited text goes unasked.
+//!   preview named (`FollowItem`), reading it again there. A refusal is said
+//!   under the text, the library's message and code, and the text is kept.
+//!   After an answer whose effect is unknown, the text stays read-only, as
+//!   while a request runs, and Preview prepares that same request again: a
+//!   repair made then answers `already_applied`, and is followed (fix 1,
+//!   M1). While a request runs, the text and Preview wait.
+//! - **Leaving.** Cancel, closing the tab, quitting, or removing the
+//!   repository with text that differs from what the view opened with
+//!   asks first, or counts it; unedited text goes unasked.
 //!
 //! The text is the file's, so nothing here derives `Debug`, and it reaches
 //! no operation entry, notification, dialog message or error: only the
 //! request carries it to the library.
 
+mod adopt;
 mod prompt;
 mod view;
 
@@ -57,8 +64,11 @@ use super::{CloseThisTab, ItemPane};
 use crate::desktop::{
     model::{edit::Phase, item::CONTEXT_PROBLEMS, navigation::OpenTarget},
     services::requests::{DesktopRequestId, Intent, RequestState},
-    view::confirm::{self, Confirmed},
+    view::confirm::{self, Followed},
 };
+pub(super) use adopt::Adoption;
+#[cfg(test)]
+use adopt::adopt_title;
 use prompt::Choice;
 
 /// A file with no text to repair (pre-flight ruling, Task 25).
@@ -125,17 +135,31 @@ pub(super) struct Repairing {
     kind: ItemDtoKind,
     /// The token of the read the text came from, on primary.
     observation: String,
-    /// The file as read: text equal to it is unedited.
-    read: String,
+    /// The text the view opened with, the file as read or an adoption's:
+    /// text equal to it is unedited.
+    opened: String,
     text: Entity<TextareaState>,
     sent: Option<Sent>,
     /// A repair is with the worker: the text and Preview wait.
     running: bool,
+    /// The last answer's effect is unknown (not `Intent::refused_answer`):
+    /// the text stays read-only, and Preview prepares the same request
+    /// again.
+    unknown: bool,
     /// The last answer that made no repair: the library's message and code.
     failure: Option<(String, ResultCode)>,
-    /// The last confirmation opened, whose Confirm says what it sent.
+    /// The last confirmation opened, which says what it sent and what a
+    /// prepare with no preview answered.
     _confirming: Option<Subscription>,
     _changed: Subscription,
+}
+
+impl Repairing {
+    /// Whether the text cannot change now: a request runs, or the last
+    /// answer's effect is unknown.
+    fn locked(&self) -> bool {
+        self.running || self.unknown
+    }
 }
 
 /// The text a repair request carries.
@@ -153,22 +177,23 @@ impl ItemPane {
         Some(self.repair.as_ref()?.text.clone())
     }
 
-    /// Whether the repair view holds text that differs from the file as
-    /// read: no draft keeps it, so leaving asks first.
+    /// Whether the repair view holds text that differs from what it opened
+    /// with: no draft keeps it, so leaving asks first.
     pub(in crate::desktop::view) fn repair_edited(&self, cx: &App) -> bool {
         self.repair
             .as_ref()
-            .is_some_and(|repair| repair.text.read(cx).value().as_ref() != repair.read)
+            .is_some_and(|repair| repair.text.read(cx).value().as_ref() != repair.opened)
     }
 
-    /// What `item`, this tab's read, offers: its repair, for a file under
-    /// `docs/` or `.manyhands/tickets/` read on primary as UTF-8 text with
-    /// its token, while the tab views it with no edit session and no repair
-    /// open; or, for a file that is not UTF-8, why not.
+    /// What `item`, this tab's read, offers: its repair, for a nonconforming
+    /// file under `docs/` or `.manyhands/tickets/` read on primary as UTF-8
+    /// text with its token, while the tab views it with no edit session and
+    /// no repair open; or, for a file that is not UTF-8, why not.
     fn repair_offer(&self, item: &ItemDto) -> Option<Offer> {
         let viewing =
             self.edit.phase() == Phase::Viewing && !self.has_session() && self.repair.is_none();
         if !viewing
+            || item.id.is_some()
             || item.context.kind != ItemContextKind::Primary
             || repair_kind(&item.path).is_none()
         {
@@ -181,9 +206,22 @@ impl ItemPane {
         }
     }
 
-    /// Opens the repair view on the file as this tab read it, with focus in
-    /// its text.
+    /// Repair…: the view opens on the file exactly as this tab read it.
     fn open_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self
+            .model
+            .item()
+            .rows()
+            .and_then(|item| item.source.clone())
+        else {
+            return;
+        };
+        self.open_view(source, window, cx);
+    }
+
+    /// Opens the repair view on `opened`, its unedited text, over the file
+    /// as this tab read it (never a stand-in), with focus in its text.
+    fn open_view(&mut self, opened: String, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
@@ -193,15 +231,12 @@ impl ItemPane {
         if !matches!(self.repair_offer(item), Some(Offer::Repair)) {
             return;
         }
-        let (Some(source), Some(observation), Some(kind)) = (
-            item.source.clone(),
-            item.observation.clone(),
-            repair_kind(&item.path),
-        ) else {
+        let (Some(observation), Some(kind)) = (item.observation.clone(), repair_kind(&item.path))
+        else {
             return;
         };
         let path = item.path.clone();
-        let value = source.clone();
+        let value = opened.clone();
         let text = cx.new(|cx| TextareaState::new(window, cx).default_value(value));
         // The tab's unsaved mark follows the text.
         let changed = cx.subscribe(&text, |_, _, event: &InputEvent, cx| {
@@ -215,10 +250,11 @@ impl ItemPane {
             path,
             kind,
             observation,
-            read: source,
+            opened,
             text,
             sent: None,
             running: false,
+            unknown: false,
             failure: None,
             _confirming: None,
             _changed: changed,
@@ -227,8 +263,9 @@ impl ItemPane {
     }
 
     /// Preview: the repair of the text as it is now, prepared in the
-    /// confirmation dialog, whose Confirm sends it. The dialog gives focus
-    /// back to what held it.
+    /// confirmation dialog, whose Confirm sends it; after an answer whose
+    /// effect is unknown, that same request prepared again. The dialog
+    /// gives focus back to what held it.
     fn preview_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
@@ -239,61 +276,87 @@ impl ItemPane {
         if repair.running {
             return;
         }
-        let source = repair.text.read(cx).value().to_string();
-        let (root, path) = (repair.root.clone(), PathBuf::from(&repair.path));
-        let observation = repair.observation.clone();
-        let intent = match repair.kind {
-            ItemDtoKind::Document => Intent::DocumentRepair {
-                root,
-                path,
-                observation,
-                source,
-            },
-            ItemDtoKind::Ticket => Intent::TicketRepair {
-                root,
-                path,
-                observation,
-                source,
-            },
-        };
         let origin = window
             .focused(cx)
             .unwrap_or_else(|| repair.text.read(cx).focus_handle(cx));
-        let Some(dialog) = confirm::confirm_followed(intent, origin, &self.services, window, cx)
-        else {
+        let dialog = match repair.sent.as_ref().filter(|_| repair.unknown) {
+            Some(sent) => {
+                confirm::prepare_again_followed(sent.request, origin, &self.services, window, cx)
+            }
+            None => {
+                let source = repair.text.read(cx).value().to_string();
+                let (root, path) = (repair.root.clone(), PathBuf::from(&repair.path));
+                let observation = repair.observation.clone();
+                let intent = match repair.kind {
+                    ItemDtoKind::Document => Intent::DocumentRepair {
+                        root,
+                        path,
+                        observation,
+                        source,
+                    },
+                    ItemDtoKind::Ticket => Intent::TicketRepair {
+                        root,
+                        path,
+                        observation,
+                        source,
+                    },
+                };
+                confirm::confirm_followed(intent, origin, &self.services, window, cx)
+            }
+        };
+        let Some(dialog) = dialog else {
             return;
         };
-        let confirmed = cx.subscribe(&dialog, |pane, _, event: &Confirmed, cx| {
-            pane.repair_confirmed(event, cx)
+        let followed = cx.subscribe(&dialog, |pane, _, event: &Followed, cx| match event {
+            Followed::Confirmed { request, details } => {
+                pane.repair_confirmed(*request, details, cx)
+            }
+            Followed::Answered(code) => pane.repair_prepared(*code, cx),
         });
         if let Some(repair) = &mut self.repair {
-            repair._confirming = Some(confirmed);
+            repair._confirming = Some(followed);
         }
     }
 
-    /// The confirmation sent the repair, or queued it again: its answers
-    /// are followed from here.
-    fn repair_confirmed(&mut self, event: &Confirmed, cx: &mut Context<Self>) {
+    /// The confirmation sent the repair `request`, or queued it again: its
+    /// answers are followed from here.
+    fn repair_confirmed(
+        &mut self,
+        request: DesktopRequestId,
+        details: &PreviewDetailsDto,
+        cx: &mut Context<Self>,
+    ) {
         let Some(repair) = &mut self.repair else {
             return;
         };
-        let id = match &event.details {
+        let id = match details {
             PreviewDetailsDto::Repair(preview) => preview.id.parse().ok(),
             _ => None,
         };
         match &mut repair.sent {
-            Some(sent) if sent.request == event.request => sent.id = id.or(sent.id.take()),
+            Some(sent) if sent.request == request => sent.id = id.or(sent.id.take()),
             sent => {
                 *sent = Some(Sent {
-                    request: event.request,
+                    request,
                     taken: 0,
                     id,
                 })
             }
         }
         repair.running = true;
+        repair.unknown = false;
         repair.failure = None;
         cx.notify();
+    }
+
+    /// A prepare gave no preview. After an answer whose effect is unknown,
+    /// the same request prepared again answered `already_applied`: its
+    /// repair is made, as the text it sent says.
+    fn repair_prepared(&mut self, code: ResultCode, cx: &mut Context<Self>) {
+        let unknown = self.repair.as_ref().is_some_and(|repair| repair.unknown);
+        if unknown && code == ResultCode::AlreadyApplied {
+            self.repaired(None, cx);
+        }
     }
 
     /// The request model changed: an attempt of the repair's request that
@@ -322,7 +385,7 @@ impl ItemPane {
         match state {
             // A retry of it: the repair runs again.
             RequestState::Queued | RequestState::Running { .. } => repair.running = true,
-            RequestState::Finished(_, code, effects, _, message) => {
+            RequestState::Finished(outcome, code, effects, recovery, message) => {
                 if let Some(sent) = &mut repair.sent {
                     sent.taken = attempt;
                 }
@@ -332,6 +395,7 @@ impl ItemPane {
                     return self.repaired(carried, cx);
                 }
                 repair.running = false;
+                repair.unknown = !Intent::refused_answer(outcome, code, &recovery);
                 repair.failure = Some((message, code));
             }
             RequestState::Removed | RequestState::Dismissed | RequestState::NotSent(_) => {
@@ -344,17 +408,21 @@ impl ItemPane {
         cx.notify();
     }
 
-    /// The repair is made with `carried`, the text its request sent. That
-    /// text is the item now: the view closes, and the tab follows the item
-    /// by the ID the preview named. Text changed since it was sent is not
-    /// what was repaired, and stays.
+    /// The repair is made, with `carried`, the text its request sent, when
+    /// its answer gives it. That text is the item now: the view closes, and
+    /// the tab follows the item by the ID the preview named. The text is
+    /// read-only from Confirm to a refusal; but a request a refusal left can
+    /// still be confirmed again from the operation area, with the text it
+    /// sent, so text changed since then is not what was repaired, and
+    /// stays.
     fn repaired(&mut self, carried: Option<String>, cx: &mut Context<Self>) {
         let Some(repair) = &mut self.repair else {
             return;
         };
         repair.running = false;
+        repair.unknown = false;
         repair.failure = None;
-        if carried.as_deref() != Some(repair.text.read(cx).value().as_ref()) {
+        if carried.is_some_and(|carried| carried != repair.text.read(cx).value().as_ref()) {
             cx.notify();
             return;
         }

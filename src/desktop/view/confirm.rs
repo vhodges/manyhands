@@ -20,8 +20,12 @@
 //!
 //! A repair's preview shows its Root, Path and ID, and, when the file
 //! holds no valid ID and the source's is assigned, "A new ID will be
-//! assigned". Confirm says what it sent (`Confirmed`) to an opener that
-//! follows the request's answers (`confirm_followed`).
+//! assigned". A repair carries the token of the read its text came from,
+//! so a fresh preview of one refused `external_change` would be refused
+//! the same way: that answer offers no Prepare again, and closes the
+//! dialog (Task 25 fix 1, M5). The dialog tells an opener that follows it
+//! (`confirm_followed`, `prepare_again_followed`) what Confirm sent, and
+//! what a prepare that gave no preview answered (`Followed`).
 
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
@@ -72,15 +76,33 @@ pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay i
 /// (design, Part E: Repair).
 pub(crate) const NEW_ID: &str = "A new ID will be assigned";
 
-/// What Confirm sent: the request it submitted, or queued again after
-/// Prepare again, with the details of the preview confirmed. The opener of
-/// a dialog it follows (`confirm_followed`) follows the request's answers.
-pub(crate) struct Confirmed {
-    pub(crate) request: DesktopRequestId,
-    pub(crate) details: PreviewDetailsDto,
+/// What the dialog tells an opener that follows it (`confirm_followed`,
+/// `prepare_again_followed`).
+pub(crate) enum Followed {
+    /// Confirm sent the request, or queued it again after Prepare again,
+    /// with the details of the preview confirmed: its answers are the
+    /// opener's to follow.
+    Confirmed {
+        request: DesktopRequestId,
+        details: PreviewDetailsDto,
+    },
+    /// The prepare gave no preview, and was answered this code.
+    Answered(ResultCode),
 }
 
-impl EventEmitter<Confirmed> for ConfirmDialog {}
+impl EventEmitter<Followed> for ConfirmDialog {}
+
+/// Whether `intent`, answered `code` at execute, is one whose fresh
+/// preview would be refused the same way: a repair carries the token of
+/// the read its text came from, so after `external_change` no new preview
+/// of it can stand (Task 25 fix 1, M5).
+fn refused_again(intent: &Intent, code: ResultCode) -> bool {
+    code == ResultCode::ExternalChange
+        && matches!(
+            intent,
+            Intent::DocumentRepair { .. } | Intent::TicketRepair { .. }
+        )
+}
 
 /// A removal closes the repository's tabs, `count` of which hold unsaved
 /// text that no draft holds (Part C fix 1, I1): `None` when none do. The
@@ -135,8 +157,8 @@ pub(crate) fn confirm(
 }
 
 /// Opens the confirmation dialog for `intent`, as `confirm` does, and
-/// gives it, for its opener to hear what Confirm sends (`Confirmed`);
-/// `None` when nothing opened.
+/// gives it, for its opener to follow (`Followed`); `None` when nothing
+/// opened.
 pub(crate) fn confirm_followed(
     intent: Intent,
     origin: FocusHandle,
@@ -156,15 +178,25 @@ pub(crate) fn prepare_again(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(intent) = services
+    prepare_again_followed(id, origin, services, window, cx);
+}
+
+/// Opens the dialog for the request `id` again, as `prepare_again` does,
+/// and gives it, for its opener to follow (`Followed`); `None` when
+/// nothing opened.
+pub(crate) fn prepare_again_followed(
+    id: DesktopRequestId,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<ConfirmDialog>> {
+    let intent = services
         .operations()
         .read(cx)
         .request(id)
-        .map(|request| request.intent.clone())
-    else {
-        return;
-    };
-    open(intent, Some(id), origin, services, window, cx);
+        .map(|request| request.intent.clone())?;
+    open(intent, Some(id), origin, services, window, cx)
 }
 
 fn open(
@@ -347,6 +379,7 @@ impl ConfirmDialog {
                     message,
                     replacement,
                 };
+                cx.emit(Followed::Answered(code));
                 // What the row offered may be gone: the views that show
                 // the repository read it again. A busy answer says nothing
                 // changed: Retry prepares again.
@@ -403,7 +436,7 @@ impl ConfirmDialog {
         }
         if let (Some(request), Some((preview, _))) = (self.request, &self.preview) {
             let details = preview.details.clone();
-            cx.emit(Confirmed { request, details });
+            cx.emit(Followed::Confirmed { request, details });
         }
         // Part C fix 2, N1: once it lands, a removal closes only the tabs
         // whose unkept text the line counted as it was confirmed.
@@ -439,7 +472,8 @@ impl ConfirmDialog {
     }
 
     /// The request this dialog submitted was answered: a stale preview
-    /// shows Prepare again; anything else closes the dialog.
+    /// shows Prepare again, unless a new one would be refused the same way
+    /// (`refused_again`); anything else closes the dialog.
     fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::Submitted) {
             return;
@@ -459,7 +493,7 @@ impl ConfirmDialog {
         match &request.state {
             RequestState::Queued | RequestState::Running { .. } => {}
             RequestState::Finished(_, code, _, recovery, message)
-                if offers_prepare_again(*code, recovery) =>
+                if offers_prepare_again(*code, recovery) && !refused_again(&self.intent, *code) =>
             {
                 self.phase = Phase::Stale {
                     code: *code,

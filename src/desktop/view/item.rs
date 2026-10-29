@@ -66,11 +66,7 @@ use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
     keys::{Edit, ITEM_TAB_CONTEXT, Save, ToggleRich},
     model::{
-        edit::Phase,
-        item::{ItemView, REPAIR},
-        names::TicketName,
-        navigation::OpenTarget,
-        stamp::ViewScope,
+        edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
     services::{
         Services,
@@ -160,6 +156,8 @@ pub(crate) struct ItemPane {
     edit: edit::TabEdit,
     /// The repair view, while it is open (`repair`).
     repair: Option<repair::Repairing>,
+    /// Adopt…'s ID for this tab's read of its file, and its making.
+    adoption: repair::Adoption,
     _operations: Subscription,
     /// A draft listed, restored or written redraws the banner and section.
     _drafts: Subscription,
@@ -227,6 +225,7 @@ impl ItemPane {
             images,
             edit,
             repair: None,
+            adoption: repair::Adoption::default(),
             _operations: operations,
             _drafts: drafts,
             _saved: saved,
@@ -324,6 +323,8 @@ impl ItemPane {
 impl Render for ItemPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_source(window, cx);
+        // An Adopt… whose ID has landed opens its view.
+        self.sync_adoption(window, cx);
         // A picker goes once its sheet has closed (Task 21 fix 1).
         self.picker_follows_sheet(window, cx);
         // Before the read editor takes a new read: Edit compares the two
@@ -370,19 +371,7 @@ impl Render for ItemPane {
                 } else {
                     self.read_body(item, cx)
                 };
-                // An Inspect tab of a file that needs no fixing offers
-                // Repair… on its page; "Needs fixing" offers it in its
-                // banner.
-                let entry = (inspect && !banners::nonconforming(item))
-                    .then(|| self.repair_entry(item, REPAIR, cx))
-                    .flatten();
-                Some(
-                    v_flex()
-                        .gap_3()
-                        .children(details)
-                        .children(entry)
-                        .child(text),
-                )
+                Some(v_flex().gap_3().children(details).child(text))
             }
             // A new item not created yet has no item to read: its edit
             // editor is the page (R-42). Repair text stays shown when a
