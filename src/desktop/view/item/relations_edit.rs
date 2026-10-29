@@ -20,8 +20,10 @@
 //!   over the whole proposed set, under the tab's stamp, off the UI thread;
 //!   an answer asked before a newer change is dropped when it lands. A set
 //!   equal to the base's is not checked: its save sends both as
-//!   `Unchanged`, which the library does not check. The check is advisory:
-//!   it reads the index only, and while one runs nothing waits.
+//!   `Unchanged`, which the library does not check. The check reads the
+//!   index only, and the library checks again; but while one of what the
+//!   session proposes runs, every save waits, so that a cycle is explained
+//!   before any save (contract 10; Task 27 fix 1, B4).
 //! - **A rejection** is explained under the field whose change it
 //!   answered, naming its tickets by short code and title where a loaded
 //!   row gives them, else by ID, and every save waits through the one gate
@@ -53,7 +55,8 @@ use crate::desktop::{
     model::{
         navigation::OpenTarget,
         relations_edit::{
-            Answer, Candidate, Proposed, RelationField, explanation, save_field, save_reason,
+            Answer, Candidate, Proposed, RelationField, SAVE_CHECKING, explanation, save_field,
+            save_reason,
         },
         stamp::{Generations, Stamp, ViewScope},
     },
@@ -135,11 +138,26 @@ impl ItemPane {
         (answer.proposed == proposed && proposed != base).then_some(answer)
     }
 
-    /// Why every save waits for the relationships: a rejection held for
-    /// what the session proposes now (`save_blocked`). Not while a check
-    /// runs: the check is advisory, and the library checks again.
+    /// Why every save waits for the relationships (`save_blocked`): a check
+    /// of what the session proposes now, where that differs from its base,
+    /// still runs, so that a cycle is explained before any save (contract
+    /// 10; Task 27 fix 1, B4); or a rejection is held for that proposal.
     pub(super) fn relations_blocked(&self) -> Option<&'static str> {
+        if self.relations_checking() {
+            return Some(SAVE_CHECKING);
+        }
         save_reason(self.current_answer()?.rejection.as_ref()?.code)
+    }
+
+    /// Whether the check of what the session proposes now runs: one is in
+    /// flight, asked of that proposal, which differs from the base.
+    fn relations_checking(&self) -> bool {
+        let Some((proposed, base)) = self.proposals() else {
+            return false;
+        };
+        self.relations.check.is_some()
+            && proposed != base
+            && self.relations.asked.as_ref() == Some(&proposed)
     }
 
     /// A control's change: the session proposes `proposed`, changed under
@@ -214,6 +232,8 @@ impl ItemPane {
         if !self.relations.generations.is_current(&stamp) {
             return;
         }
+        // The check is over: Save waits for it no longer, whatever it said.
+        self.relations.check = None;
         if let ReadResult::Ok(check) = result {
             let answer = Answer::of_check(proposed, field, check);
             // A save's refusal of the same proposal keeps its rejection.

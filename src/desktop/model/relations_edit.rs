@@ -57,6 +57,9 @@ pub(crate) const CANNOT_BE_OWN_PARENT: &str = "A ticket cannot be its own parent
 pub(crate) const SAVE_CYCLE: &str = "A ticket cannot be saved with a relationship cycle.";
 /// Save's reason for `invalid_relationship`.
 pub(crate) const SAVE_INVALID: &str = "A ticket's dependencies and parent must be tickets.";
+/// Save's reason while a check of what the session proposes runs (Task 27
+/// fix 1, B4; contract 10).
+pub(crate) const SAVE_CHECKING: &str = "Save waits while the relationships are checked.";
 /// An unresolved dependency or parent, on its chip or row.
 pub(crate) const NOT_FOUND_KEPT: &str = "not found, kept";
 /// An answer from an index that is behind or incomplete, under the

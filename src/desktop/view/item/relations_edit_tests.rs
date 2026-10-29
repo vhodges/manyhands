@@ -20,7 +20,9 @@ use super::*;
 use crate::desktop::{
     model::{
         edit::save_state::NO_CHANGES_TO_SAVE,
-        relations_edit::{NO_MATCH, NOT_FOUND_KEPT, Proposed, SAVE_CHECKS_AGAIN, SAVE_CYCLE},
+        relations_edit::{
+            NO_MATCH, NOT_FOUND_KEPT, Proposed, SAVE_CHECKING, SAVE_CHECKS_AGAIN, SAVE_CYCLE,
+        },
         relationships::NONE,
     },
     test_support::drafts::{Actor, second_actor},
@@ -633,11 +635,16 @@ async fn a_late_check_does_not_replace_a_newer_one(cx: &mut TestAppContext) {
     pick(&shell, "rel-deps-add", "Cyclic", cx);
     assert_eq!(blocked(&shell, cx), Some(SAVE_CYCLE));
 
-    // The next check is held: while it runs, nothing waits.
+    // The next check is held: while it runs, Save waits for it (Task 27
+    // fix 1, B4), and nothing is said yet.
     let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
     shell.click(("rel-dep-remove", 0usize), cx);
     pick(&shell, "rel-deps-add", "Later", cx);
-    assert_eq!(blocked(&shell, cx), None, "a check in flight holds nothing");
+    assert_eq!(
+        blocked(&shell, cx),
+        Some(SAVE_CHECKING),
+        "Save waits for the check in flight"
+    );
     assert!(!shell.present("rel-deps-problem", cx));
 
     // A newer change of the same proposal is answered: no cycle.
@@ -883,20 +890,22 @@ async fn a_library_relationship_cycle_answer_is_explained_the_same_way(cx: &mut 
     assert_eq!(shell.label("rel-deps-problem", cx).as_deref(), Some(words));
     assert_eq!(blocked(&shell, cx), Some(SAVE_CYCLE));
 
-    // Saved while its check still runs, which holds nothing: the refusal is
-    // held, and the check, landing after it, keeps it and says the
-    // unresolved dependency is still not found, kept (fix 1, I1).
+    // Save waits while its check still runs (Task 27 fix 1, B4: contract 10
+    // binds); the check, landing, says the cycle and that the unresolved
+    // dependency is still not found, kept (fix 1, I1).
     shell.click(("rel-dep-remove", 0usize), cx);
     let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
     pick(&shell, "rel-deps-add", "Racer", cx);
-    assert_eq!(blocked(&shell, cx), None, "the check is in flight");
-    shell.keys("secondary-s", cx);
-    let sent = saves(&shell, cx);
-    assert_eq!(sent.len(), 2, "the sheet's key saved");
-    ended(&shell, sent[0], cx).await;
     assert_eq!(
-        code(&shell, sent[0], cx),
-        Some(ResultCode::RelationshipCycle)
+        blocked(&shell, cx),
+        Some(SAVE_CHECKING),
+        "the check is in flight"
+    );
+    shell.keys("secondary-s", cx);
+    assert_eq!(saves(&shell, cx).len(), 1, "the sheet's key waits");
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some(SAVE_CHECKING)
     );
     held.send(()).expect("the check is still running");
     shell.run(cx);
@@ -1108,4 +1117,67 @@ async fn the_relationship_controls_are_read_only_while_preparing_loading_in_revi
     shell
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+}
+
+/// Task 27 fix 1, B4 (contract 10: a cycle is explained before any save,
+/// and the save is not offered): while the check of what the session
+/// proposes runs, Save waits, saying so, on every route; the check landing
+/// with no rejection offers it again; one with a rejection says the
+/// rejection's words, as before.
+#[gpui_kit::test]
+async fn save_waits_while_the_relationships_are_checked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Main", &with_deps("mh-00001", &[]));
+        fixture.commit_ticket(root, OTHER, "New parent", &with_deps("mh-00091", &[]));
+        fixture.commit_ticket(
+            root,
+            THIRD,
+            "Child",
+            &format!("{}parent: {TICKET}\n", with_deps("mh-00092", &[])),
+        );
+    });
+    assert_eq!(
+        SAVE_CHECKING,
+        "Save waits while the relationships are checked."
+    );
+    open(&shell, ticket(&root, TICKET), cx);
+    edit(&shell, cx).await;
+    open_sheet(&shell, cx);
+    let held = shell.backend.hold_read(ReadKind::RelationshipCheck);
+    pick(&shell, "rel-parent-change", "New parent", cx);
+    assert!(dirty(&shell, cx));
+    assert_eq!(blocked(&shell, cx), Some(SAVE_CHECKING), "the check runs");
+    shell.keys("secondary-s", cx);
+    assert!(
+        saves(&shell, cx).is_empty(),
+        "the sheet's key sends nothing"
+    );
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some(SAVE_CHECKING)
+    );
+    shell.keys("escape", cx);
+    assert!(shell.inert_button("item-save", cx), "Save is not offered");
+    shell.click("item-save", cx);
+    assert!(saves(&shell, cx).is_empty(), "nor the header's Save");
+
+    held.send(()).expect("the check is still running");
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert_eq!(blocked(&shell, cx), None, "no rejection: Save is offered");
+
+    open_sheet(&shell, cx);
+    pick(&shell, "rel-parent-change", "Child", cx);
+    assert_eq!(blocked(&shell, cx), Some(SAVE_CYCLE), "a rejection's words");
+    assert_eq!(
+        shell.label("rel-parent-problem", cx).as_deref(),
+        Some("This makes a cycle: mh-00001 Main, mh-00092 Child.")
+    );
+    pick(&shell, "rel-parent-change", "New parent", cx);
+    assert_eq!(blocked(&shell, cx), None, "checked, with no rejection");
+    shell.keys("escape", cx);
+    let request = save(&shell, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert!(writes(&shell, request, cx).1 == RelationshipWrite::Set(OTHER.to_owned()));
 }
