@@ -8,7 +8,7 @@ use serde::{Serialize, Serializer};
 use super::command::Command;
 use crate::{
     repository::{IdentityDto, OperationAction, OperationFamily},
-    results::{Effects, Outcome, ResultCode, Scope, contract_enum},
+    results::{Effects, Outcome, PublicationEffect, ResultCode, Scope, contract_enum},
 };
 
 contract_enum!(
@@ -546,9 +546,96 @@ pub enum MutationDataDto {
     Operation(OperationMutationDto),
     Synchronization(SynchronizationMutationDto),
     SynchronizationConflict(SynchronizationConflictMutationDto),
+    Comment(CommentMutationDto),
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
     Repair(RepairMutationDto),
+}
+
+contract_enum!(
+    /// Why a comment's publication is pending: the repository has no
+    /// publication remote; the comment's own index hand-off, or the
+    /// proof of its checkpoint, is to be done first; or its
+    /// synchronization stopped, as the result's code says.
+    CommentPendingReason {
+        NoPublicationRemote => "no_publication_remote",
+        RecoveryRequired => "recovery_required",
+        Synchronization => "synchronization",
+    }
+);
+
+contract_enum!(
+    /// The tag of `CommentMutationDto`: one value, so that the data of a
+    /// comment is told apart by it alone.
+    CommentMutationType {
+        Comment => "comment",
+    }
+);
+
+/// What `comment add` reports of the comment it checkpointed: the
+/// comment, as its front matter names it, the synchronization that
+/// publishes it, and how far that got. It holds no body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CommentMutationDto {
+    pub r#type: CommentMutationType,
+    /// The item the comment is filed under.
+    pub item_id: String,
+    pub comment_id: String,
+    /// Null for a root comment.
+    pub parent_id: Option<String>,
+    /// The comment's `created_by`, as its checkpoint holds it: the author
+    /// the request gave, or the text of the identity that checkpointed
+    /// it. Null when it cannot be read.
+    pub created_by: Option<String>,
+    /// The synchronization that publishes the comment: the ID it is
+    /// inspected, resolved and resumed by.
+    pub synchronization_id: String,
+    /// As the result's effects say, and never `not_requested`.
+    pub publication: PublicationEffect,
+    /// Set exactly when the publication is pending.
+    pub pending_reason: Option<CommentPendingReason>,
+    /// The next step of the conflict the synchronization stopped on, when
+    /// it stopped on one.
+    pub conflict: Option<ConflictNextDto>,
+}
+
+impl CommentMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        let tag = stored.get("type")?.as_str()?;
+        let publication = stored.get("publication")?.as_str()?;
+        Some(Self {
+            r#type: CommentMutationType::ALL
+                .into_iter()
+                .find(|known| known.as_str() == tag)?,
+            item_id: text("item_id")??,
+            comment_id: text("comment_id")??,
+            parent_id: text("parent_id")?,
+            created_by: text("created_by")?,
+            synchronization_id: text("synchronization_id")??,
+            publication: PublicationEffect::ALL
+                .into_iter()
+                .find(|known| known.as_str() == publication)?,
+            pending_reason: match text("pending_reason")? {
+                Some(reason) => Some(
+                    CommentPendingReason::ALL
+                        .into_iter()
+                        .find(|known| known.as_str() == reason)?,
+                ),
+                None => None,
+            },
+            conflict: match stored.get("conflict")? {
+                serde_json::Value::Null => None,
+                conflict => Some(ConflictNextDto::from_stored(conflict)?),
+            },
+        })
+    }
 }
 
 /// What `document repair` and `ticket repair` report about the item the
@@ -1048,6 +1135,9 @@ impl MutationDataDto {
             Self::LocalContextSync(_) => None,
             Self::Synchronization(data) => Some(data.authority()),
             Self::SynchronizationConflict(_)
+            // A comment's data names no host: its synchronization's is
+            // not kept.
+            | Self::Comment(_)
             | Self::Document(_)
             | Self::Ticket(_)
             | Self::Remote(_)
@@ -1102,6 +1192,7 @@ impl MutationDataDto {
             Command::DocumentRepair | Command::TicketRepair => {
                 RepairMutationDto::from_stored(stored).map(Self::Repair)
             }
+            Command::CommentAdd => CommentMutationDto::from_stored(stored).map(Self::Comment),
             // A synchronization that stopped on a conflict of its own
             // merge, or a resume that took one up, is told apart by its
             // tag.

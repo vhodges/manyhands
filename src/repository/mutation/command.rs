@@ -67,6 +67,7 @@ commands! {
     TicketRepair => "ticket repair",
     LocalContextSync => "context sync-local",
     LocalContextResolve => "context resolve-local",
+    CommentAdd => "comment add",
 }
 
 impl Command {
@@ -88,6 +89,11 @@ impl Command {
         match self {
             Self::LocalContextSync => true,
             Self::LocalContextResolve => false,
+            // The comment's own operation, in the local journal: its
+            // write and its checkpoint. The synchronization that
+            // publishes it is a child the comment's binding names, made
+            // under an ID of its own that no record holds (fact 79).
+            Self::CommentAdd => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -154,7 +160,7 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -192,7 +198,7 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -231,7 +237,7 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -267,15 +273,19 @@ impl Command {
 
     /// Whether the command's operation has safe points: places it can
     /// be stopped at once it is accepted, and a reservation it holds
-    /// from its first one on. Only a synchronization has. Such a
-    /// command honors a cancellation after acceptance and reports a
-    /// stage at each safe point, and a request of it that stopped with
-    /// its reservation held is continued by the same request, whatever
-    /// stopped it.
+    /// from its first one on. Only a synchronization has, and a comment's
+    /// submission, at the safe points of the synchronization that
+    /// publishes it. Such a command honors a cancellation after
+    /// acceptance and reports a stage at each safe point, and a request
+    /// of it that stopped with its reservation held is continued by the
+    /// same request, whatever stopped it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
+            // `request cancel` sets the request's flag, which the
+            // publication's observer reads at its next safe point.
+            Self::CommentAdd => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -319,12 +329,13 @@ impl Command {
     /// synchronization: one that was stopped or fenced with its push not
     /// confirmed tells its caller to look at the repository, and says
     /// so again each time it is given again. A synchronization's own
-    /// result is one, and so is that of a resume that took one up. The
+    /// result is one, and so is that of a resume that took one up, and of
+    /// a comment's submission, which ends as its publication does. The
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,
-            Self::ItemSync | Self::RepoSync | Self::OperationResume => true,
+            Self::ItemSync | Self::RepoSync | Self::OperationResume | Self::CommentAdd => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -391,7 +402,11 @@ impl Command {
             // What a folder creation does first is make the directory.
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => ProgressStage::Writing,
+            | Self::TicketRepair
+            // What a comment's submission does first is write the
+            // comment and checkpoint it. Its publication then reports
+            // the stages of its synchronization's safe points.
+            | Self::CommentAdd => ProgressStage::Writing,
         }
     }
 
@@ -403,7 +418,7 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -446,7 +461,10 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            // A comment adds a file that nothing held, in the item's own
+            // context, and publishes it as a synchronization would: there
+            // is nothing to show first.
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
             Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -531,22 +549,24 @@ mod tests {
         assert_eq!(Command::FolderCreate.name(), "folder create");
         assert_eq!(Command::DocumentRepair.name(), "document repair");
         assert_eq!(Command::TicketRepair.name(), "ticket repair");
+        assert_eq!(Command::CommentAdd.name(), "comment add");
     }
 
     #[test]
-    fn only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation() {
+    fn the_stopping_commands_and_their_stages_and_confirmation() {
         for command in Command::ALL {
             let local = matches!(
                 command,
                 Command::LocalContextSync | Command::LocalContextResolve
             );
-            let synchronization = local || matches!(command, Command::ItemSync | Command::RepoSync);
-            assert_eq!(
-                command.stops_at_safe_points(),
-                synchronization,
-                "{command:?}"
-            );
-            if synchronization {
+            // A comment's submission publishes it by a synchronization
+            // of its own, and stops at that synchronization's safe
+            // points; what it does first is write the comment.
+            let comment = command == Command::CommentAdd;
+            let stopping =
+                local || comment || matches!(command, Command::ItemSync | Command::RepoSync);
+            assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
+            if stopping {
                 assert!(!command.needs_confirmation(), "{command:?}");
                 assert_eq!(
                     command.has_operation(),
@@ -557,6 +577,8 @@ mod tests {
                     command.stage(),
                     if local {
                         ProgressStage::Observing
+                    } else if comment {
+                        ProgressStage::Writing
                     } else {
                         ProgressStage::Connecting
                     },
@@ -564,6 +586,12 @@ mod tests {
                 );
             }
         }
+        // The rest of the comment submission's predicates (R-32).
+        assert!(Command::CommentAdd.finishes_as_a_synchronization());
+        assert!(!Command::CommentAdd.was_accepted_without_operation());
+        assert!(!Command::CommentAdd.restores_index());
+        assert!(!Command::CommentAdd.creates_its_repository());
+        assert!(!Command::CommentAdd.hands_off_to_any_refresh());
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
         assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
         assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);

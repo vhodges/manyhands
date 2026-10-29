@@ -1050,6 +1050,42 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    use manyhands::repository::{CommentMutationType, CommentPendingReason};
+    let comment = "comment_mutation.schema.json";
+    enumerations.extend([
+        (
+            comment,
+            "type",
+            CommentMutationType::ALL
+                .map(CommentMutationType::as_str)
+                .to_vec(),
+        ),
+        // A comment's publication is always asked for: never
+        // `not_requested`.
+        (
+            comment,
+            "publication",
+            PublicationEffect::ALL
+                .into_iter()
+                .filter(|effect| *effect != PublicationEffect::NotRequested)
+                .map(PublicationEffect::as_str)
+                .collect(),
+        ),
+        (
+            comment,
+            "pending_reason",
+            CommentPendingReason::ALL
+                .map(CommentPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            comment,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
     enumerations
 }
 

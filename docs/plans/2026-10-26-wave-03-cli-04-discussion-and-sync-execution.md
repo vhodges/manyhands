@@ -593,6 +593,7 @@ new ticket comment (ruling P4).
 | --- | --- | --- | --- | --- |
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
+| 2b | `feat: bind comment submission with authorship and safe points` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt | pending | `remote_branch_deleted` leaves a held reservation (finding 1). See "Task 2b: The Comment Submission Binding" |
 
 ### Task 1: Merging Synchronization
 
@@ -1038,3 +1039,180 @@ which passed unchanged.
 - **`IdentityRequired` with `release_unwritten: true`** leaves the row
   `rejected`, which the journal reads as `Absent`. The binding keeps the
   record accepted itself (R-34).
+
+### Task 2b: The Comment Submission Binding
+
+The commit is on `4a6d981`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched.
+
+**Moved here from Task 2a (ruling Q2), as the plan's Task 2a interface
+gives it.**
+
+- `comment_publication.rs`: `pub(crate) struct CommentAuthor` with
+  `parse(&str) -> Result<CommentAuthor, CommentAuthorError>` and `as_str`
+  (R-7). The form is `Name <email>`, at most 256 bytes. The name and the
+  email are each nonempty, hold no control character and no angle bracket,
+  neither begins nor ends with white space, and a `git2` signature carries
+  both unchanged; the email holds an `@` (fact 57's rules). The
+  configuration round trip of `ValidIdentity::of` is not made: it is about
+  Git configuration, and writes a scratch file. `CommentAuthorError` holds
+  nothing of the value.
+- `submit_comment_with(request, author, restart, release_unwritten,
+  synchronize)` and `checkpoint_comment_locally_with(request, config,
+  author, release_unwritten)`. The author's text replaces fact 20's format
+  in the `if !exists` branch, so it is written once. A commit identity is
+  still needed. `checkpoint_comment_locally` and the public path pass
+  `None` and `false`; a call with an author goes through the `_with`
+  function whatever `release_unwritten` is.
+
+**What changed.**
+
+- `bind/comment.rs` (new): `CommentAddInput` (no derive), the
+  `CommentAddBinding`, `pub(crate) fn comment_synchronization(connection,
+  root: &Path, operation_id) -> Option<(comment, synchronization)>`, which
+  resolves either ID through the binding table (R-5), and
+  `recorded_effects`.
+  - `prepare` parses the author (`invalid_input`), resolves the root, and
+    accepts the request on the item's branch with `expected: Missing`,
+    family `Local`. Everything else is the domain's.
+  - `run` and `rerun` call `submit_comment_with` with the full input,
+    `release_unwritten: true`, and `restart` false and true (fact 65).
+    `reenter` answers `Entered::Unfinished`;
+    `ended_without_checkpoint` is `SaysNothing`.
+  - The synchronizer is a closure over `sync::of_a_comment`, which runs
+    `SyncBinding`'s own call: `call.session.synchronize(service, request,
+    MERGING, &mut watch)`, with `watch = Watch::new(&child, call, subject,
+    owner)`. `child` is built as `resume.rs:647-655` builds one, with the
+    child's ID; `subject` and `owner` are the `comment add` request. So the
+    child's progress, cancellation, unsettled-push and fence handling,
+    `beside_a_pending_merge`, and conflict data are item sync's.
+  - Outcomes (R-6): published or current is `ok` (or `discovery_pending`,
+    owed, when the publication's hand-off is); no publication remote is
+    `ok`, final; the comment's own hand-off pending is `recovery_required`,
+    owed, `pending_reason: recovery_required`; a stopped child gives its
+    code, its publication when it is published, its integration, and its
+    conflict as `conflict`. A child that published without the comment is
+    `recovery_required`, final.
+  - Standing (R-34): a stopped child is owed, except a cancelled or
+    retained row or a code `never_finished_by_the_same_request`, which is
+    final; `identity_required` is owed; a domain error is the local row's
+    to settle, or owed once the binding records a checkpoint.
+  - Effects: `write: written`, `checkpoint: committed` and the checkpoint
+    as `commit_oid`, on every answer once the comment is checkpointed; the
+    publication and integration as above; discovery pending when the
+    comment's or the publication's hand-off is.
+  - Data: `CommentMutationDto` whenever the comment is checkpointed.
+    `created_by` is read from the checkpoint's file, so it is the author
+    written, given or the identity's.
+- `bind/sync.rs`: `SyncBinding::call` delegates to a new `observed`, which
+  also gives back what the domain returned; `pub(super) fn of_a_comment`
+  calls it for the child. No behavior change for item or repo sync.
+- `dto.rs`: `CommentPendingReason`, `CommentMutationType` (`comment`),
+  `CommentMutationDto`, `MutationDataDto::Comment`, its `authority()` arm
+  (none) and its `from_stored` arm. Exported from `mutation/mod.rs`.
+- `command.rs`: `CommentAdd => "comment add"`, with the Command
+  Predicates table's values (R-32).
+- `mod.rs`: `Mutation::CommentAdd`, its `kind`, `confirmed` (none) and
+  `into_binding` arms. `bind/mod.rs`: the module, and the
+  `recorded_effects` arm. `outcome.rs`: `never_finished_by_the_same_request`
+  is `pub(crate)`, for the binding's standing.
+- `schemas/v1/comment_mutation.schema.json` (new). The conflict is inlined,
+  as a nullable object, because the schema checker allows `$ref` only
+  alone (fact 50).
+
+**Named edits.**
+
+- E-6: `the_published_names_are_the_ones_records_hold` gains `comment
+  add`. `only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation`
+  is renamed `the_stopping_commands_and_their_stages_and_confirmation` now,
+  since `comment add` makes the old name untrue, and gains `comment add` as
+  a stopping command with an operation that reports `Writing`, plus its
+  other predicates. Task 5 adds `item republish` to it.
+- E-7: `DATA_ROOTS` gains `comment_mutation.schema.json` (52). No code
+  list changes.
+- E-8: `contract_enumerations` gains the schema's four enums: `type`,
+  `publication` (`PublicationEffect::ALL` less `not_requested`),
+  `pending_reason`, and `conflict.next_action`.
+- E-9: `HOMES` gains `("comment add", Home::Remote)` (33), and
+  `tests/mutation_remote.rs`'s `CONFORMANCE` gains its row (3); its
+  header comment no longer says "two".
+- E-10: the six accessors of `tests/support/mutation.rs` and
+  `repair_data` gain the `Comment` arm.
+
+**Tests.** `tests/mutation_remote/comment.rs` (new) holds 27 `c4_comment_*`
+SSH cases: one per row of the comment-submission table, the no-context
+identity case carried from Task 2a's review, `MERGING` (a context the
+remote moved on merges), and Review Focus 1 and 5 and the
+`request_mismatch` case of Step 4. `comment_domain.rs` gains the two
+author cases (7 in all). Goldens `comment_add`,
+`comment_add_push_rejected`, `comment_add_ticket_closed` and
+`comment_add_item_not_found` are new and registered; each was read.
+
+**TDD.** RED: `cargo test --all-features --locked --test mutation_remote --
+c4_comment`, with the cases and named edits written and nothing
+implemented, failed to compile with exactly the missing names (26 errors:
+`Mutation::CommentAdd`, `CommentAddInput`, `CommentMutationDto`,
+`CommentPendingReason`, `CommentMutationType`, `CommentAuthor`,
+`MutationDataDto::Comment`, and the new `author` argument). GREEN: the
+first run passed 27 of 34; the failures were four goldens not yet written,
+a 255-byte "256-byte" author in the test, and the two no-remote cases,
+whose fixture left primary's configuration file dirty. With the goldens
+written and the configuration committed, each passed.
+
+**Verify list** (each `devenv shell -- cargo … --locked`, 2026-10-28):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote` | 148 SSH cases passed (34 `c4_comment`, among them the 7 `c4_comment_domain`), 32 min 23 s |
+| `test --all-features --test comment_publication` | 41 SSH cases passed (5 min 38 s) |
+| `test --all-features --test mutation_replay` | 383 passed (13 min 3 s) |
+| `test --all-features --test mutation_bridges` | 129 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --lib mutation` | 123 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+
+The remote conformance case, `every_command_of_this_target_keeps_the_rules_of_the_boundary`,
+now drives three rows. It ran in about 74 s, against the harness's 100 s
+watchdog; with two rows it ran in about 48 s.
+
+**Findings for the controller.**
+
+1. **`remote_branch_deleted` leaves the child's reservation held, with no
+   record to cancel it.** The row says the record is finished, and it is
+   (`Standing::Final`, as R-34 says). But the child synchronization stops
+   with its row pending and keeps the repository's reservation, as `item
+   sync` does on this code. A probe showed the reservation held, and a new
+   `item sync` then `busy`. `request cancel` on the finished `comment add`
+   record asks nothing, and the comment's record holds only its local
+   operation (fact 79), so the row's "human output names `request cancel`
+   for the request, then `item republish`" cannot work as written, and
+   `item republish` is `busy` while the reservation is held (republish
+   table). The library's recovery for the finished record is empty. A
+   ruling is needed: keep the record accepted for this code, release the
+   child, or another route. Nothing here works around it.
+2. **A refused `occupied_path` leaves its binding row.** The domain binds
+   the comment ID before it finds the ID occupied, and only an identity
+   stop releases a binding. A probe showed one binding row left, and the
+   same request sent again answered `internal_error` (the binding's
+   comment-ID collision), not `occupied_path`. The row itself (first
+   answer `occupied_path`, input, no effect) holds. The same is true of any
+   refusal after the binding, such as an item missing from its context.
+   This is the domain's order since Task 2a; changing it is outside this
+   task.
+3. **The closed-ticket golden's scope names the item's branch and
+   worktree.** `item_scope` names them for any accepted item request,
+   though for a ticket with no context neither exists. `ticket save`
+   refuses a closed ticket before acceptance, so its golden names none.
+   `comment add` leaves the check to the domain, under its lease.
+4. **A comment's data names no host.** When the child stops for an
+   untrusted host, `comment add` answers with the code, but its data is the
+   comment's, so `host.approve` is not offered as `item sync` offers it.
+   No row covers it.
+5. **No publication remote, staged with a dirty configuration file.** The
+   first form of the two no-remote cases removed the remote in primary's
+   working tree only, as the merging cases do; the comment's index hand-off
+   then stops, and the answer is not `ok`. The cases commit the change on
+   primary instead.

@@ -118,8 +118,8 @@ const REQUEST_5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY5";
 pub(super) const PRIMARY_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
 /// The identity a case sets with `repo identity-set` once the world's
 /// own is removed.
-const MERGE_NAME: &str = "Merge Author";
-const MERGE_EMAIL: &str = "merge-author@example.invalid";
+pub(super) const MERGE_NAME: &str = "Merge Author";
+pub(super) const MERGE_EMAIL: &str = "merge-author@example.invalid";
 
 /// The branch a case synchronizes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,7 +316,7 @@ pub(super) fn ticket_source(id: &str, title: &str) -> String {
 }
 
 /// Brings the peer's `reference` up to the server's.
-fn fetch_into_peer(w: &World, reference: &str) -> Result<(), FixtureError> {
+pub(super) fn fetch_into_peer(w: &World, reference: &str) -> Result<(), FixtureError> {
     let mut remote = fixed(w.peer.remote_anonymous(&w.server.url()))?;
     let mut options = git2::FetchOptions::new();
     options.remote_callbacks(callbacks(&w.server));
@@ -916,7 +916,10 @@ fn remove_the_identity(w: &World) -> Result<(), FixtureError> {
 
 /// Sets the repository's identity through `repo identity-set`, which is
 /// confirmed: a preview, then the request with its confirmation.
-fn set_the_identity(w: &World, id: &str) -> Result<Envelope<MutationDataDto>, FixtureError> {
+pub(super) fn set_the_identity(
+    w: &World,
+    id: &str,
+) -> Result<Envelope<MutationDataDto>, FixtureError> {
     let set = || {
         Mutation::RepoIdentitySet(RepoIdentitySetInput {
             root: w.root.clone(),

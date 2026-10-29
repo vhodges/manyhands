@@ -32,6 +32,7 @@ use super::{
 };
 
 pub(crate) mod abandon;
+pub(crate) mod comment;
 pub(crate) mod document;
 pub(crate) mod folder;
 pub(crate) mod host;
@@ -976,6 +977,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::ItemSync | Command::RepoSync) => {
             Recorded::of(sync::recorded_effects(service, &accepted))
         }
+        // The comment's write and checkpoint, as its binding and its
+        // context show them, and what its synchronization is known to
+        // have published.
+        Some(Command::CommentAdd) => Recorded::of(comment::recorded_effects(service, &accepted)),
         // A resume has no operation, so none is ever found to have run:
         // this is not reached, and nothing is claimed. What the
         // operation it names did is that operation's request's to say.

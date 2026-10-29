@@ -60,6 +60,7 @@ mod settle;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
+    comment::CommentAddBinding,
     document::DocumentBinding,
     folder::FolderCreateBinding,
     host::HostBinding,
@@ -77,6 +78,7 @@ use bind::{
 };
 pub use bind::{
     abandon::OperationAbandonInput,
+    comment::CommentAddInput,
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
@@ -98,16 +100,16 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, ConflictNextAction, ConflictNextDto, DocumentMutationDto, HostMutationDto,
-    HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
-    IdentityPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
-    KeyMutationDto, LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto,
-    OperationMutationDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect,
-    PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto,
-    RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
-    RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
-    TicketMutationDto,
+    CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
+    ConflictNextDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
+    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
+    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto, PreviewDetailsDto,
+    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
+    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
+    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -403,6 +405,7 @@ pub struct MutationCall {
 pub enum Mutation {
     LocalContextSync(LocalContextSyncInput),
     LocalContextResolve(LocalContextResolveInput),
+    CommentAdd(CommentAddInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -445,6 +448,7 @@ impl Mutation {
         match self {
             Self::LocalContextSync(_) => Command::LocalContextSync,
             Self::LocalContextResolve(_) => Command::LocalContextResolve,
+            Self::CommentAdd(_) => Command::CommentAdd,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -483,7 +487,7 @@ impl Mutation {
     /// there is nothing to preview, and nothing is read of its input.
     fn confirmed(&self) -> Option<Box<dyn Confirmed>> {
         match self {
-            Self::LocalContextSync(_) | Self::LocalContextResolve(_) => None,
+            Self::LocalContextSync(_) | Self::LocalContextResolve(_) | Self::CommentAdd(_) => None,
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -525,6 +529,7 @@ impl Mutation {
         match self {
             Self::LocalContextSync(input) => Box::new(LocalSyncBinding::Start(input)),
             Self::LocalContextResolve(input) => Box::new(LocalSyncBinding::Resolve(input)),
+            Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

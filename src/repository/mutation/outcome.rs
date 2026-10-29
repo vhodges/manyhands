@@ -1001,8 +1001,12 @@ fn recovery(
 }
 
 /// Whether `code`, from a synchronization, is one the same request
-/// never gets past; see the closing rule of `recovery`.
-fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
+/// never gets past; see the closing rule of `recovery`. A comment's
+/// submission whose publication stops so is finished on it (R-34).
+pub(crate) fn never_finished_by_the_same_request(
+    code: ResultCode,
+    command: Option<Command>,
+) -> bool {
     command.is_some_and(Command::stops_at_safe_points)
         && (code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted)
 }

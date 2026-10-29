@@ -148,6 +148,60 @@ impl fmt::Display for CommentSubmissionError {
 }
 impl std::error::Error for CommentSubmissionError {}
 
+/// The author a comment's front matter names when `comment add` is given
+/// one (decision 9, R-7): `Name <email>`, at most 256 bytes. The name and
+/// the email are each nonempty, hold no control character, neither begin
+/// nor end with white space, and are ones a commit signature carries
+/// unchanged; the email holds an `@`, and neither holds an angle bracket
+/// (fact 57). It is written verbatim, in place of the text the Git
+/// identity would give.
+#[derive(Clone)]
+pub(crate) struct CommentAuthor(String);
+
+/// A `created_by` that is not an author `comment add` writes. It holds
+/// nothing of the value it was given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CommentAuthorError;
+
+impl CommentAuthor {
+    /// The most bytes an author is written with.
+    const LIMIT: usize = 256;
+
+    /// `text` as an author, or why it is not one; see the type.
+    pub(crate) fn parse(text: &str) -> Result<Self, CommentAuthorError> {
+        if text.len() > Self::LIMIT {
+            return Err(CommentAuthorError);
+        }
+        let (name, email) = text
+            .strip_suffix('>')
+            .and_then(|rest| rest.split_once(" <"))
+            .ok_or(CommentAuthorError)?;
+        for value in [name, email] {
+            if value.is_empty()
+                || value.contains(['<', '>'])
+                || value.chars().any(char::is_control)
+                || value.trim() != value
+            {
+                return Err(CommentAuthorError);
+            }
+        }
+        if !email.contains('@') {
+            return Err(CommentAuthorError);
+        }
+        match git2::Signature::now(name, email) {
+            Ok(signature) if signature.name() == Some(name) && signature.email() == Some(email) => {
+            }
+            Ok(_) | Err(_) => return Err(CommentAuthorError),
+        }
+        Ok(Self(text.to_owned()))
+    }
+
+    /// The author, as it is written.
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 pub(super) fn recovery_error() -> RepositoryError {
     RepositoryError::new(
         RepositoryOperation::SubmitComment,
@@ -190,13 +244,16 @@ impl RepositoryService {
         request: PublishCommentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
-        self.submit_comment_with(request, false, false, &mut |request| {
+        self.submit_comment_with(request, None, false, false, &mut |request| {
             Some(self.synchronize_remote(request, session))
         })
     }
 
     /// `submit_comment` as `comment add` calls it (R-3, R-4).
     ///
+    /// - `author`, when given, is written as the comment's `created_by` in
+    ///   place of the Git identity's text (R-7). A commit identity is
+    ///   needed all the same.
     /// - `restart` is passed to every request `synchronize` is given. A
     ///   request that enters again sets it (fact 65): a proved receipt is
     ///   published without writing again, and a stopped child is taken up.
@@ -206,11 +263,19 @@ impl RepositoryService {
     pub(crate) fn submit_comment_with(
         &self,
         request: PublishCommentRequest,
+        author: Option<CommentAuthor>,
         restart: bool,
         release_unwritten: bool,
         synchronize: &mut Synchronizer<'_>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
-        self.publish_comment_with_config(request, None, restart, release_unwritten, synchronize)
+        self.publish_comment_with_config(
+            request,
+            None,
+            author,
+            restart,
+            release_unwritten,
+            synchronize,
+        )
     }
 
     #[doc(hidden)]
@@ -223,6 +288,7 @@ impl RepositoryService {
         self.publish_comment_with_config(
             request,
             Some(effective_config),
+            None,
             false,
             false,
             &mut |request| Some(self.synchronize_remote(request, session)),
@@ -233,6 +299,7 @@ impl RepositoryService {
         &self,
         request: PublishCommentRequest,
         config: Option<&Config>,
+        author: Option<CommentAuthor>,
         restart: bool,
         release_unwritten: bool,
         synchronize: &mut Synchronizer<'_>,
@@ -268,9 +335,15 @@ impl RepositoryService {
                 }
             }
             // The public path goes on through the function it always
-            // called (fact 73); only the binding asks for its semantics.
-            let local = if release_unwritten {
-                self.checkpoint_comment_locally_with(request.comment.clone(), config, true)?
+            // called (fact 73); only the binding asks for its semantics,
+            // or gives an author.
+            let local = if release_unwritten || author.is_some() {
+                self.checkpoint_comment_locally_with(
+                    request.comment.clone(),
+                    config,
+                    author,
+                    release_unwritten,
+                )?
             } else {
                 self.checkpoint_comment_locally(request.comment.clone(), config)?
             };

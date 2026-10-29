@@ -2761,11 +2761,16 @@ impl RepositoryService {
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
-        self.checkpoint_comment_locally_with(request, effective_config, false)
+        self.checkpoint_comment_locally_with(request, effective_config, None, false)
     }
 
-    /// `checkpoint_comment_locally`, which calls this with
+    /// `checkpoint_comment_locally`, which calls this with no author and
     /// `release_unwritten: false`.
+    ///
+    /// `author`, when given, is the new comment's `created_by`, in place
+    /// of the text of the identity that checkpoints it (R-7). It is
+    /// written once: a file already written keeps the author it has. A
+    /// commit identity is needed either way.
     ///
     /// `release_unwritten` selects the binding's semantics, which
     /// `comment add` asks for: a call that writes nothing leaves no
@@ -2785,6 +2790,7 @@ impl RepositoryService {
         &self,
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
+        author: Option<comment_publication::CommentAuthor>,
         release_unwritten: bool,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
@@ -3092,10 +3098,14 @@ impl RepositoryService {
                 return Ok(LocalCommentCheckpointOutcome::IdentityRequired { context });
             };
             if !exists {
-                // A new comment names the identity that checkpoints it. A file
-                // already there keeps the author it was written with, so a
-                // retry under another identity rewrites nothing.
-                comment.created_by = Some(format!("{} <{}>", identity.name, identity.email));
+                // A new comment names the author it was given, or else the
+                // identity that checkpoints it. A file already there keeps
+                // the author it was written with, so a retry under another
+                // identity or author rewrites nothing.
+                comment.created_by = Some(match &author {
+                    Some(author) => author.as_str().to_owned(),
+                    None => format!("{} <{}>", identity.name, identity.email),
+                });
                 let serialized = serialize(&comment)?;
                 effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;

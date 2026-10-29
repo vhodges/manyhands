@@ -6,6 +6,8 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/comment.rs"]
+mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
 mod comment_domain;
 #[path = "support/conformance.rs"]
@@ -49,6 +51,7 @@ fn main() {
         .chain(host::CASES)
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
+        .chain(comment::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -4572,7 +4575,7 @@ fn a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_no
     assert_final(&w, REQUEST_1, &own)
 }
 
-// The conformance table, for the two commands that need a server; see
+// The conformance table, for the commands that need a server; see
 // `conformance`.
 
 /// One call of `execute` that presents `confirmation`, scanned as
@@ -4642,7 +4645,7 @@ fn conforming(
     Ok(())
 }
 
-const CONFORMANCE: [conformance::Row; 2] = [
+const CONFORMANCE: [conformance::Row; 3] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4670,6 +4673,35 @@ const CONFORMANCE: [conformance::Row; 2] = [
                 conformance::Ask::Changed => item_sync(w),
                 // A directory that is no repository.
                 conformance::Ask::Refused => Mutation::RepoSync(RepoSyncInput { root: w.data() }),
+            },
+            rule,
+        )
+    }),
+    conformance::Row::new("comment add", false, "invalid_input", |rule| {
+        conforming(
+            |w, ask| {
+                let (body, created_by) = match ask {
+                    conformance::Ask::Same | conformance::Ask::Unconsented => {
+                        ("A comment of the conformance table.\n", None)
+                    }
+                    // Another body: a changed input under a finished
+                    // request's ID.
+                    conformance::Ask::Changed => ("Another comment.\n", None),
+                    // An author that is not written as one, refused
+                    // before the request is accepted.
+                    conformance::Ask::Refused => {
+                        ("A comment of the conformance table.\n", Some("no brackets"))
+                    }
+                };
+                Mutation::CommentAdd(CommentAddInput {
+                    root: w.root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: ITEM.parse().unwrap(),
+                    comment_id: "01ARZ3NDEKTSV4RRFFQ69G5FC9".parse().unwrap(),
+                    parent_id: None,
+                    body: body.to_owned(),
+                    created_by: created_by.map(str::to_owned),
+                })
             },
             rule,
         )

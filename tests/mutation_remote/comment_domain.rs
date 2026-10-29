@@ -11,9 +11,11 @@
 //!   today's.
 //! - The synchronizer sees the child `synchronization_id` and `restart` as
 //!   given.
+//! - A given author is written verbatim, once; a malformed one is refused
+//!   by its parse, before anything is called (R-7).
 //!
-//! The author cases, and the merging settings the binding's synchronizer
-//! passes, are Task 2b's.
+//! The merging settings the binding's synchronizer passes are asserted
+//! through the binding, in `comment`.
 
 use std::path::{Path, PathBuf};
 
@@ -39,6 +41,14 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
     (
         "c4_comment_domain_the_synchronizer_sees_the_child_and_restart",
         c4_comment_domain_the_synchronizer_sees_the_child_and_restart,
+    ),
+    (
+        "c4_comment_domain_a_given_author_is_written_verbatim",
+        c4_comment_domain_a_given_author_is_written_verbatim,
+    ),
+    (
+        "c4_comment_domain_a_malformed_author_is_refused_before_any_write",
+        c4_comment_domain_a_malformed_author_is_refused_before_any_write,
     ),
 ];
 
@@ -96,7 +106,7 @@ type SynchronizationAnswer = Result<SynchronizationResult, SynchronizationError>
 /// released.
 fn bound(w: &World, request: PublishCommentRequest) -> Submitted {
     w.service
-        .submit_comment_with(request, false, true, &mut unsynchronized)
+        .submit_comment_with(request, None, false, true, &mut unsynchronized)
 }
 
 fn saved(outcome: Submitted) -> Result<(CommentReceipt, CommentPublicationState), FixtureError> {
@@ -122,7 +132,7 @@ fn refused(outcome: Submitted) -> Option<RepositoryErrorKind> {
 }
 
 /// The child synchronization IDs bound to `operation`.
-fn bindings(w: &World, operation: OperationId) -> Result<Vec<String>, FixtureError> {
+pub(super) fn bindings(w: &World, operation: OperationId) -> Result<Vec<String>, FixtureError> {
     let db = w.db()?;
     let mut statement = fixed(db.prepare(
         "SELECT synchronization_ulid FROM comment_publication_bindings WHERE operation_ulid=?1",
@@ -132,7 +142,10 @@ fn bindings(w: &World, operation: OperationId) -> Result<Vec<String>, FixtureErr
 }
 
 /// The local row of `operation`: its state and its last step.
-fn local_row(w: &World, operation: OperationId) -> Result<(String, Option<String>), FixtureError> {
+pub(super) fn local_row(
+    w: &World,
+    operation: OperationId,
+) -> Result<(String, Option<String>), FixtureError> {
     fixed(w.db()?.query_row(
         "SELECT state, completed_step FROM operation_records WHERE operation_ulid=?1",
         [operation.to_string()],
@@ -145,7 +158,7 @@ fn comment_path(item: &str, comment_id: &canonical::ItemId) -> PathBuf {
 }
 
 /// The commits on `reference` whose subject checkpoints `comment_id`.
-fn checkpoints(
+pub(super) fn checkpoints(
     w: &World,
     reference: &str,
     comment_id: &canonical::ItemId,
@@ -170,7 +183,7 @@ fn parent_of(w: &World, oid: git2::Oid) -> Result<git2::Oid, FixtureError> {
 
 /// Removes the identity the world gives its repository (fact 60 keeps
 /// any other out).
-fn remove_the_identity(w: &World) -> Result<(), FixtureError> {
+pub(super) fn remove_the_identity(w: &World) -> Result<(), FixtureError> {
     let mut config = fixed(fixed(w.repo()?.config())?.open_level(git2::ConfigLevel::Local))?;
     fixed(config.remove("user.name"))?;
     fixed(config.remove("user.email"))?;
@@ -178,7 +191,7 @@ fn remove_the_identity(w: &World) -> Result<(), FixtureError> {
 }
 
 /// Gives the repository the world's identity again.
-fn restore_the_identity(w: &World) -> Result<(), FixtureError> {
+pub(super) fn restore_the_identity(w: &World) -> Result<(), FixtureError> {
     let mut config = fixed(fixed(w.repo()?.config())?.open_level(git2::ConfigLevel::Local))?;
     fixed(config.set_str("user.name", "Fixture"))?;
     fixed(config.set_str("user.email", "fixture@example.invalid"))?;
@@ -301,10 +314,11 @@ fn c4_comment_domain_identity_required_releases_an_unwritten_binding() -> Result
         seen.push(request.operation_id);
         None
     };
-    let (receipt, _) = saved(
-        w.service
-            .submit_comment_with(request, false, true, &mut record),
-    )?;
+    let (receipt, _) =
+        saved(
+            w.service
+                .submit_comment_with(request, None, false, true, &mut record),
+        )?;
     // Bound afresh, on the new tip, and written once.
     assert_eq!(
         bindings(&w, operation)?,
@@ -332,7 +346,8 @@ fn c4_comment_domain_identity_required_after_a_write_keeps_the_binding() -> Resu
         &w.data(),
         FailurePoint::BeforeCheckpointCommit,
     ))?;
-    let stopped = stopping.submit_comment_with(request.clone(), false, true, &mut unsynchronized);
+    let stopped =
+        stopping.submit_comment_with(request.clone(), None, false, true, &mut unsynchronized);
     drop(stopping);
     assert_eq!(refused(stopped), Some(RepositoryErrorKind::InjectedFailure));
     let path = context.worktree.join(comment_path(ITEM, &comment_id));
@@ -363,7 +378,7 @@ fn c4_comment_domain_without_release_the_public_path_is_unchanged() -> Result<()
     let (w, context) = world()?;
     let public = |request: PublishCommentRequest| {
         w.service
-            .submit_comment_with(request, false, false, &mut unsynchronized)
+            .submit_comment_with(request, None, false, false, &mut unsynchronized)
     };
     // A refused parent leaves its binding row, in today's order.
     let unknown = OperationId::new();
@@ -429,7 +444,7 @@ fn c4_comment_domain_the_synchronizer_sees_the_child_and_restart() -> Result<(),
     let (receipt, publication) =
         saved(
             w.service
-                .submit_comment_with(request.clone(), false, true, &mut record),
+                .submit_comment_with(request.clone(), None, false, true, &mut record),
         )?;
     assert!(matches!(
         publication,
@@ -440,7 +455,7 @@ fn c4_comment_domain_the_synchronizer_sees_the_child_and_restart() -> Result<(),
     // Re-entry proves the receipt and asks again, with `restart` as given.
     saved(
         w.service
-            .submit_comment_with(request, true, true, &mut record),
+            .submit_comment_with(request, None, true, true, &mut record),
     )?;
     let child = receipt.synchronization_id;
     assert_eq!(bindings(&w, operation)?, [child.to_string()]);
@@ -485,6 +500,113 @@ fn c4_comment_domain_the_synchronizer_sees_the_child_and_restart() -> Result<(),
         CommentPublicationState::Published { oid } if oid == served
     ));
     assert!(served_contains(&w, &receipt.comment_path)?);
+    Ok(())
+}
+
+/// The `created_by` of the comment at `path` in `worktree`, as its file
+/// holds it.
+fn author_of(worktree: &Path, path: &Path) -> Result<Option<String>, FixtureError> {
+    let source = fixed(std::fs::read_to_string(worktree.join(path)))?;
+    match fixed(canonical::parse_item(path, &source))? {
+        canonical::CanonicalItem::Comment(comment) => Ok(comment.created_by),
+        _ => Err(FixtureError),
+    }
+}
+
+const AUTHOR: &str = "Comment Author <comment-author@example.invalid>";
+
+fn c4_comment_domain_a_given_author_is_written_verbatim() -> Result<(), FixtureError> {
+    let (w, context) = world()?;
+    let operation = OperationId::new();
+    let comment_id = canonical::ItemId::generate();
+    let request = comment(&w, ITEM, operation, comment_id.clone(), None)?;
+    let author = || CommentAuthor::parse(AUTHOR).map_err(|_| FixtureError);
+    let (receipt, _) = saved(w.service.submit_comment_with(
+        request.clone(),
+        Some(author()?),
+        false,
+        true,
+        &mut unsynchronized,
+    ))?;
+    let path = comment_path(ITEM, &comment_id);
+    // The given text replaces the identity's, verbatim; the identity
+    // still commits.
+    assert_eq!(
+        author_of(&context.worktree, &path)?.as_deref(),
+        Some(AUTHOR)
+    );
+    let repo = w.repo()?;
+    let commit = fixed(repo.find_commit(receipt.checkpoint_oid))?;
+    assert_eq!(commit.author().name(), Some("Fixture"));
+    assert_eq!(commit.author().email(), Some("fixture@example.invalid"));
+    // It is written once: the same operation with another author rewrites
+    // nothing.
+    let written = fixed(std::fs::read(context.worktree.join(&path)))?;
+    let other = CommentAuthor::parse("Another Author <another@example.invalid>")
+        .map_err(|_| FixtureError)?;
+    let (again, _) = saved(w.service.submit_comment_with(
+        request,
+        Some(other),
+        true,
+        true,
+        &mut unsynchronized,
+    ))?;
+    assert_eq!(again.checkpoint_oid, receipt.checkpoint_oid);
+    assert_eq!(fixed(std::fs::read(context.worktree.join(&path)))?, written);
+    assert_eq!(
+        checkpoints(&w, CONTEXT, &comment_id)?,
+        [receipt.checkpoint_oid]
+    );
+    Ok(())
+}
+
+fn c4_comment_domain_a_malformed_author_is_refused_before_any_write() -> Result<(), FixtureError> {
+    let (w, _) = world()?;
+    let long = format!("{} <a@example.invalid>", "n".repeat(240));
+    assert!(long.len() > 256);
+    for malformed in [
+        "",
+        "No Brackets",
+        "Name <>",
+        "<a@example.invalid>",
+        " Name <a@example.invalid>",
+        "Name  <a@example.invalid>",
+        "Name\t<a@example.invalid>",
+        "Name <a-at-example.invalid>",
+        "Name < a@example.invalid>",
+        "Name <a@example.invalid >",
+        "Na<me <a@example.invalid>",
+        "Na>me <a@example.invalid>",
+        "Name <a@<example.invalid>",
+        "Name <a@example.invalid> trailing",
+        "Name <a@example.invalid>>",
+        "Na\u{7}me <a@example.invalid>",
+        "Name <a@exam\nple.invalid>",
+        long.as_str(),
+    ] {
+        assert!(
+            CommentAuthor::parse(malformed).is_err(),
+            "{malformed:?} is not an author"
+        );
+    }
+    // At the limit, and with a name of more than one word, outside ASCII.
+    let at_the_limit = format!("{} <a@example.invalid>", "n".repeat(236));
+    assert_eq!(at_the_limit.len(), 256);
+    for wellformed in [
+        AUTHOR,
+        "Zoë Ångström-Ñuñez <zoe@example.invalid>",
+        at_the_limit.as_str(),
+    ] {
+        let author = CommentAuthor::parse(wellformed).map_err(|_| FixtureError)?;
+        assert_eq!(author.as_str(), wellformed);
+    }
+    // Nothing is called with a malformed one, so nothing was written.
+    let bound: i64 = fixed(w.db()?.query_row(
+        "SELECT COUNT(*) FROM comment_publication_bindings",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(bound, 0);
     Ok(())
 }
 

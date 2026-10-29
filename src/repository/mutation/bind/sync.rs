@@ -581,6 +581,46 @@ pub(crate) fn resumed(
     .call(call, accepted, subject, owner, true)
 }
 
+/// What the domain returned of one call of a synchronization: `None`
+/// when no call was made.
+pub(super) type Synchronized = Option<Result<SynchronizationResult, SynchronizationError>>;
+
+/// The synchronization a comment's submission publishes the comment by,
+/// for `comment add` (R-3): the child operation `accepted` names, called
+/// as `request` asks, with the merging settings and a `Watch` of the
+/// call, as a synchronization's own request calls it. `subject` is the
+/// `comment add` request as its events name it, and `owner` the request
+/// whose flag a cancellation is read from: that same request (fact 79).
+///
+/// It gives back what the domain returned, which the submission reads,
+/// and what a synchronization's binding makes of it: the code, the
+/// effects of the publication and the integration, the conflict's next
+/// step, and the standing of the child's row.
+pub(super) fn of_a_comment(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    request: SynchronizeRemoteRequest,
+    subject: Subject,
+    owner: Option<RequestId>,
+) -> (Synchronized, Ran) {
+    let SynchronizeRemoteRequest {
+        root: _,
+        operation_id: _,
+        target,
+        // A host is approved by its own command, and a merge commits
+        // with the repository's own identity: the child is asked as a
+        // synchronization's own request asks, with neither.
+        approval: _,
+        confirmed_identity: _,
+        restart,
+    } = request;
+    SyncBinding {
+        root: accepted.root(),
+        target,
+    }
+    .observed(call, accepted, subject, owner, restart)
+}
+
 /// The position on its branch of a synchronization of `target` in the
 /// repository at `root`: what a request that takes it up is accepted
 /// with, so that a result of it that names a commit is given again only
@@ -739,6 +779,19 @@ impl SyncBinding {
         owner: Option<RequestId>,
         restart: bool,
     ) -> Ran {
+        self.observed(call, accepted, subject, owner, restart).1
+    }
+
+    /// `call`, giving back as well what the domain returned: the last
+    /// call's result, which is the one the answer is of.
+    fn observed(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        subject: Subject,
+        owner: Option<RequestId>,
+        restart: bool,
+    ) -> (Synchronized, Ran) {
         let service = call.service;
         let root = accepted.root();
         let mut watch = Watch::new(accepted, call, subject, owner);
@@ -750,19 +803,24 @@ impl SyncBinding {
         ) else {
             // No domain call was made. The record is the journal row's
             // to settle: with none, nothing is in flight.
-            return Ran {
+            let ran = Ran {
                 answer: Answer::stopped(ResultCode::InternalError),
                 standing: Standing::Stopped {
                     journal: accepted.journal_row(service),
                 },
             };
+            return (None, ran);
         };
         let error = match result {
-            Ok(result) => return self.finished(service, accepted, &result),
+            Ok(result) => {
+                let ran = self.finished(service, accepted, &result);
+                return (Some(Ok(result)), ran);
+            }
             Err(error) => error,
         };
         if !(watch.unsettled && watch.cancellation_is_pending()) {
-            return self.stopped(service, accepted, &watch, &error);
+            let ran = self.stopped(service, accepted, &watch, &error);
+            return (Some(Err(error)), ran);
         }
         // Only an operation that holds the reservation is asked, and the
         // second call is made only once the row says it was: a call
@@ -782,9 +840,11 @@ impl SyncBinding {
                 call.session
                     .synchronize(service, self.request(accepted, true), MERGING, &mut watch)
         {
-            return self.stopped(service, accepted, &watch, &acknowledged);
+            let ran = self.stopped(service, accepted, &watch, &acknowledged);
+            return (Some(Err(acknowledged)), ran);
         }
-        self.stopped(service, accepted, &watch, &error)
+        let ran = self.stopped(service, accepted, &watch, &error);
+        (Some(Err(error)), ran)
     }
 
     /// The domain returned a result: the synchronization has its
