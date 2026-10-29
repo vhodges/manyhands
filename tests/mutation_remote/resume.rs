@@ -55,6 +55,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
     ("c4_resume_listed", c4_resume_listed),
     ("c4_resume_hostile_path", c4_resume_hostile_path),
     ("c4_resume_republish", c4_resume_republish),
+    ("c4_resume_republish_hand_off", c4_resume_republish_hand_off),
 ];
 
 const MAIN: &str = "refs/heads/main";
@@ -1113,6 +1114,86 @@ fn c4_resume_republish() -> Result<(), FixtureError> {
     assert_eq!(finished.operation_id, held.operation_id);
     assert!(!reserved(&w));
     // An operation that has ended owes nothing.
+    let noop = resumed_by(&w, LATER, &operation);
+    assert_eq!(noop.code, ResultCode::AlreadyApplied, "{}", noop.message);
+    assert_no_record_of(&w, LATER, &noop);
+    Ok(())
+}
+
+/// Row 6, with the index hand-off owed: a republish that published and
+/// whose hand-off failed has a row that is final, completed and owing work,
+/// and its request keeps its record for the hand-off. A resume names that
+/// request, and the republish's own result offers it in place of a resume
+/// (`offering_resume`). Staged with `FAIL_HAND_OFF`, an SQL trigger on the
+/// refresh's completion: no failure point is added.
+fn c4_resume_republish_hand_off() -> Result<(), FixtureError> {
+    use super::republish::{REPUBLISH, Recorded, confirmed, deleted, previewed};
+    let (w, tip) = deleted(Recorded::ByFetch, true)?;
+    let (confirmation, _) = previewed(&w)?;
+    let db = w.db()?;
+    fixed(db.execute_batch(FAIL_HAND_OFF))?;
+    let pushes = accepted(&w.server);
+    let owed = confirmed(&w, REPUBLISH, &confirmation);
+    assert_eq!(
+        (owed.outcome, owed.code),
+        (Outcome::Partial, ResultCode::DiscoveryPending),
+        "{owed:?}"
+    );
+    assert_eq!(
+        owed.effects,
+        Effects {
+            publication: PublicationEffect::Published,
+            discovery: DiscoveryEffect::Pending,
+            commit_oid: Some(tip.to_string()),
+            ..Effects::not_requested()
+        }
+    );
+    let named_request = |envelope: &Envelope<MutationDataDto>| {
+        envelope.recovery[0]
+            .arguments
+            .get("request_id")
+            .and_then(|id| id.as_str())
+            .map(str::to_owned)
+    };
+    assert_eq!(actions(&owed), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(named_request(&owed).as_deref(), Some(REPUBLISH));
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REPUBLISH).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    let operation = owed.operation_id.clone().ok_or(FixtureError)?;
+    assert_eq!(
+        phase(&w, OperationId::parse(&operation).unwrap())?,
+        "completed"
+    );
+
+    let opened = connections(&w);
+    let left = resumed(&w, &operation);
+    assert_eq!(
+        (left.outcome, left.code),
+        (Outcome::Blocked, ResultCode::OriginalRequestRequired),
+        "{left:?}"
+    );
+    assert_eq!(actions(&left), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(named_request(&left).as_deref(), Some(REPUBLISH));
+    assert_no_record_of(&w, RESUME, &left);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+
+    // The republish request does the hand-off, with no connection.
+    fixed(db.execute_batch("DROP TRIGGER fail_handoff"))?;
+    let finished = confirmed(&w, REPUBLISH, &confirmation);
+    assert_eq!(finished.outcome, Outcome::Success, "{}", finished.message);
+    assert_eq!(finished.effects, published(tip));
+    assert_eq!(finished.operation_id, owed.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(
+        record(&w, REPUBLISH).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
     let noop = resumed_by(&w, LATER, &operation);
     assert_eq!(noop.code, ResultCode::AlreadyApplied, "{}", noop.message);
     assert_no_record_of(&w, LATER, &noop);

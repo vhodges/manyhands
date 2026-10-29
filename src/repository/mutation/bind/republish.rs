@@ -220,22 +220,15 @@ impl ItemRepublishBinding {
         })
     }
 
-    /// The consent a request that is entered again was accepted with: its
-    /// branch and the local commit, as its recorded position holds them,
-    /// and the commit last published there, as is stored now. The domain
-    /// judges a request whose operation began by that operation's own
-    /// evidence.
-    fn accepted_consent(
-        &self,
-        service: &RepositoryService,
-        accepted: &Accepted,
-    ) -> Option<RepublishConsent> {
+    /// The consent a request whose operation has begun was accepted with:
+    /// its branch and the local commit, as its recorded position holds
+    /// them. The commit last published is `None`: the domain compares it
+    /// with what is stored only before it begins an operation, and judges
+    /// one that has begun by that operation's own evidence.
+    fn accepted_consent(accepted: &Accepted) -> Option<RepublishConsent> {
         Some(RepublishConsent {
             branch: accepted.position.base_ref.clone()?,
-            last_published: service
-                .republish_evidence(&accepted.root(), self.kind, &self.id)
-                .ok()
-                .and_then(|evidence| evidence.last_published),
+            last_published: None,
             local: accepted.position.base_oid?,
         })
     }
@@ -393,7 +386,7 @@ impl Confirmed for ItemRepublishBinding {
         if *journal == JournalRow::Absent {
             return Row::Unrecorded;
         }
-        self.consent = self.accepted_consent(call.service, accepted);
+        self.consent = Self::accepted_consent(accepted);
         Row::Recorded
     }
 

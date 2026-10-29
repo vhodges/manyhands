@@ -597,7 +597,7 @@ new ticket comment (ruling P4).
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
-| 5 | `feat: republish a remotely deleted item branch with consent` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58 | pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
+| 5 | `feat: republish a remotely deleted item branch with consent`; review fix round 1 `refactor: share item sync's fetch and push steps with republish, and close the review's gaps` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
 
 ### Task 1: Merging Synchronization
 
@@ -2401,3 +2401,80 @@ tests; logs `logs/task-5-*`):
 - **Row 15's host stop** is `host_replacement_required`. A host that is
   already pinned cannot be `host_approval_required`, which is the code for
   an unpinned one.
+
+#### Task 5, fix round 1
+
+The commit is `refactor: share item sync's fetch and push steps with
+republish, and close the review's gaps`, on FIX_BASE `296a6c8`
+(`task-5-fix-1.md`). There is no ticket comment this round.
+
+- **I1: one set of steps, no copies.** Three private helpers in
+  `remote/sync.rs` are now called by both item sync and the republish path,
+  over a `Steps` struct (the request, the reservation, the plan, the
+  configuration and the primary branch):
+  - `open_synchronization` covers the canonical root, the other-root and
+    target checks, and the replay of an operation with its outcome, a
+    cancelled one or a stopped one. It returns `Opened::Replayed` or
+    `Opened::Taken` (boxed, for clippy).
+  - `fetch_and_observe` runs from `BeforeFetch` to `AfterFetch`, and returns
+    `Fetched { primary, context, changed, repository }`. The caller refuses
+    `changed`.
+  - `push_and_verify` runs from the `PushPrepared` intent to the
+    `PushVerified` checkpoint. It keeps item sync's rationale comment for
+    recording `PushReturned` before the boundary.
+- **Item sync's code moved verbatim.** Each helper's body was compared with
+  the code item sync had at `296a6c8`, whitespace and the renamed locals
+  aside: it is the same, in the same order. The one addition is
+  `.map_err(after)` on the post-push local inspection and advertisement
+  read. Item sync passes `AfterThePush::AsItIs`, for which that is the
+  identity.
+- **The republish's difference is now explicit.** It passes
+  `AfterThePush::Unverified`, which maps those two reads through
+  `unverified_push_error`.
+- **Republish now opens as item sync does.** `republish_replayed` is gone. A
+  restart whose reservation is a replay is `RecoveryRequired`, as item
+  sync's is; the binding reads the row as before.
+- **Minor 1.** `accepted_consent` passes `last_published: None`. The domain
+  checks it only before an operation begins, so the swallowed
+  `republish_evidence` read is gone.
+- **Minor 2.** `records::operation_holder` takes `command: Option<&str>`,
+  and `operation_holder_of` is gone. The callers in `operation_owner`,
+  `bind/conflict.rs` and `bind/resume.rs` (two) pass `None`;
+  `republishing` passes `Some("item republish")`.
+- **Minor 3.** New case `c4_republish_second_preview` pins the Known Limit:
+  - after a republish the fetch row is still `remotely_deleted`, so a
+    preview is offered again;
+  - executing it is `external_change`, finished, with nothing pushed;
+  - its fetch recorded the branch, so the next preview is the no-op.
+- **Minor 4.**
+  - `c4_republish_confirmed_from_push_evidence`: a `Pushed` preview,
+    executed, is `ok`, with exactly the local commit created once and
+    nothing merged.
+  - `c4_republish_reappeared` now asserts the operation's phase is
+    `cancelled`.
+  - `resume::c4_resume_republish_hand_off` covers the owes-work route. It is
+    staged with the existing `FAIL_HAND_OFF` SQL trigger, so no failure
+    point is added. The republish is `discovery_pending`, offering its own
+    request through `offering_resume`. A resume is
+    `original_request_required`, naming that request. With the trigger
+    dropped, the same request does the hand-off with no connection, and a
+    later resume is `already_applied`.
+- **Minor 5.** `command.rs`'s 108-character doc line is rewrapped.
+- **New cases first.** The four cases pin behavior `296a6c8` already had:
+  the Known Limit, the push-evidence path, the ruled end state and the
+  owes-work route. None can fail against the code under review, and none
+  was run against it.
+- **Verify** (each `devenv shell -- cargo … --locked`; logs
+  `logs/task-5-fix1-*`):
+  - `mutation_remote`: `-- c4_republish` 25 (the first run of this round was
+    24, with the conformance case at the 100 s watchdog under a load average
+    of 7 to 15; its world is now the lightest a preview is given in: the
+    branch published and then deleted, with no synchronization since;
+    alone it took 79 s with a compile); `-- c4_resume` 17;
+    `-- c4_resume_republish` 2; `-- merging` 26; `-- push` 38;
+    `-- c4_comment` 34.
+  - `remote_merge_recovery` 25, `comment_publication` 41,
+    `mutation_confirmation` 183.
+  - `--lib` remote 477, local_sync 164, integration 26 and mutation 123.
+  - clippy, fmt, and the desktop `--bin` check and clippy passed.
+  - The whole target is the Task 6 gate's, as ruled.

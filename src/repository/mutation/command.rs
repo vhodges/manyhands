@@ -296,10 +296,11 @@ impl Command {
     /// be stopped at once it is accepted, and a reservation it holds
     /// from its first one on. Only a synchronization has, a republish,
     /// whose push-only operation is one, and a comment's submission, at
-    /// the safe points of the synchronization that publishes it. Such a command honors a cancellation after
-    /// acceptance and reports a stage at each safe point, and a request
-    /// of it that stopped with its reservation held is continued by the
-    /// same request, whatever stopped it.
+    /// the safe points of the synchronization that publishes it. Such a
+    /// command honors a cancellation after acceptance and reports a stage
+    /// at each safe point, and a request of it that stopped with its
+    /// reservation held is continued by the same request, whatever stopped
+    /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,

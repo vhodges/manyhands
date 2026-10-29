@@ -45,6 +45,11 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
     ("c4_republish_preview_noop", c4_republish_preview_noop),
     ("c4_republish_ticket_closed", c4_republish_ticket_closed),
     ("c4_republish_confirmed", c4_republish_confirmed),
+    (
+        "c4_republish_confirmed_from_push_evidence",
+        c4_republish_confirmed_from_push_evidence,
+    ),
+    ("c4_republish_second_preview", c4_republish_second_preview),
     ("c4_republish_primary_moved", c4_republish_primary_moved),
     (
         "c4_republish_ancestor_of_primary",
@@ -190,6 +195,19 @@ pub(super) enum Recorded {
     ByPush,
 }
 
+/// A world whose item's editing branch `item sync` published, at the commit
+/// it returns, which is the branch's local tip.
+fn publish_the_item() -> Result<(World, git2::Oid), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    w.context()?;
+    let tip = local(&w)?;
+    let published = execute(&w, PUBLISH, item_sync(&w));
+    assert_eq!(published.outcome, Outcome::Success);
+    assert_eq!(served(&w)?, Some(tip));
+    Ok((w, tip))
+}
+
 /// Cancels the refused `item sync` and sends it once more, which ends it
 /// cancelled and lets its reservation go.
 fn release(w: &World) -> Result<(), FixtureError> {
@@ -210,13 +228,7 @@ pub(super) fn deleted_with(
     released: bool,
     before: impl FnOnce(&World, git2::Oid) -> Result<(), FixtureError>,
 ) -> Result<(World, git2::Oid), FixtureError> {
-    let mut w = World::new()?;
-    approve(&w)?;
-    w.context()?;
-    let tip = local(&w)?;
-    let published = execute(&w, PUBLISH, item_sync(&w));
-    assert_eq!(published.outcome, Outcome::Success);
-    assert_eq!(served(&w)?, Some(tip));
+    let (w, tip) = publish_the_item()?;
     if recorded == Recorded::ByFetch {
         let current = execute(&w, OBSERVE, item_sync(&w));
         assert_eq!(current.code, ResultCode::AlreadyApplied);
@@ -785,6 +797,46 @@ fn c4_republish_confirmed() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// Row 8, from push evidence alone: a deletion only the push evidence of
+/// the publication shows (row 2's preview) is republished as one a fetch
+/// recorded is, with exactly the local commit pushed and nothing merged.
+fn c4_republish_confirmed_from_push_evidence() -> Result<(), FixtureError> {
+    let (w, tip) = deleted(Recorded::ByPush, true)?;
+    assert_eq!(context_state(&w)?, None);
+    republished(&w, tip)?;
+    Ok(())
+}
+
+/// A Known Limit, pinned. After a republish the fetch record still says
+/// the branch was deleted, until a fetch sees it again: a second preview is
+/// offered. Its execution fetches, finds the branch, and is refused with
+/// nothing pushed, and that fetch is what the next preview reads: the
+/// no-op.
+fn c4_republish_second_preview() -> Result<(), FixtureError> {
+    let (w, tip) = deleted(Recorded::ByFetch, true)?;
+    republished(&w, tip)?;
+    assert_eq!(context_state(&w)?.as_deref(), Some("remotely_deleted"));
+    let (confirmation, shown) = previewed(&w)?;
+    assert_eq!(shown.local_oid, tip.to_string());
+    let pushes = accepted(&w.server);
+    let refused = confirmed(&w, ANOTHER, &confirmation);
+    assert_eq!(
+        refused.code,
+        ResultCode::ExternalChange,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestPrepare]);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(served(&w)?, Some(tip));
+    assert!(!reserved(&w));
+    assert_eq!(state_of(&w, ANOTHER), Some(RequestState::Finished));
+    assert_eq!(context_state(&w)?.as_deref(), Some(PRESENT));
+    assert_noop_preview(&w)?;
+    Ok(())
+}
+
 /// Row 9: remote primary moved since the item's branch last integrated it.
 /// Exactly the local commit is pushed; primary is not merged.
 fn c4_republish_primary_moved() -> Result<(), FixtureError> {
@@ -875,9 +927,10 @@ fn c4_republish_reappeared() -> Result<(), FixtureError> {
     assert_eq!(accepted(&w.server), pushes);
     assert_eq!(served(&w)?, Some(again));
     assert_eq!(local(&w)?, tip);
-    // The operation is over and the request finished.
+    // The operation is over, ended as a cancellation ends one, and the
+    // request finished.
     let operation = refused.operation_id.clone().ok_or(FixtureError)?;
-    assert_ne!(standing(&w, &operation)?.0, "push_prepared");
+    assert_eq!(standing(&w, &operation)?.0, "cancelled");
     assert!(!reserved(&w));
     assert_eq!(state_of(&w, REPUBLISH), Some(RequestState::Finished));
     assert_eq!(confirmed(&w, REPUBLISH, &confirmation), refused);
@@ -1170,10 +1223,20 @@ fn c4_republish_cancelled_before_execution() -> Result<(), FixtureError> {
 /// confirmation of one preview; the request that is refused presents a
 /// confirmation no preview gave, and the one with the wrong consent presents
 /// none. The preview is made stale by another commit on the item's branch.
+///
+/// The row's five rules each build a world within one case's time, so the
+/// world is the cheapest a republish is previewed in: the branch published,
+/// then deleted on the remote, with no synchronization since. The
+/// publication's push evidence is classified `Deleted` (row 2), and the
+/// branch is gone, so a republish succeeds.
 pub(super) fn conforming(rule: &mut dyn FnMut(&conformance::Subject<'_>)) -> Result<(), String> {
     use conformance::{Ask, NO_SUCH_CONFIRMATION, Recorded as Held, Subject};
-    let (w, _) = deleted(Recorded::ByPush, true)
-        .map_err(|_| "a world whose item's branch was deleted".to_owned())?;
+    let built = || -> Result<World, FixtureError> {
+        let (w, _) = publish_the_item()?;
+        fixed(fixed(w.bare()?.find_reference(CONTEXT))?.delete())?;
+        Ok(w)
+    };
+    let w = built().map_err(|_| "a world whose item's branch was deleted".to_owned())?;
     let confirmation = OnceCell::new();
     let preview = || -> String {
         confirmation

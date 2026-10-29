@@ -399,7 +399,13 @@ impl Resolving<'_> {
         let holder = self
             .service()
             .read_session(RepositoryOperation::Read, |db| {
-                Ok(records::operation_holder(db, family, scope, operation_id)?)
+                Ok(records::operation_holder(
+                    db,
+                    family,
+                    scope,
+                    operation_id,
+                    None,
+                )?)
             })
             .map_err(|error| Answer::of_read(&error))?;
         holder

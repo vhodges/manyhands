@@ -226,7 +226,7 @@ fn left_to_its_request(
     otherwise: Named,
 ) -> rusqlite::Result<Named> {
     Ok(
-        match records::operation_holder(connection, family, scope, operation_id)? {
+        match records::operation_holder(connection, family, scope, operation_id, None)? {
             Some(request) => Named::OriginalRequest { request },
             None => otherwise,
         },
@@ -409,12 +409,12 @@ fn republishing(
     root: &str,
     operation_id: OperationId,
 ) -> Result<Option<Named>, ReadError> {
-    Ok(records::operation_holder_of(
+    Ok(records::operation_holder(
         connection,
         OperationFamily::Remote,
         root,
         operation_id,
-        Command::ItemRepublish.name(),
+        Some(Command::ItemRepublish.name()),
     )?
     .map(|request| Named::OriginalRequest { request }))
 }
@@ -779,6 +779,7 @@ impl OperationResumeBinding {
                     family,
                     scope.as_str(),
                     operation_id,
+                    None,
                 )?)
             })
             .map_err(|error| Answer::of_read(&error))?;
