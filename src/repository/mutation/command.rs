@@ -68,6 +68,7 @@ commands! {
     LocalContextSync => "context sync-local",
     LocalContextResolve => "context resolve-local",
     CommentAdd => "comment add",
+    ConflictResolve => "conflict resolve",
 }
 
 impl Command {
@@ -138,6 +139,11 @@ impl Command {
             // its own ID, in its own journal, and the resume's record
             // holds none.
             Self::OperationResume => false,
+            // So is the synchronization a resolution names. Its durable
+            // state is the resolution attempt, which the remote journal
+            // records against the synchronization, and which a table of
+            // its own associates with the request (R-35).
+            Self::ConflictResolve => false,
             // A few keys of Git configuration, set by one replacement
             // of the file under the repository lease, or not at all: no
             // operation ID and no row. What shows the work to be done
@@ -160,7 +166,10 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -198,7 +207,10 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -237,7 +249,10 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -322,6 +337,13 @@ impl Command {
             // that stopped is not offered again by the rule for a
             // synchronization.
             Self::OperationResume => false,
+            // As a resume (R-32, R-35): a resolution has no operation, and
+            // the publication it continues honors its call's token at the
+            // synchronization's safe points. Nothing is held for it between
+            // calls, so `request cancel` asks nothing of it (fact 11); the
+            // synchronization's own request is what `request cancel`
+            // reaches.
+            Self::ConflictResolve => false,
         }
     }
 
@@ -362,7 +384,11 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            // A resolution's result says what its request did, and a
+            // replay of it offers nothing (R-35): `conflict show` names
+            // the next step.
+            | Self::ConflictResolve => false,
         }
     }
 
@@ -406,7 +432,11 @@ impl Command {
             // What a comment's submission does first is write the
             // comment and checkpoint it. Its publication then reports
             // the stages of its synchronization's safe points.
-            | Self::CommentAdd => ProgressStage::Writing,
+            | Self::CommentAdd
+            // What a resolution does first is write the resolved paths
+            // and commit them; its continuation then reports the stages
+            // of the synchronization's safe points.
+            | Self::ConflictResolve => ProgressStage::Writing,
         }
     }
 
@@ -418,7 +448,10 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -465,6 +498,9 @@ impl Command {
             // context, and publishes it as a synchronization would: there
             // is nothing to show first.
             Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            // A resolution's caller was shown the conflict by `conflict
+            // show`, and presents its observation: a stale one is refused.
+            Self::ConflictResolve => false,
             Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -550,6 +586,7 @@ mod tests {
         assert_eq!(Command::DocumentRepair.name(), "document repair");
         assert_eq!(Command::TicketRepair.name(), "ticket repair");
         assert_eq!(Command::CommentAdd.name(), "comment add");
+        assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
     }
 
     #[test]
@@ -592,6 +629,18 @@ mod tests {
         assert!(!Command::CommentAdd.restores_index());
         assert!(!Command::CommentAdd.creates_its_repository());
         assert!(!Command::CommentAdd.hands_off_to_any_refresh());
+        // A resolution does not stop at safe points, as a resume does not
+        // (R-32, R-35): it holds no operation, needs no confirmation and
+        // reports `Writing` first.
+        assert!(!Command::ConflictResolve.stops_at_safe_points());
+        assert!(!Command::ConflictResolve.has_operation());
+        assert!(!Command::ConflictResolve.needs_confirmation());
+        assert!(!Command::ConflictResolve.finishes_as_a_synchronization());
+        assert!(!Command::ConflictResolve.was_accepted_without_operation());
+        assert!(!Command::ConflictResolve.restores_index());
+        assert!(!Command::ConflictResolve.creates_its_repository());
+        assert!(!Command::ConflictResolve.hands_off_to_any_refresh());
+        assert_eq!(Command::ConflictResolve.stage(), ProgressStage::Writing);
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
         assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
         assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);
@@ -652,7 +701,7 @@ mod tests {
             // none of its own either.
             let names_another_s = matches!(
                 command,
-                Command::OperationResume | Command::LocalContextResolve
+                Command::OperationResume | Command::LocalContextResolve | Command::ConflictResolve
             );
             // An identity is Git configuration, written under the
             // repository lease with no row.

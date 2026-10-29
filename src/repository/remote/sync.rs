@@ -2450,6 +2450,140 @@ fn owned_result_digest(root: &Path, relative: &Path) -> Result<[u8; 32], Synchro
     resolution::owned_result_digest(root, relative).map_err(Into::into)
 }
 
+/// Every blob of `tree`, recursively, with its full path's bytes.
+fn tree_blobs(
+    repository: &git2::Repository,
+    tree: &git2::Tree<'_>,
+    prefix: &[u8],
+    blobs: &mut Vec<(Vec<u8>, git2::Oid)>,
+) -> Result<(), SynchronizationError> {
+    for entry in tree.iter() {
+        let mut path = prefix.to_vec();
+        if !path.is_empty() {
+            path.push(b'/');
+        }
+        path.extend_from_slice(entry.name_bytes());
+        match entry.kind() {
+            Some(git2::ObjectType::Tree) => {
+                let child = repository
+                    .find_tree(entry.id())
+                    .map_err(|_| SynchronizationError::RecoveryRequired)?;
+                tree_blobs(repository, &child, &path, blobs)?;
+            }
+            Some(git2::ObjectType::Blob) => blobs.push((path, entry.id())),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Whether every path a resolution attempt wrote and observed still holds
+/// exactly the result it wrote. Each recorded path is found among the live
+/// conflict's paths by its digest; one that is gone, or holds anything
+/// else, is changed.
+fn written_paths_unchanged(
+    repository: &git2::Repository,
+    inspection: &SynchronizationConflictInspection,
+    paths: &[state::ResolutionPathRecord],
+) -> Result<bool, SynchronizationError> {
+    let workdir = repository
+        .workdir()
+        .ok_or(SynchronizationError::RecoveryRequired)?;
+    for recorded in paths.iter().filter(|path| path.applied) {
+        let Some(path) = inspection
+            .paths
+            .iter()
+            .find(|path| blake3::hash(&path.token.path).as_bytes() == &recorded.path_digest)
+        else {
+            return Ok(false);
+        };
+        let Ok(relative) = std::str::from_utf8(&path.token.path) else {
+            return Ok(false);
+        };
+        match owned_result_digest(workdir, Path::new(relative)) {
+            Ok(digest) if digest == recorded.result_digest => {}
+            Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(true)
+}
+
+/// Releases the native index sentinel of a superseded attempt (decision
+/// 18), which prepared no index output: `index.lock` is unlinked only when
+/// it is exactly the sentinel the attempt journaled, by identity and
+/// digest. Nothing is journaled, because the attempt's rows are deleted
+/// next. An absent lock was released already; a lock that is not the
+/// sentinel is never touched.
+#[cfg(unix)]
+fn release_superseded_sentinel(
+    repository: &git2::Repository,
+    artifact: &state::ResolutionIndexArtifact,
+) -> Result<(), SynchronizationError> {
+    if artifact.output.is_some() {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    let parent = native_resolution::open_directory(repository.path())
+        .map_err(|_| SynchronizationError::ExternalChange)?;
+    let lock = fixed_index_name("index.lock");
+    if !index_leaf_present(&parent, &lock)? {
+        return Ok(());
+    }
+    let (_, live) = index_file_image_at(&parent, &lock)?;
+    if (live.device, live.inode) != (artifact.device, artifact.inode)
+        || blake3::hash(&live.bytes).as_bytes() != &artifact.sentinel_digest
+    {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), lock.as_ptr(), 0) } != 0 {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    parent
+        .sync_all()
+        .map_err(|_| SynchronizationError::ExternalChange)
+}
+
+#[cfg(windows)]
+fn release_superseded_sentinel(
+    repository: &git2::Repository,
+    artifact: &state::ResolutionIndexArtifact,
+) -> Result<(), SynchronizationError> {
+    if artifact.output.is_some() {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    let parent = native_resolution::Directory::open(repository.path())
+        .map_err(|_| SynchronizationError::ExternalChange)?;
+    if let Some(image) = parent
+        .image("index.lock")
+        .map_err(|_| SynchronizationError::ExternalChange)?
+    {
+        if image.stamp.identity != [artifact.device, artifact.inode]
+            || blake3::hash(&image.bytes).as_bytes() != &artifact.sentinel_digest
+        {
+            return Err(SynchronizationError::ExternalChange);
+        }
+        parent
+            .retire("index.lock", image)
+            .map_err(|_| SynchronizationError::ExternalChange)?;
+    }
+    if parent
+        .image("index.lock")
+        .map_err(|_| SynchronizationError::ExternalChange)?
+        .is_some()
+    {
+        return Err(SynchronizationError::ExternalChange);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn release_superseded_sentinel(
+    _repository: &git2::Repository,
+    _artifact: &state::ResolutionIndexArtifact,
+) -> Result<(), SynchronizationError> {
+    Err(SynchronizationError::ExternalChange)
+}
+
 fn conflict_token_digest(token: &merge::ConflictPathToken) -> [u8; 32] {
     let mut expected = blake3::Hasher::new();
     expected.update(b"manyhands-conflict-path-v1\0");
@@ -5319,6 +5453,250 @@ impl RepositoryService {
                 commit_oid: candidate,
             },
         )
+    }
+
+    /// Finishes the resolution attempt `attempt_id` of the synchronization
+    /// `synchronization_id`, whose candidate commit is prepared or applied,
+    /// from its durable rows alone (R-14, decision 18): no source is
+    /// presented and none is stored. `None` for an attempt that has no
+    /// candidate yet.
+    ///
+    /// The library's tokens are rebuilt for `reconcile_resolution_candidate`
+    /// only, which checks them against the attempt's recorded window,
+    /// ordinal, operation and input digest. Each path is found by hashing
+    /// every path of the candidate's tree and matching the recorded path
+    /// digest (fact 70), and its bytes are the candidate's blob there; each
+    /// side's blob is the one the attempt recorded. The observation's
+    /// configuration digest is the live one: it is not stored (fact 31),
+    /// and the attempt is bound by its input digest, which holds none.
+    pub(crate) fn finish_resolution_attempt(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+    ) -> Result<Option<merge::ResolveSynchronizationOutcome>, SynchronizationError> {
+        let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        let Some((target, step, candidate, paths)) =
+            state::with_transaction(self, &root, |tx, id| {
+                let record = state::read_operation(tx, id, synchronization_id)?
+                    .ok_or_else(state::recovery_required)?;
+                let Some((step, candidate, _, _, requires_confirmation, _)) =
+                    state::resolution_candidate_for_attempt(tx, &record, attempt_id)?
+                else {
+                    return Ok(None);
+                };
+                // `conflict resolve` never confirms an identity: an attempt
+                // that did is no request of its.
+                if requires_confirmation {
+                    return Err(state::recovery_required());
+                }
+                let paths = state::resolution_path_records(tx, &record, attempt_id)?;
+                Ok(Some((record.target, step, candidate, paths)))
+            })?
+        else {
+            return Ok(None);
+        };
+        let target = match target.action() {
+            RemoteOperationAction::SynchronizePrimary => SynchronizationTarget::Primary,
+            RemoteOperationAction::SynchronizeContext => {
+                let (kind, item_id) = target
+                    .item()
+                    .ok_or(SynchronizationError::RecoveryRequired)?;
+                SynchronizationTarget::Context {
+                    kind,
+                    item_id: item_id.clone(),
+                }
+            }
+            _ => return Err(SynchronizationError::RecoveryRequired),
+        };
+        let repository = Self::inspect_conflict_target(&root, &target)?;
+        let tree = repository
+            .find_commit(candidate)
+            .and_then(|commit| commit.tree())
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let mut blobs = Vec::new();
+        tree_blobs(&repository, &tree, &[], &mut blobs)?;
+        let observation = merge::ConflictObservation {
+            operation_id: synchronization_id,
+            window_number: step.window_number,
+            ordinal: step.intent.ordinal,
+            fingerprint: step
+                .conflict_digest
+                .ok_or(SynchronizationError::RecoveryRequired)?,
+            head: step.intent.local_oid,
+            configuration: Self::conflict_configuration(&root)?,
+            root: root.clone(),
+        };
+        let mut resolutions = Vec::with_capacity(paths.len());
+        for recorded in &paths {
+            let (path, blob) = blobs
+                .iter()
+                .find(|(path, _)| blake3::hash(path).as_bytes() == &recorded.path_digest)
+                .ok_or(SynchronizationError::RecoveryRequired)?;
+            let bytes = repository
+                .find_blob(*blob)
+                .map_err(|_| SynchronizationError::RecoveryRequired)?
+                .content()
+                .to_vec();
+            // An eligible canonical conflict has regular-file sides only.
+            let [base, local, incoming] = recorded.sides;
+            let mode = |side: Option<git2::Oid>| side.map(|_| 0o100644);
+            resolutions.push((
+                merge::ConflictPathToken {
+                    observation: observation.clone(),
+                    ordinal: recorded.ordinal,
+                    path: path.clone(),
+                    base,
+                    base_mode: mode(base),
+                    local,
+                    local_mode: mode(local),
+                    incoming,
+                    incoming_mode: mode(incoming),
+                },
+                merge::RedactedConflictBytes::from_bytes(bytes),
+            ));
+        }
+        drop(tree);
+        self.resolve_synchronization(merge::ResolveSynchronizationRequest::new(
+            root,
+            synchronization_id,
+            attempt_id,
+            observation,
+            resolutions,
+            None,
+        ))
+        .map(Some)
+    }
+
+    /// The request that continues the attempt `attempt_id`, which has
+    /// written paths and no candidate, for the request that made it, which
+    /// presented `sources` again (R-14): the live inspection's observation
+    /// and tokens, each path with the source whose digest the attempt
+    /// recorded for it. `None` when the live conflict is not the attempt's,
+    /// or a recorded result has no such source.
+    pub(crate) fn resolution_request_again(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+        sources: &[merge::RedactedConflictBytes],
+    ) -> Result<Option<merge::ResolveSynchronizationRequest>, SynchronizationError> {
+        let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        let paths = state::with_transaction(self, &root, |tx, id| {
+            let record = state::read_operation(tx, id, synchronization_id)?
+                .ok_or_else(state::recovery_required)?;
+            state::resolution_path_records(tx, &record, attempt_id)
+        })?;
+        let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
+        if inspection.paths.len() != paths.len() {
+            return Ok(None);
+        }
+        let mut resolutions = Vec::with_capacity(paths.len());
+        for (path, recorded) in inspection.paths.iter().zip(&paths) {
+            if path.token.ordinal != recorded.ordinal
+                || blake3::hash(&path.token.path).as_bytes() != &recorded.path_digest
+            {
+                return Ok(None);
+            }
+            let Some(source) = sources
+                .iter()
+                .find(|source| blake3::hash(source.bytes()).as_bytes() == &recorded.result_digest)
+            else {
+                return Ok(None);
+            };
+            resolutions.push((path.token.clone(), source.clone()));
+        }
+        Ok(Some(merge::ResolveSynchronizationRequest::new(
+            root,
+            synchronization_id,
+            attempt_id,
+            inspection.observation,
+            resolutions,
+            None,
+        )))
+    }
+
+    /// Whether every path the attempt `attempt_id` wrote still holds
+    /// exactly what it wrote, as its durable rows show: the condition under
+    /// which a new request may supersede it (decision 18). Read only, under
+    /// the repository's lease; nothing is reserved.
+    pub(crate) fn resolution_paths_unchanged(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+    ) -> Result<bool, SynchronizationError> {
+        let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        let paths = state::with_transaction(self, &root, |tx, id| {
+            let record = state::read_operation(tx, id, synchronization_id)?
+                .ok_or_else(state::recovery_required)?;
+            state::resolution_path_records(tx, &record, attempt_id)
+        })?;
+        let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
+        let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
+        let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
+        written_paths_unchanged(&repository, &inspection, &paths)
+    }
+
+    /// Decision 18's supersede: closes the attempt `attempt_id`, which has
+    /// written paths and no candidate, so that a new request's attempt can
+    /// proceed. `Ok(false)`, with nothing changed, when a path it wrote no
+    /// longer holds exactly what it wrote.
+    ///
+    /// Under the conflict's reservation and the repository's lease, the
+    /// written paths are proved unchanged again, the attempt's native index
+    /// sentinel, when it is there, is verified as its own and released, and
+    /// the attempt's rows and the record of its owner are deleted in one
+    /// transaction. The paths it wrote are left as they are: the new
+    /// attempt records them as its own preimage.
+    pub(crate) fn supersede_resolution_attempt(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+    ) -> Result<bool, SynchronizationError> {
+        let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
+        let ConfigurationInspection::Valid(config) = read_configuration(&root)? else {
+            return Err(SynchronizationError::RecoveryRequired);
+        };
+        let Some(remote) = config.publication_remote.as_deref() else {
+            return Err(SynchronizationError::RecoveryRequired);
+        };
+        let plan = RemoteRefPlan::from_configuration(remote, &config.primary_branch)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let owner = match self.reacquire_synchronization_conflict_in_window(
+            &root,
+            synchronization_id,
+            &inspection.target.operation_target(&plan),
+            inspection.observation.window_number,
+            inspection.observation.ordinal,
+            inspection.observation.fingerprint,
+        )? {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
+            _ => return Err(SynchronizationError::RecoveryRequired),
+        };
+        let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
+        let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
+        let (paths, artifact) = state::with_transaction(self, &root, |tx, id| {
+            let record = reservation::owned(self, tx, id, &owner)?;
+            Ok((
+                state::resolution_path_records(tx, &record, attempt_id)?,
+                state::resolution_index_artifact(tx, &record, attempt_id)?,
+            ))
+        })?;
+        if !written_paths_unchanged(&repository, &inspection, &paths)? {
+            return Ok(false);
+        }
+        if let Some(artifact) = &artifact {
+            release_superseded_sentinel(&repository, artifact)?;
+        }
+        state::with_transaction(self, &root, |tx, id| {
+            let record = reservation::owned(self, tx, id, &owner)?;
+            state::close_superseded_resolution_attempt(tx, &record, attempt_id)
+        })?;
+        Ok(true)
     }
 
     /// Synchronize one existing clean target; every publication is independently

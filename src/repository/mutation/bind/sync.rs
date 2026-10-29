@@ -552,9 +552,10 @@ struct Configured {
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, for
-/// a request that did not begin it: `operation resume`. `accepted` is
-/// that request with the operation's ID and journal in place of its
-/// own, and `subject` the request as its events name it.
+/// a request that did not begin it: `operation resume`, and the
+/// continuation of `conflict resolve` (R-15). `accepted` is that request
+/// with the operation's ID and journal in place of its own, and `subject`
+/// the request as its events name it.
 ///
 /// It is the call a re-entry of the synchronization's own request
 /// makes, with the same settings: the operation is taken up with

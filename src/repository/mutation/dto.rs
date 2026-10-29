@@ -547,6 +547,7 @@ pub enum MutationDataDto {
     Synchronization(SynchronizationMutationDto),
     SynchronizationConflict(SynchronizationConflictMutationDto),
     Comment(CommentMutationDto),
+    ConflictResolution(ConflictResolutionMutationDto),
     Identity(IdentityMutationDto),
     Host(HostMutationDto),
     Repair(RepairMutationDto),
@@ -630,6 +631,57 @@ impl CommentMutationDto {
                 ),
                 None => None,
             },
+            conflict: match stored.get("conflict")? {
+                serde_json::Value::Null => None,
+                conflict => Some(ConflictNextDto::from_stored(conflict)?),
+            },
+        })
+    }
+}
+
+contract_enum!(
+    /// The tag of `ConflictResolutionMutationDto`: one value, so that the
+    /// data of a resolution is told apart by it alone.
+    ConflictResolutionMutationType {
+        ConflictResolution => "conflict_resolution",
+    }
+);
+
+/// What `conflict resolve` reports: the synchronization whose conflict it
+/// resolved, the resolution commit, how far the publication that continued
+/// it got, and the next step of a new conflict that publication met. It
+/// holds no source and names no path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ConflictResolutionMutationDto {
+    pub r#type: ConflictResolutionMutationType,
+    /// The synchronization, whichever ID the request named (R-5).
+    pub operation_id: String,
+    /// The resolution commit. Null when the request made none.
+    pub commit_oid: Option<String>,
+    /// As the result's effects say.
+    pub publication: PublicationEffect,
+    /// The next step of the conflict the publication met, or of the
+    /// conflict the request could not resolve in Manyhands. Null otherwise.
+    pub conflict: Option<ConflictNextDto>,
+}
+
+impl ConflictResolutionMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let tag = stored.get("type")?.as_str()?;
+        let publication = stored.get("publication")?.as_str()?;
+        Some(Self {
+            r#type: ConflictResolutionMutationType::ALL
+                .into_iter()
+                .find(|known| known.as_str() == tag)?,
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            commit_oid: match stored.get("commit_oid")? {
+                serde_json::Value::Null => None,
+                commit => Some(commit.as_str()?.to_owned()),
+            },
+            publication: PublicationEffect::ALL
+                .into_iter()
+                .find(|known| known.as_str() == publication)?,
             conflict: match stored.get("conflict")? {
                 serde_json::Value::Null => None,
                 conflict => Some(ConflictNextDto::from_stored(conflict)?),
@@ -1138,6 +1190,8 @@ impl MutationDataDto {
             // A comment's data names no host: its synchronization's is
             // not kept.
             | Self::Comment(_)
+            // Nor does a resolution's.
+            | Self::ConflictResolution(_)
             | Self::Document(_)
             | Self::Ticket(_)
             | Self::Remote(_)
@@ -1193,6 +1247,9 @@ impl MutationDataDto {
                 RepairMutationDto::from_stored(stored).map(Self::Repair)
             }
             Command::CommentAdd => CommentMutationDto::from_stored(stored).map(Self::Comment),
+            Command::ConflictResolve => {
+                ConflictResolutionMutationDto::from_stored(stored).map(Self::ConflictResolution)
+            }
             // A synchronization that stopped on a conflict of its own
             // merge, or a resume that took one up, is told apart by its
             // tag.

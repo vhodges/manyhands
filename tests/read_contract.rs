@@ -1086,6 +1086,31 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    use manyhands::repository::ConflictResolutionMutationType;
+    let resolution = "conflict_resolution_mutation.schema.json";
+    enumerations.extend([
+        (
+            resolution,
+            "type",
+            ConflictResolutionMutationType::ALL
+                .map(ConflictResolutionMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "publication",
+            PublicationEffect::ALL
+                .map(PublicationEffect::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
     use manyhands::repository::{
         ConflictPathKind, ConflictPathStructure, ConflictReadEligibility, ConflictReadNextAction,
         ConflictStage, ConflictState, ConflictTarget,

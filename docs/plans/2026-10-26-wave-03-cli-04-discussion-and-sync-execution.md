@@ -595,6 +595,7 @@ new ticket comment (ruling P4).
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
+| 4a | `feat: bind conflict resolution that the same request can finish` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy | pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 
 ### Task 1: Merging Synchronization
 
@@ -1698,3 +1699,231 @@ refused repairs, and share the restart's repair rule`, on `b7dfda9`.
 | `test --all-features --lib integration` | 26 passed |
 | `clippy --all-targets --all-features -- -D warnings` | passed |
 | `fmt --check` | passed |
+
+### Task 4a: Conflict Resolution Binding
+
+The commit is `feat: bind conflict resolution that the same request can
+finish`, on `73ecf13`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched.
+
+**The library (R-14, R-35, R-41).**
+
+- `remote/state.rs`:
+  - `remote_resolution_owners(attempt_ulid, request_ulid, input_digest)`,
+    values only, with no foreign key, created by its own migration step
+    (`migrate_resolution_owners`, `CREATE TABLE IF NOT EXISTS`, the last
+    step of `state::migrate`). No audited table, column or trigger
+    changes (fact 75), and no object name holds `request` (fact 81).
+  - `resolution_view`: one read of a synchronization's conflict steps
+    (newest first) and its resolution attempts, each with its phase, its
+    candidate, whether its native artifacts are released, and its owner.
+    `ResolutionView::unfinished` is the attempt fact 71 speaks of: paths
+    written with no candidate, a candidate prepared, or applied with its
+    sentinel not released.
+  - `record_resolution_owner`, `release_resolution_owner` (only for an
+    attempt the domain never recorded), `resolution_owned_by`,
+    `unfinished_resolution_request` (the read's `request_id`),
+    `resolution_path_records` and `close_superseded_resolution_attempt`.
+- `remote/sync.rs`:
+  - `finish_resolution_attempt`: an attempt at `CommitPrepared` or
+    `Applied` is finished from `remote_resolution_attempts` and
+    `remote_resolution_paths` alone (fact 34). The library's tokens are
+    rebuilt for `reconcile_resolution_candidate` only: each path is found
+    by hashing every path of the candidate's tree against the recorded
+    `path_digest` (fact 70), its bytes are the candidate's blob, the sides
+    are the recorded blob OIDs (mode `100644`, as an eligible canonical
+    conflict's sides are), and the observation is the step's window,
+    ordinal, conflict digest and local parent with the live configuration
+    digest, which is not stored (fact 31). The reconcile then checks
+    window, ordinal, operation, every token digest and the input digest,
+    as before.
+  - `resolution_request_again`: at `ResolutionPrepared`, the live
+    inspection's observation and tokens, each path given the presented
+    source whose digest the attempt recorded for it. A changed
+    `config.toml` changes the live observation but not the attempt's
+    input digest, so the same request finishes it (row 11).
+  - `resolution_paths_unchanged` and `supersede_resolution_attempt`
+    (decision 18): under the conflict's reservation and the repository's
+    lease, the written paths are proved unchanged again, the old attempt's
+    `index.lock` is unlinked only when it is exactly the sentinel the
+    attempt journaled (identity and digest; a free function per platform,
+    because `windows_resolution.rs` is outside C4's library files), and
+    the old attempt's rows and its owner row are deleted in one
+    transaction. Deleting is what "closed" is: the attempt's evidence
+    exists only to resume it, and a row left in `paths_applying` would
+    read as unfinished for ever.
+- `remote/conflict_read.rs` (ruling P2): `ConflictDto.request_id` names the
+  owner of the attempt that has written paths or prepared a commit.
+
+**The binding (`bind/conflict.rs`).**
+
+- `ConflictResolveInput { root, operation_id, observation, resolutions }`
+  and `ConflictResolutionInput { token, source }`, with no derives.
+  `Command::ConflictResolve => "conflict resolve"`, with the Command
+  Predicates table's values (R-32).
+- Step 1 in `prepare`: an observation and tokens of R-9's form, at least
+  one resolution and no token twice, else `invalid_input`. Then the root,
+  then the operation: a local-context sync's ID (looked up first) and an
+  operation that is no synchronization are `invalid_input`, an unknown ID
+  `operation_not_found`, a comment's ID resolves to its synchronization
+  (R-5). The request is placed on the synchronized branch.
+- The attempt ID is a ULID from a domain-separated BLAKE3 digest of the
+  request ID, the synchronization's ID, the window and the stage ordinal.
+  The input digest covers the synchronization's ID, the observation and
+  every token and source in token order.
+- Step 2, replay first: the request's own attempt is the owner row whose
+  attempt is derived from this request and a conflict step of the
+  synchronization. A different digest is `request_mismatch` (no effects,
+  record deleted). A matching one finishes it: from durable state at
+  `CommitPrepared`/`Applied`, with the presented sources at
+  `ResolutionPrepared`, straight to the continuation once released, and
+  through steps 3 to 5 when the domain never recorded it (row 1).
+- Step 3: another request's unfinished attempt with only written paths is
+  superseded when they are unchanged (checked read-only before validation,
+  done after it), else `original_request_required` with `request.retry`
+  naming its request; one with its commit prepared is `recovery_required`
+  offering `operation.resume` of the synchronization, then `repo.inspect`.
+- Step 4 in the design's order: already resolved is `recovery_required`
+  (`repo.inspect`); another observation `external_change`; an
+  external-only set `recovery_required` with data
+  `conflict.next_action: external_repair`; a wrong count `invalid_input`;
+  a token not in the conflict `external_change`. Nothing is written.
+- Step 5: the owner row is written, then any supersede, then
+  `resolve_synchronization`. A refusal the domain made before it recorded
+  the attempt lets the owner row go.
+- Step 6 (R-15): the token is looked at once the resolution is
+  checkpointed (`cancelled`, final, the synchronization left resolved).
+  Otherwise a comment's synchronization is continued by
+  `retry_comment_publication_with` with `restart: true` and
+  `sync::of_a_comment`; any other by `sync::resumed`. The child `Accepted`
+  is built as `resume.rs` builds one, and the `Watch` owner is this
+  request (R-35). An earlier call's resolution that another request has
+  since published is `already_applied` with the same commit, on a first
+  call of the request (row 12).
+- Step 7: the data is `ConflictResolutionMutationDto` (`type:
+  "conflict_resolution"`). Effects are the resolution's (`written`,
+  `committed`, integration `complete`, the resolution commit) with the
+  continuation's publication and discovery, and `integration: pending`
+  when the publication met a new conflict, which `conflict` names. `ok`,
+  `cancelled` and `discovery_pending` (offering `operation.resume`) are
+  final; any other stop deletes the record (fact 67). A stop before the
+  resolution is checkpointed names only what this call moved the attempt
+  to, so a retry refused before any write (row 14) claims nothing.
+
+**`operation resume`, one route (decision 18).** `bind/resume.rs` calls
+`conflict::finish_prepared_resolution` before it restarts a pending
+synchronization it takes over: a restart refuses to touch a prepared
+commit's artifacts (`sync.rs`, `reconcile_pending_candidate`), so row 9
+could not be met otherwise. It is the one route 4b's brief also names
+("finishing a prepared resolution candidate from durable state"); the
+comment synchronization's routes and `original_request_required` for
+written paths are left to Task 4b.
+
+**Failure points used** (`grep -n 'FailurePoint::'` over `sync.rs` and
+`state.rs`; `state.rs` has none): `ResolutionAfterPathWrite`,
+`ResolutionAfterCandidatePrepared`, `ResolutionAfterRefTransition`,
+`ResolutionAfterCheckpointObservation`,
+`ResolutionBeforeMetadataRetirement`,
+`ResolutionAfterIndexLockRetirement` and `ResolutionAfterMetadataCleanup`.
+Before the first path write (fact 64), an SQL trigger refuses the first
+`remote_resolution_paths` insert. Before publication, the test server
+disconnects at its advertisement; during publication it withholds the
+push status (`AfterReceivePack`). Ctrl-C is the call's token, cancelled
+by the sink at `writing` and at `pushing`.
+
+**Cases** (`tests/mutation_remote/resolution.rs`, 30 `c4_resolution_`):
+
+| Table row | Case |
+| --- | --- |
+| Before any path is written | `before_any_path_write` |
+| After the paths are written | `after_paths_written` |
+| After the commit is prepared | `after_commit_prepared` |
+| After the ref moves, before publication | `after_ref_moved` (ref transition, checkpoint observation), `after_checkpoint` (the three later points) |
+| During publication | `during_publication` |
+| Another source under the same request ID | `another_source_is_a_mismatch` (trigger, path write, ref transition) |
+| Paths written, first request lost, paths unchanged | `new_request_supersedes_written_paths` |
+| Paths written, a path edited by hand | `new_request_after_a_written_path_is_edited` |
+| Commit prepared or ref moved: `operation resume` | `resume_finishes_a_prepared_commit` |
+| Commit prepared or ref moved: a new request | `new_request_after_commit_prepared` |
+| `config.toml` changed | `configuration_changed` (an item's conflict) |
+| Published by another request | `published_by_another_request` |
+| After success, a new request | `new_request_after_success` |
+| Unfinished local-context sync | `unfinished_local_sync` |
+| After success, before publication: resume | `resume_before_publication` |
+| After publication: resume | `resume_after_publication` |
+| Ctrl-C during the resolution | `cancelled_before_publication` |
+| Ctrl-C during publication | `cancelled_during_publication` |
+
+Also: Review Focus 3 (`duplicate_token`, `foreign_token`, each with the
+source as a probe of the stores and envelopes), `publishes` (golden),
+`syntax`, `another_observation` (golden), `wrong_count` (golden),
+`external_only`, `operation_lookup`, `local_sync_operation`,
+`comment_conflict` (by the comment's ID; the comment is published) and
+`conformance`. Task 3's `c4_conflict_read_resolution_prepared` now makes
+its attempt through `conflict resolve` and asserts `request_id`.
+
+**The unfinished-local-sync row (R-38).** The gate refuses a local sync
+while a remote operation is retained, and every remote reservation while a
+local sync is unfinished, so the two cannot be staged in turn (as Task 1
+found for its row). The case leaves the local sync in its conflict with
+Task 1's helper, sets its two rows' states to read as ended
+(`local_context_sync_records.state`, `operation_records.state`) while the
+remote conflict is made and its resolution interrupted, puts them back,
+and asserts the row; then sets them to ended again and the same request
+finishes the attempt.
+
+**Named edits.** E-6 (`command.rs` tests), E-7 (`DATA_ROOTS` 54), E-8
+(`conflict_resolution_mutation`'s three enums), E-9 (`HOMES` 34; the
+`CONFORMANCE` row), E-10 (six accessors and `repair_data`), E-12 (the
+gate's eight tables and `remote_resolution_owners`). **Owner-authorized,
+beside E-9** (2026-10-28, "It's okay if you need to split the test"): the
+`conflict resolve` row is driven by `c4_resolution_conformance`, and
+`every_command_of_this_target_keeps_the_rules_of_the_boundary` drives the
+other three rows, with the resolution row added to its `elsewhere`. Each
+rule of the row builds a world; the two that need a finished request
+(`replay`, `mismatch`) make a conflict in it and resolve it. The first full
+run, with a conflict made for every rule, failed that case once at the
+100 s watchdog, so the two refusal rules (`refusal`, `consent`) now use a
+plain world: they are refused before anything is read.
+
+**Commands** (each `devenv shell -- cargo … --locked`; logs under the
+SDD directory's `logs/task-4a-*`):
+
+| Command | Result |
+| --- | --- |
+| RED: `test --all-features --test mutation_remote --no-run`, with the new tests against the library at `73ecf13` (the changed library files restored from it, then put back) | did not compile: 7 errors, each a missing name (`Mutation::ConflictResolve`, `ConflictResolveInput`, `ConflictResolutionInput`, `ConflictResolutionMutationDto`, `ConflictResolutionMutationType`, `MutationDataDto::ConflictResolution`) |
+| `test --all-features --test mutation_remote -- c4_resolution`, `MANYHANDS_UPDATE_GOLDEN=1`, `CI` unset | 29 SSH cases passed (the four goldens written, then read) |
+| `test --all-features --test mutation_remote` (goldens compared) | 200 SSH cases passed, 1 failed: `c4_resolution_conformance`, at the 100 s watchdog (3385 s). Every other `c4_resolution` case (29, `after_checkpoint` among them), the 23 `c4_conflict_read` cases and both other conformance cases passed |
+| `test --all-features --test mutation_replay` | 383 passed (fact 81's `:400` test among them) |
+| `test --all-features --test mutation_bridges` | 129 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --test repository_enablement` | 95 passed (E-12's test among them) |
+| `test --all-features --test remote_merge_recovery` | 25 SSH cases passed |
+| `test --all-features --lib mutation` | 123 passed |
+| `test --all-features --lib remote` | 477 passed (`state_tests.rs`' drop tests among them) |
+| `test --all-features --lib local_sync` | 164 passed |
+| `test --all-features --lib integration` | 26 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+| After the conformance fix (the refusal rules in a plain world; the world boxed for clippy): `test --all-features --test mutation_remote -- c4_resolution_conformance` | 1 SSH case passed, 47 s at load 2 (79 s at load 19, while another session's tests ran) |
+| `test --all-features --test mutation_remote -- every_command_of_this_target_keeps_the_rules_of_the_boundary` (the other three rows) | 1 SSH case passed, 72 s at load 3. At load 19 it reached the 100 s watchdog: its nominal 74 s is unchanged by C4's split |
+| `clippy --all-targets --all-features -- -D warnings`, `fmt --check` (final) | passed |
+| `check --locked --features desktop --bin manyhands`; `clippy --locked --features desktop --bin manyhands -- -D warnings` | passed |
+
+**Recorded for later tasks.**
+
+- Task 4b: `bind/resume.rs` already finishes a prepared commit
+  (`conflict::finish_prepared_resolution`) before it restarts a pending
+  synchronization other than a comment's. A comment's synchronization is
+  still `LeftToInspect` there, and an attempt with only written paths still
+  reaches the restart's `RecoveryRequired`: both are 4b's routes. The
+  library function is `finish_resolution_attempt`; the owner of an attempt
+  is `ResolutionView::attempts[..].owner`.
+- Task 5 and Task 13: the remote conformance case's other three rows take
+  about 74 s alone, and exceed the 100 s watchdog under heavy machine load.
+  Task 5's `item republish` row needs a case of its own as this one has.
+- A continuation that stops for an untrusted host answers with the
+  resolution's data, which names no host, so `host.approve` is not offered
+  (as Task 2b recorded for a comment's child). No table row covers it.

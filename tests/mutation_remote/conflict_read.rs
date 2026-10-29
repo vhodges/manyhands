@@ -12,8 +12,10 @@
 //!
 //! Every read is checked against the published schema, and what it
 //! renders, but for the sides it was asked for, is scanned for the
-//! world's private material. `request_id` is null in every row until
-//! Task 4a records which request a resolution attempt belongs to.
+//! world's private material. `request_id` names the request whose
+//! resolution attempt is unfinished, which `conflict resolve` records
+//! (R-35); it is null in every other row, and for an attempt the library
+//! was called for directly, which is no request's.
 
 use std::path::Path;
 
@@ -749,7 +751,26 @@ fn c4_conflict_read_resolution_prepared() -> Result<(), FixtureError> {
     )
     .unwrap();
     let resolved = source("Resolved");
-    let _ = resolve_with(&w, &failing, operation, &[resolved.as_bytes()]);
+    // `conflict resolve` makes the attempt, which records its request
+    // (R-35).
+    let stopped = call(
+        &w,
+        &failing,
+        REQUEST_2,
+        Mutation::ConflictResolve(ConflictResolveInput {
+            root: w.root.clone(),
+            operation_id: operation,
+            observation: before.observation.clone().unwrap(),
+            resolutions: vec![ConflictResolutionInput {
+                token: before.paths[0].token.clone(),
+                source: resolved.clone(),
+            }],
+        }),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert!(stopped.code.failure_class().is_some());
     assert_eq!(step_phase(&w, operation), "resolution_prepared");
     // The path holds what the attempt wrote.
     assert_eq!(
@@ -769,8 +790,8 @@ fn c4_conflict_read_resolution_prepared() -> Result<(), FixtureError> {
         dto.eligibility,
         Some(ConflictReadEligibility::EligibleCanonical)
     );
-    // Until Task 4a records the attempt's request.
-    assert_eq!(dto.request_id, None);
+    // The request whose attempt is unfinished (R-35).
+    assert_eq!(dto.request_id.as_deref(), Some(REQUEST_2));
     Ok(())
 }
 

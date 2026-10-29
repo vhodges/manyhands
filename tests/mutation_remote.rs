@@ -26,6 +26,8 @@ mod merging;
 mod mutation_golden;
 #[path = "support/remote_world.rs"]
 mod remote_world;
+#[path = "mutation_remote/resolution.rs"]
+mod resolution;
 #[path = "support/schema.rs"]
 mod schema;
 #[path = "support/ssh_harness.rs"]
@@ -55,6 +57,7 @@ fn main() {
         .chain(comment_domain::CASES)
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
+        .chain(resolution::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -4648,7 +4651,13 @@ fn conforming(
     Ok(())
 }
 
-const CONFORMANCE: [conformance::Row; 3] = [
+/// Where the row of `conflict resolve` is in `CONFORMANCE`: it is driven
+/// by a case of its own, `resolution::c4_resolution_conformance`, since
+/// its rules that need a finished request each make a conflict to resolve
+/// (owner, 2026-10-28, beside E-9).
+const RESOLUTION_ROW: usize = 3;
+
+const CONFORMANCE: [conformance::Row; 4] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4709,17 +4718,31 @@ const CONFORMANCE: [conformance::Row; 3] = [
             rule,
         )
     }),
+    conformance::Row::new(
+        "conflict resolve",
+        false,
+        "invalid_input",
+        resolution::conforming,
+    ),
 ];
 
 fn every_command_of_this_target_keeps_the_rules_of_the_boundary() -> Result<(), FixtureError> {
     // The rows of the two commands that approve a host are driven by
     // a case of their own, in `host`: each rule of each row builds a
     // world with a server, and a case has a time it must end within.
+    // So is the row of `conflict resolve`, in `resolution`, whose rules
+    // each build a world with a conflict.
+    let (rows, resolution) = CONFORMANCE.split_at(RESOLUTION_ROW);
+    let elsewhere: Vec<&str> = host::CONFORMANCE
+        .iter()
+        .chain(resolution)
+        .map(|row| row.command)
+        .collect();
     conformance::run_part(
         conformance::Home::Remote,
         &request_store::bound_commands(),
-        &CONFORMANCE,
-        &host::CONFORMANCE.map(|row| row.command),
+        rows,
+        &elsewhere,
     );
     Ok(())
 }

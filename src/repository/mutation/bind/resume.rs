@@ -627,6 +627,22 @@ impl OperationResumeBinding {
         target: SynchronizationTarget,
         takes_over: bool,
     ) -> Ran {
+        // A resolution whose commit is prepared is finished from durable
+        // state first, which a restart does not do (decision 18).
+        if takes_over
+            && let Err(answer) = super::conflict::finish_prepared_resolution(
+                call.service,
+                &accepted.root(),
+                self.operation_id,
+            )
+        {
+            return Ran {
+                answer,
+                standing: Standing::Stopped {
+                    journal: Some(NO_ROW),
+                },
+            };
+        }
         let owner = match self.owner(
             call.service,
             &accepted.scope,

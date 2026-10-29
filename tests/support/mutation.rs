@@ -597,6 +597,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Ticket(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
@@ -617,6 +618,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
     match envelope.data.as_ref().expect("document data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Document(data) => data,
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
@@ -741,6 +743,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
     match envelope.data.as_ref().expect("remote data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Remote(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -761,6 +764,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
     match envelope.data.as_ref().expect("operation data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Operation(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -781,6 +785,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     match envelope.data.as_ref().expect("key data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Key(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -801,6 +806,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
     match envelope.data.as_ref().expect("identity data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
         MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Identity(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),

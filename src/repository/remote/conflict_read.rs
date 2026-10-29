@@ -140,8 +140,9 @@ pub struct ConflictDto {
     pub stage: ConflictStage,
     pub state: ConflictState,
     pub next_action: ConflictReadNextAction,
-    /// The request whose resolution attempt is unfinished. Null until the
-    /// attempt's request is recorded (Task 4a).
+    /// The request whose resolution attempt is unfinished, as
+    /// `conflict resolve` recorded it (R-35). Null when no attempt is
+    /// unfinished, or the unfinished one is no request's.
     pub request_id: Option<String>,
     /// The set's eligibility, while the conflict is live.
     pub eligibility: Option<ConflictReadEligibility>,
@@ -307,6 +308,9 @@ struct Recorded {
     step: IntegrationStepEvidence,
     /// Whether a resolution attempt of the library's is recorded for it.
     resolution_attempted: bool,
+    /// The request whose resolution attempt of it is unfinished, when
+    /// `conflict resolve` recorded one (R-35).
+    request_id: Option<String>,
     /// The merge metadata its merge left, as it recorded it.
     merge_metadata: Option<MergeMetadataEvidence>,
 }
@@ -456,6 +460,12 @@ fn lookup(
         },
     };
     let resolution_attempted = state::integration_has_resolution_attempt(db, &record, &step)?;
+    let request_id = match pending_phase {
+        Some(IntegrationStepPhase::ResolutionPrepared | IntegrationStepPhase::CommitPrepared) => {
+            state::unfinished_resolution_request(db, &record, &step)?
+        }
+        _ => None,
+    };
     let merge_metadata =
         state::integration_merge_metadata(db, &record, step.window_number, step.intent.ordinal)?;
     Ok(Lookup::Found(Box::new(Recorded {
@@ -466,6 +476,7 @@ fn lookup(
         pending: pending_phase,
         step,
         resolution_attempted,
+        request_id,
         merge_metadata,
     })))
 }
@@ -524,7 +535,7 @@ fn settled(
         },
         state,
         next_action,
-        request_id: None,
+        request_id: recorded.request_id.clone(),
         eligibility: None,
         local_parent: recorded.step.intent.local_oid.to_string(),
         incoming_parent: recorded.step.intent.incoming_oid.to_string(),

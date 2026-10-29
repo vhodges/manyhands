@@ -33,6 +33,7 @@ use super::{
 
 pub(crate) mod abandon;
 pub(crate) mod comment;
+pub(crate) mod conflict;
 pub(crate) mod document;
 pub(crate) mod folder;
 pub(crate) mod host;
@@ -985,6 +986,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // this is not reached, and nothing is claimed. What the
         // operation it names did is that operation's request's to say.
         Some(Command::OperationResume) => Recorded::nothing(),
+        // Nor has a resolution: this is not reached, and nothing is
+        // claimed. Its durable state is its attempt, and a refusal under
+        // its request ID carries no effects (R-32).
+        Some(Command::ConflictResolve) => Recorded::nothing(),
         // An identity has no operation either: this is not reached, and
         // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
