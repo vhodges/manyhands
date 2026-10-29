@@ -1370,3 +1370,51 @@ async fn closing_unsent_or_refused_repair_text_says_it_is_not_saved(cx: &mut Tes
     shell.keys("escape", cx);
     assert_eq!(tab_count(&shell, cx), 1);
 }
+
+/// C3 (contract 6: a reload or refresh never replaces unsaved repair
+/// text): the repair text typed in, the file changed by another, and the
+/// tab read again by a refresh, `secondary-r`. The view stays open with the
+/// typed text, and the pill still says it is unsaved.
+#[gpui_kit::test]
+async fn a_refresh_never_replaces_edited_repair_text(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    shell.select(&root, cx);
+    open(&shell, inspect(&root, MARKER), cx);
+    open_repair(&shell, cx);
+    type_at_line(&shell, 0, "x", cx);
+    let typed = repair_text(&shell, cx);
+    assert_eq!(typed, format!("x{MARKER_ONLY}"));
+    shell.fixture.commit_file(
+        &root,
+        MARKER,
+        b"---\nmanyhands_managed: true\n---\nChanged by another.\n",
+    );
+
+    let reads = shell.backend.reads_seen(ReadKind::Item);
+    shell.keys("secondary-r", cx);
+    let refresh = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::IndexRefresh { .. })
+    });
+    assert_eq!(refresh.len(), 1, "secondary-r refreshes");
+    shell.until_ended(refresh[0], cx).await;
+    shell
+        .until_drawn(cx, "the tab read again", |shell, cx| {
+            shell.backend.reads_seen(ReadKind::Item) > reads
+                && pane(shell, cx).read_with(cx, |pane, _| {
+                    pane.model
+                        .item()
+                        .rows()
+                        .and_then(|item| item.source.as_deref())
+                        == Some("---\nmanyhands_managed: true\n---\nChanged by another.\n")
+                })
+        })
+        .await;
+    assert!(shell.present("repair-source", cx), "the view stays open");
+    assert_eq!(repair_text(&shell, cx), typed, "with the typed text");
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Editing \u{b7} unsaved changes")
+    );
+}
