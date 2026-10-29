@@ -1219,6 +1219,14 @@ impl MutationDataDto {
                 crate::repository::LocalContextSyncMutationDto::from_stored(stored)
                     .map(Self::LocalContextSync)
             }
+            // A resume that took a comment's publication up gives the
+            // comment's data (R-20), told apart by its own tag.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(CommentMutationType::Comment.as_str()) =>
+            {
+                CommentMutationDto::from_stored(stored).map(Self::Comment)
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }

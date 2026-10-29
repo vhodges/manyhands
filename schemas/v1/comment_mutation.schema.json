@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 comment mutation data",
-  "description": "The data of a comment add envelope whose comment was checkpointed in its item's editing context: the comment, the synchronization that publishes it, and how far that got. The effects of the envelope say what the request wrote and committed, and what was published and merged. A request that stopped before its comment was checkpointed carries no data. It holds no body.",
+  "description": "The data of a comment add envelope whose comment was checkpointed in its item's editing context, or of an operation resume envelope that took up the publication of such a comment: the comment, the synchronization that publishes it, and how far that got. The effects of the envelope say what the request wrote and committed, which for an operation resume is nothing, and what was published and merged. A request that stopped before its comment was checkpointed carries no data. It holds no body.",
   "type": "object",
   "additionalProperties": false,
   "required": [

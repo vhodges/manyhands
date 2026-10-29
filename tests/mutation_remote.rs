@@ -28,6 +28,8 @@ mod mutation_golden;
 mod remote_world;
 #[path = "mutation_remote/resolution.rs"]
 mod resolution;
+#[path = "mutation_remote/resume.rs"]
+mod resume;
 #[path = "support/schema.rs"]
 mod schema;
 #[path = "support/ssh_harness.rs"]
@@ -58,6 +60,7 @@ fn main() {
         .chain(comment::CASES)
         .chain(conflict_read::CASES)
         .chain(resolution::CASES)
+        .chain(resume::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -753,16 +756,19 @@ fn call_before_the_stores_hold_anything(
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     // A resume that took up a synchronization carries that
-    // synchronization's data: a host's, or a conflict's, by its tag.
+    // synchronization's data: a host's, or a conflict's, by its tag. One
+    // that took up a comment's publication carries the comment's, and one
+    // of a local-context sync the gate's (R-20).
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
-        let data_schema = if value["data"]["type"] == "synchronization_conflict" {
-            CONFLICT_SCHEMA
-        } else {
-            SYNCHRONIZATION_SCHEMA
+        let data_schema = match value["data"]["type"].as_str() {
+            Some("synchronization_conflict") => CONFLICT_SCHEMA,
+            Some("comment") => COMMENT_SCHEMA,
+            Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
+            _ => SYNCHRONIZATION_SCHEMA,
         };
         schema::check_published(data_schema, &value["data"])
             .expect("the synchronization data schema");
@@ -786,6 +792,8 @@ fn execute(w: &World, id: &str, mutation: Mutation) -> Envelope<MutationDataDto>
 
 const SYNCHRONIZATION_SCHEMA: &str = "synchronization_mutation.schema.json";
 const CONFLICT_SCHEMA: &str = "synchronization_conflict_mutation.schema.json";
+const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
+const LOCAL_CONTEXT_SYNC_SCHEMA: &str = "local_context_sync_mutation.schema.json";
 const HOST_SCHEMA: &str = "host_mutation.schema.json";
 
 /// Checks an envelope against its golden fixture under

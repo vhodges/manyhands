@@ -949,6 +949,31 @@ impl ConflictResolveBinding {
     }
 }
 
+/// The phases of the resolution attempts of the synchronization
+/// `synchronization` of the repository `repository_id`, as they are
+/// stored. A caller that acts only on an attempt in some phase asks this
+/// first, and reads the resolution's view only when one is there:
+/// `state::resolution_view` reads the synchronization's whole row.
+pub(super) fn attempt_phases(
+    db: &rusqlite::Connection,
+    repository_id: i64,
+    synchronization: OperationId,
+) -> rusqlite::Result<Vec<String>> {
+    let mut statement = db.prepare(
+        "SELECT attempt.phase
+           FROM remote_resolution_attempts attempt
+           JOIN remote_operation_records operation
+             ON operation.id = attempt.operation_record_id
+          WHERE operation.repository_id = ?1 AND operation.operation_ulid = ?2",
+    )?;
+    statement
+        .query_map(
+            rusqlite::params![repository_id, synchronization.to_string()],
+            |row| row.get(0),
+        )?
+        .collect()
+}
+
 /// Finishes, from durable state alone, the resolution attempt of the
 /// synchronization `synchronization` whose commit is prepared, or applied
 /// with its native artifacts held, so that `operation resume` takes the
@@ -964,6 +989,13 @@ pub(crate) fn finish_prepared_resolution(
     let id = repository.registration_id();
     let view = service
         .read_session(RepositoryOperation::Read, |db| {
+            let phases = attempt_phases(db, id, synchronization)?;
+            if !phases
+                .iter()
+                .any(|phase| phase == "candidate_prepared" || phase == "applied")
+            {
+                return Ok(None);
+            }
             Ok(state::resolution_view(db, id, synchronization)?)
         })
         .map_err(|error| Answer::of_read(&error))?;

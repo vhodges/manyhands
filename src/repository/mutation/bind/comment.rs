@@ -36,6 +36,10 @@
 //! (`EndedWithoutCheckpoint::SaysNothing`). Re-entry makes the domain
 //! call with `restart` (fact 65): the submission proves the receipt from
 //! Git and publishes, and never writes a comment it has checkpointed.
+//!
+//! `operation resume` takes a pending publication up through `resumed`
+//! (R-20): the comment's publication-only retry, with `restart`, which
+//! never writes a comment.
 
 use std::path::{Path, PathBuf};
 
@@ -56,15 +60,15 @@ use super::{
             CommentPublicationPendingReason, CommentPublicationState, CommentReceipt,
             CommentSubmissionError, CommentSubmissionOutcome, ContextIntent,
             ExpectedPathObservation, OperationId, PublishCommentRequest, ReadError,
-            RepositoryOperation, RepositoryService, SubmitCommentRequest, authoring_kind_segment,
-            owned_file_bytes,
+            RepositoryOperation, RepositoryService, RetryCommentPublicationRequest,
+            SubmitCommentRequest, authoring_kind_segment, owned_file_bytes,
             recovery::{self, FinalKind, JournalRow},
         },
         command::Command,
         context::context_names,
         dto::{CommentMutationDto, CommentMutationType, CommentPendingReason, MutationDataDto},
         evidence::Position,
-        identity::{FieldValue, IntentDigestBuilder},
+        identity::{FieldValue, IntentDigestBuilder, RequestId},
         outcome,
         progress::Subject,
     },
@@ -239,6 +243,186 @@ struct Child {
     ran: Ran,
     /// The domain returned a result, and no error.
     succeeded: bool,
+}
+
+/// `operation resume` of a comment whose publication is pending (R-20):
+/// the comment's synchronizer-driven retry with `restart`, which proves the
+/// comment's checkpoint before it publishes and never writes a comment.
+/// `accepted` is the resume's request and `binding` the resume, as its
+/// events name it. `holder` is the `comment add` request, whose record
+/// holds the comment's operation (fact 79): `request cancel` of it stops
+/// the call, and its flag is left for that request's own next call, as a
+/// resolution's continuation leaves it.
+///
+/// What the result claims is what the synchronization reports of itself,
+/// as for any synchronization a resume takes up: the resume writes and
+/// commits nothing. Its publication is the comment's, and the data is the
+/// comment's. The standing is the synchronization's, for the resume to
+/// read as it reads a synchronization's; with no call made it is a stop
+/// that leaves nothing in flight.
+pub(super) fn resumed(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    binding: &dyn Binding,
+    comment: OperationId,
+    holder: Option<RequestId>,
+) -> Ran {
+    let mut child = None;
+    let retried = call.service.retry_comment_publication_with(
+        RetryCommentPublicationRequest {
+            root: accepted.root(),
+            operation_id: comment,
+            // A host is approved by its own command, and a merge commits
+            // with the repository's own identity.
+            approval: None,
+            confirmed_identity: None,
+            restart: true,
+        },
+        &mut |request| {
+            let synchronization = accepted.taking_up(request.operation_id);
+            let (result, ran) = sync::of_a_comment(
+                call,
+                &synchronization,
+                request,
+                Subject::of(binding, accepted),
+                None,
+                holder,
+            );
+            child = Some(Child {
+                ran,
+                succeeded: matches!(result, Some(Ok(_))),
+            });
+            result
+        },
+    );
+    let gone = || Standing::Stopped {
+        journal: Some(JournalRow::Absent),
+    };
+    let (receipt, publication) = match retried {
+        Ok(CommentSubmissionOutcome::Saved {
+            receipt,
+            publication,
+            indexing: _,
+            context: _,
+            checkpoint: _,
+        }) => (receipt, publication),
+        // The retry writes no comment, and asks for no identity to write
+        // one with: not reached.
+        Ok(CommentSubmissionOutcome::IdentityRequired { context: _ }) => {
+            return Ran {
+                answer: Answer::stopped(ResultCode::IdentityRequired),
+                standing: gone(),
+            };
+        }
+        // Only the error's kind is read: its text can hold a path.
+        Err(error) => {
+            return Ran {
+                answer: Answer::stopped(outcome::repository_error_code(error.kind)),
+                standing: gone(),
+            };
+        }
+    };
+    let pending = PublicationEffect::Pending;
+    let (mut answer, standing, published, reason, conflict) = match (child, publication) {
+        // The synchronization published what holds the comment, or found
+        // the remote held it: its own answer.
+        (
+            Some(Child {
+                ran,
+                succeeded: true,
+            }),
+            CommentPublicationState::Published { oid: _ }
+            | CommentPublicationState::AlreadyCurrent { oid: _ },
+        ) => {
+            let published = ran.answer.effects.publication;
+            (ran.answer, ran.standing, published, None, None)
+        }
+        // It published, and what it published does not hold the comment:
+        // nothing a call of the resume changes.
+        (
+            Some(Child {
+                ran,
+                succeeded: true,
+            }),
+            CommentPublicationState::Pending { reason: _ },
+        ) => (
+            Answer {
+                effects: ran.answer.effects,
+                ..Answer::stopped(ResultCode::RecoveryRequired)
+            },
+            Standing::Final,
+            pending,
+            Some(CommentPendingReason::Synchronization),
+            None,
+        ),
+        // The synchronization stopped: its answer is the resume's, and a
+        // push the remote took before the stop is published.
+        (
+            Some(Child {
+                ran,
+                succeeded: false,
+            }),
+            _,
+        ) => {
+            let Ran { answer, standing } = ran;
+            let published = match answer.effects.publication {
+                effect @ (PublicationEffect::Published | PublicationEffect::Current) => effect,
+                PublicationEffect::NotRequested | PublicationEffect::Pending => pending,
+            };
+            let conflict = match &answer.data {
+                Some(MutationDataDto::SynchronizationConflict(data)) => Some(data.conflict.clone()),
+                _ => None,
+            };
+            let reason = (published == pending).then_some(CommentPendingReason::Synchronization);
+            (answer, standing, published, reason, conflict)
+        }
+        // No synchronization was called: the comment's own hand-off, or the
+        // proof of its checkpoint, comes first; there is no publication
+        // remote to publish to; or the comment is not where its checkpoint
+        // left it. Nothing was done.
+        (None, publication) => {
+            let (code, reason) = match publication {
+                CommentPublicationState::Pending {
+                    reason: CommentPublicationPendingReason::NoPublicationRemote,
+                } => (
+                    ResultCode::PublicationRemoteRequired,
+                    CommentPendingReason::NoPublicationRemote,
+                ),
+                CommentPublicationState::Pending {
+                    reason: CommentPublicationPendingReason::Synchronization(error),
+                } => (
+                    outcome::synchronization_error_code(&error),
+                    CommentPendingReason::Synchronization,
+                ),
+                // A publication is had only from a call: not reached.
+                CommentPublicationState::Pending {
+                    reason: CommentPublicationPendingReason::LocalRecoveryRequired,
+                }
+                | CommentPublicationState::Published { oid: _ }
+                | CommentPublicationState::AlreadyCurrent { oid: _ } => (
+                    ResultCode::RecoveryRequired,
+                    CommentPendingReason::RecoveryRequired,
+                ),
+            };
+            (Answer::stopped(code), gone(), pending, Some(reason), None)
+        }
+    };
+    answer.effects.publication = published;
+    let data = CommentMutationDto {
+        r#type: CommentMutationType::Comment,
+        item_id: receipt.item_id.to_string(),
+        comment_id: receipt.comment_id.to_string(),
+        parent_id: receipt.parent_id.as_ref().map(ToString::to_string),
+        created_by: checkpointed_author(&receipt),
+        synchronization_id: receipt.synchronization_id.to_string(),
+        publication: published,
+        pending_reason: reason.filter(|_| published == pending),
+        conflict,
+    };
+    Ran {
+        answer: answer.with_data(MutationDataDto::Comment(data)),
+        standing,
+    }
 }
 
 /// What becomes of the record of a request whose publication stopped,

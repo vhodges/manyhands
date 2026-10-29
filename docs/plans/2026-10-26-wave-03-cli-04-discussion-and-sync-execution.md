@@ -596,6 +596,7 @@ new ticket comment (ruling P4).
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
+| 4b | `feat: resume comment publication and resolved synchronizations` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy | pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 
 ### Task 1: Merging Synchronization
 
@@ -2019,3 +2020,147 @@ six of them failed against the library at `e485caa`
     passed. The first clippy run found one `single_match`, which was
     fixed.
   - `check` and `clippy --features desktop --bin manyhands` passed.
+
+### Task 4b: Resume Routes
+
+The commit is `feat: resume comment publication and resolved
+synchronizations`, on `e4f9348`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched.
+
+**The routes (R-20), in `bind/resume.rs`.**
+
+- **A comment's publication** (row 1): `Named::Comment`, found first, by
+  `found_comment`, under the comment's operation ID or its
+  synchronization's (R-5, through `comment_synchronization`, whose errors
+  propagate).
+  - It applies to a comment whose local row is completed and whose binding
+    records its checkpoint, while the child synchronization never reserved,
+    or is pending and not fenced, or completed owing its hand-off.
+  - A local row that is pending, waits for its registration, or was
+    abandoned keeps the existing route. So P7's
+    `tests/mutation_confirmation/abandon.rs:1273` still answers
+    `recovery_required` with `operation.abandon` (re-run: 1 passed).
+  - `publish_comment` first finishes a prepared resolution
+    (`finish_prepared_resolution`, Task 4a's call, not moved). It then
+    enters the `comment add` request's record, as a synchronization's owner
+    is entered (fact 79). Then `comment::resumed` runs
+    `retry_comment_publication_with` (`restart: true`) through
+    `sync::of_a_comment`, with that request as `holder`.
+  - The answer is the child synchronization's own: its code, its effects
+    and its standing. The publication is the comment's, and the data is
+    `CommentMutationDto`. The resume writes and commits nothing.
+  - `kept` (factored out of `synchronize`) maps the standing for both
+    routes. Only the synchronization route settles its owner's record.
+- **Written paths only** (row 5): `written_paths_only` answers
+  `original_request_required` naming the attempt's owner from
+  `remote_resolution_owners` (decision 20), with `request.retry` and no
+  data. It uses `resolution_view`, `unfinished()` and
+  `has_written_paths_only`; no visibility was widened. An attempt no
+  request owns is left to inspect.
+- **A cancelled operation** (row 8): see below.
+- **The gate's routing is untouched** (row 9, fact 9): the local-sync
+  calls still run first in `prepare`, `run`, `rerun` and `reenter`.
+- `takes_up` is true for a comment's publication.
+
+**Other files.**
+
+- **`bind/comment.rs`:** `resumed`.
+- **`bind/conflict.rs`:** `attempt_phases`.
+  `finish_prepared_resolution` now reads `resolution_view` only when an
+  attempt is `candidate_prepared` or `applied`. Without the guard, a remote
+  row that the view's whole-row read rejects (`mutation_replay`'s
+  fixture-inserted rows) made every resume that reached it
+  `internal_error`. `written_paths_only` uses the same guard for
+  `paths_applying`.
+- **`dto.rs`:** `from_stored`'s `OperationResume` arm for `type:
+  "comment"`, after the gate's `local_context_sync` arm, which stays first
+  (fact 49).
+- **`schemas/v1/comment_mutation.schema.json`:** the description names
+  `operation resume` too (description only).
+- **`tests/mutation_remote.rs`:** mounts the new module, and checks a
+  resume's `comment` and `local_context_sync` data against their schemas by
+  tag.
+
+**The cases** (`tests/mutation_remote/resume.rs`, 13 `c4_resume_`):
+
+| Row | Case(s) |
+| --- | --- |
+| 1 comment publication | `comment_publication` (both IDs, replay, the comment's own request after) |
+| 2 `identity_required` | `comment_identity_required` |
+| 3 resolution checkpointed, outside repair | `resolution_checkpointed`, `outside_repair` |
+| 4 commit prepared or ref moved | `prepared_commit` (a guard: Task 4a's route) |
+| 5 written paths only | `written_paths_only` |
+| 6 `item republish` | Task 5's (ruling P3) |
+| 7 conflict pending | `conflict_pending` |
+| 8 cancelled | `cancelled` (a comment, both IDs), `cancelled_synchronization` (nothing owed), `cancelled_with_work_owed` |
+| 9 local-context sync | `local_context_sync` (Task 1's helper; the gate's whole answer pinned, and the same against BASE's library) |
+| Step 1, `list_operations` | `listed` |
+| Review Focus 2 | `hostile_path` (a canonical document at `docs/hostile-\x1b[31mred\nline.md`; the resolution commit changes that path alone from either parent; the worktree is clean) |
+
+**Row 8: a design checkpoint, ruled.**
+
+- **What the code answered.** F2 answers `already_applied` for a
+  synchronization cancelled with nothing outstanding. That covers a Ctrl-C
+  before the push, both for `comment add`'s child and for a plain
+  `repo sync`: the row is `cancelled`, with `index_pending` and
+  `reconciliation_required` both 0. A pre-existing test pins it:
+  `a_resume_of_a_remote_operation_that_has_ended_is_a_no_op`.
+- **The row says** `recovery_required`, "as F2".
+- **The ruling was option B.**
+  - A comment's cancelled publication answers `recovery_required` with
+    `[repo.inspect]` under either ID (`found_comment`).
+  - Every other cancelled operation answers as F2, unchanged:
+    `already_applied` when nothing is owed, `recovery_required` when work
+    is owed.
+  - The pinned test is not edited.
+- **Recorded for Task 14:** amend row 8's wording to this answer (and fact
+  9's "a cancelled one is left to inspect"). The design was not edited here.
+- The evidence is in `logs/task-4b-row8-evidence.log`.
+
+**E-11.**
+
+- The test is renamed
+  `a_resume_of_a_comment_s_synchronization_is_the_comment_s_publication`
+  (ruled accepted).
+- **The fixture** is now a real `comment add` checkpoint. The old one was a
+  binding whose checkpoint OID was not in Git, so it could not show
+  publication.
+- **The read assertions are unchanged.**
+- **The resume part** now asserts the comment's publication: its data,
+  pending on its synchronization; `blocked`/`recovery_required`; publication
+  `pending` and nothing written; no record; the row unchanged, with no
+  remote to publish to.
+
+**TDD.**
+
+- RED: `logs/task-4b-red.log` holds the first draft.
+- `logs/task-4b-red-final.log` holds the final cases, with the library
+  checked out at BASE: rows 1, 5, 8 and the list case failed, as did the
+  E-11 test.
+- Row 8 failed at the checkpoint until the ruling. Its two F2 variants were
+  added with the ruling, as guards.
+
+**Verify** (each `devenv shell -- cargo … --locked`, `--all-features` for
+tests; logs `logs/task-4b-final-*` and `logs/task-4b-verify-*`):
+
+- `mutation_remote`: 221 SSH cases passed, 0 failed (3770 s), 13 of them
+  `c4_resume_`. No case hit the 100 s watchdog, so the conformance case
+  needed no split.
+- `mutation_replay`: 383 passed. P7's `mutation_confirmation` case: 1 passed.
+- `mutation_contract`: 44 passed. `--lib mutation`: 123 passed.
+- `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
+  passed.
+- `check` and `clippy --features desktop --bin manyhands` passed.
+
+**Deferred or for review (rulings).**
+
+- Concerns 3 and 4 were accepted: the `finish_prepared_resolution` guard
+  and the E-11 rename and fixture.
+- Concern 2 is deferred to the final review: the read's `next_action` is
+  still `None` for a comment's synchronization (`read/status.rs`, outside
+  C4's files).
+- Concern 6 is deferred to the final review: a re-entered resume of a
+  comment, and a host stop, answer with no comment data.
+- Concern 5 goes to the reviewer: `takes_up` now keeps `operation.resume`
+  on a comment's or a resolution's `discovery_pending` result.

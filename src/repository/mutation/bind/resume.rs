@@ -11,12 +11,22 @@
 //! - a synchronization, which is taken up as its own request's next call
 //!   would take it up: the remote is asked what it holds before anything
 //!   is pushed, and divergent history is merged as that request merges
-//!   it.
+//!   it. A resolution of its conflict whose commit is prepared is finished
+//!   from durable state first (decision 18);
+//! - a comment's publication, named by the comment's operation or by the
+//!   synchronization that publishes it, once the comment is checkpointed
+//!   and its publication is pending and was not cancelled: it is taken up
+//!   by the comment's own synchronizer-driven retry, which proves the
+//!   comment's checkpoint before it publishes and never writes a comment
+//!   (R-20).
 //!
 //! Anything else that is pending is left exactly as it was: a save that
 //! stopped before or after its write, whose body no record holds, a key
 //! generation, an enablement that has not registered its repository, a
-//! synchronization that was fenced. While the request that began it has
+//! synchronization that was fenced, one whose conflict's resolution has
+//! written paths only, which only its own request goes on with or a new
+//! `conflict resolve` supersedes (decisions 18 and 20). While the request
+//! that began it has
 //! an unfinished record, the answer is `original_request_required` and
 //! names that request, which is what goes on. With no such record no
 //! request can be sent again, and the answer says what the row is: a
@@ -35,6 +45,8 @@
 
 use std::path::{Path, PathBuf};
 
+use rusqlite::OptionalExtension;
+
 use crate::results::{
     DiscoveryEffect, Effects, RecoveryAction, RecoveryActionKind, ResultCode, Scope,
 };
@@ -42,8 +54,9 @@ use crate::results::{
 use super::{
     super::{
         super::{
-            OperationFamily, OperationId, ReadError, RefreshRepositoryRequest, RepositoryErrorKind,
-            RepositoryOperation, RepositoryService, SynchronizationTarget, keys,
+            AuthoringKind, OperationFamily, OperationId, ReadError, RefreshRepositoryRequest,
+            RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationTarget,
+            keys,
             recovery::{self, FinalKind, JournalRow, LocalStanding, PendingOperation},
             remote,
         },
@@ -55,7 +68,7 @@ use super::{
         records,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
-    Prepared, Ran, Standing, sync,
+    Prepared, Ran, Standing, comment, conflict, sync,
 };
 
 /// The input of `operation resume`: the root of the repository, and the
@@ -146,9 +159,14 @@ enum Named {
     /// Git may still hold something of. It is looked at, not resumed.
     /// `synchronization` is what it synchronized, when it is one.
     ///
-    /// Also the synchronization a comment's binding keeps, ended or
-    /// not, with no `synchronization`: the domain is asked nothing of
-    /// it under a resume, which would take it up.
+    /// Also, with no `synchronization`, what the domain is asked nothing
+    /// of under a resume, which would take it up as a plain
+    /// synchronization: the synchronization a comment's binding keeps
+    /// while its comment is not one a resume publishes, a comment's
+    /// cancelled publication, named by either ID, whatever its row owes,
+    /// and one that ended with work outstanding named by its comment's
+    /// operation. So is a synchronization whose resolution attempt has
+    /// written paths that no request of the boundary owns.
     LeftToInspect {
         synchronization: Option<SynchronizationTarget>,
     },
@@ -158,6 +176,16 @@ enum Named {
     /// A synchronization that has not ended, or has ended with its index
     /// hand-off owed, and was not fenced.
     Synchronization(SynchronizationTarget),
+    /// A comment checkpointed and handed off, whose publication has not
+    /// ended, or has ended with its index hand-off owed, and was neither
+    /// cancelled nor fenced (R-20): `comment` is its operation, and
+    /// `synchronization` the one that publishes it, of `target`. The
+    /// comment's own retry takes it up, whichever of the two was named.
+    Comment {
+        comment: OperationId,
+        synchronization: OperationId,
+        target: SynchronizationTarget,
+    },
     /// The operation is pending and only the request that began it goes
     /// on with it: it needs that request's input, or was fenced and has
     /// a final answer for that request alone. `request` is that
@@ -165,6 +193,10 @@ enum Named {
     /// sent again, it is what goes on. Without such a record there is
     /// no request to name, and the operation stands as one of the three
     /// below.
+    ///
+    /// Also a synchronization whose resolution attempt has written paths
+    /// only: `request` is the `conflict resolve` request that owns the
+    /// attempt (decision 20).
     OriginalRequest { request: String },
     /// A synchronization that was fenced, with no unfinished record
     /// that holds it: its request has been given its final answer, or
@@ -217,10 +249,11 @@ fn found_remote(
     let target = remote::state::lookup_synchronization_target(connection, root, operation_id)?;
     // The synchronization a comment's binding keeps is the comment
     // submission's to take up: its retry proves that the branch still
-    // holds the comment before it publishes, and may merge. No command
-    // of the boundary is that retry, so the boundary takes it up for
-    // nobody, also for its index hand-off. It is left non-terminal, as
-    // the submission's own retry needs it.
+    // holds the comment before it publishes, and may merge. A resume
+    // takes it up through that retry (`found_comment`), once the comment
+    // is checkpointed and handed off; until then, and so here, it is
+    // taken up for nobody, also for its index hand-off. It is left
+    // non-terminal, as the submission's own retry needs it.
     let of_a_comment = recovery::is_comment_synchronization(connection, &operation_id.to_string())?;
     let taken_up = |target: SynchronizationTarget| {
         if of_a_comment {
@@ -283,6 +316,8 @@ fn found_remote(
                     operation_id,
                     Named::Fenced,
                 )?
+            } else if let Some(named) = written_paths_only(connection, root, operation_id)? {
+                named
             } else {
                 taken_up(target)
             }
@@ -301,6 +336,186 @@ fn found_remote(
             Some(_),
         ) => return Err(unreadable()),
     }))
+}
+
+/// The standing of the synchronization `synchronization` of the repository
+/// at `root` when an attempt to resolve its conflict has written paths and
+/// no commit holds them yet (`ResolutionPrepared`): only the attempt's own
+/// request goes on with it, with the sources it presented, or a new
+/// `conflict resolve` supersedes it while the paths still hold what it
+/// wrote (decisions 18 and 20). A restart refuses such an attempt. The
+/// request named is the attempt's owner; an attempt no request of the
+/// boundary made has none to name, and is looked at. `None` when no
+/// attempt of the synchronization is in that state.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn written_paths_only(
+    connection: &rusqlite::Connection,
+    root: &str,
+    synchronization: OperationId,
+) -> Result<Option<Named>, ReadError> {
+    let repository: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(repository) = repository else {
+        return Ok(None);
+    };
+    if !conflict::attempt_phases(connection, repository, synchronization)?
+        .iter()
+        .any(|phase| phase == "paths_applying")
+    {
+        return Ok(None);
+    }
+    let Some(view) = remote::state::resolution_view(connection, repository, synchronization)?
+    else {
+        return Ok(None);
+    };
+    let Some(attempt) = view
+        .unfinished()
+        .filter(|attempt| view.has_written_paths_only(attempt))
+    else {
+        return Ok(None);
+    };
+    Ok(Some(match &attempt.owner {
+        Some(owner) => Named::OriginalRequest {
+            request: owner.request_id.clone(),
+        },
+        None => Named::LeftToInspect {
+            synchronization: None,
+        },
+    }))
+}
+
+/// What the comment `comment`'s publication synchronizes, once its
+/// binding records its checkpoint: the editing branch of its item. `None`
+/// for a comment with no checkpoint recorded.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn checkpointed(
+    connection: &rusqlite::Connection,
+    comment: OperationId,
+) -> Result<Option<SynchronizationTarget>, ReadError> {
+    let bound: Option<(String, String, Option<String>)> = connection
+        .query_row(
+            "SELECT kind, item_ulid, checkpoint_oid FROM comment_publication_bindings
+              WHERE operation_ulid = ?1",
+            [comment.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((kind, item_id, Some(_))) = bound else {
+        return Ok(None);
+    };
+    let kind = match kind.as_str() {
+        "document" => AuthoringKind::Document,
+        "ticket" => AuthoringKind::Ticket,
+        _ => return Err(unreadable()),
+    };
+    let item_id = item_id.parse().map_err(|_| unreadable())?;
+    Ok(Some(SynchronizationTarget::Context { kind, item_id }))
+}
+
+/// How a comment's publication stands for a resume (R-20), when
+/// `operation_id` names the comment's operation or the synchronization
+/// that publishes it (R-5). `None` for an ID that is no comment's, and for
+/// a comment whose own row is what says how it stands: one not yet
+/// checkpointed and handed off, one that waits for its registration, one
+/// abandoned. A registry that holds an ID that is no operation's is an
+/// error: nothing is taken to be no comment's on that.
+///
+/// A comment checkpointed and handed off is taken up while its
+/// publication has not ended, or has ended with its index hand-off owed:
+/// a synchronization that never reserved, or that stopped and was neither
+/// fenced nor cancelled. One whose resolution has written paths only is
+/// its resolution's request's. One that was cancelled is left to inspect
+/// under either ID, whatever its row owes. Otherwise the publication's row
+/// says how it stands: by the synchronization's ID, as the remote journal
+/// answers it; by the comment's, alike, but taken up for nobody.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn found_comment(
+    connection: &rusqlite::Connection,
+    root: &str,
+    operation_id: OperationId,
+) -> Result<Option<Named>, ReadError> {
+    let Some((comment, synchronization)) =
+        comment::comment_synchronization(connection, Path::new(root), operation_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(row) = recovery::local_row(connection, root, comment)? else {
+        return Ok(None);
+    };
+    if !row.is_well_formed() {
+        return Err(unreadable());
+    }
+    if row.standing() != LocalStanding::Completed {
+        return Ok(None);
+    }
+    let Some(target) = checkpointed(connection, comment)? else {
+        return Ok(None);
+    };
+    let publishing = match remote::state::lookup_operation(connection, root, synchronization)? {
+        // A cancelled publication is final (fact 56): nothing takes it up,
+        // under either ID, and the repository is what is looked at, whether
+        // or not its row owes work. A new synchronization publishes the
+        // comment (controller ruling, Task 4b row 8).
+        JournalRow::Final {
+            kind: FinalKind::Cancelled,
+            owes_work: _,
+            checkpointed: _,
+        } => {
+            return Ok(Some(Named::LeftToInspect {
+                synchronization: None,
+            }));
+        }
+        JournalRow::Absent
+        | JournalRow::Final {
+            kind: FinalKind::Completed,
+            owes_work: true,
+            checkpointed: _,
+        } => true,
+        JournalRow::Pending(PendingOperation::Remote { phase: _ }) => {
+            if remote::state::lookup_fenced(connection, root, synchronization)? {
+                false
+            } else if let Some(named) = written_paths_only(connection, root, synchronization)? {
+                return Ok(Some(named));
+            } else {
+                true
+            }
+        }
+        JournalRow::Pending(
+            PendingOperation::Local { state: _, step: _ }
+            | PendingOperation::KeyMaterial { phase: _ },
+        )
+        | JournalRow::Final {
+            kind: _,
+            owes_work: _,
+            checkpointed: _,
+        } => false,
+    };
+    if publishing {
+        return Ok(Some(Named::Comment {
+            comment,
+            synchronization,
+            target,
+        }));
+    }
+    if operation_id == synchronization {
+        return Ok(None);
+    }
+    Ok(
+        found_remote(connection, root, synchronization)?.map(|named| match named {
+            Named::Ended { synchronization: _ } => Named::Ended {
+                synchronization: None,
+            },
+            Named::LeftToInspect { synchronization: _ } => Named::LeftToInspect {
+                synchronization: None,
+            },
+            named => named,
+        }),
+    )
 }
 
 /// How the ID stands in the key journal, which is the application's.
@@ -378,11 +593,15 @@ fn named(
 ) -> Result<Named, ReadError> {
     service.read_session(RepositoryOperation::Read, |connection| {
         // An index that has never held an operation of a journal may
-        // lack that journal's table.
-        if recovery::has_table(connection, recovery::REMOTE_JOURNAL_TABLE)?
-            && let Some(found) = found_remote(connection, root, operation_id)?
-        {
-            return Ok(found);
+        // lack that journal's table. A comment's publication is asked of
+        // first, under either of its IDs.
+        if recovery::has_table(connection, recovery::REMOTE_JOURNAL_TABLE)? {
+            if let Some(found) = found_comment(connection, root, operation_id)? {
+                return Ok(found);
+            }
+            if let Some(found) = found_remote(connection, root, operation_id)? {
+                return Ok(found);
+            }
         }
         if recovery::has_table(connection, recovery::KEY_JOURNAL_TABLE)?
             && let Some(found) = found_key(connection, operation_id)?
@@ -399,7 +618,15 @@ fn named(
 /// journals cannot be read: a resume is not offered on a guess.
 pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: OperationId) -> bool {
     match named(service, root, operation_id) {
-        Ok(Named::HandOff | Named::Synchronization(_)) => true,
+        Ok(
+            Named::HandOff
+            | Named::Synchronization(_)
+            | Named::Comment {
+                comment: _,
+                synchronization: _,
+                target: _,
+            },
+        ) => true,
         Ok(
             Named::NotFound
             | Named::Abandoned
@@ -455,7 +682,13 @@ impl OperationResumeBinding {
     /// operation it takes up.
     fn refusal(found: &Named) -> Option<Answer> {
         Some(match found {
-            Named::HandOff | Named::Synchronization(_) => return None,
+            Named::HandOff
+            | Named::Synchronization(_)
+            | Named::Comment {
+                comment: _,
+                synchronization: _,
+                target: _,
+            } => return None,
             Named::NotFound => Answer::stopped(ResultCode::OperationNotFound),
             // As the journal refuses every repeat of an abandoned
             // operation's ID.
@@ -485,9 +718,11 @@ impl OperationResumeBinding {
         })
     }
 
-    /// The request whose unfinished record holds the operation, in the
-    /// journal `family`: the one that owns it. `None` when no such
-    /// record does.
+    /// The request whose unfinished record holds the operation
+    /// `operation_id`, in the journal `family`: the one that owns it.
+    /// `None` when no such record does. It is the operation the resume
+    /// names, but for a comment's publication, whose `comment add` request
+    /// holds the comment's operation (fact 79).
     ///
     /// With `takes_over`, the owner's record is also entered, as that
     /// request's own next call would enter it: its attempt is raised.
@@ -501,13 +736,12 @@ impl OperationResumeBinding {
     /// `Err` when the records cannot be read or written: nothing is
     /// taken up on that.
     fn owner(
-        &self,
         service: &RepositoryService,
         scope: &ScopeKey,
         family: OperationFamily,
+        operation_id: OperationId,
         takes_over: bool,
     ) -> Result<Option<Owner>, Answer> {
-        let operation_id = self.operation_id;
         let holder = service
             .read_session(RepositoryOperation::Read, |connection| {
                 Ok(records::operation_holder(
@@ -563,7 +797,13 @@ impl OperationResumeBinding {
     /// all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
-        if let Err(answer) = self.owner(service, &accepted.scope, OperationFamily::Local, true) {
+        if let Err(answer) = Self::owner(
+            service,
+            &accepted.scope,
+            OperationFamily::Local,
+            self.operation_id,
+            true,
+        ) {
             return Ran {
                 answer,
                 standing: Standing::Stopped { journal: None },
@@ -630,7 +870,7 @@ impl OperationResumeBinding {
         // A resolution whose commit is prepared is finished from durable
         // state first, which a restart does not do (decision 18).
         if takes_over
-            && let Err(answer) = super::conflict::finish_prepared_resolution(
+            && let Err(answer) = conflict::finish_prepared_resolution(
                 call.service,
                 &accepted.root(),
                 self.operation_id,
@@ -643,10 +883,11 @@ impl OperationResumeBinding {
                 },
             };
         }
-        let owner = match self.owner(
+        let owner = match Self::owner(
             call.service,
             &accepted.scope,
             OperationFamily::Remote,
+            self.operation_id,
             takes_over,
         ) {
             Ok(owner) => owner,
@@ -662,17 +903,87 @@ impl OperationResumeBinding {
         // The request as the synchronization's binding is to see it:
         // with the operation it takes up in place of none.
         let operation = accepted.taking_up(self.operation_id);
-        let Ran { answer, standing } = sync::resumed(
+        let ran = self.kept(sync::resumed(
             call,
             &operation,
             target,
             Subject::of(self, accepted),
             owner.map(|owner| owner.request),
-        );
+        ));
+        if let (Standing::Final, Some(owner)) = (&ran.standing, owner) {
+            Self::settle_owner(call.service, owner, &ran.answer);
+        }
+        ran
+    }
+
+    /// Takes up the publication of the comment `comment`, which
+    /// `synchronization` publishes, through the comment's own retry
+    /// (R-20), and reads what the synchronization's binding makes of the
+    /// call as a synchronization's own (`kept`).
+    ///
+    /// The `comment add` request whose record holds the comment's
+    /// operation is entered, as a synchronization's owner is, so that a
+    /// call of it that is still running settles nothing. Its record is
+    /// not settled here: the comment's answer is its own, with what it
+    /// wrote and committed, and its next call gives it from what the
+    /// publication came to. A `request cancel` of it stops the call, and
+    /// its flag is left for that call.
+    fn publish_comment(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        comment: OperationId,
+        synchronization: OperationId,
+    ) -> Ran {
+        // As for any synchronization taken over (decision 18).
+        if let Err(answer) =
+            conflict::finish_prepared_resolution(call.service, &accepted.root(), synchronization)
+        {
+            return Ran {
+                answer,
+                standing: Standing::Stopped {
+                    journal: Some(NO_ROW),
+                },
+            };
+        }
+        let holder = match Self::owner(
+            call.service,
+            &accepted.scope,
+            OperationFamily::Local,
+            comment,
+            true,
+        ) {
+            Ok(holder) => holder,
+            // Nothing is known of whose the comment is, or of whether that
+            // request was asked to stop: nothing is called.
+            Err(answer) => {
+                return Ran {
+                    answer,
+                    standing: Standing::Stopped { journal: None },
+                };
+            }
+        };
+        self.kept(comment::resumed(
+            call,
+            accepted,
+            self,
+            comment,
+            holder.map(|holder| holder.request),
+        ))
+    }
+
+    /// What becomes of this request's record, given what the binding of
+    /// the synchronization it took up made of the call. The operation's
+    /// row decides it, for one thing: an answer the operation has made
+    /// final is stored, and anything else leaves no record of the resume,
+    /// since the operation's own request is what holds whatever is still
+    /// in flight.
+    fn kept(&self, ran: Ran) -> Ran {
+        let Ran { answer, standing } = ran;
         let gone = Standing::Stopped {
             journal: Some(NO_ROW),
         };
-        let ran = match standing {
+        match standing {
             Standing::Final => Ran {
                 answer,
                 standing: Standing::Final,
@@ -730,11 +1041,7 @@ impl OperationResumeBinding {
                 answer,
                 standing: Standing::Stopped { journal: None },
             },
-        };
-        if let (Standing::Final, Some(owner)) = (&ran.standing, owner) {
-            Self::settle_owner(call.service, owner, &ran.answer);
         }
-        ran
     }
 
     /// The one call of the request: the operation is read again, and
@@ -753,6 +1060,11 @@ impl OperationResumeBinding {
         match found {
             Named::HandOff => self.hand_off(call, accepted),
             Named::Synchronization(target) => self.synchronize(call, accepted, target, true),
+            Named::Comment {
+                comment,
+                synchronization,
+                target: _,
+            } => self.publish_comment(call, accepted, comment, synchronization),
             // A synchronization that has ended, met by a request whose
             // earlier call may be what ended it: the domain is asked
             // what the operation came to, which it answers from the row
@@ -842,11 +1154,15 @@ impl Binding for OperationResumeBinding {
             return Err(answer);
         }
         // A synchronization's result can name the commit it published:
-        // the request is placed on the branch that holds it.
+        // the request is placed on the branch that holds it. A comment's
+        // is its item's editing branch.
         let position = match found {
-            Named::Synchronization(target) => {
-                sync::resumed_position(call.service, Path::new(scope.as_str()), target)?
-            }
+            Named::Synchronization(target)
+            | Named::Comment {
+                comment: _,
+                synchronization: _,
+                target,
+            } => sync::resumed_position(call.service, Path::new(scope.as_str()), target)?,
             Named::NotFound
             | Named::Abandoned
             | Named::Ended { synchronization: _ }
@@ -925,6 +1241,11 @@ impl Binding for OperationResumeBinding {
         match &found {
             Named::HandOff
             | Named::Synchronization(_)
+            | Named::Comment {
+                comment: _,
+                synchronization: _,
+                target: _,
+            }
             | Named::Ended {
                 synchronization: Some(_),
             }

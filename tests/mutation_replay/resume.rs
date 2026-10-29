@@ -1080,17 +1080,45 @@ fn a_resume_of_a_fenced_synchronization_is_not_taken_up_and_names_its_request() 
 
 /// The synchronization a comment's binding keeps is taken up by the
 /// comment's own retry, which first proves that the branch still holds
-/// the comment and may merge. No command of the boundary is that retry
-/// yet. A resume would take it up as a plain synchronization, and one
-/// that published a branch the comment was missing from would end the
-/// only synchronization the comment has. So it is left: nothing of the
-/// row changes, and neither the list nor `operation show` says a resume
-/// would go on with it, as they say of the same row with no binding.
+/// the comment and may merge. A resume of it is that retry (R-20): it
+/// publishes the comment under the synchronization's ID, and never takes
+/// the branch up as a plain synchronization, which could publish a branch
+/// the comment was missing from. Here no publication remote is configured
+/// and no server runs, so the publication goes no further than the
+/// synchronization's refusal: the answer is the comment's, its
+/// publication pending on its synchronization, and nothing of the row
+/// changes. `mutation_remote`'s `c4_resume_comment_publication` publishes
+/// one. The list and `operation show` still say no resume would go on
+/// with it, as they say of the same row with no binding: that read is no
+/// part of C4's change.
 #[test]
-fn a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered() {
-    use manyhands::repository::OperationNextAction;
+fn a_resume_of_a_comment_s_synchronization_is_the_comment_s_publication() {
+    use manyhands::repository::{
+        AuthoringKind, CommentAddInput, CommentPendingReason, OperationNextAction,
+    };
+    use manyhands::results::PublicationEffect;
     let world = remote_world();
-    for operation_id in [OPERATION_A, OPERATION_C] {
+    // A comment checkpointed, which no publication remote published.
+    let added = world.execute(
+        REQUEST_2,
+        Mutation::CommentAdd(CommentAddInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: items::item_id(TICKET_A),
+            comment_id: items::item_id(items::COMMENT_A),
+            parent_id: None,
+            body: "A comment whose publication a resume takes up.\n".to_owned(),
+            created_by: None,
+        }),
+    );
+    assert_eq!(added.code, ResultCode::Ok, "{}", added.message);
+    let Some(MutationDataDto::Comment(comment)) = added.data.as_ref() else {
+        panic!("a comment's data");
+    };
+    let synchronization = comment.synchronization_id.clone();
+    // Its synchronization stopped, and so did one of the same branch that
+    // no binding keeps.
+    for operation_id in [synchronization.as_str(), OPERATION_C] {
         operations::insert_remote_synchronization(
             world.data.path(),
             operation_id,
@@ -1100,14 +1128,7 @@ fn a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered() 
             None,
         );
     }
-    operations::insert_comment_binding(
-        world.data.path(),
-        OPERATION_B,
-        OPERATION_A,
-        ("ticket", TICKET_A),
-        items::COMMENT_A,
-    );
-    let before = stored_remote(&world, OPERATION_A);
+    let before = stored_remote(&world, &synchronization);
     let repo = world.service.resolve_repository(&world.root).unwrap();
     let next_action = |operation_id: &str| {
         let shown = world
@@ -1126,24 +1147,39 @@ fn a_resume_of_a_comment_s_synchronization_is_not_taken_up_and_is_not_offered() 
         shown.next_action
     };
 
-    assert_eq!(next_action(OPERATION_A), None);
+    assert_eq!(next_action(&synchronization), None);
     // The same row with no binding is one a resume goes on with.
     assert_eq!(next_action(OPERATION_C), Some(OperationNextAction::Resume));
 
-    let left = world.execute(REQUEST_1, resume(&world, OPERATION_A));
-    assert_refused(
-        &world,
-        REQUEST_1,
-        &left,
-        Outcome::Blocked,
-        ResultCode::RecoveryRequired,
+    let pending = world.execute(REQUEST_1, resume(&world, &synchronization));
+    assert_eq!(pending.command, "operation resume");
+    assert_eq!(
+        (pending.outcome, pending.code),
+        (Outcome::Blocked, ResultCode::RecoveryRequired),
+        "{pending:?}"
     );
-    assert!(
-        !recovery_actions(&left).contains(&"operation.resume"),
-        "{:?}",
-        recovery_actions(&left)
+    // The comment's publication: it writes and commits nothing.
+    assert_eq!(
+        pending.effects,
+        Effects {
+            publication: PublicationEffect::Pending,
+            ..Effects::not_requested()
+        }
     );
-    assert_eq!(stored_remote(&world, OPERATION_A), before);
+    let Some(MutationDataDto::Comment(data)) = pending.data.as_ref() else {
+        panic!("a comment's data: {pending:?}");
+    };
+    assert_eq!(data.synchronization_id, synchronization);
+    assert_eq!(data.comment_id, items::COMMENT_A);
+    assert_eq!(data.publication, PublicationEffect::Pending);
+    assert_eq!(
+        data.pending_reason,
+        Some(CommentPendingReason::Synchronization)
+    );
+    assert_eq!(pending.operation_id, None);
+    assert!(world.record(REQUEST_1).is_none(), "a request record");
+    assert_eq!(recovery_actions(&pending), ["repo.inspect"]);
+    assert_eq!(stored_remote(&world, &synchronization), before);
 }
 
 #[test]
