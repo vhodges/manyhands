@@ -120,12 +120,18 @@ impl ItemPane {
         else {
             return Some(MOVE_WHILE_VIEWING);
         };
-        let saving = self.services.drafts().read(cx).saving_item(|target| {
+        let drafts = self.services.drafts().read(cx);
+        let saving = drafts.saving_item(|target| {
             target.comment.is_none()
                 && target.repository == repo
                 && target.item_id.to_string() == id
         });
-        if self.edit.phase() != Phase::Viewing
+        // A stored draft is known only from a listing that is ready: while
+        // it loads or has failed, Move waits, as a release does (Part E
+        // review, M1).
+        let listed = drafts.listing().rows().is_some();
+        if !listed
+            || self.edit.phase() != Phase::Viewing
             || self.has_session()
             || self.draft.restoring()
             || self.draft_kept(cx)

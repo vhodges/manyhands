@@ -31,7 +31,7 @@ use super::{MoveDialog, OpenedMove};
 use crate::desktop::{
     model::{edit::Phase, navigation::OpenTarget},
     services::{
-        JobKind,
+        JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::{
@@ -635,6 +635,57 @@ async fn move_is_disabled_while_a_release_is_queued_or_running(cx: &mut TestAppC
     assert_offered(&shell, cx);
     shell.click("sheet-move-button", cx);
     assert!(dialog_open(&shell, cx), "Move… opens its dialog");
+}
+
+/// Whether the draft store's last listing is ready.
+fn drafts_listed(shell: &Shell, cx: &mut TestAppContext) -> bool {
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    drafts.read_with(cx, |registry, _| registry.listing().rows().is_some())
+}
+
+/// R-23 (Part E review, M1): a stored draft of the document is known only
+/// from the draft store's listing, so Move… waits for it, as a release
+/// does. With the launch listing held, Move… is not offered, in R-23's
+/// words; once it lands, it is still not, the draft now listed.
+#[gpui_kit::test]
+async fn move_waits_for_the_draft_listing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.create_document(&root, DOCUMENT, PLAN, "Plan");
+    fixture.refresh(&root);
+    store_draft(
+        &fixture,
+        &root,
+        ItemDtoKind::Document,
+        DOCUMENT,
+        "From an earlier session.\n",
+    );
+    let mut listing = None;
+    let shell = Shell::launch(
+        fixture,
+        |backend| listing = Some(backend.hold_read(ReadKind::Drafts)),
+        cx,
+    );
+    shell.select(&root, cx);
+    open(&shell, &root, DOCUMENT, cx);
+    assert!(!drafts_listed(&shell, cx), "the listing is held");
+    assert_eq!(phase(&shell, cx), Phase::Viewing);
+    assert_not_offered(&shell, WHILE_VIEWING, cx);
+
+    listing.unwrap().send(()).unwrap();
+    shell
+        .until_drawn(cx, "the draft listing", drafts_listed)
+        .await;
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Viewing \u{b7} unsaved changes kept"),
+        "the draft is listed"
+    );
+    assert_not_offered(&shell, WHILE_VIEWING, cx);
+    assert!(moves(&shell, cx).is_empty(), "nothing was sent");
 }
 
 /// Moves `root`'s document to `docs/archive` from its tab's sheet, with
