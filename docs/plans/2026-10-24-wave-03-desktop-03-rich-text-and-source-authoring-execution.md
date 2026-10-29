@@ -1212,3 +1212,52 @@ Notes for later tasks: Task 22 leaves `targets()` in
     it), so "A ticket cannot depend on itself." and "… its own parent."
     are tested in the model only;
   - `view/item/sheet/ticket.rs` is 486 lines.
+- Ruling (controller, Task 21 notes): the relationship picker lists only
+  the tab's repository's tickets, and leaves out the ticket itself and its
+  current dependencies. A check in flight does not block Save; only a held
+  rejection does, through `save_blocked`. — The design's picker is "over
+  `list_tickets`", and the workspace's list may be another repository's;
+  the check is advisory and the save checks again (R-26). — If wrong: a
+  picker filter, or one gate condition.
+- Ruling (controller, Task 21 notes): a rejection names only a code and a
+  set of IDs, so its explanation sits under the field whose change the
+  check answered. A save's refusal sits under Waiting on when `deps` differ
+  from the base, and under Parent otherwise. The words: "This makes a
+  cycle: {names}.", "A ticket cannot depend on itself.", "A ticket cannot
+  be its own parent.", "Not a ticket: {names}.", Save's reasons "A ticket
+  cannot be saved with a relationship cycle." and "A ticket's dependencies
+  and parent must be tickets.", "not found, kept", and "The index may be
+  missing tickets. Save checks again." — The design gives only "not found,
+  kept" and "Save checks again". — If wrong: copy edits.
+- Ruling (controller, Task 21 review I1, M3 to M5): a save's refusal
+  changes only the rejection. What the last check of the same proposal
+  said of unresolved IDs and the index stays, and a check still running
+  lands without undoing the refusal. Use these choices checks the
+  proposal again against the new base. A ticket's name comes from the
+  item's own reads first, then the picker's, which clear when the session
+  ends. Closing the sheet closes the picker. — An unresolved dependency
+  read "Resolved" after a refusal. — If wrong: one merge rule.
+- Copy for the owner's on-screen check (Task 21): the words above; "Could
+  not list the tickets"; the picker shows at most 8 tickets, with no hint
+  that more exist, and an empty filter shows the first eight in list
+  order; the chips' look, Remove, Add…, Change… and Clear.
+- Parked (Task 21), for the whole-branch review:
+  - a held rejection is not checked again when the index changes, only
+    when a relationship does. If another actor removes the cycle, Save
+    stays disabled until the user changes a relationship;
+  - the stamp check in `check_landed` is redundant with dropping the task,
+    so removing it alone breaks no test; and the two picker drops (on draw,
+    and in `open_details`) mask each other;
+  - the picker's Tab to an offer, and Enter or Space on one, have no view
+    test; the merge of a check landing after a refusal is pinned only in
+    the model; clearing the picker's names at session end was checked by
+    reading;
+  - the stale-index test writes the registry's `refresh_required` through
+    rusqlite, as `tests/mutation_relationships.rs` does;
+  - the self-reference words are tested only in the model. No desktop path
+    can propose a self-reference;
+  - `Operations::rejected` is never pruned;
+  - `sheet/ticket.rs` is at 486 lines. The next change there should move
+    the relationship drawing into its own submodule;
+  - test nits: `shown_raw` duplicates `shown`, and the `DOCUMENT` ID is
+    used as a ticket in repository "b".
