@@ -1636,3 +1636,47 @@ Notes for later tasks: Task 22 leaves `targets()` in
     stays open over it with nothing said;
   - after a lost answer, the close prompt's "not saved anywhere" may be
     untrue if the repair was in fact made.
+- Ruling (controller, Task 26 review I1): the privacy sweep exempts only
+  the editors and the places the design puts the text:
+  - the edit host (`item-edit-view`) and the review's result editor;
+  - the review's Body row values;
+  - the read view, the comment editors and the repair text area;
+  - the caret link's address, and the toolbar's link field while a link
+    is edited;
+  - the Inspect tab's source view.
+
+  It does not exempt the `draft-section` wrappers, which also hold the
+  whole editing sheet and the review's chrome. — Obligation 5 allows the
+  editors, not the sheet. — If wrong: a test that reads more than the
+  design allows, never less.
+- Ruling (controller, Task 26 review M7): the Inspect tab's source view
+  (`item-source`, the read-only `Textarea` in `item/source.rs:61-72`) is
+  an allowed surface for the file's text. It is D1's view of the file as
+  written. — It is where the design shows the file. — If wrong: none;
+  that view shows the file by design.
+- Ruling (controller, Task 26 review M4): when a keyed press in a D3
+  dialog (Create, Move or New folder) is refused and the dialog stays
+  open, focus moves to the field the refusal's note is under. Failing
+  that, it moves to the primary button if that is enabled; failing that,
+  it stays where it is. — Contract 13: focus is never left on an unseen
+  root. — If wrong: one Tab more or less.
+- Ruling (controller, Task 26 concerns): accepted as they are:
+  - the Kit sheet's own close button has no name, and the sheet walk
+    exempts only it, since Escape closes the sheet (Kit code);
+  - the floating "{n} comments" button takes no focus, since
+    `secondary-shift-c` and the header's Comments reach the discussion;
+  - `secondary-shift-e` works from the header and the page but not from
+    the tab strip (`keys.rs:206`, `ITEM_TAB_CONTEXT`), since Edit is a
+    named control in the header.
+
+  — Contract 13 asks for a labeled focusable control or a key, and each
+  has one. — If wrong: a key binding moved to a wider context.
+- For the owner's on-screen check (Task 26 review M1): in the review, the
+  fields after the body's result editor are reached by Shift-Tab from
+  below (or Back to top, then Shift-Tab), because that editor keeps Tab.
+  Should the other both-changed rows come before the body's result
+  editor? This is a design question for the owner, not a defect.
+- Parked (Task 26 review M8), for the whole-branch review: the privacy
+  scan reads the accessibility labels and values of `test_support`
+  elements only. Text drawn as a plain child, Kit tooltips, and the Kit's
+  own text are not seen. This is the same shape as D2's ruled sweep.
