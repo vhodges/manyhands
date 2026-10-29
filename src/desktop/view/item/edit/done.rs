@@ -270,7 +270,7 @@ impl ItemPane {
                 self.edit.phase() == Phase::Editing
                     && self.edit_dirty(cx)
                     && !saving
-                    && self.missing_field(cx).is_none(),
+                    && self.save_blocked(cx).is_none(),
             ),
             discard: !saving,
         }

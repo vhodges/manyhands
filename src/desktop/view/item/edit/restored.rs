@@ -278,7 +278,7 @@ impl ItemPane {
         let enabled = self.edit_available(cx) && self.restored_unsaved(cx);
         let note = match self.continues_new_item(cx) {
             true => Some(LATER_NOTE),
-            false => self.missing_field(cx),
+            false => self.save_blocked(cx),
         };
         action("draft-save", SAVE, enabled, note)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_restored(cx)))

@@ -121,7 +121,7 @@ impl ItemPane {
                 !busy
                     && self.edit_available(cx)
                     && self.restored_unsaved(cx)
-                    && self.missing_field(cx).is_none()
+                    && self.save_blocked(cx).is_none()
             });
             return Offers {
                 keep: Some(!busy),
@@ -144,7 +144,7 @@ impl ItemPane {
             return self.edit.save.run.is_none()
                 && !self.store_settling(cx)
                 && self.edit_dirty(cx)
-                && self.missing_field(cx).is_none();
+                && self.save_blocked(cx).is_none();
         }
         self.save_offered(cx)
     }
@@ -161,9 +161,13 @@ impl ItemPane {
         self.draft.restoring() || preparing || self.save_in_flight(cx)
     }
 
-    /// What the close dialog's Save came to, while it has not closed the
-    /// tab: `None` until it is pressed, and once the dialog has nothing
-    /// to say of it. While the review is open, how to reach it.
+    /// What the close dialog says of its Save, while it has not closed the
+    /// tab. While the review is open, how to reach it; once Save is
+    /// pressed, what it came to (`closing_note`); else, only when nothing
+    /// else blocks it, the empty required field that does, but not for a
+    /// new item's draft, whose Save is unavailable for a later release, as
+    /// D2's section says (Task 20 fix 1). `None` when there is nothing to
+    /// say.
     pub(in crate::desktop::view) fn close_note(&self, cx: &App) -> Option<SaveNote> {
         // A prepare waiting for Resume is why D2's Save waits (M2): Resume
         // is the tab's banner's, which Cancel returns to.
@@ -185,13 +189,21 @@ impl ItemPane {
             };
             return Some(SaveNote::says(format!("{words} {CANCEL_TO_REVIEW}")));
         }
-        // Save waits for an empty required field: the dialog says which.
-        if let Some(missing) = self.missing_field(cx) {
-            return Some(SaveNote::says(missing));
+        if self.edit.closing
+            && let Some(note) = self.closing_note(cx)
+        {
+            return Some(note);
         }
-        if !self.edit.closing {
+        if self.edit.session.is_none() && self.continues_new_item(cx) {
             return None;
         }
+        self.save_blocked(cx).map(SaveNote::says)
+    }
+
+    /// What the close dialog's Save came to, once pressed: a refused claim
+    /// or prepare, a prepare waiting or not sent again, the save running,
+    /// or its answer. `None` once there is nothing to say of it.
+    fn closing_note(&self, cx: &App) -> Option<SaveNote> {
         if self.edit.session.is_none()
             && let Some(refused) = self.draft.refused()
         {

@@ -537,6 +537,10 @@ async fn suggestions_come_from_the_loaded_tickets_values(cx: &mut TestAppContext
         "focus stays in it"
     );
     assert!(dirty(&shell, cx));
+    // Undone in the control, it holds what was typed again.
+    shell.keys("secondary-z", cx);
+    assert_eq!(holds(&shell, Field::Type, cx), "FE", "undone");
+    assert!(value(&meta(&shell, cx), Field::Type) == Some("FE"));
 
     // A value no loaded ticket has is kept, and saved.
     empty_it(&shell, cx);
@@ -888,11 +892,55 @@ async fn an_emptied_project_is_saved_as_absent(cx: &mut TestAppContext) {
     assert_eq!(item.project, None);
     assert_eq!(item.team, None);
     assert!(!item.unknown_metadata.contains_key("project"));
+    assert!(!item.unknown_metadata.contains_key("team"));
     let branch = item.context.branch.clone().expect("its own branch");
     let file = committed(&root, &branch, TICKET);
     assert!(file.starts_with("---\n") && file.contains("title: Absent\n"));
     assert!(!file.contains("project:"), "no project key");
     assert!(!file.contains("team:"), "no team key");
+}
+
+/// A save asked for while the first draft still begins is sent once it
+/// lands, with the fields as they are then: a Title emptied meanwhile is
+/// checked again, so nothing is sent, the toolbar says why, and the tab
+/// stays dirty (fix round 1, A). The keys go in one by one, with nothing
+/// run between them, so the begin lands only after the last.
+#[gpui_kit::test]
+async fn a_save_deferred_until_the_draft_begins_checks_the_required_fields_again(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Deferred", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    edit(&shell, cx).await;
+    open_sheet(&shell, ChipField::All, cx);
+    assert!(control_focused(&shell, Field::Title, cx));
+    let window = shell.window.into();
+    for key in ["x", "secondary-s", "secondary-a", "backspace"] {
+        cx.dispatch_keystroke(window, gpui_kit::Keystroke::parse(key).unwrap());
+    }
+    assert!(
+        attached(&shell, &root, TICKET, cx).is_none(),
+        "still beginning"
+    );
+    assert!(matches!(phase(&shell, cx), Phase::Saving), "the save waits");
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+
+    assert!(
+        attached(&shell, &root, TICKET, cx).is_some(),
+        "the draft began"
+    );
+    assert!(saves(&shell, cx).is_empty(), "nothing is sent");
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some(TICKET_NEEDS_TITLE)
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing, "the run ended");
+    assert!(value(&meta(&shell, cx), Field::Title) == Some(""));
+    assert!(dirty(&shell, cx), "still dirty");
 }
 
 /// R-74: `secondary-s` with focus in the sheet saves the tab, and the

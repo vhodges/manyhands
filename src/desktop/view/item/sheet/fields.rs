@@ -18,7 +18,7 @@
 //! - **Opening.** A chip's field focuses its control (`sheet_target`).
 //! - **Required.** An empty Title, Type or Status draws a red border and
 //!   its message under it; every save waits until it is filled
-//!   (`edit::save_view::missing_field`).
+//!   (`edit::save_view::save_blocked`).
 //! - **Suggestions** (R-57) under a focused Type, Status, Project or Team:
 //!   the values on the tickets the workspace's ticket list loaded for this
 //!   tab's repository, with the item's own as read, given to the tab each
@@ -69,33 +69,30 @@ fn field_of(chip: ChipField) -> Option<Field> {
     }
 }
 
-/// The element IDs of `field`'s control, its message and its suggestions.
-fn ids(field: Field) -> (&'static str, &'static str, &'static str) {
+/// The element IDs of `field`'s control, its message and, but for the
+/// Title, which has none, its suggestions.
+fn ids(field: Field) -> (&'static str, &'static str, Option<&'static str>) {
     match field {
-        Field::Title => (
-            "sheet-title-input",
-            "sheet-title-required",
-            "sheet-title-suggestion",
-        ),
+        Field::Title => ("sheet-title-input", "sheet-title-required", None),
         Field::Type => (
             "sheet-type-input",
             "sheet-type-required",
-            "sheet-type-suggestion",
+            Some("sheet-type-suggestion"),
         ),
         Field::Status => (
             "sheet-status-input",
             "sheet-status-required",
-            "sheet-status-suggestion",
+            Some("sheet-status-suggestion"),
         ),
         Field::Project => (
             "sheet-project-input",
             "sheet-project-required",
-            "sheet-project-suggestion",
+            Some("sheet-project-suggestion"),
         ),
         Field::Team => (
             "sheet-team-input",
             "sheet-team-required",
-            "sheet-team-suggestion",
+            Some("sheet-team-suggestion"),
         ),
     }
 }
@@ -201,6 +198,11 @@ impl ItemPane {
     }
 
     /// A suggestion chosen: the field's value, focus kept in its control.
+    /// The input replaces its text as one edit it can undo (Task 20 fix
+    /// 1). The value reaches the session now, through `field_typed`, before
+    /// any frame can set the control back from the session's fields; the
+    /// input's own change event, which follows, then finds nothing to
+    /// change.
     fn take_suggestion(
         &mut self,
         field: Field,
@@ -216,7 +218,7 @@ impl ItemPane {
             return;
         };
         input.update(cx, |input, cx| {
-            input.set_value(value, window, cx);
+            input.replace_all(value, window, cx);
             input.focus(window, cx);
         });
         self.field_typed(field, cx);
@@ -286,21 +288,23 @@ impl ItemPane {
         } else {
             Vec::new()
         };
-        let suggestions = (!offered.is_empty()).then(|| {
-            h_flex()
-                .flex_wrap()
-                .gap_1()
-                .children(offered.into_iter().enumerate().map(|(ix, value)| {
-                    let chosen = value.clone();
-                    Button::new((suggestion_id, ix))
-                        .label(value)
-                        .xsmall()
-                        .outline()
-                        .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
-                            pane.take_suggestion(field, chosen.clone(), window, cx)
-                        }))
-                }))
-        });
+        let suggestions = suggestion_id
+            .filter(|_| !offered.is_empty())
+            .map(|suggestion_id| {
+                h_flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(offered.into_iter().enumerate().map(|(ix, value)| {
+                        let chosen = value.clone();
+                        Button::new((suggestion_id, ix))
+                            .label(value)
+                            .xsmall()
+                            .outline()
+                            .on_click(cx.listener(move |pane, _: &ClickEvent, window, cx| {
+                                pane.take_suggestion(field, chosen.clone(), window, cx)
+                            }))
+                    }))
+            });
         let element = v_flex()
             .id(row.id)
             .test_support()

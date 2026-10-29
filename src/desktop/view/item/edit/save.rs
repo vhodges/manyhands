@@ -179,7 +179,7 @@ impl ItemPane {
             toolbar.update(cx, |toolbar, cx| toolbar.note(NO_CHANGES_TO_SAVE, cx));
             return false;
         }
-        if let Some(missing) = self.missing_field(cx) {
+        if let Some(missing) = self.save_blocked(cx) {
             toolbar.update(cx, |toolbar, cx| toolbar.note(missing, cx));
             return false;
         }
@@ -206,12 +206,21 @@ impl ItemPane {
     /// Sends the save waiting in `run`: through D2's session, or, with none,
     /// as the fields are. A draft still beginning sends it once it lands
     /// (`draft_begun`); while D2 finishes the last save, once it is done
-    /// (`follow_registry`).
+    /// (`follow_registry`). The fields go as they are when it is sent, and
+    /// the controls take typing meanwhile, so it is checked again here: a
+    /// save that cannot be sent now ends, saying why, and the tab stays
+    /// dirty (Task 20 fix 1).
     pub(super) fn send_save(&mut self, cx: &mut Context<Self>) {
         let Some(session) = &self.edit.session else {
             return;
         };
         if session.draft == DraftLink::Beginning || self.store_settling(cx) {
+            return;
+        }
+        if let Some(blocked) = self.save_blocked(cx) {
+            let toolbar = session.toolbar.clone();
+            toolbar.update(cx, |toolbar, cx| toolbar.note(blocked, cx));
+            self.end_run(cx);
             return;
         }
         let Some(id) = self.live_draft(cx) else {
