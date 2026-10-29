@@ -57,7 +57,7 @@ use manyhands::{
 };
 
 use super::{
-    create::{CANCEL, FILE_NAME, FOLDER, PathCheck, button, field},
+    create::{CANCEL, FILE_NAME, FOLDER, PathCheck, button, field, keep_focus_in},
     item::{ItemPane, text},
 };
 use crate::desktop::{
@@ -427,8 +427,12 @@ impl Render for MoveDialog {
             true,
             self.offered(),
             self.reason(),
-            move |_, _, cx| {
-                let _ = entity.update(cx, |dialog, cx| dialog.move_document(cx));
+            move |_, window, cx| {
+                let _ = entity.update(cx, |dialog, cx| {
+                    let fields = [&dialog.folder, &dialog.file_name];
+                    keep_focus_in(&dialog.focus, &fields, window, cx);
+                    dialog.move_document(cx)
+                });
             },
         );
         v_flex()

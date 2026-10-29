@@ -7,8 +7,9 @@
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, ClickEvent, Context, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    App, ClickEvent, Context, ElementId, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, StatefulInteractiveElement, Styled, TestSupportExt,
+    Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -103,6 +104,26 @@ pub(in crate::desktop::view) fn button(
     }
 }
 
+/// A dialog's primary button was pressed: it disables while the dialog
+/// works, and a disabled button holds no focus. When focus is on it, in
+/// the dialog's own `focus` but in none of its `fields` (a click leaves
+/// focus in the field it was in), focus moves to `focus`, around the
+/// dialog's controls. So it stays in the dialog, which closes itself once
+/// done only while focus is in it.
+pub(in crate::desktop::view) fn keep_focus_in(
+    focus: &FocusHandle,
+    fields: &[&Entity<InputState>],
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let in_field = fields
+        .iter()
+        .any(|field| field.read(cx).focus_handle(cx).contains_focused(window, cx));
+    if focus.contains_focused(window, cx) && !focus.is_focused(window) && !in_field {
+        window.focus(focus, cx);
+    }
+}
+
 /// The dialog: its fields, each with its note, what the last Create said,
 /// and Cancel and Create.
 impl Render for CreateDialog {
@@ -158,7 +179,16 @@ impl Render for CreateDialog {
             self.offered(cx),
             self.reason(cx),
             move |_, window, cx| {
-                let _ = entity.update(cx, |dialog, cx| dialog.create(window, cx));
+                let _ = entity.update(cx, |dialog, cx| {
+                    let fields = match &dialog.inputs {
+                        Inputs::Ticket { ticket_type } => vec![&dialog.title, ticket_type],
+                        Inputs::Document(place) => {
+                            vec![&dialog.title, &place.folder, &place.file_name]
+                        }
+                    };
+                    keep_focus_in(&dialog.focus, &fields, window, cx);
+                    dialog.create(window, cx)
+                });
             },
         );
         body.children(failure)

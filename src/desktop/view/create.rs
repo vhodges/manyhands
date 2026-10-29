@@ -46,7 +46,7 @@ use self::document::Place;
 /// 24).
 pub(in crate::desktop::view) use self::{
     document::PathCheck,
-    form::{button, field},
+    form::{button, field, keep_focus_in},
 };
 use super::workspace::Workspace;
 use crate::desktop::{

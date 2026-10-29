@@ -39,7 +39,7 @@ use gpui_kit::{
 use manyhands::results::ResultCode;
 
 use super::{
-    create::{CANCEL, CREATE, button, field},
+    create::{CANCEL, CREATE, button, field, keep_focus_in},
     item::text,
     workspace::Workspace,
 };
@@ -342,8 +342,11 @@ impl Render for NewFolderDialog {
             true,
             self.offered(cx),
             self.reason(cx).map(str::to_owned),
-            move |_, _, cx| {
-                let _ = entity.update(cx, |dialog, cx| dialog.create(cx));
+            move |_, window, cx| {
+                let _ = entity.update(cx, |dialog, cx| {
+                    keep_focus_in(&dialog.focus, &[&dialog.name], window, cx);
+                    dialog.create(cx)
+                });
             },
         );
         v_flex()
