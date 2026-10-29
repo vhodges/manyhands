@@ -1549,28 +1549,88 @@ Notes for later tasks: Task 22 leaves `targets()` in
   goes when a field changes.
 - Parked (Task 24 review), for the whole-branch review: none beyond
   Task 24's own list above.
-- Found and decided (Task 25, obligation 7): a repair never writes
-  primary (`bridges/repair.rs`: the corrected source is committed in the
-  item's own context), so reading an Inspect tab's target again shows the
-  same nonconforming file and "Needs fixing". A repair made therefore
-  makes the tab follow the item by the ID its preview named, in its place
-  in the strip (`Tabs::replace`, `TabContent::follow`); an open tab of
-  that item is shown instead and the repair's tab closes. — The notes'
-  "reads the file again by its target" cannot show what the repair made.
-  — If wrong: the tab could become an Inspect tab of the file in the
-  item's worktree instead.
-- Decided (Task 25, obligation 3): the observation sent is the token of
-  the tab's own `show_path` read, the one the text came from, which the
-  library documents as the input (`DocumentRepairInput::observation`, "the
-  token `show_path` gave for the file on primary"); `observe_path` gives
-  the same token, but taken at open it could be newer than the text. Repair
-  is offered only for a file read on primary, the copy a repair corrects.
-  — If wrong: a newer token over older text, or a refused repair offered
-  in an item's worktree.
-- Copy for the owner's on-screen check (Task 25): the unruled "Repair…",
-  "Adopt…" and "Preview"; the unmanaged banner's words, the handoff's
-  (`docs/design/04-item-area.md`); Adopt… opens the file exactly as
-  written, with no title or ID filled in. An Inspect tab of a file that
-  needs no fixing offers Repair… on its page, as the notes rule; the
-  library refuses any conforming file as `not_repairable`, which the
-  dialog explains.
+- Ruling (controller, adopting Task 25's finding on obligation 7): a
+  repair never writes primary (`bridges/repair.rs:5-8`: the corrected
+  source is committed in the item's own context), so reading an Inspect
+  tab's target again would show the same nonconforming file and "Needs
+  fixing". Once a repair is made, the tab follows the item by the ID its
+  preview named, in its place in the strip (`Tabs::replace`,
+  `TabContent::follow`). If that item already has a tab open, that tab
+  is shown instead and the repair's tab closes; that switch happens only
+  when the repair's tab was the one shown. — "Show what the repair made"
+  is only true of the item's own copy. — If wrong: the tab could become
+  an Inspect tab of the file in the item's worktree instead.
+- Ruling (controller, adopting Task 25's finding on obligation 3): the
+  observation sent is the token of the tab's own `show_path` read, the
+  read the text came from. That is the library's documented input
+  (`DocumentRepairInput::observation`, "the token `show_path` gave for the
+  file on primary"); an `observe_path` taken when the view opens could be
+  newer than the text. Repair is offered only for a file read on primary,
+  the copy a repair corrects. — A newer token over older text would hide
+  another actor's change. — If wrong: a repair refused that could have
+  gone through.
+- Ruling (controller, Task 25 review I1): Adopt… adds the title and the ID
+  that its banner promises. The library makes no ID ("The ID is the
+  caller's", `bridges/repair.rs:10`), so the desktop makes one, the way
+  create does (`ReadKind::NewId`), once for each observation of the file.
+  It puts the canonical document front matter (`canonical::serialize_item`)
+  above the file, exactly as read. The title is the file's first ATX
+  heading, or else the file stem. The prefilled text is the unedited
+  baseline, so an untouched adoption closes without asking. Repair…, as
+  opposed to Adopt…, opens the file exactly as read (R-25), even when its
+  front matter holds no valid ID. — Contract 8: the banner's words must be
+  true; reusing the ID per observation keeps a retried adoption to one
+  item. — If wrong: a second item for one file, or a front matter the
+  owner would word differently.
+- Ruling (controller, Task 25 review M1): after an answer whose effect is
+  unknown, the repair view keeps its text read-only and waits for that
+  request. Preview then prepares the same request again, so its stored
+  result answers and the tab follows. — Exactly once: a new request with
+  edited text could make a second adoption. — If wrong: a view held
+  read-only until it is closed.
+- Ruling (controller, Task 25 review M3; it narrows obligation 1 of the
+  Task 25 notes): an Inspect tab offers Repair… or Adopt… only through its
+  "Needs fixing" or unmanaged banner, that is, only for a nonconforming
+  file. — The library refuses every conforming file
+  (`bridges/repair.rs:187`, `:200-202`), so the control could only fail;
+  D3's `an_inspect_tab_of_a_conforming_item_needs_no_fixing` states "no
+  Repair". — If wrong: none, since the library refuses that repair.
+- Ruling (controller, Task 25 review M5): a repair refused
+  `external_change` offers no Prepare again in its dialog or view, since
+  the request carries the read's token and would be refused the same way.
+  The library's message and code are shown, and the text is kept. D2's
+  confirmation users are unchanged. — Offer only what can work. — If
+  wrong: a missing Prepare again.
+- Known Limits, to add to the design at Task 27 (Task 25):
+  - Repair… inserts no ID into a document whose front matter has none;
+    the user writes it.
+  - A repair refused because the file changed starts again from the file
+    as it now is (Cancel, then Repair… again). The edited text is not
+    carried over.
+  - The operation area still offers the library's Prepare again for that
+    refusal, and it is refused the same way.
+- Copy for the owner's on-screen check (Task 25):
+  - the unruled "Repair…", "Adopt…" and "Preview";
+  - the unmanaged banner's words, which are the handoff's
+    (`docs/design/04-item-area.md:36`);
+  - Adopt… opens with front matter holding a new ID and a title (the
+    first heading, else the file name), with the file below exactly as
+    written;
+  - the confirmation's "A new ID will be assigned";
+  - "Discard your repair?" and "Your changes to this file are not saved
+    anywhere.";
+  - "This file is not UTF-8 text, so it cannot be repaired here.";
+  - a conforming file's Inspect tab shows no Repair….
+- Parked (Task 25 review and re-review), for the whole-branch review:
+  - N3: an Adopt… press made while an ID is being made is dropped, even
+    when the tab has read the file again since; a second press works;
+  - a fresh view, opened after a lost answer, then Cancel, then Adopt…
+    again, shows the dialog's `already_applied` and does not follow; the
+    file is still adopted once;
+  - the removal of a repository with an Inspect tab's edited repair text
+    is tested for its count line and Cancel only;
+  - after a refusal, an edit, and then a reconfirm of the old request from
+    the operation area, the repair is made with the old text, and the view
+    stays open over it with nothing said;
+  - after a lost answer, the close prompt's "not saved anywhere" may be
+    untrue if the repair was in fact made.
