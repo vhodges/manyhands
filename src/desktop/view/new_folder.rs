@@ -10,7 +10,9 @@
 //!   `.` or `..`, or starts with `.`; anything else the library refuses is
 //!   shown with its message and code.
 //! - **Create**, on the user's action only (contract 11), sends `folder
-//!   create`. Its `ok` closes the dialog (`Made`), as does
+//!   create`. It takes no observation: its input is `{ root, path }`, it
+//!   makes no commit (fact 16), and a second request is answered
+//!   `already_applied`. Its `ok` closes the dialog (`Made`), as does
 //!   `discovery_pending`, a folder made whose index refresh is owed (fix
 //!   1, M1); the tree reads its folders again, as any finished request of
 //!   its repository makes it: folder creation refreshes the index itself,
