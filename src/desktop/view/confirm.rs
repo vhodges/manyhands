@@ -84,7 +84,7 @@ pub(crate) enum Followed {
     /// opener's to follow.
     Confirmed {
         request: DesktopRequestId,
-        details: PreviewDetailsDto,
+        details: Box<PreviewDetailsDto>,
     },
     /// The prepare gave no preview, and was answered this code.
     Answered(ResultCode),
@@ -435,7 +435,7 @@ impl ConfirmDialog {
             },
         }
         if let (Some(request), Some((preview, _))) = (self.request, &self.preview) {
-            let details = preview.details.clone();
+            let details = Box::new(preview.details.clone());
             cx.emit(Followed::Confirmed { request, details });
         }
         // Part C fix 2, N1: once it lands, a removal closes only the tabs
