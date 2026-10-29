@@ -1144,3 +1144,37 @@ Notes for later tasks: Task 22 leaves `targets()` in
     `view/tabs.rs` and `view/confirm.rs`;
   - D's Restore gate is held both by the disabled button and by a check
     in `restore`, so its test fails only when both are removed.
+- Ruling (controller, Task 20 review M1 and M2): every save consults one
+  check, `save_blocked`: each offer, `start_save`, and `send_save`, where a
+  deferred save is finally sent. Today it holds an empty required field;
+  Task 21's relationship rejection joins it there. The close dialog names
+  a missing field only when nothing else blocks its Save, and not for a
+  new item's draft. — The fields go as they are when sent, and the
+  controls take typing meanwhile. — If wrong: one guard.
+- Ruling (controller, Task 20): a chosen suggestion replaces the control's
+  text as one edit the control can undo. Suggestions come from the
+  workspace's ticket list when it is the tab's repository's, plus the
+  item's own values; with another repository's list loaded, only the
+  item's own values (R-57). "Empty" follows the library's rule, so spaces
+  fill a field. — No distinct-values read exists (fact 64). — If wrong:
+  fewer suggestions, never a wrong one.
+- Copy for the owner's on-screen check (Task 20): the required-field
+  messages ("A ticket needs a type before it can be saved." and the rest)
+  and the red border; the suggestion buttons; during the review the sheet
+  keeps "Saved with the ticket (Ctrl S)" while its fields are read only;
+  Done's prompt disables Save for an empty field without saying why;
+  clicking a row's label focuses the row, not its input; with focus on
+  the Kit's own close button, `secondary-s` does nothing.
+- Parked (Task 20), for the whole-branch review:
+  - some assertions are weaker than they read: the tab key's "says why"
+    reads a note the sheet key had set; the draft-section test has no
+    positive control; the review guard in the sheet's `secondary-s` is
+    masked by `start_save`'s own Review refusal;
+  - suggestions are rebuilt each frame while the sheet is open;
+  - the controls are cleared only when the sheet is next drawn with no
+    session;
+  - one send is not re-checked: if D2's session ends while its save is
+    asked, `registry_sent` falls back to `send_direct`. The library refuses
+    an empty field there;
+  - the close dialog's note order for a new item's draft has no test
+    until Task 22's harness.
