@@ -68,7 +68,7 @@ impl ItemPane {
         {
             return;
         }
-        self.done_go(window, cx);
+        self.done_go(false, window, cx);
     }
 
     /// Whether a save is in flight: sent and not answered, settling after
@@ -77,8 +77,9 @@ impl ItemPane {
         self.edit.phase() == Phase::Saving || self.store_settling(cx)
     }
 
-    /// Done from step 2 on.
-    fn done_go(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Done from step 2 on: `landed` when an answer it waited for goes on
+    /// with it, rather than the press.
+    fn done_go(&mut self, landed: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.edit.finishing = None;
         let Some(session) = self.shown_session() else {
             return;
@@ -106,7 +107,7 @@ impl ItemPane {
             return;
         }
         let Some(id) = self.live_draft(cx) else {
-            self.done_decide(false, window, cx);
+            self.done_decide(false, landed, window, cx);
             return;
         };
         self.done_write(id, false, window, cx);
@@ -140,7 +141,7 @@ impl ItemPane {
                     Some(id) if flushed && !written && !again => {
                         pane.done_write(id, true, window, cx)
                     }
-                    _ => pane.done_decide(written, window, cx),
+                    _ => pane.done_decide(written, true, window, cx),
                 }
             });
         })
@@ -163,9 +164,19 @@ impl ItemPane {
     }
 
     /// Step 5, once the draft is written as far as it can be: `written`
-    /// when its newest revision is stored. A save, or the review, begun
-    /// meanwhile stops Done.
-    fn done_decide(&mut self, written: bool, window: &mut Window, cx: &mut Context<Self>) {
+    /// when its newest revision is stored, `landed` when the write's answer
+    /// brings Done here. A save, or the review, begun meanwhile stops Done.
+    /// A session that ends or is kept views the saved copy, and the page's
+    /// read editor takes the focus: at once after the press, and after an
+    /// answer only while nothing is open in front of the tab (Task 27 fix
+    /// 1, A1).
+    fn done_decide(
+        &mut self,
+        written: bool,
+        landed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.shown_session() else {
             return;
         };
@@ -176,13 +187,20 @@ impl ItemPane {
         let outcome = done_outcome(session.never_created(), session.dirty(cx), stored, written);
         match outcome {
             DoneOutcome::End => {
-                self.end_session(Some(window), cx);
+                self.end_session(None, cx);
                 self.release_on_leave(cx);
             }
-            DoneOutcome::Discard => self.discard_session(Some(window), cx).detach(),
-            DoneOutcome::Keep => self.keep_session(window, cx),
-            DoneOutcome::AskNotKept => self.ask_done(false, window, cx),
-            DoneOutcome::AskNotCreated => self.ask_done(true, window, cx),
+            DoneOutcome::Discard => self.discard_session(None, cx).detach(),
+            DoneOutcome::Keep => self.keep_session(cx),
+            DoneOutcome::AskNotKept => return self.ask_done(false, window, cx),
+            DoneOutcome::AskNotCreated => return self.ask_done(true, window, cx),
+        }
+        if landed {
+            self.focus_landed(window, cx, |pane, window, cx| {
+                pane.page.focus_read(window, cx)
+            });
+        } else {
+            self.page.focus_read(window, cx);
         }
     }
 
@@ -222,7 +240,7 @@ impl ItemPane {
         cx.spawn(async move |pane, cx| {
             let _ = pane.update_in(cx, |pane, window, cx| {
                 if matches!(pane.edit.finishing, Some(Finishing::Go)) {
-                    pane.done_go(window, cx);
+                    pane.done_go(true, window, cx);
                 }
             });
         })

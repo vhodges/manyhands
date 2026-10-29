@@ -4,7 +4,7 @@
 //! draft's text (`restored`), with no item read for a new item's draft
 //! whose item is not created yet (`create`).
 
-use gpui_kit::{AppContext, Context, Window};
+use gpui_kit::{AppContext, Context, Window, component::WindowExt};
 use manyhands::drafts::{DraftBase, DraftFields};
 
 use super::{DraftLink, EditSession, Phase};
@@ -168,10 +168,30 @@ impl ItemPane {
         // draft's relationships are checked.
         self.relations_opened(cx);
         // Focus moves into the editor once the frame that draws it is
-        // drawn.
-        cx.defer_in(window, move |_, window, cx| {
+        // drawn: it opens as a read lands, so not out of a dialog or the
+        // sheet opened meanwhile.
+        self.focus_landed(window, cx, move |_, window, cx| {
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         });
         cx.notify();
+    }
+
+    /// A focus a late answer takes as it lands (Task 27 fix 1, A1): `focus`
+    /// runs once the frame after it is drawn, and is dropped when a dialog
+    /// or the details sheet is open then. No key acts behind those (R-60),
+    /// so nothing that lands takes the focus from what is in front of the
+    /// tab; the Kit gives focus back, as that closes, to what held it
+    /// before. A focus taken in answer to a key or a click is not this.
+    pub(in crate::desktop::view::item) fn focus_landed(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        focus: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        cx.defer_in(window, move |pane, window, cx| {
+            if !window.has_active_dialog(cx) && !window.has_active_sheet(cx) {
+                focus(pane, window, cx);
+            }
+        });
     }
 }

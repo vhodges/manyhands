@@ -721,3 +721,63 @@ async fn the_drafts_pages_restore_is_disabled_over_a_live_edit_session(cx: &mut 
     assert_eq!(phase(&shell, cx), Phase::Editing);
     assert!(edit_text(&host, cx) == text, "the session goes on");
 }
+
+// Task 27 fix 1.
+
+/// A1: the close dialog of a restored draft, its Save pressed by key, stays
+/// open while the draft is continued and saved. The editor that opens
+/// beneath it takes no focus: focus stays in the dialog, and Escape is the
+/// dialog's Cancel. The save goes on, and the tab stays.
+#[gpui_kit::test]
+async fn the_editor_opening_under_the_close_dialog_leaves_focus_in_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, stored) = with_stored_draft(cx, "Closing", "Draft body");
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("draft-restore-button", cx);
+    assert_eq!(attached(&shell, &root, TICKET, cx), Some(stored));
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx));
+    shell.keys("tab", cx);
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-save-button", cx),
+        "Tab reaches Save"
+    );
+    shell.keys("enter", cx);
+    let host = until_editing(&shell, cx).await;
+    shell
+        .until_drawn(cx, "the save sent", |shell, cx| {
+            !saves(shell, cx).is_empty()
+        })
+        .await;
+    held.wait_reached();
+
+    assert!(shell.present("close-draft-dialog", cx), "it stays open");
+    assert!(
+        !focused(&shell, &host_editor(&host, cx), cx),
+        "the editor takes no focus"
+    );
+    assert!(
+        holds_focus(&shell, "close-draft-dialog", cx),
+        "focus stays in the dialog"
+    );
+    shell.keys("escape", cx);
+    assert!(
+        !shell.present("close-draft-dialog", cx),
+        "Escape is its Cancel"
+    );
+
+    held.release();
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::Ok));
+    assert_eq!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .len(),
+        1,
+        "Cancel kept the tab"
+    );
+}

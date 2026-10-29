@@ -13,7 +13,7 @@ use gpui_kit::{
 };
 use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
-    repository::ItemDtoKind,
+    repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
 };
 
 use super::{editor::host::EditorHost, workspace::Workspace};
@@ -21,7 +21,10 @@ use crate::desktop::{
     keys,
     model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
-    services::requests::{DesktopRequest, DesktopRequestId, Intent},
+    services::{
+        prompts::{PromptReply, PromptRequest},
+        requests::{DesktopRequest, DesktopRequestId, Intent},
+    },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
 
@@ -507,6 +510,46 @@ impl Shell {
         self.frame(cx, |_, _| ());
         self.visual(cx).simulate_input(typed);
         self.run(cx);
+    }
+}
+
+impl Shell {
+    /// A credential prompt, placed in the worker's channel as a job's
+    /// provider places it, with nothing waiting on it: the workspace shows
+    /// it above whatever is open once the channel drains. No transport is
+    /// initialized. Gives its answer, which a dropped dialog leaves
+    /// `Canceled`.
+    pub(crate) fn prompt(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> futures::channel::oneshot::Receiver<PromptReply> {
+        let (reply, answer) = futures::channel::oneshot::channel();
+        self.workspace.read_with(cx, |workspace, _| {
+            workspace.services().worker().send_prompt(PromptRequest {
+                key_id: SharedKeyId::new(),
+                label: "primary".to_owned(),
+                reason: UnlockReason::ProtectedKey,
+                reply,
+            })
+        });
+        self.run(cx);
+        self.frame(cx, |_, _| ());
+        answer
+    }
+
+    /// Whether the open prompt's passphrase input holds focus.
+    pub(crate) fn prompt_focused(&self, cx: &mut TestAppContext) -> bool {
+        let Some(dialog) = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.passphrase())
+        else {
+            return false;
+        };
+        let Some(input) = dialog.read_with(cx, |dialog, _| dialog.input()) else {
+            return false;
+        };
+        let handle = input.read_with(cx, |input, cx| input.focus_handle(cx));
+        self.frame(cx, move |window, _| handle.is_focused(window))
     }
 }
 

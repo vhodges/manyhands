@@ -216,12 +216,20 @@ impl ItemPane {
         else {
             return;
         };
-        self.open_view(source, window, cx);
+        self.open_view(source, false, window, cx);
     }
 
     /// Opens the repair view on `opened`, its unedited text, over the file
-    /// as this tab read it (never a stand-in), with focus in its text.
-    fn open_view(&mut self, opened: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// as this tab read it (never a stand-in), with focus in its text: at
+    /// once for a press, and, `landed` from an answer, only while nothing is
+    /// open in front of the tab (Task 27 fix 1, A1).
+    fn open_view(
+        &mut self,
+        opened: String,
+        landed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if window.has_active_dialog(cx) {
             return;
         }
@@ -244,7 +252,14 @@ impl ItemPane {
                 cx.notify();
             }
         });
-        text.update(cx, |state, cx| state.focus(window, cx));
+        if landed {
+            let text = text.clone();
+            self.focus_landed(window, cx, move |_, window, cx| {
+                text.update(cx, |state, cx| state.focus(window, cx))
+            });
+        } else {
+            text.update(cx, |state, cx| state.focus(window, cx));
+        }
         self.repair = Some(Repairing {
             root: PathBuf::from(self.repo()),
             path,

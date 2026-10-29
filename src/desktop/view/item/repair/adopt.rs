@@ -115,7 +115,7 @@ impl ItemPane {
         match &self.adoption.made {
             Some((seen, id)) if *seen == observation => {
                 let id = id.clone();
-                self.open_adopted(&id, window, cx);
+                self.open_adopted(&id, false, window, cx);
             }
             _ if self.adoption.making.is_some() => {}
             _ => self.make_id(observation, cx),
@@ -209,7 +209,7 @@ impl ItemPane {
             .rows()
             .and_then(|item| item.observation.as_deref());
         if shown == Some(seen.as_str()) {
-            self.open_adopted(&id, window, cx);
+            self.open_adopted(&id, true, window, cx);
         }
     }
 
@@ -218,7 +218,13 @@ impl ItemPane {
     /// heading the library cannot write as a title gives way to the file
     /// stem (fix 2, N2); the file alone is the last resort, which keeps this
     /// total.
-    fn open_adopted(&mut self, id: &ItemId, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_adopted(
+        &mut self,
+        id: &ItemId,
+        landed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(item) = self.model.item().rows() else {
             return;
         };
@@ -236,6 +242,6 @@ impl ItemPane {
         let opened = adopted(adopt_title(&item.path, &source))
             .or_else(|_| adopted(file_stem(&item.path)))
             .unwrap_or_else(|_| source.clone());
-        self.open_view(opened, window, cx);
+        self.open_view(opened, landed, window, cx);
     }
 }

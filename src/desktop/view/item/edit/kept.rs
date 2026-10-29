@@ -44,9 +44,9 @@ pub(crate) const DISCARD_KEPT: &str =
     "Discard your unsaved changes? The draft is deleted and cannot be recovered.";
 
 impl ItemPane {
-    /// Done kept the session (R-58): the tab is viewing the saved copy, and
-    /// the page's read editor takes the focus.
-    pub(super) fn keep_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Done kept the session (R-58): the tab is viewing the saved copy. Done
+    /// gives the page's read editor the focus (`done`).
+    pub(super) fn keep_session(&mut self, cx: &mut Context<Self>) {
         let Some(session) = &mut self.edit.session else {
             return;
         };
@@ -54,7 +54,6 @@ impl ItemPane {
         self.edit.phase = Phase::Viewing;
         self.edit.changed = None;
         self.sync_status(cx);
-        self.page.focus_read(window, cx);
         cx.notify();
     }
 

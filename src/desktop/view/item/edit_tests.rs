@@ -1359,6 +1359,44 @@ async fn resume_takes_only_its_own_answer(cx: &mut TestAppContext) {
     assert!(!shell.present("item-prepare-pending", cx));
 }
 
+/// Task 27 fix 1, A1: a credential prompt that opens while an Edit
+/// prepares keeps the focus when the editor opens beneath it: what the
+/// user goes on typing is the passphrase, never body text.
+#[gpui_kit::test]
+async fn the_editor_opening_under_a_prompt_leaves_focus_in_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Prompted", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let held = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("item-edit", cx);
+    held.wait_reached();
+    let mut answer = shell.prompt(cx);
+    assert!(shell.present("passphrase-dialog", cx));
+    assert!(shell.prompt_focused(cx), "the prompt takes focus");
+
+    held.release();
+    let host = until_editing(&shell, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(
+        !focused(&shell, &host_editor(&host, cx), cx),
+        "the editor takes no focus"
+    );
+    assert!(shell.prompt_focused(cx), "focus stays in the prompt");
+    let body = host.read_with(cx, |host, cx| host.text(cx));
+    shell.visual(cx).simulate_input("typed-on");
+    shell.run(cx);
+    assert!(
+        host.read_with(cx, |host, cx| host.text(cx)) == body,
+        "nothing is typed into the body"
+    );
+    assert!(matches!(answer.try_recv(), Ok(None)), "not yet answered");
+    shell.keys("escape", cx);
+    assert!(!shell.present("passphrase-dialog", cx));
+}
+
 /// Save, the session after a save, and the save states (Task 15).
 #[path = "edit_save_tests.rs"]
 mod save;

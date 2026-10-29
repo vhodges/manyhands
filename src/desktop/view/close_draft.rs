@@ -28,7 +28,7 @@
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
+    App, ClickEvent, ElementId, FocusHandle, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, WindowExt,
@@ -260,6 +260,10 @@ fn default_choice(offers: Offers) -> Option<CloseWithDraft> {
 
 /// Opens `ask`. `choose` gets the choice once the dialog has closed, or at
 /// once for a choice that keeps it open; Cancel and Escape give `Cancel`.
+/// A choice that keeps it open first gives the focus to the dialog's body,
+/// which tracks a focus of its own, as Create's form does: the button
+/// pressed waits from then on and holds no focus, and the dialog's keys,
+/// Escape among them, act only while focus is in it (Task 27 fix 1, A1).
 pub(crate) fn open(
     ask: Ask,
     window: &mut Window,
@@ -269,21 +273,26 @@ pub(crate) fn open(
     let choose: Choose = Rc::new(choose);
     let origin = window.focused(cx);
     let ask = Rc::new(ask);
+    let held = cx.focus_handle();
     window.open_dialog(cx, move |base, _, cx| {
         let (enter, cancel, close) = (choose.clone(), choose.clone(), origin.clone());
         let offers = (ask.offers)(cx);
         let note = (ask.note)(cx);
-        let stays = ask.clone();
+        let (stays, parked) = (ask.clone(), held.clone());
         base.title(ask.title)
             .close_button(false)
             .overlay_closable(false)
-            .child(body(&ask, offers, note, &choose, cx))
+            .child(body(&ask, offers, note, &choose, &held, cx))
             // Enter: the default; the Kit closes the dialog, unless Keep
             // draft still waits, or the default keeps it open.
             .on_ok(move |_, window, cx| match default_choice(offers) {
                 Some(choice) => {
+                    let stays = stays.stays_for(choice);
+                    if stays {
+                        window.focus(&parked, cx);
+                    }
                     enter(choice, window, cx);
-                    !stays.stays_for(choice)
+                    !stays
                 }
                 None => false,
             })
@@ -304,6 +313,7 @@ fn body(
     offers: Offers,
     note: Option<SaveNote>,
     choose: &Choose,
+    held: &FocusHandle,
     cx: &App,
 ) -> impl IntoElement + use<> {
     let muted = cx.theme().muted_foreground;
@@ -320,10 +330,13 @@ fn body(
             button = button.primary();
         }
         let closes = !ask.stays_for(choice);
+        let parked = held.clone();
         let press = enabled.then(|| {
             Rc::new(move |window: &mut Window, cx: &mut App| {
                 if closes {
                     window.close_dialog(cx);
+                } else {
+                    window.focus(&parked, cx);
                 }
                 choose(choice, window, cx);
             })
@@ -372,6 +385,7 @@ fn body(
     v_flex()
         .id(ElementId::from(format!("{prefix}-dialog")))
         .test_support()
+        .track_focus(held)
         // Named by its title, which the Kit draws above it.
         .aria_label(ask.title)
         .gap_2()

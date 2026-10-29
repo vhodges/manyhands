@@ -198,8 +198,9 @@ impl ItemPane {
         review.model = Some(model);
         let focus = review.focus.clone();
         self.show_result(window, cx);
-        // Once the frame that draws it is drawn.
-        cx.defer_in(window, move |_, window, cx| window.focus(&focus, cx));
+        // Once the frame that draws it is drawn: it builds as its read
+        // lands, so not out of a dialog or the sheet opened meanwhile.
+        self.focus_landed(window, cx, move |_, window, cx| window.focus(&focus, cx));
         cx.notify();
     }
 

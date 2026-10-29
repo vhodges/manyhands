@@ -1377,3 +1377,83 @@ async fn a_fact_81_body_saved_in_the_session_is_no_change_of_theirs(cx: &mut Tes
     assert_eq!(phase(&shell, cx), Phase::Editing);
     assert!(edit_text(&host, cx) == mine, "byte for byte");
 }
+
+// Task 27 fix 1.
+
+/// A1: the close dialog's Save on an unverified base opens the review
+/// instead (R-36), behind the dialog, which stays open. As the review's
+/// read lands and it builds, it takes no focus: focus stays in the dialog,
+/// whose Escape is its Cancel, and the review is then in view.
+#[gpui_kit::test]
+async fn the_review_built_behind_the_close_dialog_leaves_focus_in_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    open(&shell, document(&root), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let saved = edit_text(&host, cx);
+    let read = shell.backend.hold_read(ReadKind::DraftItem);
+    shell.click("item-save", cx);
+    let request = saves(&shell, cx)[0];
+    shell.until_ended(request, cx).await;
+    their_document(&shell, &root, "Their title", &saved);
+    read.send(()).unwrap();
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(session_base(&shell, cx).observation.is_none(), "unverified");
+    type_at_end(&shell, &host, "y", cx);
+
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx));
+    shell.click("close-draft-save-button", cx);
+    until_review(&shell, cx).await;
+    assert_eq!(saves(&shell, cx).len(), 1, "nothing more is sent");
+    assert!(shell.present("close-draft-dialog", cx), "the dialog stays");
+    assert!(
+        !holds_focus(&shell, "item-review", cx),
+        "the review takes no focus"
+    );
+    assert!(
+        holds_focus(&shell, "close-draft-dialog", cx),
+        "focus stays in the dialog"
+    );
+    shell.keys("escape", cx);
+    assert!(!shell.present("close-draft-dialog", cx));
+    assert!(shell.present("item-review", cx), "the review is in view");
+}
+
+/// A1: `secondary-s` in the details sheet over a changed item sends the
+/// save, whose `external_change` opens the review behind the sheet. As the
+/// review builds, it takes no focus: focus stays in the sheet, in its trap
+/// (contract 13), where the control, read only in the review, leaves it.
+#[gpui_kit::test]
+async fn the_review_built_behind_the_sheet_leaves_focus_in_it(cx: &mut TestAppContext) {
+    use gpui_kit::component::input::InputState;
+
+    use crate::desktop::model::edit::fields::Field;
+
+    cx.executor().allow_parking();
+    let (shell, root) = with_items(cx);
+    edited_ticket(&shell, &root, cx).await;
+    shell.fixture.save_ticket(&root, TICKET, "Theirs");
+    shell.click(ChipField::All.id(), cx);
+    assert!(shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    shell.frame(cx, |_, _| ());
+    let title: Entity<InputState> = pane(&shell, cx)
+        .read_with(cx, |pane, _| pane.sheet_input(Field::Title))
+        .expect("the Title control");
+    let handle = title.read_with(cx, |input, cx| input.focus_handle(cx));
+    assert!(shell.frame(cx, |window, _| handle.is_focused(window)));
+
+    shell.keys("secondary-s", cx);
+    let request = saves(&shell, cx)[0];
+    ended(&shell, request, cx).await;
+    assert_eq!(code(&shell, request, cx), Some(ResultCode::ExternalChange));
+    until_review(&shell, cx).await;
+    assert!(shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    assert!(
+        !holds_focus(&shell, "item-review", cx),
+        "the review takes no focus"
+    );
+    assert!(holds_focus(&shell, "sheet", cx), "focus stays in the sheet");
+}
