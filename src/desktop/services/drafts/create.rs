@@ -38,10 +38,10 @@ use manyhands::{
     drafts::{
         DraftBase, DraftErrorKind, DraftFields, DraftId, DraftTarget, ItemKind, is_new_item_base,
     },
-    repository::{AuthoringKind, ContextPrepareIntent, ItemDto, ItemDtoKind},
+    repository::{AuthoringKind, ContextPrepareIntent, ItemDto},
 };
 
-use super::{DraftRegistry, save::Verb};
+use super::{DraftRegistry, item_kind, save::Verb};
 use crate::desktop::{
     model::drafts::create::unmarked,
     services::{
@@ -143,11 +143,15 @@ impl DraftRegistry {
             return;
         };
         let Some(path) = live.session.base().map(|base| PathBuf::from(&base.path)) else {
+            // A create needs a base: not reached. The session may save again.
             live.session.set_saving(None);
+            cx.notify();
             return;
         };
         let target = live.session.target().clone();
-        let worktree = self.contexts.get(&key_of(&target)).cloned();
+        // The key the Create prepare's answer was kept under (`for_drafts`).
+        let worktree = ContextKey::of(&prepare_create(&target))
+            .and_then(|key| self.contexts.get(&key).cloned());
         let root = PathBuf::from(&target.repository);
         let reader = Reader::new(self.backend.clone(), cx.background_executor().clone());
         let read = cx.background_executor().spawn(async move {
@@ -213,22 +217,9 @@ fn prepare_create(target: &DraftTarget) -> Intent {
     }
 }
 
-/// The context key of a draft's item.
-fn key_of(target: &DraftTarget) -> ContextKey {
-    let kind = match target.item_kind {
-        ItemKind::Document => ItemDtoKind::Document,
-        ItemKind::Ticket => ItemDtoKind::Ticket,
-    };
-    ContextKey::new(&target.repository, kind, &target.item_id.to_string())
-}
-
 /// Whether `item`, read at a draft's path, is the draft's own item.
 fn holds(item: &ItemDto, target: &DraftTarget) -> bool {
-    let kind = match item.kind {
-        ItemDtoKind::Document => ItemKind::Document,
-        ItemDtoKind::Ticket => ItemKind::Ticket,
-    };
-    kind == target.item_kind
+    item_kind(item.kind) == target.item_kind
         && item
             .id
             .as_deref()

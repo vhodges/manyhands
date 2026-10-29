@@ -604,6 +604,114 @@ async fn a_create_retried_after_a_lost_answer_creates_one_item(cx: &mut TestAppC
     assert!(drafts.read_with(cx, |registry, _| registry.is_idle()));
 }
 
+/// A create of a new document whose answer is lost after it ran (the
+/// library's `BeforeRequestSettlement`): the made item, its draft, the
+/// lost request, and the commits on the item's branch then.
+async fn lost_create(
+    fixture: &Fixture,
+    backend: &DelayingBackend,
+    services: &Services,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> (NewItem, DesktopRequestId, String, usize) {
+    let drafts = services.drafts().clone();
+    let made = new_item(services, new_document(root, "New title"), cx).await;
+    backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            fixture.data_dir(),
+            FailurePoint::BeforeRequestSettlement,
+        )
+        .unwrap(),
+    );
+    let request = create(&drafts, made.draft, cx)
+        .await
+        .expect("the create is sent");
+    finished(services, request, 1, cx).await;
+    assert_eq!(
+        code(services, request, cx),
+        ResultCode::InternalError,
+        "lost"
+    );
+    backend.replace_service(RepositoryService::open_at(fixture.data_dir()).unwrap());
+    let shown = show(fixture.service(), root, DOCUMENT);
+    let branch = shown.context.branch.clone().expect("the item's branch");
+    let before = commits(root, &branch);
+    (made, request, branch, before)
+}
+
+/// What a user does after a lost create answer, which offers no Retry:
+/// Save again. Its text unchanged, the new create is `already_applied`:
+/// one item, no second commit, and the draft retires.
+#[gpui_kit::test]
+async fn a_create_sent_again_after_a_lost_answer_completes_the_draft(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let root = fixture.create_repository("a");
+    let (made, lost, branch, before) = lost_create(&fixture, &backend, &services, &root, cx).await;
+
+    let again = create(&drafts, made.draft, cx).await.expect("sent again");
+    assert_ne!(again, lost, "a new request");
+    finished(&services, again, 1, cx).await;
+
+    let (outcome, code, _) = answer(&services, again, cx);
+    assert_eq!((outcome, code), (Outcome::Noop, ResultCode::AlreadyApplied));
+    assert_eq!(commits(&root, &branch), before, "no second commit");
+    let service = fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let ours = service
+        .list_documents(&repo)
+        .unwrap()
+        .items
+        .iter()
+        .filter(|item| item.id.as_deref() == Some(DOCUMENT))
+        .count();
+    assert_eq!(ours, 1, "one item");
+    assert!(
+        stored(&fixture.draft_store(), made.draft).is_none(),
+        "retired"
+    );
+    assert!(drafts.read_with(cx, |registry, _| registry.is_idle()));
+}
+
+/// After a lost create answer, newer text saved again meets its own item
+/// at the path (`occupied_path`): no second item, and the draft goes on
+/// as an ordinary unverified draft, which its tab reviews.
+#[gpui_kit::test]
+async fn a_changed_create_sent_again_after_a_lost_answer_becomes_unverified(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let root = fixture.create_repository("a");
+    let (made, _, branch, before) = lost_create(&fixture, &backend, &services, &root, cx).await;
+
+    edit(
+        &drafts,
+        made.draft,
+        document_fields("Newer title", "Body\n"),
+        cx,
+    );
+    let again = create(&drafts, made.draft, cx).await.expect("sent again");
+    finished(&services, again, 1, cx).await;
+
+    assert_eq!(code(&services, again, cx), ResultCode::OccupiedPath);
+    assert_eq!(commits(&root, &branch), before, "no second commit");
+    let shown = show(fixture.service(), &root, DOCUMENT);
+    assert_eq!(shown.title.as_deref(), Some("New title"));
+    let base = drafts.read_with(cx, |registry, _| {
+        registry
+            .session(made.draft)
+            .and_then(|session| session.base().cloned())
+            .expect("the session goes on, with a base")
+    });
+    assert!(!is_new_item_base(&base), "an ordinary unverified draft");
+    assert_eq!(base.observation, None);
+    assert_eq!(base.source.as_deref(), Some(""));
+    assert!(create(&drafts, made.draft, cx).await.is_none(), "no create");
+}
+
 // ---- the tab ----
 
 /// One repository, `a`, built by `build` and refreshed, in an open window.
@@ -862,6 +970,102 @@ async fn a_not_created_draft_restores_into_a_tab_with_no_item_read(cx: &mut Test
     assert_eq!(shell.label("draft-save", cx).as_deref(), Some("Save"));
     assert!(!shell.present("draft-save-note", cx), "offered");
     assert!(prepares(&shell, cx).is_empty(), "nothing is prepared yet");
+}
+
+/// Restores the not-created draft stored for `root`'s ticket into its tab,
+/// from the banner, and waits for D2's section.
+async fn restore_in_tab(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
+    open(shell, root, cx);
+    shell.click("draft-restore-button", cx);
+    until(shell, cx, "the restore", |shell, cx| {
+        shell.present("draft-section", cx)
+    })
+    .await;
+}
+
+/// The ticket `TICKET` of `root`, as read now, if it exists.
+fn ticket_read(shell: &Shell, root: &Path) -> Option<ItemDto> {
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    service.show_item(&repo, &item_id(TICKET)).ok()
+}
+
+/// D2's section's Save of a restored not-created draft (R-42): Continue
+/// editing's steps with the Create intent, then its create. The item is
+/// created, and the draft retires.
+#[gpui_kit::test]
+async fn save_of_a_restored_not_created_draft_creates_it(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        store_new_ticket(fixture, root, "Left before", "Draft body\n");
+    });
+    let id = shell.fixture.draft_store().list().unwrap()[0].id;
+    restore_in_tab(&shell, &root, cx).await;
+
+    shell.click("draft-save-button", cx);
+    until(&shell, cx, "the create", |shell, cx| {
+        creates(shell, cx)
+            .first()
+            .is_some_and(|request| request_code(shell, *request, cx).is_some())
+    })
+    .await;
+    until(&shell, cx, "the draft retiring", |shell, _| {
+        held(&shell.fixture.draft_store(), id).is_none()
+    })
+    .await;
+
+    let sent = creates(&shell, cx);
+    assert_eq!(sent.len(), 1, "one create");
+    assert_eq!(request_code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    let prepared = prepares(&shell, cx);
+    assert!(prepared.len() == 1 && prepared[0].0, "one Create prepare");
+    let shown = ticket_read(&shell, &root).expect("the item is created");
+    assert_eq!(shown.title.as_deref(), Some("Left before"));
+    assert_eq!(shown.body.as_deref(), Some("Draft body\n"));
+    let branch = shown.context.branch.clone().expect("the item's branch");
+    let repository = Repository::open(&root).unwrap();
+    let tip = repository
+        .revparse_single(&format!("refs/heads/{branch}"))
+        .unwrap()
+        .peel_to_commit()
+        .unwrap();
+    assert!(
+        tip.tree()
+            .unwrap()
+            .get_path(Path::new(&format!(".manyhands/tickets/{TICKET}/ticket.md")))
+            .is_ok(),
+        "the item's file is committed"
+    );
+}
+
+/// The close dialog's Save of a restored not-created draft (R-42): the
+/// dialog offers it, the item is created once, and the tab closes.
+#[gpui_kit::test]
+async fn the_close_dialogs_save_of_a_not_created_draft_creates_it_and_closes(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        store_new_ticket(fixture, root, "Left before", "Draft body\n");
+    });
+    let id = shell.fixture.draft_store().list().unwrap()[0].id;
+    restore_in_tab(&shell, &root, cx).await;
+
+    shell.click(("tab-close", 0usize), cx);
+    assert!(shell.present("close-draft-dialog", cx), "it asks first");
+    assert_eq!(shell.label("close-draft-save", cx).as_deref(), Some("Save"));
+    assert!(!shell.present("close-draft-save-note", cx), "offered");
+    shell.click("close-draft-save-button", cx);
+    until(&shell, cx, "the tab closing", |shell, cx| {
+        tab_count(shell, cx) == 0
+    })
+    .await;
+
+    assert!(!shell.present("close-draft-dialog", cx), "closed with it");
+    let sent = creates(&shell, cx);
+    assert_eq!(sent.len(), 1, "created once");
+    assert_eq!(request_code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    let shown = ticket_read(&shell, &root).expect("the item is created");
+    assert_eq!(shown.title.as_deref(), Some("Left before"));
+    assert!(held(&shell.fixture.draft_store(), id).is_none(), "retired");
 }
 
 /// R-42: Continue editing of a not-created draft prepares with the Create

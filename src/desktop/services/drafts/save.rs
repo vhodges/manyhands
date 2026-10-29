@@ -57,9 +57,9 @@ pub(super) struct SaveRecord {
     pub(super) fields: DraftFields,
     /// The operation a pending answer named: abandoning it ends the save.
     pub(super) operation: Option<String>,
-    /// A new item's create (`create`), not a save: its completion and its
-    /// refusals are a create's.
-    pub(super) create: bool,
+    /// What it was sent as: a new item's create (`create`) completes and is
+    /// refused as a create.
+    pub(super) verb: Verb,
 }
 
 /// What a session's newest revision is sent as.
@@ -187,7 +187,7 @@ impl DraftRegistry {
         // An earlier create of the session, kept for the same request to be
         // sent again (`finished`), is over: this one is its save now.
         self.saves
-            .retain(|_, record| !(record.create && record.draft == id));
+            .retain(|_, record| !(record.verb == Verb::Create && record.draft == id));
         self.saves.insert(
             request,
             SaveRecord {
@@ -195,7 +195,7 @@ impl DraftRegistry {
                 revision,
                 fields,
                 operation: None,
-                create: verb == Verb::Create,
+                verb,
             },
         );
         cx.notify();
@@ -233,7 +233,9 @@ impl DraftRegistry {
             // A create stopped by what is at its path: the path is read in
             // the item's own context first (`create`), and the session saves
             // again once that read lands.
-            SaveVerdict::Keep if record.create && envelope.code == ResultCode::OccupiedPath => {
+            SaveVerdict::Keep
+                if record.verb == Verb::Create && envelope.code == ResultCode::OccupiedPath =>
+            {
                 self.saves.remove(&request);
                 self.check_occupied(draft, cx);
             }
@@ -244,7 +246,16 @@ impl DraftRegistry {
                 // sent again (the worker's `retry`) completes the draft once
                 // it has created the item, as its first answer would have.
                 // The session's next save or create drops it.
-                let again = record.create
+                //
+                // The session is not saving meanwhile, so that request sent
+                // again (the operation area's Retry, when its answer offers
+                // `request.retry`) and a new Save can both be in flight for
+                // the item: one save at a time is relaxed here, by ruling
+                // (Task 22 fix 1, M7). It is harmless: the new send drops
+                // the old record, so the old request's answer changes
+                // nothing, and the library answers whichever runs second
+                // `already_applied` or `occupied_path`.
+                let again = record.verb == Verb::Create
                     && !Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
                 if !again {
                     self.saves.remove(&request);

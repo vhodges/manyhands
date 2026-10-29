@@ -30,7 +30,10 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{DraftRegistry, DraftSaved, off_thread, save::SaveRecord};
+use super::{
+    DraftRegistry, DraftSaved, off_thread,
+    save::{SaveRecord, Verb},
+};
 use crate::desktop::{
     model::drafts::{create::base_after_create, save::base_after_save},
     services::{ReadKind, ReadResult, Reader},
@@ -73,9 +76,9 @@ impl DraftRegistry {
                 let previous = live.session.base()?;
                 let read = read_item(&read);
                 // A create's clears the new item's marker either way (R-20b).
-                Some(match record.create {
-                    true => base_after_create(&record.fields, read, previous),
-                    false => base_after_save(&record.fields, read, previous),
+                Some(match record.verb {
+                    Verb::Create => base_after_create(&record.fields, read, previous),
+                    Verb::Save => base_after_save(&record.fields, read, previous),
                 })
             }) else {
                 return;
