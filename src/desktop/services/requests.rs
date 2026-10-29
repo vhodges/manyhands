@@ -148,20 +148,28 @@ pub(crate) enum Intent {
         parent: RelationshipWrite<String>,
         observation: String,
     },
-    /// Prepares the work context an edit or a new item is written in.
+    /// Prepares the work context an edit or a new item is written in. No
+    /// token: neither context command records a checkpoint, so the desktop
+    /// never sends one again across the other (R-78, `undone_by`).
     ContextPrepare {
         root: PathBuf,
         kind: AuthoringKind,
         id: ItemId,
         intent: ContextPrepareIntent,
     },
-    /// Releases the work context of an item.
+    /// Releases the work context of an item. No token: neither context
+    /// command records a checkpoint, so the desktop never sends one again
+    /// across the other (R-78, `undone_by`).
     ContextRelease {
         root: PathBuf,
         kind: AuthoringKind,
         id: ItemId,
     },
-    /// A new document at `path`. It holds the body.
+    /// A new document at `path`. It holds the body. No token: the ID is
+    /// fixed when the draft is written; the same request is answered from
+    /// its record, and a new one finds the item `already_applied`, an
+    /// earlier attempt's write not committed (`external_change`), or the
+    /// path occupied (`occupied_path`).
     DocumentCreate {
         root: PathBuf,
         id: ItemId,
@@ -169,7 +177,11 @@ pub(crate) enum Intent {
         title: String,
         body: String,
     },
-    /// A new ticket. It holds the body.
+    /// A new ticket. It holds the body. No token: the ID is fixed when the
+    /// draft is written; the same request is answered from its record, and
+    /// a new one finds the item `already_applied`, an earlier attempt's
+    /// write not committed (`external_change`), or the path occupied
+    /// (`occupied_path`).
     TicketCreate {
         root: PathBuf,
         id: ItemId,
