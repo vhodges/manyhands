@@ -688,6 +688,37 @@ async fn move_waits_for_the_draft_listing(cx: &mut TestAppContext) {
     assert!(moves(&shell, cx).is_empty(), "nothing was sent");
 }
 
+/// R-23 (Part E fix round 2): a draft store that did not open is never
+/// listed, and no draft is read from it or kept in it, so Move… does not
+/// wait for a listing then. Its folder is a link, as `edit_tests` makes
+/// it. Move… is offered on its other conditions, and a press opens its
+/// dialog.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn move_is_offered_while_the_draft_store_did_not_open(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), fixture.data_dir().join("drafts")).unwrap();
+    let root = fixture.create_repository("a");
+    fixture.commit_file(&root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    shell.select(&root, cx);
+    open(&shell, &root, DOCUMENT, cx);
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    assert!(
+        drafts.read_with(cx, |registry, _| registry.unavailable().is_some()),
+        "the store did not open"
+    );
+    assert!(!drafts_listed(&shell, cx), "it is never listed");
+    assert_offered(&shell, cx);
+    shell.click("sheet-move-button", cx);
+    assert!(dialog_open(&shell, cx), "Move… opens its dialog");
+}
+
 /// Moves `root`'s document to `docs/archive` from its tab's sheet, with
 /// the answer lost after the move ran (the library's
 /// `BeforeRequestSettlement`, as Task 22's `lost_create` loses a create's):

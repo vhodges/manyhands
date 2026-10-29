@@ -128,9 +128,10 @@ impl ItemPane {
         });
         // A stored draft is known only from a listing that is ready: while
         // it loads or has failed, Move waits, as a release does (Part E
-        // review, M1).
-        let listed = drafts.listing().rows().is_some();
-        if !listed
+        // review, M1). A store that did not open is never listed, and
+        // keeps no draft: Move does not wait for it (fix round 2).
+        let known = drafts.unavailable().is_some() || drafts.listing().rows().is_some();
+        if !known
             || self.edit.phase() != Phase::Viewing
             || self.has_session()
             || self.draft.restoring()
