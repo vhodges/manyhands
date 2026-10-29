@@ -96,12 +96,16 @@ pub(crate) fn new_item_draft(
 /// tab reads it (design, Create: the new tab opens editing, with its header
 /// built from the draft's fields): the draft's named fields over its base's
 /// path and context kind, open, with no body, short code, relationship,
-/// readiness, other key or problem. A field left empty is not shown.
+/// readiness, other key or problem. A field left empty is not shown. Once
+/// `created`, its context kind is Active, whatever the base holds: every
+/// create commits in the item's own private context, the one its Create
+/// prepare made ready (Part D fix 2, N2).
 pub(crate) fn shown_new_item(
     kind: ItemDtoKind,
     id: &ItemId,
     base: &DraftBase,
     fields: &DraftFields,
+    created: bool,
 ) -> ItemDto {
     let named = |value: &str| (!value.is_empty()).then(|| value.to_owned());
     let (title, ticket_type, status, project, team) = match fields {
@@ -147,6 +151,7 @@ pub(crate) fn shown_new_item(
         observation: None,
         context: ItemContextDto {
             kind: match context.kind {
+                _ if created => ItemContextKind::Active,
                 ContextKind::Primary => ItemContextKind::Primary,
                 ContextKind::Unverified => ItemContextKind::Unverified,
                 ContextKind::Active => ItemContextKind::Active,

@@ -176,8 +176,8 @@ impl ItemPane {
         let Some(session) = &self.edit.session else {
             return;
         };
-        // A created item not read yet still has its draft's header (M7).
-        self.edit.stand_in.ended(&session.base, &session.meta);
+        // A created item not read yet stands in as created (M7, N1).
+        self.edit.stand_in.ended(&session.base);
         // A review still open goes with it, and D2's schedule resumes.
         self.close_review(cx);
         self.edit.session = None;

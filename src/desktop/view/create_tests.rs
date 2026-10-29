@@ -25,7 +25,10 @@ use git2::Repository;
 use gpui_kit::{Entity, Focusable, TestAppContext, component::input::InputState};
 use manyhands::{
     drafts::{Draft, DraftStore, Entry, Held, ItemKind, is_new_item_base},
-    repository::{ClosureState, ItemDto, ItemDtoKind},
+    repository::{
+        CancellationToken, ClosureState, DocumentDraft, DocumentSaveInput, ItemDto, ItemDtoKind,
+        Mutation, MutationCall, NoProgress, RequestId, keys::SessionCredentials,
+    },
     results::ResultCode,
 };
 
@@ -40,7 +43,7 @@ use crate::desktop::{
         JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
-    test_support::fixtures::{Fixture, item_id},
+    test_support::fixtures::{Fixture, NoPassphrase, item_id},
     view::{
         drafts::row_id,
         editor::host::EditorHost,
@@ -1348,4 +1351,171 @@ async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_rele
         (false, false),
         "the context is gone"
     );
+}
+
+// ---- Part D fix 2 ----
+
+/// Another actor saves the document `id` of `root` retitled `title`, from
+/// the observation `show_item` gives it now.
+fn retitled_by_another(shell: &Shell, root: &Path, id: &str, title: &str) {
+    let shown = show(shell, root, id).expect("the document is created");
+    let saved = shell.fixture.service().execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: None,
+            mutation: Mutation::DocumentSave(DocumentSaveInput {
+                root: root.to_owned(),
+                id: item_id(id),
+                draft: DocumentDraft {
+                    title: title.to_owned(),
+                    body: shown.body.clone().unwrap_or_default(),
+                },
+                observation: shown.observation.clone(),
+            }),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+}
+
+/// N1 and the kept session: a created item its tab has not read yet
+/// stands in with the fields it was created with once its session no
+/// longer shows. A Title changed in the sheet after the create shows while
+/// the session is shown; Done keeps the session (its draft is stored), and
+/// the header and the strip show the created title; the kept draft's
+/// Discard… ends the session, and they still do.
+#[gpui_kit::test]
+async fn a_created_item_not_yet_read_stands_in_as_created_once_kept_or_discarded(
+    cx: &mut TestAppContext,
+) {
+    let (shell, _root) = shell(cx, |_, _| {});
+    new_document(&shell, "Plans", "plans.md", cx).await;
+    shell.click("create-ok", cx);
+    let host = until_editing(&shell, cx).await;
+    type_at_end(&shell, &host, "First", cx);
+    // The tab's reads after the create are held where they reach the
+    // library.
+    let reads: Vec<_> = (0..3)
+        .map(|_| shell.backend.hold_read(ReadKind::Item))
+        .collect();
+    shell.click("item-save", cx);
+    let sent = creates(&shell, cx);
+    assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
+    until(&shell, cx, "the draft retiring", |shell, _| {
+        shell.fixture.draft_store().list().unwrap().is_empty()
+    })
+    .await;
+
+    shell.click(ChipField::All.id(), cx);
+    shell.frame(cx, |_, _| ());
+    sheet_retype(&shell, Field::Title, "Changed", cx);
+    shell.keys("escape", cx);
+    assert_eq!(
+        shell.label("item-title", cx).as_deref(),
+        Some("Changed"),
+        "a shown session's fields"
+    );
+    until(&shell, cx, "the new draft", |shell, _| {
+        !shell.fixture.draft_store().list().unwrap().is_empty()
+    })
+    .await;
+
+    shell.click("item-done", cx);
+    until(&shell, cx, "the session kept", |shell, cx| {
+        shell.present("item-kept", cx)
+    })
+    .await;
+    assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
+    assert_eq!(
+        shell.label("item-title", cx).as_deref(),
+        Some("Plans"),
+        "kept: the title it was created with"
+    );
+    assert_eq!(shell.rows("tab", cx), ["Plans, unsaved"]);
+
+    shell.click("item-kept-discard", cx);
+    assert!(shell.present("discard-draft-dialog", cx), "it asks first");
+    shell.click("discard-draft-confirm", cx);
+    until(&shell, cx, "the session ending", |shell, cx| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+    })
+    .await;
+    assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
+    assert_eq!(
+        shell.label("item-title", cx).as_deref(),
+        Some("Plans"),
+        "discarded: the title it was created with"
+    );
+    assert_eq!(shell.rows("tab", cx), ["Plans"]);
+
+    for held in reads {
+        let _ = held.send(());
+    }
+    until(&shell, cx, "the item read", |shell, cx| {
+        shell.present(ChipField::Updated.id(), cx)
+    })
+    .await;
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Plans"));
+}
+
+/// N2: every create commits in the item's own private context. When D2's
+/// read after the create finds the item changed by another actor, the
+/// session's base keeps the new item's context (Primary); once Done has
+/// ended the session, before the tab's read lands, the pill and the sheet
+/// still say the private copy, and the sheet gives no provenance.
+#[gpui_kit::test]
+async fn a_created_item_ended_before_its_read_is_viewed_as_the_private_copy(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |_, _| {});
+    new_document(&shell, "Plans", "plans.md", cx).await;
+    shell.click("create-ok", cx);
+    let host = until_editing(&shell, cx).await;
+    let id = opened_id(&shell, cx);
+    type_at_end(&shell, &host, "First", cx);
+    let reads: Vec<_> = (0..3)
+        .map(|_| shell.backend.hold_read(ReadKind::Item))
+        .collect();
+    let checked = shell.backend.hold_read(ReadKind::DraftItem);
+    shell.click("item-save", cx);
+    let sent = creates(&shell, cx);
+    assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
+    // Another actor retitles the item before D2's read after the create
+    // lands: the base is the fields sent, over the new item's context.
+    retitled_by_another(&shell, &root, &id, "Someone else's title");
+    checked.send(()).unwrap();
+    until(&shell, cx, "the draft retiring", |shell, _| {
+        shell.fixture.draft_store().list().unwrap().is_empty()
+    })
+    .await;
+
+    shell.click("item-done", cx);
+    until(&shell, cx, "Done ending the session", |shell, cx| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+    })
+    .await;
+    assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Plans"));
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Viewing your private copy")
+    );
+    shell.click(ChipField::All.id(), cx);
+    shell.frame(cx, |_, _| ());
+    assert_eq!(
+        shell.label("sheet-description", cx).as_deref(),
+        Some("Viewing your private copy. Choose Edit to change these.")
+    );
+    assert!(!shell.present("provenance", cx), "no provenance");
+    shell.keys("escape", cx);
+
+    for held in reads {
+        let _ = held.send(());
+    }
+    until(&shell, cx, "the item read", |shell, cx| {
+        shell.present(ChipField::Updated.id(), cx)
+    })
+    .await;
 }

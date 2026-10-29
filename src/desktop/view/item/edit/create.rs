@@ -37,9 +37,11 @@
 //!   began on the draft until the tab's read first finds the item, a
 //!   session Done ended after the create included (`StandIn`,
 //!   `new_item_shown`); D1's not-found line and D2's restored section are
-//!   not shown meanwhile. The stand-in claims no provenance and no
-//!   closure: nothing was read. Once the read has found the item, nothing
-//!   stands in for it again in that tab.
+//!   not shown meanwhile. Once its session no longer shows, kept or ended,
+//!   a created item stands in as it was created, in its private context.
+//!   The stand-in claims no provenance and no closure: nothing was read.
+//!   Once the read has found the item, nothing stands in for it again in
+//!   that tab.
 //!
 //! Done, Discard and the Drafts page's discard of such a session are
 //! `done` and `leave`'s: there is no saved copy to view, so the tab
@@ -76,11 +78,13 @@ pub(super) enum StandIn {
     #[default]
     Unset,
     /// A session began on a new item's draft: its fields stand in while it
-    /// lives.
+    /// is shown, and, once Done has kept it with its item created, the
+    /// fields its base holds, the saved copy the tab views (Part D fix 2).
     Session,
     /// That session ended, its item created, before the read found the
-    /// item: the base and fields it ended with.
-    Ended(Box<(DraftBase, DraftFields)>),
+    /// item: the base it ended on, whose fields are the item as created or
+    /// last saved, never the session's unsaved ones (Part D fix 2, N1).
+    Ended(Box<DraftBase>),
     /// The tab's read found the item: nothing stands in for it again, so a
     /// later read that does not find it shows D1's status.
     Found,
@@ -94,15 +98,15 @@ impl StandIn {
         }
     }
 
-    /// The session holding `base` and `meta` ended. Its item created, they
-    /// stand in, as they were, until the read finds the item (M7). Its item
-    /// never created, nothing does: a draft still stored is D2's to offer,
-    /// as any stored draft's.
-    pub(super) fn ended(&mut self, base: &DraftBase, meta: &DraftFields) {
+    /// The session on `base` ended. Its item created, the base stands in
+    /// until the read finds the item (M7): the item as created, whatever
+    /// the session held unsaved (N1). Its item never created, nothing does:
+    /// a draft still stored is D2's to offer, as any stored draft's.
+    pub(super) fn ended(&mut self, base: &DraftBase) {
         if matches!(self, Self::Session) {
             *self = match is_new_item_base(base) {
                 true => Self::Unset,
-                false => Self::Ended(Box::new((base.clone(), meta.clone()))),
+                false => Self::Ended(Box::new(base.clone())),
             };
         }
     }
@@ -155,12 +159,14 @@ impl ItemPane {
         let OpenTarget::Item { kind, id, .. } = self.model.target() else {
             return None;
         };
-        self.with_new_item(cx, |base, fields| shown_new_item(*kind, id, base, fields))
+        self.with_new_item(cx, |base, fields, created| {
+            shown_new_item(*kind, id, base, fields, created)
+        })
     }
 
     /// The title `new_item_shown` gives, alone, when it gives one.
     pub(in crate::desktop::view) fn new_item_title(&self, cx: &App) -> Option<String> {
-        self.with_new_item(cx, |_, fields| match fields {
+        self.with_new_item(cx, |_, fields, _| match fields {
             DraftFields::Document { title, .. } | DraftFields::Ticket { title, .. } => {
                 (!title.is_empty()).then(|| title.clone())
             }
@@ -171,24 +177,32 @@ impl ItemPane {
 
     /// Whether the tab shows a new item's stand-in (`new_item_shown`).
     pub(in crate::desktop::view::item) fn shows_new_item(&self, cx: &App) -> bool {
-        self.with_new_item(cx, |_, _| ()).is_some()
+        self.with_new_item(cx, |_, _, _| ()).is_some()
     }
 
-    /// `f` of the base and fields `new_item_shown` shows.
+    /// `f` of the base and fields `new_item_shown` shows, and whether they
+    /// are a created item's whose session no longer shows (Part D fix 2):
+    /// the item as created, Done having kept or ended its session. A shown
+    /// session gives its own fields (Task 23's header from the draft), as
+    /// a never-created item's draft does.
     fn with_new_item<R>(
         &self,
         cx: &App,
-        f: impl FnOnce(&DraftBase, &DraftFields) -> R,
+        f: impl FnOnce(&DraftBase, &DraftFields, bool) -> R,
     ) -> Option<R> {
         if self.model.item().rows().is_some() {
             return None;
         }
         match &self.edit.stand_in {
             StandIn::Found => return None,
-            StandIn::Ended(ended) => return Some(f(&ended.0, &ended.1)),
+            StandIn::Ended(base) => return Some(f(base, &base.fields, true)),
             StandIn::Session => {
                 let session = self.edit.session.as_ref()?;
-                return Some(f(&session.base, &session.meta));
+                // A kept session views the saved copy.
+                if session.kept() && !session.never_created() {
+                    return Some(f(&session.base, &session.base.fields, true));
+                }
+                return Some(f(&session.base, &session.meta, false));
             }
             StandIn::Unset => {}
         }
@@ -198,7 +212,7 @@ impl ItemPane {
         let continuing = self.edit.continuing.as_ref()?;
         let registry = self.services.drafts().read(cx);
         let session = registry.session(registry.current_id(continuing.draft)?)?;
-        Some(f(session.base()?, session.current()))
+        Some(f(session.base()?, session.current(), false))
     }
 
     /// Whether the Create prepare of a draft continued here runs: the tab
