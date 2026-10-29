@@ -1117,3 +1117,56 @@ async fn cancel_while_a_restored_save_waits_for_the_check_sends_nothing(cx: &mut
     assert_eq!(phase(&shell, cx), Phase::Editing);
     assert_eq!(parent_of(&shell, &root), None, "nothing is written");
 }
+
+/// N2: a tab whose Keep draft is still writing closes once the write lands,
+/// and the next frame would focus the content region. Meanwhile another
+/// tab is shown with its details sheet open: the refocus is dropped, so
+/// focus stays in the sheet, and its Escape gives focus back to its chip.
+#[gpui_kit::test]
+async fn a_background_tab_closing_takes_no_focus_from_the_sheet(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Kept", "");
+        fixture.commit_ticket(root, OTHER, "Shown", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    assert!(attached(&shell, &root, TICKET, cx).is_some(), "a draft");
+    type_at_end(&shell, &host, "y", cx);
+    let write = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-keep-button", cx);
+    assert!(!shell.present("close-draft-dialog", cx));
+    assert_eq!(tabs(&shell, cx), 1, "Keep draft waits for its write");
+
+    open(&shell, ticket(&root, OTHER), cx);
+    shell.click(ChipField::All.id(), cx);
+    assert!(shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    shell.frame(cx, |_, _| ());
+    assert!(holds_focus(&shell, "sheet", cx), "the sheet has the focus");
+
+    drop(write);
+    shell
+        .until_drawn(cx, "the kept tab closing", |shell, cx| {
+            tabs(shell, cx) == 1
+                && shell
+                    .workspace
+                    .read_with(cx, |workspace, _| workspace.tab_keys())
+                    .iter()
+                    .all(|tab| *tab != TabKey::for_target(&ticket(&root, TICKET)))
+        })
+        .await;
+    shell.frame(cx, |_, _| ());
+    assert!(shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    assert!(holds_focus(&shell, "sheet", cx), "focus stays in the sheet");
+
+    shell.keys("escape", cx);
+    assert!(!shell.frame(cx, |window, cx| window.has_active_sheet(cx)));
+    assert!(
+        holds_focus(&shell, ChipField::All.id(), cx),
+        "back on its chip"
+    );
+}

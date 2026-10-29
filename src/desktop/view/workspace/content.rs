@@ -115,7 +115,9 @@ impl Workspace {
     }
 
     /// Opens the Drafts page a tab's Review in Drafts asked for, and
-    /// focuses a tab whose draft was discarded, and opens Settings on the
+    /// focuses a tab whose draft was discarded, or the content region once
+    /// a tab closed or followed its item (not behind the details sheet,
+    /// N2), and opens Settings on the
     /// repository a tab's create asked for: the identity form, where its
     /// initials are set. While a dialog is open the request waits, as D1's
     /// actions do not act behind one; the frame after the dialog closes
@@ -125,6 +127,10 @@ impl Workspace {
             return;
         }
         if std::mem::take(&mut self.content.refocus) {
+            self.focus_region(Region::Content, window, cx);
+        }
+        // Dropped behind the details sheet, never kept for its close (N2).
+        if std::mem::take(&mut self.content.landed_refocus) && !window.has_active_sheet(cx) {
             self.focus_region(Region::Content, window, cx);
         }
         if let Some(id) = self.content.review.take() {
@@ -311,7 +317,7 @@ impl Workspace {
     /// follows the item to `target`, in its place in the strip, and reads it
     /// there; a tab already open on it is shown instead, and this one
     /// closes. A shown tab's content takes the focus at the next frame, the
-    /// view that held it gone.
+    /// view that held it gone, unless the details sheet is open then (N2).
     pub(in crate::desktop::view) fn follow_tab(
         &mut self,
         id: TabId,
@@ -325,7 +331,7 @@ impl Workspace {
             pane.update(cx, |pane, _| pane.end_region_with(details));
         }
         if shown {
-            self.content.refocus = true;
+            self.content.landed_refocus = true;
         }
         cx.notify();
     }
@@ -407,10 +413,11 @@ impl Workspace {
 
     /// The tab `id` settled what its unsaved work comes to, in its own
     /// dialog or after a discard elsewhere (R-71): it closes, and the next
-    /// frame focuses the content region, as `secondary-w` does.
+    /// frame focuses the content region, as `secondary-w` does, unless the
+    /// details sheet is open then (Task 27 fix 2, N2).
     pub(in crate::desktop::view) fn close_settled(&mut self, id: TabId, cx: &mut Context<Self>) {
         if self.content.tabs.close(id) {
-            self.content.refocus = true;
+            self.content.landed_refocus = true;
             cx.notify();
         }
     }

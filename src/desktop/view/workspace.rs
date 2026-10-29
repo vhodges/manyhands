@@ -61,6 +61,11 @@ struct ContentArea {
     /// A tab's restored draft was discarded: the next frame focuses the
     /// tab's content.
     refocus: bool,
+    /// A tab closed, or followed its repaired item, once an answer landed:
+    /// the next frame focuses the content region, as `refocus` does, but
+    /// not while the details sheet is open, whose close gives focus back to
+    /// its chip (Task 27 fix 2, N2).
+    landed_refocus: bool,
     /// A chip's request for its tab's details sheet, for the next frame to
     /// open.
     details: Option<(WeakEntity<ItemPane>, ChipField)>,
@@ -229,6 +234,7 @@ impl Workspace {
                 review: None,
                 settings_for: None,
                 refocus: false,
+                landed_refocus: false,
                 details: None,
                 sheet: None,
             },
