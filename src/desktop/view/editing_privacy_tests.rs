@@ -25,7 +25,7 @@
 
 use std::path::Path;
 
-use gpui_kit::{ElementId, Entity, Focusable, TestAppContext, component::WindowExt};
+use gpui_kit::{ElementId, Entity, TestAppContext, component::WindowExt, test::ElementSnapshot};
 use manyhands::{drafts::DraftError, repository::ItemDtoKind, results::ResultCode};
 
 use crate::desktop::{
@@ -33,8 +33,7 @@ use crate::desktop::{
     services::requests::{DesktopRequestId, Intent, RequestState},
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
     view::{
-        editor::host::EditorHost,
-        harness::{Shell, key},
+        harness::{Shell, is_save, key},
         item::ItemPane,
     },
 };
@@ -45,19 +44,26 @@ const IMAGE: &str = "SENTINEL-D3-IMAGE-b7d3.png";
 const SENTINELS: [&str; 3] = [BODY, LINK, IMAGE];
 
 /// Where the design puts a body's text, so a sentinel may show there
-/// (Task 26 notes, obligation 5): the read view, the edit editor's and the
-/// review's draft section (R-38), a comment's read editor, the repair
-/// text area, the toolbar's link field, an Inspect tab's whole file
-/// (R-64), and the nearest-match banner's path.
-const ALLOWED: [&str; 7] = [
+/// (Task 26 notes, obligation 5; fix round 1, I1): inside the editors
+/// themselves, the read view, the edit editor and the review's result
+/// editor; a comment's read editor; the repair text area; the toolbar's
+/// link field; an Inspect tab's whole file (R-64); and the nearest-match
+/// banner's path. The rest of a draft section, the editing sheet and the
+/// review's own words, is read.
+const ALLOWED: [&str; 8] = [
     "item-read",
-    "draft-section",
+    "item-edit-view",
+    "review-result-editor",
     "comment-body",
     "repair-source",
     "toolbar-link-popover",
     "item-source",
     "item-link",
 ];
+
+/// The review's values of a field, side by side: the Body row's alone may
+/// show the body.
+const REVIEW_VALUES: [&str; 3] = ["review-before", "review-theirs", "review-mine"];
 
 const EDITED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY0";
 const RELEASED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY1";
@@ -116,11 +122,36 @@ fn name(id: &ElementId) -> Option<&str> {
     }
 }
 
-/// The first place in `ALLOWED` that `path` is inside, if any.
-fn allowed(path: &[ElementId]) -> Option<&'static str> {
+/// Where a sentinel may show for the element at `path`: one of the review's
+/// values at `body`, the Body row's index, by its name; else the first
+/// place in `ALLOWED` that `path` is inside. `None` if neither.
+fn allowed(path: &[ElementId], body: Option<u64>) -> Option<&'static str> {
+    if let Some(ElementId::NamedInteger(name, ix)) = path.last()
+        && Some(*ix) == body
+        && let Some(value) = REVIEW_VALUES
+            .iter()
+            .copied()
+            .find(|value| *value == &**name)
+    {
+        return Some(value);
+    }
     path.iter()
         .filter_map(name)
         .find_map(|name| ALLOWED.iter().copied().find(|allowed| *allowed == name))
+}
+
+/// The index of the review's Body row, while the review is drawn.
+fn body_row(snapshots: &[ElementSnapshot]) -> Option<u64> {
+    snapshots
+        .iter()
+        .find_map(|snapshot| match snapshot.path().last() {
+            Some(ElementId::NamedInteger(name, ix))
+                if &**name == "review-field" && snapshot.label() == Some("Body") =>
+            {
+                Some(*ix)
+            }
+            _ => None,
+        })
 }
 
 /// Everything the sweep read, by where it was read, and where inside
@@ -144,10 +175,12 @@ impl Seen {
     fn window(&mut self, shell: &Shell, cx: &mut TestAppContext) {
         self.add("operation entry", operation_entries(shell, cx));
         let drawn: Vec<(Option<&'static str>, String)> = shell.frame(cx, |window, _| {
-            gpui_kit::base::test_support::snapshots(window)
+            let snapshots = gpui_kit::base::test_support::snapshots(window);
+            let body = body_row(&snapshots);
+            snapshots
                 .iter()
                 .flat_map(|snapshot| {
-                    let at = allowed(snapshot.path());
+                    let at = allowed(snapshot.path(), body);
                     [snapshot.label(), snapshot.value()]
                         .into_iter()
                         .flatten()
@@ -284,30 +317,6 @@ async fn ended(
     })
 }
 
-/// The shown tab's edit host, once its editor opened.
-async fn until_editing(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
-    shell
-        .until_drawn(cx, "the edit editor opened", |shell, cx| {
-            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
-        })
-        .await;
-    pane(shell, cx)
-        .read_with(cx, |pane, _| pane.edit_host())
-        .expect("editing")
-}
-
-/// Types `typed` at the end of the edit editor's text, through the window.
-fn type_at_end(shell: &Shell, host: &Entity<EditorHost>, typed: &str, cx: &mut TestAppContext) {
-    let editor = host.read_with(cx, |host, _| host.editor().clone());
-    let end = editor.read_with(cx, |editor, _| editor.text().len());
-    editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
-    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
-    shell.frame(cx, |window, cx| window.focus(&handle, cx));
-    shell.frame(cx, |_, _| ());
-    shell.visual(cx).simulate_input(typed);
-    shell.run(cx);
-}
-
 /// Opens the sheet from All details, focuses the control of `field`, and
 /// types `typed` there, through the window.
 fn type_in_sheet(shell: &Shell, field: Field, typed: &str, cx: &mut TestAppContext) {
@@ -323,13 +332,6 @@ fn type_in_sheet(shell: &Shell, field: Field, typed: &str, cx: &mut TestAppConte
     shell.keys("end", cx);
     shell.visual(cx).simulate_input(typed);
     shell.run(cx);
-}
-
-fn is_save(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::TicketSave { .. } | Intent::DocumentSave { .. }
-    )
 }
 
 /// Viewing, the comment editors, the details sheet viewing and editing, a
@@ -375,11 +377,17 @@ async fn sentinels_reach_no_surface_through_editing_saving_and_release(cx: &mut 
 
     // Edit, a typed change, and the sheet while editing, its Title edited.
     shell.click("item-edit", cx);
-    let host = until_editing(&shell, cx).await;
-    type_at_end(&shell, &host, " more", cx);
+    let host = shell.until_editing(cx).await;
+    shell.type_at_end(&host, " more", cx);
     seen.window(&shell, cx);
     type_in_sheet(&shell, Field::Title, " edited", cx);
     seen.window(&shell, cx);
+    assert!(
+        seen.read
+            .iter()
+            .any(|(at, text)| *at == "drawn" && text == "Private edited"),
+        "the editing sheet is read: its Title holds what was typed"
+    );
     shell.keys("escape", cx);
 
     // A save.
@@ -390,7 +398,7 @@ async fn sentinels_reach_no_surface_through_editing_saving_and_release(cx: &mut 
     seen.window(&shell, cx);
 
     // A save the library refuses as `invalid_input`: a NUL in Project.
-    type_at_end(&shell, &host, " again", cx);
+    shell.type_at_end(&host, " again", cx);
     type_in_sheet(&shell, Field::Project, "\u{0}", cx);
     shell.keys("escape", cx);
     shell.click("item-save", cx);
@@ -404,7 +412,7 @@ async fn sentinels_reach_no_surface_through_editing_saving_and_release(cx: &mut 
 
     // A stale save: the item was saved since; the review opens.
     shell.fixture.save_ticket(&a, EDITED, "Theirs");
-    type_at_end(&shell, &host, " stale", cx);
+    shell.type_at_end(&host, " stale", cx);
     shell.click("item-save", cx);
     let (code, message) = ended(&shell, is_save, cx).await;
     assert_eq!(code, ResultCode::ExternalChange);
@@ -418,8 +426,8 @@ async fn sentinels_reach_no_surface_through_editing_saving_and_release(cx: &mut 
     assert!(
         seen.allowed
             .iter()
-            .any(|(at, text)| *at == "draft-section" && text.contains(BODY)),
-        "the scan sees drawn text: the review shows the body"
+            .any(|(at, text)| REVIEW_VALUES.contains(at) && text.contains(BODY)),
+        "the scan sees drawn text: the review's Body row shows the body"
     );
     shell.click("review-cancel", cx);
     seen.window(&shell, cx);
@@ -427,7 +435,7 @@ async fn sentinels_reach_no_surface_through_editing_saving_and_release(cx: &mut 
     // A release: Edit, then Done with nothing changed.
     open(&shell, ticket(&a, RELEASED), cx);
     shell.click("item-edit", cx);
-    until_editing(&shell, cx).await;
+    shell.until_editing(cx).await;
     shell.click("item-done", cx);
     let (code, message) = ended(
         &shell,
@@ -494,9 +502,9 @@ async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut Test
         })
         .await;
     shell.keys("enter", cx);
-    let host = until_editing(&shell, cx).await;
+    let host = shell.until_editing(cx).await;
     host.update(cx, |host, cx| host.set_rich(false, cx));
-    type_at_end(&shell, &host, &sentinel_body(), cx);
+    shell.type_at_end(&host, &sentinel_body(), cx);
     seen.window(&shell, cx);
     shell.click("item-save", cx);
     let (code, message) = ended(
