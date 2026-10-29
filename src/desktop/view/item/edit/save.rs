@@ -222,16 +222,15 @@ impl ItemPane {
         }
         // A never-created item's Save is its create (R-20b).
         let create = session.never_created();
-        if let Some(blocked) = self.save_blocked(cx) {
-            let toolbar = session.toolbar.clone();
-            toolbar.update(cx, |toolbar, cx| toolbar.note(blocked, cx));
-            self.end_run(cx);
-            return;
-        }
+        // With no D2 session the fields go as they are; that send consults
+        // the gate itself.
         let Some(id) = self.live_draft(cx) else {
             self.send_direct(cx);
             return;
         };
+        if self.save_stopped(cx) {
+            return;
+        }
         if let Some(run) = &mut self.edit.save.run {
             run.asked = true;
         }
@@ -269,9 +268,29 @@ impl ItemPane {
         self.end_run(cx);
     }
 
+    /// Whether the one gate stops the save now: a required field left
+    /// empty, or the relationships (`save_blocked`), ends it, saying why in
+    /// the toolbar, and the tab stays dirty.
+    fn save_stopped(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(blocked) = self.save_blocked(cx) else {
+            return false;
+        };
+        if let Some(session) = &self.edit.session {
+            let toolbar = session.toolbar.clone();
+            toolbar.update(cx, |toolbar, cx| toolbar.note(blocked, cx));
+        }
+        self.end_run(cx);
+        true
+    }
+
     /// Sends the editor's fields over the session's base, with no D2
-    /// session to write them first.
+    /// session to write them first: from `send_save`, and once D2 answers
+    /// that it sent nothing, its session having ended. Both consult the
+    /// gate here (Task 27 fix 1, B1).
     fn send_direct(&mut self, cx: &mut Context<Self>) {
+        if self.save_stopped(cx) {
+            return;
+        }
         let target = self.draft_target();
         let Some((session, target)) = self.edit.session.as_ref().zip(target) else {
             return self.end_run(cx);

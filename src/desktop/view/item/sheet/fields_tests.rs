@@ -1151,3 +1151,39 @@ async fn the_sheets_body_is_a_draft_section_while_editing(cx: &mut TestAppContex
         "typed text is drawn only in the section"
     );
 }
+
+/// Task 27 fix 1, B1: every save consults the one gate, the one sent as
+/// the fields are, once D2 answers that it sent nothing, its session having
+/// ended, included. Title is emptied while D2 holds the save: nothing is
+/// sent, the toolbar says the sheet's own words, and the tab stays dirty.
+#[gpui_kit::test]
+async fn a_save_d2_sent_nothing_for_still_consults_the_gate(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Gated", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
+    let untitled =
+        crate::desktop::model::edit::fields::with_value(&meta(&shell, cx), Field::Title, "");
+    let (pane, registry) = (pane(&shell, cx), registry(&shell, cx));
+    shell.frame(cx, |window, cx| {
+        pane.update(cx, |pane, cx| {
+            assert!(pane.save_requested(window, cx), "Save is asked of D2");
+            pane.change_fields(untitled, cx);
+        });
+        registry.update(cx, |registry, cx| registry.end_session_for_testing(id, cx));
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+
+    assert!(saves(&shell, cx).is_empty(), "nothing is sent");
+    assert_eq!(
+        shell.label("toolbar-status", cx).as_deref(),
+        Some(TICKET_NEEDS_TITLE)
+    );
+    assert_eq!(phase(&shell, cx), Phase::Editing, "the run ended");
+    assert!(dirty(&shell, cx), "still dirty");
+}
