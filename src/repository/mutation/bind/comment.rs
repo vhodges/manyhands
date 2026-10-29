@@ -338,7 +338,10 @@ pub(super) fn resumed(
             (ran.answer, ran.standing, published, None, None)
         }
         // It published, and what it published does not hold the comment:
-        // nothing a call of the resume changes.
+        // nothing a call of the resume changes, and the answer is final.
+        // A synchronization that still owes its index hand-off is owed as
+        // it says, as a completed child beside an error is for `comment
+        // add` (controller ruling, Task 2b).
         (
             Some(Child {
                 ran,
@@ -350,7 +353,13 @@ pub(super) fn resumed(
                 effects: ran.answer.effects,
                 ..Answer::stopped(ResultCode::RecoveryRequired)
             },
-            Standing::Final,
+            match ran.standing {
+                Standing::Owed => Standing::Owed,
+                Standing::Final
+                | Standing::Unconfirmed
+                | Standing::Stopped { journal: _ }
+                | Standing::NotRun { journal: _ } => Standing::Final,
+            },
             pending,
             Some(CommentPendingReason::Synchronization),
             None,
@@ -394,7 +403,12 @@ pub(super) fn resumed(
                     outcome::synchronization_error_code(&error),
                     CommentPendingReason::Synchronization,
                 ),
-                // A publication is had only from a call: not reached.
+                // The comment's own hand-off comes first, and did not
+                // complete: its receipt could not be stored
+                // (`persistence_pending`), or its row is still pending
+                // after the retry's repair. Nothing was published. A
+                // publication is had only from a call, so the two others
+                // are not reached.
                 CommentPublicationState::Pending {
                     reason: CommentPublicationPendingReason::LocalRecoveryRequired,
                 }

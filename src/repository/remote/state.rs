@@ -4925,7 +4925,11 @@ fn conflict_step_state(phase: IntegrationStepPhase) -> ConflictStepState {
     }
 }
 
-fn resolution_attempt_phase(phase: &str) -> Result<ResolutionAttemptPhase, RepositoryError> {
+/// The phase a resolution attempt's row stores, by its stored name: the one
+/// vocabulary of attempt phases.
+pub(in super::super) fn resolution_attempt_phase(
+    phase: &str,
+) -> Result<ResolutionAttemptPhase, RepositoryError> {
     Ok(match phase {
         "prepared" => ResolutionAttemptPhase::Prepared,
         "paths_applying" => ResolutionAttemptPhase::PathsApplying,

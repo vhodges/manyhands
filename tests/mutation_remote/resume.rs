@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 
 use results::IntegrationEffect;
 
+use super::resolution::{
+    attempts, candidate, conflict_step, fresh, remote_commit, resolutions_at, world,
+};
 use super::*;
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
@@ -44,6 +47,8 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c4_resume_cancelled_with_work_owed",
         c4_resume_cancelled_with_work_owed,
     ),
+    ("c4_resume_fenced_comment", c4_resume_fenced_comment),
+    ("c4_resume_comment_hand_off", c4_resume_comment_hand_off),
     ("c4_resume_local_context_sync", c4_resume_local_context_sync),
     ("c4_resume_listed", c4_resume_listed),
     ("c4_resume_hostile_path", c4_resume_hostile_path),
@@ -73,15 +78,6 @@ const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDH";
 /// A canonical document's path holding a terminal escape sequence and a
 /// newline (Review Focus 2).
 const HOSTILE_DOCUMENT: &str = "docs/hostile-\u{1b}[31mred\nline.md";
-/// What the resolution commit's subject begins with (`sync.rs`).
-const RESOLUTION_SUBJECT: &str = "Resolve synchronization";
-
-/// A world with a trusted server.
-fn world() -> Result<World, FixtureError> {
-    let w = World::new()?;
-    approve(&w)?;
-    Ok(w)
-}
 
 /// `operation resume` of `operation` under the request `id`, on `service`,
 /// with the world's passphrase, no sink and no cancellation, scanned as
@@ -121,11 +117,6 @@ fn resumed(w: &World, operation: &str) -> Envelope<MutationDataDto> {
 /// `resumed_as` under `id`, on the world's service.
 fn resumed_by(w: &World, id: &str, operation: &str) -> Envelope<MutationDataDto> {
     resumed_as(w, &w.service, id, operation)
-}
-
-/// A fresh service on the world's data directory.
-fn fresh(w: &World) -> RepositoryService {
-    RepositoryService::open_at(&w.data()).unwrap()
 }
 
 /// What a synchronization taken up by a resume reports once it published
@@ -358,36 +349,13 @@ fn c4_resume_comment_identity_required() -> Result<(), FixtureError> {
 }
 
 // A synchronization whose conflict is resolved, repaired, or being
-// resolved.
-
-/// The peer commits `bytes` at `path` on `reference` as the server holds
-/// it, and pushes it there. What the server holds is fetched to a ref of
-/// the fixture's own first, so the peer's checked-out branch is never
-/// fetched into.
-fn remote_commit(
-    w: &World,
-    reference: &str,
-    path: &str,
-    bytes: &[u8],
-) -> Result<git2::Oid, FixtureError> {
-    let served = format!("refs/fixture/{}", reference.trim_start_matches("refs/"));
-    let mut remote = fixed(w.peer.remote_anonymous(&w.server.url()))?;
-    let mut options = git2::FetchOptions::new();
-    options.remote_callbacks(callbacks(&w.server));
-    fixed(remote.fetch(
-        &[&format!("+{reference}:{served}")],
-        Some(&mut options),
-        None,
-    ))?;
-    let parent = fixed(w.peer.refname_to_id(&served))?;
-    let new = commit_path(&w.peer, parent, path, bytes)?;
-    fixed(w.peer.reference(reference, new, true, "fixture"))?;
-    push_peer(&w.peer, &w.server, reference)?;
-    Ok(new)
-}
+// resolved. The world, the peer's commits and the registry's reads are
+// `resolution`'s, shared.
 
 /// A world whose `repo sync` stopped on a conflict at one canonical path
 /// of primary, with all three sides, and what `conflict show` gave of it.
+/// `resolution`'s own `Conflict` is fixed to a ticket; this one takes any
+/// path, which the hostile-path case needs.
 struct Conflict {
     w: World,
     /// The synchronization.
@@ -511,61 +479,12 @@ impl Conflict {
 
     /// The resolution commits on primary, newest first.
     fn resolutions(&self) -> Vec<git2::Oid> {
-        let repo = self.w.repo().unwrap();
-        let mut walk = repo.revwalk().unwrap();
-        walk.push(self.tip()).unwrap();
-        walk.map(Result::unwrap)
-            .filter(|oid| {
-                repo.find_commit(*oid)
-                    .unwrap()
-                    .summary()
-                    .is_some_and(|summary| summary.starts_with(RESOLUTION_SUBJECT))
-            })
-            .collect()
+        resolutions_at(&self.w, self.tip())
     }
 
     /// The phase of the integration step whose conflict this is.
     fn step(&self) -> String {
-        fixed(self.w.db().unwrap().query_row(
-            "SELECT step.phase FROM remote_integration_steps step
-               JOIN remote_operation_records operation ON operation.id = step.operation_record_id
-              WHERE operation.operation_ulid = ?1 AND step.conflict_digest IS NOT NULL
-              ORDER BY step.window_number DESC, step.ordinal DESC LIMIT 1",
-            [self.operation.to_string()],
-            |row| row.get(0),
-        ))
-        .unwrap()
-    }
-
-    /// How many resolution attempts, and records of their owners, the
-    /// registry holds.
-    fn attempts(&self) -> (i64, i64) {
-        let db = self.w.db().unwrap();
-        let count = |table: &str| -> i64 {
-            db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap()
-        };
-        (
-            count("remote_resolution_attempts"),
-            count("remote_resolution_owners"),
-        )
-    }
-
-    /// The candidate commit the one attempt recorded.
-    fn candidate(&self) -> git2::Oid {
-        let candidate: String = self
-            .w
-            .db()
-            .unwrap()
-            .query_row(
-                "SELECT candidate_oid FROM remote_resolution_attempts",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        git2::Oid::from_str(&candidate).unwrap()
+        conflict_step(&self.w, self.operation)
     }
 
     fn resume(&self) -> Envelope<MutationDataDto> {
@@ -711,7 +630,7 @@ fn c4_resume_prepared_commit() -> Result<(), FixtureError> {
     ] {
         let c = Conflict::primary()?;
         c.interrupted_at(point);
-        let prepared = c.candidate();
+        let prepared = candidate(&c.w);
         let pushes = accepted(&c.w.server);
         let resumed = c.resume();
         assert_eq!(
@@ -738,7 +657,7 @@ fn c4_resume_written_paths_only() -> Result<(), FixtureError> {
     let c = Conflict::primary()?;
     c.interrupted_at(FailurePoint::ResolutionAfterPathWrite);
     assert_eq!(c.step(), "resolution_prepared");
-    let before = (c.tip(), c.written(), c.step(), c.attempts());
+    let before = (c.tip(), c.written(), c.step(), attempts(&c.w));
     let opened = connections(&c.w);
 
     let refused = c.resume();
@@ -752,7 +671,7 @@ fn c4_resume_written_paths_only() -> Result<(), FixtureError> {
     assert_eq!(actions(&refused), [RecoveryActionKind::RequestRetry]);
     assert_eq!(refused.recovery[0].arguments["request_id"], RESOLVE);
     assert_no_record_of(&c.w, RESUME, &refused);
-    assert_eq!((c.tip(), c.written(), c.step(), c.attempts()), before);
+    assert_eq!((c.tip(), c.written(), c.step(), attempts(&c.w)), before);
     assert_eq!(c.written(), ticket("Resolved"));
     assert_eq!(connections(&c.w), opened);
 
@@ -970,6 +889,117 @@ fn c4_resume_cancelled_with_work_owed() -> Result<(), FixtureError> {
     assert_eq!(phase(&w, operation)?, "cancelled");
     assert_eq!(connections(&w), opened);
     assert_eq!(accepted(&w.server), pushes);
+    Ok(())
+}
+
+/// A comment's publication that was fenced: its synchronization stopped
+/// holding the reservation before any push, for its key has no passphrase
+/// here, and the key's selection then changed, which fences it (as
+/// `a_resume_does_not_take_up_a_fenced_synchronization` fences a plain
+/// one). The domain takes a fenced operation up for nobody. A resume
+/// answers by the comment's ID as by its synchronization's, with what the
+/// fence says; before C4's routes the comment's ID was answered from the
+/// comment's completed local row, `already_applied`.
+fn c4_resume_fenced_comment() -> Result<(), FixtureError> {
+    let (w, _) = comment_world()?;
+    let held = call(
+        &w,
+        &w.service,
+        STOPPED,
+        add(&w),
+        NoPassphrase,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(held.code, ResultCode::UnlockRequired, "{held:?}");
+    assert!(reserved(&w));
+    let synchronization =
+        OperationId::parse(&comment_data(&held)?.synchronization_id).map_err(|_| FixtureError)?;
+    let comment = held.operation_id.clone().ok_or(FixtureError)?;
+    select_the_key_again(&w)?;
+    let before = phase(&w, synchronization)?;
+    let opened = connections(&w);
+    let pushes = accepted(&w.server);
+    for named in [comment, synchronization.to_string()] {
+        let refused = resumed(&w, &named);
+        assert_eq!(
+            (refused.outcome, refused.code),
+            (Outcome::Blocked, ResultCode::ExternalChange),
+            "{named}: {refused:?}"
+        );
+        assert_eq!(refused.effects, Effects::not_requested());
+        assert!(refused.data.is_none());
+        assert!(refused.recovery.is_empty());
+        assert_no_record_of(&w, RESUME, &refused);
+    }
+    assert_eq!(phase(&w, synchronization)?, before);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes);
+    assert!(!served(&w)?);
+    Ok(())
+}
+
+/// Has the registry refuse to complete a refresh: the index hand-off of a
+/// synchronization that published, as
+/// `a_resume_runs_the_hand_off_a_published_synchronization_owes` stages it.
+const FAIL_HAND_OFF: &str = "CREATE TRIGGER fail_handoff BEFORE UPDATE ON operation_records WHEN NEW.state='completed' AND NEW.action='refresh' BEGIN SELECT RAISE(ABORT,'fixed failure'); END";
+
+/// A comment published whose publication's index hand-off failed: `comment
+/// add` answers `discovery_pending` and offers the resume of the comment's
+/// operation, which a resume now takes up (`takes_up`). The resume does
+/// the hand-off, with no connection and no push, and the comment's own
+/// request is then finished.
+fn c4_resume_comment_hand_off() -> Result<(), FixtureError> {
+    let (w, _) = comment_world()?;
+    let db = w.db()?;
+    fixed(db.execute_batch(FAIL_HAND_OFF))?;
+    let pushes = accepted(&w.server);
+    let owed = execute(&w, STOPPED, add(&w));
+    assert_eq!(owed.code, ResultCode::DiscoveryPending, "{owed:?}");
+    assert_eq!(owed.outcome, Outcome::Partial);
+    let comment = owed.operation_id.clone().ok_or(FixtureError)?;
+    assert_eq!(actions(&owed), [RecoveryActionKind::OperationResume]);
+    assert_eq!(owed.recovery[0].operation_id.as_deref(), Some(&*comment));
+    assert_eq!(
+        comment_data(&owed)?.publication,
+        PublicationEffect::Published
+    );
+    assert!(served(&w)?);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    let [checkpoint] = checkpoints(&w)?[..] else {
+        return Err(FixtureError);
+    };
+
+    // While the hand-off still fails, the resume says so, and offers itself
+    // again.
+    let still = resumed(&w, &comment);
+    assert_eq!(still.code, ResultCode::DiscoveryPending, "{still:?}");
+    assert_eq!(actions(&still), [RecoveryActionKind::OperationResume]);
+    assert_eq!(still.recovery[0].operation_id.as_deref(), Some(&*comment));
+    assert_no_record_of(&w, RESUME, &still);
+
+    fixed(db.execute_batch("DROP TRIGGER fail_handoff"))?;
+    let opened = connections(&w);
+    let resumed = resumed(&w, &comment);
+    assert_eq!(
+        (resumed.outcome, resumed.code),
+        (Outcome::Success, ResultCode::Ok),
+        "{resumed:?}"
+    );
+    assert_eq!(resumed.effects, publishing(checkpoint));
+    assert_eq!(
+        comment_data(&resumed)?.publication,
+        PublicationEffect::Published
+    );
+    assert!(resumed.recovery.is_empty());
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    // The comment's own request is finished from what its publication came
+    // to.
+    let again = execute(&w, STOPPED, add(&w));
+    assert_eq!(again.code, ResultCode::Ok, "{again:?}");
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(checkpoints(&w)?, [checkpoint]);
     Ok(())
 }
 

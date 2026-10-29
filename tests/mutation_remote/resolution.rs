@@ -211,7 +211,7 @@ struct Conflict {
 }
 
 /// A world with a trusted server.
-fn world() -> Result<World, FixtureError> {
+pub(super) fn world() -> Result<World, FixtureError> {
     let w = World::new()?;
     approve(&w)?;
     Ok(w)
@@ -221,7 +221,7 @@ fn world() -> Result<World, FixtureError> {
 /// it, and pushes it there. What the server holds is fetched to a ref of
 /// the fixture's own first, so the peer's checked-out branch is never
 /// fetched into.
-fn remote_commit(
+pub(super) fn remote_commit(
     w: &World,
     reference: &str,
     path: &str,
@@ -403,17 +403,7 @@ impl Conflict {
 
     /// The resolution commits on the branch, newest first.
     fn resolutions(&self) -> Vec<git2::Oid> {
-        let repo = self.w.repo().unwrap();
-        let mut walk = repo.revwalk().unwrap();
-        walk.push(self.tip()).unwrap();
-        walk.map(Result::unwrap)
-            .filter(|oid| {
-                repo.find_commit(*oid)
-                    .unwrap()
-                    .summary()
-                    .is_some_and(|summary| summary.starts_with(RESOLUTION_SUBJECT))
-            })
-            .collect()
+        resolutions_at(&self.w, self.tip())
     }
 
     /// What the ticket's file in the worktree holds.
@@ -423,15 +413,7 @@ impl Conflict {
 
     /// The phase of the integration step whose conflict this is.
     fn step(&self) -> String {
-        fixed(self.w.db().unwrap().query_row(
-            "SELECT step.phase FROM remote_integration_steps step
-               JOIN remote_operation_records operation ON operation.id = step.operation_record_id
-              WHERE operation.operation_ulid = ?1 AND step.conflict_digest IS NOT NULL
-              ORDER BY step.window_number DESC, step.ordinal DESC LIMIT 1",
-            [self.operation.to_string()],
-            |row| row.get(0),
-        ))
-        .unwrap()
+        conflict_step(&self.w, self.operation)
     }
 
     /// Asserts that `envelope` is the request's result once the conflict is
@@ -519,8 +501,37 @@ fn checked(envelope: Envelope<MutationDataDto>) -> Envelope<MutationDataDto> {
     envelope
 }
 
+/// The resolution commits that `tip` holds, newest first.
+pub(super) fn resolutions_at(w: &World, tip: git2::Oid) -> Vec<git2::Oid> {
+    let repo = w.repo().unwrap();
+    let mut walk = repo.revwalk().unwrap();
+    walk.push(tip).unwrap();
+    walk.map(Result::unwrap)
+        .filter(|oid| {
+            repo.find_commit(*oid)
+                .unwrap()
+                .summary()
+                .is_some_and(|summary| summary.starts_with(RESOLUTION_SUBJECT))
+        })
+        .collect()
+}
+
+/// The phase of the newest integration step of the synchronization
+/// `operation` that met a conflict.
+pub(super) fn conflict_step(w: &World, operation: OperationId) -> String {
+    fixed(w.db().unwrap().query_row(
+        "SELECT step.phase FROM remote_integration_steps step
+           JOIN remote_operation_records operation ON operation.id = step.operation_record_id
+          WHERE operation.operation_ulid = ?1 AND step.conflict_digest IS NOT NULL
+          ORDER BY step.window_number DESC, step.ordinal DESC LIMIT 1",
+        [operation.to_string()],
+        |row| row.get(0),
+    ))
+    .unwrap()
+}
+
 /// A fresh service on the world's data directory.
-fn fresh(w: &World) -> RepositoryService {
+pub(super) fn fresh(w: &World) -> RepositoryService {
     RepositoryService::open_at(&w.data()).unwrap()
 }
 
@@ -563,7 +574,7 @@ fn data_of(
 
 /// How many resolution attempts, and records of their owners, the
 /// registry holds.
-fn attempts(w: &World) -> (i64, i64) {
+pub(super) fn attempts(w: &World) -> (i64, i64) {
     let db = w.db().unwrap();
     let count = |table: &str| -> i64 {
         db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
@@ -578,7 +589,7 @@ fn attempts(w: &World) -> (i64, i64) {
 }
 
 /// The candidate commit the one attempt recorded.
-fn candidate(w: &World) -> git2::Oid {
+pub(super) fn candidate(w: &World) -> git2::Oid {
     let candidate: String = w
         .db()
         .unwrap()

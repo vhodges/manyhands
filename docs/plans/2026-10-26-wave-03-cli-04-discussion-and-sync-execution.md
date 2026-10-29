@@ -596,7 +596,7 @@ new ticket comment (ruling P4).
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
-| 4b | `feat: resume comment publication and resolved synchronizations` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy | pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
+| 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 
 ### Task 1: Merging Synchronization
 
@@ -2164,3 +2164,61 @@ tests; logs `logs/task-4b-final-*` and `logs/task-4b-verify-*`):
   comment, and a host stop, answer with no comment data.
 - Concern 5 goes to the reviewer: `takes_up` now keeps `operation.resume`
   on a comment's or a resolution's `discovery_pending` result.
+
+#### Task 4b, fix round 1
+
+The commit is `fix: share resolution fixtures, keep an owed child's
+standing, and pin a fenced comment's resume`, on FIX_BASE `14a60a8`
+(`task-4b-fix-1.md`). There is no ticket comment this round.
+
+- **I1, shared fixtures.**
+  - `resolution.rs`'s `world`, `remote_commit`, `fresh`, `attempts` and
+    `candidate` are `pub(super)`.
+  - Its `Conflict::resolutions` and `Conflict::step` now delegate to new
+    free functions `resolutions_at` and `conflict_step`.
+  - `resume.rs` imports all seven. Its path-generic `Conflict` delegates
+    `resolutions` and `step` to them, and calls `attempts` and
+    `candidate`. Its copies are removed.
+- **Minor 1.** `comment.rs`: the comment on the no-call arm now says that
+  `LocalRecoveryRequired` is reached (the receipt's store failed, or the
+  row is still pending after the retry's repair). The mapping is
+  unchanged.
+- **Minor 2.**
+  - `state::resolution_attempt_phase` is now `pub(in super::super)`.
+  - `conflict::attempt_phases` returns `ResolutionAttemptPhase`s parsed by
+    it.
+  - `finish_prepared_resolution` and `written_paths_only` match on the
+    enum: there is one source of the vocabulary.
+- **Minor 3.** `comment::resumed`'s arm for a child that succeeded without
+  holding the comment keeps an `Owed` child standing (a hand-off still
+  owed). Any other is `Final`, as Task 2b's ruling has it. No case stages
+  it: it needs a remote that ends without the comment.
+- **Minor 4.** New cases, for 15 `c4_resume_`:
+  - **`c4_resume_fenced_comment`.** A comment's publication held for an
+    unlockable key, then fenced by the key's selection changing. A resume
+    by the comment's ID and by the synchronization's is
+    `external_change`, `blocked`, with no effects, data or record.
+    Against the pre-4b library (`e4f9348`), the comment's ID answered
+    `already_applied` (`logs/task-4b-fix1-red.log`).
+  - **`c4_resume_comment_hand_off`** (concern 5). The fixture is the root
+    resume test's `fail_handoff` trigger on refresh completion.
+    - `comment add` publishes and answers `discovery_pending`, offering
+      `operation.resume` of the comment's operation.
+    - While the trigger stands, the resume says the same.
+    - Without it, the resume does the hand-off: `ok`, with no connection
+      and no push. The comment's own request is then `ok`.
+    - Against `e4f9348`, the offer was `request.retry`.
+  - Both pass at FIX_BASE: they pin behaviour 4b introduced.
+- **Minor 5.** `resume.rs`'s module doc is re-wrapped.
+- **Deferred, as ruled:** the hostile-path case on Windows, and the
+  remaining coverage gaps.
+- **Verify** (each `devenv shell -- cargo … --locked`; logs
+  `logs/task-4b-fix1-*`):
+  - `mutation_remote`: `-- c4_resume` 15, `-- c4_comment` 34 and
+    `-- c4_resolution` 37 SSH cases passed.
+  - `mutation_replay`: 383 passed. `mutation_confirmation`: 183 passed.
+  - `--lib mutation`: 123 passed. `--lib remote`: 477 passed.
+  - `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
+    passed.
+  - `check` and `clippy --features desktop --bin manyhands` passed.
+  - The full `mutation_remote` run is Task 5's (the round says so).

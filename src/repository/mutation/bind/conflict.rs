@@ -56,7 +56,7 @@ use super::{
     super::{
         super::{
             CommentPublicationPendingReason, CommentPublicationState, CommentSubmissionOutcome,
-            ConflictEligibility, OperationFamily, OperationId, RedactedConflictBytes,
+            ConflictEligibility, OperationFamily, OperationId, ReadError, RedactedConflictBytes,
             RepositoryOperation, RepositoryService, ResolveSynchronizationOutcome,
             ResolveSynchronizationRequest, ResolvedRepository, RetryCommentPublicationRequest,
             SynchronizationError, SynchronizationTarget, local_sync,
@@ -950,15 +950,17 @@ impl ConflictResolveBinding {
 }
 
 /// The phases of the resolution attempts of the synchronization
-/// `synchronization` of the repository `repository_id`, as they are
-/// stored. A caller that acts only on an attempt in some phase asks this
-/// first, and reads the resolution's view only when one is there:
-/// `state::resolution_view` reads the synchronization's whole row.
+/// `synchronization` of the repository `repository_id`, read by
+/// `state::resolution_attempt_phase`. A caller that acts only on an attempt
+/// in some phase asks this first, and reads the resolution's view only when
+/// one is there: `state::resolution_view` reads the synchronization's whole
+/// row.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(super) fn attempt_phases(
     db: &rusqlite::Connection,
     repository_id: i64,
     synchronization: OperationId,
-) -> rusqlite::Result<Vec<String>> {
+) -> Result<Vec<ResolutionAttemptPhase>, ReadError> {
     let mut statement = db.prepare(
         "SELECT attempt.phase
            FROM remote_resolution_attempts attempt
@@ -966,12 +968,16 @@ pub(super) fn attempt_phases(
              ON operation.id = attempt.operation_record_id
           WHERE operation.repository_id = ?1 AND operation.operation_ulid = ?2",
     )?;
-    statement
+    let stored = statement
         .query_map(
             rusqlite::params![repository_id, synchronization.to_string()],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0),
         )?
-        .collect()
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(stored
+        .iter()
+        .map(|phase| state::resolution_attempt_phase(phase))
+        .collect::<Result<Vec<_>, _>>()?)
 }
 
 /// Finishes, from durable state alone, the resolution attempt of the
@@ -989,10 +995,14 @@ pub(crate) fn finish_prepared_resolution(
     let id = repository.registration_id();
     let view = service
         .read_session(RepositoryOperation::Read, |db| {
-            let phases = attempt_phases(db, id, synchronization)?;
-            if !phases
+            if !attempt_phases(db, id, synchronization)?
                 .iter()
-                .any(|phase| phase == "candidate_prepared" || phase == "applied")
+                .any(|phase| {
+                    matches!(
+                        phase,
+                        ResolutionAttemptPhase::CandidatePrepared | ResolutionAttemptPhase::Applied
+                    )
+                })
             {
                 return Ok(None);
             }

@@ -26,14 +26,13 @@
 //! synchronization that was fenced, one whose conflict's resolution has
 //! written paths only, which only its own request goes on with or a new
 //! `conflict resolve` supersedes (decisions 18 and 20). While the request
-//! that began it has
-//! an unfinished record, the answer is `original_request_required` and
-//! names that request, which is what goes on. With no such record no
-//! request can be sent again, and the answer says what the row is: a
-//! fenced synchronization is `external_change`, as its request was
-//! told; a local or key operation is `recovery_required`, with the
-//! abandon of a local one offered; a poll, a promotion or a closure is
-//! `invalid_input`.
+//! that began it has an unfinished record, the answer is
+//! `original_request_required` and names that request, which is what goes
+//! on. With no such record no request can be sent again, and the answer
+//! says what the row is: a fenced synchronization is `external_change`, as
+//! its request was told; a local or key operation is `recovery_required`,
+//! with the abandon of a local one offered; a poll, a promotion or a
+//! closure is `invalid_input`.
 //!
 //! An operation that has ended owes nothing, and resuming it is a no-op.
 //! One that was abandoned is refused as every repeat of its ID is.
@@ -58,7 +57,7 @@ use super::{
             RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationTarget,
             keys,
             recovery::{self, FinalKind, JournalRow, LocalStanding, PendingOperation},
-            remote,
+            remote::{self, state::ResolutionAttemptPhase},
         },
         command::Command,
         evidence::Position,
@@ -364,8 +363,7 @@ fn written_paths_only(
         return Ok(None);
     };
     if !conflict::attempt_phases(connection, repository, synchronization)?
-        .iter()
-        .any(|phase| phase == "paths_applying")
+        .contains(&ResolutionAttemptPhase::PathsApplying)
     {
         return Ok(None);
     }
