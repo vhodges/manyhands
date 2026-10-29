@@ -58,6 +58,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         c4_conflict_read_repair_beside_a_lock,
     ),
     (
+        "c4_conflict_read_invalid_configuration",
+        c4_conflict_read_invalid_configuration,
+    ),
+    (
         "c4_conflict_read_merge_aborted",
         c4_conflict_read_merge_aborted,
     ),
@@ -702,12 +706,11 @@ fn c4_conflict_read_incompatible_closures() -> Result<(), FixtureError> {
         dto.paths[0].structure,
         ConflictPathStructure::IncompatibleClosures
     );
-    // Not `regular`, so given no sides (R-10).
-    assert!(!dto.paths[0].content_available);
-    assert_eq!(
-        (&dto.paths[0].local, &dto.paths[0].incoming),
-        (&None, &None)
-    );
+    // An item's text, so its sides are given whatever its structure (R-10).
+    assert!(dto.paths[0].content_available);
+    assert_eq!(dto.paths[0].base, Some(source("Base")));
+    assert_eq!(dto.paths[0].local.as_deref(), Some(local.as_str()));
+    assert_eq!(dto.paths[0].incoming.as_deref(), Some(incoming.as_str()));
     // The library refuses to resolve the set, before any write (fact 33).
     let resolved = source("Resolved");
     assert!(matches!(
@@ -1038,6 +1041,29 @@ fn c4_conflict_read_repair_beside_a_lock() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// An intact conflict whose configuration cannot be read: the inspection
+/// cannot be made, and the read says so as an error. It never judges the
+/// conflict a refused repair.
+fn c4_conflict_read_invalid_configuration() -> Result<(), FixtureError> {
+    let w = world()?;
+    let (operation, ..) = canonical_conflict(&w);
+    let config = w.root.join(".manyhands/config.toml");
+    let valid = std::fs::read(&config).unwrap();
+    std::fs::write(&config, b"this is = = not a configuration\n").unwrap();
+    assert!(w.repo().unwrap().index().unwrap().has_conflicts());
+    assert_eq!(
+        show(&w, operation).unwrap_err().code(),
+        ResultCode::RecoveryRequired
+    );
+    // With the configuration restored, the same conflict is read.
+    std::fs::write(&config, valid).unwrap();
+    assert_eq!(
+        show(&w, operation).unwrap().state,
+        ConflictState::ConflictPending
+    );
+    Ok(())
+}
+
 fn c4_conflict_read_merge_aborted() -> Result<(), FixtureError> {
     let w = world()?;
     let (operation, local, incoming) = plain_conflict(&w);
@@ -1076,7 +1102,7 @@ fn c4_conflict_read_cancelled() -> Result<(), FixtureError> {
         SynchronizationSettings::default(),
         &mut CancelAtFirst,
     );
-    assert!(continued.is_err());
+    assert!(matches!(continued, Err(SynchronizationError::Interrupted)));
     assert_eq!(phase(&w, operation)?, "cancelled");
     assert_eq!(
         show(&w, operation).unwrap(),
@@ -1237,18 +1263,38 @@ fn checkpoint(w: &World) {
 
 fn c4_conflict_read_writes_nothing() -> Result<(), FixtureError> {
     let w = world()?;
-    let (operation, ..) = canonical_conflict(&w);
+    let (operation, _, local, _) = canonical_conflict(&w);
     let registry = w.data().join(REGISTRY_FILE);
     checkpoint(&w);
     let before = std::fs::read(&registry).unwrap();
     // A live conflict, read with its sides; then the same operation
     // asked for under an unknown ID and while the lease is held.
-    assert!(show(&w, operation).is_ok());
-    assert!(show(&w, OperationId::new()).is_err());
+    assert_eq!(
+        show(&w, operation).unwrap().state,
+        ConflictState::ConflictPending
+    );
+    assert_eq!(
+        show(&w, OperationId::new()).unwrap_err().code(),
+        ResultCode::OperationNotFound
+    );
     let held = RepositoryService::hold_lease_for_testing(&w.root, &w.data(), LeaseKind::Repository)
         .unwrap();
-    assert!(show(&w, operation).is_err());
+    assert_eq!(show(&w, operation).unwrap_err().code(), ResultCode::Busy);
     drop(held);
+    // The merge aborted outside: a read that judges the repair, under the
+    // lease, and refuses it.
+    let repo = w.repo().unwrap();
+    repo.reset(
+        &repo.find_object(local, None).unwrap(),
+        git2::ResetType::Hard,
+        None,
+    )
+    .unwrap();
+    repo.cleanup_state().unwrap();
+    assert_eq!(
+        show(&w, operation).unwrap().state,
+        ConflictState::RepairRefused
+    );
     checkpoint(&w);
     assert!(std::fs::read(&registry).unwrap() == before);
     Ok(())

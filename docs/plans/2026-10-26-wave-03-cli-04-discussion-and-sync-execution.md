@@ -594,7 +594,7 @@ new ticket comment (ruling P4).
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
-| 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt | pre-review fix round 1 applied; review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
+| 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 
 ### Task 1: Merging Synchronization
 
@@ -1444,6 +1444,8 @@ dispatched.
   call per path (fact 32). `content_available` is true exactly when it
   returns sides. `ExternalResolutionRequired` from it means none. Paths
   are sorted by raw bytes; tokens keep the inspection's positions.
+  (Superseded by the fix rounds below: sides are now given only for a
+  path whose kind is an item, whatever its structure.)
 - **Errors** are placed as `ResolvedRepository::failure` places them: the
   scope names the repository, and `index_unavailable` offers
   `index.rebuild` with its root. `at_root` is private to `read/`, so this
@@ -1507,7 +1509,8 @@ The read's `next_action` is checked against the synchronization's own
 3. **A lock not mirrored.** The repair judgement does not mirror
    `refuse_local_reconciliation_locks`. A Git lock left in the target
    makes the read say `repaired` where a restart answers
-   `recovery_required` until the lock is gone.
+   `recovery_required` until the lock is gone. (Fixed in pre-review fix
+   round 1.)
 4. **Platforms.** The hostile-path case returns early on Windows, which
    cannot name such a file. The display-path read runs on Linux only
    (macOS refuses the non-UTF-8 byte). Its pure-function pin runs
@@ -1549,6 +1552,10 @@ lock, and give sides only for item text`, on `ffa627b`.
      `index.lock`, and the locks of HEAD, its log, the branch, the branch's
      log and packed refs. The read never says `repaired` beside one.
 2. **Concern 8: sides only for an item's canonical text (R-10).**
+   (Corrected in review fix round 2: the structure no longer matters. A
+   path whose kind is an item gets its sides whatever its structure,
+   `incompatible_closures` included; only a `noncanonical` path gets
+   none. The two points below give this round's first rule.)
    - The library's side read is asked only for a path the classifier
      reads as an item's (`kind` is not `noncanonical`) with structure
      `regular`. `content_available` is true only when it returns sides.
@@ -1572,7 +1579,8 @@ lock, and give sides only for item text`, on `ffa627b`.
 - `noncanonical_or_structural` gains `plain.sh`, the script as a 100644
   file. It is `noncanonical` / `binary` with no sides, while the library's
   side read, called directly with its resolved token, returns them.
-- `incompatible_closures` asserts no sides.
+- `incompatible_closures` asserts no sides (reversed in review fix round
+  2: it now asserts all three sides).
 - `hostile_path` asserts that the read carries no sides. It still proves
   the token resolves, by the library's side read on the resolved token.
 
@@ -1585,5 +1593,108 @@ lock, and give sides only for item text`, on `ffa627b`.
 | `test --all-features --test read_contract` | 72 passed |
 | `test --all-features --test mutation_contract` | 44 passed |
 | `test --all-features --lib remote` | 477 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+
+#### Task 3, review fix round 2
+
+The task review found three Important issues and some Minors, and the
+controller ruled. The commit is `fix: give item sides, tell errors from
+refused repairs, and share the restart's repair rule`, on `b7dfda9`.
+
+1. **Important 1: sides for any item kind.** The read asks the library
+   for sides on every path whose kind is an item (`document`, `ticket`,
+   `comment`), whatever its structure. It sets `content_available: true`
+   when sides are returned. A `noncanonical` path still gets none. The
+   DTO doc, the comment in `live` and `conflict_path.schema.json`'s
+   description say so. The earlier text of this entry that gave the
+   `regular`-only rule is marked as superseded.
+2. **Important 2: failures are not refusals.**
+   - `repair_accepted` and `clean` return `Result<bool, ReadError>`.
+     `Ok(false)`, which is `repair_refused` / `external_repair`, comes only
+     from a decided refusal:
+     - foreign merge metadata or state, a conflict, a change or untracked
+       file, or an index that is not HEAD's tree (the target is not
+       clean);
+     - wrong parent count or order;
+     - `validates_external_integration` returning `Ok(false)`.
+   - Every Git read that fails is `recovery_required`, as the restart's
+     `map_err(|_| RecoveryRequired)` maps it. That covers HEAD, the index,
+     statuses, the diff, `MergeMetadataDirectory::open` and digests. A
+     `validates_external_integration` error is converted as the restart's
+     `?` converts it.
+   - A configuration that is not valid is `recovery_required`, the
+     restart's own answer to it. An unmaterialized target is
+     `external_change`, as `inspect_conflict_target` maps it.
+   - **Narrowed fallback.** The judgement runs only for the inspection's
+     `ExternalChange` (HEAD or the conflict set moved) and
+     `RecoveryRequired`. `RecoveryRequired` is kept because
+     `conflict_digest` returns it for an index with no conflict, which is
+     the repaired, staged, wrong-parent and aborted rows. Any other
+     inspection error is answered as itself. The judgement now answers
+     its own failed reads as errors, so a `RecoveryRequired` from a cause
+     other than a conflict-free index cannot become a refusal.
+3. **Important 3: the restart's rule is shared.**
+   - `sync.rs`:
+     - `RESOLUTION_MERGE_MEMBERS` is `pub(super)`.
+     - The clean-target state list is `pub(super) const
+       CLEAN_TARGET_FOREIGN_STATE`. The foreign-metadata list is
+       `pub(super) const FOREIGN_RESOLUTION_METADATA`, and
+       `foreign_resolution_metadata_present` is `pub(super)` and uses it.
+     - `require_clean_target_with` now calls the new `pub(super)
+       require_clean_target_state`, which runs every check before the
+       tree write, then keeps its `write_tree` comparison.
+     - `owned_merge_metadata_remnant` keeps its lazy journal read: it
+       reads only when metadata is present. It then calls the new
+       `pub(super) merge_metadata_remnant(repository, recorded)`, which
+       answers `Absent`, `Owned(digests)` or `Foreign` and maps `Foreign`
+       to the same `RecoveryRequired` as before.
+     - The new `pub(super) merge_metadata_present` is the presence check
+       both use.
+   - The restart's order and errors are unchanged, and
+     `remote_merge_recovery` passes all 25 cases.
+   - The read calls `merge_metadata_remnant`, then
+     `require_clean_target_state` (`WorktreeConflicted` and
+     `WorktreeNotClean` count as not clean; anything else is an error),
+     then compares the index with HEAD's tree through
+     `diff_tree_to_index`. The copies in `conflict_read.rs` (the member
+     and state lists, `present` and the rest of the old `clean`) are
+     deleted.
+4. **Minors.**
+   - `placed` uses `ROOT_ARGUMENT`. In `read/mod.rs` it is now
+     `pub(super)`, an export-only change.
+   - `cancelled` asserts `Err(SynchronizationError::Interrupted)`.
+   - `writes_nothing` asserts each answer: `conflict_pending`,
+     `operation_not_found` and `busy`. It also adds a `repair_refused`
+     read (the merge aborted outside) inside the byte-compare window, so
+     the judgement's lease and reads are proved to write nothing too.
+
+**Cases.**
+
+- `incompatible_closures` asserts `content_available: true`, `base` equal
+  to the base source, and `local` and `incoming` equal to the two closed
+  sources.
+- `c4_conflict_read_invalid_configuration` (new; 23 cases now). An intact
+  conflict, and a `.manyhands/config.toml` that does not parse. The index
+  still has conflicts. The read is `recovery_required`, not
+  `repair_refused`. With the file restored, it is `conflict_pending`
+  again.
+  - A probe with the old `Ok(false)` restored failed this case at the
+    read's `unwrap_err`.
+- No golden changed: the pending golden's one path is a ticket, and the
+  other two have no paths.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_conflict_read_invalid_configuration`, with `Ok(false)` restored for an invalid configuration (probe) | 1 SSH case failed, at the read's `unwrap_err` |
+| `test --all-features --test mutation_remote -- c4_conflict_read` | 23 SSH cases passed (295 s), goldens compared |
+| `test --all-features --test remote_merge_recovery` | 25 SSH cases passed (305 s) |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --lib remote` | 477 passed |
+| `test --all-features --lib local_sync` | 164 passed |
+| `test --all-features --lib integration` | 26 passed |
 | `clippy --all-targets --all-features -- -D warnings` | passed |
 | `fmt --check` | passed |

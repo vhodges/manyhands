@@ -584,6 +584,18 @@ pub(in super::super) fn require_clean_target(
     require_clean_target_with(linked, target, false)
 }
 
+/// The state files a clean target holds none of, in its own Git directory
+/// or the common one: a merge's, a rebase's and a cherry-pick's.
+pub(super) const CLEAN_TARGET_FOREIGN_STATE: [&str; 7] = [
+    "MERGE_HEAD",
+    "MERGE_MSG",
+    "MERGE_MODE",
+    "REBASE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "rebase-apply",
+    "rebase-merge",
+];
+
 /// `own_merge_metadata` is passed only after the caller proved that every
 /// remaining MERGE_HEAD/MERGE_MSG/MERGE_MODE member of this target's own gitdir
 /// equals the digests this operation recorded for its own conflicted merge.
@@ -594,19 +606,40 @@ fn require_clean_target_with(
     target: &SynchronizationTarget,
     own_merge_metadata: bool,
 ) -> Result<(), SynchronizationError> {
+    require_clean_target_state(linked, target, own_merge_metadata)?;
+    // A clean index/worktree must actually describe the checked-out commit.
+    let commit = linked
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    let tree = linked
+        .index()
+        .and_then(|mut i| i.write_tree())
+        .map_err(|_| SynchronizationError::RecoveryRequired)?;
+    if tree != commit.tree_id() {
+        return Err(SynchronizationError::RecoveryRequired);
+    }
+    drop(commit);
+    Ok(())
+}
+
+/// Every check of `require_clean_target_with` that writes nothing: no
+/// foreign state file, a clean repository state (or this operation's own
+/// merge, with `own_merge_metadata`), no conflict, and no change or
+/// untracked file. It is not yet proved that the index describes HEAD's
+/// tree.
+///
+/// A target found not clean is `WorktreeConflicted` or `WorktreeNotClean`;
+/// one Git could not read is `RecoveryRequired`. The conflict read judges an
+/// outside repair with it, as a restart does.
+pub(super) fn require_clean_target_state(
+    linked: &git2::Repository,
+    target: &SynchronizationTarget,
+    own_merge_metadata: bool,
+) -> Result<(), SynchronizationError> {
     // A new synchronization must never adopt a foreign merge, rebase, or
     // cherry-pick merely because libgit2's state cache or index looks clean.
-    let foreign_state = [
-        "MERGE_HEAD",
-        "MERGE_MSG",
-        "MERGE_MODE",
-        "REBASE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "rebase-apply",
-        "rebase-merge",
-    ]
-    .iter()
-    .any(|name| {
+    let foreign_state = CLEAN_TARGET_FOREIGN_STATE.iter().any(|name| {
         [linked.path(), linked.commondir()].into_iter().any(|root| {
             if own_merge_metadata
                 && root == linked.path()
@@ -642,20 +675,6 @@ fn require_clean_target_with(
             target: target.clone(),
         });
     }
-    drop(statuses);
-    // A clean index/worktree must actually describe the checked-out commit.
-    let commit = linked
-        .head()
-        .and_then(|h| h.peel_to_commit())
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    let tree = linked
-        .index()
-        .and_then(|mut i| i.write_tree())
-        .map_err(|_| SynchronizationError::RecoveryRequired)?;
-    if tree != commit.tree_id() {
-        return Err(SynchronizationError::RecoveryRequired);
-    }
-    drop(commit);
     Ok(())
 }
 pub(super) fn local_oid(repository: &git2::Repository) -> Result<git2::Oid, SynchronizationError> {
@@ -1863,7 +1882,7 @@ fn apply_resolution_ref(
 }
 
 /// Fixed journal order of the merge metadata an operation may own.
-const RESOLUTION_MERGE_MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
+pub(super) const RESOLUTION_MERGE_MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
 
 /// Operation-private hard-link anchor and durable immutable identity establish
 /// ownership, not sentinel contents. Never exchanged with or installed as index.
@@ -2528,18 +2547,20 @@ fn recorded_merge_index_matches(
     recorded_merge_index_matches_index(repository, &actual, local, incoming)
 }
 
-fn foreign_resolution_metadata_present(repository: &git2::Repository) -> bool {
-    [
-        "REBASE_HEAD",
-        "CHERRY_PICK_HEAD",
-        "REVERT_HEAD",
-        "BISECT_LOG",
-        "rebase-merge",
-        "rebase-apply",
-        "sequencer",
-    ]
-    .iter()
-    .any(|name| {
+/// State files of another Git command, in the target's own Git directory or
+/// the common one, beside which no merge metadata is this operation's own.
+pub(super) const FOREIGN_RESOLUTION_METADATA: [&str; 7] = [
+    "REBASE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+];
+
+pub(super) fn foreign_resolution_metadata_present(repository: &git2::Repository) -> bool {
+    FOREIGN_RESOLUTION_METADATA.iter().any(|name| {
         [repository.path(), repository.commondir()]
             .into_iter()
             .any(|root| match std::fs::symlink_metadata(root.join(name)) {
@@ -2681,30 +2702,66 @@ fn owned_merge_metadata_remnant(
     repository: &git2::Repository,
     step: &state::IntegrationStepEvidence,
 ) -> Result<Option<[Option<[u8; 32]>; 3]>, SynchronizationError> {
-    let present = RESOLUTION_MERGE_MEMBERS.iter().any(|member| {
+    // The journal is read only when metadata remains.
+    if !merge_metadata_present(repository) {
+        return Ok(None);
+    }
+    let recorded = service.synchronization_merge_metadata(root, owner, step)?;
+    match merge_metadata_remnant(repository, recorded.as_ref())? {
+        MergeMetadataRemnant::Absent => Ok(None),
+        MergeMetadataRemnant::Owned(digests) => Ok(Some(digests)),
+        MergeMetadataRemnant::Foreign => Err(SynchronizationError::RecoveryRequired),
+    }
+}
+
+/// What merge metadata an outside repair left in the target's own Git
+/// directory.
+pub(super) enum MergeMetadataRemnant {
+    /// No member remains.
+    Absent,
+    /// Every remaining member is what the operation recorded of its own
+    /// conflicted merge, whose digests these are.
+    Owned([Option<[u8; 32]>; 3]),
+    /// What remains is not the operation's own: unrecorded, altered, beside
+    /// another Git command's state, or already journaled as retired.
+    Foreign,
+}
+
+/// Whether any merge member remains in the target's own Git directory.
+pub(super) fn merge_metadata_present(repository: &git2::Repository) -> bool {
+    RESOLUTION_MERGE_MEMBERS.iter().any(|member| {
         !matches!(
             std::fs::symlink_metadata(repository.path().join(member)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound
         )
-    });
-    if !present {
-        return Ok(None);
+    })
+}
+
+/// The rule of a restart's `owned_merge_metadata_remnant`, given what the
+/// operation recorded of its own merge's metadata. A member that cannot be
+/// read is an error; the conflict read judges an outside repair with it.
+pub(super) fn merge_metadata_remnant(
+    repository: &git2::Repository,
+    recorded: Option<&state::MergeMetadataEvidence>,
+) -> Result<MergeMetadataRemnant, SynchronizationError> {
+    if !merge_metadata_present(repository) {
+        return Ok(MergeMetadataRemnant::Absent);
     }
-    let recorded = service
-        .synchronization_merge_metadata(root, owner, step)?
-        .ok_or(SynchronizationError::RecoveryRequired)?;
+    let Some(recorded) = recorded else {
+        return Ok(MergeMetadataRemnant::Foreign);
+    };
     if recorded.phase == "retired" || foreign_resolution_metadata_present(repository) {
-        return Err(SynchronizationError::RecoveryRequired);
+        return Ok(MergeMetadataRemnant::Foreign);
     }
     let directory = MergeMetadataDirectory::open(repository)?;
     for (member, expected) in RESOLUTION_MERGE_MEMBERS.iter().zip(recorded.digests) {
         if let Some(actual) = directory.digest(member)?
             && Some(actual) != expected
         {
-            return Err(SynchronizationError::RecoveryRequired);
+            return Ok(MergeMetadataRemnant::Foreign);
         }
     }
-    Ok(Some(recorded.digests))
+    Ok(MergeMetadataRemnant::Owned(recorded.digests))
 }
 
 /// Also called by the conflict read, which judges an outside repair as a

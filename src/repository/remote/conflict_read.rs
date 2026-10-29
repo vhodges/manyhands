@@ -29,17 +29,16 @@ use super::{
         self, IntegrationStepEvidence, IntegrationStepPhase, MergeMetadataEvidence,
         StoredRemoteOperation,
     },
-    sync::{self, SynchronizationConflictInspection, SynchronizationError},
+    sync::{self, MergeMetadataRemnant, SynchronizationConflictInspection, SynchronizationError},
 };
 use crate::{
     repository::{
         AuthoringKind, ConfigurationInspection, OperationId, ReadError, RepositoryOperation,
         RepositoryService, ResolvedRepository,
-        integration::{
-            artifacts::MergeMetadataDirectory,
-            validate::{self, ConflictEntryKind, ConflictStructure},
-        },
-        local_sync, mutation, read_configuration, repository_lease,
+        integration::validate::{self, ConflictEntryKind, ConflictStructure},
+        local_sync, mutation,
+        read::ROOT_ARGUMENT,
+        read_configuration, repository_lease,
     },
     results::{RecoveryAction, RecoveryActionKind, ResultCode, contract_enum},
 };
@@ -169,8 +168,9 @@ pub struct ConflictPathDto {
     pub token: String,
     pub kind: ConflictPathKind,
     pub structure: ConflictPathStructure,
-    /// Whether the sides are given: only for an item's canonical text
-    /// (structure `regular`), as the library reads it (fact 32, R-10).
+    /// Whether the sides are given: only for a path whose kind is an item,
+    /// whatever its structure, when the library reads them (fact 32,
+    /// R-10).
     pub content_available: bool,
     pub base: Option<String>,
     pub local: Option<String>,
@@ -337,14 +337,15 @@ fn conflict(
         Some(IntegrationStepPhase::ConflictPending) => {
             match service.inspect_synchronization_recovery(repo.root(), recorded.operation_id) {
                 Ok(inspection) => live(service, repo, &recorded, &inspection, false),
-                // A held lease or an unreadable registry is no answer about
-                // the conflict.
-                Err(error @ (SynchronizationError::Repository(_) | SynchronizationError::Busy)) => {
-                    Err(read_error(error))
-                }
                 // Git no longer holds the recorded conflict: it was repaired
-                // outside, or it was changed some other way.
-                Err(_) => Ok(if repair_accepted(repo.root(), &recorded)? {
+                // outside, or changed some other way. The inspection says
+                // so with `ExternalChange` (HEAD or the conflict set moved)
+                // or, for an index that holds no conflict at all,
+                // `RecoveryRequired`; the judgement answers any of its own
+                // reads that fail as an error.
+                Err(
+                    SynchronizationError::ExternalChange | SynchronizationError::RecoveryRequired,
+                ) => Ok(if repair_accepted(repo.root(), &recorded)? {
                     answer(ConflictState::Repaired, ConflictReadNextAction::Resume)
                 } else {
                     answer(
@@ -352,6 +353,9 @@ fn conflict(
                         ConflictReadNextAction::ExternalRepair,
                     )
                 }),
+                // A held lease, an unreadable registry, or anything else is
+                // no answer about the conflict.
+                Err(error) => Err(read_error(error)),
             }
         }
         // An attempt has written paths, and the index's stages are intact
@@ -552,10 +556,9 @@ fn live(
     for (token_text, token) in path_tokens(inspection) {
         let candidate = validate::classify_conflict_entry(&git, &index_conflict(&token));
         // Sides only for an item's canonical text (R-10), which the item
-        // limits bound; and only when the library returns them (fact 32).
-        // Any other path, text or not, is given none.
-        let item_text = candidate.kind != ConflictEntryKind::Noncanonical
-            && candidate.structure == ConflictStructure::RegularUtf8SamePath;
+        // limits bound, whatever its structure; and only when the library
+        // returns them (fact 32). A path that is no item's is given none.
+        let item_text = candidate.kind != ConflictEntryKind::Noncanonical;
         let sides = if item_text {
             match service.read_synchronization_conflict(&token) {
                 Ok(sides) => text_sides([sides.base, sides.local, sides.incoming]),
@@ -679,134 +682,88 @@ fn path_structure(structure: ConflictStructure) -> ConflictPathStructure {
     }
 }
 
-const MERGE_MEMBERS: [&str; 3] = ["MERGE_HEAD", "MERGE_MSG", "MERGE_MODE"];
-
-/// State of another Git command that a clean target holds none of, as
-/// `require_clean_target_with` lists it beside the merge members.
-const OTHER_STATE: [&str; 4] = [
-    "REBASE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "rebase-apply",
-    "rebase-merge",
-];
-
-/// State that makes merge metadata left in the target foreign, as
-/// `foreign_resolution_metadata_present` lists it.
-const FOREIGN_METADATA: [&str; 7] = [
-    "REBASE_HEAD",
-    "CHERRY_PICK_HEAD",
-    "REVERT_HEAD",
-    "BISECT_LOG",
-    "rebase-merge",
-    "rebase-apply",
-    "sequencer",
-];
-
 /// Whether the target holds an outside repair a restart would take up
-/// (fact 35), judged as `reconcile_pending_candidate` judges it. A Git lock
-/// left in the target (`index.lock`, or a lock of HEAD, of the branch or
-/// of packed refs) is the restart's `recovery_required`, whatever else
-/// the target holds, and so it is the read's. Otherwise: HEAD is a commit
-/// with exactly the parents `[local, incoming]`; the target is clean but
-/// for this operation's own recorded merge metadata; and
-/// `validates_external_integration` accepts it. Read under the
-/// repository's lease. Nothing is written, retired or recorded.
+/// (fact 35), judged as `reconcile_pending_candidate` judges it, read-only
+/// and under the repository's lease. Nothing is written, retired or
+/// recorded.
+///
+/// `Ok(false)` only for a refusal the restart would decide on what it
+/// read: a target that is not clean, a HEAD whose parents are not exactly
+/// `[local, incoming]`, or a commit `validates_external_integration`
+/// refuses. Anything that cannot be read is an error, as the restart's own
+/// reads are:
+/// - a configuration that is not valid is `recovery_required`, the
+///   restart's answer to it;
+/// - a target that is not materialized is `external_change`, as
+///   `inspect_conflict_target` maps it;
+/// - a Git lock left in the target (`index.lock`, or a lock of HEAD, of
+///   the branch or of packed refs) is `recovery_required`, whatever else
+///   the target holds;
+/// - a Git read that fails is `recovery_required`.
 fn repair_accepted(root: &Path, recorded: &Recorded) -> Result<bool, ReadError> {
     let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
-        return Ok(false);
+        return Err(read_error(SynchronizationError::RecoveryRequired));
     };
-    let Ok(repository) = sync::materialized_target(root, &config.primary_branch, &recorded.target)
-    else {
-        return Ok(false);
-    };
+    let repository = sync::materialized_target(root, &config.primary_branch, &recorded.target)
+        .map_err(|_| read_error(SynchronizationError::ExternalChange))?;
     let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
     sync::refuse_local_reconciliation_locks(&repository).map_err(read_error)?;
-    Ok(repaired(&repository, recorded).unwrap_or(false))
-}
-
-fn repaired(repository: &git2::Repository, recorded: &Recorded) -> Option<bool> {
+    if !clean(&repository, recorded)? {
+        return Ok(false);
+    }
     let (local, incoming) = (
         recorded.step.intent.local_oid,
         recorded.step.intent.incoming_oid,
     );
-    let head = repository.head().ok()?.peel_to_commit().ok()?;
+    let head = repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(|_| git_read_failed())?;
     if head.parent_count() != 2
         || [head.parent_id(0).ok(), head.parent_id(1).ok()] != [Some(local), Some(incoming)]
-        || !clean(repository, &head, recorded.merge_metadata.as_ref())?
     {
-        return Some(false);
+        return Ok(false);
     }
-    validate::validates_external_integration(repository, local, incoming, head.id()).ok()
+    validate::validates_external_integration(&repository, local, incoming, head.id())
+        .map_err(|error| read_error(error.into()))
 }
 
-fn present(path: &Path) -> bool {
-    !matches!(
-        std::fs::symlink_metadata(path),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound
-    )
-}
-
-/// The cleanliness a restart requires of a repaired target: no state of
-/// another Git command, no conflict, no change or untracked file, and an
-/// index that is HEAD's tree. Merge metadata may remain in the target's
-/// own Git directory only when every member is what the operation's own
-/// merge recorded and its retirement has not been recorded.
-fn clean(
-    repository: &git2::Repository,
-    head: &git2::Commit<'_>,
-    recorded: Option<&MergeMetadataEvidence>,
-) -> Option<bool> {
-    let gitdir = repository.path();
-    let common = repository.commondir();
-    let own = MERGE_MEMBERS
-        .iter()
-        .any(|member| present(&gitdir.join(member)));
-    if own {
-        let Some(recorded) = recorded else {
-            return Some(false);
-        };
-        if recorded.phase == "retired"
-            || FOREIGN_METADATA
-                .iter()
-                .any(|name| present(&gitdir.join(name)) || present(&common.join(name)))
-        {
-            return Some(false);
-        }
-        let directory = MergeMetadataDirectory::open(repository).ok()?;
-        for (member, expected) in MERGE_MEMBERS.iter().zip(recorded.digests) {
-            if let Some(actual) = directory.digest(member).ok()?
-                && Some(actual) != expected
-            {
-                return Some(false);
-            }
-        }
-    }
-    let foreign = MERGE_MEMBERS.iter().chain(&OTHER_STATE).any(|name| {
-        [gitdir, common].into_iter().any(|root| {
-            !(own && root == gitdir && MERGE_MEMBERS.contains(name)) && present(&root.join(name))
-        })
-    });
-    let state = repository.state();
-    let index = repository.index().ok()?;
-    if foreign
-        || !(state == git2::RepositoryState::Clean
-            || (own && state == git2::RepositoryState::Merge))
-        || index.has_conflicts()
+/// The cleanliness a restart requires of a repaired target, by its own
+/// rules: `merge_metadata_remnant`, then `require_clean_target_state`.
+/// Merge metadata may remain only when it is the operation's own. The
+/// index must then describe HEAD's tree, which `require_clean_target_with`
+/// proves by writing the index's tree, and this read by a diff.
+fn clean(repository: &git2::Repository, recorded: &Recorded) -> Result<bool, ReadError> {
+    let own = match sync::merge_metadata_remnant(repository, recorded.merge_metadata.as_ref())
+        .map_err(read_error)?
     {
-        return Some(false);
+        MergeMetadataRemnant::Absent => false,
+        MergeMetadataRemnant::Owned(_) => true,
+        MergeMetadataRemnant::Foreign => return Ok(false),
+    };
+    match sync::require_clean_target_state(repository, &recorded.target, own) {
+        Ok(()) => {}
+        Err(
+            SynchronizationError::WorktreeConflicted { .. }
+            | SynchronizationError::WorktreeNotClean { .. },
+        ) => return Ok(false),
+        Err(error) => return Err(read_error(error)),
     }
-    let mut options = git2::StatusOptions::new();
-    options.include_untracked(true).recurse_untracked_dirs(true);
-    if !repository.statuses(Some(&mut options)).ok()?.is_empty() {
-        return Some(false);
-    }
-    let tree = head.tree().ok()?;
-    // What `require_clean_target_with` proves by writing the index's tree,
-    // read without a write.
+    let tree = repository
+        .head()
+        .and_then(|head| head.peel_to_tree())
+        .map_err(|_| git_read_failed())?;
+    let index = repository.index().map_err(|_| git_read_failed())?;
     let staged = repository
         .diff_tree_to_index(Some(&tree), Some(&index), None)
-        .ok()?;
-    Some(staged.deltas().next().is_none())
+        .map_err(|_| git_read_failed())?;
+    Ok(staged.deltas().next().is_none())
+}
+
+/// A Git read that failed: `recovery_required`, as the restart maps its
+/// own (`map_err(|_| RecoveryRequired)`).
+fn git_read_failed() -> ReadError {
+    read_error(SynchronizationError::RecoveryRequired)
 }
 
 /// What a failure of the library's conflict reads means to a read. None of
@@ -845,7 +802,7 @@ fn placed(repo: &ResolvedRepository, mut error: ReadError) -> ReadError {
     if error.code() == ResultCode::IndexUnavailable {
         error.recovery = vec![RecoveryAction::new(
             RecoveryActionKind::IndexRebuild,
-            root.clone().map(|root| ("root", root.into())),
+            root.clone().map(|root| (ROOT_ARGUMENT, root.into())),
         )];
     }
     if error.scope.repository.is_none() {

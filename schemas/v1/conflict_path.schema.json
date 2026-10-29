@@ -43,7 +43,7 @@
       ]
     },
     "content_available": {
-      "description": "Whether the sides are given: only for an item's canonical text (structure regular) that the library reads. Any other path, text or not, is given none. When false, base, local and incoming are null.",
+      "description": "Whether the sides are given: only for a path whose kind is an item (document, ticket or comment), whatever its structure, when the library reads them as text. A path of kind noncanonical, text or not, is given none. When false, base, local and incoming are null.",
       "type": "boolean"
     },
     "base": {
