@@ -1411,3 +1411,58 @@ Notes for later tasks: Task 22 leaves `targets()` in
     above meanwhile;
   - `view/create.rs` is 454 lines after `Render` moved to
     `create/form.rs`.
+- Part D checkpoint (controller): the gate at `afd93d4` passed (desktop
+  986/0 in 682 s; `--lib drafts::` 55; `--test drafts` 48; clippy both
+  ways, fmt, CLI isolation and `check --all-features` clean). The review
+  approved with 9 Minor issues. Fix round 1 closed six of them (M1, M2,
+  M3, M5 to M7, and M8's first two points), and its re-review found all
+  eight points addressed, with two new Minor issues (N1, N2). Fix round 2
+  closed those, and the controller checked its diff.
+- Ruling (controller, Part D review M1): a save or create answered
+  `already_applied` takes its key out of the created contexts, as a
+  commit does. An earlier attempt committed, so the context holds the
+  item's commit and its release would be refused. — If wrong: a context
+  kept until a manual release (the Known Limits class).
+- Ruling (controller, Part D review M2, M3, M7, and re-review N1, N2): a
+  new item's stand-in shows from its draft until the tab's read first
+  finds the item, whether its session lives or Done ended it, and never
+  after. It shows the item as it was created, except while a live session
+  is shown. While it shows, the pill has no provenance tooltip and the
+  sheet has no provenance block and no closure sentence. After Done, the
+  pill and the sheet say the private copy, where every create commits. —
+  Contract 8: the tab says only what is true. — If wrong: a flash of
+  "not found", or a header's words for a moment.
+- Ruling (controller, Part D review M5): when a create is refused
+  `occupied_path` and the check of that path cannot tell what is there,
+  the tab shows the library's refusal (its message and code) without
+  "Another file…". In the item's own context, `invalid_path` and
+  `path_not_found` do tell: this draft's own item is not there, so the
+  words stay. A busy or failed read, and every read of the root's copy,
+  do not tell. — The words must not claim a file that may be the user's
+  own. — If wrong: the words in an untested edge (below).
+- Ruling (controller, Part D review M6): a Drafts-page discard while a
+  new item's Create prepare runs closes its tab once the discard lands
+  (R-71), and the context the prepare made is released (decision 18). —
+  If wrong: a tab left open on "not found".
+- Copy for the owner's on-screen check (Part D review): after Done → Save
+  on a new item, the header keeps its title until the read lands, with no
+  "not found" line; its pill says "Viewing your private copy"; an
+  occupied path that could not be checked shows the library's refusal
+  with no path words; a new ticket's emptied Project and a `closed`
+  Status are saved as typed; a discard from the Drafts page while New
+  ticket… prepares closes the new tab.
+- Parked (Part D review), for the whole-branch review:
+  - M4: a `TicketCreate` refused for its relationships shows only the
+    generic refusal; practically unreachable (a fresh ID closes no
+    cycle);
+  - M8c: the retitle-then-review route is tested only at the registry;
+  - M9: eight tests ran over 60 s in the whole binary under load, three
+    of them Part D's;
+  - M5's edge: an own item whose context the index does not hold yet
+    would be called "another file"; no route to it was found;
+  - untested: the pill's tooltip (the harness cannot read tooltips),
+    M6's Loading branch, and a never-created session's end leaving no
+    stand-in;
+  - M1's limit: an `already_applied` save into a fresh context whose
+    text equals the file it branched with keeps that clean context
+    instead of releasing it (safe; contrived).
