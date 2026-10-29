@@ -1519,3 +1519,30 @@ Notes for later tasks: Task 22 leaves `targets()` in
   not `occupied_path`; the dialog then observes the destination and names
   the collision rather than a changed document. The library's
   `occupied_path` arm is reached by no route from this dialog.
+- Ruling (controller, Task 24 review M1, M4): a folder create answered
+  `discovery_pending` made the folder, so the dialog closes as for `ok`.
+  A change of the Move dialog's fields clears a refusal of the
+  destination they gave. After the stale words, Move is not offered again
+  in that dialog, as "Close this and try again." says; reopening Move…
+  reads afresh. — The folder exists, and the words must match the offer.
+  — If wrong: a dialog closed while the index lags, or one more reopen.
+- Ruling (controller, Task 24 fix 1): when the library answers
+  `external_change`, the document is read again by its ID. At the
+  destination, the move is done. Where it was read, with a file now at
+  the destination, it is that collision: "Another file is already at
+  {path}.". The library checks the destination's token first. Otherwise
+  the stale words. The library's own `occupied_path` is not reached from
+  this dialog, and its arm is tested directly. — The pre-flight words
+  would have said a document changed when a file had taken its
+  destination. — If wrong: the collision words for a source that also
+  changed.
+- Found (Task 24): the lost-answer retry route never reaches
+  `external_change`, so known defect `01M4PB80T7` does not show through
+  this dialog. The ticket stays open on main.
+- Copy for the owner's on-screen check (Task 24 review): the unruled
+  "The document is already at this path.", "Move…", "Move document",
+  "Move", "New folder…" (now with an ellipsis) and its heading "New
+  folder"; the stale words with Move no longer offered; a refusal that
+  goes when a field changes.
+- Parked (Task 24 review), for the whole-branch review: none beyond
+  Task 24's own list above.
