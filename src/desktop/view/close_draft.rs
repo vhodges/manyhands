@@ -165,6 +165,11 @@ pub(crate) struct Ask {
     pub(crate) note: Read<Option<SaveNote>>,
     /// Save and Retry keep the dialog open: the tab closes it.
     pub(crate) stays: bool,
+    /// Enter closes the dialog at once, not by the Kit's deferred close,
+    /// whose focus restore a quarter second on would take back the focus
+    /// that what its choice goes on to takes as it lands (Done's; Task 27
+    /// fix 1, D3).
+    pub(crate) closes_at_once: bool,
 }
 
 impl Ask {
@@ -179,6 +184,7 @@ impl Ask {
             offers,
             note,
             stays: true,
+            closes_at_once: false,
         }
     }
 
@@ -198,6 +204,7 @@ impl Ask {
             offers,
             note,
             stays: true,
+            closes_at_once: false,
         }
     }
 
@@ -212,6 +219,7 @@ impl Ask {
             offers,
             note,
             stays: true,
+            closes_at_once: false,
         }
     }
 
@@ -230,6 +238,7 @@ impl Ask {
             offers,
             note: Rc::new(|_| None),
             stays: false,
+            closes_at_once: true,
         }
     }
 
@@ -308,21 +317,24 @@ pub(crate) fn open(
         let (enter, cancel, close) = (choose.clone(), choose.clone(), origin.clone());
         let offers = (ask.offers)(cx);
         let note = (ask.note)(cx);
-        let (stays, parked) = (ask.clone(), held.clone());
+        let (asked, parked) = (ask.clone(), held.clone());
         base.title(ask.title)
             .close_button(false)
             .overlay_closable(false)
             .child(body(&ask, offers, note, &choose, &held, cx))
             // Enter: the default; the Kit closes the dialog, unless Keep
-            // draft still waits, or the default keeps it open.
+            // draft still waits, or the default keeps it open, or the dialog
+            // closes itself at once (`closes_at_once`).
             .on_ok(move |_, window, cx| match default_choice(offers) {
                 Some(choice) => {
-                    let stays = stays.stays_for(choice);
+                    let (stays, closes_at_once) = (asked.stays_for(choice), asked.closes_at_once);
                     if stays {
                         window.focus(&parked, cx);
+                    } else if closes_at_once {
+                        window.close_dialog(cx);
                     }
                     enter(choice, window, cx);
-                    !stays
+                    !stays && !closes_at_once
                 }
                 None => false,
             })

@@ -53,10 +53,14 @@ pub(super) fn open(
             .close_button(false)
             .overlay_closable(false)
             .child(body(reason, &go))
-            // Enter: Continue; the Kit closes the dialog.
-            .on_ok(move |_, _, cx| {
+            // Enter: Continue. The dialog closes itself at once, as its
+            // buttons do: the Kit's own close of it would give focus back a
+            // quarter second on, taking it from the editor that opens
+            // (Task 27 fix 1, D3).
+            .on_ok(move |_, window, cx| {
+                window.close_dialog(cx);
                 ok(cx);
-                true
+                false
             })
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| {

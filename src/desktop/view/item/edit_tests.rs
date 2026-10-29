@@ -1429,6 +1429,66 @@ async fn undo_back_past_a_mode_switch_leaves_the_tab_clean(cx: &mut TestAppConte
     assert_eq!(shell.rows("tab", cx), ["Shared undo"], "not marked unsaved");
 }
 
+/// Draws frames and lets the reads run until `done` holds, waiting on the
+/// worker in real time only, so the test clock stands still: a timer armed
+/// before, such as the Kit's deferred focus restore, is still pending.
+fn until_with_the_clock_still(
+    shell: &Shell,
+    what: &str,
+    cx: &mut TestAppContext,
+    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+) {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+        if done(shell, cx) {
+            shell.frame(cx, |_, _| ());
+            return;
+        }
+        assert!(Instant::now() < deadline, "{what} did not happen");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// The time the Kit's deferred close waits before it gives focus back
+/// (`ANIMATION_DURATION`, 0.25 s), and a little more.
+const PAST_THE_RESTORE: Duration = Duration::from_millis(300);
+
+/// Task 27 fix 1, D3: the recovery-off dialog's Enter, its Continue, closes
+/// it at once, so no deferred focus restore is left to take the focus back
+/// from the editor that opens a moment later.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn continue_by_enter_leaves_the_editor_its_focus(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), fixture.data_dir().join("drafts")).unwrap();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Unprotected", "");
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root, TICKET), cx);
+    shell.click("item-edit", cx);
+    assert!(shell.present("recovery-off-dialog", cx));
+
+    // Enter with the dialog's own focus: the Kit's `on_ok`.
+    shell.keys("enter", cx);
+    assert!(!shell.present("recovery-off-dialog", cx));
+    until_with_the_clock_still(&shell, "the editor opening", cx, |shell, cx| {
+        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
+    });
+    let host = pane(&shell, cx)
+        .read_with(cx, |pane, _| pane.edit_host())
+        .expect("the editor is open");
+    let editor = host_editor(&host, cx);
+    assert!(focused(&shell, &editor, cx), "the editor takes the focus");
+    cx.executor().advance_clock(PAST_THE_RESTORE);
+    shell.run(cx);
+    assert!(focused(&shell, &editor, cx), "and keeps it");
+}
+
 /// Save, the session after a save, and the save states (Task 15).
 #[path = "edit_save_tests.rs"]
 mod save;

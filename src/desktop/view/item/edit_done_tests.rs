@@ -1610,3 +1610,36 @@ async fn done_stops_on_a_save_kept_for_retry_once_its_write_lands(cx: &mut TestA
     assert_eq!(session(&shell, cx), Some(false), "nothing is kept");
     assert_eq!(shell.label("item-save-retry", cx).as_deref(), Some("Retry"));
 }
+
+/// Task 27 fix 1, D3: Done's "Changes not kept" prompt, crash recovery
+/// off, by Enter, its default Save: it closes at once, the save commits,
+/// Done ends the session, and the read editor takes the focus; no deferred
+/// focus restore is left to take it back to Done, gone with the session.
+#[cfg(unix)]
+#[gpui_kit::test]
+async fn dones_prompt_saved_by_enter_leaves_the_read_editor_its_focus(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, _elsewhere) = shell_without_a_store(cx, "Saved by Enter");
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit_without_a_store(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    done(&shell, cx);
+    assert!(shell.present("done-draft-dialog", cx), "Done asks");
+    assert!(!shell.present("done-draft-keep", cx), "Save is the default");
+
+    shell.keys("enter", cx);
+    assert!(!shell.present("done-draft-dialog", cx));
+    until_with_the_clock_still(&shell, "the session ending", cx, |shell, cx| {
+        session(shell, cx).is_none()
+    });
+    assert_eq!(saves(&shell, cx).len(), 1, "Enter saved");
+    assert_eq!(phase(&shell, cx), Phase::Viewing);
+    let read = read_editor(&shell, cx);
+    assert!(
+        focused(&shell, &read, cx),
+        "the read editor takes the focus"
+    );
+    cx.executor().advance_clock(PAST_THE_RESTORE);
+    shell.run(cx);
+    assert!(focused(&shell, &read, cx), "and keeps it");
+}
