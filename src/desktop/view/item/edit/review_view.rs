@@ -11,8 +11,8 @@
 //! (R-38). Layout follows the page's tokens; it is checked on screen.
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Styled, TestSupportExt,
+    AnyElement, ClickEvent, Context, Div, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Styled, TestSupportExt,
     component::{
         ActiveTheme, Disableable, Selectable, Sizable,
         button::{Button, ButtonVariants},
@@ -55,12 +55,11 @@ impl ItemPane {
                 // the scroll region, which keeps no footer in place.
                 let mut rows: Vec<_> = model.rows().iter().copied().enumerate().collect();
                 rows.sort_by_key(|(_, (field, _))| *field != Field::Body);
-                content =
-                    content
-                        .child(self.review_actions(model, cx))
-                        .children(rows.into_iter().map(|(ix, (field, change))| {
-                            self.field_row(ix, field, change, model, review, cx)
-                        }));
+                content = content
+                    .child(self.review_actions(model, review.lines.first(), cx))
+                    .children(rows.into_iter().map(|(ix, (field, change))| {
+                        self.field_row(ix, field, change, model, review, cx)
+                    }));
             }
             None if review.failed => {
                 content = content.child(
@@ -163,7 +162,7 @@ impl ItemPane {
             .border_1()
             .border_color(border)
             .child(
-                h_flex()
+                self.revealed(review.lines.get(ix + 1), h_flex())
                     .flex_wrap()
                     .gap_2()
                     .items_center()
@@ -192,11 +191,16 @@ impl ItemPane {
     }
 
     /// Use these choices, disabled with its reason until every
-    /// both-changed field has a choice, and Cancel.
-    fn review_actions(&self, model: &Review, cx: &mut Context<Self>) -> AnyElement {
+    /// both-changed field has a choice, and Cancel, inside `line`.
+    fn review_actions(
+        &self,
+        model: &Review,
+        line: Option<&FocusHandle>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let ready = model.ready();
-        h_flex()
+        self.revealed(line, h_flex())
             .flex_wrap()
             .gap_3()
             .items_center()
@@ -217,6 +221,20 @@ impl ItemPane {
                     .text_color(muted)
             }))
             .into_any_element()
+    }
+
+    /// `line` holds a row of Kit buttons, whose own focus is private: it
+    /// tracks `wrapper` around them, so that focus moving onto one of them
+    /// scrolls the row into view in the item's region. No editor is inside
+    /// it (R-67).
+    fn revealed(&self, wrapper: Option<&FocusHandle>, line: Div) -> Div {
+        match wrapper {
+            Some(wrapper) => line
+                .track_focus(wrapper)
+                .relative()
+                .child(self.scroll.marker_within(wrapper)),
+            None => line,
+        }
     }
 }
 

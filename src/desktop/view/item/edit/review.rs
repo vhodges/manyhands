@@ -92,6 +92,10 @@ pub(super) struct ReviewState {
     pub(super) host: Option<Entity<EditorHost>>,
     /// The review itself, which takes the focus as it opens.
     pub(super) focus: FocusHandle,
+    /// The wrappers around its actions, then each field's choices, by the
+    /// model's row: a Kit button's own focus is private, so focus inside
+    /// one of these scrolls it into view.
+    pub(super) lines: Vec<FocusHandle>,
     _host: Vec<Subscription>,
 }
 
@@ -121,6 +125,7 @@ impl ItemPane {
             model: None,
             host: None,
             focus: cx.focus_handle(),
+            lines: Vec::new(),
             _host: Vec::new(),
         });
         cx.notify();
@@ -186,7 +191,11 @@ impl ItemPane {
         // M1: the session's own base, a restored draft's kept one included,
         // holds no normalization-only difference from theirs.
         let base = base_as_read(&base, &raw, &theirs.fields);
-        review.model = Some(Review::new(base, theirs, mine));
+        let model = Review::new(base, theirs, mine);
+        review.lines = (0..=model.rows().len())
+            .map(|_| cx.focus_handle())
+            .collect();
+        review.model = Some(model);
         let focus = review.focus.clone();
         self.show_result(window, cx);
         // Once the frame that draws it is drawn.
