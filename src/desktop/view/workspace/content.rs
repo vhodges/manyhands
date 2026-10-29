@@ -412,12 +412,19 @@ impl Workspace {
     }
 
     /// The tab `id` settled what its unsaved work comes to, in its own
-    /// dialog or after a discard elsewhere (R-71): it closes, and the next
-    /// frame focuses the content region, as `secondary-w` does, unless the
-    /// details sheet is open then (Task 27 fix 2, N2).
+    /// dialog or after a discard elsewhere (R-71): it closes. When it was
+    /// the tab shown, the next frame focuses the content region, as
+    /// `secondary-w` does, unless the details sheet is open then (Task 27
+    /// fix 2, N2); a tab closed in the background, behind another tab or
+    /// the Drafts page or Settings, held no focus, so focus stays where the
+    /// user is (fix 3).
     pub(in crate::desktop::view) fn close_settled(&mut self, id: TabId, cx: &mut Context<Self>) {
+        let shown = matches!(self.content.page(cx), ContentPage::Tabs)
+            && self.content.tabs.active() == Some(id);
         if self.content.tabs.close(id) {
-            self.content.landed_refocus = true;
+            if shown {
+                self.content.landed_refocus = true;
+            }
             cx.notify();
         }
     }

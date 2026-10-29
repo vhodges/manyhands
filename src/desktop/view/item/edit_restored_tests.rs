@@ -1170,3 +1170,64 @@ async fn a_background_tab_closing_takes_no_focus_from_the_sheet(cx: &mut TestApp
         "back on its chip"
     );
 }
+
+// Task 27 fix 3.
+
+/// Fix 3 (ruling): a tab closed in the background once its Keep draft's
+/// write lands held no focus, so focus stays where the user is: here B's
+/// read editor. A shown tab closed the same way gives the content region
+/// the focus, as before.
+#[gpui_kit::test]
+async fn a_background_tab_closing_leaves_focus_where_it_is(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Kept", "");
+        fixture.commit_ticket(root, OTHER, "Shown", "");
+    });
+    let a = TabKey::for_target(&ticket(&root, TICKET));
+    let a_open = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.tab_keys())
+            .contains(&a)
+    };
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    assert!(attached(&shell, &root, TICKET, cx).is_some(), "a draft");
+    type_at_end(&shell, &host, "y", cx);
+    let write = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-keep-button", cx);
+    assert!(a_open(&shell, cx), "Keep draft waits for its write");
+
+    open(&shell, ticket(&root, OTHER), cx);
+    let read = read_editor(&shell, cx);
+    focus_at(&shell, &read, 0, cx);
+    drop(write);
+    shell
+        .until_drawn(cx, "the kept tab closing", |shell, cx| !a_open(shell, cx))
+        .await;
+    shell.frame(cx, |_, _| ());
+    assert!(focused(&shell, &read, cx), "focus stays in B's read editor");
+
+    // The shown case: B, edited and kept the same way, closes while shown.
+    let host = edit(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    assert!(attached(&shell, &root, OTHER, cx).is_some(), "a draft");
+    type_at_end(&shell, &host, "y", cx);
+    let write = shell.backend.hold_read(ReadKind::DraftWrite);
+    shell.click(("tab-close", 0usize), cx);
+    shell.click("close-draft-keep-button", cx);
+    drop(write);
+    shell
+        .until_drawn(cx, "the shown tab closing", |shell, cx| {
+            tabs(shell, cx) == 0
+        })
+        .await;
+    shell.frame(cx, |_, _| ());
+    assert!(
+        holds_focus(&shell, "region-content", cx),
+        "the content region takes the focus"
+    );
+}
